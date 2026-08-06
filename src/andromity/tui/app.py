@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from rich.markup import escape
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual import on
