@@ -36,7 +36,7 @@ Screen { background: $surface; }
 #right-panel { width: 0; min-width: 0; }
 #right-panel.visible { width: 50%; min-width: 30; border-left: solid $accent; }
 #context-panel {
-    width: 22; min-width: 18;
+    width: 22; min-width: 18; height: 1fr;
     border-left: solid $accent-darken-2;
     overflow-y: auto;
 }
@@ -90,13 +90,13 @@ class AndromityApp(App):
                 ChatPanel(id="chat"),
                 Static("", id="suggestions"),
                 InputBar(id="input-bar"),
-                StatusBar(id="status-bar"),
                 id="center-panel",
             ),
             DiffPanel(id="right-panel"),
             ContextPanel(id="context-panel"),
             id="main-layout",
         )
+        yield StatusBar(id="status-bar")
         yield ModelPickerOverlay(id="model-overlay")
         yield ProfilePickerOverlay(id="profile-overlay")
         yield TrustPromptOverlay(self._project_path, id="trust-overlay")
