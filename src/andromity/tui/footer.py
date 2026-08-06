@@ -167,7 +167,6 @@ StatusBar {
         self.tokens = tokens
         self.cost = cost
         self.profile = profile
-        self.cwd = cwd
         self._ctx_limit = ctx_limit
         self._estimated = estimated
         if "/" in model:
