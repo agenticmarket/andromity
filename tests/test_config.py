@@ -15,6 +15,8 @@ def test_config_defaults():
         cm = ConfigManager(config_dir=Path(tmpdir))
         assert cm.get("default", "provider") == "anthropic"
         assert cm.get("default", "profile") == "builder"
+        assert cm.get("default", "permission_mode") == "safe"
+        assert "npm run dev" in cm.get("default", "allowed_commands")
 
 
 def test_config_get_set():
