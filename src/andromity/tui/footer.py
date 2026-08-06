@@ -25,17 +25,21 @@ ContextPanel {
 
     def compose(self) -> ComposeResult:
         yield Static("[bold]Context[/]", id="ctx-title")
+        yield Static("", id="ctx-session")
         yield Static("", id="ctx-tokens")
         yield Static("", id="ctx-cost")
         yield Static("", id="ctx-profile")
         yield Static("", id="ctx-model")
         yield Static("", id="ctx-lsp")
 
-    def update_context(self, tokens: int = 0, cost: float = 0.0, profile: str = "builder", model: str = "", ctx_limit: int = 0, estimated: bool = False):
+    def update_context(self, tokens: int = 0, cost: float = 0.0, profile: str = "builder", model: str = "", ctx_limit: int = 0, estimated: bool = False, session_name: str = ""):
         self.tokens = tokens
         self.cost = cost
         self.profile = profile
         try:
+            if session_name:
+                short_sess = session_name if len(session_name) <= 15 else session_name[:12] + "..."
+                safe_update(self.query_one("#ctx-session"), f"Session:\n[bold cyan]{escape(short_sess)}[/]")
             tok_prefix = "~" if estimated else ""
             safe_update(self.query_one("#ctx-tokens"), f"{tok_prefix}{tokens:,} tokens")
             safe_update(self.query_one("#ctx-cost"), f"${cost:.4f} spent")
@@ -84,6 +88,10 @@ StatusBar {
         yield Static(self._render_status(), id="status-text")
 
     def _render_status(self) -> str:
+        import datetime
+        now = datetime.datetime.now().strftime("%I:%M %p")
+        version = "v0.1.0"
+        
         model_part = ""
         if self._provider and self._model:
             model_part = f" [bold cyan]{escape(self._provider)}[/bold cyan] [white]{escape(self._model)}[/white] |"
@@ -109,7 +117,11 @@ StatusBar {
         else:
             ctx_part = f" {tok_str} tok |"
 
+        cwd_part = f" [bold magenta]{escape(getattr(self, 'cwd', ''))}[/]" if getattr(self, "cwd", "") else ""
+
         return (
+            f" [bold]Andromity {version}[/] | {now} |"
+            f"{cwd_part} |"
             f"{stream_part}"
             f"{model_part}"
             f" {escape(self.profile)} |"
@@ -124,10 +136,11 @@ StatusBar {
         except Exception:
             pass
 
-    def update_status(self, tokens: int = 0, cost: float = 0.0, profile: str = "builder", model: str = "", ctx_limit: int = 0, estimated: bool = False):
+    def update_status(self, tokens: int = 0, cost: float = 0.0, profile: str = "builder", model: str = "", ctx_limit: int = 0, estimated: bool = False, cwd: str = ""):
         self.tokens = tokens
         self.cost = cost
         self.profile = profile
+        self.cwd = cwd
         self._ctx_limit = ctx_limit
         self._estimated = estimated
         if "/" in model:

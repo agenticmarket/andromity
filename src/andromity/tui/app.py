@@ -162,7 +162,8 @@ class AndromityApp(App):
             profile=self.agent.profile,
             model=display,
             ctx_limit=ctx_limit,
-            estimated=is_estimated
+            estimated=is_estimated,
+            session_name=self.session.name
         )
         self.query_one(StatusBar).update_status(
             tokens=display_tokens,
@@ -170,7 +171,8 @@ class AndromityApp(App):
             profile=self.agent.profile,
             model=display,
             ctx_limit=ctx_limit,
-            estimated=is_estimated
+            estimated=is_estimated,
+            cwd=self._project_path
         )
 
     async def _on_tool_approval(self, tool_name: str, args: dict) -> bool:
