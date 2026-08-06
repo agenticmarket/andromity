@@ -38,8 +38,8 @@ import re
 
 class ToolIndicator(Widget):
     DEFAULT_CSS = """\
-ToolIndicator { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
-ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
+ToolIndicator { width: 1fr; height: auto; min-height: 1; padding: 0 1; margin: 1 0; background: #1a1a24; border-left: tall #4a4a8a; }
+ToolIndicator Collapsible { border: none; padding: 0 1; background: transparent; }
 """
     def __init__(self, tool_name: str = "", **kwargs):
         super().__init__(**kwargs)
@@ -50,7 +50,7 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
         self._timer = None
 
     def compose(self) -> ComposeResult:
-        with Collapsible(title=f"  [dim]>[/dim] {escape(self.tool_name)} [yellow]Running...[/yellow]", collapsed=True, id="tool-col"):
+        with Collapsible(title=f"  {escape(self.tool_name)} [yellow]Running...[/yellow]", collapsed=True, id="tool-col"):
             yield Static("", id="tool-args", classes="dim")
             yield Static("", id="tool-result")
 
@@ -68,7 +68,7 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
         try:
             res_str = result
             if len(res_str) > 2000:
-                res_str = res_str[:2000] + "\n... [truncated]"
+                res_str = res_str[:1000] + "\n\n... [truncated] ...\n\n" + res_str[-1000:]
             safe_update(self.query_one("#tool-result"), f"\nResult:\n{escape(res_str)}")
         except Exception:
             pass
@@ -77,6 +77,20 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
         if not self._done:
             self._dots += 1
             self._update_title()
+
+    def _get_icon(self) -> str:
+        name = self.tool_name.lower()
+        if "file" in name or "read" in name or "write" in name or "edit" in name:
+            return "📝"
+        if "dir" in name or "list" in name:
+            return "📁"
+        if "shell" in name or "cmd" in name or "exec" in name or "run" in name:
+            return "💻"
+        if "search" in name or "grep" in name:
+            return "🔍"
+        if "web" in name or "browser" in name:
+            return "🌐"
+        return "🛠️"
 
     def _update_title(self):
         summary = ""
@@ -87,6 +101,7 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
                 val = val[:15] + "..." + val[-15:]
             summary = f" ({val})"
         
+        icon = self._get_icon()
         status = "[yellow]Running...[/yellow]" if not self._done else "[green]Done[/green]"
         if not self._done:
             dots = "." * (self._dots % 4)
@@ -94,7 +109,7 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
             
         try:
             col = self.query_one("#tool-col", Collapsible)
-            col.title = f"  [dim]>[/dim] {escape(self.tool_name)}{escape(summary)} {status}"
+            col.title = f"{icon} [bold cyan]{escape(self.tool_name)}[/bold cyan]{escape(summary)} {status}"
         except Exception:
             pass
 
