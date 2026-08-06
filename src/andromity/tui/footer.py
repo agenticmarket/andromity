@@ -151,8 +151,14 @@ StatusBar {
         else:
             ctx_part = f" {tok_str} tok |"
 
+        sess_part = ""
+        if hasattr(self, "session_name") and self.session_name:
+            short_sess = self.session_name if len(self.session_name) <= 15 else self.session_name[:12] + "..."
+            sess_part = f" [bold cyan]{escape(short_sess)}[/] |"
+
         return (
             f"{stream_part}"
+            f"{sess_part}"
             f"{model_part}"
             f" {escape(self.profile)} |"
             f"{ctx_part}"
@@ -166,10 +172,11 @@ StatusBar {
         except Exception:
             pass
 
-    def update_status(self, tokens: int = 0, cost: float = 0.0, profile: str = "builder", model: str = "", ctx_limit: int = 0, estimated: bool = False):
+    def update_status(self, tokens: int = 0, cost: float = 0.0, profile: str = "builder", model: str = "", ctx_limit: int = 0, estimated: bool = False, session_name: str = ""):
         self.tokens = tokens
         self.cost = cost
         self.profile = profile
+        self.session_name = session_name
         self._ctx_limit = ctx_limit
         self._estimated = estimated
         if "/" in model:

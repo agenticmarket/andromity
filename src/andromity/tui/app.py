@@ -33,6 +33,8 @@ Screen { background: $surface; }
     width: 24; min-width: 16; max-width: 35;
     border-right: solid $accent-darken-2; overflow-y: auto;
 }
+#left-panel.force-hidden { display: none; }
+#left-panel.force-show { display: block; }
 #center-panel { width: 1fr; }
 #right-panel { width: 0; min-width: 0; }
 #right-panel.visible { width: 50%; min-width: 30; border-left: solid $accent; }
@@ -54,6 +56,19 @@ DiffPanel { height: 1fr; overflow-y: auto; padding: 1 2; }
 #trust-overlay.visible { display: block; }
 #session-overlay { display: none; }
 #session-overlay.visible { display: block; }
+
+@media (max-width: 100) {
+    #context-panel { display: none; }
+    #left-panel { display: none; }
+    #left-panel.force-show {
+        display: block;
+        dock: left;
+        width: 35;
+        height: 100%;
+        background: $surface;
+        border-right: solid $accent-darken-2;
+    }
+}
 """
 
 
@@ -173,7 +188,8 @@ class AndromityApp(App):
             profile=self.agent.profile,
             model=display,
             ctx_limit=ctx_limit,
-            estimated=is_estimated
+            estimated=is_estimated,
+            session_name=self.session.name
         )
         self.query_one(AppFooter).update_footer(cwd=self._project_path)
 
@@ -555,7 +571,18 @@ class AndromityApp(App):
 
     def action_toggle_filetree(self):
         left = self.query_one("#left-panel")
-        left.display = not left.display
+        if self.size.width <= 100:
+            left.remove_class("force-hidden")
+            if left.has_class("force-show"):
+                left.remove_class("force-show")
+            else:
+                left.add_class("force-show")
+        else:
+            left.remove_class("force-show")
+            if left.has_class("force-hidden"):
+                left.remove_class("force-hidden")
+            else:
+                left.add_class("force-hidden")
 
     def action_toggle_diff(self):
         right = self.query_one("#right-panel")
