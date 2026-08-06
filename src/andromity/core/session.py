@@ -99,9 +99,10 @@ class Session:
         if not sessions_dir.exists():
             return []
         sessions = []
-        for f in sorted(sessions_dir.glob("*.json"), reverse=True):
+        for f in sessions_dir.glob("*.json"):
             try:
                 sessions.append(cls.load(f))
             except Exception:
                 continue
+        sessions.sort(key=lambda s: s.created_at, reverse=True)
         return sessions
