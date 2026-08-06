@@ -20,8 +20,12 @@ class Agent:
         self.auto_approve = auto_approve
         self.on_tool_approval = on_tool_approval
         self.allowed_tools = filter_tools_for_profile(CORE_TOOLS, self.profile)
+        sys_prompt = get_system_prompt(self.profile)
         if not self.session.messages:
-            self.session.add_message("system", get_system_prompt(self.profile))
+            self.session.add_message("system", sys_prompt)
+        elif self.session.messages[0]["role"] == "system":
+            self.session.messages[0]["content"] = sys_prompt
+            self.session.save()
 
     async def run(self, user_input: str) -> AsyncGenerator[StreamEvent, None]:
         self.session.add_message("user", content=user_input)

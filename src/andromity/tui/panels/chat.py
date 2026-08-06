@@ -1,8 +1,10 @@
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.widget import Widget
-from textual.widgets import Static, Label
-
+from textual.widgets import Static, Label, Markdown
+from rich.markup import escape
+from textual.markup import MarkupError
+from andromity.tui.markup_utils import safe_markup, safe_update
 
 class ChatMessage(Widget):
     DEFAULT_CSS = """\
@@ -14,15 +16,21 @@ ChatMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
         self._content = content
 
     def compose(self) -> ComposeResult:
-        from rich.markup import escape
         if self.role == "user":
-            yield Label(f"[bold cyan]You:[/] {escape(self._content)}")
+            yield Static(f"[bold cyan]You:[/bold cyan] {escape(self._content)}")
         elif self.role == "assistant":
-            yield Label(f"[bold green]Andromity:[/] {escape(self._content)}")
+            yield Static("[bold green]Andromity:[/bold green]", id="assistant-header")
+            if self._content.strip():
+                yield Markdown(self._content)
+            else:
+                yield Static("")
         elif self.role == "system":
-            yield Label(f"[dim italic]{escape(self._content)}[/]")
+            yield Static(f"[dim italic]{escape(self._content)}[/dim italic]")
+        elif self.role == "system-markup":
+            # Pre-validate markup — bad tags fall back to plain escaped text
+            yield Static(safe_markup(self._content))
         elif self.role == "tool":
-            yield Label(f"[dim][tool: {escape(self._content)}][/]")
+            yield Static(f"[dim][tool: {escape(self._content)}][/dim]")
 
 
 class ToolIndicator(Widget):
@@ -33,15 +41,26 @@ ToolIndicator { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
         super().__init__(**kwargs)
         self.tool_name = tool_name
         self._done = False
+        self._dots = 0
+        self._timer = None
 
     def compose(self) -> ComposeResult:
-        from rich.markup import escape
-        status = "[green]Done[/]" if self._done else "[yellow]Running...[/]"
-        yield Label(f"  [dim]>[/] {escape(self.tool_name)} {status}")
+        yield Static(f"  [dim]>[/dim] {escape(self.tool_name)} [yellow]Running...[/yellow]", id="tool-status")
+
+    def on_mount(self):
+        self._timer = self.set_interval(0.5, self._tick)
+
+    def _tick(self):
+        if not self._done:
+            self._dots = (self._dots + 1) % 4
+            dots = "." * self._dots
+            safe_update(self.query_one("#tool-status"), f"  [dim]>[/dim] {escape(self.tool_name)} [yellow]Running{dots}[/yellow]")
 
     def mark_done(self):
         self._done = True
-        self.refresh()
+        if self._timer:
+            self._timer.stop()
+        safe_update(self.query_one("#tool-status"), f"  [dim]>[/dim] {escape(self.tool_name)} [green]Done[/green]")
 
 
 class StreamingMessage(Widget):
@@ -53,14 +72,16 @@ StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
         self._text = ""
 
     def compose(self) -> ComposeResult:
-        from rich.markup import escape
-        yield Label(f"[bold green]Andromity:[/] {escape(self._text)}")
+        yield Static("[bold green]Andromity:[/bold green]", id="assistant-header")
+        yield Markdown(self._text if self._text.strip() else " ", id="md-view")
 
     def append(self, text: str):
         self._text += text
         try:
-            from rich.markup import escape
-            self.query_one(Label).update(f"[bold green]Andromity:[/] {escape(self._text)}")
+            md = self.query_one("#md-view")
+            md.update(self._text if self._text.strip() else " ")
+        except MarkupError:
+            md.update(escape(self._text) if self._text.strip() else " ")
         except Exception:
             pass
 
@@ -78,9 +99,13 @@ class ChatPanel(VerticalScroll):
         self._messages.append({"role": "user", "content": text})
         self._append_widget(ChatMessage("user", text))
 
-    def add_system_message(self, text: str):
+    def add_system_message(self, text: str, markup: bool = True):
+        """Add a system/info message. markup=True allows Rich markup tags."""
         self._messages.append({"role": "system", "content": text})
-        self._append_widget(ChatMessage("system", text))
+        if markup:
+            self._append_widget(ChatMessage("system-markup", text))
+        else:
+            self._append_widget(ChatMessage("system", text))
 
     def start_assistant_message(self):
         self._streaming = StreamingMessage()
@@ -111,6 +136,19 @@ class ChatPanel(VerticalScroll):
         self._streaming = None
         self.remove_children()
         self.mount(Static("[dim]Chat cleared.[/]", id="welcome"))
+
+    def load_history(self, messages: list):
+        """Replay a session's message history into the chat panel visually."""
+        self.clear()
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "") or ""
+            if not content:
+                continue
+            if role == "user":
+                self._append_widget(ChatMessage("user", content))
+            elif role == "assistant":
+                self._append_widget(ChatMessage("assistant", content))
 
     def _append_widget(self, widget: Widget):
         try:

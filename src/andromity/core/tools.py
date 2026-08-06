@@ -4,7 +4,14 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 from andromity.core.git_ops import get_repo, create_pre_edit_snapshot
-from andromity.config import get_shell
+from andromity.config import config, get_shell
+from andromity.core.debug_log import get_logger
+
+log = get_logger("tools")
+
+
+def _is_trusted() -> bool:
+    return config.is_trusted(str(Path.cwd()))
 
 
 def _ensure_snapshot():
@@ -28,6 +35,8 @@ def read_file(path: str, start: Optional[int] = None, end: Optional[int] = None)
 
 
 def write_file(path: str, content: str) -> str:
+    if not _is_trusted():
+        return "Error: This folder is not trusted. Use /trust to allow file writes."
     p = Path(path).resolve()
     _ensure_snapshot()
     try:
@@ -40,6 +49,8 @@ def write_file(path: str, content: str) -> str:
 
 
 def edit_file(path: str, old_str: str, new_str: str) -> str:
+    if not _is_trusted():
+        return "Error: This folder is not trusted. Use /trust to allow file edits."
     p = Path(path).resolve()
     if not p.is_file():
         return f"Error: File '{path}' does not exist."
@@ -58,6 +69,8 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
 
 
 def shell_exec(command: str, timeout: int = 30) -> str:
+    if not _is_trusted():
+        return "Error: This folder is not trusted. Use /trust to allow shell commands."
     shell = get_shell()
     try:
         if shell == "powershell":
@@ -82,8 +95,7 @@ def list_dir(path: str = ".") -> str:
     try:
         items = []
         for item in p.iterdir():
-            if item.name.startswith("."):
-                continue
+
             kind = "DIR " if item.is_dir() else "FILE"
             items.append(f"{kind}\t{item.name}")
         return "\n".join(sorted(items))
@@ -171,15 +183,18 @@ CORE_TOOLS = [
 
 
 def execute_tool(name: str, args: Dict[str, Any]) -> str:
+    log.debug("TOOL CALL: %s(%s)", name, {k: (str(v)[:80] + '...' if isinstance(v, str) and len(v) > 80 else v) for k, v in args.items()})
     if name == "read_file":
-        return read_file(**args)
+        result = read_file(**args)
     elif name == "write_file":
-        return write_file(**args)
+        result = write_file(**args)
     elif name == "edit_file":
-        return edit_file(**args)
+        result = edit_file(**args)
     elif name == "shell_exec":
-        return shell_exec(**args)
+        result = shell_exec(**args)
     elif name == "list_dir":
-        return list_dir(**args)
+        result = list_dir(**args)
     else:
-        return f"Error: Unknown tool {name}"
+        result = f"Error: Unknown tool {name}"
+    log.debug("TOOL RESULT: %s -> %s chars: %s", name, len(result), result[:120])
+    return result

@@ -12,6 +12,7 @@ src/andromity/core/__init__.py
 src/andromity/core/agent.py
 src/andromity/core/events.py
 src/andromity/core/git_ops.py
+src/andromity/core/models.py
 src/andromity/core/profiles.py
 src/andromity/core/provider.py
 src/andromity/core/session.py

@@ -1,4 +1,8 @@
+import os
+import platform
+from pathlib import Path
 from typing import List
+from andromity.config import get_shell
 
 PROFILES = {
     "builder": {"tools": ["read_file", "write_file", "edit_file", "shell_exec", "list_dir"]},
@@ -8,8 +12,14 @@ PROFILES = {
 
 
 def get_system_prompt(profile: str) -> str:
-    base = """You are Andromity, a world-class AI coding assistant.
+    cwd = Path.cwd()
+    os_name = platform.system()
+    shell = get_shell()
+    base = f"""You are Andromity, a world-class AI coding assistant.
 You operate on the user's local machine with the ability to read, write, and execute code.
+Current working directory: {cwd}
+Operating System: {os_name}
+Shell: {shell}
 Always be concise. Think before you act.
 """
     if profile == "reviewer":

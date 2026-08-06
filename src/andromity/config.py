@@ -18,10 +18,6 @@ def get_config_dir() -> Path:
     return Path.home() / ".andromity"
 
 
-def get_project_dir() -> Path:
-    return Path.cwd() / ".andromity"
-
-
 def get_shell() -> str:
     if platform.system() == "Windows":
         return "powershell"

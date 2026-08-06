@@ -49,6 +49,7 @@ class Session:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id, "name": self.name, "project": self.project_hash,
+            "project_path": self.project_path,
             "parent_session": self.parent_session, "branch_point": self.branch_point,
             "created_at": self.created_at, "messages": self.messages,
             "token_total": self.token_total, "cost_usd": self.cost_usd,
@@ -66,6 +67,7 @@ class Session:
         session.id = data["id"]
         session.name = data["name"]
         session.project_hash = data["project"]
+        session.project_path = data.get("project_path", str(Path.cwd()))
         session.parent_session = data["parent_session"]
         session.branch_point = data["branch_point"]
         session.created_at = data["created_at"]
@@ -80,7 +82,7 @@ class Session:
     def list_sessions(cls, project_path: Optional[str] = None) -> List["Session"]:
         pp = project_path or str(Path.cwd())
         project_hash = hashlib.sha256(pp.encode()).hexdigest()[:16]
-        sessions_dir = get_project_dir() / "sessions" / project_hash
+        sessions_dir = get_config_dir() / "sessions" / project_hash
         if not sessions_dir.exists():
             return []
         sessions = []
