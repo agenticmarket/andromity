@@ -127,7 +127,7 @@ class AndromityApp(App):
             self.call_after_refresh(lambda: self.action_toggle_model())
         else:
             chat.add_system_message(
-                f"Welcome to Andromity! Active model: [bold cyan]{provider}[/] / [bold]{model}[/]\n\n"
+                f"Welcome to Andromity! Provider: [bold]{provider}[/] | Model: [bold cyan]{model}[/]\n\n"
                 "Quick start:\n"
                 "  Type any message below to start chatting\n"
                 "  /help     Show all commands\n"
@@ -180,7 +180,7 @@ class AndromityApp(App):
         chat = self.query_one(ChatPanel)
         model = config.get("default", "model", "")
         provider = config.get("default", "provider", "")
-        chat.add_system_message(f"Model: {provider}/{model}")
+        chat.add_system_message(f"Provider: [bold]{provider}[/] | Model: [bold cyan]{model}[/]")
 
     def _apply_profile(self, profile: str):
         """Apply a new profile from the profile picker."""
