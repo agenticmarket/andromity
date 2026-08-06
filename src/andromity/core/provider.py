@@ -6,7 +6,7 @@ from litellm import acompletion
 from andromity.config import config
 from andromity.core.debug_log import get_logger
 from andromity.core.events import (
-    StreamEvent, TextDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done
+    StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done
 )
 
 log = get_logger("provider")
