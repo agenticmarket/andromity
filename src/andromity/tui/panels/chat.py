@@ -247,8 +247,9 @@ class ChatPanel(VerticalScroll):
             self._append_widget(ChatMessage("system", text))
 
     def start_thinking_message(self):
+        self.start_assistant_message()
         self._thinking = ThinkingBubble()
-        self._append_widget(self._thinking)
+        self._streaming.mount(self._thinking, before="#md-view")
 
     def append_thinking(self, text: str):
         if hasattr(self, "_thinking") and getattr(self, "_thinking", None):
@@ -260,8 +261,9 @@ class ChatPanel(VerticalScroll):
             self._thinking = None
 
     def start_assistant_message(self):
-        self._streaming = StreamingMessage()
-        self._append_widget(self._streaming)
+        if getattr(self, "_streaming", None) is None:
+            self._streaming = StreamingMessage()
+            self._append_widget(self._streaming)
 
     def append_text(self, text: str):
         if not getattr(self, "_streaming", None):
