@@ -67,6 +67,7 @@ async def stream_completion(
 
     current_tool_id = None
     usage = None
+    in_thinking = False
 
     try:
         async for chunk in response_stream:
@@ -94,7 +95,23 @@ async def stream_completion(
                 if getattr(delta, "thinking", None):
                     yield ThinkingDelta(text=delta.thinking)
                 if getattr(delta, "content", None) and not current_tool_id:
-                    yield TextDelta(text=delta.content)
+                    text = delta.content
+                    if "<think>" in text:
+                        in_thinking = True
+                        text = text.replace("<think>", "")
+                    if "</think>" in text:
+                        in_thinking = False
+                        parts = text.split("</think>")
+                        if parts[0]:
+                            yield ThinkingDelta(text=parts[0])
+                        if len(parts) > 1 and parts[1]:
+                            yield TextDelta(text=parts[1])
+                        continue
+                    
+                    if in_thinking:
+                        yield ThinkingDelta(text=text)
+                    else:
+                        yield TextDelta(text=text)
 
             finish_reason = chunk.choices[0].finish_reason
             if finish_reason:

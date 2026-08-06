@@ -225,8 +225,19 @@ DiffPanel { height: 1fr; }
 
     def on_button_pressed(self, event: Button.Pressed):
         btn_id = event.button.id
+        parent_panel = self.app.query_one("#right-panel")
+        
         if btn_id == "btn-close":
-            parent_panel = self.app.query_one("#right-panel")
+            parent_panel.remove_class("visible")
+        elif btn_id == "btn-apply":
+            if hasattr(self.app, "_tool_approval_future") and self.app._tool_approval_future:
+                if not self.app._tool_approval_future.done():
+                    self.app._tool_approval_future.set_result(True)
+            parent_panel.remove_class("visible")
+        elif btn_id == "btn-reject":
+            if hasattr(self.app, "_tool_approval_future") and self.app._tool_approval_future:
+                if not self.app._tool_approval_future.done():
+                    self.app._tool_approval_future.set_result(False)
             parent_panel.remove_class("visible")
         elif btn_id == "btn-toggle-diff":
             if self._view_mode == "file" and self._current_file:

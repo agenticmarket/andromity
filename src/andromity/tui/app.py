@@ -173,11 +173,17 @@ class AndromityApp(App):
             estimated=is_estimated
         )
 
-    def _on_tool_approval(self, tool_name: str, args: dict) -> bool:
+    async def _on_tool_approval(self, tool_name: str, args: dict) -> bool:
         if tool_name in ("write_file", "edit_file"):
             diff_panel = self.query_one(DiffPanel)
             diff_panel.show_tool(tool_name, args)
             self.query_one("#right-panel").add_class("visible")
+            
+            # Wait for user decision from the DiffPanel buttons
+            self._tool_approval_future = asyncio.Future()
+            result = await self._tool_approval_future
+            self._tool_approval_future = None
+            return result
         return True
 
     def _refresh_agent(self):

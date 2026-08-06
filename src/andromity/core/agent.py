@@ -87,7 +87,9 @@ class Agent:
                     args = {}
 
                 if not self.auto_approve and self.on_tool_approval:
-                    if not self.on_tool_approval(tool_name, args):
+                    import asyncio
+                    is_approved = await self.on_tool_approval(tool_name, args) if asyncio.iscoroutinefunction(self.on_tool_approval) else self.on_tool_approval(tool_name, args)
+                    if not is_approved:
                         result = f"Tool '{tool_name}' rejected by user."
                         self.session.add_message("tool", content=result, name=tool_name, tool_call_id=tool_call["id"])
                         continue
