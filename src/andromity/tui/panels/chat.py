@@ -60,7 +60,10 @@ ToolIndicator Collapsible { border: none; padding: 0 1; background: transparent;
     def append_args(self, args_chunk: str):
         self._args_json += args_chunk
         try:
-            safe_update(self.query_one("#tool-args"), f"Args: {escape(self._args_json)}")
+            disp = self._args_json
+            if len(disp) > 200:
+                disp = disp[:200] + "..."
+            safe_update(self.query_one("#tool-args"), f"Args: {escape(disp)}")
         except Exception:
             pass
 
@@ -118,6 +121,17 @@ ToolIndicator Collapsible { border: none; padding: 0 1; background: transparent;
         if self._timer:
             self._timer.stop()
         self._update_title()
+        
+        try:
+            import json
+            args_dict = json.loads(self._args_json)
+            for big_field in ["content", "old_str", "new_str"]:
+                if big_field in args_dict and len(str(args_dict[big_field])) > 100:
+                    args_dict[big_field] = f"... [{len(str(args_dict[big_field]))} chars truncated] ..."
+            pretty_args = json.dumps(args_dict, indent=2)
+            safe_update(self.query_one("#tool-args"), f"Args:\n{escape(pretty_args)}")
+        except Exception:
+            pass
 
 
 class ThinkingBubble(Widget):
