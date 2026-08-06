@@ -65,14 +65,46 @@ ContextPanel {
             pass
 
 
+class AppFooter(Widget):
+    DEFAULT_CSS = """\
+AppFooter {
+    height: 1; background: $surface-darken-1; padding: 0 1;
+    layout: horizontal;
+}
+#footer-left { width: auto; content-align: left middle; }
+#footer-right { width: 1fr; content-align: right middle; }
+"""
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.cwd = ""
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="footer-left")
+        yield Static("", id="footer-right")
+
+    def _refresh_text(self):
+        try:
+            import datetime
+            now = datetime.datetime.now().strftime("%I:%M %p")
+            version = "v0.1.0"
+            cwd_part = f" [bold magenta]{escape(self.cwd)}[/]" if self.cwd else ""
+            left_text = f" [bold]Andromity {version}[/] |{cwd_part}"
+            right_text = f"{now} "
+            safe_update(self.query_one("#footer-left"), left_text)
+            safe_update(self.query_one("#footer-right"), right_text)
+        except Exception:
+            pass
+
+    def update_footer(self, cwd: str = ""):
+        self.cwd = cwd
+        self._refresh_text()
+
+
 class StatusBar(Widget):
     DEFAULT_CSS = """\
 StatusBar {
     height: 1; background: $surface-darken-1; padding: 0 1;
-    layout: horizontal;
 }
-#status-left { width: auto; content-align: left middle; }
-#status-right { width: 1fr; content-align: right middle; }
 """
     tokens: reactive(int) = reactive(0)
     cost: reactive(float) = reactive(0.0)
@@ -87,58 +119,51 @@ StatusBar {
         self._spinner_timer = None
         self._ctx_limit: int = 0
         self._estimated: bool = False
-        self.cwd: str = ""
 
     def compose(self) -> ComposeResult:
-        yield Static("", id="status-left")
-        yield Static("", id="status-right")
+        yield Static("", id="status-text")
+
+    def _render_status(self) -> str:
+        model_part = ""
+        if self._provider and self._model:
+            model_part = f" [bold cyan]{escape(self._provider)}[/] [white]{escape(self._model)}[/] |"
+        elif self._model:
+            model_part = f" [white]{escape(self._model)}[/] |"
+        else:
+            model_part = " [red]no model[/] |"
+
+        stream_part = ""
+        if self._streaming:
+            frame = _SPINNER_FRAMES[self._spinner_idx % len(_SPINNER_FRAMES)]
+            stream_part = f" [green]{frame} streaming…[/] |"
+
+        tok = self.tokens
+        ctx_part = ""
+        tok_str = f"~{tok:,}" if self._estimated else f"{tok:,}"
+        if self._ctx_limit > 0:
+            pct = min(tok / self._ctx_limit * 100, 100.0)
+            ctx_k = self._ctx_limit // 1000
+            color = "green" if pct < 70 else ("yellow" if pct < 90 else "red")
+            ctx_part = f" [{color}]{tok_str}/{ctx_k}K[/{color}] [{color}]({pct:.0f}%)[/{color}] |"
+        else:
+            ctx_part = f" {tok_str} tok |"
+
+        return (
+            f"{stream_part}"
+            f"{model_part}"
+            f" {escape(self.profile)} |"
+            f"{ctx_part}"
+            f" ${self.cost:.4f}"
+            f"  [dim]/help[/dim]"
+        )
 
     def _refresh_text(self):
         try:
-            import datetime
-            now = datetime.datetime.now().strftime("%I:%M %p")
-            version = "v0.1.0"
-            
-            # LEFT SIDE
-            cwd_part = f"[bold magenta]{escape(self.cwd)}[/]" if self.cwd else ""
-            left_text = f"[bold]Andromity {version}[/] | {cwd_part}"
-            
-            # RIGHT SIDE
-            model_part = ""
-            if self._provider and self._model:
-                model_part = f"[bold cyan]{escape(self._provider)}[/] [white]{escape(self._model)}[/] | "
-            elif self._model:
-                model_part = f"[white]{escape(self._model)}[/] | "
-            else:
-                model_part = "[red]no model[/] | "
-
-            stream_part = ""
-            if self._streaming:
-                frame = _SPINNER_FRAMES[self._spinner_idx % len(_SPINNER_FRAMES)]
-                stream_part = f"[green]{frame} streaming…[/] | "
-
-            tok_str = f"~{self.tokens:,}" if self._estimated else f"{self.tokens:,}"
-            if self._ctx_limit > 0:
-                pct = min(self.tokens / self._ctx_limit * 100, 100.0)
-                color = "green" if pct < 70 else ("yellow" if pct < 90 else "red")
-                ctx_part = f"[{color}]{tok_str}/{self._ctx_limit//1000}K ({pct:.0f}%)[/] | "
-            else:
-                ctx_part = f"{tok_str} tok | "
-
-            right_text = (
-                f"{stream_part}{model_part}"
-                f"{escape(self.profile)} | "
-                f"{ctx_part}"
-                f"${self.cost:.4f} | "
-                f"{now} | [dim]/help[/dim]"
-            )
-
-            safe_update(self.query_one("#status-left"), left_text)
-            safe_update(self.query_one("#status-right"), right_text)
+            safe_update(self.query_one("#status-text"), self._render_status())
         except Exception:
             pass
 
-    def update_status(self, tokens: int = 0, cost: float = 0.0, profile: str = "builder", model: str = "", ctx_limit: int = 0, estimated: bool = False, cwd: str = ""):
+    def update_status(self, tokens: int = 0, cost: float = 0.0, profile: str = "builder", model: str = "", ctx_limit: int = 0, estimated: bool = False):
         self.tokens = tokens
         self.cost = cost
         self.profile = profile

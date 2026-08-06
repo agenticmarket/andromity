@@ -10,7 +10,7 @@ from textual.containers import Horizontal, Vertical
 from andromity.tui.panels.chat import ChatPanel
 from andromity.tui.panels.filetree import FileTreePanel
 from andromity.tui.panels.diff import DiffPanel
-from andromity.tui.footer import StatusBar, InputBar, ContextPanel
+from andromity.tui.footer import StatusBar, InputBar, ContextPanel, AppFooter
 from andromity.tui.overlays.model import ModelPickerOverlay
 from andromity.tui.overlays.profile import ProfilePickerOverlay
 from andromity.tui.overlays.trust import TrustPromptOverlay
@@ -89,6 +89,7 @@ class AndromityApp(App):
             FileTreePanel(id="left-panel"),
             Vertical(
                 ChatPanel(id="chat"),
+                StatusBar(id="status-bar"),
                 Static("", id="suggestions"),
                 InputBar(id="input-bar"),
                 id="center-panel",
@@ -97,7 +98,7 @@ class AndromityApp(App):
             ContextPanel(id="context-panel"),
             id="main-layout",
         )
-        yield StatusBar(id="status-bar")
+        yield AppFooter(id="app-footer")
         yield ModelPickerOverlay(id="model-overlay")
         yield ProfilePickerOverlay(id="profile-overlay")
         yield TrustPromptOverlay(self._project_path, id="trust-overlay")
@@ -172,9 +173,9 @@ class AndromityApp(App):
             profile=self.agent.profile,
             model=display,
             ctx_limit=ctx_limit,
-            estimated=is_estimated,
-            cwd=self._project_path
+            estimated=is_estimated
         )
+        self.query_one(AppFooter).update_footer(cwd=self._project_path)
 
     async def _on_tool_approval(self, tool_name: str, args: dict) -> bool:
         if tool_name in ("write_file", "edit_file"):
