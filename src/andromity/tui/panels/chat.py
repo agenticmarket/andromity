@@ -279,6 +279,7 @@ class ChatPanel(VerticalScroll):
             self._streaming = None
 
     def show_tool_start(self, tool_name: str):
+        self.stop_thinking_message()
         self.end_assistant_message()
         self._append_widget(ToolIndicator(tool_name))
 

@@ -82,6 +82,9 @@ AppFooter {
         yield Static("", id="footer-left")
         yield Static("", id="footer-right")
 
+    def on_mount(self):
+        self.set_interval(1.0, self._refresh_text)
+
     def _refresh_text(self):
         try:
             import datetime
