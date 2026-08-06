@@ -138,6 +138,7 @@ class ThinkingBubble(Widget):
     DEFAULT_CSS = """\
 ThinkingBubble { width: 1fr; height: auto; padding: 0 1; }
 ThinkingBubble Collapsible { border: none; padding: 0; background: transparent; }
+#think-md { color: $text-muted; text-style: italic; padding: 0 0 1 2; border-left: solid $accent-darken-2; }
 """
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
