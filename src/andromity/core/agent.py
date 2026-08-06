@@ -61,6 +61,14 @@ class Agent:
 
             if last_usage:
                 self.session.update_usage(last_usage)
+            else:
+                prompt_tokens = sum(len(str(m.get("content", ""))) // 4 for m in self.session.messages)
+                completion_tokens = len(assistant_content) // 4
+                self.session.update_usage({
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens
+                })
 
             self.session.add_message(
                 "assistant",

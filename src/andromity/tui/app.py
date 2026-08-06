@@ -302,9 +302,8 @@ class AndromityApp(App):
                     chat.show_tool_result(event.tool_id, event.result)
                 elif isinstance(event, Done):
                     log.info("DONE usage=%s", event.usage)
-                    if event.usage and event.usage.get("total_tokens"):
-                        self._update_status()
-                        estimated_tokens = 0 # reset
+                    self._update_status()
+                    estimated_tokens = 0
                 
                 # Live token update
                 delta_count += 1
@@ -323,6 +322,30 @@ class AndromityApp(App):
             chat.end_assistant_message()
             self._update_status()
             self.query_one(InputBar).query_one("#input-field").focus()
+
+    async def _generate_ai_session_name(self, prompt: str):
+        try:
+            import litellm
+            from andromity.core.models import get_current_model
+            
+            provider = config.get("default", "provider", "")
+            model = config.get("default", "model", "")
+            if not provider or not model:
+                return
+                
+            model_id = get_current_model()
+            messages = [
+                {"role": "system", "content": "You are a helpful assistant. Generate a very short (3-5 words) descriptive title for a conversation starting with the following message. Output ONLY the title, no quotes or prefixes."},
+                {"role": "user", "content": prompt}
+            ]
+            response = await litellm.acompletion(model=model_id, messages=messages)
+            if response.choices:
+                name = response.choices[0].message.content.strip().strip('"').strip("'")
+                if name:
+                    self.session.rename(name)
+                    self._update_status()
+        except Exception as e:
+            log.warning("Failed to generate AI session name: %s", e)
 
     @on(InputBar.Submitted)
     def on_input_submitted(self, event: InputBar.Submitted):
@@ -350,6 +373,7 @@ class AndromityApp(App):
                 name = Session.auto_name_from_message(prompt)
                 self.session.rename(name)
                 self._update_status()
+                asyncio.create_task(self._generate_ai_session_name(prompt))
             self.run_worker(self._stream_agent(prompt), exclusive=True)
 
     @on(Input.Changed, "#input-field")
