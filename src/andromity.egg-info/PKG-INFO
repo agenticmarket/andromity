@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: andromity
+Version: 0.1.0
+Summary: The coding agent that never clocks out.
+License: Apache-2.0
+Requires-Python: >=3.11
+Requires-Dist: textual>=3.0
+Requires-Dist: litellm>=1.50
+Requires-Dist: tomli>=2.0; python_version < "3.12"
+Requires-Dist: tomli-w>=1.0
+Requires-Dist: gitpython>=3.1
+Requires-Dist: rich>=13.0
+Requires-Dist: click>=8.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.21; extra == "dev"

@@ -1,0 +1,10 @@
+.andromity/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+.env
+venv/
+env/
+.venv/

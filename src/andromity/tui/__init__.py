@@ -1,0 +1,1 @@
+"""Andromity TUI."""
