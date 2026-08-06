@@ -58,6 +58,13 @@ async def stream_completion(
              provider_name, model, litellm_model)
 
     try:
+        if "z-ai/" in model or "glm-" in model:
+            kwargs.setdefault("extra_body", {})
+            kwargs["extra_body"]["chat_template_kwargs"] = {
+                "enable_thinking": True,
+                "clear_thinking": False
+            }
+
         response_stream = await acompletion(**kwargs)
     except Exception as e:
         log.error("acompletion initial error: %s", e, exc_info=True)
@@ -91,11 +98,12 @@ async def stream_completion(
                         yield ToolCallStart(tool_name=tool_call.function.name, tool_id=current_tool_id)
                     if tool_call.function and getattr(tool_call.function, "arguments", None):
                         yield ToolCallDelta(tool_id=current_tool_id, args_json_chunk=tool_call.function.arguments)
-            elif getattr(delta, "content", None) or getattr(delta, "thinking", None) or getattr(delta, "reasoning_content", None):
-                if getattr(delta, "thinking", None):
-                    yield ThinkingDelta(text=delta.thinking)
-                if getattr(delta, "reasoning_content", None):
-                    yield ThinkingDelta(text=delta.reasoning_content)
+            elif any(getattr(delta, attr, None) for attr in ["content", "thinking", "reasoning_content", "reasoning", "thought"]):
+                for attr in ["thinking", "reasoning_content", "reasoning", "thought"]:
+                    val = getattr(delta, attr, None)
+                    if val:
+                        yield ThinkingDelta(text=val)
+                
                 if getattr(delta, "content", None) and not current_tool_id:
                     text = delta.content
                     if "<think>" in text:
