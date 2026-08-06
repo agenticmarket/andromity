@@ -66,7 +66,7 @@ class AndromityApp(App):
         Binding("ctrl+d", "toggle_diff", "Diff", show=True),
         Binding("ctrl+m", "toggle_model", "Model", show=True),
         Binding("ctrl+j", "toggle_profile", "Profile", show=True),
-        Binding("ctrl+s", "toggle_sessions", "Sessions", show=True),
+        Binding("ctrl+h", "toggle_sessions", "History", show=True),
         Binding("escape", "escape_pressed", show=False),
     ]
 
@@ -501,7 +501,7 @@ class AndromityApp(App):
                 "Commands:\n"
                 "  /model                   Switch provider & model (Ctrl+M)\n"
                 "  /profile [name]          Switch profile (builder/reviewer/planner, Ctrl+J)\n"
-                "  /sessions                Browse & switch sessions (Ctrl+S)\n"
+                "  /sessions                Browse & switch sessions (Ctrl+H)\n"
                 "  /new                     Start a new session\n"
                 "  /rename <name>           Rename current session\n"
                 "  /keys                    View status of all provider API keys\n"
@@ -518,7 +518,7 @@ class AndromityApp(App):
                 "  Ctrl+D     Toggle diff panel\n"
                 "  Ctrl+M     Model picker\n"
                 "  Ctrl+J     Profile picker\n"
-                "  Ctrl+S     Session browser\n"
+                "  Ctrl+H     Session browser\n"
                 "  Escape x2  Cancel current response\n\n"
                 f"[dim]Log: {LOG_PATH}[/]"
             )
