@@ -16,7 +16,7 @@ from andromity.tui.overlays.trust import TrustPromptOverlay
 from andromity.tui.overlays.session import SessionBrowserOverlay
 from andromity.core.session import Session
 from andromity.core.agent import Agent
-from andromity.core.events import TextDelta, ThinkingDelta, ToolCallStart, ToolCallEnd, Done
+from andromity.core.events import TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done
 from andromity.core.models import get_context_limit_for_model
 from andromity.core.debug_log import get_logger, LOG_PATH
 from andromity.config import config
@@ -126,8 +126,9 @@ class AndromityApp(App):
             # Auto-open model picker
             self.call_after_refresh(lambda: self.action_toggle_model())
         else:
+            sess_name = escape(self.session.name) if self.session.name != "new-session" else "New Session"
             chat.add_system_message(
-                f"Welcome to Andromity! Provider: [bold]{provider}[/] | Model: [bold cyan]{model}[/]\n\n"
+                f"Welcome to Andromity! Session: [bold]{sess_name}[/]\nProvider: [bold]{provider}[/] | Model: [bold cyan]{model}[/]\n\n"
                 "Quick start:\n"
                 "  Type any message below to start chatting\n"
                 "  /help     Show all commands\n"
@@ -291,6 +292,8 @@ class AndromityApp(App):
                     if self._debug_mode:
                         chat.add_system_message(f"[dim]▶ tool: {event.tool_name}[/]")
                     chat.show_tool_start(event.tool_name)
+                elif isinstance(event, ToolCallDelta):
+                    chat.append_tool_args(event.args_json_chunk)
                 elif isinstance(event, ToolCallEnd):
                     log.debug("TOOL END: %s", event.tool_id)
                     chat.show_tool_end()

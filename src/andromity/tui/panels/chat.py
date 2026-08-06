@@ -34,34 +34,65 @@ ChatMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
             yield Static(f"[dim][tool: {escape(self._content)}][/dim]")
 
 
+import re
+
 class ToolIndicator(Widget):
     DEFAULT_CSS = """\
 ToolIndicator { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
+ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
 """
     def __init__(self, tool_name: str = "", **kwargs):
         super().__init__(**kwargs)
         self.tool_name = tool_name
+        self._args_json = ""
         self._done = False
         self._dots = 0
         self._timer = None
 
     def compose(self) -> ComposeResult:
-        yield Static(f"  [dim]>[/dim] {escape(self.tool_name)} [yellow]Running...[/yellow]", id="tool-status")
+        with Collapsible(title=f"  [dim]>[/dim] {escape(self.tool_name)} [yellow]Running...[/yellow]", collapsed=True, id="tool-col"):
+            yield Static("", id="tool-args", classes="dim")
 
     def on_mount(self):
         self._timer = self.set_interval(0.5, self._tick)
 
+    def append_args(self, args_chunk: str):
+        self._args_json += args_chunk
+        try:
+            safe_update(self.query_one("#tool-args"), escape(self._args_json))
+        except Exception:
+            pass
+
     def _tick(self):
         if not self._done:
-            self._dots = (self._dots + 1) % 4
-            dots = "." * self._dots
-            safe_update(self.query_one("#tool-status"), f"  [dim]>[/dim] {escape(self.tool_name)} [yellow]Running{dots}[/yellow]")
+            self._dots += 1
+            self._update_title()
+
+    def _update_title(self):
+        summary = ""
+        m = re.search(r'"(path|command|DirectoryPath|query|Url|AbsolutePath)"\s*:\s*"([^"]+)"', self._args_json)
+        if m:
+            val = m.group(2)
+            if len(val) > 35:
+                val = val[:15] + "..." + val[-15:]
+            summary = f" ({val})"
+        
+        status = "[yellow]Running...[/yellow]" if not self._done else "[green]Done[/green]"
+        if not self._done:
+            dots = "." * (self._dots % 4)
+            status = f"[yellow]Running{dots}[/yellow]"
+            
+        try:
+            col = self.query_one("#tool-col", Collapsible)
+            col.title = f"  [dim]>[/dim] {escape(self.tool_name)}{escape(summary)} {status}"
+        except Exception:
+            pass
 
     def mark_done(self):
         self._done = True
         if self._timer:
             self._timer.stop()
-        safe_update(self.query_one("#tool-status"), f"  [dim]>[/dim] {escape(self.tool_name)} [green]Done[/green]")
+        self._update_title()
 
 
 class ThinkingBubble(Widget):
@@ -80,7 +111,7 @@ ThinkingBubble Collapsible { border: none; padding: 0; background: transparent; 
 
     def compose(self) -> ComposeResult:
         with Collapsible(title="💭 Thinking (0s)", collapsed=True, id="think-col"):
-            yield Markdown("", id="think-md")
+            yield Static("", id="think-md", classes="dim italic")
 
     def on_mount(self):
         self._timer = self.set_interval(1.0, self._tick_time)
@@ -96,8 +127,8 @@ ThinkingBubble Collapsible { border: none; padding: 0; background: transparent; 
         if self._pending:
             self._pending = False
             try:
-                md = self.query_one("#think-md", Markdown)
-                md.update(self._text)
+                st = self.query_one("#think-md", Static)
+                st.update(escape(self._text))
             except Exception:
                 pass
 
@@ -205,6 +236,14 @@ class ChatPanel(VerticalScroll):
 
     def show_tool_start(self, tool_name: str):
         self._append_widget(ToolIndicator(tool_name))
+
+    def append_tool_args(self, args_chunk: str):
+        try:
+            indicators = self.query(ToolIndicator)
+            if indicators:
+                indicators.last().append_args(args_chunk)
+        except Exception:
+            pass
 
     def show_tool_end(self):
         try:

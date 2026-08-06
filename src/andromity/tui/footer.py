@@ -43,7 +43,7 @@ ContextPanel {
             short_model = model.split("/")[-1] if "/" in model else model
             safe_update(self.query_one("#ctx-model"), f"[dim]{escape(short_model or '\u2014')}[/dim]")
             # Context window usage bar
-            if ctx_limit > 0 and tokens > 0:
+            if ctx_limit > 0:
                 pct = min(tokens / ctx_limit * 100, 100.0)
                 bar_width = 10
                 filled = int(bar_width * pct / 100)
@@ -101,7 +101,7 @@ StatusBar {
         tok = self.tokens
         ctx_part = ""
         tok_str = f"~{tok:,}" if self._estimated else f"{tok:,}"
-        if self._ctx_limit > 0 and tok > 0:
+        if self._ctx_limit > 0:
             pct = min(tok / self._ctx_limit * 100, 100.0)
             ctx_k = self._ctx_limit // 1000
             color = "green" if pct < 70 else ("yellow" if pct < 90 else "red")
