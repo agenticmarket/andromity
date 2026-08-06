@@ -24,7 +24,7 @@ from andromity.config import config
 
 log = get_logger("app")
 
-COMMANDS = ["/help", "/model", "/profile", "/keys", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear"]
+COMMANDS = ["/help", "/mode", "/model", "/profile", "/keys", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear"]
 
 CSS = """\
 Screen { background: $surface; }
