@@ -332,19 +332,42 @@ class AndromityApp(App):
     async def _generate_ai_session_name(self, prompt: str):
         try:
             import litellm
-            from andromity.core.models import get_current_model
             
             provider = config.get("default", "provider", "")
             model = config.get("default", "model", "")
             if not provider or not model:
                 return
                 
-            model_id = get_current_model()
+            provider_cfg = config.get_provider_config(provider)
+            base_url = None
+            api_key = config.get_api_key(provider)
+            
+            if provider == "ollama":
+                litellm_model = f"ollama_chat/{model}" if not (model.startswith("ollama/") or model.startswith("ollama_chat/")) else model
+                base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "http://localhost:11434"
+            elif provider == "google":
+                litellm_model = f"gemini/{model}" if not model.startswith("gemini/") else model
+            elif provider == "openrouter":
+                litellm_model = f"openrouter/{model}" if not model.startswith("openrouter/") else model
+            elif provider == "nvidia":
+                litellm_model = f"nvidia_nim/{model}" if not model.startswith("nvidia_nim/") else model
+            else:
+                litellm_model = f"{provider}/{model}" if not model.startswith(f"{provider}/") else model
+                base_url = provider_cfg.get("base_url") if provider_cfg else None
+
+            kwargs = {"model": litellm_model, "stream": False}
+            if api_key:
+                kwargs["api_key"] = api_key
+            if base_url:
+                kwargs["api_base"] = base_url
+                
             messages = [
                 {"role": "system", "content": "You are a helpful assistant. Generate a very short (3-5 words) descriptive title for a conversation starting with the following message. Output ONLY the title, no quotes or prefixes."},
                 {"role": "user", "content": prompt}
             ]
-            response = await litellm.acompletion(model=model_id, messages=messages)
+            kwargs["messages"] = messages
+            
+            response = await litellm.acompletion(**kwargs)
             if response.choices:
                 name = response.choices[0].message.content.strip().strip('"').strip("'")
                 if name:
