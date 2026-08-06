@@ -158,6 +158,10 @@ DiffPanel { height: 1fr; }
             self._show_write_diff(content_area, args)
         elif tool_name == "edit_file":
             self._show_edit_diff(content_area, args)
+        elif tool_name == "shell_exec":
+            self._show_command_approval(content_area, args)
+        elif tool_name == "read_file":
+            self._show_sensitive_warning(content_area, args)
 
         self._update_button_visibility()
 
@@ -222,6 +226,20 @@ DiffPanel { height: 1fr; }
             return
             
         self._render_diff_text(container, "\n".join(line.rstrip("\r\n") for line in diff))
+
+    def _show_command_approval(self, container: VerticalScroll, args: Dict[str, Any]):
+        command = args.get("CommandLine", "") or args.get("command", "")
+        container.mount(Static("[bold red]⚠ SECURITY WARNING: The AI wants to run a shell command.[/bold red]\n\n"
+                               "Shell commands can modify your system, access the internet, or delete files. "
+                               "Only approve this if you understand exactly what the command does.\n"))
+        container.mount(Static(f"[bold]Command:[/]\n\n  [cyan]{escape(command)}[/cyan]\n\n", classes="shell-command-view"))
+
+    def _show_sensitive_warning(self, container: VerticalScroll, args: Dict[str, Any]):
+        path = args.get("path", "")
+        container.mount(Static("[bold red]⚠ SECURITY WARNING: Sensitive File Access[/bold red]\n\n"
+                               "The AI is attempting to read a sensitive file (like a password, API key, or configuration file).\n"
+                               "If you approve this, the contents of the file will be sent to the LLM provider.\n"))
+        container.mount(Static(f"[bold]Target File:[/]\n\n  [magenta]{escape(path)}[/magenta]\n\n"))
 
     def on_button_pressed(self, event: Button.Pressed):
         btn_id = event.button.id

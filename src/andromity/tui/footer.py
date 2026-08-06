@@ -156,11 +156,17 @@ StatusBar {
             short_sess = self.session_name if len(self.session_name) <= 15 else self.session_name[:12] + "..."
             sess_part = f" [bold cyan]{escape(short_sess)}[/] |"
 
+        perm_mode = getattr(self, "permission_mode", "safe")
+        perm_colors = {"safe": "green", "trust": "yellow", "yolo": "red"}
+        pcolor = perm_colors.get(perm_mode, "white")
+        perm_part = f" [{pcolor}][{perm_mode.upper()}][/{pcolor}] |"
+
         return (
             f"{stream_part}"
             f"{sess_part}"
             f"{model_part}"
             f" {escape(self.profile)} |"
+            f"{perm_part}"
             f"{ctx_part}"
             f" ${self.cost:.4f}"
             f"  [dim]/help[/dim]"
@@ -172,11 +178,12 @@ StatusBar {
         except Exception:
             pass
 
-    def update_status(self, tokens: int = 0, cost: float = 0.0, profile: str = "builder", model: str = "", ctx_limit: int = 0, estimated: bool = False, session_name: str = ""):
+    def update_status(self, tokens: int = 0, cost: float = 0.0, profile: str = "builder", model: str = "", ctx_limit: int = 0, estimated: bool = False, session_name: str = "", permission_mode: str = "safe"):
         self.tokens = tokens
         self.cost = cost
         self.profile = profile
         self.session_name = session_name
+        self.permission_mode = permission_mode
         self._ctx_limit = ctx_limit
         self._estimated = estimated
         if "/" in model:

@@ -189,12 +189,38 @@ class AndromityApp(App):
             model=display,
             ctx_limit=ctx_limit,
             estimated=is_estimated,
-            session_name=self.session.name
+            session_name=self.session.name,
+            permission_mode=config.get("default", "permission_mode", "safe")
         )
         self.query_one(AppFooter).update_footer(cwd=self._project_path)
 
     async def _on_tool_approval(self, tool_name: str, args: dict) -> bool:
+        mode = config.get("default", "permission_mode", "safe")
+        if mode == "yolo":
+            return True
+            
+        sensitive_patterns = [".env", ".ssh", ".git", "config.toml", "secret", "password"]
+        target_path = str(args.get("path", "")).lower()
+        is_sensitive = any(p in target_path for p in sensitive_patterns) if target_path else False
+        
+        needs_approval = False
+        
         if tool_name in ("write_file", "edit_file"):
+            if mode == "safe" or is_sensitive:
+                needs_approval = True
+        elif tool_name == "shell_exec":
+            command = str(args.get("command", "")).strip()
+            if mode == "safe":
+                needs_approval = True
+            elif mode == "trust":
+                allowed = config.get("default", "allowed_commands", [])
+                if not any(command.startswith(prefix) for prefix in allowed):
+                    needs_approval = True
+        elif tool_name == "read_file":
+            if is_sensitive:
+                needs_approval = True
+                
+        if needs_approval:
             diff_panel = self.query_one(DiffPanel)
             diff_panel.show_tool(tool_name, args)
             self.query_one("#right-panel").add_class("visible")
@@ -204,6 +230,7 @@ class AndromityApp(App):
             result = await self._tool_approval_future
             self._tool_approval_future = None
             return result
+            
         return True
 
     def _refresh_agent(self):
@@ -516,11 +543,23 @@ class AndromityApp(App):
             chat.add_system_message(f"[yellow]Folder untrusted:[/] {self._project_path}\nFile writes and shell commands are now blocked.")
         elif command == "/clear":
             chat.clear()
+        elif command == "/mode":
+            if len(parts) > 1:
+                mode = parts[1].strip().lower()
+                if mode in ("safe", "trust", "yolo"):
+                    config.set("default", "permission_mode", mode)
+                    self._update_status()
+                    chat.add_system_message(f"Permission mode set to [bold]{mode.upper()}[/]")
+                else:
+                    chat.add_system_message("Unknown mode. Use: safe, trust, or yolo")
+            else:
+                chat.add_system_message("Usage: /mode <safe|trust|yolo>")
         elif command == "/help":
             chat.add_system_message(
                 "Commands:\n"
                 "  /model                   Switch provider & model (Ctrl+M)\n"
                 "  /profile [name]          Switch profile (builder/reviewer/planner, Ctrl+J)\n"
+                "  /mode [safe|trust|yolo]  Set permission mode for file/shell approvals\n"
                 "  /sessions                Browse & switch sessions (Ctrl+O)\n"
                 "  /new                     Start a new session\n"
                 "  /rename <name>           Rename current session\n"

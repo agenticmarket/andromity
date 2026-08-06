@@ -50,6 +50,8 @@ class ConfigManager:
                 "provider": "anthropic",
                 "model": "claude-sonnet-4-6",
                 "profile": "builder",
+                "permission_mode": "safe",
+                "allowed_commands": ["npm run", "npm test", "npm list", "npm run dev", "pytest", "python -m pytest", "git status", "git diff", "git log", "ls", "dir", "cat", "echo"]
             },
             "providers": [
                 {"name": "anthropic", "type": "anthropic"},
