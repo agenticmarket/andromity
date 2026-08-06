@@ -57,17 +57,15 @@ DiffPanel { height: 1fr; overflow-y: auto; padding: 1 2; }
 #session-overlay { display: none; }
 #session-overlay.visible { display: block; }
 
-@media (max-width: 100) {
-    #context-panel { display: none; }
-    #left-panel { display: none; }
-    #left-panel.force-show {
-        display: block;
-        dock: left;
-        width: 35;
-        height: 100%;
-        background: $surface;
-        border-right: solid $accent-darken-2;
-    }
+.narrow #context-panel { display: none; }
+.narrow #left-panel { display: none; }
+.narrow #left-panel.force-show {
+    display: block;
+    dock: left;
+    width: 35;
+    height: 100%;
+    background: $surface;
+    border-right: solid $accent-darken-2;
 }
 """
 
@@ -120,6 +118,12 @@ class AndromityApp(App):
         yield SessionBrowserOverlay(
             self.session.id, self._project_path, id="session-overlay"
         )
+
+    def on_resize(self, event):
+        if event.size.width <= 100:
+            self.add_class("narrow")
+        else:
+            self.remove_class("narrow")
 
     def on_mount(self):
         self.query_one(InputBar).query_one("#input-field").focus()
