@@ -93,7 +93,8 @@ MODEL_CATALOG = {
             {"id": "deepseek-ai/deepseek-r1", "name": "DeepSeek R1", "desc": "NVIDIA-accelerated reasoning model", "context": "128K", "pricing": "NVIDIA NIM API"},
             {"id": "qwen/qwen2.5-coder-32b-instruct", "name": "Qwen 2.5 Coder 32B", "desc": "Specialized coding LLM on NVIDIA hardware", "context": "128K", "pricing": "NVIDIA NIM API"},
             {"id": "mistralai/mistral-large-2-instruct", "name": "Mistral Large 2", "desc": "123B flagship multilingual & coding model", "context": "128K", "pricing": "NVIDIA NIM API"},
-            {"id": "google/gemma-2-2b-it", "name": "Gemma 2 2B IT", "desc": "Google's lightweight instruction-tuned model", "context": "8K", "pricing": "NVIDIA NIM API"},
+            {"id": "google/gemma-3-27b-it", "name": "Gemma 3 27B IT", "desc": "Google's latest 27B multimodal reasoning model", "context": "32K", "pricing": "NVIDIA NIM API"},
+            {"id": "microsoft/phi-4", "name": "Phi 4", "desc": "Microsoft's 14B highly capable small model", "context": "16K", "pricing": "NVIDIA NIM API"},
         ],
     },
 }

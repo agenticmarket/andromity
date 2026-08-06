@@ -1,10 +1,11 @@
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.widget import Widget
-from textual.widgets import Static, Label, Markdown
+from textual.widgets import Static, Label, Markdown, Collapsible
 from rich.markup import escape
 from textual.markup import MarkupError
 from andromity.tui.markup_utils import safe_markup, safe_update
+import time
 
 class ChatMessage(Widget):
     DEFAULT_CSS = """\
@@ -63,6 +64,58 @@ ToolIndicator { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
         safe_update(self.query_one("#tool-status"), f"  [dim]>[/dim] {escape(self.tool_name)} [green]Done[/green]")
 
 
+class ThinkingBubble(Widget):
+    DEFAULT_CSS = """\
+ThinkingBubble { width: 1fr; height: auto; padding: 0 1; }
+ThinkingBubble Collapsible { border: none; padding: 0; background: transparent; }
+"""
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._text = ""
+        self._start_time = time.time()
+        self._done = False
+        self._timer = None
+        self._md_timer = None
+        self._pending = False
+
+    def compose(self) -> ComposeResult:
+        with Collapsible(title="💭 Thinking (0s)", collapsed=True, id="think-col"):
+            yield Markdown("", id="think-md")
+
+    def on_mount(self):
+        self._timer = self.set_interval(1.0, self._tick_time)
+        self._md_timer = self.set_interval(0.1, self._flush)
+
+    def _tick_time(self):
+        if not self._done:
+            elapsed = int(time.time() - self._start_time)
+            col = self.query_one("#think-col", Collapsible)
+            col.title = f"💭 Thinking ({elapsed}s)"
+
+    def _flush(self):
+        if self._pending:
+            self._pending = False
+            try:
+                md = self.query_one("#think-md", Markdown)
+                md.update(self._text)
+            except Exception:
+                pass
+
+    def append(self, text: str):
+        self._text += text
+        self._pending = True
+
+    def stop_timer(self):
+        self._done = True
+        if self._timer:
+            self._timer.stop()
+        if self._md_timer:
+            self._md_timer.stop()
+        self._flush()  # Final flush
+        elapsed = int(time.time() - self._start_time)
+        col = self.query_one("#think-col", Collapsible)
+        col.title = f"💭 Thinking ({elapsed}s) ▼"
+
 class StreamingMessage(Widget):
     DEFAULT_CSS = """\
 StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
@@ -70,20 +123,36 @@ StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._text = ""
+        self._pending = False
+        self._timer = None
 
     def compose(self) -> ComposeResult:
         yield Static("[bold green]Andromity:[/bold green]", id="assistant-header")
-        yield Markdown(self._text if self._text.strip() else " ", id="md-view")
+        yield Markdown(" ", id="md-view")
+
+    def on_mount(self):
+        self._timer = self.set_interval(0.1, self._flush)
+
+    def _flush(self):
+        if self._pending:
+            self._pending = False
+            try:
+                md = self.query_one("#md-view")
+                md.update(self._text if self._text.strip() else " ")
+            except MarkupError:
+                md.update(escape(self._text) if self._text.strip() else " ")
+            except Exception:
+                pass
 
     def append(self, text: str):
         self._text += text
-        try:
-            md = self.query_one("#md-view")
-            md.update(self._text if self._text.strip() else " ")
-        except MarkupError:
-            md.update(escape(self._text) if self._text.strip() else " ")
-        except Exception:
-            pass
+        self._pending = True
+
+    def finish(self):
+        if self._timer:
+            self._timer.stop()
+        self._pending = True
+        self._flush()
 
 
 class ChatPanel(VerticalScroll):
@@ -107,6 +176,19 @@ class ChatPanel(VerticalScroll):
         else:
             self._append_widget(ChatMessage("system", text))
 
+    def start_thinking_message(self):
+        self._thinking = ThinkingBubble()
+        self._append_widget(self._thinking)
+
+    def append_thinking(self, text: str):
+        if hasattr(self, "_thinking") and getattr(self, "_thinking", None):
+            self._thinking.append(text)
+
+    def stop_thinking_message(self):
+        if hasattr(self, "_thinking") and getattr(self, "_thinking", None):
+            self._thinking.stop_timer()
+            self._thinking = None
+
     def start_assistant_message(self):
         self._streaming = StreamingMessage()
         self._append_widget(self._streaming)
@@ -117,6 +199,7 @@ class ChatPanel(VerticalScroll):
 
     def end_assistant_message(self):
         if self._streaming:
+            self._streaming.finish()
             self._messages.append({"role": "assistant", "content": self._streaming._text})
             self._streaming = None
 

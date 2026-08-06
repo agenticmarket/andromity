@@ -115,3 +115,35 @@ def get_current_branch(repo: Repo) -> str:
         return repo.active_branch.name
     except TypeError:
         return "HEAD"
+
+
+def get_file_diff(repo: Repo, rel_path: str) -> str:
+    """Get git diff for a specific relative file path vs HEAD or unstaged changes."""
+    try:
+        norm_path = rel_path.replace("\\", "/")
+        # Try diff vs HEAD first
+        try:
+            diff = repo.git.diff("HEAD", "--", norm_path)
+            if diff:
+                return diff
+        except GitCommandError:
+            pass
+
+        # Try unstaged diff
+        diff = repo.git.diff("--", norm_path)
+        if diff:
+            return diff
+
+        # If untracked, read current content
+        if norm_path in repo.untracked_files:
+            try:
+                full_path = Path(repo.working_tree_dir) / norm_path
+                with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                return f"--- /dev/null\n+++ b/{norm_path}\n@@ -0,0 +1,{len(content.splitlines())} @@\n" + "\n".join(f"+{line}" for line in content.splitlines())
+            except Exception:
+                pass
+        return ""
+    except Exception:
+        return ""
+

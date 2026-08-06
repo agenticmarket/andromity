@@ -1,6 +1,8 @@
+import hashlib
 import os
 import platform
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -46,7 +48,7 @@ class ConfigManager:
         default_config = {
             "default": {
                 "provider": "anthropic",
-                "model": "claude-sonnet-4-20240514",
+                "model": "claude-sonnet-4-6",
                 "profile": "builder",
             },
             "providers": [
@@ -81,16 +83,88 @@ class ConfigManager:
 
     def get_api_key(self, provider_name: str) -> Optional[str]:
         provider_cfg = self.get_provider_config(provider_name)
-        if not provider_cfg:
-            return None
-        key = provider_cfg.get("api_key")
-        if key and key.startswith("$"):
-            env_var = key[1:]
+        if provider_cfg:
+            key = provider_cfg.get("api_key")
+            if key:
+                if key.startswith("$"):
+                    return os.environ.get(key[1:])
+                return key
+        
+        # Fallback to standard env vars
+        env_map = {
+            "anthropic": "ANTHROPIC_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "google": "GEMINI_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
+            "groq": "GROQ_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
+            "nvidia": "NVIDIA_API_KEY",
+        }
+        if provider_name == "google":
+            return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if provider_name == "nvidia":
+            return os.environ.get("NVIDIA_API_KEY") or os.environ.get("NVIDIA_NIM_API_KEY")
+        env_var = env_map.get(provider_name)
+        if env_var:
             return os.environ.get(env_var)
-        return key
+        return None
+
+    def set_api_key(self, provider_name: str, api_key: str):
+        """Set or update the API key for a given provider in config.toml and environment."""
+        providers = self._config_cache.get("providers", [])
+        found = False
+        for p in providers:
+            if p.get("name") == provider_name:
+                p["api_key"] = api_key
+                found = True
+                break
+        if not found:
+            providers.append({"name": provider_name, "type": provider_name, "api_key": api_key})
+            self._config_cache["providers"] = providers
+        self.save()
+
+        # Also set in os.environ for immediate use by litellm
+        env_map = {
+            "anthropic": "ANTHROPIC_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "google": "GEMINI_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
+            "groq": "GROQ_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
+        }
+        env_var = env_map.get(provider_name)
+        if env_var:
+            os.environ[env_var] = api_key
 
     def list_providers(self) -> list:
         return self._config_cache.get("providers", [])
+
+    # ─── Trust Management ────────────────────────────────────────────────
+    def _trust_key(self, path: str) -> str:
+        resolved = str(Path(path).resolve())
+        return "p" + hashlib.sha256(resolved.encode()).hexdigest()[:15]
+
+    def is_trusted(self, path: str) -> bool:
+        key = self._trust_key(path)
+        return key in self._config_cache.get("trusted_projects", {})
+
+    def set_trusted(self, path: str):
+        resolved = str(Path(path).resolve())
+        key = self._trust_key(path)
+        if "trusted_projects" not in self._config_cache:
+            self._config_cache["trusted_projects"] = {}
+        self._config_cache["trusted_projects"][key] = {
+            "path": resolved,
+            "trusted_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.save()
+
+    def revoke_trust(self, path: str):
+        key = self._trust_key(path)
+        trusted = self._config_cache.get("trusted_projects", {})
+        if key in trusted:
+            del trusted[key]
+            self.save()
 
 
 config = ConfigManager()

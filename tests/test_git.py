@@ -1,0 +1,51 @@
+"""Tests for Git operations and file diff utilities."""
+import tempfile
+from pathlib import Path
+from git import Repo
+from andromity.core.git_ops import get_repo, get_file_diff
+
+
+def test_get_repo_invalid_path():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        repo = get_repo(Path(tmpdir))
+        assert repo is None
+
+
+def test_get_repo_valid():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        r = Repo.init(tmpdir)
+        repo = get_repo(Path(tmpdir))
+        assert repo is not None
+        assert Path(repo.working_tree_dir) == Path(tmpdir)
+        repo.close()
+        r.close()
+
+
+def test_get_file_diff_untracked():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        r = Repo.init(tmpdir)
+        test_file = Path(tmpdir) / "hello.py"
+        test_file.write_text("print('hello world')\n", encoding="utf-8")
+        diff = get_file_diff(r, "hello.py")
+        assert "+print('hello world')" in diff
+        r.close()
+
+
+def test_get_file_diff_modified():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        r = Repo.init(tmpdir)
+        with r.config_writer() as writer:
+            writer.set_value("user", "name", "Test")
+            writer.set_value("user", "email", "test@example.com")
+        
+        test_file = Path(tmpdir) / "app.py"
+        test_file.write_text("x = 1\n", encoding="utf-8")
+        r.index.add(["app.py"])
+        r.index.commit("Initial commit")
+
+        # Now modify
+        test_file.write_text("x = 2\n", encoding="utf-8")
+        diff = get_file_diff(r, "app.py")
+        assert "-x = 1" in diff
+        assert "+x = 2" in diff
+        r.close()

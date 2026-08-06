@@ -59,6 +59,19 @@ class Session:
         with open(self.file_path, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, indent=2)
 
+    def rename(self, name: str):
+        """Rename this session and persist."""
+        self.name = name
+        self.save()
+
+    @staticmethod
+    def auto_name_from_message(text: str) -> str:
+        """Generate a session name from the first user message."""
+        cleaned = text.strip().replace("\n", " ").replace("\r", "")
+        if len(cleaned) > 55:
+            cleaned = cleaned[:52] + "..."
+        return cleaned or "New Session"
+
     @classmethod
     def load(cls, file_path: Path) -> "Session":
         with open(file_path, "r", encoding="utf-8") as f:

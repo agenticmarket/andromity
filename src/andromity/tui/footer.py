@@ -31,12 +31,13 @@ ContextPanel {
         yield Static("", id="ctx-model")
         yield Static("", id="ctx-lsp")
 
-    def update_context(self, tokens: int = 0, cost: float = 0.0, profile: str = "builder", model: str = "", ctx_limit: int = 0):
+    def update_context(self, tokens: int = 0, cost: float = 0.0, profile: str = "builder", model: str = "", ctx_limit: int = 0, estimated: bool = False):
         self.tokens = tokens
         self.cost = cost
         self.profile = profile
         try:
-            safe_update(self.query_one("#ctx-tokens"), f"{tokens:,} tokens")
+            tok_prefix = "~" if estimated else ""
+            safe_update(self.query_one("#ctx-tokens"), f"{tok_prefix}{tokens:,} tokens")
             safe_update(self.query_one("#ctx-cost"), f"${cost:.4f} spent")
             safe_update(self.query_one("#ctx-profile"), f"Profile: {escape(profile)}")
             short_model = model.split("/")[-1] if "/" in model else model
@@ -77,6 +78,7 @@ StatusBar {
         self._spinner_idx: int = 0
         self._spinner_timer = None
         self._ctx_limit: int = 0  # max context window for current model
+        self._estimated: bool = False
 
     def compose(self) -> ComposeResult:
         yield Static(self._render_status(), id="status-text")
@@ -98,13 +100,14 @@ StatusBar {
         # Context window usage
         tok = self.tokens
         ctx_part = ""
+        tok_str = f"~{tok:,}" if self._estimated else f"{tok:,}"
         if self._ctx_limit > 0 and tok > 0:
             pct = min(tok / self._ctx_limit * 100, 100.0)
             ctx_k = self._ctx_limit // 1000
             color = "green" if pct < 70 else ("yellow" if pct < 90 else "red")
-            ctx_part = f" [{color}]{tok:,}/{ctx_k}K[/{color}] [{color}]({pct:.0f}%)[/{color}] |"
+            ctx_part = f" [{color}]{tok_str}/{ctx_k}K[/{color}] [{color}]({pct:.0f}%)[/{color}] |"
         else:
-            ctx_part = f" {tok:,} tok |"
+            ctx_part = f" {tok_str} tok |"
 
         return (
             f"{stream_part}"
@@ -121,11 +124,12 @@ StatusBar {
         except Exception:
             pass
 
-    def update_status(self, tokens: int = 0, cost: float = 0.0, profile: str = "builder", model: str = "", ctx_limit: int = 0):
+    def update_status(self, tokens: int = 0, cost: float = 0.0, profile: str = "builder", model: str = "", ctx_limit: int = 0, estimated: bool = False):
         self.tokens = tokens
         self.cost = cost
         self.profile = profile
         self._ctx_limit = ctx_limit
+        self._estimated = estimated
         if "/" in model:
             self._provider, self._model = model.split("/", 1)
         else:

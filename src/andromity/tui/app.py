@@ -16,7 +16,7 @@ from andromity.tui.overlays.trust import TrustPromptOverlay
 from andromity.tui.overlays.session import SessionBrowserOverlay
 from andromity.core.session import Session
 from andromity.core.agent import Agent
-from andromity.core.events import TextDelta, ToolCallStart, ToolCallEnd, Done
+from andromity.core.events import TextDelta, ThinkingDelta, ToolCallStart, ToolCallEnd, Done
 from andromity.core.models import get_context_limit_for_model
 from andromity.core.debug_log import get_logger, LOG_PATH
 from andromity.config import config
@@ -145,25 +145,31 @@ class AndromityApp(App):
                     "⚠ No cloud API key configured. Use [bold cyan]/keys set <provider> <key>[/] or set environment variables."
                 )
 
-    def _update_status(self):
+    def _update_status(self, live_tokens: int | None = None):
         model = config.get("default", "model", "")
         provider = config.get("default", "provider", "")
         display = f"{provider}/{model}" if provider and model else model
         ctx_limit = get_context_limit_for_model(provider, model) if (provider and model) else 0
         ctx = self.query_one(ContextPanel)
+        
+        display_tokens = live_tokens if live_tokens is not None else self.session.token_total
+        is_estimated = live_tokens is not None
+        
         ctx.update_context(
-            tokens=self.session.token_total,
+            tokens=display_tokens,
             cost=self.session.cost_usd,
             profile=self.agent.profile,
             model=display,
             ctx_limit=ctx_limit,
+            estimated=is_estimated
         )
         self.query_one(StatusBar).update_status(
-            tokens=self.session.token_total,
+            tokens=display_tokens,
             cost=self.session.cost_usd,
             profile=self.agent.profile,
             model=display,
             ctx_limit=ctx_limit,
+            estimated=is_estimated
         )
 
     def _on_tool_approval(self, tool_name: str, args: dict) -> bool:
@@ -264,10 +270,22 @@ class AndromityApp(App):
         status_bar.set_streaming(True)
         self._current_task = asyncio.current_task()
         log.info("USER: %s", prompt[:200])
+        estimated_tokens = 0
+        delta_count = 0
+        first_text_seen = False
         try:
             async for event in self.agent.run(prompt):
-                if isinstance(event, TextDelta):
+                if isinstance(event, ThinkingDelta):
+                    if not hasattr(chat, "_thinking") or not getattr(chat, "_thinking", None):
+                        chat.start_thinking_message()
+                    chat.append_thinking(event.text)
+                    estimated_tokens += len(event.text) // 4
+                elif isinstance(event, TextDelta):
+                    if not first_text_seen:
+                        first_text_seen = True
+                        chat.stop_thinking_message()
                     chat.append_text(event.text)
+                    estimated_tokens += len(event.text) // 4
                 elif isinstance(event, ToolCallStart):
                     log.debug("TOOL START: %s", event.tool_name)
                     if self._debug_mode:
@@ -278,7 +296,15 @@ class AndromityApp(App):
                     chat.show_tool_end()
                 elif isinstance(event, Done):
                     log.info("DONE usage=%s", event.usage)
-                    self._update_status()
+                    if event.usage and event.usage.get("total_tokens"):
+                        self._update_status()
+                        estimated_tokens = 0 # reset
+                
+                # Live token update
+                delta_count += 1
+                if delta_count % 10 == 0 and estimated_tokens > 0 and not isinstance(event, Done):
+                    self._update_status(live_tokens=self.session.token_total + estimated_tokens)
+
         except asyncio.CancelledError:
             log.info("Stream cancelled by user")
         except Exception as e:
@@ -287,6 +313,7 @@ class AndromityApp(App):
         finally:
             self._current_task = None
             status_bar.set_streaming(False)
+            chat.stop_thinking_message()
             chat.end_assistant_message()
             self._update_status()
             self.query_one(InputBar).query_one("#input-field").focus()

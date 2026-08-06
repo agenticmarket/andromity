@@ -47,3 +47,38 @@ def test_session_tool_message():
     s = Session(name="t", project_path="/tmp/test")
     s.add_message("tool", content="result", name="read_file", tool_call_id="tc_123")
     assert s.messages[0]["name"] == "read_file" and s.messages[0]["tool_call_id"] == "tc_123"
+
+
+# ─── New feature tests ────────────────────────────────────────────────────────
+
+def test_session_rename():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        s = Session(name="old-name", project_path=tmpdir)
+        s.rename("My New Name")
+        assert s.name == "My New Name"
+        # Persisted
+        loaded = Session.load(s.file_path)
+        assert loaded.name == "My New Name"
+
+
+def test_auto_name_short_message():
+    name = Session.auto_name_from_message("Fix the login bug")
+    assert name == "Fix the login bug"
+
+
+def test_auto_name_long_message():
+    long_msg = "A" * 100
+    name = Session.auto_name_from_message(long_msg)
+    assert len(name) <= 55
+    assert name.endswith("...")
+
+
+def test_auto_name_empty_message():
+    assert Session.auto_name_from_message("   ") == "New Session"
+
+
+def test_auto_name_strips_newlines():
+    name = Session.auto_name_from_message("line one\nline two")
+    assert "\n" not in name
+    assert "line one" in name
+
