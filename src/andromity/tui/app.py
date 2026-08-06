@@ -277,7 +277,6 @@ class AndromityApp(App):
     async def _stream_agent(self, prompt: str):
         chat = self.query_one(ChatPanel)
         status_bar = self.query_one(StatusBar)
-        chat.start_assistant_message()
         status_bar.set_streaming(True)
         self._current_task = asyncio.current_task()
         log.info("USER: %s", prompt[:200])
@@ -295,6 +294,7 @@ class AndromityApp(App):
                     if not first_text_seen:
                         first_text_seen = True
                         chat.stop_thinking_message()
+                        chat.start_assistant_message()
                     chat.append_text(event.text)
                     estimated_tokens += len(event.text) // 4
                 elif isinstance(event, ToolCallStart):
