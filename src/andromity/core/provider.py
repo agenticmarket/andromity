@@ -91,9 +91,11 @@ async def stream_completion(
                         yield ToolCallStart(tool_name=tool_call.function.name, tool_id=current_tool_id)
                     if tool_call.function and getattr(tool_call.function, "arguments", None):
                         yield ToolCallDelta(tool_id=current_tool_id, args_json_chunk=tool_call.function.arguments)
-            elif getattr(delta, "content", None) or getattr(delta, "thinking", None):
+            elif getattr(delta, "content", None) or getattr(delta, "thinking", None) or getattr(delta, "reasoning_content", None):
                 if getattr(delta, "thinking", None):
                     yield ThinkingDelta(text=delta.thinking)
+                if getattr(delta, "reasoning_content", None):
+                    yield ThinkingDelta(text=delta.reasoning_content)
                 if getattr(delta, "content", None) and not current_tool_id:
                     text = delta.content
                     if "<think>" in text:
