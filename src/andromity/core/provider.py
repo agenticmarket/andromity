@@ -31,9 +31,9 @@ async def stream_completion(
         litellm_model = f"ollama_chat/{model}" if not (model.startswith("ollama/") or model.startswith("ollama_chat/")) else model
         base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "http://localhost:11434"
     elif provider_name == "nvidia":
-        # NVIDIA NIM uses OpenAI-compatible API — route via openai/ with explicit base_url
-        litellm_model = f"openai/{model}" if not model.startswith("openai/") else model
-        base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "https://integrate.api.nvidia.com/v1"
+        # Route natively via litellm's nvidia_nim provider (handles auth and endpoints automatically)
+        litellm_model = f"nvidia_nim/{model}" if not model.startswith("nvidia_nim/") else model
+        base_url = (provider_cfg.get("base_url") if provider_cfg else None)
     elif provider_cfg and provider_cfg.get("type") and provider_cfg.get("type") != provider_name:
         litellm_model = f"{provider_cfg.get('type')}/{model}"
         base_url = provider_cfg.get("base_url")
