@@ -26,6 +26,7 @@ ContextPanel {
     def compose(self) -> ComposeResult:
         yield Static("[bold]Context[/]", id="ctx-title")
         yield Static("", id="ctx-session")
+        yield Static("[dim]──────────[/]", id="ctx-sep")
         yield Static("", id="ctx-tokens")
         yield Static("", id="ctx-cost")
         yield Static("", id="ctx-profile")
@@ -68,7 +69,10 @@ class StatusBar(Widget):
     DEFAULT_CSS = """\
 StatusBar {
     height: 1; background: $surface-darken-1; padding: 0 1;
+    layout: horizontal;
 }
+#status-left { width: auto; content-align: left middle; }
+#status-right { width: 1fr; content-align: right middle; }
 """
     tokens: reactive(int) = reactive(0)
     cost: reactive(float) = reactive(0.0)
@@ -81,58 +85,56 @@ StatusBar {
         self._streaming: bool = False
         self._spinner_idx: int = 0
         self._spinner_timer = None
-        self._ctx_limit: int = 0  # max context window for current model
+        self._ctx_limit: int = 0
         self._estimated: bool = False
+        self.cwd: str = ""
 
     def compose(self) -> ComposeResult:
-        yield Static(self._render_status(), id="status-text")
-
-    def _render_status(self) -> str:
-        import datetime
-        now = datetime.datetime.now().strftime("%I:%M %p")
-        version = "v0.1.0"
-        
-        model_part = ""
-        if self._provider and self._model:
-            model_part = f" [bold cyan]{escape(self._provider)}[/bold cyan] [white]{escape(self._model)}[/white] |"
-        elif self._model:
-            model_part = f" [white]{escape(self._model)}[/white] |"
-        else:
-            model_part = " [red]no model[/red] |"
-
-        stream_part = ""
-        if self._streaming:
-            frame = _SPINNER_FRAMES[self._spinner_idx % len(_SPINNER_FRAMES)]
-            stream_part = f" [green]{frame} streaming…[/green] |"
-
-        # Context window usage
-        tok = self.tokens
-        ctx_part = ""
-        tok_str = f"~{tok:,}" if self._estimated else f"{tok:,}"
-        if self._ctx_limit > 0:
-            pct = min(tok / self._ctx_limit * 100, 100.0)
-            ctx_k = self._ctx_limit // 1000
-            color = "green" if pct < 70 else ("yellow" if pct < 90 else "red")
-            ctx_part = f" [{color}]{tok_str}/{ctx_k}K[/{color}] [{color}]({pct:.0f}%)[/{color}] |"
-        else:
-            ctx_part = f" {tok_str} tok |"
-
-        cwd_part = f" [bold magenta]{escape(getattr(self, 'cwd', ''))}[/]" if getattr(self, "cwd", "") else ""
-
-        return (
-            f" [bold]Andromity {version}[/] | {now} |"
-            f"{cwd_part} |"
-            f"{stream_part}"
-            f"{model_part}"
-            f" {escape(self.profile)} |"
-            f"{ctx_part}"
-            f" ${self.cost:.4f}"
-            f"  [dim]/help[/dim]"
-        )
+        yield Static("", id="status-left")
+        yield Static("", id="status-right")
 
     def _refresh_text(self):
         try:
-            safe_update(self.query_one("#status-text"), self._render_status())
+            import datetime
+            now = datetime.datetime.now().strftime("%I:%M %p")
+            version = "v0.1.0"
+            
+            # LEFT SIDE
+            cwd_part = f"[bold magenta]{escape(self.cwd)}[/]" if self.cwd else ""
+            left_text = f"[bold]Andromity {version}[/] | {cwd_part}"
+            
+            # RIGHT SIDE
+            model_part = ""
+            if self._provider and self._model:
+                model_part = f"[bold cyan]{escape(self._provider)}[/] [white]{escape(self._model)}[/] | "
+            elif self._model:
+                model_part = f"[white]{escape(self._model)}[/] | "
+            else:
+                model_part = "[red]no model[/] | "
+
+            stream_part = ""
+            if self._streaming:
+                frame = _SPINNER_FRAMES[self._spinner_idx % len(_SPINNER_FRAMES)]
+                stream_part = f"[green]{frame} streaming…[/] | "
+
+            tok_str = f"~{self.tokens:,}" if self._estimated else f"{self.tokens:,}"
+            if self._ctx_limit > 0:
+                pct = min(self.tokens / self._ctx_limit * 100, 100.0)
+                color = "green" if pct < 70 else ("yellow" if pct < 90 else "red")
+                ctx_part = f"[{color}]{tok_str}/{self._ctx_limit//1000}K ({pct:.0f}%)[/] | "
+            else:
+                ctx_part = f"{tok_str} tok | "
+
+            right_text = (
+                f"{stream_part}{model_part}"
+                f"{escape(self.profile)} | "
+                f"{ctx_part}"
+                f"${self.cost:.4f} | "
+                f"{now} | [dim]/help[/dim]"
+            )
+
+            safe_update(self.query_one("#status-left"), left_text)
+            safe_update(self.query_one("#status-right"), right_text)
         except Exception:
             pass
 
