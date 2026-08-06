@@ -159,7 +159,7 @@ StatusBar {
         perm_mode = getattr(self, "permission_mode", "safe")
         perm_colors = {"safe": "green", "trust": "yellow", "yolo": "red"}
         pcolor = perm_colors.get(perm_mode, "white")
-        perm_part = f" [{pcolor}][{perm_mode.upper()}][/{pcolor}] |"
+        perm_part = f" [{pcolor}]\\[{perm_mode.upper()}\\][/{pcolor}] |"
 
         return (
             f"{stream_part}"
