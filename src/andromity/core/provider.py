@@ -46,7 +46,12 @@ async def stream_completion(
 
     api_key = config.get_api_key(provider_name)
 
-    kwargs: Dict[str, Any] = {"model": litellm_model, "messages": messages, "stream": True}
+    kwargs: Dict[str, Any] = {
+        "model": litellm_model,
+        "messages": messages,
+        "stream": True,
+        "stream_options": {"include_usage": True}
+    }
     if tools:
         kwargs["tools"] = tools
     if api_key:

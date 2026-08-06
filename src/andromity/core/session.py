@@ -39,11 +39,19 @@ class Session:
         self.messages.append(msg)
         self.save()
 
-    def update_usage(self, usage: Dict[str, int]):
+    def update_usage(self, usage: Dict[str, int], model: str = ""):
         self.token_total += usage.get("total_tokens", 0)
         prompt_tokens = usage.get("prompt_tokens", 0)
         completion_tokens = usage.get("completion_tokens", 0)
-        self.cost_usd += (prompt_tokens * 3.0 + completion_tokens * 15.0) / 1_000_000
+        try:
+            import litellm
+            cost_tuple = litellm.cost_per_token(model=model, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+            if cost_tuple:
+                self.cost_usd += sum(cost_tuple)
+            else:
+                self.cost_usd += (prompt_tokens * 3.0 + completion_tokens * 15.0) / 1_000_000
+        except Exception:
+            self.cost_usd += (prompt_tokens * 3.0 + completion_tokens * 15.0) / 1_000_000
         self.save()
 
     def to_dict(self) -> Dict[str, Any]:

@@ -60,7 +60,9 @@ class Agent:
                     last_usage = event.usage
 
             if last_usage:
-                self.session.update_usage(last_usage)
+                from andromity.config import config
+                m = f"{config.get('default', 'provider', 'ollama')}/{config.get('default', 'model', '')}"
+                self.session.update_usage(last_usage, model=m)
             else:
                 prompt_tokens = sum(len(str(m.get("content", ""))) // 4 for m in self.session.messages)
                 completion_tokens = len(assistant_content) // 4
