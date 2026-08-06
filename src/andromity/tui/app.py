@@ -16,7 +16,7 @@ from andromity.tui.overlays.trust import TrustPromptOverlay
 from andromity.tui.overlays.session import SessionBrowserOverlay
 from andromity.core.session import Session
 from andromity.core.agent import Agent
-from andromity.core.events import TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done
+from andromity.core.events import TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult
 from andromity.core.models import get_context_limit_for_model
 from andromity.core.debug_log import get_logger, LOG_PATH
 from andromity.config import config
@@ -297,6 +297,9 @@ class AndromityApp(App):
                 elif isinstance(event, ToolCallEnd):
                     log.debug("TOOL END: %s", event.tool_id)
                     chat.show_tool_end()
+                elif isinstance(event, ToolResult):
+                    log.debug("TOOL RESULT: %s", event.tool_id)
+                    chat.show_tool_result(event.tool_id, event.result)
                 elif isinstance(event, Done):
                     log.info("DONE usage=%s", event.usage)
                     if event.usage and event.usage.get("total_tokens"):

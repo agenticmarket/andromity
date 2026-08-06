@@ -37,3 +37,8 @@ class ToolCallEnd(StreamEvent):
 @dataclass
 class Done(StreamEvent):
     usage: Optional[Dict[str, int]] = None
+
+@dataclass
+class ToolResult(StreamEvent):
+    tool_id: str
+    result: str

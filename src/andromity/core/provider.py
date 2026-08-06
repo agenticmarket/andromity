@@ -93,7 +93,7 @@ async def stream_completion(
             elif getattr(delta, "content", None) or getattr(delta, "thinking", None):
                 if getattr(delta, "thinking", None):
                     yield ThinkingDelta(text=delta.thinking)
-                if getattr(delta, "content", None):
+                if getattr(delta, "content", None) and not current_tool_id:
                     yield TextDelta(text=delta.content)
 
             finish_reason = chunk.choices[0].finish_reason

@@ -6,7 +6,7 @@ from andromity.core.session import Session
 from andromity.core.profiles import get_system_prompt, filter_tools_for_profile
 from andromity.core.tools import CORE_TOOLS, execute_tool
 from andromity.core.events import (
-    StreamEvent, TextDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done
+    StreamEvent, TextDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult
 )
 from andromity.config import config
 
@@ -93,3 +93,4 @@ class Agent:
                         result = f"Error executing {tool_name}: {e}"
 
                 self.session.add_message("tool", content=str(result), name=tool_name, tool_call_id=tool_call["id"])
+                yield ToolResult(tool_id=tool_call["id"], result=str(result))

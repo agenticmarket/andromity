@@ -52,6 +52,7 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
     def compose(self) -> ComposeResult:
         with Collapsible(title=f"  [dim]>[/dim] {escape(self.tool_name)} [yellow]Running...[/yellow]", collapsed=True, id="tool-col"):
             yield Static("", id="tool-args", classes="dim")
+            yield Static("", id="tool-result")
 
     def on_mount(self):
         self._timer = self.set_interval(0.5, self._tick)
@@ -59,7 +60,16 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
     def append_args(self, args_chunk: str):
         self._args_json += args_chunk
         try:
-            safe_update(self.query_one("#tool-args"), escape(self._args_json))
+            safe_update(self.query_one("#tool-args"), f"Args: {escape(self._args_json)}")
+        except Exception:
+            pass
+
+    def append_result(self, result: str):
+        try:
+            res_str = result
+            if len(res_str) > 2000:
+                res_str = res_str[:2000] + "\n... [truncated]"
+            safe_update(self.query_one("#tool-result"), f"\nResult:\n{escape(res_str)}")
         except Exception:
             pass
 
@@ -225,16 +235,19 @@ class ChatPanel(VerticalScroll):
         self._append_widget(self._streaming)
 
     def append_text(self, text: str):
+        if not getattr(self, "_streaming", None):
+            self.start_assistant_message()
         if self._streaming:
             self._streaming.append(text)
 
     def end_assistant_message(self):
-        if self._streaming:
+        if getattr(self, "_streaming", None):
             self._streaming.finish()
             self._messages.append({"role": "assistant", "content": self._streaming._text})
             self._streaming = None
 
     def show_tool_start(self, tool_name: str):
+        self.end_assistant_message()
         self._append_widget(ToolIndicator(tool_name))
 
     def append_tool_args(self, args_chunk: str):
@@ -242,6 +255,14 @@ class ChatPanel(VerticalScroll):
             indicators = self.query(ToolIndicator)
             if indicators:
                 indicators.last().append_args(args_chunk)
+        except Exception:
+            pass
+
+    def show_tool_result(self, tool_id: str, result: str):
+        try:
+            indicators = self.query(ToolIndicator)
+            if indicators:
+                indicators.last().append_result(result)
         except Exception:
             pass
 
