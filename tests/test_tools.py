@@ -24,7 +24,7 @@ def test_write_and_read_file(monkeypatch):
         _trusted(monkeypatch, tmpdir)
         path = os.path.join(tmpdir, "test.txt")
         assert "Successfully" in write_file(path, "hello world")
-        assert read_file(path) == "hello world"
+        assert "hello world" in read_file(path)
 
 
 def test_edit_file(monkeypatch):
@@ -33,7 +33,7 @@ def test_edit_file(monkeypatch):
         path = os.path.join(tmpdir, "test.txt")
         write_file(path, "foo bar baz")
         assert "Successfully" in edit_file(path, "bar", "qux")
-        assert read_file(path) == "foo qux baz"
+        assert "foo qux baz" in read_file(path)
 
 
 def test_edit_file_not_found(monkeypatch):
@@ -57,8 +57,21 @@ def test_read_file_with_lines(monkeypatch):
         path = os.path.join(tmpdir, "test.txt")
         write_file(path, "line1\nline2\nline3\nline4\n")
         content = read_file(path, start=2, end=3)
-        assert "line2" in content and "line3" in content
+        assert "2: line2" in content and "3: line3" in content
         assert "line1" not in content and "line4" not in content
+
+
+def test_read_file_large_bounded(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _trusted(monkeypatch, tmpdir)
+        path = os.path.join(tmpdir, "large.txt")
+        lines = [f"line {i}" for i in range(1, 600)]
+        write_file(path, "\n".join(lines))
+        content = read_file(path, max_lines=50)
+        assert "Showing lines 1 to 50" in content
+        assert "1: line 1" in content
+        assert "50: line 50" in content
+        assert "line 51" not in content
 
 
 def test_list_dir(monkeypatch):
@@ -81,7 +94,11 @@ def test_execute_tool_dispatch(monkeypatch):
         _trusted(monkeypatch, tmpdir)
         path = os.path.join(tmpdir, "test.txt")
         assert "Successfully" in execute_tool("write_file", {"path": path, "content": "test"})
-        assert execute_tool("read_file", {"path": path}) == "test"
+        assert "test" in execute_tool("read_file", {"path": path})
+        grep_res = execute_tool("grep_search", {"query": "test", "path": tmpdir})
+        assert "test.txt" in grep_res
+        find_res = execute_tool("find_files", {"pattern": "*.txt", "path": tmpdir})
+        assert "test.txt" in find_res
 
 
 def test_execute_tool_unknown():

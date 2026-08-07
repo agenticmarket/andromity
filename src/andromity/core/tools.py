@@ -72,7 +72,7 @@ def _ensure_snapshot():
         create_pre_edit_snapshot(repo)
 
 
-def read_file(path: str, start: Optional[int] = None, end: Optional[int] = None) -> str:
+def read_file(path: str, start: Optional[int] = None, end: Optional[int] = None, max_lines: int = 500) -> str:
     p = Path(path).resolve()
     try:
         _assert_safe_path(p)
@@ -81,12 +81,37 @@ def read_file(path: str, start: Optional[int] = None, end: Optional[int] = None)
     if not p.is_file():
         return f"Error: File '{path}' does not exist."
     try:
-        with open(p, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        if start is not None and end is not None:
-            lines = lines[start - 1 : end]
-        content = "".join(lines)
-        return content if content else f"File '{path}' is empty."
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+        total_lines = len(all_lines)
+        if total_lines == 0:
+            return f"File '{path}' is empty."
+
+        # Range specified
+        if start is not None or end is not None:
+            s = max(1, start if start is not None else 1)
+            e = min(total_lines, end if end is not None else total_lines)
+            if s > total_lines:
+                return f"Error: start line {s} exceeds total lines ({total_lines})."
+            if s > e:
+                return f"Error: start line {s} is greater than end line {e}."
+            selected = all_lines[s - 1 : e]
+            numbered = [f"{s + i}: {line}" for i, line in enumerate(selected)]
+            header = f"File: {path} | Total Lines: {total_lines} | Showing lines {s} to {e}"
+            return header + "\n" + "".join(numbered)
+
+        # Default bounded view if file is large
+        if total_lines > max_lines:
+            selected = all_lines[:max_lines]
+            numbered = [f"{1 + i}: {line}" for i, line in enumerate(selected)]
+            header = (
+                f"File: {path} | Total Lines: {total_lines} | Showing lines 1 to {max_lines}\n"
+                f"[NOTE: File has {total_lines} lines. Showing first {max_lines}. Use start={max_lines + 1}, end={min(total_lines, max_lines * 2)} to view more.]"
+            )
+            return header + "\n" + "".join(numbered)
+        else:
+            numbered = [f"{1 + i}: {line}" for i, line in enumerate(all_lines)]
+            return "".join(numbered)
     except Exception as e:
         return f"Error reading file: {e}"
 
@@ -153,7 +178,7 @@ def shell_exec(command: str, timeout: int = 30) -> str:
         return f"Error executing command: {e}"
 
 
-def list_dir(path: str = ".") -> str:
+def list_dir(path: str = ".", show_hidden: bool = False) -> str:
     p = Path(path).resolve()
     try:
         _assert_safe_path(p)
@@ -162,16 +187,66 @@ def list_dir(path: str = ".") -> str:
     if not p.is_dir():
         return f"Error: Directory '{path}' does not exist."
     try:
+        from andromity.core.search import DEFAULT_EXCLUDED_DIRS
         items = []
         for item in p.iterdir():
-
-            kind = "DIR " if item.is_dir() else "FILE"
-            items.append(f"{kind}\t{item.name}")
+            name = item.name
+            if not show_hidden:
+                if name in DEFAULT_EXCLUDED_DIRS or (name.startswith(".") and name != ".andromity"):
+                    continue
+            if item.is_dir():
+                items.append(f"[DIR]  {name}/")
+            else:
+                try:
+                    size = item.stat().st_size
+                    if size < 1024:
+                        size_str = f"{size} B"
+                    elif size < 1024 * 1024:
+                        size_str = f"{size / 1024:.1f} KB"
+                    else:
+                        size_str = f"{size / (1024 * 1024):.1f} MB"
+                    items.append(f"[FILE] {name} ({size_str})")
+                except Exception:
+                    items.append(f"[FILE] {name}")
         if not items:
             return f"Directory '{path}' is empty."
         return "\n".join(sorted(items))
     except Exception as e:
         return f"Error listing directory: {e}"
+
+
+def grep_search(
+    query: str,
+    path: str = ".",
+    case_sensitive: bool = False,
+    file_pattern: Optional[str] = None,
+    max_results: int = 50,
+) -> str:
+    """Search for text or regex patterns across the codebase."""
+    p = Path(path).resolve()
+    try:
+        _assert_safe_path(p)
+    except Exception as e:
+        return f"Error in grep_search: {e}"
+    from andromity.core.search import grep_search as core_grep_search
+    return core_grep_search(
+        query=query,
+        path=str(p),
+        case_sensitive=case_sensitive,
+        file_pattern=file_pattern,
+        max_results=max_results,
+    )
+
+
+def find_files(pattern: str = "*", path: str = ".", max_results: int = 50) -> str:
+    """Find files matching a glob pattern across the codebase."""
+    p = Path(path).resolve()
+    try:
+        _assert_safe_path(p)
+    except Exception as e:
+        return f"Error in find_files: {e}"
+    from andromity.core.search import find_files as core_find_files
+    return core_find_files(pattern=pattern, path=str(p), max_results=max_results)
 
 
 def write_plan(title: str, steps: list, description: str = "") -> str:
@@ -239,15 +314,49 @@ CORE_TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Reads the contents of a file.",
+            "description": "Reads the contents of a file with line numbers (e.g. '1: ...', '2: ...'). For large files (>500 lines), returns the first 500 lines by default. Use start and end to view specific line ranges.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Path to the file"},
-                    "start": {"type": "integer", "description": "Starting line number (1-indexed)"},
-                    "end": {"type": "integer", "description": "Ending line number (inclusive)"},
+                    "start": {"type": "integer", "description": "Starting line number (1-indexed, optional)"},
+                    "end": {"type": "integer", "description": "Ending line number (inclusive, optional)"},
                 },
                 "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep_search",
+            "description": "Searches for text or regex patterns across the codebase. Automatically respects .gitignore and skips node_modules, .venv, .git, and binary files.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The text or regex pattern to search for"},
+                    "path": {"type": "string", "description": "Directory path to search in (default is current directory)"},
+                    "case_sensitive": {"type": "boolean", "description": "Whether the search is case-sensitive (default false)"},
+                    "file_pattern": {"type": "string", "description": "Optional glob pattern to filter files (e.g. '*.py', '*.ts')"},
+                    "max_results": {"type": "integer", "description": "Maximum number of results to return (default 50)"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_files",
+            "description": "Finds files matching a glob pattern across the codebase (e.g. '*.py', '*config*', 'src/**/*.tsx'). Automatically excludes node_modules, .venv, and build folders.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Glob pattern to match file names or paths (e.g. '*.py', '*auth*')"},
+                    "path": {"type": "string", "description": "Directory path to search in (default is current directory)"},
+                    "max_results": {"type": "integer", "description": "Maximum number of files to return (default 50)"},
+                },
+                "required": ["pattern"],
             },
         },
     },
@@ -301,11 +410,12 @@ CORE_TOOLS = [
         "type": "function",
         "function": {
             "name": "list_dir",
-            "description": "Lists contents of a directory.",
+            "description": "Lists contents of a directory. Skips node_modules, .venv, .git, and cache folders by default.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Path to the directory (default is current directory)"},
+                    "show_hidden": {"type": "boolean", "description": "Whether to include hidden and ignored files/folders (default false)"},
                 },
             },
         },
@@ -388,6 +498,10 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
     log.debug("TOOL CALL: %s(%s)", name, {k: (str(v)[:80] + '...' if isinstance(v, str) and len(v) > 80 else v) for k, v in args.items()})
     if name == "read_file":
         result = read_file(**args)
+    elif name == "grep_search":
+        result = grep_search(**args)
+    elif name == "find_files":
+        result = find_files(**args)
     elif name == "write_file":
         result = write_file(**args)
     elif name == "edit_file":
