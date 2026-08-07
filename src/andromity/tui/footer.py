@@ -7,6 +7,9 @@ from textual.message import Message
 from textual.binding import Binding
 from rich.markup import escape
 from andromity.tui.markup_utils import safe_update
+from andromity.core.debug_log import get_logger
+
+log = get_logger("footer")
 
 _SPINNER_FRAMES = "⣾⣽⣻⢿⡿⣟⣯⣷"
 
@@ -16,7 +19,7 @@ class ContextPanel(Widget):
 ContextPanel {
     padding: 1 1;
 }
-#ctx-title { height: 3; }
+#ctx-title { height: 1; }
 """
     tokens: reactive(int) = reactive(0)
     cost: reactive(float) = reactive(0.0)
@@ -24,8 +27,6 @@ ContextPanel {
 
     def compose(self) -> ComposeResult:
         yield Static("[bold]Context[/]", id="ctx-title")
-        yield Static("", id="ctx-session")
-        yield Static("[dim]──────────[/]", id="ctx-sep")
         yield Static("", id="ctx-tokens")
         yield Static("", id="ctx-cost")
         yield Static("", id="ctx-profile")
@@ -37,16 +38,12 @@ ContextPanel {
         self.cost = cost
         self.profile = profile
         try:
-            if session_name:
-                short_sess = session_name if len(session_name) <= 15 else session_name[:12] + "..."
-                safe_update(self.query_one("#ctx-session"), f"Session:\n[bold cyan]{escape(short_sess)}[/]")
             tok_prefix = "~" if estimated else ""
             safe_update(self.query_one("#ctx-tokens"), f"{tok_prefix}{tokens:,} tokens")
             safe_update(self.query_one("#ctx-cost"), f"${cost:.4f} spent")
             safe_update(self.query_one("#ctx-profile"), f"Profile: {escape(profile)}")
             short_model = model.split("/")[-1] if "/" in model else model
             safe_update(self.query_one("#ctx-model"), f"[dim]{escape(short_model or '\u2014')}[/dim]")
-            # Context window usage bar
             if ctx_limit > 0:
                 pct = min(tokens / ctx_limit * 100, 100.0)
                 bar_width = 10
@@ -59,7 +56,7 @@ ContextPanel {
                     f"[dim]{tokens:,} / {ctx_k}K ctx[/dim]"
                 )
             else:
-                safe_update(self.query_one("#ctx-lsp"), "[dim]context: \u2014[/dim]")
+                safe_update(self.query_one("#ctx-lsp"), f"[dim]{tokens:,} tokens used[/dim]")
         except Exception:
             pass
 
@@ -121,6 +118,7 @@ StatusBar {
         self._spinner_timer = None
         self._ctx_limit: int = 0
         self._estimated: bool = False
+        self._hint: str = ""
 
     def compose(self) -> ComposeResult:
         yield Static("", id="status-text")
@@ -141,19 +139,15 @@ StatusBar {
 
         tok = self.tokens
         ctx_part = ""
-        tok_str = f"~{tok:,}" if self._estimated else f"{tok:,}"
+        tok_str = f"~{tok // 1000}K" if self._estimated and tok >= 1000 else (f"{tok // 1000}K" if tok >= 1000 else f"{tok}")
         if self._ctx_limit > 0:
             pct = min(tok / self._ctx_limit * 100, 100.0)
             ctx_k = self._ctx_limit // 1000
             color = "green" if pct < 70 else ("yellow" if pct < 90 else "red")
-            ctx_part = f" [{color}]{tok_str}/{ctx_k}K[/{color}] [{color}]({pct:.0f}%)[/{color}] |"
+            warn_icon = " ⚠" if pct >= 90 else ""
+            ctx_part = f" [{color}]{tok_str}/{ctx_k}K{warn_icon} tok[/{color}] |"
         else:
             ctx_part = f" {tok_str} tok |"
-
-        sess_part = ""
-        if hasattr(self, "session_name") and self.session_name:
-            short_sess = self.session_name if len(self.session_name) <= 15 else self.session_name[:12] + "..."
-            sess_part = f" [bold cyan]{escape(short_sess)}[/] |"
 
         perm_mode = getattr(self, "permission_mode", "safe")
         perm_colors = {"safe": "green", "trust": "yellow", "yolo": "red"}
@@ -162,13 +156,12 @@ StatusBar {
 
         return (
             f"{stream_part}"
-            f"{sess_part}"
             f"{model_part}"
             f" {escape(self.profile)} |"
             f"{perm_part}"
             f"{ctx_part}"
             f" ${self.cost:.4f}"
-            f"  [dim]/help[/dim]"
+            f"  [dim]{escape(self._hint) if self._hint else '/help'}[/dim]"
         )
 
     def _refresh_text(self):
@@ -207,6 +200,16 @@ StatusBar {
                 self._spinner_timer = None
             self._refresh_text()
 
+    def show_hint(self, text: str, duration: float = 2.0):
+        """Show a temporary hint message in the status bar."""
+        self._hint = text
+        self._refresh_text()
+        self.set_timer(duration, self._clear_hint)
+
+    def _clear_hint(self):
+        self._hint = ""
+        self._refresh_text()
+
     def _tick_spinner(self):
         self._spinner_idx = (self._spinner_idx + 1) % len(_SPINNER_FRAMES)
         self._refresh_text()
@@ -228,6 +231,97 @@ class ChatInput(TextArea):
 
     def action_newline(self):
         self.insert("\n")
+
+
+class QueuePanel(Widget):
+    """Static area above input bar showing queued messages."""
+    DEFAULT_CSS = """\
+QueuePanel {
+    height: auto;
+    display: none;
+    padding: 0 1;
+    background: $surface-darken-1;
+    border-top: solid $accent-darken-2;
+}
+QueuePanel.has-items { display: block; }
+#queue-list { height: auto; }
+"""
+    def compose(self) -> ComposeResult:
+        yield Static("", id="queue-list")
+
+    def update_queue(self, items: list[str]):
+        try:
+            el = self.query_one("#queue-list", Static)
+            if not items:
+                safe_update(el, "")
+                self.remove_class("has-items")
+                return
+            lines = []
+            for i, item in enumerate(items, 1):
+                short = item if len(item) <= 50 else item[:47] + "..."
+                lines.append(f"[yellow]⏳ #{i}:[/] [dim]{escape(short)}[/]")
+            safe_update(el, "\n".join(lines))
+            self.add_class("has-items")
+        except Exception as e:
+            log.warning("QueuePanel.update_queue error: %s", e)
+
+class CronStatusPanel(Widget):
+    """Sidebar panel showing active cron jobs and recent status notifications."""
+    DEFAULT_CSS = """\
+CronStatusPanel {
+    height: auto; max-height: 15;
+    padding: 1 1;
+    border-top: solid $accent-darken-2;
+    display: none;
+}
+CronStatusPanel.has-crons { display: block; }
+#cron-status-title { height: 1; text-style: bold; margin-bottom: 1; }
+#cron-jobs-list { height: auto; max-height: 8; overflow-y: auto; }
+#cron-notifs { height: auto; margin-top: 1; color: $text-muted; }
+"""
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._jobs = []
+        self._notifs = []
+
+    def compose(self) -> ComposeResult:
+        yield Static("⏱ Cron Status", id="cron-status-title")
+        yield Static("", id="cron-jobs-list")
+        yield Static("", id="cron-notifs")
+
+    def refresh_jobs(self, jobs: list):
+        self._jobs = jobs
+        if not jobs:
+            self.remove_class("has-crons")
+        else:
+            self.add_class("has-crons")
+        
+        try:
+            list_el = self.query_one("#cron-jobs-list", Static)
+            lines = []
+            for j in jobs:
+                status_icon = {"never": "○", "success": "✓", "failed": "✗"}.get(j.last_status, "○")
+                color = {"never": "dim", "success": "green", "failed": "red"}.get(j.last_status, "dim")
+                enabled_c = "white" if j.enabled else "dim"
+                next_run = j.next_run_in() if j.enabled else "off"
+                lines.append(f"[{color}]{status_icon}[/] [{enabled_c}]{escape(j.name)}[/] [dim]({next_run})[/]")
+            safe_update(list_el, "\n".join(lines))
+        except Exception as e:
+            log.warning("CronStatusPanel error: %s", e)
+
+    def push_notification(self, msg: str):
+        self._notifs.append(msg)
+        if len(self._notifs) > 5:
+            self._notifs.pop(0)
+        try:
+            notifs_el = self.query_one("#cron-notifs", Static)
+            lines = []
+            for n in self._notifs:
+                lines.append(f"• {n}")
+            safe_update(notifs_el, "\n".join(lines))
+        except Exception:
+            pass
+
 
 
 class InputBar(Widget):
@@ -256,7 +350,7 @@ InputBar {
 """
     def compose(self) -> ComposeResult:
         yield ChatInput(id="input-field")
-        yield Static("Ask me anything… (Enter to send, /help for commands)", id="input-placeholder")
+        yield Static("Ask Andromity anything… (Enter to send, /help for commands)", id="input-placeholder")
 
     def on_mount(self):
         self._update_placeholder()

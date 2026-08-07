@@ -141,3 +141,32 @@ class Plan:
     def progress(self) -> tuple[int, int]:
         done = sum(1 for s in self.steps if s.status in ("done", "skipped"))
         return done, len(self.steps)
+
+    # ── JSON serialization (for session storage) ─────────────────────────────
+
+    def to_dict(self) -> dict:
+        return {
+            "title": self.title,
+            "description": self.description,
+            "status": self.status,
+            "steps": [
+                {"index": s.index, "text": s.text, "status": s.status}
+                for s in self.steps
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict, project_path: str = "") -> "Plan":
+        plan = cls(
+            title=data.get("title", "Untitled Plan"),
+            description=data.get("description", ""),
+            status=data.get("status", "pending_approval"),
+            project_path=project_path,
+        )
+        for s in data.get("steps", []):
+            plan.steps.append(PlanStep(
+                index=s.get("index", 0),
+                text=s.get("text", ""),
+                status=s.get("status", "pending"),
+            ))
+        return plan

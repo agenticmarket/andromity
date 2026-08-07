@@ -7,6 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from andromity.core.debug_log import get_logger
+
+log = get_logger("cron")
+
 
 # ── Cron spec parsing ──────────────────────────────────────────────────────
 
@@ -40,11 +44,13 @@ class CronJob:
     allowed_commands: List[str]
     on_failure: str        # "notify" | "disable" | "retry"
     enabled: bool = True
+    timeout_seconds: int = 600  # max wall-clock time per run; 0 = unlimited
     last_run: Optional[str] = None
-    last_status: str = "never"   # "never" | "success" | "failed"
+    last_status: str = "never"   # "never" | "success" | "failed" | "timeout"
     last_error: Optional[str] = None
     run_count: int = 0
     fail_count: int = 0
+    retry_count: int = 0
 
     def is_due(self) -> bool:
         if not self.enabled:
@@ -56,15 +62,23 @@ class CronJob:
         return elapsed >= self.interval_seconds
 
     def mark_run(self, success: bool, error: Optional[str] = None):
-        self.last_run = datetime.now(timezone.utc).isoformat()
         self.run_count += 1
         if success:
             self.last_status = "success"
             self.last_error = None
+            self.retry_count = 0
+            self.last_run = datetime.now(timezone.utc).isoformat()
         else:
             self.last_status = "failed"
             self.last_error = error
             self.fail_count += 1
+            if self.on_failure == "retry" and self.retry_count < 3:
+                self.retry_count += 1
+                # Do not update last_run, so it fires again next tick
+            else:
+                self.retry_count = 0
+                self.last_run = datetime.now(timezone.utc).isoformat()
+                
             if self.on_failure == "disable":
                 self.enabled = False
 
@@ -107,10 +121,83 @@ class CronStore:
             return []
 
     def save(self, crons: List[CronJob]):
-        self._path.write_text(
-            json.dumps({"crons": [c.to_dict() for c in crons]}, indent=2),
-            encoding="utf-8",
-        )
+        import os
+        tmp_path = self._path.with_suffix(".json.tmp")
+        try:
+            tmp_path.write_text(
+                json.dumps({"crons": [c.to_dict() for c in crons]}, indent=2),
+                encoding="utf-8",
+            )
+            os.replace(tmp_path, self._path)
+        except Exception as e:
+            log.error("Failed to save crons: %s", e)
+            if tmp_path.exists():
+                tmp_path.unlink()
+
+
+# ── Run history ────────────────────────────────────────────────────────────
+
+@dataclass
+class CronRun:
+    """A single execution record for a cron job."""
+    id: str
+    job_id: str
+    job_name: str
+    started_at: str
+    finished_at: Optional[str] = None
+    duration_ms: int = 0
+    status: str = "running"  # "running" | "success" | "failed"
+    prompt: str = ""
+    model: str = ""
+    messages: List[Dict[str, Any]] = field(default_factory=list)
+    tools_used: List[str] = field(default_factory=list)
+    files_modified: List[str] = field(default_factory=list)
+    error: Optional[str] = None
+    output_preview: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "CronRun":
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
+class CronRunStore:
+    """Persists cron run history to .andromity/cron_runs/<job_id>/<run_id>.json"""
+
+    def __init__(self, project_path: str):
+        self._base = Path(project_path) / ".andromity" / "cron_runs"
+        self._base.mkdir(parents=True, exist_ok=True)
+
+    def _job_dir(self, job_id: str) -> Path:
+        d = self._base / job_id
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def save_run(self, run: CronRun):
+        path = self._job_dir(run.job_id) / f"{run.id}.json"
+        path.write_text(json.dumps(run.to_dict(), indent=2), encoding="utf-8")
+
+    def list_runs(self, job_id: str, limit: int = 50) -> List[CronRun]:
+        job_dir = self._job_dir(job_id)
+        runs = []
+        for f in job_dir.glob("*.json"):
+            try:
+                runs.append(CronRun.from_dict(json.loads(f.read_text(encoding="utf-8"))))
+            except Exception:
+                continue
+        runs.sort(key=lambda r: r.started_at, reverse=True)
+        return runs[:limit]
+
+    def get_run(self, job_id: str, run_id: str) -> Optional[CronRun]:
+        path = self._job_dir(job_id) / f"{run_id}.json"
+        if path.exists():
+            try:
+                return CronRun.from_dict(json.loads(path.read_text(encoding="utf-8")))
+            except Exception:
+                pass
+        return None
 
 
 # ── Scheduler ──────────────────────────────────────────────────────────────
@@ -123,6 +210,7 @@ class CronScheduler:
     def __init__(self, project_path: str, on_trigger: Callable[[CronJob], None]):
         self._project_path = project_path
         self._store = CronStore(project_path)
+        self._run_store = CronRunStore(project_path)
         self._crons: List[CronJob] = self._store.load()
         self._on_trigger = on_trigger
         self._task: Optional[asyncio.Task] = None
@@ -139,7 +227,7 @@ class CronScheduler:
 
     def add(self, name: str, prompt: str, schedule: str, provider: str, model: str,
             mode: str = "trust", allowed_commands: Optional[List[str]] = None,
-            on_failure: str = "notify") -> CronJob:
+            on_failure: str = "notify", timeout_seconds: int = 600) -> CronJob:
         interval = parse_interval_seconds(schedule)
         job = CronJob(
             id=str(uuid.uuid4())[:8],
@@ -148,6 +236,7 @@ class CronScheduler:
             provider=provider, model=model,
             mode=mode, allowed_commands=allowed_commands or [],
             on_failure=on_failure,
+            timeout_seconds=timeout_seconds,
         )
         self._crons.append(job)
         self._store.save(self._crons)
@@ -172,23 +261,64 @@ class CronScheduler:
     def list(self) -> List[CronJob]:
         return list(self._crons)
 
-    def mark_result(self, job_id: str, success: bool, error: Optional[str] = None):
+    def mark_result(self, job_id: str, success: bool, error: Optional[str] = None,
+                    run: Optional[CronRun] = None):
         for cron in self._crons:
             if cron.id == job_id:
                 cron.mark_run(success, error)
                 self._store.save(self._crons)
+                if run:
+                    run.status = "success" if success else "failed"
+                    run.error = error
+                    run.finished_at = datetime.now(timezone.utc).isoformat()
+                    # Calculate duration
+                    try:
+                        started = datetime.fromisoformat(run.started_at)
+                        finished = datetime.fromisoformat(run.finished_at)
+                        run.duration_ms = int((finished - started).total_seconds() * 1000)
+                    except Exception:
+                        pass
+                    self._run_store.save_run(run)
                 break
+
+    def start_run(self, job_id: str, prompt: str, model: str) -> Optional[CronRun]:
+        """Create a new run record and return it for tracking."""
+        cron = next((c for c in self._crons if c.id == job_id), None)
+        if not cron:
+            return None
+        run = CronRun(
+            id=str(uuid.uuid4())[:12],
+            job_id=job_id,
+            job_name=cron.name,
+            started_at=datetime.now(timezone.utc).isoformat(),
+            prompt=prompt,
+            model=model,
+        )
+        self._run_store.save_run(run)
+        return run
+
+    def list_runs(self, job_id: str, limit: int = 50) -> List[CronRun]:
+        return self._run_store.list_runs(job_id, limit)
+
+    def get_run(self, job_id: str, run_id: str) -> Optional[CronRun]:
+        return self._run_store.get_run(job_id, run_id)
 
     # ── Internal ───────────────────────────────────────────────────────────
 
     async def _run_loop(self):
+        log.info("Cron scheduler started, checking every %ds", self.CHECK_INTERVAL)
         while True:
             try:
                 await asyncio.sleep(self.CHECK_INTERVAL)
                 for cron in list(self._crons):
                     if cron.is_due():
-                        self._on_trigger(cron)
+                        log.info("Cron '%s' is due, triggering", cron.name)
+                        try:
+                            self._on_trigger(cron)
+                        except Exception as e:
+                            log.error("Cron trigger failed for '%s': %s", cron.name, e)
             except asyncio.CancelledError:
+                log.info("Cron scheduler stopped")
                 break
-            except Exception:
-                pass  # Never crash the scheduler loop
+            except Exception as e:
+                log.error("Cron scheduler error: %s", e)

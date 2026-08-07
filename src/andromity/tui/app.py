@@ -11,7 +11,7 @@ from andromity.tui.panels.chat import ChatPanel
 from andromity.tui.panels.filetree import FileTreePanel
 from andromity.tui.panels.diff import DiffPanel
 from andromity.tui.panels.plan import PlanPanel
-from andromity.tui.footer import StatusBar, InputBar, ContextPanel, AppFooter
+from andromity.tui.footer import StatusBar, InputBar, ContextPanel, AppFooter, QueuePanel, CronStatusPanel
 from andromity.tui.overlays.model import ModelPickerOverlay
 from andromity.tui.overlays.profile import ProfilePickerOverlay
 from andromity.tui.overlays.trust import TrustPromptOverlay
@@ -34,11 +34,15 @@ CSS = """\
 Screen { background: $surface; }
 #main-layout { height: 1fr; }
 #left-panel {
-    width: 24; min-width: 16; max-width: 35;
+    width: 34; min-width: 16; max-width: 35;
     border-right: solid $accent-darken-2; overflow-y: auto;
 }
+.narrow #left-panel { display: none; }
+.narrow #right-sidebar { display: none; }
 #left-panel.force-hidden { display: none; }
 #left-panel.force-show { display: block; }
+#right-sidebar.force-hidden { display: none; }
+#right-sidebar.force-show { display: block !important; }
 #center-panel { width: 1fr; }
 #diff-panel {
     display: none;
@@ -92,8 +96,9 @@ class AndromityApp(App):
         Binding("tab", "focus_next", "Next", show=False),
         Binding("shift+tab", "focus_prev", "Prev", show=False),
         Binding("ctrl+b", "toggle_filetree", "Files", show=True),
+        Binding("ctrl+r", "toggle_right_panel", "Context", show=True),
         Binding("ctrl+d", "toggle_diff", "Viewer", show=True),
-        Binding("ctrl+m", "toggle_model", "Model", show=True),
+        Binding("ctrl+l", "toggle_model", "Model", show=True),
         Binding("ctrl+j", "toggle_profile", "Profile", show=True),
         Binding("ctrl+o", "toggle_sessions", "Sessions", show=True),
         Binding("escape", "escape_pressed", show=False),
@@ -118,6 +123,8 @@ class AndromityApp(App):
         self._cron_scheduler = CronScheduler(self._project_path, on_trigger=self._on_cron_trigger)
         # Register plan callback so PlanPanel updates when agent writes a plan
         register_plan_callback(self._on_plan_written)
+        self._ollama_num_ctx = 0
+        self._cron_running_jobs: set = set()  # tracks which cron job IDs are currently executing
         log.info("=== Andromity started | project=%s ===", self._project_path)
 
     def compose(self) -> ComposeResult:
@@ -127,12 +134,14 @@ class AndromityApp(App):
                 ChatPanel(id="chat"),
                 StatusBar(id="status-bar"),
                 Static("", id="suggestions"),
+                QueuePanel(id="queue-panel"),
                 InputBar(id="input-bar"),
                 id="center-panel",
             ),
             DiffPanel(id="diff-panel"),
             Vertical(
                 ContextPanel(id="context-panel"),
+                CronStatusPanel(id="cron-status"),
                 PlanPanel(self._project_path, id="plan-panel"),
                 id="right-sidebar",
             ),
@@ -157,14 +166,20 @@ class AndromityApp(App):
 
     def on_mount(self):
         self.focus_input()
+        provider = config.get("default", "provider", "")
+        model = config.get("default", "model", "")
+        if provider == "ollama":
+            from andromity.core.models import get_ollama_num_ctx
+            self._ollama_num_ctx = get_ollama_num_ctx(model)
         self._update_status()
         # Start cron scheduler
-        self._cron_scheduler.start()
-        # Load any existing plan
-        from andromity.core.planner import Plan
-        existing_plan = Plan.load(self._project_path)
-        if existing_plan:
-            self.query_one(PlanPanel).load_plan(existing_plan)
+        try:
+            self._cron_scheduler.start()
+            log.info("Cron scheduler started")
+            self.refresh_cron_status()
+        except Exception as e:
+            log.error("Failed to start cron scheduler: %s", e)
+        # Do NOT auto-load stale plan from disk — plans are session-scoped
         # Check trust FIRST before showing welcome
         if not config.is_trusted(self._project_path):
             self.query_one("#trust-overlay").add_class("visible")
@@ -188,20 +203,12 @@ class AndromityApp(App):
             chat.add_system_message(
                 "[yellow]⚠ No model selected.[/] Use [bold cyan]/model[/] or [bold]Ctrl+M[/] to pick a provider and model first."
             )
-            # Auto-open model picker
             self.call_after_refresh(lambda: self.action_toggle_model())
         else:
-            sess_name = escape(self.session.name) if self.session.name != "new-session" else "New Session"
+            short_model = model.split("/")[-1] if "/" in model else model
             chat.add_system_message(
-                f"Welcome to Andromity! Session: [bold]{sess_name}[/]\nProvider: [bold]{provider}[/] | Model: [bold cyan]{model}[/]\n\n"
-                "Quick start:\n"
-                "  Type any message below to start chatting\n"
-                "  /help     Show all commands\n"
-                "  /model    Switch provider & model (Ctrl+M)\n"
-                "  /keys     Check or set your API keys\n"
-                "  /profile  Switch builder/reviewer/planner (Ctrl+J)\n\n"
-                "Set an API key:   /keys set anthropic sk-ant-...\n"
-                "Or use Ollama:    /model then select ollama"
+                f"[dim]Andromity[/] \u2022 [bold cyan]{provider}[/] {short_model}\n"
+                f"[dim]Ask anything\u2026[/]"
             )
 
         if not config.get_api_key("anthropic") and not config.get_api_key("openai") and \
@@ -215,7 +222,10 @@ class AndromityApp(App):
         model = config.get("default", "model", "")
         provider = config.get("default", "provider", "")
         display = f"{provider}/{model}" if provider and model else model
-        ctx_limit = get_context_limit_for_model(provider, model) if (provider and model) else 0
+        if provider == "ollama" and getattr(self, "_ollama_num_ctx", 0) > 0:
+            ctx_limit = self._ollama_num_ctx
+        else:
+            ctx_limit = get_context_limit_for_model(provider, model) if (provider and model) else 0
         
         display_tokens = live_tokens if live_tokens is not None else self.session.token_total
         is_estimated = live_tokens is not None
@@ -245,6 +255,13 @@ class AndromityApp(App):
             permission_mode=config.get("default", "permission_mode", "safe")
         )
         self.query_one(AppFooter).update_footer(cwd=self._project_path)
+
+    def refresh_cron_status(self):
+        try:
+            panel = self.query_one(CronStatusPanel)
+            panel.refresh_jobs(self._cron_scheduler.list())
+        except Exception:
+            pass
 
     async def _on_tool_approval(self, tool_name: str, args: dict) -> bool:
         if not config.is_trusted(self._project_path):
@@ -296,30 +313,52 @@ class AndromityApp(App):
     # ── Plan callbacks ────────────────────────────────────────────────────────
 
     def _on_plan_written(self, plan):
-        """Called by tools.py when agent writes a plan. Runs in agent thread — schedule on UI thread."""
+        """Called by tools.py on write_plan AND update_plan_step. Runs in agent thread."""
         if plan:
-            self.call_from_thread(self._load_plan_in_ui, plan)
+            self.call_from_thread(self._refresh_plan_in_ui, plan)
 
-    def _load_plan_in_ui(self, plan):
+    def _refresh_plan_in_ui(self, plan):
         try:
-            self.query_one(PlanPanel).load_plan(plan)
-            chat = self.query_one(ChatPanel)
-            chat.add_system_message(
-                f"📋 [bold]Plan ready:[/] [cyan]{escape(plan.title)}[/] ({len(plan.steps)} steps)\n"
-                "[dim]Review the plan in the right panel → Approve or Reject[/]"
-            )
+            panel = self.query_one(PlanPanel)
+            if panel._plan is plan:
+                # Same plan object — step status changed, just refresh
+                panel.refresh_plan()
+            else:
+                # New plan — load it and notify user
+                panel.load_plan(plan)
+                # Auto-show right sidebar so user can see approve/reject buttons
+                sidebar = self.query_one("#right-sidebar")
+                if sidebar.styles.display == "none":
+                    sidebar.remove_class("force-hidden")
+                    sidebar.add_class("force-show")
+                chat = self.query_one(ChatPanel)
+                chat.add_system_message(
+                    f"📋 [bold]Plan ready:[/] [cyan]{escape(plan.title)}[/] ({len(plan.steps)} steps)\n"
+                    "[dim]Review the plan in the right panel → Approve or Reject[/]"
+                )
         except Exception:
             pass
 
     def _on_plan_approved(self, plan):
         """Called when user clicks Approve in PlanPanel."""
+        # Save approved state to session
+        if self.session:
+            self.session.save_plan(plan.to_dict())
         chat = self.query_one(ChatPanel)
-        chat.add_system_message(f"[green]✓ Plan approved.[/] Agent may now proceed.")
-        # Feed approval back to agent as a new message so it can proceed automatically
-        self._process_message("The plan was approved. You may now proceed with the implementation.")
+        chat.add_system_message(f"[green]✓ Plan approved.[/] Proceeding with implementation...")
+        # Send approval to agent directly (not shown in chat as user message)
+        self._send_to_agent(
+            "The plan was approved. Before executing, write a file called '.andromity/task.md' "
+            "with a short summary of the task (title + 1-2 sentence description of what will be built). "
+            "Then proceed with the implementation step by step. "
+            "Do NOT ask for confirmation — just execute each step directly."
+        )
 
     def _on_plan_rejected(self, plan, feedback: str):
         """Called when user clicks Reject + submits feedback in PlanPanel."""
+        # Save rejected state to session
+        if self.session:
+            self.session.save_plan(plan.to_dict())
         chat = self.query_one(ChatPanel)
         msg = f"[red]✗ Plan rejected.[/]"
         if feedback:
@@ -333,13 +372,21 @@ class AndromityApp(App):
     # ── Cron callbacks ────────────────────────────────────────────────────────
 
     def _on_cron_trigger(self, cron: CronJob):
-        """Called from scheduler loop (async task). Must be thread-safe."""
-        self.call_from_thread(self._run_cron_job, cron)
+        """Called from scheduler loop (async task)."""
+        if cron.id in getattr(self, "_cron_running_jobs", set()):
+            log.debug("Skipping cron trigger for '%s': already running", cron.name)
+            return
+        
+        # Mark as running immediately so the next scheduler tick (in 10s) 
+        # doesn't re-trigger it before the UI thread actually starts the worker.
+        self._cron_running_jobs.add(cron.id)
+        log.info("Cron trigger fired for '%s'", cron.name)
+        self.call_later(self._run_cron_job, cron)
 
     def _run_cron_job(self, cron: CronJob):
         """Schedule cron agent run on the UI thread."""
-        chat = self.query_one(ChatPanel)
-        chat.add_system_message(
+        cron_panel = self.query_one(CronStatusPanel)
+        cron_panel.push_notification(
             f"⏱ [yellow bold]Cron:[/] [bold]{escape(cron.name)}[/] is firing…"
         )
         # Temporarily switch to cron's model/provider if different
@@ -351,27 +398,77 @@ class AndromityApp(App):
             config.set("default", "provider", cron.provider)
             config.set("default", "model", cron.model)
 
-        # Create a temporary agent with cron's permission mode
+        # Create a temporary agent with isolated session and cron's permission mode
+        cron_session = Session(name=f"cron-{cron.name}", project_path=self._project_path)
         cron_agent = Agent(
-            self.session,
+            cron_session,
             profile=self.agent.profile,
             on_tool_approval=self._make_cron_approval(cron),
         )
 
+        # Start a run record for history tracking
+        model_display = f"{cron.provider}/{cron.model}"
+        run = self._cron_scheduler.start_run(cron.id, cron.prompt, model_display)
+
         async def _run():
+            run_messages = []
+            tools_used = set()
+            files_modified = set()
+            output_text = ""
+            # ID is already added to _cron_running_jobs in _on_cron_trigger
+
+            async def _execute():
+                nonlocal output_text
+                async for event in cron_agent.run(cron.prompt):
+                    if isinstance(event, TextDelta):
+                        output_text += event.text
+                    elif isinstance(event, ToolCallStart):
+                        tools_used.add(event.tool_name)
+
             try:
-                # stream the cron prompt
-                async for _ in cron_agent.run(cron.prompt):
-                    pass
-                self._cron_scheduler.mark_result(cron.id, success=True)
-                chat.add_system_message(f"[green]✓ Cron '{escape(cron.name)}' completed.[/]")
-            except Exception as e:
-                self._cron_scheduler.mark_result(cron.id, success=False, error=str(e))
-                chat.add_system_message(
-                    f"[red]✗ Cron '{escape(cron.name)}' failed:[/] {escape(str(e))}\n"
-                    f"[dim]Use /cron to view details or disable.[/]"
+                timeout = cron.timeout_seconds if cron.timeout_seconds > 0 else None
+                if timeout:
+                    await asyncio.wait_for(_execute(), timeout=timeout)
+                else:
+                    await _execute()
+
+                # Collect session messages from this run
+                run_messages = cron_session.messages[-10:]
+                if run:
+                    run.messages = run_messages
+                    run.tools_used = sorted(tools_used)
+                    run.files_modified = sorted(files_modified)
+                    run.output_preview = output_text[:500] if output_text else ""
+
+                self._cron_scheduler.mark_result(cron.id, success=True, run=run)
+                cron_panel.push_notification(f"[green]✓ Cron '{escape(cron.name)}' completed.[/]")
+                self.refresh_cron_status()
+
+            except asyncio.TimeoutError:
+                timeout_msg = f"Timed out after {cron.timeout_seconds}s"
+                log.warning("Cron '%s' timed out after %ds", cron.name, cron.timeout_seconds)
+                if run:
+                    run.error = timeout_msg
+                self._cron_scheduler.mark_result(cron.id, success=False, error=timeout_msg, run=run)
+                # Mark status as timeout distinctly so history shows it clearly
+                for c in self._cron_scheduler.list():
+                    if c.id == cron.id:
+                        c.last_status = "timeout"
+                        break
+                cron_panel.push_notification(
+                    f"[yellow]⏱ Cron '{escape(cron.name)}' timed out[/] after {cron.timeout_seconds}s. "
+                    f"Job is free to run again next interval."
                 )
+                self.refresh_cron_status()
+
+            except Exception as e:
+                if run:
+                    run.error = str(e)
+                self._cron_scheduler.mark_result(cron.id, success=False, error=str(e), run=run)
+                cron_panel.push_notification(f"[red]✗ Cron '{escape(cron.name)}' failed:[/] {escape(str(e))}")
+                self.refresh_cron_status()
             finally:
+                self._cron_running_jobs.discard(cron.id)  # ALWAYS release — timeout, fail, or success
                 if is_different:
                     config.set("default", "provider", current_provider)
                     config.set("default", "model", current_model)
@@ -388,14 +485,14 @@ class AndromityApp(App):
                 if cron.allowed_commands and any(command.startswith(p) for p in cron.allowed_commands):
                     return True
                 # Block unapproved commands — notify but don't prompt
-                chat = self.query_one(ChatPanel)
-                chat.add_system_message(
+                cron_panel = self.query_one(CronStatusPanel)
+                cron_panel.push_notification(
                     f"[yellow]⏱ Cron '{escape(cron.name)}':[/] blocked '{escape(tool_name)}' (not in allowlist)"
                 )
                 return False
             if tool_name in ("write_file", "edit_file") and cron.mode == "safe":
-                chat = self.query_one(ChatPanel)
-                chat.add_system_message(
+                cron_panel = self.query_one(CronStatusPanel)
+                cron_panel.push_notification(
                     f"[yellow]⏱ Cron '{escape(cron.name)}':[/] blocked '{escape(tool_name)}' (safe mode)"
                 )
                 return False
@@ -414,10 +511,15 @@ class AndromityApp(App):
         
     def _apply_model_change(self):
         self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval)
-        self._update_status()
-        chat = self.query_one(ChatPanel)
         model = config.get("default", "model", "")
         provider = config.get("default", "provider", "")
+        if provider == "ollama":
+            from andromity.core.models import get_ollama_num_ctx
+            self._ollama_num_ctx = get_ollama_num_ctx(model)
+        else:
+            self._ollama_num_ctx = 0
+        self._update_status()
+        chat = self.query_one(ChatPanel)
         chat.add_system_message(f"Provider: [bold]{provider}[/] | Model: [bold cyan]{model}[/]")
 
     def _apply_profile(self, profile: str):
@@ -446,6 +548,11 @@ class AndromityApp(App):
         self._session_named = False
         chat = self.query_one(ChatPanel)
         chat.clear()
+        # Plan is session-scoped — new session starts with no plan
+        try:
+            self.query_one(PlanPanel).clear_plan()
+        except Exception:
+            pass
         chat.add_system_message("[green]New session started.[/] Previous session saved.")
         self._update_status()
         # Refresh session browser overlay
@@ -464,6 +571,16 @@ class AndromityApp(App):
         chat = self.query_one(ChatPanel)
         chat.load_history(session.messages)
         self._update_status()
+        # Load plan from session (if any)
+        try:
+            plan = session.load_plan_obj()
+            panel = self.query_one(PlanPanel)
+            if plan:
+                panel.load_plan(plan)
+            else:
+                panel.clear_plan()
+        except Exception:
+            pass
         chat.add_system_message(
             f"[green]Session loaded:[/] [bold]{session.name}[/]  "
             f"[dim]({len(session.messages)} messages, {session.token_total:,} tokens)[/]"
@@ -494,6 +611,24 @@ class AndromityApp(App):
                 self.query_one(InputBar).clear_input()
                 self.query_one(InputBar).query_one("#input-field").focus()
             return
+        # First ESC — show hint
+        if self._is_streaming:
+            try:
+                self.query_one(StatusBar).show_hint("Press ESC again to interrupt", 2.0)
+            except Exception:
+                pass
+
+    def _send_to_agent(self, prompt: str):
+        """Send a message to the agent without showing it as a user message in chat."""
+        if prompt.startswith("/"):
+            self._handle_command(prompt)
+        else:
+            self.run_worker(self._stream_agent(prompt), exclusive=False)
+
+    def _update_queue_display(self):
+        """Update the static queue panel above input bar."""
+        panel = self.query_one("#queue-panel", QueuePanel)
+        panel.update_queue(self._prompt_queue)
 
     async def _stream_agent(self, prompt: str):
         chat = self.query_one(ChatPanel)
@@ -508,6 +643,7 @@ class AndromityApp(App):
         
         active_tool_name = ""
         active_tool_args = ""
+        tools_used = set()  # track which tools were called this stream
         
         try:
             async for event in self.agent.run(prompt):
@@ -526,16 +662,17 @@ class AndromityApp(App):
                 elif isinstance(event, ToolCallStart):
                     active_tool_name = event.tool_name
                     active_tool_args = ""
+                    tools_used.add(event.tool_name)
                     log.debug("TOOL START: %s", event.tool_name)
                     if self._debug_mode:
                         chat.add_system_message(f"[dim]▶ tool: {event.tool_name}[/]")
-                    chat.show_tool_start(event.tool_name)
+                    chat.show_tool_start(event.tool_name, event.tool_id)
                 elif isinstance(event, ToolCallDelta):
                     active_tool_args += event.args_json_chunk
-                    chat.append_tool_args(event.args_json_chunk)
+                    chat.append_tool_args(event.tool_id, event.args_json_chunk)
                 elif isinstance(event, ToolCallEnd):
                     log.debug("TOOL END: %s", event.tool_id)
-                    chat.show_tool_end()
+                    chat.show_tool_end(event.tool_id)
                 elif isinstance(event, ToolResult):
                     log.debug("TOOL RESULT: %s", event.tool_id)
                     chat.show_tool_result(event.tool_id, event.result)
@@ -572,9 +709,20 @@ class AndromityApp(App):
             chat.end_assistant_message()
             self._update_status()
             
-            # If the agent wrote or updated a plan, refresh the panel
+            # Refresh file tree only if file-modifying tools were used
+            file_tools = {"write_file", "edit_file", "delete_file", "shell_exec"}
+            if tools_used & file_tools:
+                try:
+                    self.query_one(FileTreePanel).refresh_tree()
+                except Exception:
+                    pass
+            
+            # If the agent wrote or updated a plan, refresh the panel from session
             try:
-                self.query_one(PlanPanel).refresh_plan()
+                plan = self.session.load_plan_obj()
+                panel = self.query_one(PlanPanel)
+                if plan:
+                    panel.load_plan(plan)
             except Exception:
                 pass
             
@@ -588,14 +736,9 @@ class AndromityApp(App):
                 
             if self._prompt_queue:
                 next_prompt = self._prompt_queue.pop(0)
-                remaining = len(self._prompt_queue)
-                # Clear the queue badge for this message before processing
-                try:
-                    self.query_one(ChatPanel).clear_queue_badge(next_prompt)
-                except Exception:
-                    pass
-                # Process next queued message slightly after UI updates
-                self.call_after_refresh(lambda p=next_prompt: self._process_message(p))
+                self._update_queue_display()
+                # Process next queued message after a short delay (survives cancel better)
+                self.set_timer(0.3, lambda p=next_prompt: self._process_message(p))
             else:
                 self.focus_input()
 
@@ -623,10 +766,8 @@ class AndromityApp(App):
 
         if self._is_streaming:
             self._prompt_queue.append(prompt)
-            chat = self.query_one(ChatPanel)
-            # Show a distinct queue badge — NOT a system message that looks like a response
-            qlen = len(self._prompt_queue)
-            chat.add_queued_message(prompt, qlen)
+            log.info("Queued: %s (queue size: %d)", prompt[:50], len(self._prompt_queue))
+            self._update_queue_display()
             return
             
         self._process_message(prompt)
@@ -656,7 +797,7 @@ class AndromityApp(App):
             path = Path(event.node.data)
             if path.is_file():
                 diff_panel = self.query_one("#diff-panel", DiffPanel)
-                diff_panel.load_file(str(path))
+                diff_panel.show_file(path)
                 diff_panel.add_class("visible")
 
 
@@ -885,42 +1026,44 @@ class AndromityApp(App):
         elif command.startswith("/plan"):
             parts = cmd.split()
             if len(parts) > 1 and parts[1].strip().lower() == "clear":
-                from andromity.core.planner import Plan
-                Plan.clear(self._project_path)
+                self.session.clear_plan()
                 panel = self.query_one(PlanPanel)
-                panel._plan = None
-                panel.refresh_plan()
-                chat.add_system_message("[green]✓ Active plan cleared and removed.[/]")
+                panel.clear_plan()
+                chat.add_system_message("[green]✓ Active plan cleared.[/]")
             else:
-                from andromity.core.planner import Plan
-                plan = Plan.load(self._project_path)
+                plan = self.session.load_plan_obj()
                 if plan:
                     self.query_one(PlanPanel).load_plan(plan)
                     chat.add_system_message(f"[cyan]Plan reloaded:[/] {escape(plan.title)}")
                 else:
-                    chat.add_system_message("[dim]No plan file found in this project.[/]")
+                    chat.add_system_message("[dim]No plan in this session.[/]")
         else:
             chat.add_system_message(f"Unknown: {command}. Type /help")
 
     def action_toggle_filetree(self):
-        left = self.query_one("#left-panel")
-        if self.size.width <= 100:
-            left.remove_class("force-hidden")
-            if left.has_class("force-show"):
-                left.remove_class("force-show")
-            else:
-                left.add_class("force-show")
+        panel = self.query_one("#left-panel")
+        if panel.styles.display == "none":
+            panel.remove_class("force-hidden")
+            panel.add_class("force-show")
         else:
-            left.remove_class("force-show")
-            if left.has_class("force-hidden"):
-                left.remove_class("force-hidden")
-            else:
-                left.add_class("force-hidden")
+            panel.remove_class("force-show")
+            panel.add_class("force-hidden")
+
+    def action_toggle_right_panel(self):
+        panel = self.query_one("#right-sidebar")
+        if panel.styles.display == "none":
+            panel.remove_class("force-hidden")
+            panel.add_class("force-show")
+        else:
+            panel.remove_class("force-show")
+            panel.add_class("force-hidden")
 
     def action_toggle_diff(self):
         """Ctrl+D — show/hide the file viewer/diff panel."""
         diff = self.query_one("#diff-panel")
         if diff.has_class("visible"):
+            # Resolve pending tool approval if hiding the panel
+            self._resolve_tool_approval(False)
             diff.remove_class("visible")
         else:
             diff.add_class("visible")
@@ -950,6 +1093,16 @@ class AndromityApp(App):
             sb.add_class("visible")
 
     def action_close_overlays(self):
+        # Resolve pending tool approval if diff panel is visible
+        diff = self.query_one("#diff-panel")
+        if diff.has_class("visible"):
+            self._resolve_tool_approval(False)
         for overlay in self.query(".visible"):
             overlay.remove_class("visible")
         self.query_one(InputBar).query_one("#input-field").focus()
+
+    def _resolve_tool_approval(self, result: bool):
+        """Resolve pending tool approval future if one exists."""
+        if self._tool_approval_future and not self._tool_approval_future.done():
+            self._tool_approval_future.set_result(result)
+            self._tool_approval_future = None

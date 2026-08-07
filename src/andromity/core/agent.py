@@ -4,7 +4,7 @@ from typing import AsyncGenerator, Dict, Any, Optional, Callable
 from andromity.core.provider import stream_completion
 from andromity.core.session import Session
 from andromity.core.profiles import get_system_prompt, filter_tools_for_profile
-from andromity.core.tools import CORE_TOOLS, execute_tool
+from andromity.core.tools import CORE_TOOLS, execute_tool, register_session
 from andromity.core.events import (
     StreamEvent, TextDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult
 )
@@ -20,6 +20,8 @@ class Agent:
         self.auto_approve = auto_approve
         self.on_tool_approval = on_tool_approval
         self.allowed_tools = filter_tools_for_profile(CORE_TOOLS, self.profile)
+        # Register session so plan tools can store plan in it
+        register_session(session)
         sys_prompt = get_system_prompt(self.profile)
         if not self.session.messages:
             self.session.add_message("system", sys_prompt)
@@ -77,6 +79,16 @@ class Agent:
                 content=assistant_content if assistant_content else None,
                 tool_calls=tool_calls_to_execute if tool_calls_to_execute else None,
             )
+
+            if not assistant_content and not tool_calls_to_execute:
+                # Model returned nothing — context may be truncated
+                warning = (
+                    "\n[dim][No response from model][/] Context may have exceeded the model's "
+                    "window. Try [bold cyan]/new[/] for a fresh session, or switch model with "
+                    "[bold cyan]Ctrl+M[/].\n"
+                )
+                yield TextDelta(text=warning)
+                break
 
             if not tool_calls_to_execute:
                 break

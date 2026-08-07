@@ -1,4 +1,4 @@
-﻿from rich.markup import escape
+from rich.markup import escape
 
 def safe_markup(text: str) -> str:
     '''Pre-validate Rich/Textual markup. Falls back to plain escaped text if tags are broken.'''

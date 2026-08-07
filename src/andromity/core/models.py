@@ -144,6 +144,37 @@ def get_context_limit_for_model(provider_key: str, model_id: str) -> int:
     return 0
 
 
+def get_ollama_num_ctx(model: str, base_url: str = "http://localhost:11434") -> int:
+    """Query Ollama /api/show to get actual num_ctx for the running model."""
+    import urllib.request, json
+    try:
+        data = json.dumps({"name": model}).encode()
+        req = urllib.request.Request(
+            f"{base_url.rstrip('/')}/api/show",
+            data=data, headers={"Content-Type": "application/json"}, method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            result = json.loads(resp.read())
+        
+        ctx = (
+            result.get("model_info", {}).get("llama.context_length")
+            or result.get("model_info", {}).get("qwen2.context_length")
+            or result.get("model_info", {}).get("mistral.context_length")
+        )
+        if not ctx:
+            params = result.get("parameters", "")
+            for line in params.split("\n"):
+                if "num_ctx" in line:
+                    try:
+                        ctx = int(line.split()[1])
+                        break
+                    except (ValueError, IndexError):
+                        pass
+        return int(ctx) if ctx else 32768
+    except Exception:
+        return 32768
+
+
 def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str = None) -> list[dict]:
     """Fetch live models from provider API. Returns list of model dicts or empty list on failure."""
     import json
@@ -169,11 +200,12 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
             name = item.get("name", "")
             size_bytes = item.get("size", 0)
             size_gb = f"{size_bytes / (1024**3):.1f}GB" if size_bytes else ""
+            num_ctx = get_ollama_num_ctx(name, base_url or "http://localhost:11434")
             models.append({
                 "id": name,
                 "name": name,
                 "desc": f"Locally installed ({size_gb})" if size_gb else "Locally installed",
-                "context": "Local",
+                "context": f"{num_ctx // 1024}K" if num_ctx else "Local",
             })
         return models
 

@@ -30,6 +30,9 @@ async def stream_completion(
         # LiteLLM routes Ollama chat endpoint via 'ollama_chat/' or 'ollama/'
         litellm_model = f"ollama_chat/{model}" if not (model.startswith("ollama/") or model.startswith("ollama_chat/")) else model
         base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "http://localhost:11434"
+        from andromity.core.models import get_ollama_num_ctx
+        _num_ctx = get_ollama_num_ctx(model, base_url)
+        log.info("Ollama num_ctx=%d for model=%s", _num_ctx, model)
     elif provider_name == "nvidia":
         # Route natively via litellm's nvidia_nim provider (handles auth and endpoints automatically)
         litellm_model = f"nvidia_nim/{model}" if not model.startswith("nvidia_nim/") else model
@@ -58,6 +61,8 @@ async def stream_completion(
         kwargs["api_key"] = api_key
     if base_url:
         kwargs["api_base"] = base_url
+    if provider_name == "ollama" and "_num_ctx" in locals():
+        kwargs["num_ctx"] = locals()["_num_ctx"]
 
     log.info("stream_completion start: provider=%s model=%s litellm_model=%s",
              provider_name, model, litellm_model)
@@ -111,22 +116,24 @@ async def stream_completion(
                 
                 if getattr(delta, "content", None) and not current_tool_id:
                     text = delta.content
-                    if "<think>" in text:
-                        in_thinking = True
-                        text = text.replace("<think>", "")
-                    if "</think>" in text:
-                        in_thinking = False
-                        parts = text.split("</think>")
-                        if parts[0]:
-                            yield ThinkingDelta(text=parts[0])
-                        if len(parts) > 1 and parts[1]:
-                            yield TextDelta(text=parts[1])
-                        continue
-                    
-                    if in_thinking:
-                        yield ThinkingDelta(text=text)
-                    else:
-                        yield TextDelta(text=text)
+                    # Handle <think>...</think> tag boundaries across chunks
+                    while text:
+                        if "<think>" in text:
+                            in_thinking = True
+                            text = text.split("<think>", 1)[1]
+                            continue
+                        if "</think>" in text:
+                            in_thinking = False
+                            parts = text.split("</think>", 1)
+                            if parts[0]:
+                                yield ThinkingDelta(text=parts[0])
+                            text = parts[1] if len(parts) > 1 else ""
+                            continue
+                        if in_thinking:
+                            yield ThinkingDelta(text=text)
+                        else:
+                            yield TextDelta(text=text)
+                        break
 
             finish_reason = chunk.choices[0].finish_reason
             if finish_reason:

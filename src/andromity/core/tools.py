@@ -10,15 +10,20 @@ from andromity.core.debug_log import get_logger
 log = get_logger("tools")
 
 _PLAN_CALLBACKS = []  # list of callables(plan) to notify on plan write/update
+_current_session = None  # set by agent before tool execution
+
 
 def register_plan_callback(cb):
     _PLAN_CALLBACKS.append(cb)
 
-def _notify_plan():
-    from andromity.core.planner import Plan
-    import os
-    pp = str(Path.cwd())
-    plan = Plan.load(pp)
+
+def register_session(session):
+    """Register the active session so plan tools can store plan in it."""
+    global _current_session
+    _current_session = session
+
+
+def _notify_plan(plan):
     for cb in _PLAN_CALLBACKS:
         try:
             cb(plan)
@@ -119,34 +124,35 @@ def list_dir(path: str = ".") -> str:
         return f"Error listing directory: {e}"
 
 
-def write_plan(title: str, steps: List[str], description: str = "") -> str:
-    """Create a plan file with the given title and list of step strings."""
+def write_plan(title: str, steps: list, description: str = "") -> str:
+    """Create a plan with the given title and list of step strings. Stored in session."""
     from andromity.core.planner import Plan, PlanStep
-    project_path = str(Path.cwd())
+    if isinstance(steps, str):
+        steps = [s.strip() for s in steps.split('\n') if s.strip()]
     plan = Plan(
         title=title,
         description=description,
-        project_path=project_path,
         status="pending_approval",
         steps=[PlanStep(index=i + 1, text=s) for i, s in enumerate(steps)],
     )
-    plan.save()
-    _notify_plan()
+    if _current_session:
+        _current_session.save_plan(plan.to_dict())
+    _notify_plan(plan)
     return f"Plan '{title}' written with {len(steps)} steps. Awaiting user approval before proceeding."
 
 
 def update_plan_step(step_index: int, status: str) -> str:
     """Update a plan step status. status: done | failed | active | skipped."""
     from andromity.core.planner import Plan
-    project_path = str(Path.cwd())
-    plan = Plan.load(project_path)
-    if not plan:
+    if not _current_session or not _current_session.plan:
         return "Error: No plan found. Use write_plan first."
+    plan = Plan.from_dict(_current_session.plan)
     valid = ("pending", "active", "done", "failed", "skipped")
     if status not in valid:
         return f"Error: status must be one of {valid}"
     plan.set_step_status(step_index, status)
-    _notify_plan()
+    _current_session.save_plan(plan.to_dict())
+    _notify_plan(plan)
     return f"Step {step_index} marked as {status}."
 
 

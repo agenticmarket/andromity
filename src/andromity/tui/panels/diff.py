@@ -245,6 +245,10 @@ DiffPanel { height: 1fr; }
         btn_id = event.button.id
         
         if btn_id == "btn-close":
+            # Resolve the approval future as rejected if pending
+            if hasattr(self.app, "_tool_approval_future") and self.app._tool_approval_future:
+                if not self.app._tool_approval_future.done():
+                    self.app._tool_approval_future.set_result(False)
             self.remove_class("visible")
         elif btn_id == "btn-apply":
             if hasattr(self.app, "_tool_approval_future") and self.app._tool_approval_future:

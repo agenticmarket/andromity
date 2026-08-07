@@ -5,6 +5,7 @@ from textual.widgets import Static, Label, Markdown, Collapsible
 from rich.markup import escape
 from textual.markup import MarkupError
 from andromity.tui.markup_utils import safe_markup, safe_update
+import re
 import time
 
 class ChatMessage(Widget):
@@ -63,9 +64,10 @@ class ToolIndicator(Widget):
 ToolIndicator { width: 1fr; height: auto; min-height: 1; padding: 0 1; margin: 1 0; background: #1a1a24; border-left: tall #4a4a8a; }
 ToolIndicator Collapsible { border: none; padding: 0 1; background: transparent; }
 """
-    def __init__(self, tool_name: str = "", **kwargs):
+    def __init__(self, tool_name: str = "", tool_id: str = "", **kwargs):
         super().__init__(**kwargs)
         self.tool_name = tool_name
+        self.tool_id = tool_id
         self._args_json = ""
         self._done = False
         self._dots = 0
@@ -207,7 +209,7 @@ ThinkingBubble Collapsible { border: none; padding: 0; background: transparent; 
         self._flush()  # Final flush
         elapsed = int(time.time() - self._start_time)
         col = self.query_one("#think-col", Collapsible)
-        col.title = f"💭 Thinking ({elapsed}s) ▼"
+        col.title = f"💭 Thinking ({elapsed}s)"
 
 class StreamingMessage(Widget):
     DEFAULT_CSS = """\
@@ -306,13 +308,17 @@ class ChatPanel(VerticalScroll):
             self._messages.append({"role": "assistant", "content": self._streaming._text})
             self._streaming = None
 
-    def show_tool_start(self, tool_name: str):
+    def show_tool_start(self, tool_name: str, tool_id: str = ""):
         self.stop_thinking_message()
         self.end_assistant_message()
-        self._append_widget(ToolIndicator(tool_name))
+        self._append_widget(ToolIndicator(tool_name, tool_id))
 
-    def append_tool_args(self, args_chunk: str):
+    def append_tool_args(self, tool_id: str, args_chunk: str):
         try:
+            for ind in self.query(ToolIndicator):
+                if ind.tool_id == tool_id:
+                    ind.append_args(args_chunk)
+                    return
             indicators = self.query(ToolIndicator)
             if indicators:
                 indicators.last().append_args(args_chunk)
@@ -321,14 +327,22 @@ class ChatPanel(VerticalScroll):
 
     def show_tool_result(self, tool_id: str, result: str):
         try:
+            for ind in self.query(ToolIndicator):
+                if ind.tool_id == tool_id:
+                    ind.append_result(result)
+                    return
             indicators = self.query(ToolIndicator)
             if indicators:
                 indicators.last().append_result(result)
         except Exception:
             pass
 
-    def show_tool_end(self):
+    def show_tool_end(self, tool_id: str):
         try:
+            for ind in self.query(ToolIndicator):
+                if ind.tool_id == tool_id:
+                    ind.mark_done()
+                    return
             indicators = self.query(ToolIndicator)
             if indicators:
                 indicators.last().mark_done()

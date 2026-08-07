@@ -79,7 +79,7 @@ SessionBrowserOverlay {
         table.add_columns("Name", "Status", "Age", "Tokens", "Messages")
         for s in self._sessions:
             badge = "[bold green]active[/]" if s.id == self._current_id else ""
-            age = _time_ago(s.created_at)
+            age = _time_ago(getattr(s, "updated_at", s.created_at))
             tokens = f"{s.token_total:,}" if s.token_total else "—"
             msg_count = str(len([m for m in s.messages if m.get("role") in ("user", "assistant")]))
             name = s.name if s.name != "new-session" and s.name != "tui-session" else "[dim]Unnamed[/]"
