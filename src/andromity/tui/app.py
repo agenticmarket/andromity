@@ -628,18 +628,14 @@ class AndromityApp(App):
         )
 
     def _show_suggestions(self, text: str):
-        try:
-            suggestions = self.query_one("#suggestions")
-            if text.startswith("/"):
-                matches = [c for c in COMMANDS if c.startswith(text)]
-                if matches:
-                    suggestions.update("  ".join(matches))
-                    suggestions.add_class("visible")
-                    return
-            if "visible" in suggestions.classes:
-                suggestions.remove_class("visible")
-        except Exception:
-            pass
+        suggestions = self.query_one("#suggestions")
+        if text.startswith("/"):
+            matches = [c for c in COMMANDS if c.startswith(text)]
+            if matches:
+                suggestions.update("  ".join(matches))
+                suggestions.add_class("visible")
+                return
+        suggestions.remove_class("visible")
 
     def action_escape_pressed(self):
         import time
@@ -698,6 +694,9 @@ class AndromityApp(App):
         active_tool_args = ""
         tools_used = set()  # track which tools were called this stream
         
+        # Start response placeholder immediately so there is ZERO perceived lag/freeze
+        chat.start_assistant_message()
+
         try:
             async for event in self.agent.run(prompt):
                 if isinstance(event, ThinkingDelta):
@@ -709,7 +708,6 @@ class AndromityApp(App):
                     if not first_text_seen:
                         first_text_seen = True
                         chat.stop_thinking_message()
-                        chat.start_assistant_message()
                     chat.append_text(event.text)
                     estimated_tokens += len(event.text) // 4
                 elif isinstance(event, ToolCallStart):

@@ -214,24 +214,46 @@ ThinkingBubble Collapsible { border: none; padding: 0; background: transparent; 
 class StreamingMessage(Widget):
     DEFAULT_CSS = """\
 StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
+#stream-placeholder { color: #38bdf8; margin: 0 0 0 1; }
 """
+    _SPINNER_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
     def __init__(self, show_header: bool = True, **kwargs):
         super().__init__(**kwargs)
         self._show_header = show_header
         self._text = ""
         self._pending = False
         self._timer = None
+        self._spinner_frame = 0
+        self._first_content_received = False
 
     def compose(self) -> ComposeResult:
         if self._show_header:
             yield Static("[bold green]Andromity:[/bold green]", id="assistant-header")
+        yield Static("[dim #38bdf8]⠋ Thinking…[/dim #38bdf8]", id="stream-placeholder")
         yield Markdown(" ", id="md-view")
 
     def on_mount(self):
-        self._timer = self.set_interval(0.1, self._flush)
+        self._timer = self.set_interval(0.09, self._flush)
+
+    def hide_placeholder(self):
+        if not self._first_content_received:
+            self._first_content_received = True
+            try:
+                self.query_one("#stream-placeholder").remove()
+            except Exception:
+                pass
 
     def _flush(self):
-        if self._pending:
+        if not self._first_content_received:
+            self._spinner_frame += 1
+            spin = self._SPINNER_CHARS[self._spinner_frame % len(self._SPINNER_CHARS)]
+            try:
+                placeholder = self.query_one("#stream-placeholder", Static)
+                placeholder.update(f"[dim #38bdf8]{spin} Thinking…[/dim #38bdf8]")
+            except Exception:
+                pass
+        elif self._pending:
             self._pending = False
             try:
                 md = self.query_one("#md-view")
@@ -242,12 +264,14 @@ StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
                 pass
 
     def append(self, text: str):
+        self.hide_placeholder()
         self._text += text
         self._pending = True
 
     def finish(self):
         if self._timer:
             self._timer.stop()
+        self.hide_placeholder()
         self._pending = True
         self._flush()
 
@@ -309,7 +333,7 @@ WelcomeBanner {
         )
 
     def on_mount(self):
-        self._timer = self.set_interval(0.4, self._tick_animation)
+        self._timer = self.set_interval(0.12, self._tick_animation)
         self._update_info()
 
     def _update_info(self):
@@ -382,6 +406,8 @@ class ChatPanel(VerticalScroll):
 
     def start_thinking_message(self):
         self.start_assistant_message()
+        if self._streaming:
+            self._streaming.hide_placeholder()
         self._thinking = ThinkingBubble()
         self._streaming.mount(self._thinking, before="#md-view")
 
@@ -411,7 +437,14 @@ class ChatPanel(VerticalScroll):
     def end_assistant_message(self):
         if getattr(self, "_streaming", None):
             self._streaming.finish()
-            self._messages.append({"role": "assistant", "content": self._streaming._text})
+            if self._streaming._text.strip():
+                self._messages.append({"role": "assistant", "content": self._streaming._text})
+            else:
+                try:
+                    if not self._streaming.query(ThinkingBubble):
+                        self._streaming.remove()
+                except Exception:
+                    pass
             self._streaming = None
 
     def show_tool_start(self, tool_name: str, tool_id: str = ""):
