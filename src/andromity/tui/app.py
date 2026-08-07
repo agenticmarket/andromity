@@ -60,10 +60,10 @@ Screen { background: $surface; }
     padding: 1 1;
 }
 ChatPanel { height: 1fr; overflow-y: auto; padding: 1 2; }
-ChatPanel Markdown p { margin: 0 0 1 0; }
-ChatPanel Markdown ul { margin: 0 0 1 2; }
-ChatPanel Markdown ol { margin: 0 0 1 2; }
-ChatPanel Markdown hr { margin: 0; padding: 0; border: none; border-top: solid $accent-darken-2; }
+ChatPanel MarkdownParagraph { margin: 0 0 1 0; }
+ChatPanel MarkdownBulletList { margin: 0 0 1 2; }
+ChatPanel MarkdownOrderedList { margin: 0 0 1 2; }
+ChatPanel MarkdownHorizontalRule { margin: 0; padding: 0; border: none; border-top: solid $accent-darken-2; }
 FileTreePanel { height: 1fr; overflow-y: auto; padding: 1; }
 PlanPanel { height: 1fr; border-top: solid $accent-darken-2; }
 #suggestions { display: none; }
