@@ -6,19 +6,27 @@ from pathlib import Path
 from typing import List
 from andromity.config import get_shell
 
+_git_branch_cache: str | None = None
+
+
 def _get_git_branch() -> str:
+    global _git_branch_cache
+    if _git_branch_cache is not None:
+        return _git_branch_cache
     try:
         result = subprocess.run(
-            ["git", "branch", "--show-current"], 
-            capture_output=True, 
-            text=True, 
-            timeout=1
+            ["git", "branch", "--show-current"],
+            capture_output=True,
+            text=True,
+            timeout=1,
         )
         if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
+            _git_branch_cache = result.stdout.strip()
+            return _git_branch_cache
     except Exception:
         pass
-    return "unknown"
+    _git_branch_cache = "unknown"
+    return _git_branch_cache
 
 PROFILES = {
     "builder": {"tools": ["read_file", "write_file", "edit_file", "shell_exec", "list_dir", "write_plan", "update_plan_step", "create_todo", "update_todo", "list_todos"]},
@@ -39,7 +47,7 @@ def get_system_prompt(profile: str) -> str:
     venv = os.environ.get("VIRTUAL_ENV") or os.environ.get("CONDA_DEFAULT_ENV") or "none"
     is_wsl = "WSL" in platform.uname().release if os_name == "Linux" else False
     
-    base = f"""You are Andromity, a world-class AI coding assistant running on the user's machine.
+    base = f"""You are Andromity, an AI coding assistant running on the user's machine.
 
 ## Environment
 - OS: {os_name}{" (WSL)" if is_wsl else ""}
@@ -53,18 +61,20 @@ def get_system_prompt(profile: str) -> str:
 ## Rules
 - Always use the correct shell syntax for {shell} on {os_name}.
 - Never assume Unix paths on Windows unless in WSL.
-- Plan before acting. Be concise.
-- CRITICAL: Always send a short text message BEFORE calling any tool.
-  Say what you are about to do in plain language. Example: "Creating the project structure..."
+- Plan before acting and create todo when needed. Be very concise and professional and be a good team member and behave like a senior software engineer.
+- CRITICAL: Always inform the user and say what you are about to do in plain language before calling any tool.
+  Example: "Creating the project structure..."
   Then call the tool. Never chain tools without text in between.
-- After completing all tasks, send a brief summary of what was done.
+- After completing all tasks, send a brief summary of what you have done.
+- Use markdown format for all responses. Use bullet points, code blocks, and tables when appropriate.
+- If you ever get stuck in a loop, ask the user for help.
 """
     if profile == "reviewer":
         extra = """
 [PROFILE: SWE Reviewer]
 Your role is to act as a security and code quality auditor.
 - You have READ-ONLY access. Do not use tools to modify files.
-- Focus on finding bugs, security vulnerabilities (SQLi, XSS, etc.), and anti-patterns.
+- Focus on finding bugs, security vulnerabilities (SQLi, XSS, etc.), logic gap, behavioural issues, performance, scalability issues and anti-patterns.
 - Output a list of issues with severity badges: [HIGH], [MED], [LOW].
 - Do not apply fixes directly. Explain the issue and wait for the user to ask for a fix.
 - Always explain what you are looking at before listing findings.

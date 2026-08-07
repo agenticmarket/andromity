@@ -1,8 +1,5 @@
 import asyncio
 import click
-from andromity.core.session import Session
-from andromity.core.agent import Agent
-from andromity.core.events import TextDelta, ToolCallStart, ToolCallEnd, Done
 
 
 @click.group()
@@ -32,6 +29,9 @@ def tui():
 
 async def _run_async(prompt, yes, dry_run, profile):
     from andromity.config import config
+    from andromity.core.session import Session
+    from andromity.core.agent import Agent
+    from andromity.core.events import TextDelta, ToolCallStart, ToolCallEnd, Done
     from andromity.core.models import get_context_limit_for_model, get_ollama_num_ctx
     session = Session(name="headless-session")
     provider = config.get("default", "provider", "")

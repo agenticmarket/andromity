@@ -1,13 +1,17 @@
+from __future__ import annotations
+
 import os
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, TYPE_CHECKING
 
-from git import Repo, InvalidGitRepositoryError, GitCommandError, NoSuchPathError
+if TYPE_CHECKING:
+    from git import Repo
 
 SNAPSHOT_BRANCH = "andromity-snapshots"
 
 
 def get_repo(path: Optional[Path] = None) -> Optional[Repo]:
+    from git import Repo, InvalidGitRepositoryError, NoSuchPathError  # lazy
     if path is None:
         path = Path.cwd()
     try:
@@ -21,6 +25,7 @@ def create_pre_edit_snapshot(repo: Repo) -> Optional[str]:
     Snapshot working tree state to shadow branch BEFORE any file modifications.
     Returns commit hash of snapshot, or None on failure.
     """
+    from git.exc import GitCommandError
     try:
         # Check if repo has any commits
         try:
@@ -62,25 +67,27 @@ def create_pre_edit_snapshot(repo: Repo) -> Optional[str]:
             m="andromity: pre-edit snapshot"
         )
         return snapshot_hash
-    except GitCommandError as e:
+    except (GitCommandError, Exception) as e:
         print(f"Warning: Failed to create git snapshot: {e}")
         return None
 
 
 def restore_snapshot(repo: Repo, commit_hash: str) -> bool:
+    from git.exc import GitCommandError
     try:
         repo.git.checkout("--force", commit_hash, "--", ".")
         repo.git.clean("-fd")
         return True
-    except GitCommandError as e:
+    except (GitCommandError, Exception) as e:
         print(f"Warning: Failed to restore snapshot: {e}")
         return False
 
 
 def list_snapshots(repo: Repo, limit: int = 20) -> List[dict]:
+    from git.exc import GitCommandError
     try:
         repo.git.rev_parse(SNAPSHOT_BRANCH)
-    except GitCommandError:
+    except (GitCommandError, Exception):
         return []
     try:
         log_output = repo.git.log(SNAPSHOT_BRANCH, f"-{limit}", "--format=%H|%ai|%s")
@@ -92,11 +99,12 @@ def list_snapshots(repo: Repo, limit: int = 20) -> List[dict]:
             if len(parts) == 3:
                 snapshots.append({"hash": parts[0], "date": parts[1], "message": parts[2]})
         return snapshots
-    except GitCommandError:
+    except (GitCommandError, Exception):
         return []
 
 
 def get_git_status(repo: Repo) -> dict:
+    from git.exc import GitCommandError
     try:
         status = {}
         for item in repo.index.diff(None):
@@ -106,19 +114,20 @@ def get_git_status(repo: Repo) -> dict:
         for path in repo.untracked_files:
             status[path] = "U"
         return status
-    except GitCommandError:
+    except (GitCommandError, Exception):
         return {}
 
 
 def get_current_branch(repo: Repo) -> str:
     try:
         return repo.active_branch.name
-    except TypeError:
+    except Exception:
         return "HEAD"
 
 
 def get_file_diff(repo: Repo, rel_path: str) -> str:
     """Get git diff for a specific relative file path vs HEAD or unstaged changes."""
+    from git.exc import GitCommandError
     try:
         norm_path = rel_path.replace("\\", "/")
         # Try diff vs HEAD first
@@ -126,7 +135,7 @@ def get_file_diff(repo: Repo, rel_path: str) -> str:
             diff = repo.git.diff("HEAD", "--", norm_path)
             if diff:
                 return diff
-        except GitCommandError:
+        except (GitCommandError, Exception):
             pass
 
         # Try unstaged diff

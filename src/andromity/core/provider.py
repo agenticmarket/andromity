@@ -1,8 +1,6 @@
 import json
 from typing import AsyncGenerator, List, Dict, Any, Optional
 
-import litellm
-from litellm import acompletion
 from andromity.config import config
 from andromity.core.debug_log import get_logger
 from andromity.core.events import (
@@ -17,6 +15,11 @@ async def stream_completion(
     tools: Optional[List[Dict[str, Any]]] = None,
     provider_name: Optional[str] = None,
 ) -> AsyncGenerator[StreamEvent, None]:
+    # Lazy-import litellm — it has a heavy import chain (~2-4s), so we defer
+    # it until the first actual AI call rather than paying the cost at startup.
+    import litellm
+    from litellm import acompletion
+
     if provider_name is None:
         provider_name = config.get("default", "provider", "anthropic")
     model = config.get("default", "model", "claude-sonnet-4-6")
@@ -63,6 +66,14 @@ async def stream_completion(
         kwargs["api_base"] = base_url
     if provider_name == "ollama" and "_num_ctx" in locals():
         kwargs["num_ctx"] = locals()["_num_ctx"]
+
+    # OpenRouter: send app identity headers so the dashboard shows "Andromity"
+    # instead of "litellm". See https://openrouter.ai/docs#provider-routing
+    if provider_name == "openrouter":
+        kwargs["extra_headers"] = {
+            "HTTP-Referer": "https://github.com/andromity-ai/andromity",
+            "X-Title": "Andromity",
+        }
 
     log.info("stream_completion start: provider=%s model=%s litellm_model=%s",
              provider_name, model, litellm_model)
@@ -163,10 +174,10 @@ async def stream_completion(
     yield Done(usage=usage)
 
 def _handle_rate_limit(e: Exception) -> TextDelta:
+    import re
     msg = str(e)
     retry_hint = ""
     if "retry in" in msg.lower():
-        import re
         m = re.search(r"retry in ([\d.]+)s", msg, re.IGNORECASE)
         if m:
             retry_hint = f" Retry in ~{int(float(m.group(1)))}s."
