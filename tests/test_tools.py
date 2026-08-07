@@ -139,6 +139,84 @@ def test_path_traversal_blocked_for_list_dir(monkeypatch):
         assert "Access denied" in result and "outside the project directory" in result
 
 
+def test_path_traversal_blocked_for_grep_search(monkeypatch):
+    from andromity.core.tools import grep_search
+    with tempfile.TemporaryDirectory() as project_dir:
+        _trusted(monkeypatch, project_dir)
+        outside_dir = os.path.abspath(os.path.join(project_dir, ".."))
+        result = grep_search("query", path=outside_dir)
+        assert "Access denied" in result and "outside the project directory" in result
+
+
+def test_path_traversal_blocked_for_find_files(monkeypatch):
+    from andromity.core.tools import find_files
+    with tempfile.TemporaryDirectory() as project_dir:
+        _trusted(monkeypatch, project_dir)
+        outside_dir = os.path.abspath(os.path.join(project_dir, ".."))
+        result = find_files("*.py", path=outside_dir)
+        assert "Access denied" in result and "outside the project directory" in result
+
+
+def test_read_file_range_edge_cases(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _trusted(monkeypatch, tmpdir)
+        path = os.path.join(tmpdir, "sample.txt")
+        write_file(path, "line 1\nline 2\nline 3\n")
+        
+        # start > total_lines
+        res = read_file(path, start=10, end=12)
+        assert "Error: start line 10 exceeds total lines" in res
+        
+        # start > end
+        res2 = read_file(path, start=3, end=1)
+        assert "Error: start line 3 is greater than end line 1" in res2
+
+        # Empty file
+        empty_path = os.path.join(tmpdir, "empty.txt")
+        write_file(empty_path, "")
+        assert "is empty" in read_file(empty_path)
+
+
+def test_list_dir_show_hidden(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _trusted(monkeypatch, tmpdir)
+        (Path(tmpdir) / "visible.py").touch()
+        (Path(tmpdir) / "node_modules").mkdir()
+        (Path(tmpdir) / ".venv").mkdir()
+
+        # By default hidden/excluded dirs should not be shown
+        default_res = list_dir(tmpdir)
+        assert "visible.py" in default_res
+        assert "node_modules" not in default_res
+        assert ".venv" not in default_res
+
+        # With show_hidden=True
+        hidden_res = list_dir(tmpdir, show_hidden=True)
+        assert "visible.py" in hidden_res
+        assert "node_modules" in hidden_res
+        assert ".venv" in hidden_res
+
+
+def test_core_tools_structure():
+    from andromity.core.tools import CORE_TOOLS
+    tool_names = [t["function"]["name"] for t in CORE_TOOLS]
+    assert "read_file" in tool_names
+    assert "grep_search" in tool_names
+    assert "find_files" in tool_names
+    assert "write_file" in tool_names
+    assert "edit_file" in tool_names
+    assert "list_dir" in tool_names
+    assert "shell_exec" in tool_names
+
+    # Check grep_search schema
+    grep_tool = next(t for t in CORE_TOOLS if t["function"]["name"] == "grep_search")
+    assert "query" in grep_tool["function"]["parameters"]["required"]
+
+    # Check find_files schema
+    find_tool = next(t for t in CORE_TOOLS if t["function"]["name"] == "find_files")
+    assert "pattern" in find_tool["function"]["parameters"]["required"]
+
+
 # ─── Trust guard tests ────────────────────────────────────────────────────────
 
 def test_write_blocked_when_untrusted(monkeypatch):

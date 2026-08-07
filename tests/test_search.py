@@ -128,3 +128,38 @@ def test_python_grep_direct():
         (root / "sample.txt").write_text("alpha beta gamma\n")
         res = _python_grep("beta", root, case_sensitive=False, file_pattern=None, max_results=10)
         assert "sample.txt:1: alpha beta gamma" in res
+
+
+def test_grep_search_regex():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        (root / "module.py").write_text("def test_func():\n    pass\n\ndef helper():\n    pass\n")
+
+        res = grep_search(r"def\s+\w+\(", path=tmpdir)
+        assert "test_func" in res
+        assert "helper" in res
+
+
+def test_grep_search_empty_query():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        res = grep_search("", path=tmpdir)
+        assert "Error: query cannot be empty." in res
+
+
+def test_grep_search_nonexistent_path():
+    res = grep_search("anything", path="nonexistent_folder_xyz_123")
+    assert "Error" in res and "does not exist" in res
+
+
+def test_grep_search_no_matches():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "test.txt").write_text("just some content")
+        res = grep_search("nonexistent_needle_123", path=tmpdir)
+        assert "No matches found" in res
+
+
+def test_find_files_no_matches():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "test.txt").write_text("hello")
+        res = find_files("*.rs", path=tmpdir)
+        assert "No files matching pattern" in res
