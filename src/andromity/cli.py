@@ -21,9 +21,11 @@ def run(prompt, yes, dry_run, profile):
 @main.command()
 def tui():
     """Launch the interactive TUI."""
-    print("Launching TUI ...")
-    from andromity.tui.app import AndromityApp
-    app = AndromityApp()
+    from rich.console import Console
+    console = Console()
+    with console.status("[bold cyan]✦ Initializing Andromity TUI...[/bold cyan]", spinner="dots12"):
+        from andromity.tui.app import AndromityApp
+        app = AndromityApp()
     app.run()
 
 

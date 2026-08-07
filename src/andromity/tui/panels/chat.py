@@ -252,6 +252,99 @@ StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
         self._flush()
 
 
+class WelcomeBanner(Widget):
+    """Sleek, animated Welcome Hero Banner shown on startup."""
+    DEFAULT_CSS = """\
+WelcomeBanner {
+    width: 1fr;
+    height: auto;
+    padding: 1 2;
+    margin: 1 0;
+    border: round #38bdf8;
+    background: #0f172a;
+}
+#banner-ascii {
+    width: 1fr;
+    content-align: center middle;
+    color: #38bdf8;
+    text-style: bold;
+}
+#banner-tagline {
+    width: 1fr;
+    content-align: center middle;
+    margin: 0 0 1 0;
+}
+#banner-info {
+    width: 1fr;
+    content-align: center middle;
+    color: #94a3b8;
+}
+#banner-shortcuts {
+    width: 1fr;
+    content-align: center middle;
+    margin: 1 0 0 0;
+    color: #64748b;
+}
+"""
+    _PULSE_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._frame = 0
+        self._timer = None
+
+    def compose(self) -> ComposeResult:
+        banner_art = (
+            "   ___   _  ______  ___  ____  __  __________________  __\n"
+            "  / _ | / |/ / _  \\/ _ \\/ __ \\/  |/  /  _/_  __/ / / / / /\n"
+            " / __ |/    / // // , _/ /_/ / /|_/ // /  / / / /_/ /_/ / \n"
+            "/_/ |_/_/|_/____//_/|_|\\____/_/  /_/___/ /_/  \\____/___/  "
+        )
+        yield Static(banner_art, id="banner-ascii")
+        yield Static("[bold cyan]⠋[/bold cyan] [dim italic]The autonomous coding agent that never clocks out[/dim italic] [bold cyan]⠋[/bold cyan]", id="banner-tagline")
+        yield Static("[dim]Loading workspace...[/dim]", id="banner-info")
+        yield Static(
+            "[bold #38bdf8]/help[/] commands  •  [bold #38bdf8]Ctrl+B[/] file tree  •  [bold #38bdf8]Ctrl+L[/] model  •  [bold #38bdf8]Ctrl+J[/] profile",
+            id="banner-shortcuts"
+        )
+
+    def on_mount(self):
+        self._timer = self.set_interval(0.12, self._tick_animation)
+        self._update_info()
+
+    def _update_info(self):
+        try:
+            from andromity.config import config
+            from pathlib import Path
+            model = config.get("default", "model", "") or "default"
+            profile = config.get("default", "profile", "builder")
+            cwd_name = Path.cwd().name
+            info_text = (
+                f"[bold green]● Ready[/bold green]  │  "
+                f"[dim]Project:[/] [bold cyan]{escape(cwd_name)}[/]  │  "
+                f"[dim]Model:[/] [bold yellow]{escape(model.split('/')[-1])}[/]  │  "
+                f"[dim]Profile:[/] [bold magenta]{escape(profile.capitalize())}[/]"
+            )
+            safe_update(self.query_one("#banner-info"), info_text)
+        except Exception:
+            pass
+
+    def _tick_animation(self):
+        self._frame += 1
+        pulse = self._PULSE_CHARS[self._frame % len(self._PULSE_CHARS)]
+        try:
+            tagline = self.query_one("#banner-tagline", Static)
+            tagline.update(
+                f"[bold cyan]{pulse}[/bold cyan] [dim italic]The autonomous coding agent that never clocks out[/dim italic] [bold cyan]{pulse}[/bold cyan]"
+            )
+        except Exception:
+            pass
+
+    def on_unmount(self):
+        if self._timer:
+            self._timer.stop()
+
+
 class ChatPanel(VerticalScroll):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -260,7 +353,7 @@ class ChatPanel(VerticalScroll):
         self._turn_started = False
 
     def compose(self) -> ComposeResult:
-        yield Static("[dim]Andromity TUI - Type a message or /help[/]", id="welcome")
+        yield WelcomeBanner(id="welcome")
 
     def add_user_message(self, text: str):
         self._turn_started = False
