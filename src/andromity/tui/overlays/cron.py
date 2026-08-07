@@ -24,7 +24,7 @@ CronManagerOverlay {
 #cron-list-pane { width: 1fr; height: 1fr; border-right: solid $accent-darken-2; }
 #cron-form-pane { width: 36; height: 1fr; padding: 1; }
 #cron-list-scroll { height: 1fr; overflow-y: auto; padding: 1; }
-.cron-row { padding: 1; border-bottom: solid $accent-darken-3; background: $surface; cursor: pointer; }
+.cron-row { padding: 1; border-bottom: solid $accent-darken-3; background: $surface; }
 .cron-row:hover { background: $surface-lighten-1; }
 .cron-row.selected { background: $accent-darken-2; border-left: thick solid $primary; padding-left: 0; }
 .cron-row.enabled { border: solid $accent-darken-1; }
