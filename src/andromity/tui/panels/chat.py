@@ -191,14 +191,16 @@ class StreamingMessage(Widget):
     DEFAULT_CSS = """\
 StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
 """
-    def __init__(self, **kwargs):
+    def __init__(self, show_header: bool = True, **kwargs):
         super().__init__(**kwargs)
+        self._show_header = show_header
         self._text = ""
         self._pending = False
         self._timer = None
 
     def compose(self) -> ComposeResult:
-        yield Static("[bold green]Andromity:[/bold green]", id="assistant-header")
+        if self._show_header:
+            yield Static("[bold green]Andromity:[/bold green]", id="assistant-header")
         yield Markdown(" ", id="md-view")
 
     def on_mount(self):
@@ -231,11 +233,13 @@ class ChatPanel(VerticalScroll):
         super().__init__(**kwargs)
         self._streaming = None
         self._messages = []
+        self._turn_started = False
 
     def compose(self) -> ComposeResult:
         yield Static("[dim]Andromity TUI - Type a message or /help[/]", id="welcome")
 
     def add_user_message(self, text: str):
+        self._turn_started = False
         self._messages.append({"role": "user", "content": text})
         self._append_widget(ChatMessage("user", text))
 
@@ -263,7 +267,9 @@ class ChatPanel(VerticalScroll):
 
     def start_assistant_message(self):
         if getattr(self, "_streaming", None) is None:
-            self._streaming = StreamingMessage()
+            show = not getattr(self, "_turn_started", False)
+            self._turn_started = True
+            self._streaming = StreamingMessage(show_header=show)
             self._append_widget(self._streaming)
 
     def append_text(self, text: str):
