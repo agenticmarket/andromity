@@ -66,6 +66,32 @@ class Session:
             "plan": self.plan,
         }
 
+    def compact_messages(self, new_summary: str, keep_last_n: int = 10) -> int:
+        """Replace older messages with a summary to free up context.
+        Returns the number of messages removed.
+        """
+        if len(self.messages) <= keep_last_n + 1:
+            return 0
+            
+        # The system prompt is at index 0. We want to keep it.
+        # We also want to keep the last `keep_last_n` messages.
+        # Everything in between is compacted.
+        
+        system_msg = self.messages[0]
+        recent_msgs = self.messages[-keep_last_n:]
+        
+        # Check if the last compacted block is already there, if so, we can just replace it.
+        # But building a new message array is cleaner.
+        summary_msg = {
+            "role": "system",
+            "content": f"PREVIOUS MEMORY SUMMARY: {new_summary}"
+        }
+        
+        removed_count = len(self.messages) - 1 - keep_last_n
+        self.messages = [system_msg, summary_msg] + recent_msgs
+        self.save()
+        return removed_count
+
     # ── Plan helpers (session-scoped) ────────────────────────────────────────
 
     def save_plan(self, plan_dict: Dict[str, Any]):

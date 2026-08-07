@@ -29,8 +29,51 @@ class Agent:
             self.session.messages[0]["content"] = sys_prompt
             self.session.save()
 
+    async def _compact_context(self) -> AsyncGenerator[StreamEvent, None]:
+        from andromity.core.models import get_context_limit_for_model
+        provider = config.get("default", "provider", "")
+        model = config.get("default", "model", "")
+        
+        limit = get_context_limit_for_model(provider, model)
+        if limit <= 0:
+            limit = 32768
+            
+        current_tokens = sum(len(str(m.get("content", ""))) // 4 for m in self.session.messages)
+        threshold = int(limit * 0.8)
+        
+        if current_tokens > threshold and len(self.session.messages) > 12:
+            yield TextDelta(text="\n[dim italic]Context window near limit. Compacting memory...[/]\n")
+            
+            keep_last_n = 10
+            msgs_to_summarize = self.session.messages[1:-keep_last_n]
+            
+            summary_prompt = (
+                "Summarize the following conversation history. Focus on decisions made, "
+                "files created, and the overarching goal. Combine this with the previous "
+                "summary if one exists:\n\n"
+            )
+            for m in msgs_to_summarize:
+                role = m.get("role", "unknown")
+                content = str(m.get("content", ""))
+                if len(content) > 500:
+                    content = content[:500] + " ...[truncated]"
+                summary_prompt += f"{role.upper()}: {content}\n\n"
+                
+            summary_msgs = [{"role": "user", "content": summary_prompt}]
+            
+            new_summary = ""
+            async for event in stream_completion(summary_msgs, tools=[]):
+                if isinstance(event, TextDelta):
+                    new_summary += event.text
+            
+            removed = self.session.compact_messages(new_summary, keep_last_n=keep_last_n)
+            yield TextDelta(text=f"[dim italic]Compacted {removed} messages into memory.[/]\n")
+
     async def run(self, user_input: str) -> AsyncGenerator[StreamEvent, None]:
         self.session.add_message("user", content=user_input)
+        
+        async for event in self._compact_context():
+            yield event
 
         while True:
             current_tool_id = None

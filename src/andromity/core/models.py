@@ -128,7 +128,7 @@ _CTX_SIZE_MAP = {
 
 def get_context_limit_for_model(provider_key: str, model_id: str) -> int:
     """Return context window size in tokens for a given provider + model.
-    Returns 0 if unknown (no percentage shown).
+    Returns 32768 if unknown to avoid crashing on new model releases.
     """
     provider = MODEL_CATALOG.get(provider_key, {})
     for m in provider.get("models", []):
@@ -140,8 +140,8 @@ def get_context_limit_for_model(provider_key: str, model_id: str) -> int:
             except (ValueError, TypeError):
                 pass
             # Parse shorthand (e.g. "128K", "1M")
-            return _CTX_SIZE_MAP.get(ctx_str.strip(), 0)
-    return 0
+            return _CTX_SIZE_MAP.get(ctx_str.strip(), 32768)
+    return 32768
 
 
 def get_ollama_num_ctx(model: str, base_url: str = "http://localhost:11434") -> int:
