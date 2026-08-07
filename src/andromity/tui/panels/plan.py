@@ -161,7 +161,7 @@ PlanPanel {
         if btn_id == "plan-approve":
             if self._plan:
                 self._plan.approve()
-                self._render()
+                self._refresh_ui()
                 try:
                     self.app._on_plan_approved(self._plan)
                 except Exception:

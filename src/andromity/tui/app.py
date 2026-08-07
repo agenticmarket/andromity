@@ -281,9 +281,9 @@ class AndromityApp(App):
                 needs_approval = True
                 
         if needs_approval:
-            diff_panel = self.query_one("#diff-overlay", DiffPanel)
+            diff_panel = self.query_one("#diff-panel", DiffPanel)
             diff_panel.show_tool(tool_name, args)
-            self.query_one("#diff-overlay").add_class("visible")
+            diff_panel.add_class("visible")
             
             # Wait for user decision from the DiffPanel buttons
             self._tool_approval_future = asyncio.Future()
@@ -315,9 +315,8 @@ class AndromityApp(App):
         """Called when user clicks Approve in PlanPanel."""
         chat = self.query_one(ChatPanel)
         chat.add_system_message(f"[green]✓ Plan approved.[/] Agent may now proceed.")
-        # Unblock the agent if it's waiting for plan approval
-        if self._plan_approval_future and not self._plan_approval_future.done():
-            self._plan_approval_future.set_result(True)
+        # Feed approval back to agent as a new message so it can proceed automatically
+        self._process_message("The plan was approved. You may now proceed with the implementation.")
 
     def _on_plan_rejected(self, plan, feedback: str):
         """Called when user clicks Reject + submits feedback in PlanPanel."""

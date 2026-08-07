@@ -4,6 +4,7 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Static, Button, Input, Select
+from textual import events, on
 
 from andromity.core.cron import CronJob, CronScheduler, parse_interval_seconds
 
@@ -23,7 +24,9 @@ CronManagerOverlay {
 #cron-list-pane { width: 1fr; height: 1fr; border-right: solid $accent-darken-2; }
 #cron-form-pane { width: 36; height: 1fr; padding: 1; }
 #cron-list-scroll { height: 1fr; overflow-y: auto; padding: 1; }
-.cron-row { height: 4; margin: 0 0 1 0; padding: 0 1; border: solid $surface-lighten-1; }
+.cron-row { padding: 1; border-bottom: solid $accent-darken-3; background: $surface; cursor: pointer; }
+.cron-row:hover { background: $surface-lighten-1; }
+.cron-row.selected { background: $accent-darken-2; border-left: thick solid $primary; padding-left: 0; }
 .cron-row.enabled { border: solid $accent-darken-1; }
 .cron-row.failed  { border: solid $error; }
 #cron-footer { dock: bottom; height: 3; padding: 0 1; }
@@ -95,6 +98,20 @@ CronManagerOverlay {
                 id=f"cron-row-{cron.id}",
             )
             scroll.mount(row)
+
+    @on(events.Click, ".cron-row")
+    def on_row_click(self, event: events.Click):
+        widget = event.widget
+        if not widget or not widget.id or not widget.id.startswith("cron-row-"):
+            return
+        self._selected_id = widget.id[9:]
+        # Update highlighting
+        for row in self.query(".cron-row"):
+            if row.id == widget.id:
+                row.add_class("selected")
+            else:
+                row.remove_class("selected")
+        self._set_selected_buttons(True)
 
     def on_button_pressed(self, event: Button.Pressed):
         btn_id = event.button.id
