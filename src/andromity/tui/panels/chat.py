@@ -316,13 +316,16 @@ WelcomeBanner {
         try:
             from andromity.config import config
             from pathlib import Path
+            provider = config.get("default", "provider", "") or "default"
             model = config.get("default", "model", "") or "default"
             profile = config.get("default", "profile", "builder")
             cwd_name = Path.cwd().name
+            short_model = model.split("/")[-1] if "/" in model else model
             info_text = (
-                f"[bold green]● Ready[/bold green]  │  "
+                f"[bold green]● System Online[/bold green]  │  "
                 f"[dim]Project:[/] [bold cyan]{escape(cwd_name)}[/]  │  "
-                f"[dim]Model:[/] [bold yellow]{escape(model.split('/')[-1])}[/]  │  "
+                f"[dim]Provider:[/] [bold cyan]{escape(provider)}[/]  │  "
+                f"[dim]Model:[/] [bold yellow]{escape(short_model)}[/]  │  "
                 f"[dim]Profile:[/] [bold magenta]{escape(profile.capitalize())}[/]"
             )
             safe_update(self.query_one("#banner-info"), info_text)
@@ -355,7 +358,14 @@ class ChatPanel(VerticalScroll):
     def compose(self) -> ComposeResult:
         yield WelcomeBanner(id="welcome")
 
+    def _remove_welcome_if_present(self):
+        try:
+            self.query_one("#welcome").remove()
+        except Exception:
+            pass
+
     def add_user_message(self, text: str):
+        self._remove_welcome_if_present()
         self._turn_started = False
         self._messages.append({"role": "user", "content": text})
         self._append_widget(ChatMessage("user", text))
@@ -364,9 +374,11 @@ class ChatPanel(VerticalScroll):
         """Add a system/info message. markup=True allows Rich markup tags."""
         self._messages.append({"role": "system", "content": text})
         if markup:
-            self._append_widget(ChatMessage("system-markup", text))
+            msg = ChatMessage("system-markup", text)
         else:
-            self._append_widget(ChatMessage("system", text))
+            msg = ChatMessage("system", text)
+        self.mount(msg)
+        self.scroll_end()
 
     def start_thinking_message(self):
         self.start_assistant_message()
@@ -383,6 +395,7 @@ class ChatPanel(VerticalScroll):
             self._thinking = None
 
     def start_assistant_message(self):
+        self._remove_welcome_if_present()
         if getattr(self, "_streaming", None) is None:
             show = not getattr(self, "_turn_started", False)
             self._turn_started = True
@@ -467,11 +480,12 @@ class ChatPanel(VerticalScroll):
         self._messages.clear()
         self._streaming = None
         self.remove_children()
-        self.mount(Static("[dim]Chat cleared.[/]", id="welcome"))
+        self.mount(WelcomeBanner(id="welcome"))
 
     def load_history(self, messages: list):
         """Replay a session's message history into the chat panel visually."""
         self.clear()
+        self._remove_welcome_if_present()
         for msg in messages:
             role = msg.get("role", "")
             content = msg.get("content", "") or ""
@@ -483,9 +497,5 @@ class ChatPanel(VerticalScroll):
                 self._append_widget(ChatMessage("assistant", content))
 
     def _append_widget(self, widget: Widget):
-        try:
-            self.query_one("#welcome").remove()
-        except Exception:
-            pass
         self.mount(widget)
         self.scroll_end()

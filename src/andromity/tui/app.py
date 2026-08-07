@@ -226,21 +226,15 @@ class AndromityApp(App):
         # No-model warning banner
         if not model:
             chat.add_system_message(
-                "[yellow]⚠ No model selected.[/] Use [bold cyan]/model[/] or [bold]Ctrl+M[/] to pick a provider and model first."
+                "[yellow]⚠ No model selected.[/] Use [bold cyan]/model[/] or [bold]Ctrl+L[/] to pick a provider and model first."
             )
             self.call_after_refresh(lambda: self.action_toggle_model())
-        else:
-            short_model = model.split("/")[-1] if "/" in model else model
-            chat.add_system_message(
-                f"[dim]Andromity[/] \u2022 [bold cyan]{provider}[/] {short_model}\n"
-                f"[dim]Ask anything\u2026[/]"
-            )
 
         if not config.get_api_key("anthropic") and not config.get_api_key("openai") and \
                 not config.get_api_key("google") and not config.get_api_key("openrouter"):
             if model and provider not in ("ollama",):
                 chat.add_system_message(
-                    "⚠ No cloud API key configured. Use [bold cyan]/keys set <provider> <key>[/] or set environment variables."
+                    "[yellow]⚠ No cloud API key configured.[/] Use [bold cyan]/keys set <provider> <key>[/] or set environment variables."
                 )
 
     def _update_status(self, live_tokens: int | None = None):
