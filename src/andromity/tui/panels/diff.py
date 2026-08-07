@@ -243,7 +243,9 @@ DiffPanel { height: 1fr; }
 
     def on_button_pressed(self, event: Button.Pressed):
         btn_id = event.button.id
-        parent_panel = self.app.query_one("#right-panel")
+        # The parent overlay can be either #right-panel (legacy) or #diff-overlay
+        parent_id = "#diff-overlay" if self.app.query("#diff-overlay") else "#right-panel"
+        parent_panel = self.app.query_one(parent_id)
         
         if btn_id == "btn-close":
             parent_panel.remove_class("visible")

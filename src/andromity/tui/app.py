@@ -10,21 +10,25 @@ from textual.containers import Horizontal, Vertical
 from andromity.tui.panels.chat import ChatPanel
 from andromity.tui.panels.filetree import FileTreePanel
 from andromity.tui.panels.diff import DiffPanel
+from andromity.tui.panels.plan import PlanPanel
 from andromity.tui.footer import StatusBar, InputBar, ContextPanel, AppFooter
 from andromity.tui.overlays.model import ModelPickerOverlay
 from andromity.tui.overlays.profile import ProfilePickerOverlay
 from andromity.tui.overlays.trust import TrustPromptOverlay
 from andromity.tui.overlays.session import SessionBrowserOverlay
+from andromity.tui.overlays.cron import CronManagerOverlay
 from andromity.core.session import Session
 from andromity.core.agent import Agent
 from andromity.core.events import TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult
 from andromity.core.models import get_context_limit_for_model
 from andromity.core.debug_log import get_logger, LOG_PATH
+from andromity.core.cron import CronScheduler, CronJob
+from andromity.core.tools import register_plan_callback
 from andromity.config import config
 
 log = get_logger("app")
 
-COMMANDS = ["/help", "/mode", "/model", "/profile", "/keys", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear"]
+COMMANDS = ["/help", "/mode", "/model", "/profile", "/keys", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear", "/cron", "/plan"]
 
 CSS = """\
 Screen { background: $surface; }
@@ -36,16 +40,24 @@ Screen { background: $surface; }
 #left-panel.force-hidden { display: none; }
 #left-panel.force-show { display: block; }
 #center-panel { width: 1fr; }
-#right-panel { width: 0; min-width: 0; }
-#right-panel.visible { width: 50%; min-width: 30; border-left: solid $accent; }
-#context-panel {
-    width: 22; min-width: 18; height: 1fr;
+#diff-panel {
+    display: none;
+    width: 60;
+    height: 1fr;
     border-left: solid $accent-darken-2;
-    overflow-y: auto;
+}
+#diff-panel.visible { display: block; }
+#right-sidebar {
+    width: 45; height: 1fr;
+    border-left: solid $accent-darken-2;
+}
+#context-panel {
+    height: auto;
+    padding: 1 1;
 }
 ChatPanel { height: 1fr; overflow-y: auto; padding: 1 2; }
 FileTreePanel { height: 1fr; overflow-y: auto; padding: 1; }
-DiffPanel { height: 1fr; overflow-y: auto; padding: 1 2; }
+PlanPanel { height: 1fr; border-top: solid $accent-darken-2; }
 #suggestions { display: none; }
 #suggestions.visible { display: block; padding: 0 2; }
 #model-overlay { display: none; }
@@ -56,6 +68,8 @@ DiffPanel { height: 1fr; overflow-y: auto; padding: 1 2; }
 #trust-overlay.visible { display: block; }
 #session-overlay { display: none; }
 #session-overlay.visible { display: block; }
+#cron-overlay { display: none; }
+#cron-overlay.visible { display: block; }
 
 .narrow #context-panel { display: none; }
 .narrow #left-panel { display: none; }
@@ -67,6 +81,7 @@ DiffPanel { height: 1fr; overflow-y: auto; padding: 1 2; }
     background: $surface;
     border-right: solid $accent-darken-2;
 }
+.narrow #right-panel { width: 0; min-width: 0; border-left: none; }
 """
 
 
@@ -77,7 +92,7 @@ class AndromityApp(App):
         Binding("tab", "focus_next", "Next", show=False),
         Binding("shift+tab", "focus_prev", "Prev", show=False),
         Binding("ctrl+b", "toggle_filetree", "Files", show=True),
-        Binding("ctrl+d", "toggle_diff", "Diff", show=True),
+        Binding("ctrl+d", "toggle_diff", "Viewer", show=True),
         Binding("ctrl+m", "toggle_model", "Model", show=True),
         Binding("ctrl+j", "toggle_profile", "Profile", show=True),
         Binding("ctrl+o", "toggle_sessions", "Sessions", show=True),
@@ -94,7 +109,15 @@ class AndromityApp(App):
         self._esc_timer = None
         self._current_task = None
         self._session_named = False
-        self._debug_mode = False  # when True, show tool calls inline in chat
+        self._debug_mode = False
+        self._is_streaming = False
+        self._prompt_queue = []
+        self._pending_model_change = False
+        self._pending_mode_change = False
+        self._plan_approval_future: asyncio.Future | None = None
+        self._cron_scheduler = CronScheduler(self._project_path, on_trigger=self._on_cron_trigger)
+        # Register plan callback so PlanPanel updates when agent writes a plan
+        register_plan_callback(self._on_plan_written)
         log.info("=== Andromity started | project=%s ===", self._project_path)
 
     def compose(self) -> ComposeResult:
@@ -107,8 +130,12 @@ class AndromityApp(App):
                 InputBar(id="input-bar"),
                 id="center-panel",
             ),
-            DiffPanel(id="right-panel"),
-            ContextPanel(id="context-panel"),
+            DiffPanel(id="diff-panel"),
+            Vertical(
+                ContextPanel(id="context-panel"),
+                PlanPanel(self._project_path, id="plan-panel"),
+                id="right-sidebar",
+            ),
             id="main-layout",
         )
         yield AppFooter(id="app-footer")
@@ -118,6 +145,9 @@ class AndromityApp(App):
         yield SessionBrowserOverlay(
             self.session.id, self._project_path, id="session-overlay"
         )
+        yield CronManagerOverlay(
+            self._cron_scheduler, self._project_path, id="cron-overlay"
+        )
 
     def on_resize(self, event):
         if event.size.width <= 100:
@@ -126,13 +156,27 @@ class AndromityApp(App):
             self.remove_class("narrow")
 
     def on_mount(self):
-        self.query_one(InputBar).query_one("#input-field").focus()
+        self.focus_input()
         self._update_status()
+        # Start cron scheduler
+        self._cron_scheduler.start()
+        # Load any existing plan
+        from andromity.core.planner import Plan
+        existing_plan = Plan.load(self._project_path)
+        if existing_plan:
+            self.query_one(PlanPanel).load_plan(existing_plan)
         # Check trust FIRST before showing welcome
         if not config.is_trusted(self._project_path):
             self.query_one("#trust-overlay").add_class("visible")
         else:
             self._show_welcome()
+
+    def focus_input(self):
+        """Force focus back to the main chat input field."""
+        try:
+            self.query_one("InputBar").query_one("#input-field").focus()
+        except Exception:
+            pass
 
     def _show_welcome(self):
         chat = self.query_one(ChatPanel)
@@ -172,20 +216,24 @@ class AndromityApp(App):
         provider = config.get("default", "provider", "")
         display = f"{provider}/{model}" if provider and model else model
         ctx_limit = get_context_limit_for_model(provider, model) if (provider and model) else 0
-        ctx = self.query_one(ContextPanel)
         
         display_tokens = live_tokens if live_tokens is not None else self.session.token_total
         is_estimated = live_tokens is not None
         
-        ctx.update_context(
-            tokens=display_tokens,
-            cost=self.session.cost_usd,
-            profile=self.agent.profile,
-            model=display,
-            ctx_limit=ctx_limit,
-            estimated=is_estimated,
-            session_name=self.session.name
-        )
+        try:
+            ctx = self.query_one(ContextPanel)
+            ctx.update_context(
+                tokens=display_tokens,
+                cost=self.session.cost_usd,
+                profile=self.agent.profile,
+                model=display,
+                ctx_limit=ctx_limit,
+                estimated=is_estimated,
+                session_name=self.session.name
+            )
+        except Exception:
+            pass
+
         self.query_one(StatusBar).update_status(
             tokens=display_tokens,
             cost=self.session.cost_usd,
@@ -199,6 +247,12 @@ class AndromityApp(App):
         self.query_one(AppFooter).update_footer(cwd=self._project_path)
 
     async def _on_tool_approval(self, tool_name: str, args: dict) -> bool:
+        if not config.is_trusted(self._project_path):
+            if tool_name in ("write_file", "edit_file", "shell_exec"):
+                chat = self.query_one(ChatPanel)
+                chat.add_system_message(f"[red]✗ Blocked '{tool_name}'[/] — Folder is untrusted. Use [bold cyan]/trust[/] to enable.")
+                return False
+
         mode = config.get("default", "permission_mode", "safe")
         if mode == "yolo":
             return True
@@ -218,16 +272,18 @@ class AndromityApp(App):
                 needs_approval = True
             elif mode == "trust":
                 allowed = config.get("default", "allowed_commands", [])
-                if not any(command.startswith(prefix) for prefix in allowed):
+                if not allowed:
+                    needs_approval = True
+                elif not any(command.startswith(prefix) for prefix in allowed):
                     needs_approval = True
         elif tool_name == "read_file":
             if is_sensitive:
                 needs_approval = True
                 
         if needs_approval:
-            diff_panel = self.query_one(DiffPanel)
+            diff_panel = self.query_one("#diff-overlay", DiffPanel)
             diff_panel.show_tool(tool_name, args)
-            self.query_one("#right-panel").add_class("visible")
+            self.query_one("#diff-overlay").add_class("visible")
             
             # Wait for user decision from the DiffPanel buttons
             self._tool_approval_future = asyncio.Future()
@@ -237,8 +293,127 @@ class AndromityApp(App):
             
         return True
 
+    # ── Plan callbacks ────────────────────────────────────────────────────────
+
+    def _on_plan_written(self, plan):
+        """Called by tools.py when agent writes a plan. Runs in agent thread — schedule on UI thread."""
+        if plan:
+            self.call_from_thread(self._load_plan_in_ui, plan)
+
+    def _load_plan_in_ui(self, plan):
+        try:
+            self.query_one(PlanPanel).load_plan(plan)
+            chat = self.query_one(ChatPanel)
+            chat.add_system_message(
+                f"📋 [bold]Plan ready:[/] [cyan]{escape(plan.title)}[/] ({len(plan.steps)} steps)\n"
+                "[dim]Review the plan in the right panel → Approve or Reject[/]"
+            )
+        except Exception:
+            pass
+
+    def _on_plan_approved(self, plan):
+        """Called when user clicks Approve in PlanPanel."""
+        chat = self.query_one(ChatPanel)
+        chat.add_system_message(f"[green]✓ Plan approved.[/] Agent may now proceed.")
+        # Unblock the agent if it's waiting for plan approval
+        if self._plan_approval_future and not self._plan_approval_future.done():
+            self._plan_approval_future.set_result(True)
+
+    def _on_plan_rejected(self, plan, feedback: str):
+        """Called when user clicks Reject + submits feedback in PlanPanel."""
+        chat = self.query_one(ChatPanel)
+        msg = f"[red]✗ Plan rejected.[/]"
+        if feedback:
+            msg += f" Reason: {escape(feedback)}"
+            # Feed rejection back to agent as a new message
+            self._process_message(f"The plan was rejected. Reason: {feedback}. Please revise the plan.")
+        else:
+            self._process_message("The plan was rejected. Please revise the plan and try again.")
+        chat.add_system_message(msg)
+
+    # ── Cron callbacks ────────────────────────────────────────────────────────
+
+    def _on_cron_trigger(self, cron: CronJob):
+        """Called from scheduler loop (async task). Must be thread-safe."""
+        self.call_from_thread(self._run_cron_job, cron)
+
+    def _run_cron_job(self, cron: CronJob):
+        """Schedule cron agent run on the UI thread."""
+        chat = self.query_one(ChatPanel)
+        chat.add_system_message(
+            f"⏱ [yellow bold]Cron:[/] [bold]{escape(cron.name)}[/] is firing…"
+        )
+        # Temporarily switch to cron's model/provider if different
+        current_provider = config.get("default", "provider", "")
+        current_model = config.get("default", "model", "")
+        is_different = (cron.provider != current_provider or cron.model != current_model)
+
+        if is_different:
+            config.set("default", "provider", cron.provider)
+            config.set("default", "model", cron.model)
+
+        # Create a temporary agent with cron's permission mode
+        cron_agent = Agent(
+            self.session,
+            profile=self.agent.profile,
+            on_tool_approval=self._make_cron_approval(cron),
+        )
+
+        async def _run():
+            try:
+                # stream the cron prompt
+                async for _ in cron_agent.run(cron.prompt):
+                    pass
+                self._cron_scheduler.mark_result(cron.id, success=True)
+                chat.add_system_message(f"[green]✓ Cron '{escape(cron.name)}' completed.[/]")
+            except Exception as e:
+                self._cron_scheduler.mark_result(cron.id, success=False, error=str(e))
+                chat.add_system_message(
+                    f"[red]✗ Cron '{escape(cron.name)}' failed:[/] {escape(str(e))}\n"
+                    f"[dim]Use /cron to view details or disable.[/]"
+                )
+            finally:
+                if is_different:
+                    config.set("default", "provider", current_provider)
+                    config.set("default", "model", current_model)
+
+        self.run_worker(_run(), exclusive=False)
+
+    def _make_cron_approval(self, cron: CronJob):
+        """Return an approval callback respecting the cron's own mode and allowlist."""
+        async def _approval(tool_name: str, args: dict) -> bool:
+            if cron.mode == "yolo":
+                return True
+            if tool_name == "shell_exec":
+                command = str(args.get("command", "")).strip()
+                if cron.allowed_commands and any(command.startswith(p) for p in cron.allowed_commands):
+                    return True
+                # Block unapproved commands — notify but don't prompt
+                chat = self.query_one(ChatPanel)
+                chat.add_system_message(
+                    f"[yellow]⏱ Cron '{escape(cron.name)}':[/] blocked '{escape(tool_name)}' (not in allowlist)"
+                )
+                return False
+            if tool_name in ("write_file", "edit_file") and cron.mode == "safe":
+                chat = self.query_one(ChatPanel)
+                chat.add_system_message(
+                    f"[yellow]⏱ Cron '{escape(cron.name)}':[/] blocked '{escape(tool_name)}' (safe mode)"
+                )
+                return False
+            return True
+        return _approval
+
     def _refresh_agent(self):
         """Refresh agent with current config (after model/provider change)."""
+        if self._is_streaming:
+            self._pending_model_change = True
+            chat = self.query_one(ChatPanel)
+            chat.add_system_message("⚡ [yellow]Model change pending...[/] (Will apply after current response)")
+            return
+            
+        self._apply_model_change()
+        
+    def _apply_model_change(self):
         self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval)
         self._update_status()
         chat = self.query_one(ChatPanel)
@@ -325,6 +500,7 @@ class AndromityApp(App):
         chat = self.query_one(ChatPanel)
         status_bar = self.query_one(StatusBar)
         status_bar.set_streaming(True)
+        self._is_streaming = True
         self._current_task = asyncio.current_task()
         log.info("USER: %s", prompt[:200])
         estimated_tokens = 0
@@ -374,11 +550,105 @@ class AndromityApp(App):
             chat.append_text(f"\n[Unexpected error: {type(e).__name__}] {e}\n")
         finally:
             self._current_task = None
+            self._is_streaming = False
             status_bar.set_streaming(False)
             chat.stop_thinking_message()
             chat.end_assistant_message()
             self._update_status()
-            self.query_one(InputBar).query_one("#input-field").focus()
+            
+            # If the agent wrote or updated a plan, refresh the panel
+            try:
+                self.query_one(PlanPanel).refresh_plan()
+            except Exception:
+                pass
+            
+            if self._pending_model_change:
+                self._pending_model_change = False
+                self._apply_model_change()
+            
+            if self._pending_mode_change:
+                self._pending_mode_change = False
+                self._apply_mode_change()
+                
+            if self._prompt_queue:
+                next_prompt = self._prompt_queue.pop(0)
+                remaining = len(self._prompt_queue)
+                # Clear the queue badge for this message before processing
+                try:
+                    self.query_one(ChatPanel).clear_queue_badge(next_prompt)
+                except Exception:
+                    pass
+                # Process next queued message slightly after UI updates
+                self.call_after_refresh(lambda p=next_prompt: self._process_message(p))
+            else:
+                self.focus_input()
+
+    @on(InputBar.Submitted)
+    def on_input_submitted(self, event: InputBar.Submitted):
+        prompt = event.text.strip()
+        if not prompt:
+            return
+        self._esc_count = 0
+        self.query_one("#suggestions").remove_class("visible")
+        
+        # Guard: no model configured
+        model = config.get("default", "model", "")
+        if not model:
+            chat = self.query_one(ChatPanel)
+            chat.add_system_message(
+                "[red]No model selected.[/] Please choose a provider and model first:\n"
+                "  [bold cyan]/model[/] or [bold]Ctrl+M[/]"
+            )
+            return
+
+        if prompt.startswith("/"):
+            self._process_message(prompt)
+            return
+
+        if self._is_streaming:
+            self._prompt_queue.append(prompt)
+            chat = self.query_one(ChatPanel)
+            # Show a distinct queue badge — NOT a system message that looks like a response
+            qlen = len(self._prompt_queue)
+            chat.add_queued_message(prompt, qlen)
+            return
+            
+        self._process_message(prompt)
+
+    def _process_message(self, prompt: str):
+        chat = self.query_one(ChatPanel)
+        chat.add_user_message(prompt)
+        if prompt.startswith("/"):
+            self._handle_command(prompt)
+        else:
+            # Auto-name session from the first user message
+            if not self._session_named:
+                self._session_named = True
+                name = Session.auto_name_from_message(prompt)
+                self.session.rename(name)
+                self._update_status()
+                asyncio.create_task(self._generate_ai_session_name(prompt))
+            self.run_worker(self._stream_agent(prompt), exclusive=False)
+
+    @on(TextArea.Changed, "#input-field")
+    def on_input_changed(self, event: TextArea.Changed):
+        self._show_suggestions(event.text_area.text)
+
+    @on(Tree.NodeSelected, "#file-tree")
+    def on_file_tree_selected(self, event: Tree.NodeSelected):
+        if event.node.data:
+            path = Path(event.node.data)
+            if path.is_file():
+                diff_panel = self.query_one("#diff-panel", DiffPanel)
+                diff_panel.load_file(str(path))
+                diff_panel.add_class("visible")
+
+
+    def _apply_mode_change(self):
+        mode = config.get("default", "permission_mode", "safe")
+        self._update_status()
+        chat = self.query_one(ChatPanel)
+        chat.add_system_message(f"Permission mode set to [bold]{mode.upper()}[/]")
 
     async def _generate_ai_session_name(self, prompt: str):
         try:
@@ -426,49 +696,6 @@ class AndromityApp(App):
                     self._update_status()
         except Exception as e:
             log.warning("Failed to generate AI session name: %s", e)
-
-    @on(InputBar.Submitted)
-    def on_input_submitted(self, event: InputBar.Submitted):
-        prompt = event.text.strip()
-        if not prompt:
-            return
-        self._esc_count = 0
-        self.query_one("#suggestions").remove_class("visible")
-        chat = self.query_one(ChatPanel)
-        chat.add_user_message(prompt)
-        if prompt.startswith("/"):
-            self._handle_command(prompt)
-        else:
-            # Guard: no model configured
-            model = config.get("default", "model", "")
-            if not model:
-                chat.add_system_message(
-                    "[red]No model selected.[/] Please choose a provider and model first:\n"
-                    "  [bold cyan]/model[/] or [bold]Ctrl+M[/]"
-                )
-                return
-            # Auto-name session from the first user message
-            if not self._session_named:
-                self._session_named = True
-                name = Session.auto_name_from_message(prompt)
-                self.session.rename(name)
-                self._update_status()
-                asyncio.create_task(self._generate_ai_session_name(prompt))
-            self.run_worker(self._stream_agent(prompt), exclusive=True)
-
-    @on(Input.Changed, "#input-field")
-    def on_input_changed(self, event: Input.Changed):
-        self._show_suggestions(event.value)
-
-    @on(Tree.NodeSelected, "#file-tree")
-    def on_file_tree_selected(self, event: Tree.NodeSelected):
-        if event.node.data:
-            path = Path(event.node.data)
-            if path.is_file():
-                diff_panel = self.query_one(DiffPanel)
-                diff_panel.show_file(path)
-                self.query_one("#right-panel").add_class("visible")
-
 
     def _handle_command(self, cmd: str):
         parts = cmd.split(maxsplit=1)
@@ -549,11 +776,38 @@ class AndromityApp(App):
             chat.clear()
         elif command == "/mode":
             if len(parts) > 1:
-                mode = parts[1].strip().lower()
+                subparts = parts[1].strip().split()
+                mode = subparts[0].lower()
+                
+                if mode == "trust" and len(subparts) > 1:
+                    subcmd = subparts[1].lower()
+                    if subcmd == "add" and len(subparts) > 2:
+                        prefix = " ".join(subparts[2:])
+                        allowed = config.get("default", "allowed_commands", [])
+                        if prefix not in allowed:
+                            allowed.append(prefix)
+                            config.set("default", "allowed_commands", allowed)
+                        chat.add_system_message(f"Added [bold]'{prefix}'[/] to trust allowlist.")
+                    elif subcmd == "list":
+                        allowed = config.get("default", "allowed_commands", [])
+                        if allowed:
+                            chat.add_system_message("Trusted prefixes:\n  - " + "\n  - ".join(allowed))
+                        else:
+                            chat.add_system_message("Trust allowlist is empty.")
+                    elif subcmd == "clear":
+                        config.set("default", "allowed_commands", [])
+                        chat.add_system_message("Trust allowlist cleared.")
+                    else:
+                        chat.add_system_message("Usage: /mode trust [add <prefix> | list | clear]")
+                    return
+
                 if mode in ("safe", "trust", "yolo"):
                     config.set("default", "permission_mode", mode)
-                    self._update_status()
-                    chat.add_system_message(f"Permission mode set to [bold]{mode.upper()}[/]")
+                    if self._is_streaming:
+                        self._pending_mode_change = True
+                        chat.add_system_message(f"⚡ [yellow]Mode change to {mode.upper()} pending...[/] (Will apply after current response)")
+                    else:
+                        self._apply_mode_change()
                 else:
                     chat.add_system_message("Unknown mode. Use: safe, trust, or yolo")
             else:
@@ -609,6 +863,26 @@ class AndromityApp(App):
                 f"To monitor logs live, open a new PowerShell window and run:\n"
                 f"[bold cyan]Get-Content -Wait '{LOG_PATH}'[/]"
             )
+        elif command == "/cron":
+            overlay = self.query_one("#cron-overlay", CronManagerOverlay)
+            overlay.add_class("visible")
+        elif command.startswith("/plan"):
+            parts = cmd.split()
+            if len(parts) > 1 and parts[1].strip().lower() == "clear":
+                from andromity.core.planner import Plan
+                Plan.clear(self._project_path)
+                panel = self.query_one(PlanPanel)
+                panel._plan = None
+                panel.refresh_plan()
+                chat.add_system_message("[green]✓ Active plan cleared and removed.[/]")
+            else:
+                from andromity.core.planner import Plan
+                plan = Plan.load(self._project_path)
+                if plan:
+                    self.query_one(PlanPanel).load_plan(plan)
+                    chat.add_system_message(f"[cyan]Plan reloaded:[/] {escape(plan.title)}")
+                else:
+                    chat.add_system_message("[dim]No plan file found in this project.[/]")
         else:
             chat.add_system_message(f"Unknown: {command}. Type /help")
 
@@ -628,11 +902,12 @@ class AndromityApp(App):
                 left.add_class("force-hidden")
 
     def action_toggle_diff(self):
-        right = self.query_one("#right-panel")
-        if right.has_class("visible"):
-            right.remove_class("visible")
+        """Ctrl+D — show/hide the file viewer/diff panel."""
+        diff = self.query_one("#diff-panel")
+        if diff.has_class("visible"):
+            diff.remove_class("visible")
         else:
-            right.add_class("visible")
+            diff.add_class("visible")
 
     def action_toggle_model(self):
         overlay = self.query_one("#model-overlay")

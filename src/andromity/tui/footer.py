@@ -1,9 +1,10 @@
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
-from textual.widgets import Static, Input
+from textual.widgets import Static, Input, TextArea
 from textual.reactive import reactive
 from textual.message import Message
+from textual.binding import Binding
 from rich.markup import escape
 from andromity.tui.markup_utils import safe_update
 
@@ -13,8 +14,6 @@ _SPINNER_FRAMES = "⣾⣽⣻⢿⡿⣟⣯⣷"
 class ContextPanel(Widget):
     DEFAULT_CSS = """\
 ContextPanel {
-    width: 22; min-width: 18;
-    border-left: solid $accent-darken-2;
     padding: 1 1;
 }
 #ctx-title { height: 3; }
@@ -215,31 +214,73 @@ StatusBar {
             self._spinner_timer = self.set_timer(0.12, self._tick_spinner)
 
 
+class ChatInput(TextArea):
+    BINDINGS = [
+        Binding("enter", "submit", "Send", priority=True),
+        Binding("shift+enter", "newline", "New Line", priority=True),
+    ]
+
+    def action_submit(self):
+        text = self.text.strip()
+        if text:
+            self.post_message(InputBar.Submitted(text))
+            self.text = ""
+
+    def action_newline(self):
+        self.insert("\n")
+
+
 class InputBar(Widget):
     """Input bar that lives inside the center panel."""
     DEFAULT_CSS = """\
 InputBar {
-    height: auto; min-height: 3; dock: bottom;
+    height: auto; min-height: 4; max-height: 15; dock: bottom;
     padding: 0 1;
+    layers: base placeholder;
 }
 #input-field {
     width: 1fr;
     height: auto;
-    min-height: 1;
-    
+    min-height: 3;
+    max-height: 14;
+    border: none;
+    background: $surface;
+    layer: base;
+}
+#input-placeholder {
+    position: absolute;
+    offset: 2 1;
+    color: $text-muted;
+    layer: placeholder;
 }
 """
     def compose(self) -> ComposeResult:
-        yield Input(placeholder="Ask me anything… (Enter to send, /help for commands)", id="input-field")
+        yield ChatInput(id="input-field")
+        yield Static("Ask me anything… (Enter to send, /help for commands)", id="input-placeholder")
 
-    def on_input_submitted(self, event: Input.Submitted):
-        text = event.value.strip()
-        if text:
-            self.post_message(self.Submitted(text))
-            event.input.value = ""
+    def on_mount(self):
+        self._update_placeholder()
+
+    def on_text_area_changed(self, event: TextArea.Changed):
+        self._update_placeholder()
+
+    def _update_placeholder(self):
+        try:
+            ta = self.query_one("#input-field", TextArea)
+            ph = self.query_one("#input-placeholder")
+            if ta.text:
+                ph.display = False
+            else:
+                ph.display = True
+        except Exception:
+            pass
+
+    def on_click(self, event):
+        # Focus input if clicking anywhere in the bar (like the placeholder)
+        self.app.focus_input()
 
     def clear_input(self):
-        self.query_one("#input-field").value = ""
+        self.query_one("#input-field").text = ""
 
     class Submitted(Message):
         def __init__(self, text: str):

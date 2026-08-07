@@ -1,13 +1,29 @@
 import os
 import subprocess
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 from andromity.core.git_ops import get_repo, create_pre_edit_snapshot
 from andromity.config import config, get_shell
 from andromity.core.debug_log import get_logger
 
 log = get_logger("tools")
+
+_PLAN_CALLBACKS = []  # list of callables(plan) to notify on plan write/update
+
+def register_plan_callback(cb):
+    _PLAN_CALLBACKS.append(cb)
+
+def _notify_plan():
+    from andromity.core.planner import Plan
+    import os
+    pp = str(Path.cwd())
+    plan = Plan.load(pp)
+    for cb in _PLAN_CALLBACKS:
+        try:
+            cb(plan)
+        except Exception:
+            pass
 
 
 def _is_trusted() -> bool:
@@ -103,6 +119,37 @@ def list_dir(path: str = ".") -> str:
         return f"Error listing directory: {e}"
 
 
+def write_plan(title: str, steps: List[str], description: str = "") -> str:
+    """Create a plan file with the given title and list of step strings."""
+    from andromity.core.planner import Plan, PlanStep
+    project_path = str(Path.cwd())
+    plan = Plan(
+        title=title,
+        description=description,
+        project_path=project_path,
+        status="pending_approval",
+        steps=[PlanStep(index=i + 1, text=s) for i, s in enumerate(steps)],
+    )
+    plan.save()
+    _notify_plan()
+    return f"Plan '{title}' written with {len(steps)} steps. Awaiting user approval before proceeding."
+
+
+def update_plan_step(step_index: int, status: str) -> str:
+    """Update a plan step status. status: done | failed | active | skipped."""
+    from andromity.core.planner import Plan
+    project_path = str(Path.cwd())
+    plan = Plan.load(project_path)
+    if not plan:
+        return "Error: No plan found. Use write_plan first."
+    valid = ("pending", "active", "done", "failed", "skipped")
+    if status not in valid:
+        return f"Error: status must be one of {valid}"
+    plan.set_step_status(step_index, status)
+    _notify_plan()
+    return f"Step {step_index} marked as {status}."
+
+
 CORE_TOOLS = [
     {
         "type": "function",
@@ -179,6 +226,37 @@ CORE_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_plan",
+            "description": "Create a structured plan for a multi-step task. ALWAYS call this before starting complex work. The user must approve the plan before you proceed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Short title for the plan"},
+                    "steps": {"type": "array", "items": {"type": "string"}, "description": "List of step descriptions"},
+                    "description": {"type": "string", "description": "Optional overview or notes"},
+                },
+                "required": ["title", "steps"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_plan_step",
+            "description": "Update the status of a plan step. Call with 'active' when starting, 'done' when finished, 'failed' on error.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "step_index": {"type": "integer", "description": "The 1-based step number"},
+                    "status": {"type": "string", "enum": ["pending", "active", "done", "failed", "skipped"]},
+                },
+                "required": ["step_index", "status"],
+            },
+        },
+    },
 ]
 
 
@@ -194,6 +272,10 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
         result = shell_exec(**args)
     elif name == "list_dir":
         result = list_dir(**args)
+    elif name == "write_plan":
+        result = write_plan(**args)
+    elif name == "update_plan_step":
+        result = update_plan_step(**args)
     else:
         result = f"Error: Unknown tool {name}"
     log.debug("TOOL RESULT: %s -> %s chars: %s", name, len(result), result[:120])

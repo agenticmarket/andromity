@@ -46,10 +46,12 @@
 
 15. I have no idea what this microservices architecture is about, but it looks like my code did it for me! 😱🏗️  
 
+16. Why did the Docker container go to therapy? Because it had too many unresolved dependencies and couldn't commit to a stable environment! 🐳🛋️  
+
 
 ## 💀 Final Thought & Reflections
 
-16. The only difference between being late and not coming?  
+17. The only difference between being late and not coming?  
     Being "late" is when you're still in traffic to the server farm (while your code has been waiting at home). 🚦  
 
 ---

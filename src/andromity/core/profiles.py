@@ -1,13 +1,30 @@
 import os
 import platform
+import subprocess
+import sys
 from pathlib import Path
 from typing import List
 from andromity.config import get_shell
 
+def _get_git_branch() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "branch", "--show-current"], 
+            capture_output=True, 
+            text=True, 
+            timeout=1
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
 PROFILES = {
-    "builder": {"tools": ["read_file", "write_file", "edit_file", "shell_exec", "list_dir"]},
+    "builder": {"tools": ["read_file", "write_file", "edit_file", "shell_exec", "list_dir", "write_plan", "update_plan_step"]},
+    "coder": {"tools": ["read_file", "write_file", "edit_file", "shell_exec", "list_dir"]},
     "reviewer": {"tools": ["read_file", "list_dir"]},
-    "planner": {"tools": ["read_file", "list_dir"]},
+    "planner":  {"tools": ["read_file", "list_dir", "write_plan", "update_plan_step"]},
 }
 
 
@@ -15,12 +32,28 @@ def get_system_prompt(profile: str) -> str:
     cwd = Path.cwd()
     os_name = platform.system()
     shell = get_shell()
-    base = f"""You are Andromity, a world-class AI coding assistant.
-You operate on the user's local machine with the ability to read, write, and execute code.
-Current working directory: {cwd}
-Operating System: {os_name}
-Shell: {shell}
-Always be concise. Think before you act.
+    
+    python_ver = sys.version.split()[0]
+    home_dir = str(Path.home())
+    git_branch = _get_git_branch()
+    venv = os.environ.get("VIRTUAL_ENV") or os.environ.get("CONDA_DEFAULT_ENV") or "none"
+    is_wsl = "WSL" in platform.uname().release if os_name == "Linux" else False
+    
+    base = f"""You are Andromity, a world-class AI coding assistant running on the user's machine.
+
+## Environment
+- OS: {os_name}{" (WSL)" if is_wsl else ""}
+- Shell: {shell}
+- Python: {python_ver}
+- Home: {home_dir}
+- CWD: {cwd}
+- Git branch: {git_branch}
+- Virtualenv: {venv}
+
+## Rules
+- Always use the correct shell syntax for {shell} on {os_name}.
+- Never assume Unix paths on Windows unless in WSL.
+- Plan before acting. Be concise.
 """
     if profile == "reviewer":
         extra = """
@@ -39,6 +72,14 @@ Your role is to act as an architect and system designer.
 - Think in phases. Break complex tasks into small, verifiable steps.
 - Provide step-by-step checklists with [ ] checkboxes.
 - Ask clarifying questions before suggesting implementations.
+"""
+    elif profile == "coder":
+        extra = """
+[PROFILE: Fast Coder]
+Your role is to execute code changes as fast as possible without asking for permission.
+- You have full access to read, write, edit files, and execute commands.
+- Do NOT make plans. Just write or edit the code directly.
+- Act immediately.
 """
     else:
         extra = """

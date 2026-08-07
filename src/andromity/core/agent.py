@@ -92,8 +92,13 @@ class Agent:
                     import asyncio
                     is_approved = await self.on_tool_approval(tool_name, args) if asyncio.iscoroutinefunction(self.on_tool_approval) else self.on_tool_approval(tool_name, args)
                     if not is_approved:
-                        result = f"Tool '{tool_name}' rejected by user."
+                        result = (
+                            f"TOOL REJECTED BY USER: '{tool_name}' was explicitly declined.\n"
+                            f"Do NOT retry this tool call.\n"
+                            f"Acknowledge the rejection, then ask the user how they would like to proceed."
+                        )
                         self.session.add_message("tool", content=result, name=tool_name, tool_call_id=tool_call["id"])
+                        yield ToolResult(tool_id=tool_call["id"], result="[Rejected by User]")
                         continue
 
                 if self.dry_run:

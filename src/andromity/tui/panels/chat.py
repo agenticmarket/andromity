@@ -34,7 +34,29 @@ ChatMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
             yield Static(f"[dim][tool: {escape(self._content)}][/dim]")
 
 
-import re
+class QueuedMessageBadge(Widget):
+    """Shown in chat when a message is queued during streaming."""
+    DEFAULT_CSS = """\
+QueuedMessageBadge {
+    width: 1fr; height: auto; min-height: 1;
+    padding: 0 1; margin: 0;
+    border-left: tall $warning-darken-1;
+    background: #1a1800;
+}
+"""
+    def __init__(self, prompt: str, queue_pos: int, **kwargs):
+        super().__init__(**kwargs)
+        self._prompt = prompt
+        self._queue_pos = queue_pos
+
+    def compose(self) -> ComposeResult:
+        short = self._prompt[:50] + ("\u2026" if len(self._prompt) > 50 else "")
+        yield Static(
+            f"[yellow bold]⏳ Queued #{self._queue_pos}:[/] [dim]{escape(short)}[/]"
+            f"  [dim italic](will send after current response)[/]"
+        )
+
+
 
 class ToolIndicator(Widget):
     DEFAULT_CSS = """\
@@ -310,6 +332,27 @@ class ChatPanel(VerticalScroll):
             indicators = self.query(ToolIndicator)
             if indicators:
                 indicators.last().mark_done()
+        except Exception:
+            pass
+
+    def add_queued_message(self, prompt: str, queue_pos: int):
+        """Show a queue badge for a message waiting to be sent."""
+        badge = QueuedMessageBadge(prompt, queue_pos, classes=f"queued-badge")
+        self._append_widget(badge)
+
+    def clear_queue_badge(self, prompt: str):
+        """Remove the queue badge when a message is picked up for processing."""
+        try:
+            for badge in self.query(QueuedMessageBadge):
+                if badge._prompt == prompt:
+                    # Update badge to show it's now being processed
+                    try:
+                        st = badge.query_one(Static)
+                        short = prompt[:50] + ("…" if len(prompt) > 50 else "")
+                        st.update(f"[green]▶ Processing:[/] [dim]{escape(short)}[/]")
+                    except Exception:
+                        pass
+                    break
         except Exception:
             pass
 
