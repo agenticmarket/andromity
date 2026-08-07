@@ -505,6 +505,10 @@ class AndromityApp(App):
         estimated_tokens = 0
         delta_count = 0
         first_text_seen = False
+        
+        active_tool_name = ""
+        active_tool_args = ""
+        
         try:
             async for event in self.agent.run(prompt):
                 if isinstance(event, ThinkingDelta):
@@ -520,11 +524,14 @@ class AndromityApp(App):
                     chat.append_text(event.text)
                     estimated_tokens += len(event.text) // 4
                 elif isinstance(event, ToolCallStart):
+                    active_tool_name = event.tool_name
+                    active_tool_args = ""
                     log.debug("TOOL START: %s", event.tool_name)
                     if self._debug_mode:
                         chat.add_system_message(f"[dim]▶ tool: {event.tool_name}[/]")
                     chat.show_tool_start(event.tool_name)
                 elif isinstance(event, ToolCallDelta):
+                    active_tool_args += event.args_json_chunk
                     chat.append_tool_args(event.args_json_chunk)
                 elif isinstance(event, ToolCallEnd):
                     log.debug("TOOL END: %s", event.tool_id)
@@ -532,6 +539,16 @@ class AndromityApp(App):
                 elif isinstance(event, ToolResult):
                     log.debug("TOOL RESULT: %s", event.tool_id)
                     chat.show_tool_result(event.tool_id, event.result)
+                    
+                    if active_tool_name in ("write_file", "edit_file", "delete_file", "shell_exec"):
+                        import json
+                        try:
+                            args = json.loads(active_tool_args)
+                            target_path = args.get("path") or args.get("target_path") or args.get("target_file")
+                            if target_path:
+                                self.query_one(FileTreePanel).highlight_recent_change(Path(target_path).absolute())
+                        except Exception:
+                            pass
                 elif isinstance(event, Done):
                     log.info("DONE usage=%s", event.usage)
                     self._update_status()

@@ -41,3 +41,62 @@ class FileTreePanel(VerticalScroll):
                          ".json": "[cyan].json[/]", ".toml": "[cyan].toml[/]", ".md": "[dim].md[/]"}
                 icon = icons.get(ext, f"[dim]{ext or '?'}[/]")
                 parent_node.add(f"{icon} {item.name}{git_marker}", data=str(item))
+
+    def highlight_recent_change(self, target_path: Path):
+        target_str = str(target_path)
+        tree = self.query_one("#file-tree", Tree)
+        
+        def find_node(node):
+            if str(node.data) == target_str:
+                return node
+            for child in node.children:
+                found = find_node(child)
+                if found:
+                    return found
+            return None
+
+        node = find_node(tree.root)
+        
+        if not node:
+            # Rebuild tree to pick up new files
+            expanded = set()
+            def collect_expanded(n):
+                if n.is_expanded and n.data:
+                    expanded.add(str(n.data))
+                for child in n.children:
+                    collect_expanded(child)
+            collect_expanded(tree.root)
+            
+            tree.clear()
+            self._build_tree(tree.root, Path.cwd())
+            
+            def restore_expanded(n):
+                if str(n.data) in expanded:
+                    n.expand()
+                for child in n.children:
+                    restore_expanded(child)
+            restore_expanded(tree.root)
+            
+            node = find_node(tree.root)
+            
+        if node:
+            # Ensure parents are expanded
+            p = node.parent
+            while p:
+                p.expand()
+                p = p.parent
+                
+            original_label = node.label
+            
+            # Textual nodes take strings or Rich Text objects.
+            # We can append text.
+            from rich.text import Text
+            new_label = Text.assemble(original_label, Text(" [Modified]", style="bold yellow"))
+            node.set_label(new_label)
+            
+            def reset_label():
+                try:
+                    node.set_label(original_label)
+                except Exception:
+                    pass
+            self.set_timer(3.0, reset_label)
