@@ -1,7 +1,7 @@
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widget import Widget
-from textual.widgets import Static, Input, TextArea
+from textual.widgets import Static, Input, TextArea, Button
 from textual.reactive import reactive
 from textual.message import Message
 from textual.binding import Binding
@@ -119,6 +119,8 @@ StatusBar {
         self._ctx_limit: int = 0
         self._estimated: bool = False
         self._hint: str = ""
+        self._todo_done: int = 0
+        self._todo_total: int = 0
 
     def compose(self) -> ComposeResult:
         yield Static("", id="status-text")
@@ -154,12 +156,18 @@ StatusBar {
         pcolor = perm_colors.get(perm_mode, "white")
         perm_part = f" [{pcolor}]\\[{perm_mode.upper()}\\][/{pcolor}] |"
 
+        todo_part = ""
+        if self._todo_total > 0:
+            color = "green" if self._todo_done == self._todo_total else "yellow"
+            todo_part = f" [{color}]{self._todo_done}/{self._todo_total} todos[/{color}] |"
+
         return (
             f"{stream_part}"
             f"{model_part}"
             f" {escape(self.profile)} |"
             f"{perm_part}"
             f"{ctx_part}"
+            f"{todo_part}"
             f" ${self.cost:.4f}"
             f"  [dim]{escape(self._hint) if self._hint else '/help'}[/dim]"
         )
@@ -183,6 +191,11 @@ StatusBar {
         else:
             self._provider = ""
             self._model = model
+        self._refresh_text()
+
+    def update_todo_progress(self, done: int, total: int):
+        self._todo_done = done
+        self._todo_total = total
         self._refresh_text()
 
     def set_streaming(self, on: bool):
@@ -234,7 +247,7 @@ class ChatInput(TextArea):
 
 
 class QueuePanel(Widget):
-    """Static area above input bar showing queued messages."""
+    """Area above input bar showing queued messages with delete buttons."""
     DEFAULT_CSS = """\
 QueuePanel {
     height: auto;
@@ -245,25 +258,37 @@ QueuePanel {
 }
 QueuePanel.has-items { display: block; }
 #queue-list { height: auto; }
+.queue-item { height: 1; }
+.queue-item Static { width: 1fr; }
+.queue-item Button { width: 3; min-width: 3; margin: 0; }
 """
     def compose(self) -> ComposeResult:
-        yield Static("", id="queue-list")
+        yield VerticalScroll(id="queue-list")
 
     def update_queue(self, items: list[str]):
         try:
-            el = self.query_one("#queue-list", Static)
+            container = self.query_one("#queue-list", VerticalScroll)
+            container.remove_children()
             if not items:
-                safe_update(el, "")
                 self.remove_class("has-items")
                 return
-            lines = []
-            for i, item in enumerate(items, 1):
+            for i, item in enumerate(items):
                 short = item if len(item) <= 50 else item[:47] + "..."
-                lines.append(f"[yellow]⏳ #{i}:[/] [dim]{escape(short)}[/]")
-            safe_update(el, "\n".join(lines))
+                row = Horizontal(classes="queue-item")
+                row.compose_add_child(Static(f"[yellow]#{i+1}[/] [dim]{escape(short)}[/]"))
+                row.compose_add_child(Button("✕", variant="error", id=f"q-del-{i}"))
+                container.mount(row)
             self.add_class("has-items")
         except Exception as e:
             log.warning("QueuePanel.update_queue error: %s", e)
+
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id and event.button.id.startswith("q-del-"):
+            try:
+                idx = int(event.button.id.split("-")[-1])
+                self.app._remove_from_queue(idx)
+            except Exception:
+                pass
 
 class CronStatusPanel(Widget):
     """Sidebar panel showing active cron jobs and recent status notifications."""

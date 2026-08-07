@@ -13,12 +13,12 @@ PROFILES = {
     },
     "reviewer": {
         "name": "Reviewer",
-        "desc": "Read-only — reviews code, suggests changes, no file modifications.",
+        "desc": "Read-only — reviews codebase professionally, suggests changes, no file modifications.",
         "tools": "read_file, list_dir",
     },
     "planner": {
         "name": "Planner",
-        "desc": "Planning only — analyzes codebase, creates task plans, no edits.",
+        "desc": "Planning only — analyzes codebase like a human planner, creates task plans, no edits.",
         "tools": "read_file, list_dir",
     },
 }

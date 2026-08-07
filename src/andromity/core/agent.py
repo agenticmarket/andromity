@@ -13,13 +13,16 @@ from andromity.config import config
 
 class Agent:
     def __init__(self, session: Session, profile: str = None, dry_run: bool = False,
-                 auto_approve: bool = False, on_tool_approval: Optional[Callable] = None):
+                 auto_approve: bool = False, on_tool_approval: Optional[Callable] = None,
+                 ctx_limit: int = 0):
         self.session = session
         self.profile = profile or config.get("default", "profile", "builder")
         self.dry_run = dry_run
         self.auto_approve = auto_approve
         self.on_tool_approval = on_tool_approval
+        self.ctx_limit = ctx_limit
         self.allowed_tools = filter_tools_for_profile(CORE_TOOLS, self.profile)
+        self._empty_retried = False
         # Register session so plan tools can store plan in it
         register_session(session)
         sys_prompt = get_system_prompt(self.profile)
@@ -30,18 +33,24 @@ class Agent:
             self.session.save()
 
     async def _compact_context(self) -> AsyncGenerator[StreamEvent, None]:
-        from andromity.core.models import get_context_limit_for_model
-        provider = config.get("default", "provider", "")
-        model = config.get("default", "model", "")
-        
-        limit = get_context_limit_for_model(provider, model)
+        limit = self.ctx_limit
+        if limit <= 0:
+            from andromity.core.models import get_context_limit_for_model
+            provider = config.get("default", "provider", "")
+            model = config.get("default", "model", "")
+            limit = get_context_limit_for_model(provider, model)
         if limit <= 0:
             limit = 32768
-            
-        current_tokens = sum(len(str(m.get("content", ""))) // 4 for m in self.session.messages)
+
+        # Use real API-reported token count as primary source.
+        # Fall back to a crude character estimate only if we haven't had any API reply yet.
+        if self.session.token_total > 0:
+            current_tokens = self.session.token_total
+        else:
+            current_tokens = sum(len(str(m.get("content", ""))) // 4 for m in self.session.messages)
         threshold = int(limit * 0.8)
-        
-        if current_tokens > threshold and len(self.session.messages) > 12:
+
+        if current_tokens > threshold and len(self.session.messages) > 6:
             yield TextDelta(text="\n[dim italic]Context window near limit. Compacting memory...[/]\n")
             
             keep_last_n = 10
@@ -49,7 +58,7 @@ class Agent:
             
             summary_prompt = (
                 "Summarize the following conversation history. Focus on decisions made, "
-                "files created, and the overarching goal. Combine this with the previous "
+                "files created, the overarching goal and important details. Combine this with the previous "
                 "summary if one exists:\n\n"
             )
             for m in msgs_to_summarize:
@@ -124,14 +133,32 @@ class Agent:
             )
 
             if not assistant_content and not tool_calls_to_execute:
-                # Model returned nothing — context may be truncated
-                warning = (
-                    "\n[dim][No response from model][/] Context may have exceeded the model's "
-                    "window. Try [bold cyan]/new[/] for a fresh session, or switch model with "
-                    "[bold cyan]Ctrl+M[/].\n"
-                )
+                # Model returned nothing — retry once before giving up
+                if not getattr(self, '_empty_retried', False):
+                    self._empty_retried = True
+                    yield TextDelta(text="[dim]Model returned empty, retrying...[/]\n")
+                    continue
+                self._empty_retried = False
+                from andromity.core.models import get_context_limit_for_model
+                provider = config.get("default", "provider", "")
+                model = config.get("default", "model", "")
+                limit = self.ctx_limit or get_context_limit_for_model(provider, model)
+                current_tokens = sum(len(str(m.get("content", ""))) // 4 for m in self.session.messages)
+                if limit > 0 and current_tokens > limit * 0.9:
+                    warning = (
+                        f"\n[dim][No response from model][/] Context full ({current_tokens:,}/{limit:,} tokens). "
+                        "Try [bold cyan]/new[/] for a fresh session, or switch model with "
+                        "[bold cyan]Ctrl+M[/].\n"
+                    )
+                else:
+                    warning = (
+                        "\n[dim][No response from model][/] The model returned an empty response. "
+                        "Try rephrasing your message or switch model with [bold cyan]Ctrl+M[/].\n"
+                    )
                 yield TextDelta(text=warning)
                 break
+
+            self._empty_retried = False
 
             if not tool_calls_to_execute:
                 break

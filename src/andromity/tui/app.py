@@ -23,7 +23,7 @@ from andromity.core.events import TextDelta, ThinkingDelta, ToolCallStart, ToolC
 from andromity.core.models import get_context_limit_for_model
 from andromity.core.debug_log import get_logger, LOG_PATH
 from andromity.core.cron import CronScheduler, CronJob
-from andromity.core.tools import register_plan_callback
+from andromity.core.tools import register_plan_callback, register_todo_callback
 from andromity.config import config
 
 log = get_logger("app")
@@ -112,7 +112,8 @@ class AndromityApp(App):
         super().__init__(**kwargs)
         self._project_path = str(Path.cwd())
         self.session = Session(name="new-session", project_path=self._project_path)
-        self.agent = Agent(self.session, on_tool_approval=self._on_tool_approval)
+        self._ollama_num_ctx = 0
+        self.agent = Agent(self.session, on_tool_approval=self._on_tool_approval, ctx_limit=self._get_ctx_limit())
         self._esc_count = 0
         self._esc_time = 0.0
         self._esc_timer = None
@@ -127,9 +128,18 @@ class AndromityApp(App):
         self._cron_scheduler = CronScheduler(self._project_path, on_trigger=self._on_cron_trigger)
         # Register plan callback so PlanPanel updates when agent writes a plan
         register_plan_callback(self._on_plan_written)
-        self._ollama_num_ctx = 0
+        register_todo_callback(self._on_todo_changed)
         self._cron_running_jobs: set = set()  # tracks which cron job IDs are currently executing
         log.info("=== Andromity started | project=%s ===", self._project_path)
+
+    def _get_ctx_limit(self) -> int:
+        """Return live context limit for current provider/model."""
+        provider = config.get("default", "provider", "")
+        model = config.get("default", "model", "")
+        if provider == "ollama" and self._ollama_num_ctx > 0:
+            return self._ollama_num_ctx
+        from andromity.core.models import get_context_limit_for_model
+        return get_context_limit_for_model(provider, model) if (provider and model) else 0
 
     def compose(self) -> ComposeResult:
         yield Horizontal(
@@ -343,19 +353,36 @@ class AndromityApp(App):
         except Exception:
             pass
 
+    def _on_todo_changed(self):
+        """Called by tools.py when todos are created/updated. Runs in agent thread."""
+        self.call_from_thread(self._refresh_todos_in_ui)
+
+    def _refresh_todos_in_ui(self):
+        try:
+            panel = self.query_one(PlanPanel)
+            panel.refresh_todos()
+            from andromity.core.todo import TodoList
+            todo_list = TodoList.load(self._project_path)
+            done, total = todo_list.progress()
+            self.query_one(StatusBar).update_todo_progress(done, total)
+        except Exception:
+            pass
+
     def _on_plan_approved(self, plan):
         """Called when user clicks Approve in PlanPanel."""
-        # Save approved state to session
         if self.session:
             self.session.save_plan(plan.to_dict())
         chat = self.query_one(ChatPanel)
-        chat.add_system_message(f"[green]✓ Plan approved.[/] Proceeding with implementation...")
-        # Send approval to agent directly (not shown in chat as user message)
+        chat.add_system_message(f"[green]Plan approved.[/] Creating todos...")
+        steps_text = "\n".join(f"- {s.index}. {s.text}" for s in plan.steps)
         self._send_to_agent(
-            "The plan was approved. Before executing, write a file called '.andromity/task.md' "
-            "with a short summary of the task (title + 1-2 sentence description of what will be built). "
-            "Then proceed with the implementation step by step. "
-            "Do NOT ask for confirmation — just execute each step directly."
+            f"The plan was approved. Do these things in order:\n"
+            f"1. Write the plan to '.andromity/plan.md' as a reference document\n"
+            f"2. Create a todo for EACH step using create_todo tool\n"
+            f"3. Mark the first todo as active using update_todo\n"
+            f"4. Then execute the work\n\n"
+            f"Plan steps:\n{steps_text}\n\n"
+            f"Do NOT ask for confirmation — just execute."
         )
 
     def _on_plan_rejected(self, plan, feedback: str):
@@ -408,6 +435,7 @@ class AndromityApp(App):
             cron_session,
             profile=self.agent.profile,
             on_tool_approval=self._make_cron_approval(cron),
+            ctx_limit=self._get_ctx_limit(),
         )
 
         # Start a run record for history tracking
@@ -514,7 +542,6 @@ class AndromityApp(App):
         self._apply_model_change()
         
     def _apply_model_change(self):
-        self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval)
         model = config.get("default", "model", "")
         provider = config.get("default", "provider", "")
         if provider == "ollama":
@@ -522,13 +549,14 @@ class AndromityApp(App):
             self._ollama_num_ctx = get_ollama_num_ctx(model)
         else:
             self._ollama_num_ctx = 0
+        self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval, ctx_limit=self._get_ctx_limit())
         self._update_status()
         chat = self.query_one(ChatPanel)
         chat.add_system_message(f"Provider: [bold]{provider}[/] | Model: [bold cyan]{model}[/]")
 
     def _apply_profile(self, profile: str):
         """Apply a new profile from the profile picker."""
-        self.agent = Agent(self.session, profile=profile, on_tool_approval=self._on_tool_approval)
+        self.agent = Agent(self.session, profile=profile, on_tool_approval=self._on_tool_approval, ctx_limit=self._get_ctx_limit())
         self._update_status()
         chat = self.query_one(ChatPanel)
         chat.add_system_message(f"Profile: {profile}")
@@ -548,7 +576,7 @@ class AndromityApp(App):
     def _new_session(self):
         """Start a fresh session, preserving the old one in storage."""
         self.session = Session(name="new-session", project_path=self._project_path)
-        self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval)
+        self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval, ctx_limit=self._get_ctx_limit())
         self._session_named = False
         chat = self.query_one(ChatPanel)
         chat.clear()
@@ -570,7 +598,7 @@ class AndromityApp(App):
     def _load_session(self, session: Session):
         """Switch to a historical session and replay its chat history."""
         self.session = session
-        self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval)
+        self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval, ctx_limit=self._get_ctx_limit())
         self._session_named = True  # already named
         chat = self.query_one(ChatPanel)
         chat.load_history(session.messages)
@@ -633,6 +661,14 @@ class AndromityApp(App):
         """Update the static queue panel above input bar."""
         panel = self.query_one("#queue-panel", QueuePanel)
         panel.update_queue(self._prompt_queue)
+
+    def _remove_from_queue(self, index: int):
+        """Remove a message from the queue by index."""
+        if 0 <= index < len(self._prompt_queue):
+            self._prompt_queue.pop(index)
+            self._update_queue_display()
+            chat = self.query_one(ChatPanel)
+            chat.add_system_message(f"[dim]Removed message #{index+1} from queue.[/]")
 
     async def _stream_agent(self, prompt: str):
         chat = self.query_one(ChatPanel)

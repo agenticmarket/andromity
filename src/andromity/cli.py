@@ -24,14 +24,23 @@ def run(prompt, yes, dry_run, profile):
 @main.command()
 def tui():
     """Launch the interactive TUI."""
+    print("Launching TUI ...")
     from andromity.tui.app import AndromityApp
     app = AndromityApp()
     app.run()
 
 
 async def _run_async(prompt, yes, dry_run, profile):
+    from andromity.config import config
+    from andromity.core.models import get_context_limit_for_model, get_ollama_num_ctx
     session = Session(name="headless-session")
-    agent = Agent(session, profile=profile, dry_run=dry_run, auto_approve=yes)
+    provider = config.get("default", "provider", "")
+    model = config.get("default", "model", "")
+    if provider == "ollama":
+        ctx_limit = get_ollama_num_ctx(model)
+    else:
+        ctx_limit = get_context_limit_for_model(provider, model) if (provider and model) else 0
+    agent = Agent(session, profile=profile, dry_run=dry_run, auto_approve=yes, ctx_limit=ctx_limit)
     print(f"\nUser: {prompt}\n")
     print("Andromity:", end=" ", flush=True)
     async for event in agent.run(prompt):

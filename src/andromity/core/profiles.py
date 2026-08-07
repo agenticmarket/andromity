@@ -21,8 +21,8 @@ def _get_git_branch() -> str:
     return "unknown"
 
 PROFILES = {
-    "builder": {"tools": ["read_file", "write_file", "edit_file", "shell_exec", "list_dir", "write_plan", "update_plan_step"]},
-    "coder": {"tools": ["read_file", "write_file", "edit_file", "shell_exec", "list_dir"]},
+    "builder": {"tools": ["read_file", "write_file", "edit_file", "shell_exec", "list_dir", "write_plan", "update_plan_step", "create_todo", "update_todo", "list_todos"]},
+    "coder": {"tools": ["read_file", "write_file", "edit_file", "shell_exec", "list_dir", "create_todo", "update_todo", "list_todos"]},
     "reviewer": {"tools": ["read_file", "list_dir"]},
     "planner":  {"tools": ["read_file", "list_dir", "write_plan", "update_plan_step"]},
 }

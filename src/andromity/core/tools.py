@@ -10,11 +10,16 @@ from andromity.core.debug_log import get_logger
 log = get_logger("tools")
 
 _PLAN_CALLBACKS = []  # list of callables(plan) to notify on plan write/update
+_TODO_CALLBACKS = []  # list of callables() to notify on todo changes
 _current_session = None  # set by agent before tool execution
 
 
 def register_plan_callback(cb):
     _PLAN_CALLBACKS.append(cb)
+
+
+def register_todo_callback(cb):
+    _TODO_CALLBACKS.append(cb)
 
 
 def register_session(session):
@@ -27,6 +32,14 @@ def _notify_plan(plan):
     for cb in _PLAN_CALLBACKS:
         try:
             cb(plan)
+        except Exception:
+            pass
+
+
+def _notify_todo():
+    for cb in _TODO_CALLBACKS:
+        try:
+            cb()
         except Exception:
             pass
 
@@ -132,7 +145,6 @@ def write_plan(title: str, steps: list, description: str = "") -> str:
     plan = Plan(
         title=title,
         description=description,
-        status="pending_approval",
         steps=[PlanStep(index=i + 1, text=s) for i, s in enumerate(steps)],
     )
     if _current_session:
@@ -142,18 +154,47 @@ def write_plan(title: str, steps: list, description: str = "") -> str:
 
 
 def update_plan_step(step_index: int, status: str) -> str:
-    """Update a plan step status. status: done | failed | active | skipped."""
-    from andromity.core.planner import Plan
-    if not _current_session or not _current_session.plan:
-        return "Error: No plan found. Use write_plan first."
-    plan = Plan.from_dict(_current_session.plan)
+    """No-op — plan steps are reference only, use update_todo for progress tracking."""
+    return f"Plan step {step_index} noted. Use update_todo to track progress."
+
+
+def _get_todo_list():
+    from andromity.core.todo import TodoList
+    project_path = str(Path.cwd())
+    if _current_session and _current_session.project_path:
+        project_path = _current_session.project_path
+    return TodoList.load(project_path)
+
+
+def create_todo(title: str) -> str:
+    todo_list = _get_todo_list()
+    item = todo_list.add(title)
+    _notify_todo()
+    return f"Created todo {item.id}: {item.title}"
+
+
+def update_todo(todo_id: str, status: str) -> str:
+    from andromity.core.todo import TodoItem
     valid = ("pending", "active", "done", "failed", "skipped")
     if status not in valid:
         return f"Error: status must be one of {valid}"
-    plan.set_step_status(step_index, status)
-    _current_session.save_plan(plan.to_dict())
-    _notify_plan(plan)
-    return f"Step {step_index} marked as {status}."
+    todo_list = _get_todo_list()
+    item = todo_list.update(todo_id, status)
+    if not item:
+        return f"Error: Todo '{todo_id}' not found."
+    _notify_todo()
+    return f"Updated {item.id} to {status}: {item.title}"
+
+
+def list_todos() -> str:
+    todo_list = _get_todo_list()
+    if not todo_list.items:
+        return "No todos yet."
+    done, total = todo_list.progress()
+    parts = []
+    for item in todo_list.items:
+        parts.append(f"{item.icon} {item.id}. {item.title}")
+    return f"{done}/{total} done:\n" + "\n".join(parts)
 
 
 CORE_TOOLS = [
@@ -236,7 +277,7 @@ CORE_TOOLS = [
         "type": "function",
         "function": {
             "name": "write_plan",
-            "description": "Create a structured plan for a multi-step task. ALWAYS call this before starting complex work. The user must approve the plan before you proceed.",
+            "description": "Create a structured plan for future work, that you need to do. ALWAYS call this before starting complex work or when asked. The user must approve the plan before you proceed.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -263,6 +304,46 @@ CORE_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_todo",
+            "description": "Create a todo checklist item. Call after plan approval to break work into trackable items.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "What needs to be done"},
+                },
+                "required": ["title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_todo",
+            "description": "Update todo status. Use 'active' when starting, 'done' when finished, 'failed' on error.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todo_id": {"type": "string", "description": "The todo ID (e.g. t1, t2)"},
+                    "status": {"type": "string", "enum": ["pending", "active", "done", "failed", "skipped"]},
+                },
+                "required": ["todo_id", "status"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_todos",
+            "description": "List all todos and their progress.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
 ]
 
 
@@ -282,6 +363,12 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
         result = write_plan(**args)
     elif name == "update_plan_step":
         result = update_plan_step(**args)
+    elif name == "create_todo":
+        result = create_todo(**args)
+    elif name == "update_todo":
+        result = update_todo(**args)
+    elif name == "list_todos":
+        result = list_todos()
     else:
         result = f"Error: Unknown tool {name}"
     log.debug("TOOL RESULT: %s -> %s chars: %s", name, len(result), result[:120])
