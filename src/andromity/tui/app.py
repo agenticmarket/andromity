@@ -4,7 +4,7 @@ from rich.markup import escape
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual import on
-from textual.widgets import Input, Static, Tree
+from textual.widgets import Input, Static, Tree, TextArea
 from textual.containers import Horizontal, Vertical
 
 from andromity.tui.panels.chat import ChatPanel
