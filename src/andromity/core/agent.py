@@ -51,7 +51,7 @@ class Agent:
         threshold = int(limit * 0.8)
 
         if current_tokens > threshold and len(self.session.messages) > 6:
-            yield TextDelta(text="\n[dim italic]Context window near limit. Compacting memory...[/]\n")
+            yield TextDelta(text="\n*Context window near limit. Compacting memory...*\n\n")
             
             keep_last_n = 10
             msgs_to_summarize = self.session.messages[1:-keep_last_n]
@@ -76,7 +76,7 @@ class Agent:
                     new_summary += event.text
             
             removed = self.session.compact_messages(new_summary, keep_last_n=keep_last_n)
-            yield TextDelta(text=f"[dim italic]Compacted {removed} messages into memory.[/]\n")
+            yield TextDelta(text=f"*Compacted {removed} messages into memory.*\n\n")
 
     async def run(self, user_input: str) -> AsyncGenerator[StreamEvent, None]:
         self.session.add_message("user", content=user_input)
@@ -136,7 +136,7 @@ class Agent:
                 # Model returned nothing — retry once before giving up
                 if not getattr(self, '_empty_retried', False):
                     self._empty_retried = True
-                    yield TextDelta(text="[dim]Model returned empty, retrying...[/]\n")
+                    yield TextDelta(text="\n*Model returned empty, retrying...*\n\n")
                     continue
                 self._empty_retried = False
                 from andromity.core.models import get_context_limit_for_model
@@ -146,14 +146,13 @@ class Agent:
                 current_tokens = sum(len(str(m.get("content", ""))) // 4 for m in self.session.messages)
                 if limit > 0 and current_tokens > limit * 0.9:
                     warning = (
-                        f"\n[dim][No response from model][/] Context full ({current_tokens:,}/{limit:,} tokens). "
-                        "Try [bold cyan]/new[/] for a fresh session, or switch model with "
-                        "[bold cyan]Ctrl+M[/].\n"
+                        f"\n**[No response from model]** Context full ({current_tokens:,}/{limit:,} tokens). "
+                        "Try `/new` for a fresh session, or switch model with **Ctrl+M**.\n"
                     )
                 else:
                     warning = (
-                        "\n[dim][No response from model][/] The model returned an empty response. "
-                        "Try rephrasing your message or switch model with [bold cyan]Ctrl+M[/].\n"
+                        "\n**[No response from model]** The model returned an empty response. "
+                        "Try rephrasing your message or switch model with **Ctrl+M**.\n"
                     )
                 yield TextDelta(text=warning)
                 break

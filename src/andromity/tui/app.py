@@ -124,6 +124,9 @@ class AndromityApp(App):
         self._prompt_queue = []
         self._pending_model_change = False
         self._pending_mode_change = False
+        self._yolo_session = False
+        if config.get("default", "permission_mode") == "yolo":
+            config.set("default", "permission_mode", "safe")
         self._plan_approval_future: asyncio.Future | None = None
         self._cron_scheduler = CronScheduler(self._project_path, on_trigger=self._on_cron_trigger)
         # Register plan callback so PlanPanel updates when agent writes a plan
@@ -188,6 +191,14 @@ class AndromityApp(App):
         self._update_status()
         # Start cron scheduler
         try:
+            crons = self._cron_scheduler.list()
+            if crons:
+                chat = self.query_one(ChatPanel)
+                chat.add_system_message(
+                    f"[yellow]⚠ {len(crons)} scheduled cron job(s) found.[/] "
+                    "These will run automatically at their configured intervals. "
+                    "Type [bold cyan]/cron[/] to review or disable them."
+                )
             self._cron_scheduler.start()
             log.info("Cron scheduler started")
             self.refresh_cron_status()
@@ -258,6 +269,7 @@ class AndromityApp(App):
         except Exception:
             pass
 
+        active_mode = "yolo" if self._yolo_session else config.get("default", "permission_mode", "safe")
         self.query_one(StatusBar).update_status(
             tokens=display_tokens,
             cost=self.session.cost_usd,
@@ -266,7 +278,7 @@ class AndromityApp(App):
             ctx_limit=ctx_limit,
             estimated=is_estimated,
             session_name=self.session.name,
-            permission_mode=config.get("default", "permission_mode", "safe")
+            permission_mode=active_mode
         )
         self.query_one(AppFooter).update_footer(cwd=self._project_path)
 
@@ -283,6 +295,9 @@ class AndromityApp(App):
                 chat = self.query_one(ChatPanel)
                 chat.add_system_message(f"[red]✗ Blocked '{tool_name}'[/] — Folder is untrusted. Use [bold cyan]/trust[/] to enable.")
                 return False
+
+        if self._yolo_session:
+            return True
 
         mode = config.get("default", "permission_mode", "safe")
         if mode == "yolo":
@@ -842,7 +857,7 @@ class AndromityApp(App):
 
 
     def _apply_mode_change(self):
-        mode = config.get("default", "permission_mode", "safe")
+        mode = "yolo" if self._yolo_session else config.get("default", "permission_mode", "safe")
         self._update_status()
         chat = self.query_one(ChatPanel)
         chat.add_system_message(f"Permission mode set to [bold]{mode.upper()}[/]")
@@ -923,7 +938,11 @@ class AndromityApp(App):
                     key_val = subparts[2].strip()
                     config.set_api_key(provider_name, key_val)
                     masked = key_val[:6] + "..." + key_val[-4:] if len(key_val) > 10 else "***"
-                    chat.add_system_message(f"✓ API key for [bold]{provider_name}[/] saved to config: {masked}")
+                    chat.add_system_message(
+                        f"✓ API key for [bold]{provider_name}[/] saved: {masked}\n"
+                        f"[dim yellow]⚠ Stored in plaintext at: {config.config_path}[/]\n"
+                        f"[dim]Do not commit this file to version control.[/]"
+                    )
                     return
                 else:
                     chat.add_system_message("Usage: /keys set <provider> <api_key>\nExample: /keys set anthropic sk-ant-...")
@@ -998,7 +1017,15 @@ class AndromityApp(App):
                         chat.add_system_message("Usage: /mode trust [add <prefix> | list | clear]")
                     return
 
-                if mode in ("safe", "trust", "yolo"):
+                if mode == "yolo":
+                    self._yolo_session = True
+                    self._update_status()
+                    chat.add_system_message(
+                        "⚡ [bold red]YOLO mode enabled for this session only.[/]\n"
+                        "[dim yellow]All tool confirmation prompts are bypassed. This will automatically reset to SAFE on restart.[/]"
+                    )
+                elif mode in ("safe", "trust"):
+                    self._yolo_session = False
                     config.set("default", "permission_mode", mode)
                     if self._is_streaming:
                         self._pending_mode_change = True

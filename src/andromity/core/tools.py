@@ -44,6 +44,24 @@ def _notify_todo():
             pass
 
 
+def _get_project_root() -> Path:
+    if _current_session and getattr(_current_session, "project_path", None):
+        return Path(_current_session.project_path).resolve()
+    return Path.cwd().resolve()
+
+
+def _assert_safe_path(p: Path) -> None:
+    """Raise PermissionError if path escapes the project directory."""
+    root = _get_project_root()
+    try:
+        p.resolve().relative_to(root)
+    except ValueError:
+        raise PermissionError(
+            f"Access denied: '{p}' is outside the project directory ({root}). "
+            "Andromity can only access files within the active project directory."
+        )
+
+
 def _is_trusted() -> bool:
     return config.is_trusted(str(Path.cwd()))
 
@@ -56,6 +74,10 @@ def _ensure_snapshot():
 
 def read_file(path: str, start: Optional[int] = None, end: Optional[int] = None) -> str:
     p = Path(path).resolve()
+    try:
+        _assert_safe_path(p)
+    except Exception as e:
+        return f"Error reading file: {e}"
     if not p.is_file():
         return f"Error: File '{path}' does not exist."
     try:
@@ -63,7 +85,8 @@ def read_file(path: str, start: Optional[int] = None, end: Optional[int] = None)
             lines = f.readlines()
         if start is not None and end is not None:
             lines = lines[start - 1 : end]
-        return "".join(lines)
+        content = "".join(lines)
+        return content if content else f"File '{path}' is empty."
     except Exception as e:
         return f"Error reading file: {e}"
 
@@ -72,6 +95,10 @@ def write_file(path: str, content: str) -> str:
     if not _is_trusted():
         return "Error: This folder is not trusted. Use /trust to allow file writes."
     p = Path(path).resolve()
+    try:
+        _assert_safe_path(p)
+    except Exception as e:
+        return f"Error writing file: {e}"
     _ensure_snapshot()
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -86,6 +113,10 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
     if not _is_trusted():
         return "Error: This folder is not trusted. Use /trust to allow file edits."
     p = Path(path).resolve()
+    try:
+        _assert_safe_path(p)
+    except Exception as e:
+        return f"Error editing file: {e}"
     if not p.is_file():
         return f"Error: File '{path}' does not exist."
     try:
@@ -124,6 +155,10 @@ def shell_exec(command: str, timeout: int = 30) -> str:
 
 def list_dir(path: str = ".") -> str:
     p = Path(path).resolve()
+    try:
+        _assert_safe_path(p)
+    except Exception as e:
+        return f"Error listing directory: {e}"
     if not p.is_dir():
         return f"Error: Directory '{path}' does not exist."
     try:
@@ -132,6 +167,8 @@ def list_dir(path: str = ".") -> str:
 
             kind = "DIR " if item.is_dir() else "FILE"
             items.append(f"{kind}\t{item.name}")
+        if not items:
+            return f"Directory '{path}' is empty."
         return "\n".join(sorted(items))
     except Exception as e:
         return f"Error listing directory: {e}"

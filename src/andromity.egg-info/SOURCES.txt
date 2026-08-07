@@ -1,3 +1,5 @@
+LICENSE
+README.md
 pyproject.toml
 src/andromity/__init__.py
 src/andromity/cli.py
@@ -19,6 +21,7 @@ src/andromity/core/planner.py
 src/andromity/core/profiles.py
 src/andromity/core/provider.py
 src/andromity/core/session.py
+src/andromity/core/todo.py
 src/andromity/core/tools.py
 src/andromity/tui/__init__.py
 src/andromity/tui/app.py
@@ -42,4 +45,5 @@ tests/test_git.py
 tests/test_permissions.py
 tests/test_profiles.py
 tests/test_session.py
+tests/test_todo.py
 tests/test_tools.py
