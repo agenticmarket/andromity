@@ -227,7 +227,7 @@ StatusBar {
         self._spinner_idx = (self._spinner_idx + 1) % len(_SPINNER_FRAMES)
         self._refresh_text()
         if self._streaming:
-            self._spinner_timer = self.set_timer(0.12, self._tick_spinner)
+            self._spinner_timer = self.set_timer(0.2, self._tick_spinner)
 
 
 class ChatInput(TextArea):

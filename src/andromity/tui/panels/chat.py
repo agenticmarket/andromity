@@ -309,7 +309,7 @@ WelcomeBanner {
         )
 
     def on_mount(self):
-        self._timer = self.set_interval(0.12, self._tick_animation)
+        self._timer = self.set_interval(0.4, self._tick_animation)
         self._update_info()
 
     def _update_info(self):

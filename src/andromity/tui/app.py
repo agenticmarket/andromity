@@ -628,14 +628,18 @@ class AndromityApp(App):
         )
 
     def _show_suggestions(self, text: str):
-        suggestions = self.query_one("#suggestions")
-        if text.startswith("/"):
-            matches = [c for c in COMMANDS if c.startswith(text)]
-            if matches:
-                suggestions.update("  ".join(matches))
-                suggestions.add_class("visible")
-                return
-        suggestions.remove_class("visible")
+        try:
+            suggestions = self.query_one("#suggestions")
+            if text.startswith("/"):
+                matches = [c for c in COMMANDS if c.startswith(text)]
+                if matches:
+                    suggestions.update("  ".join(matches))
+                    suggestions.add_class("visible")
+                    return
+            if "visible" in suggestions.classes:
+                suggestions.remove_class("visible")
+        except Exception:
+            pass
 
     def action_escape_pressed(self):
         import time
