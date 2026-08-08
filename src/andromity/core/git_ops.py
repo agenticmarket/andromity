@@ -29,36 +29,25 @@ def create_pre_edit_snapshot(repo: Repo) -> Optional[str]:
     try:
         # Check if repo has any commits
         try:
-            repo.head.commit.hexsha
+            head_commit = repo.head.commit.hexsha
         except (ValueError, AttributeError):
             # No commits yet - can't snapshot
             return None
 
-        # Create a temporary index to capture current state
-        import tempfile
-        with tempfile.NamedTemporaryFile(delete=False) as tmp_index:
-            tmp_index_path = tmp_index.name
-
+        # Capture current state: if dirty, create stash commit; otherwise use head commit
+        snapshot_hash = head_commit
         try:
-            # Write current index to temp file
-            repo.git.write_tree()
-            # Use stash to capture state
             stash_hash = repo.git.stash("create")
-            if not stash_hash or "No local changes" in stash_hash:
-                snapshot_hash = repo.head.commit.hexsha
-            else:
-                snapshot_hash = stash_hash
-        finally:
-            try:
-                os.unlink(tmp_index_path)
-            except OSError:
-                pass
+            if stash_hash and "No local changes" not in stash_hash:
+                snapshot_hash = stash_hash.strip()
+        except (GitCommandError, Exception):
+            snapshot_hash = head_commit
 
         # Ensure shadow branch exists
         try:
             repo.git.rev_parse(SNAPSHOT_BRANCH)
         except GitCommandError:
-            repo.git.update_ref(f"refs/heads/{SNAPSHOT_BRANCH}", repo.head.commit.hexsha)
+            repo.git.update_ref(f"refs/heads/{SNAPSHOT_BRANCH}", head_commit)
 
         # Point shadow branch to snapshot
         repo.git.update_ref(

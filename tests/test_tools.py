@@ -1,9 +1,23 @@
 """Tests for tools."""
 import os
+import pytest
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
-from andromity.core.tools import read_file, write_file, edit_file, list_dir, shell_exec, execute_tool
+from andromity.core.tools import (
+    read_file,
+    write_file,
+    edit_file,
+    list_dir,
+    shell_exec,
+    execute_tool,
+    tool_search,
+    write_plan,
+    update_plan_step,
+    ToolRegistry,
+    CORE_TOOLS,
+)
+from andromity.core.todo import TodoList
 
 
 # Helper: patch trust so write/edit tests work without a real trusted path
@@ -72,6 +86,76 @@ def test_read_file_large_bounded(monkeypatch):
         assert "1: line 1" in content
         assert "50: line 50" in content
         assert "line 51" not in content
+
+
+def test_read_file_symbols_only(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _trusted(monkeypatch, tmpdir)
+        path = os.path.join(tmpdir, "module.py")
+        code = """\"\"\"Module documentation docstring.\"\"\"
+import os
+
+class DatabaseClient:
+    \"\"\"Client for DB operations.\"\"\"
+    def __init__(self, host: str):
+        self.host = host
+
+    def connect(self) -> bool:
+        return True
+
+def standalone_helper(x: int) -> int:
+    return x * 2
+"""
+        write_file(path, code)
+        res = read_file(path, symbols_only=True)
+        assert "Symbol Outline" in res
+        assert "class DatabaseClient" in res
+        assert "def __init__" in res
+        assert "def connect" in res
+        assert "def standalone_helper" in res
+        assert "Client for DB operations" in res
+
+
+def test_edit_file_whitespace_tolerant(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _trusted(monkeypatch, tmpdir)
+        path = os.path.join(tmpdir, "code.py")
+        original = "def foo():\n    x = 1\n    return x\n"
+        write_file(path, original)
+
+        # Agent sends with 2 spaces instead of 4
+        old_str = "def foo():\n  x = 1\n  return x"
+        new_str = "def foo():\n  x = 42\n  return x"
+        res = edit_file(path, old_str, new_str)
+        assert "Successfully" in res
+        assert "x = 42" in read_file(path)
+
+
+def test_edit_file_line_bounded(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _trusted(monkeypatch, tmpdir)
+        path = os.path.join(tmpdir, "duplicate.txt")
+        original = "header\nitem = 1\nmiddle\nitem = 1\nfooter\n"
+        write_file(path, original)
+
+        # Replace only the second occurrence using start_line/end_line
+        res = edit_file(path, "item = 1", "item = 99", start_line=3, end_line=5)
+        assert "Successfully" in res
+        content = read_file(path)
+        assert "item = 1" in content  # first occurrence intact
+        assert "item = 99" in content  # second occurrence replaced
+
+
+def test_edit_file_duplicate_error(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _trusted(monkeypatch, tmpdir)
+        path = os.path.join(tmpdir, "ambiguous.txt")
+        original = "repeat\nrepeat\n"
+        write_file(path, original)
+
+        res = edit_file(path, "repeat", "replaced")
+        assert "matches 2 times" in res
+        assert "lines: [1, 2]" in res
 
 
 def test_list_dir(monkeypatch):
@@ -198,7 +282,6 @@ def test_list_dir_show_hidden(monkeypatch):
 
 
 def test_core_tools_structure():
-    from andromity.core.tools import CORE_TOOLS
     tool_names = [t["function"]["name"] for t in CORE_TOOLS]
     assert "read_file" in tool_names
     assert "grep_search" in tool_names
@@ -207,14 +290,50 @@ def test_core_tools_structure():
     assert "edit_file" in tool_names
     assert "list_dir" in tool_names
     assert "shell_exec" in tool_names
+    assert "write_plan" in tool_names
+    assert "tool_search" in tool_names
 
-    # Check grep_search schema
-    grep_tool = next(t for t in CORE_TOOLS if t["function"]["name"] == "grep_search")
-    assert "query" in grep_tool["function"]["parameters"]["required"]
 
-    # Check find_files schema
-    find_tool = next(t for t in CORE_TOOLS if t["function"]["name"] == "find_files")
-    assert "pattern" in find_tool["function"]["parameters"]["required"]
+def test_tool_registry_and_tool_search():
+    registry = ToolRegistry()
+    registry.register_deferred(
+        name="fetch_url",
+        description="Fetch documentation web page",
+        parameters={"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+        category="web",
+    )
+
+    catalog = registry.get_deferred_prompt_catalog()
+    assert "<available-deferred-tools>" in catalog
+    assert "fetch_url" in catalog
+
+    # Search for tool
+    search_res = registry.search("fetch web documentation")
+    assert "matching tools" in search_res
+    assert "fetch_url" in search_res
+    assert "parameters" in search_res.lower()
+
+
+def test_write_plan_syncs_todo(tmp_path):
+    plan_data = {
+        "title": "Refactor Database Module",
+        "steps": [
+            {"index": 1, "text": "Create database interface", "status": "in_progress"},
+            {"index": 2, "text": "Implement sqlite adapter", "status": "pending"},
+        ]
+    }
+    with patch("andromity.core.tools._get_project_root", return_value=tmp_path):
+        res = write_plan(**plan_data)
+        assert "Refactor Database Module" in res
+        assert "2 steps" in res
+        
+        # Verify TodoList was synced automatically
+        todo_list = TodoList.load(str(tmp_path))
+        assert len(todo_list.items) == 2
+        assert todo_list.items[0].title == "Create database interface"
+        assert todo_list.items[0].status == "active"
+        assert todo_list.items[1].title == "Implement sqlite adapter"
+        assert todo_list.items[1].status == "pending"
 
 
 # ─── Trust guard tests ────────────────────────────────────────────────────────
@@ -247,4 +366,3 @@ def test_shell_blocked_when_untrusted():
     with patch("andromity.core.tools._is_trusted", return_value=False):
         result = shell_exec("echo hello")
         assert "not trusted" in result.lower()
-

@@ -17,18 +17,20 @@ from andromity.tui.overlays.profile import ProfilePickerOverlay
 from andromity.tui.overlays.trust import TrustPromptOverlay
 from andromity.tui.overlays.session import SessionBrowserOverlay
 from andromity.tui.overlays.cron import CronManagerOverlay
+from andromity.tui.overlays.undo import UndoConfirmOverlay
 from andromity.core.session import Session
 from andromity.core.agent import Agent
 from andromity.core.events import TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult
 from andromity.core.models import get_context_limit_for_model
 from andromity.core.debug_log import get_logger, LOG_PATH
 from andromity.core.cron import CronScheduler, CronJob
-from andromity.core.tools import register_plan_callback, register_todo_callback
+from andromity.core.tools import register_plan_callback, register_todo_callback, register_mcp_manager
+from andromity.core.mcp import MCPClientManager
 from andromity.config import config
 
 log = get_logger("app")
 
-COMMANDS = ["/help", "/mode", "/model", "/profile", "/keys", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear", "/cron", "/plan"]
+COMMANDS = ["/help", "/mode", "/model", "/profile","/undo", "/keys", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear", "/cron", "/plan", "/mcp"]
 
 CSS = """\
 Screen { background: $surface; }
@@ -37,8 +39,8 @@ Screen { background: $surface; }
     width: 34; min-width: 16; max-width: 35;
     border-right: solid $accent-darken-2; overflow-y: auto;
 }
-.narrow #left-panel { display: none; }
-.narrow #right-sidebar { display: none; }
+.hide-files #left-panel { display: none; }
+.hide-context #right-sidebar { display: none; }
 #left-panel.force-hidden { display: none; }
 #left-panel.force-show { display: block; }
 #right-sidebar.force-hidden { display: none; }
@@ -78,6 +80,8 @@ PlanPanel { height: 1fr; border-top: solid $accent-darken-2; }
 #session-overlay.visible { display: block; }
 #cron-overlay { display: none; }
 #cron-overlay.visible { display: block; }
+#undo-overlay { display: none; }
+#undo-overlay.visible { display: block; }
 
 .narrow #context-panel { display: none; }
 .narrow #left-panel { display: none; }
@@ -129,10 +133,14 @@ class AndromityApp(App):
             config.set("default", "permission_mode", "safe")
         self._plan_approval_future: asyncio.Future | None = None
         self._cron_scheduler = CronScheduler(self._project_path, on_trigger=self._on_cron_trigger)
+        self._mcp_manager = MCPClientManager(self._project_path)
+        register_mcp_manager(self._mcp_manager)
         # Register plan callback so PlanPanel updates when agent writes a plan
         register_plan_callback(self._on_plan_written)
         register_todo_callback(self._on_todo_changed)
         self._cron_running_jobs: set = set()  # tracks which cron job IDs are currently executing
+        # Undo checkpoint stack — each entry: {snapshot_hash, msg_count, prompt}
+        self._undo_stack: list[dict] = []
         log.info("=== Andromity started | project=%s ===", self._project_path)
 
     def _get_ctx_limit(self) -> int:
@@ -174,12 +182,18 @@ class AndromityApp(App):
         yield CronManagerOverlay(
             self._cron_scheduler, self._project_path, id="cron-overlay"
         )
+        yield UndoConfirmOverlay(id="undo-overlay")
 
     def on_resize(self, event):
-        if event.size.width <= 100:
-            self.add_class("narrow")
+        if event.size.width <= 120:
+            self.add_class("hide-context")
         else:
-            self.remove_class("narrow")
+            self.remove_class("hide-context")
+            
+        if event.size.width <= 200:
+            self.add_class("hide-files")
+        else:
+            self.remove_class("hide-files")
 
     def on_mount(self):
         self.focus_input()
@@ -189,6 +203,10 @@ class AndromityApp(App):
             from andromity.core.models import get_ollama_num_ctx
             self._ollama_num_ctx = get_ollama_num_ctx(model)
         self._update_status()
+        # Delay heavy dependency pre-import (litellm) until 1s after the UI
+        # is fully mounted and rendered, and run it in a background thread
+        # so the UI launch is instantaneous (0 lag).
+        self.set_timer(1.0, self._start_background_warmup)
         # Start cron scheduler
         try:
             crons = self._cron_scheduler.list()
@@ -197,19 +215,34 @@ class AndromityApp(App):
                 chat.add_system_message(
                     f"[yellow]⚠ {len(crons)} scheduled cron job(s) found.[/] "
                     "These will run automatically at their configured intervals. "
-                    "Type [bold cyan]/cron[/] to review or disable them."
+                    "Type [bold cyan]/cron[/] to review or disable them.",
+                    ephemeral=True
                 )
             self._cron_scheduler.start()
             log.info("Cron scheduler started")
             self.refresh_cron_status()
         except Exception as e:
             log.error("Failed to start cron scheduler: %s", e)
+        # Start MCP client manager
+        asyncio.create_task(self._mcp_manager.start_all())
         # Do NOT auto-load stale plan from disk — plans are session-scoped
         # Check trust FIRST before showing welcome
         if not config.is_trusted(self._project_path):
             self.query_one("#trust-overlay").add_class("visible")
         else:
             self._show_welcome()
+
+    def _start_background_warmup(self):
+        """Pre-import litellm in an isolated worker thread so it never blocks the UI event loop."""
+        def _import_job():
+            try:
+                import litellm  # noqa: F401
+                from litellm import acompletion  # noqa: F401
+                log.info("litellm warmed up in background thread")
+            except Exception as e:
+                log.warning("litellm background warm-up failed: %s", e)
+
+        self.run_worker(_import_job, thread=True, exclusive=False, group="warmup")
 
     def focus_input(self):
         """Force focus back to the main chat input field."""
@@ -223,10 +256,22 @@ class AndromityApp(App):
         model = config.get("default", "model", "")
         provider = config.get("default", "provider", "")
 
+        # Always show a welcome banner first
+        chat.add_system_message(
+            "[bold green]✦ Welcome to Andromity![/bold green]  "
+            "Your AI coding assistant is ready.\n"
+            "  [dim]Type a message and press [bold]Enter[/] to chat  ·  "
+            "[bold cyan]/help[/] for commands  ·  "
+            "[bold]Ctrl+L[/] to switch model  ·  "
+            "[bold]Shift+Enter[/] for new line[/dim]",
+            ephemeral=True
+        )
+
         # No-model warning banner
         if not model:
             chat.add_system_message(
-                "[yellow]⚠ No model selected.[/] Use [bold cyan]/model[/] or [bold]Ctrl+L[/] to pick a provider and model first."
+                "[yellow]⚠ No model selected.[/] Use [bold cyan]/model[/] or [bold]Ctrl+L[/] to pick a provider and model first.",
+                ephemeral=True
             )
             self.call_after_refresh(lambda: self.action_toggle_model())
 
@@ -234,7 +279,8 @@ class AndromityApp(App):
                 not config.get_api_key("google") and not config.get_api_key("openrouter"):
             if model and provider not in ("ollama",):
                 chat.add_system_message(
-                    "[yellow]⚠ No cloud API key configured.[/] Use [bold cyan]/keys set <provider> <key>[/] or set environment variables."
+                    "[yellow]⚠ No cloud API key configured.[/] Use [bold cyan]/keys set <provider> <key>[/] or set environment variables.",
+                    ephemeral=True
                 )
 
     def _update_status(self, live_tokens: int | None = None):
@@ -250,6 +296,7 @@ class AndromityApp(App):
         is_estimated = live_tokens is not None
         
         try:
+            mcp_summary = self._mcp_manager.get_status_summary() if hasattr(self, "_mcp_manager") else None
             ctx = self.query_one(ContextPanel)
             ctx.update_context(
                 tokens=display_tokens,
@@ -258,7 +305,8 @@ class AndromityApp(App):
                 model=display,
                 ctx_limit=ctx_limit,
                 estimated=is_estimated,
-                session_name=self.session.name
+                session_name=self.session.name,
+                mcp_summary=mcp_summary,
             )
         except Exception:
             pass
@@ -319,6 +367,25 @@ class AndromityApp(App):
         elif tool_name == "read_file":
             if is_sensitive:
                 needs_approval = True
+        elif tool_name == "web_search":
+            if mode == "safe":
+                needs_approval = True
+        elif tool_name == "fetch_url":
+            if mode == "safe":
+                needs_approval = True
+            elif mode == "trust":
+                from andromity.core.security import is_domain_allowed
+                url = str(args.get("url", ""))
+                allowed_domains = config.get("default", "allowed_domains", [])
+                if not is_domain_allowed(url, allowed_domains):
+                    needs_approval = True
+        elif tool_name.startswith("mcp__"):
+            if mode == "safe":
+                needs_approval = True
+            elif mode == "trust":
+                lower_name = tool_name.lower()
+                if any(m in lower_name for m in ("write", "insert", "update", "delete", "create", "drop", "push", "exec", "post")):
+                    needs_approval = True
                 
         if needs_approval:
             diff_panel = self.query_one("#diff-panel", DiffPanel)
@@ -689,11 +756,30 @@ class AndromityApp(App):
         estimated_tokens = 0
         delta_count = 0
         first_text_seen = False
-        
+
         active_tool_name = ""
         active_tool_args = ""
         tools_used = set()  # track which tools were called this stream
-        
+
+        # ── Pre-turn checkpoint (for /undo) ──────────────────────────────────
+        snapshot_hash: str | None = None
+        msg_count_before = len(self.session.messages)
+        try:
+            from andromity.core.git_ops import get_repo, create_pre_edit_snapshot
+            repo = get_repo(Path(self._project_path))
+            if repo:
+                snapshot_hash = create_pre_edit_snapshot(repo)
+        except Exception as snap_err:
+            log.warning("Pre-turn snapshot failed: %s", snap_err)
+        self._undo_stack.append({
+            "snapshot_hash": snapshot_hash,
+            "msg_count": msg_count_before,
+            "prompt": prompt,
+        })
+        # Keep undo stack capped at 20
+        if len(self._undo_stack) > 20:
+            self._undo_stack.pop(0)
+
         # Start response placeholder immediately so there is ZERO perceived lag/freeze
         chat.start_assistant_message()
 
@@ -816,6 +902,10 @@ class AndromityApp(App):
             return
 
         if self._is_streaming:
+            if len(self._prompt_queue) >= 10:
+                self.query_one(ChatPanel).add_system_message("Queue is full (max 10). Please wait for the agent to finish.")
+                return
+
             self._prompt_queue.append(prompt)
             log.info("Queued: %s (queue size: %d)", prompt[:50], len(self._prompt_queue))
             self._update_queue_display()
@@ -825,6 +915,7 @@ class AndromityApp(App):
 
     def _process_message(self, prompt: str):
         chat = self.query_one(ChatPanel)
+        chat.clear_ephemeral()
         chat.add_user_message(prompt)
         if prompt.startswith("/"):
             self._handle_command(prompt)
@@ -1035,9 +1126,11 @@ class AndromityApp(App):
         elif command == "/help":
             chat.add_system_message(
                 "Commands:\n"
-                "  /model                   Switch provider & model (Ctrl+M)\n"
+                "  /model                   Switch provider & model (Ctrl+L)\n"
                 "  /profile [name]          Switch profile (builder/reviewer/planner, Ctrl+J)\n"
                 "  /mode [safe|trust|yolo]  Set permission mode for file/shell approvals\n"
+                "  /undo                    Undo last prompt & revert all file changes\n"
+                "  /mcp                     Show MCP server status & available tools\n"
                 "  /sessions                Browse & switch sessions (Ctrl+O)\n"
                 "  /new                     Start a new session\n"
                 "  /rename <name>           Rename current session\n"
@@ -1053,9 +1146,10 @@ class AndromityApp(App):
                 "Shortcuts:\n"
                 "  Ctrl+B     Toggle file tree\n"
                 "  Ctrl+D     Toggle diff panel\n"
-                "  Ctrl+M     Model picker\n"
+                "  Ctrl+L     Model picker\n"
                 "  Ctrl+J     Profile picker\n"
                 "  Ctrl+O     Session browser\n"
+                "  ↑/↓ arrows  Navigate prompt history (when input is empty)\n"
                 "  Escape x2  Cancel current response\n\n"
                 f"[dim]Log: {LOG_PATH}[/]"
             )
@@ -1100,6 +1194,53 @@ class AndromityApp(App):
                     chat.add_system_message(f"[cyan]Plan reloaded:[/] {escape(plan.title)}")
                 else:
                     chat.add_system_message("[dim]No plan in this session.[/]")
+        elif command == "/mcp":
+            summary = self._mcp_manager.get_status_summary()
+            servers = summary.get("servers", {})
+            if not servers:
+                chat.add_system_message(
+                    "[yellow]No MCP servers configured.[/]\n"
+                    f"Add servers to [bold].andromity/mcp.json[/] in your project.\n\n"
+                    "[dim]Format:\n"
+                    '{  "mcpServers": {\n'
+                    '    "my-server": {\n'
+                    '      "command": "npx",\n'
+                    '      "args": ["agenticmarket", "proxy", "agenticmarket/exchange-rate"]\n'
+                    "    }\n  }\n}[/]"
+                )
+            else:
+                lines = ["[bold]MCP Servers[/]\n"]
+                for name, info in servers.items():
+                    status = info.get("status", "unknown")
+                    tools_count = info.get("tools", 0)
+                    err = info.get("error")
+                    cmd_str = info.get("command", "")
+                    if status == "running":
+                        icon = "[bold green]●[/]"
+                        status_str = f"[green]running[/] [dim]({tools_count} tools)[/]"
+                    else:
+                        icon = "[bold red]✗[/]"
+                        status_str = f"[red]error[/] [dim]{escape(err or '')}[/]"
+                    lines.append(f"  {icon} [bold]{escape(name)}[/]  {status_str}")
+                    if cmd_str:
+                        lines.append(f"      [dim]cmd: {escape(cmd_str)}[/]")
+
+                # List all available tools
+                all_tools = self._mcp_manager.get_all_tools()
+                if all_tools:
+                    lines.append("")
+                    lines.append("[bold]Available Tools[/]")
+                    for t in all_tools:
+                        lines.append(f"  [cyan]{escape(t.full_name)}[/]")
+                        if t.description:
+                            desc = t.description[:80] + ("…" if len(t.description) > 80 else "")
+                            lines.append(f"    [dim]{escape(desc)}[/]")
+
+                lines.append("")
+                lines.append(f"[dim]Config: .andromity/mcp.json  |  Restart Andromity to reload servers[/]")
+                chat.add_system_message("\n".join(lines))
+        elif command == "/undo":
+            self._run_undo()
         else:
             chat.add_system_message(f"Unknown: {command}. Type /help")
 
@@ -1169,3 +1310,99 @@ class AndromityApp(App):
         if self._tool_approval_future and not self._tool_approval_future.done():
             self._tool_approval_future.set_result(result)
             self._tool_approval_future = None
+
+    def _run_undo(self):
+        """
+        Trigger confirmation modal to undo the last AI turn.
+        """
+        chat = self.query_one(ChatPanel)
+        if not self._undo_stack:
+            chat.add_system_message("[yellow]Nothing to undo — no turns on the stack.[/]")
+            return
+        if self._is_streaming:
+            chat.add_system_message("[yellow]Cannot undo while the agent is running. Cancel first (Esc).[/]")
+            return
+
+        checkpoint = self._undo_stack[-1]
+        undone_prompt = checkpoint.get("prompt", "")
+
+        try:
+            overlay = self.query_one("#undo-overlay", UndoConfirmOverlay)
+            overlay.show_prompt(undone_prompt)
+            overlay.add_class("visible")
+        except Exception:
+            # Fallback if overlay not found: directly perform undo
+            self._perform_confirmed_undo()
+
+    def _perform_confirmed_undo(self):
+        """
+        Execute confirmed undo:
+          1. Revert all file changes from that turn using git snapshot.
+          2. Trim session.messages back to pre-turn state.
+          3. Reload the visual chat panel so chat & prompt context are cleanly rolled back.
+          4. Restore the undone prompt into the user input bar.
+        """
+        if not self._undo_stack:
+            return
+
+        checkpoint = self._undo_stack.pop()
+        snapshot_hash = checkpoint.get("snapshot_hash")
+        msg_count = checkpoint.get("msg_count", 0)
+        undone_prompt = checkpoint.get("prompt", "")
+
+        # ── 1. Revert file changes ────────────────────────────────────────────
+        files_reverted = False
+        if snapshot_hash:
+            try:
+                from andromity.core.git_ops import get_repo, restore_snapshot
+                repo = get_repo(Path(self._project_path))
+                if repo:
+                    files_reverted = restore_snapshot(repo, snapshot_hash)
+            except Exception as e:
+                log.warning("Undo file revert failed: %s", e)
+
+        # ── 2. Trim session messages ─────────────────────────────────────────
+        if msg_count <= len(self.session.messages):
+            self.session.messages = self.session.messages[:msg_count]
+            self.session.save()
+
+        # ── 3. Clean visual chat panel rollback (prevents chat/LLM context pollution)
+        chat = self.query_one(ChatPanel)
+        try:
+            chat.load_history(self.session.messages)
+        except Exception as e:
+            log.warning("Failed to reload chat history: %s", e)
+
+        # ── 4. Refresh Sidebar UI & Diff ──────────────────────────────────────
+        try:
+            self.query_one(FileTreePanel).refresh_tree()
+        except Exception:
+            pass
+        try:
+            panel = self.query_one(PlanPanel)
+            plan = self.session.load_plan_obj()
+            if plan:
+                panel.load_plan(plan)
+            else:
+                panel.clear_plan()
+        except Exception:
+            pass
+
+        short = undone_prompt[:60] + ("…" if len(undone_prompt) > 60 else "")
+        file_note = "[green]✓ Files reverted[/] " if files_reverted else "[yellow]⚠ File revert unavailable (no git repo)[/] "
+        chat.add_system_message(
+            f"[bold green]↩ Undone:[/] \"{escape(short)}\"\n"
+            f"{file_note}│ [dim]Conversation rolled back {len(self.session.messages)} messages[/] │ [cyan]Prompt restored to input[/]"
+        )
+
+        # ── 5. Restore prompt into the user input box ─────────────────────────
+        try:
+            input_field = self.query_one("InputBar").query_one("#input-field", TextArea)
+            input_field.text = undone_prompt
+            input_field.move_cursor(input_field.get_cursor_line_end_location())
+            self.focus_input()
+        except Exception:
+            pass
+
+        self._update_status()
+

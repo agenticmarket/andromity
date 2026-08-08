@@ -89,6 +89,7 @@ class Session:
         
         removed_count = len(self.messages) - 1 - keep_last_n
         self.messages = [system_msg, summary_msg] + recent_msgs
+        self.token_total = 0  # Force recalculation of tokens
         self.save()
         return removed_count
 

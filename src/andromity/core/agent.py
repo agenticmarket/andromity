@@ -4,7 +4,7 @@ from typing import AsyncGenerator, Dict, Any, Optional, Callable
 from andromity.core.provider import stream_completion
 from andromity.core.session import Session
 from andromity.core.profiles import get_system_prompt, filter_tools_for_profile
-from andromity.core.tools import CORE_TOOLS, execute_tool, register_session
+from andromity.core.tools import CORE_TOOLS, ToolRegistry, execute_tool, register_session
 from andromity.core.events import (
     StreamEvent, TextDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult
 )
@@ -26,6 +26,10 @@ class Agent:
         # Register session so plan tools can store plan in it
         register_session(session)
         sys_prompt = get_system_prompt(self.profile)
+        deferred_catalog = ToolRegistry.get_instance().get_deferred_prompt_catalog()
+        if deferred_catalog:
+            sys_prompt += "\n\n" + deferred_catalog
+
         if not self.session.messages:
             self.session.add_message("system", sys_prompt)
         elif self.session.messages[0]["role"] == "system":
@@ -186,7 +190,8 @@ class Agent:
                     result = f"[DRY RUN] Would execute {tool_name}({json.dumps(args, indent=2)})"
                 else:
                     try:
-                        result = execute_tool(tool_name, args)
+                        from andromity.core.tools import execute_tool_async
+                        result = await execute_tool_async(tool_name, args)
                     except Exception as e:
                         result = f"Error executing {tool_name}: {e}"
 

@@ -82,3 +82,4 @@ def test_auto_name_strips_newlines():
     assert "\n" not in name
     assert "line one" in name
 
+

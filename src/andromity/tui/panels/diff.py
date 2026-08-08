@@ -1,4 +1,5 @@
 import difflib
+import json
 from pathlib import Path
 from typing import Dict, Any, Optional
 from rich.markup import escape
@@ -35,6 +36,7 @@ DiffPanel { height: 1fr; }
             yield Button("Close", variant="default", id="btn-close")
             yield Button("View Diff", variant="primary", id="btn-toggle-diff")
             yield Button("[Y] Apply", variant="success", id="btn-apply")
+            yield Button("[A] Always Allow Domain", variant="warning", id="btn-allow-domain")
             yield Button("[N] Reject", variant="error", id="btn-reject")
 
     def on_mount(self):
@@ -45,24 +47,28 @@ DiffPanel { height: 1fr; }
             btn_close = self.query_one("#btn-close", Button)
             btn_diff = self.query_one("#btn-toggle-diff", Button)
             btn_apply = self.query_one("#btn-apply", Button)
+            btn_allow_domain = self.query_one("#btn-allow-domain", Button)
             btn_reject = self.query_one("#btn-reject", Button)
 
             if self._view_mode == "tool_diff":
                 btn_close.display = True
                 btn_diff.display = False
                 btn_apply.display = True
+                btn_allow_domain.display = bool(self._current_tool == "fetch_url")
                 btn_reject.display = True
             elif self._view_mode == "file":
                 btn_close.display = True
                 btn_diff.display = bool(self._current_file and self._has_git_diff(self._current_file))
                 btn_diff.label = "View Git Diff"
                 btn_apply.display = False
+                btn_allow_domain.display = False
                 btn_reject.display = False
             elif self._view_mode == "git_diff":
                 btn_close.display = True
                 btn_diff.display = True
                 btn_diff.label = "View Code"
                 btn_apply.display = False
+                btn_allow_domain.display = False
                 btn_reject.display = False
         except Exception:
             pass
@@ -98,21 +104,31 @@ DiffPanel { height: 1fr; }
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 code = f.read()
             line_count = len(code.splitlines())
-            size_kb = path.stat().st_size / 1024
-            safe_update(header, f"[bold cyan]\U0001f4c4 {escape(rel)}[/bold cyan]  [dim]({line_count} lines, {size_kb:.1f} KB)[/dim]")
 
-            # Render syntax highlighted code
-            lexer = Syntax.guess_lexer(str(path), code=code)
+            lexer = "python"
+            if path.suffix in (".js", ".jsx", ".ts", ".tsx"):
+                lexer = "typescript"
+            elif path.suffix in (".html", ".htm"):
+                lexer = "html"
+            elif path.suffix == ".css":
+                lexer = "css"
+            elif path.suffix in (".json", ".jsonc"):
+                lexer = "json"
+            elif path.suffix in (".md", ".markdown"):
+                lexer = "markdown"
+
+            safe_update(header, f"[bold cyan]File: {escape(rel)}[/bold cyan] [dim]({line_count} lines)[/dim]")
             syntax = Syntax(code, lexer, theme="monokai", line_numbers=True, word_wrap=True)
             content_area.mount(Static(syntax))
+
         except Exception as e:
-            safe_update(header, f"[bold red]Error reading {escape(rel)}[/bold red]")
+            safe_update(header, f"[red]Error loading {escape(rel)}[/red]")
             content_area.mount(Static(f"[red]{escape(str(e))}[/red]"))
 
         self._update_button_visibility()
 
     def show_git_diff(self, path: Path):
-        """Display git diff for a specific file vs HEAD."""
+        """Show git diff vs HEAD for this file."""
         self._current_file = path
         self._view_mode = "git_diff"
 
@@ -125,8 +141,8 @@ DiffPanel { height: 1fr; }
         except ValueError:
             rel = str(path)
 
-        repo = get_repo(path.parent)
         diff_text = ""
+        repo = get_repo(path.parent)
         if repo:
             try:
                 repo_rel = str(path.relative_to(Path(repo.working_tree_dir)))
@@ -149,7 +165,7 @@ DiffPanel { height: 1fr; }
         self._view_mode = "tool_diff"
 
         header = self.query_one("#diff-header", Static)
-        safe_update(header, f"[bold yellow]Proposed Change:[/bold yellow] [bold]{escape(tool_name)}[/bold]")
+        safe_update(header, f"[bold yellow]Proposed Action:[/bold yellow] [bold]{escape(tool_name)}[/bold]")
 
         content_area = self.query_one("#diff-content", VerticalScroll)
         content_area.remove_children()
@@ -162,6 +178,12 @@ DiffPanel { height: 1fr; }
             self._show_command_approval(content_area, args)
         elif tool_name == "read_file":
             self._show_sensitive_warning(content_area, args)
+        elif tool_name == "web_search":
+            self._show_web_search_approval(content_area, args)
+        elif tool_name == "fetch_url":
+            self._show_fetch_url_approval(content_area, args)
+        elif tool_name.startswith("mcp__"):
+            self._show_mcp_approval(content_area, args)
 
         self._update_button_visibility()
 
@@ -189,8 +211,6 @@ DiffPanel { height: 1fr; }
                 
             style = style_map.get(line_type, "")
             close = f"[/{style.strip('[]')}]" if style else ""
-            
-            # Unified diff lines already have + - leading chars, use as-is
             formatted_lines.append(f"{style}{escape(line)}{close}")
             
         container.mount(Static("\n".join(formatted_lines)))
@@ -241,6 +261,31 @@ DiffPanel { height: 1fr; }
                                "If you approve this, the contents of the file will be sent to the LLM provider.\n"))
         container.mount(Static(f"[bold]Target File:[/]\n\n  [magenta]{escape(path)}[/magenta]\n\n"))
 
+    def _show_web_search_approval(self, container: VerticalScroll, args: Dict[str, Any]):
+        query = args.get("query", "")
+        container.mount(Static("[bold cyan]🌐 Web Search Request (SAFE Mode)[/bold cyan]\n\n"
+                               "The AI wants to search the public web for documentation or technical references.\n"))
+        container.mount(Static(f"[bold]Search Query:[/]\n\n  [green]{escape(query)}[/green]\n\n"))
+
+    def _show_fetch_url_approval(self, container: VerticalScroll, args: Dict[str, Any]):
+        url = args.get("url", "")
+        from andromity.core.security import extract_domain, is_domain_allowed
+        domain = extract_domain(url)
+        allowed = is_domain_allowed(url)
+        status_badge = "[green]✓ In Pre-Approved Allowlist[/green]" if allowed else "[yellow]⚠ Untrusted / Unknown Domain[/yellow]"
+
+        container.mount(Static("[bold cyan]🌐 External URL Fetch Request[/bold cyan]\n\n"
+                               f"Domain Status: {status_badge}\n"
+                               "The AI wants to fetch external webpage content into context.\n"))
+        container.mount(Static(f"[bold]Target URL:[/]\n\n  [cyan]{escape(url)}[/cyan]\n\n"
+                               f"[bold]Domain:[/]\n  [white]{escape(domain)}[/white]\n\n"))
+
+    def _show_mcp_approval(self, container: VerticalScroll, args: Dict[str, Any]):
+        container.mount(Static("[bold magenta]🔌 Model Context Protocol (MCP) Tool Execution[/bold magenta]\n\n"
+                               "The AI wants to execute an MCP tool on an external server.\n"))
+        container.mount(Static(f"[bold]Tool:[/]\n  [yellow]{escape(self._current_tool or '')}[/yellow]\n\n"
+                               f"[bold]Arguments:[/]\n```json\n{json.dumps(args, indent=2)}\n```\n"))
+
     def on_button_pressed(self, event: Button.Pressed):
         btn_id = event.button.id
         
@@ -251,6 +296,16 @@ DiffPanel { height: 1fr; }
                     self.app._tool_approval_future.set_result(False)
             self.remove_class("visible")
         elif btn_id == "btn-apply":
+            if hasattr(self.app, "_tool_approval_future") and self.app._tool_approval_future:
+                if not self.app._tool_approval_future.done():
+                    self.app._tool_approval_future.set_result(True)
+            self.remove_class("visible")
+        elif btn_id == "btn-allow-domain":
+            if self._current_tool == "fetch_url" and self._current_args:
+                url = self._current_args.get("url", "")
+                if url:
+                    from andromity.core.security import add_to_allowlist
+                    add_to_allowlist(url)
             if hasattr(self.app, "_tool_approval_future") and self.app._tool_approval_future:
                 if not self.app._tool_approval_future.done():
                     self.app._tool_approval_future.set_result(True)

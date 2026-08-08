@@ -4,7 +4,7 @@
 
 Andromity is a terminal AI coding agent with a rich TUI. Point it at any codebase, pick a model, and it reads, writes, and runs code — with clear tool approval before any changes.
 
-> **Beta notice:** This is `0.1.0b1` — an early beta. Expect rough edges.
+> **Beta notice:** This is `0.1.0b2` — an early beta. Expect rough edges.
 
 ---
 
@@ -114,7 +114,19 @@ The agent interacts with the codebase using these built-in tools:
 | `update_todo` | Updates a todo status (active / done / failed) |
 | `list_todos` | Shows active todos and progress |
 
-In `SAFE` mode (default), all write, edit, and shell operations require explicit user approval.
+In `SAFE` mode (default), all write, edit, and shell operations require explicit user approval. UI remains completely responsive during execution thanks to background thread dispatch.
+
+---
+
+## MCP (Model Context Protocol) Support
+
+Andromity supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) to connect to external tools and APIs natively. 
+
+**Smart Lazy-Loading**: Andromity uses a deferred-tool architecture for MCP. It injects a tiny index of available MCP tools into the system prompt and dynamically loads the massive JSON schemas only when the LLM requests them via `tool_search`. This prevents token limit exhaustion and keeps responses lightning fast even with 50+ MCP tools connected.
+
+**Usage:**
+- Configure servers in `.andromity/mcp.json` or `.vscode/mcp.json`.
+- Type `/mcp` in the chat to view connected servers and available tools.
 
 ---
 
@@ -163,7 +175,7 @@ src/andromity/
 | Untested on cloud providers (Anthropic, OpenAI, etc.) | Contributions and test reports welcome |
 | Session files stored in plaintext at `~/.andromity/sessions/` | Do not use Andromity on shared machines with sensitive codebases |
 | Cron jobs in `.andromity/crons.json` are auto-loaded from project directory | Review via `/cron` before trusting a cloned repo |
-| **Cohere models (via OpenRouter) may fail with empty tool results** — `all elements in tool_results must have the 'outputs' property specified` | Fixed in 0.1.0b1. Was caused by `list_dir` returning an empty string on empty directories. Update to latest and retry. |
+| **Cohere models (via OpenRouter) may fail with empty tool results** — `all elements in tool_results must have the 'outputs' property specified` | Fixed in 0.1.0b2. Was caused by `list_dir` returning an empty string on empty directories. Update to latest and retry. |
 
 ---
 

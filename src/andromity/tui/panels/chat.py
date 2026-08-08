@@ -256,10 +256,21 @@ StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
         elif self._pending:
             self._pending = False
             try:
+                # Find the parent ChatPanel to check scroll position
+                chat_panel = self.app.query_one("ChatPanel")
+                # Check if we are at or very near the bottom
+                at_bottom = chat_panel.scroll_y >= (chat_panel.max_scroll_y - 5)
+                
                 md = self.query_one("#md-view")
                 md.update(self._text if self._text.strip() else " ")
+                
+                # Auto-scroll only if user hasn't scrolled up to read history
+                if at_bottom:
+                    chat_panel.scroll_end(animate=False)
             except MarkupError:
                 md.update(escape(self._text) if self._text.strip() else " ")
+                if at_bottom:
+                    chat_panel.scroll_end(animate=False)
             except Exception:
                 pass
 
@@ -276,102 +287,6 @@ StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
         self._flush()
 
 
-class WelcomeBanner(Widget):
-    """Sleek, animated Welcome Hero Banner shown on startup."""
-    DEFAULT_CSS = """\
-WelcomeBanner {
-    width: 1fr;
-    height: auto;
-    padding: 1 2;
-    margin: 1 0;
-    border: round #38bdf8;
-    background: #0f172a;
-}
-#banner-ascii {
-    width: 1fr;
-    content-align: center middle;
-    color: #38bdf8;
-    text-style: bold;
-}
-#banner-tagline {
-    width: 1fr;
-    content-align: center middle;
-    margin: 0 0 1 0;
-}
-#banner-info {
-    width: 1fr;
-    content-align: center middle;
-    color: #94a3b8;
-}
-#banner-shortcuts {
-    width: 1fr;
-    content-align: center middle;
-    margin: 1 0 0 0;
-    color: #64748b;
-}
-"""
-    _PULSE_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._frame = 0
-        self._timer = None
-
-    def compose(self) -> ComposeResult:
-        banner_art = (
-            "   ___   _  ______  ___  ____  __  __________________  __\n"
-            "  / _ | / |/ / _  \\/ _ \\/ __ \\/  |/  /  _/_  __/ / / / / /\n"
-            " / __ |/    / // // , _/ /_/ / /|_/ // /  / / / /_/ /_/ / \n"
-            "/_/ |_/_/|_/____//_/|_|\\____/_/  /_/___/ /_/  \\____/___/  "
-        )
-        yield Static(banner_art, id="banner-ascii")
-        yield Static("[bold cyan]⠋[/bold cyan] [dim italic]The autonomous coding agent that never clocks out[/dim italic] [bold cyan]⠋[/bold cyan]", id="banner-tagline")
-        yield Static("[dim]Loading workspace...[/dim]", id="banner-info")
-        yield Static(
-            "[bold #38bdf8]/help[/] commands  •  [bold #38bdf8]Ctrl+B[/] file tree  •  [bold #38bdf8]Ctrl+L[/] model  •  [bold #38bdf8]Ctrl+J[/] profile",
-            id="banner-shortcuts"
-        )
-
-    def on_mount(self):
-        self._timer = self.set_interval(0.12, self._tick_animation)
-        self._update_info()
-
-    def _update_info(self):
-        try:
-            from andromity.config import config
-            from pathlib import Path
-            provider = config.get("default", "provider", "") or "default"
-            model = config.get("default", "model", "") or "default"
-            profile = config.get("default", "profile", "builder")
-            cwd_name = Path.cwd().name
-            short_model = model.split("/")[-1] if "/" in model else model
-            info_text = (
-                f"[bold green]● System Online[/bold green]  │  "
-                f"[dim]Project:[/] [bold cyan]{escape(cwd_name)}[/]  │  "
-                f"[dim]Provider:[/] [bold cyan]{escape(provider)}[/]  │  "
-                f"[dim]Model:[/] [bold yellow]{escape(short_model)}[/]  │  "
-                f"[dim]Profile:[/] [bold magenta]{escape(profile.capitalize())}[/]"
-            )
-            safe_update(self.query_one("#banner-info"), info_text)
-        except Exception:
-            pass
-
-    def _tick_animation(self):
-        self._frame += 1
-        pulse = self._PULSE_CHARS[self._frame % len(self._PULSE_CHARS)]
-        try:
-            tagline = self.query_one("#banner-tagline", Static)
-            tagline.update(
-                f"[bold cyan]{pulse}[/bold cyan] [dim italic]The autonomous coding agent that never clocks out[/dim italic] [bold cyan]{pulse}[/bold cyan]"
-            )
-        except Exception:
-            pass
-
-    def on_unmount(self):
-        if self._timer:
-            self._timer.stop()
-
-
 class ChatPanel(VerticalScroll):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -379,30 +294,29 @@ class ChatPanel(VerticalScroll):
         self._messages = []
         self._turn_started = False
 
-    def compose(self) -> ComposeResult:
-        yield WelcomeBanner(id="welcome")
-
-    def _remove_welcome_if_present(self):
-        try:
-            self.query_one("#welcome").remove()
-        except Exception:
-            pass
-
     def add_user_message(self, text: str):
-        self._remove_welcome_if_present()
         self._turn_started = False
         self._messages.append({"role": "user", "content": text})
         self._append_widget(ChatMessage("user", text))
 
-    def add_system_message(self, text: str, markup: bool = True):
+    def add_system_message(self, text: str, markup: bool = True, ephemeral: bool = False):
         """Add a system/info message. markup=True allows Rich markup tags."""
         self._messages.append({"role": "system", "content": text})
         if markup:
             msg = ChatMessage("system-markup", text)
         else:
             msg = ChatMessage("system", text)
+            
+        if ephemeral:
+            msg.add_class("ephemeral")
+            
         self.mount(msg)
         self.scroll_end()
+
+    def clear_ephemeral(self):
+        """Remove any system messages marked as ephemeral from the UI."""
+        for child in self.query(".ephemeral"):
+            child.remove()
 
     def start_thinking_message(self):
         self.start_assistant_message()
@@ -421,8 +335,8 @@ class ChatPanel(VerticalScroll):
             self._thinking = None
 
     def start_assistant_message(self):
-        self._remove_welcome_if_present()
         if getattr(self, "_streaming", None) is None:
+            # Only show "Andromity:" header on the very first block of a turn
             show = not getattr(self, "_turn_started", False)
             self._turn_started = True
             self._streaming = StreamingMessage(show_header=show)
@@ -439,17 +353,21 @@ class ChatPanel(VerticalScroll):
             self._streaming.finish()
             if self._streaming._text.strip():
                 self._messages.append({"role": "assistant", "content": self._streaming._text})
-            else:
-                try:
-                    if not self._streaming.query(ThinkingBubble):
-                        self._streaming.remove()
-                except Exception:
-                    pass
             self._streaming = None
+            self._thinking = None
+        # NOTE: do NOT reset _turn_started here — it resets in add_user_message()
+        # so the header only shows once per full user→agent round-trip.
 
     def show_tool_start(self, tool_name: str, tool_id: str = ""):
         self.stop_thinking_message()
-        self.end_assistant_message()
+        # Park (finish) the current streaming block but keep _turn_started=True
+        # so the next StreamingMessage after the tool won't emit "Andromity:" again.
+        if getattr(self, "_streaming", None):
+            self._streaming.finish()
+            if self._streaming._text.strip():
+                self._messages.append({"role": "assistant", "content": self._streaming._text})
+            self._streaming = None
+            self._thinking = None
         self._append_widget(ToolIndicator(tool_name, tool_id))
 
     def append_tool_args(self, tool_id: str, args_chunk: str):
@@ -488,37 +406,16 @@ class ChatPanel(VerticalScroll):
         except Exception:
             pass
 
-    def add_queued_message(self, prompt: str, queue_pos: int):
-        """Show a queue badge for a message waiting to be sent."""
-        badge = QueuedMessageBadge(prompt, queue_pos, classes=f"queued-badge")
-        self._append_widget(badge)
-
-    def clear_queue_badge(self, prompt: str):
-        """Remove the queue badge when a message is picked up for processing."""
-        try:
-            for badge in self.query(QueuedMessageBadge):
-                if badge._prompt == prompt:
-                    # Update badge to show it's now being processed
-                    try:
-                        st = badge.query_one(Static)
-                        short = prompt[:50] + ("…" if len(prompt) > 50 else "")
-                        st.update(f"[green]▶ Processing:[/] [dim]{escape(short)}[/]")
-                    except Exception:
-                        pass
-                    break
-        except Exception:
-            pass
-
     def clear(self):
         self._messages.clear()
         self._streaming = None
         self.remove_children()
-        self.mount(WelcomeBanner(id="welcome"))
 
     def load_history(self, messages: list):
         """Replay a session's message history into the chat panel visually."""
-        self.clear()
-        self._remove_welcome_if_present()
+        self._messages.clear()
+        self._streaming = None
+        self.remove_children()
         for msg in messages:
             role = msg.get("role", "")
             content = msg.get("content", "") or ""

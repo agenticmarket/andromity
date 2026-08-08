@@ -1,6 +1,6 @@
 [project]
 name = "andromity"
-version = "0.1.0b1"
+version = "0.1.0b2"
 description = "The coding agent that never clocks out."
 requires-python = ">=3.11"
 license = {text = "MIT"}

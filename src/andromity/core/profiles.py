@@ -29,10 +29,10 @@ def _get_git_branch() -> str:
     return _git_branch_cache
 
 PROFILES = {
-    "builder": {"tools": ["read_file", "grep_search", "find_files", "write_file", "edit_file", "shell_exec", "list_dir", "write_plan", "update_plan_step", "create_todo", "update_todo", "list_todos"]},
-    "coder": {"tools": ["read_file", "grep_search", "find_files", "write_file", "edit_file", "shell_exec", "list_dir", "create_todo", "update_todo", "list_todos"]},
-    "reviewer": {"tools": ["read_file", "grep_search", "find_files", "list_dir"]},
-    "planner":  {"tools": ["read_file", "grep_search", "find_files", "list_dir", "write_plan", "update_plan_step", "create_todo", "update_todo", "list_todos"]},
+    "builder": {"tools": ["read_file", "grep_search", "find_files", "write_file", "edit_file", "shell_exec", "list_dir", "write_plan", "update_plan_step", "tool_search", "create_todo", "update_todo", "list_todos"]},
+    "coder": {"tools": ["read_file", "grep_search", "find_files", "write_file", "edit_file", "shell_exec", "list_dir", "tool_search", "create_todo", "update_todo", "list_todos"]},
+    "reviewer": {"tools": ["read_file", "grep_search", "find_files", "list_dir", "tool_search"]},
+    "planner":  {"tools": ["read_file", "grep_search", "find_files", "list_dir", "write_plan", "update_plan_step", "tool_search", "create_todo", "update_todo", "list_todos"]},
 }
 
 
@@ -61,13 +61,13 @@ def get_system_prompt(profile: str) -> str:
 ## Rules
 - Always use the correct shell syntax for {shell} on {os_name}.
 - Never assume Unix paths on Windows unless in WSL.
-- Plan before acting and create todo when needed. Be very concise and professional and be a good team member and behave like a senior software engineer.
+- Plan before acting on non-trivial tasks using `write_plan` (which syncs automatically to the live todo checklist).
 - CRITICAL: Always inform the user and say what you are about to do in plain language before calling any tool.
-  Example: "Creating the project structure..."
+  Example: "Inspecting the codebase structure..."
   Then call the tool. Never chain tools without text in between.
 - After completing all tasks, send a brief summary of what you have done.
 - Use markdown format for all responses. Use bullet points, code blocks, and tables when appropriate.
-- If you ever get stuck in a loop, ask the user for help.
+- If you need external capabilities like MCP tools or internet documentation, use `tool_search` to discover deferred tools.
 """
     if profile == "reviewer":
         extra = """
@@ -83,18 +83,15 @@ Your role is to act as a security and code quality auditor.
         extra = """
 [PROFILE: Planner]
 Your role is to act as an architect and system designer.
-- You have READ-ONLY access. You may only output plan files like PLAN.md.
-- Think in phases. Break complex tasks into small, verifiable steps.
-- Provide step-by-step checklists with [ ] checkboxes.
+- Think in phases. Break complex tasks into small, verifiable steps using `write_plan`.
 - Ask clarifying questions before suggesting implementations.
-- Always describe your reasoning before writing a plan file.
+- Always describe your reasoning before writing a plan.
 """
     elif profile == "coder":
         extra = """
 [PROFILE: Fast Coder]
-Your role is to execute code changes as fast as possible without asking for permission.
+Your role is to execute code changes quickly and precisely.
 - You have full access to read, write, edit files, and execute commands.
-- Do NOT make plans. Just write or edit the code directly.
 - Send a short text message before each tool call explaining what you will do.
 - After all changes, send a brief summary of what was done.
 """
@@ -109,9 +106,11 @@ Your role is to act as the primary implementer.
 
 
 def get_allowed_tools(profile: str) -> List[str]:
-    return PROFILES.get(profile, PROFILES["builder"])["tools"]
+    prof = PROFILES.get(profile, PROFILES["builder"])
+    return list(prof["tools"])
 
 
-def filter_tools_for_profile(tools: list, profile: str) -> list:
-    allowed = set(get_allowed_tools(profile))
-    return [t for t in tools if t["function"]["name"] in allowed]
+def filter_tools_for_profile(all_tools: List[dict], profile: str) -> List[dict]:
+    prof = PROFILES.get(profile, PROFILES["builder"])
+    allowed_names = set(prof["tools"])
+    return [t for t in all_tools if t["function"]["name"] in allowed_names]

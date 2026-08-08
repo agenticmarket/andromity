@@ -21,34 +21,48 @@ ContextPanel {
 }
 #ctx-title { height: 1; }
 """
-    tokens: reactive(int) = reactive(0)
-    cost: reactive(float) = reactive(0.0)
-    profile: reactive(str) = reactive("builder")
+    tokens: reactive[int] = reactive(0)
+    cost: reactive[float] = reactive(0.0)
+    profile: reactive[str] = reactive("builder")
 
     def compose(self) -> ComposeResult:
         yield Static("[bold]Context[/]", id="ctx-title")
-        yield Static("", id="ctx-tokens")
+        yield Static("", id="ctx-session")
         yield Static("", id="ctx-cost")
         yield Static("", id="ctx-profile")
         yield Static("", id="ctx-model")
+        yield Static("", id="ctx-mcp")
         yield Static("", id="ctx-lsp")
 
-    def update_context(self, tokens: int = 0, cost: float = 0.0, profile: str = "builder", model: str = "", ctx_limit: int = 0, estimated: bool = False, session_name: str = ""):
+    def update_context(self, tokens: int = 0, cost: float = 0.0, profile: str = "builder", model: str = "", ctx_limit: int = 0, estimated: bool = False, session_name: str = "", mcp_summary: dict | None = None):
         self.tokens = tokens
         self.cost = cost
         self.profile = profile
         try:
             tok_prefix = "~" if estimated else ""
-            safe_update(self.query_one("#ctx-tokens"), f"{tok_prefix}{tokens:,} tokens")
+            safe_update(self.query_one("#ctx-session"), f"Session: [bold]{escape(session_name)}[/]")
             safe_update(self.query_one("#ctx-cost"), f"${cost:.4f} spent")
             safe_update(self.query_one("#ctx-profile"), f"Profile: {escape(profile)}")
             short_model = model.split("/")[-1] if "/" in model else model
-            safe_update(self.query_one("#ctx-model"), f"[dim]{escape(short_model or '\u2014')}[/dim]")
+            safe_update(self.query_one("#ctx-model"), f"[dim]{escape(short_model or '—')}[/dim]")
+
+            # MCP status in context panel
+            if mcp_summary and mcp_summary.get("configured", 0) > 0:
+                active = mcp_summary.get("active", 0)
+                failed = mcp_summary.get("failed", 0)
+                tools_cnt = mcp_summary.get("tools_count", 0)
+                if failed > 0:
+                    safe_update(self.query_one("#ctx-mcp"), f"[bold red]✗[/] MCP: {failed} failed [dim]({active} ok, {tools_cnt} tools)[/dim]")
+                else:
+                    safe_update(self.query_one("#ctx-mcp"), f"[bold green]●[/] MCP: [green]{active} active[/] [dim]({tools_cnt} tools)[/dim]")
+            else:
+                safe_update(self.query_one("#ctx-mcp"), "[dim]MCP: None active[/dim]")
+
             if ctx_limit > 0:
                 pct = min(tokens / ctx_limit * 100, 100.0)
                 bar_width = 10
                 filled = int(bar_width * pct / 100)
-                bar = "\u2588" * filled + "\u2591" * (bar_width - filled)
+                bar = "█" * filled + "░" * (bar_width - filled)
                 color = "green" if pct < 70 else ("yellow" if pct < 90 else "red")
                 ctx_k = ctx_limit // 1000
                 safe_update(self.query_one("#ctx-lsp"),
@@ -84,8 +98,9 @@ AppFooter {
     def _refresh_text(self):
         try:
             import datetime
+            from andromity import __version__
             now = datetime.datetime.now().strftime("%I:%M %p")
-            version = "v0.1.0"
+            version = f"v{__version__}"
             cwd_part = f" [bold magenta]{escape(self.cwd)}[/]" if self.cwd else ""
             left_text = f" [bold]Andromity {version}[/] |{cwd_part}"
             right_text = f"{now} "
@@ -105,9 +120,9 @@ StatusBar {
     height: 1; background: $surface-darken-1; padding: 0 1;
 }
 """
-    tokens: reactive(int) = reactive(0)
-    cost: reactive(float) = reactive(0.0)
-    profile: reactive(str) = reactive("builder")
+    tokens: reactive[int] = reactive(0)
+    cost: reactive[float] = reactive(0.0)
+    profile: reactive[str] = reactive("builder")
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -227,7 +242,7 @@ StatusBar {
         self._spinner_idx = (self._spinner_idx + 1) % len(_SPINNER_FRAMES)
         self._refresh_text()
         if self._streaming:
-            self._spinner_timer = self.set_timer(0.2, self._tick_spinner)
+            self._spinner_timer = self.set_timer(0.12, self._tick_spinner)
 
 
 class ChatInput(TextArea):
@@ -236,14 +251,57 @@ class ChatInput(TextArea):
         Binding("shift+enter", "newline", "New Line", priority=True),
     ]
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._prompt_history: list[str] = []
+        self._history_idx: int = -1
+        self._draft: str = ""
+        self._is_placeholder: bool = False
+
     def action_submit(self):
         text = self.text.strip()
         if text:
+            # Push to history if non-duplicate
+            if not self._prompt_history or self._prompt_history[-1] != text:
+                self._prompt_history.append(text)
+            # Reset history cursor
+            self._history_idx = -1
+            self._draft = ""
             self.post_message(InputBar.Submitted(text))
             self.text = ""
 
     def action_newline(self):
         self.insert("\n")
+
+    def on_key(self, event) -> None:
+        """Handle Up/Down arrow keys for prompt history when input is empty or single-line."""
+        if event.key == "up":
+            lines = self.text.split("\n")
+            # Navigate history only when empty or cursor is on the first line
+            cursor_row = self.cursor_location[0] if self.cursor_location else 0
+            if cursor_row == 0 and self._prompt_history:
+                if self._history_idx == -1:
+                    self._draft = self.text  # cache current draft
+                    self._history_idx = len(self._prompt_history) - 1
+                elif self._history_idx > 0:
+                    self._history_idx -= 1
+                self.text = self._prompt_history[self._history_idx]
+                self.move_cursor(self.get_cursor_line_end_location())
+                event.prevent_default()
+                event.stop()
+        elif event.key == "down":
+            cursor_row = self.cursor_location[0] if self.cursor_location else 0
+            lines = self.text.split("\n")
+            if cursor_row == len(lines) - 1 and self._history_idx != -1:
+                self._history_idx += 1
+                if self._history_idx >= len(self._prompt_history):
+                    self._history_idx = -1
+                    self.text = self._draft
+                else:
+                    self.text = self._prompt_history[self._history_idx]
+                self.move_cursor(self.get_cursor_line_end_location())
+                event.prevent_default()
+                event.stop()
 
 
 class QueuePanel(Widget):
@@ -260,7 +318,7 @@ QueuePanel.has-items { display: block; }
 #queue-list { height: auto; }
 .queue-item { height: 1; }
 .queue-item Static { width: 1fr; }
-.queue-item Button { width: 3; min-width: 3; margin: 0; }
+.queue-item Button { width: 3; min-width: 3; min-height: 1; height: 1; border: none; padding: 0; margin: 0; }
 """
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="queue-list")
@@ -355,7 +413,6 @@ class InputBar(Widget):
 InputBar {
     height: auto; min-height: 4; max-height: 15; dock: bottom;
     padding: 0 1;
-    layers: base placeholder;
 }
 #input-field {
     width: 1fr;
@@ -364,42 +421,21 @@ InputBar {
     max-height: 14;
     border: none;
     background: $surface;
-    layer: base;
-}
-#input-placeholder {
-    position: absolute;
-    offset: 2 1;
-    color: $text-muted;
-    layer: placeholder;
 }
 """
+    _PLACEHOLDER = "Ask Andromity… (Enter to send, /help for commands)"
+
     def compose(self) -> ComposeResult:
-        yield ChatInput(id="input-field")
-        yield Static("Ask Andromity anything… (Enter to send, /help for commands)", id="input-placeholder")
-
-    def on_mount(self):
-        self._update_placeholder()
-
-    def on_text_area_changed(self, event: TextArea.Changed):
-        self._update_placeholder()
-
-    def _update_placeholder(self):
-        try:
-            ta = self.query_one("#input-field", TextArea)
-            ph = self.query_one("#input-placeholder")
-            if ta.text:
-                ph.display = False
-            else:
-                ph.display = True
-        except Exception:
-            pass
+        # Pass placeholder natively to Textual's TextArea
+        yield ChatInput(id="input-field", placeholder=self._PLACEHOLDER)
 
     def on_click(self, event):
-        # Focus input if clicking anywhere in the bar (like the placeholder)
+        # Focus input if clicking anywhere in the bar
         self.app.focus_input()
 
     def clear_input(self):
-        self.query_one("#input-field").text = ""
+        ta = self.query_one("#input-field", ChatInput)
+        ta.text = ""
 
     class Submitted(Message):
         def __init__(self, text: str):
