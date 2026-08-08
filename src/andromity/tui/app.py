@@ -98,6 +98,7 @@ PlanPanel { height: 1fr; border-top: solid $accent-darken-2; }
 
 
 class AndromityApp(App):
+    TITLE = "Andromity"
     CSS = CSS
     BINDINGS = [
         Binding("ctrl+c", "quit", "Quit", show=True),
@@ -916,10 +917,11 @@ class AndromityApp(App):
     def _process_message(self, prompt: str):
         chat = self.query_one(ChatPanel)
         chat.clear_ephemeral()
-        chat.add_user_message(prompt)
+        
         if prompt.startswith("/"):
             self._handle_command(prompt)
         else:
+            chat.add_user_message(prompt)
             # Auto-name session from the first user message
             if not self._session_named:
                 self._session_named = True
