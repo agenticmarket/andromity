@@ -61,25 +61,30 @@ QueuedMessageBadge {
 
 class ToolIndicator(Widget):
     DEFAULT_CSS = """\
-ToolIndicator { width: 1fr; height: auto; min-height: 1; padding: 0 1; margin: 1 0; background: #1a1a24; border-left: tall #4a4a8a; }
-ToolIndicator Collapsible { border: none; padding: 0 1; background: transparent; }
+ToolIndicator { width: 1fr; height: auto; min-height: 1; padding: 0 1; margin: 0; }
+ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
+#tool-args { margin: 0 0 0 3; }
+#tool-result { margin: 0 0 0 3; }
 """
+    _SPINNER_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    
     def __init__(self, tool_name: str = "", tool_id: str = "", **kwargs):
         super().__init__(**kwargs)
         self.tool_name = tool_name
         self.tool_id = tool_id
         self._args_json = ""
         self._done = False
-        self._dots = 0
+        self._spinner_frame = 0
+        self._start_time = time.time()
         self._timer = None
 
     def compose(self) -> ComposeResult:
-        with Collapsible(title=f"  {escape(self.tool_name)} [yellow]Running...[/yellow]", collapsed=True, id="tool-col"):
+        with Collapsible(title=f"[dim]{escape(self.tool_name)} running...[/dim]", collapsed=True, id="tool-col"):
             yield Static("", id="tool-args", classes="dim")
             yield Static("", id="tool-result")
 
     def on_mount(self):
-        self._timer = self.set_interval(0.5, self._tick)
+        self._timer = self.set_interval(0.1, self._tick)
 
     def append_args(self, args_chunk: str):
         self._args_json += args_chunk
@@ -102,7 +107,7 @@ ToolIndicator Collapsible { border: none; padding: 0 1; background: transparent;
 
     def _tick(self):
         if not self._done:
-            self._dots += 1
+            self._spinner_frame += 1
             self._update_title()
 
     def _get_icon(self) -> str:
@@ -128,15 +133,21 @@ ToolIndicator Collapsible { border: none; padding: 0 1; background: transparent;
                 val = val[:15] + "..." + val[-15:]
             summary = f" ({val})"
         
+        elapsed = int(time.time() - self._start_time)
         icon = self._get_icon()
-        status = "[yellow]Running...[/yellow]" if not self._done else "[green]Done[/green]"
-        if not self._done:
-            dots = "." * (self._dots % 4)
-            status = f"[yellow]Running{dots}[/yellow]"
+        status_color = "#22c55e" if self._done else "#eab308"
+        
+        if self._done:
+            status = f"done in {elapsed}s"
+            spin = ""
+        else:
+            spin_char = self._SPINNER_CHARS[self._spinner_frame % len(self._SPINNER_CHARS)]
+            spin = f"[dim #38bdf8]{spin_char}[/dim #38bdf8] "
+            status = f"running ({elapsed}s)"
             
         try:
             col = self.query_one("#tool-col", Collapsible)
-            col.title = f"{icon} [bold cyan]{escape(self.tool_name)}[/bold cyan]{escape(summary)} {status}"
+            col.title = f"{spin}[dim]{icon} {escape(self.tool_name)}{escape(summary)} [{status_color}]{status}[/{status_color}][/dim]"
         except Exception:
             pass
 
@@ -160,32 +171,40 @@ ToolIndicator Collapsible { border: none; padding: 0 1; background: transparent;
 
 class ThinkingBubble(Widget):
     DEFAULT_CSS = """\
-ThinkingBubble { width: 1fr; height: auto; padding: 0 1; }
+ThinkingBubble { width: 1fr; height: auto; padding: 0 1; margin: 0; }
 ThinkingBubble Collapsible { border: none; padding: 0; background: transparent; }
-#think-md { color: $text-muted; text-style: italic; padding: 0 0 1 2; border-left: solid $accent-darken-2; }
+#think-md { color: $text-muted; text-style: italic; padding: 0 0 1 3; }
 """
+    _SPINNER_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._text = ""
         self._start_time = time.time()
         self._done = False
+        self._spinner_frame = 0
         self._timer = None
         self._md_timer = None
         self._pending = False
 
     def compose(self) -> ComposeResult:
-        with Collapsible(title="💭 Thinking (0s)", collapsed=True, id="think-col"):
+        with Collapsible(title="[dim #38bdf8]⠋[/dim #38bdf8]   [dim red italic]thinking (0s)[/dim red italic]", collapsed=True, id="think-col"):
             yield Static("", id="think-md", classes="dim italic")
 
     def on_mount(self):
-        self._timer = self.set_interval(1.0, self._tick_time)
+        self._timer = self.set_interval(0.1, self._tick_time)
         self._md_timer = self.set_interval(0.1, self._flush)
 
     def _tick_time(self):
         if not self._done:
+            self._spinner_frame += 1
+            spin = self._SPINNER_CHARS[self._spinner_frame % len(self._SPINNER_CHARS)]
             elapsed = int(time.time() - self._start_time)
-            col = self.query_one("#think-col", Collapsible)
-            col.title = f"💭 Thinking ({elapsed}s)"
+            try:
+                col = self.query_one("#think-col", Collapsible)
+                col.title = f"[dim #38bdf8]{spin}[/dim #38bdf8]   [dim red italic]thinking ({elapsed}s)[/dim red italic]"
+            except Exception:
+                pass
 
     def _flush(self):
         if self._pending:
@@ -208,8 +227,11 @@ ThinkingBubble Collapsible { border: none; padding: 0; background: transparent; 
             self._md_timer.stop()
         self._flush()  # Final flush
         elapsed = int(time.time() - self._start_time)
-        col = self.query_one("#think-col", Collapsible)
-        col.title = f"💭 Thinking ({elapsed}s)"
+        try:
+            col = self.query_one("#think-col", Collapsible)
+            col.title = f"  [dim red italic]thought ({elapsed}s)[/dim red italic]"
+        except Exception:
+            pass
 
 class StreamingMessage(Widget):
     DEFAULT_CSS = """\
