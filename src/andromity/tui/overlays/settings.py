@@ -127,13 +127,21 @@ SettingsScreen {
 .mcp-transport  { color: $text-muted; height: 1; }
 .mcp-cmd-line   { color: $text-muted; height: 1; }
 .mcp-error-line { color: $error; height: auto; }
-.mcp-auth-warn  { color: $warning-darken-1; height: auto; }
+.mcp-auth-warn  { color: $warning-darken-1; height: auto; margin-top: 1; }
 .mcp-tools-head { color: $text-muted; height: 1; margin-top: 1; }
 .mcp-tool-row   { height: 1; padding: 0 1; }
 .mcp-tool-name  { color: $accent; width: 24; }
 .mcp-tool-desc  { color: $text-muted; width: 1fr; }
 .mcp-actions    { height: 3; padding: 0 1; }
 .mcp-restart-btn { margin-right: 1; }
+/* Auth section inside card */
+.mcp-auth-section { margin-top: 1; border-top: dashed $primary-darken-2; padding-top: 1; }
+.mcp-auth-label { color: $warning; height: 1; text-style: bold; }
+.mcp-token-row  { height: 3; margin-top: 1; }
+.mcp-token-hint { color: $text-muted; height: 1; }
+.mcp-card-footer { height: 3; padding: 0 1; background: $surface; }
+.mcp-remove-btn { margin-left: 1; }
+.mcp-connect-btn { margin-right: 1; }
 """
 
     def __init__(self, mcp_manager: MCPClientManager = None,
@@ -358,110 +366,147 @@ SettingsScreen {
         error_msg   = status_info.get("error") if not is_running and not disabled else None
         auth_keys   = _mcp_auth_env_keys(s_conf)
         server_url  = s_conf.get("serverUrl") or s_conf.get("url") or ""
+        # Check if already converted to mcp-remote (has command after previous save)
+        already_converted = bool(s_conf.get("command")) and transport in ("stdio", "sse")
 
-        # Status badge
+        # ─── Status badge ────────────────────────────────────────────────
         if disabled:
-            badge_txt = "◌ disabled"
-            badge_cls = "mcp-badge-disabled"
+            badge_txt, badge_cls = "◌ disabled",     "mcp-badge-disabled"
         elif is_running:
-            badge_txt = "● running"
-            badge_cls = "mcp-badge-running"
+            badge_txt, badge_cls = "● running",      "mcp-badge-running"
         elif error_msg:
-            badge_txt = "✕ error"
-            badge_cls = "mcp-badge-error"
-        elif transport == "remote" and not is_running:
-            badge_txt = "⚠ auth required"
-            badge_cls = "mcp-badge-auth"
+            badge_txt, badge_cls = "✕ error",        "mcp-badge-error"
+        elif transport == "remote" and not already_converted:
+            badge_txt, badge_cls = "⚠ needs token",  "mcp-badge-auth"
         else:
-            badge_txt = "○ stopped"
-            badge_cls = "mcp-badge-stopped"
+            badge_txt, badge_cls = "○ stopped",      "mcp-badge-stopped"
 
-        # Tool count
+        # ─── Tool list ───────────────────────────────────────────────────
         tools: list = []
         if is_running and self.mcp_manager:
             sess = self.mcp_manager.sessions.get(s_name)
             if sess:
                 tools = sess.tools
 
-        with Vertical(classes="mcp-card"):
-            # Header row
+        transport_label = {
+            "stdio":   "stdio (local process)",
+            "sse":     "SSE proxy (mcp-remote)",
+            "remote":  "remote HTTP",
+            "unknown": "unknown",
+        }[transport]
+
+        with Vertical(classes="mcp-card", id=f"card-{s_name}"):
+            # ── Header ───────────────────────────────────────────────────
             with Horizontal(classes="mcp-card-header"):
                 yield Label(f" {s_name}", classes="mcp-name")
                 yield Label(badge_txt, classes=badge_cls)
                 yield Label(
                     f"{len(tools)} tool{'s' if len(tools) != 1 else ''}",
                     classes="mcp-tool-count")
-                # Only show toggle for stdio/sse — remote needs browser OAuth
-                if transport in ("stdio", "sse"):
+                # Toggle only for startable servers
+                if transport in ("stdio", "sse") or already_converted:
                     yield Switch(value=not disabled, id=f"mcp-toggle-{s_name}")
                 else:
-                    # Remote — show info icon instead of toggle
-                    yield Label("[dim]OAuth[/]")
+                    yield Label("[dim]—[/]")
 
-            # Body
+            # ── Body ─────────────────────────────────────────────────────
             with Vertical(classes="mcp-card-body"):
-                # Transport + command line
-                transport_label = {
-                    "stdio":   "stdio",
-                    "sse":     "SSE proxy",
-                    "remote":  "remote HTTP",
-                    "unknown": "unknown",
-                }[transport]
                 yield Label(f"[dim]Transport:[/] {transport_label}",
                             classes="mcp-transport")
 
-                if server_url:
-                    short_url = server_url[:70] + "…" if len(server_url) > 70 else server_url
-                    yield Label(f"[dim]URL:[/] {short_url}",
-                                classes="mcp-cmd-line")
+                # Show URL or command
+                if server_url and not already_converted:
+                    short = server_url[:72] + "…" if len(server_url) > 72 else server_url
+                    yield Label(f"[dim]URL:[/] {short}", classes="mcp-cmd-line")
                 elif s_conf.get("command"):
                     cmd_str = (f"{s_conf['command']} "
                                f"{' '.join(str(a) for a in s_conf.get('args', []))}").strip()
-                    cmd_str = cmd_str[:70] + "…" if len(cmd_str) > 70 else cmd_str
-                    yield Label(f"[dim]Command:[/] {cmd_str}",
-                                classes="mcp-cmd-line")
+                    cmd_str = cmd_str[:72] + "…" if len(cmd_str) > 72 else cmd_str
+                    yield Label(f"[dim]Command:[/] {cmd_str}", classes="mcp-cmd-line")
 
-                # Description from config
+                # Description
                 desc = s_conf.get("description", "").strip()
                 if desc:
-                    short_desc = desc[:100].replace("\n", " ")
-                    yield Label(f"[dim]{short_desc}[/]", classes="mcp-cmd-line")
+                    yield Label(f"[dim]{desc[:100].replace(chr(10), ' ')}[/]",
+                                classes="mcp-cmd-line")
 
-                # Auth guidance
-                if transport == "remote":
-                    yield Label(
-                        "⚠  This server uses OAuth. Run [bold cyan]mcp-remote[/] "
-                        "or connect via browser to authenticate.",
-                        classes="mcp-auth-warn")
-                elif auth_keys:
-                    missing = [k for k in auth_keys
-                               if not s_conf.get("env", {}).get(k)]
-                    if missing:
+                # ── Auth section ──────────────────────────────────────────
+                # CASE 1 — remote HTTP (serverUrl only, not yet converted)
+                if transport == "remote" and not already_converted:
+                    with Vertical(classes="mcp-auth-section"):
+                        yield Label("⚠  Authentication Required",
+                                    classes="mcp-auth-label")
                         yield Label(
-                            f"⚠  Requires env vars: [bold]{', '.join(missing)}[/]",
-                            classes="mcp-auth-warn")
+                            "This server requires a Personal Access Token (PAT). "
+                            "Generate one at the provider dashboard, paste it below "
+                            "and click Connect — we'll configure mcp-remote for you.",
+                            classes="mcp-token-hint")
+                        with Horizontal(classes="mcp-token-row"):
+                            yield Input(
+                                placeholder=f"Paste {s_name} access token…",
+                                password=True,
+                                id=f"mcp-token-{s_name}")
+                            yield Button("Connect", variant="primary",
+                                         id=f"mcp-connect-{s_name}",
+                                         classes="mcp-connect-btn")
+
+                # CASE 2 — SSE proxy (mcp-remote, needs browser OAuth like Neon)
+                elif transport == "sse" and not is_running:
+                    with Vertical(classes="mcp-auth-section"):
+                        yield Label(
+                            "⚠  This server uses browser-based OAuth via mcp-remote.",
+                            classes="mcp-auth-label")
+                        yield Label(
+                            "Clicking the button will run mcp-remote in the background. "
+                            "Your browser will open for login. Once done, enable the toggle.",
+                            classes="mcp-token-hint")
+                        yield Button("Open Auth in Browser", variant="warning",
+                                     id=f"mcp-browser-auth-{s_name}")
+
+                # CASE 3 — stdio with missing env var credentials
+                elif auth_keys:
+                    env_block = s_conf.get("env", {})
+                    missing = [k for k in auth_keys if not env_block.get(k)]
+                    if missing:
+                        with Vertical(classes="mcp-auth-section"):
+                            yield Label("⚠  Missing credentials:",
+                                        classes="mcp-auth-label")
+                            for env_key in missing:
+                                yield Label(env_key, classes="mcp-token-hint")
+                                with Horizontal(classes="mcp-token-row"):
+                                    yield Input(
+                                        placeholder=f"Value for {env_key}",
+                                        password=True,
+                                        id=f"mcp-env-{s_name}--{env_key}")
+                                    yield Button("Save", variant="primary",
+                                                 id=f"mcp-saveenv-{s_name}--{env_key}")
                     else:
                         yield Label(
-                            f"[green]✓[/] Credentials set: {', '.join(auth_keys)}",
+                            f"[green]✓[/] Credentials: {', '.join(auth_keys)}",
                             classes="mcp-transport")
 
-                # Error message
+                # ── Error ─────────────────────────────────────────────────
                 if error_msg:
-                    short_err = error_msg[:120]
-                    yield Label(f"✕  {short_err}", classes="mcp-error-line")
+                    yield Label(f"✕  {error_msg[:120]}", classes="mcp-error-line")
 
-                # Tool list when running
+                # ── Tool list ──────────────────────────────────────────────
                 if tools:
-                    yield Label(
-                        f"  Tools ({len(tools)}):", classes="mcp-tools-head")
+                    yield Label(f"  Tools ({len(tools)}):", classes="mcp-tools-head")
                     for tool in tools:
                         with Horizontal(classes="mcp-tool-row"):
-                            yield Label(
-                                f"  {tool.name}", classes="mcp-tool-name")
+                            yield Label(f"  {tool.name}", classes="mcp-tool-name")
                             desc_short = (tool.description or "")[:60].replace("\n", " ")
-                            yield Label(
-                                f"[dim]{desc_short}[/]",
-                                classes="mcp-tool-desc")
+                            yield Label(f"[dim]{desc_short}[/]",
+                                        classes="mcp-tool-desc")
+
+            # ── Card footer with Remove button ────────────────────────────
+            with Horizontal(classes="mcp-card-footer"):
+                yield Label(f" [dim]installed: {s_conf.get('installedAt', 'unknown')}[/]",
+                            classes="mcp-name")
+                yield Button("✕ Remove", variant="error",
+                             id=f"mcp-remove-{s_name}",
+                             classes="mcp-remove-btn")
+
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -574,6 +619,110 @@ SettingsScreen {
                         "[green]✓ All MCP servers restarted.[/]")
                 except Exception:
                     pass
+
+        elif btn_id.startswith("mcp-connect-"):
+            # Remote HTTP: user pasted a PAT token → convert to mcp-remote
+            s_name = btn_id.replace("mcp-connect-", "")
+            try:
+                token = self.query_one(f"#mcp-token-{s_name}", Input).value.strip()
+                if not token:
+                    self.app.notify("Please paste a token first.", severity="warning")
+                    return
+                ok = config.convert_remote_to_mcp_remote(
+                    self.project_path, s_name, token)
+                if ok:
+                    # Reload the MCP servers list and start immediately
+                    self._mcp_servers = (self.mcp_manager.load_config().get("mcpServers", {})
+                                         if self.mcp_manager else {})
+                    mcp_conf = self.mcp_manager.load_config() if self.mcp_manager else {}
+                    srv_conf = mcp_conf.get("mcpServers", {}).get(s_name, {})
+                    command  = srv_conf.get("command")
+                    args     = srv_conf.get("args", [])
+                    env      = srv_conf.get("env", {})
+                    if command and self.mcp_manager:
+                        session = MCPStdioSession(
+                            name=s_name, command=command, args=args, env=env,
+                            cwd=self.mcp_manager.project_path)
+                        success = await session.start()
+                        if success:
+                            self.mcp_manager.sessions[s_name] = session
+                    self.app.notify(
+                        f"{s_name} configured! Toggle to connect.",
+                        severity="information")
+                else:
+                    self.app.notify("Failed to save token.", severity="error")
+            except Exception as e:
+                self.app.notify(f"Error: {e}", severity="error")
+
+        elif btn_id.startswith("mcp-browser-auth-"):
+            # SSE proxy (like Neon): open browser OAuth via mcp-remote
+            import subprocess, shutil
+            s_name = btn_id.replace("mcp-browser-auth-", "")
+            mcp_conf = self.mcp_manager.load_config() if self.mcp_manager else {}
+            srv_conf = mcp_conf.get("mcpServers", {}).get(s_name, {})
+            args = srv_conf.get("args", [])
+            # Find the URL in args (after mcp-remote)
+            remote_url = ""
+            for i, a in enumerate(args):
+                if a.startswith("http") and "mcp" in a.lower():
+                    remote_url = a
+                    break
+            if remote_url:
+                try:
+                    # Run mcp-remote in a new window to trigger browser OAuth
+                    npx = shutil.which("npx") or "npx"
+                    subprocess.Popen(
+                        [npx, "-y", "mcp-remote", remote_url, "--port", "3334"],
+                        creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+                    )
+                    self.app.notify(
+                        f"Opening browser for {s_name} OAuth login…",
+                        severity="information")
+                except Exception as e:
+                    self.app.notify(f"Failed to launch mcp-remote: {e}",
+                                    severity="error")
+            else:
+                self.app.notify("Could not find remote URL in config.",
+                                severity="warning")
+
+        elif btn_id.startswith("mcp-saveenv-"):
+            # Save a single env var for a stdio server
+            rest = btn_id.replace("mcp-saveenv-", "")
+            s_name, env_key = rest.split("--", 1) if "--" in rest else (rest, "")
+            if env_key:
+                try:
+                    val = self.query_one(
+                        f"#mcp-env-{s_name}--{env_key}", Input).value.strip()
+                    if val:
+                        config.set_mcp_server_env(
+                            self.project_path, s_name, env_key, val)
+                        self.app.notify(
+                            f"{env_key} saved for {s_name}.",
+                            severity="information")
+                    else:
+                        self.app.notify("Value is empty.", severity="warning")
+                except Exception as e:
+                    self.app.notify(f"Error: {e}", severity="error")
+
+        elif btn_id.startswith("mcp-remove-"):
+            # Remove / uninstall a server from mcp.json
+            s_name = btn_id.replace("mcp-remove-", "")
+            # Stop if running
+            if self.mcp_manager and s_name in self.mcp_manager.sessions:
+                await self.mcp_manager.sessions[s_name].stop()
+                del self.mcp_manager.sessions[s_name]
+                self.mcp_manager.server_status.pop(s_name, None)
+            ok = config.remove_mcp_server(self.project_path, s_name)
+            if ok:
+                # Hide card immediately
+                try:
+                    self.query_one(f"#card-{s_name}").display = False
+                except Exception:
+                    pass
+                self.app.notify(f"{s_name} removed from MCP config.",
+                                severity="information")
+            else:
+                self.app.notify(f"Could not remove {s_name}.", severity="error")
 
         elif btn_id.startswith("revoke-"):
             t_key = btn_id.replace("revoke-", "")

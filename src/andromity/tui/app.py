@@ -327,9 +327,9 @@ class AndromityApp(App):
             return True
 
         mode = config.get("default", "permission_mode", "safe")
-        if mode == "yolo":
+        if mode in ("yolo", "full"):
             return True
-            
+
         sensitive_patterns = [".env", ".ssh", ".git", "config.toml", "secret", "password"]
         target_path = str(args.get("path", "")).lower()
         is_sensitive = any(p in target_path for p in sensitive_patterns) if target_path else False
@@ -1097,7 +1097,7 @@ class AndromityApp(App):
                         "⚡ [bold red]YOLO mode enabled for this session only.[/]\n"
                         "[dim yellow]All tool confirmation prompts are bypassed. This will automatically reset to SAFE on restart.[/]"
                     )
-                elif mode in ("safe", "trust"):
+                elif mode in ("safe", "trust", "full"):
                     self._yolo_session = False
                     config.set("default", "permission_mode", mode)
                     if self._is_streaming:
@@ -1106,9 +1106,9 @@ class AndromityApp(App):
                     else:
                         self._apply_mode_change()
                 else:
-                    chat.add_system_message("Unknown mode. Use: safe, trust, or yolo")
+                    chat.add_system_message("Unknown mode. Use: safe, trust, full, or yolo")
             else:
-                chat.add_system_message("Usage: /mode <safe|trust|yolo>")
+                chat.add_system_message("Usage: /mode <safe|trust|full|yolo>")
         elif command == "/help":
             chat.add_system_message(
                 "Commands:\n"

@@ -186,10 +186,104 @@ class ConfigManager:
             servers = data.get("mcpServers") or data.get("servers") or {}
             if server_name in servers and isinstance(servers[server_name], dict):
                 servers[server_name]["disabled"] = disabled
-                # Write back
                 path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except Exception:
             pass
+
+    def _find_mcp_file_for_server(self, project_path: str, server_name: str):
+        """
+        Return (path, data, key) for the mcp.json file that contains server_name,
+        searching project then global Gemini config.
+        Returns (None, None, None) if not found.
+        """
+        import json
+
+        # Candidate files in priority order
+        candidates = []
+        if project_path:
+            candidates.extend([
+                Path(project_path) / ".andromity" / "mcp.json",
+                Path(project_path) / ".vscode" / "mcp.json",
+            ])
+        candidates.extend([
+            Path.home() / ".andromity" / "mcp.json",
+            Path.home() / ".gemini" / "config" / "mcp_config.json",
+        ])
+
+        for p in candidates:
+            if not p.is_file():
+                continue
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            for key in ("mcpServers", "servers"):
+                if server_name in data.get(key, {}):
+                    return p, data, key
+        return None, None, None
+
+    def set_mcp_server_env(self, project_path: str, server_name: str, key: str, value: str):
+        """Set a single env-var key for an MCP server in the config file."""
+        path, data, srv_key = self._find_mcp_file_for_server(project_path, server_name)
+        if path is None:
+            return
+        try:
+            import json
+            servers = data.get(srv_key, {})
+            if "env" not in servers[server_name]:
+                servers[server_name]["env"] = {}
+            servers[server_name]["env"][key] = value
+            path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def remove_mcp_server(self, project_path: str, server_name: str) -> bool:
+        """Remove an MCP server entry from the config file. Returns True on success."""
+        path, data, srv_key = self._find_mcp_file_for_server(project_path, server_name)
+        if path is None:
+            return False
+        try:
+            import json
+            del data[srv_key][server_name]
+            path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            return True
+        except Exception:
+            return False
+
+    def convert_remote_to_mcp_remote(
+        self, project_path: str, server_name: str, token: str
+    ) -> bool:
+        """
+        Convert a remote HTTP server (serverUrl only) to use npx mcp-remote
+        with an Authorization: Bearer header, so it can be launched as stdio.
+        Searches project and global Gemini config. Returns True on success.
+        """
+        path, data, srv_key = self._find_mcp_file_for_server(project_path, server_name)
+        if path is None:
+            return False
+        try:
+            import json
+            conf = data[srv_key][server_name]
+            remote_url = conf.get("serverUrl") or conf.get("url") or ""
+            if not remote_url:
+                return False
+            # Preserve safe metadata fields only
+            meta = {k: v for k, v in conf.items()
+                    if k not in ("command", "args", "env", "serverUrl", "url",
+                                 "type", "$typeName")}
+            data[srv_key][server_name] = {
+                "command": "npx",
+                "args": [
+                    "-y", "mcp-remote", remote_url,
+                    "--header", f"Authorization:Bearer {token}",
+                ],
+                "env": {},
+                **meta,
+            }
+            path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            return True
+        except Exception:
+            return False
 
     # ─── Trust Management ────────────────────────────────────────────────
     def _trust_key(self, path: str) -> str:
