@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widget import Widget
+from textual.screen import ModalScreen
 from textual.widgets import Static, Button, DataTable
 from andromity.core.session import Session
 
@@ -31,14 +31,16 @@ def _time_ago(iso_str: str) -> str:
         return ""
 
 
-class SessionBrowserOverlay(Widget):
+class SessionBrowserOverlay(ModalScreen):
     """Browse, switch, and manage sessions for the current project."""
     DEFAULT_CSS = """\
 SessionBrowserOverlay {
+    align: center middle;
+    background: $background 20%;
+}
+#sb-dialog {
     width: 76; height: 28;
     border: solid $accent-darken-2; background: $surface;
-    layer: overlay;
-    align: center middle;
 }
 #sb-title { padding: 0 1; height: 1; background: $accent-darken-3; color: $text; text-style: bold; }
 #sb-table { height: 1fr; overflow-y: auto; }
@@ -55,16 +57,17 @@ SessionBrowserOverlay {
         self._selected_idx: int = 0
 
     def compose(self) -> ComposeResult:
-        yield Static("", id="sb-title")
-        with Vertical():
-            with VerticalScroll(id="sb-table"):
-                yield DataTable(id="sb-data", cursor_type="row", zebra_stripes=True)
-            yield Static("[dim]↑↓ Navigate   Enter / Open to load session   Delete to remove[/]", id="sb-hint")
-        with Horizontal(id="sb-footer"):
-            yield Button("New Session", variant="default", id="sb-new")
-            yield Button("Delete", variant="error", id="sb-delete")
-            yield Button("Cancel", variant="default", id="sb-cancel")
-            yield Button("Open", variant="primary", id="sb-open")
+        with Vertical(id="sb-dialog"):
+            yield Static("", id="sb-title")
+            with Vertical():
+                with VerticalScroll(id="sb-table"):
+                    yield DataTable(id="sb-data", cursor_type="row", zebra_stripes=True)
+                yield Static("[dim]↑↓ Navigate   Enter / Open to load session   Delete to remove[/]", id="sb-hint")
+            with Horizontal(id="sb-footer"):
+                yield Button("New Session", variant="default", id="sb-new")
+                yield Button("Delete", variant="error", id="sb-delete")
+                yield Button("Cancel", variant="default", id="sb-cancel")
+                yield Button("Open", variant="primary", id="sb-open")
 
     def on_mount(self):
         cwd = str(Path(self._project_path).resolve())
@@ -95,7 +98,7 @@ SessionBrowserOverlay {
 
     def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "sb-cancel":
-            self.remove_class("visible")
+            self.dismiss()
             try:
                 self.app.query_one("#input-field").focus()
             except Exception:
@@ -103,7 +106,7 @@ SessionBrowserOverlay {
         elif event.button.id == "sb-open":
             self._open_selected()
         elif event.button.id == "sb-new":
-            self.remove_class("visible")
+            self.dismiss()
             try:
                 self.app._new_session()
             except Exception:
@@ -116,7 +119,7 @@ SessionBrowserOverlay {
             return
         idx = min(self._selected_idx, len(self._sessions) - 1)
         session = self._sessions[idx]
-        self.remove_class("visible")
+        self.dismiss()
         try:
             self.app._load_session(session)
         except Exception:
@@ -134,3 +137,7 @@ SessionBrowserOverlay {
         except Exception:
             pass
         self._load_sessions()
+
+    def on_key(self, event):
+        if event.key == "escape":
+            self.dismiss()

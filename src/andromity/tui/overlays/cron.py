@@ -3,22 +3,24 @@ from datetime import datetime, timezone
 from rich.markup import escape
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widget import Widget
+from textual.screen import ModalScreen
 from textual.widgets import Static, Button, Input
 from textual import events, on
 
 from andromity.core.cron import CronJob, CronScheduler, CronRun, parse_interval_seconds
 
 
-class CronManagerOverlay(Widget):
+class CronManagerOverlay(ModalScreen):
     """Full-screen overlay for managing cron jobs with run history."""
 
     DEFAULT_CSS = """\
 CronManagerOverlay {
+    align: center middle;
+    background: $background 20%;
+}
+#cron-dialog {
     width: 90; height: 42;
     border: solid $accent; background: $surface;
-    layer: overlay;
-    align: center middle;
 }
 #cron-title { padding: 0 1; height: 1; background: $accent-darken-2; color: $text; text-style: bold; }
 #cron-tabs { height: 3; padding: 0 1; }
@@ -61,7 +63,8 @@ CronManagerOverlay {
         self._refresh_guard: bool = False  # prevents concurrent _refresh_list calls
 
     def compose(self) -> ComposeResult:
-        yield Static(" ⏱  Cron Manager", id="cron-title")
+        with Vertical(id="cron-dialog"):
+            yield Static(" ⏱  Cron Manager", id="cron-title")
         with Horizontal(id="cron-tabs"):
             yield Button("Jobs", variant="primary", id="tab-jobs")
             yield Button("History", variant="default", id="tab-history")
@@ -93,11 +96,11 @@ CronManagerOverlay {
             with Horizontal(id="history-pane"):
                 yield VerticalScroll(id="history-run-list")
                 yield VerticalScroll(id="history-detail")
-        with Horizontal(id="cron-footer"):
-            yield Button("Close", variant="default", id="btn-cron-close")
-            yield Button("Enable/Disable", variant="warning", id="btn-cron-toggle", disabled=True)
-            yield Button("Remove", variant="error", id="btn-cron-remove", disabled=True)
-            yield Button("View History", variant="primary", id="btn-cron-history", disabled=True)
+            with Horizontal(id="cron-footer"):
+                yield Button("Close", variant="default", id="btn-cron-close")
+                yield Button("Enable/Disable", variant="warning", id="btn-cron-toggle", disabled=True)
+                yield Button("Remove", variant="error", id="btn-cron-remove", disabled=True)
+                yield Button("View History", variant="primary", id="btn-cron-history", disabled=True)
 
     def on_mount(self):
         self._refresh_list()
@@ -314,7 +317,7 @@ CronManagerOverlay {
 
         try:
             if btn_id == "btn-cron-close":
-                self.remove_class("visible")
+                self.dismiss()
 
             elif btn_id == "tab-jobs":
                 self._switch_tab("jobs")
@@ -442,3 +445,7 @@ CronManagerOverlay {
         self.query_one("#btn-cron-toggle", Button).disabled = not enabled
         self.query_one("#btn-cron-remove", Button).disabled = not enabled
         self.query_one("#btn-cron-history", Button).disabled = not enabled
+
+    def on_key(self, event):
+        if event.key == "escape":
+            self.dismiss()

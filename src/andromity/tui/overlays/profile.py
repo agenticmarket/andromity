@@ -1,6 +1,6 @@
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widget import Widget
+from textual.screen import ModalScreen
 from textual.widgets import Static, Button, RadioButton, RadioSet
 from textual.reactive import reactive
 
@@ -24,14 +24,16 @@ PROFILES = {
 }
 
 
-class ProfilePickerOverlay(Widget):
+class ProfilePickerOverlay(ModalScreen):
     """Profile picker overlay."""
     DEFAULT_CSS = """\
 ProfilePickerOverlay {
+    align: center middle;
+    background: $background 20%;
+}
+#pp-dialog {
     width: 62; height: 22;
     border: solid $accent-darken-2; background: $surface;
-    layer: overlay;
-    align: center middle;
 }
 #pp-title { padding: 0 1; height: 1; background: $accent-darken-3; color: $text; text-style: bold; }
 #pp-list { height: 1fr; overflow-y: auto; padding: 0 1; }
@@ -44,16 +46,17 @@ ProfilePickerOverlay {
     _selected: reactive[str] = reactive("")
 
     def compose(self) -> ComposeResult:
-        yield Static(" Select Profile ", id="pp-title")
-        with Vertical(id="pp-body"):
-            with RadioSet(id="pp-radioset"):
-                for key, info in PROFILES.items():
-                    yield RadioButton(f" {info['name']}  [dim]({key})[/]", id=f"profile-{key}")
-            yield Static("", id="pp-desc")
-            yield Static("[dim]Profile controls which tools the agent can use.[/]", id="pp-hint")
-        with Horizontal(id="pp-footer"):
-            yield Button("Cancel", variant="default", id="pp-cancel")
-            yield Button("Apply", variant="primary", id="pp-apply")
+        with Vertical(id="pp-dialog"):
+            yield Static(" Select Profile ", id="pp-title")
+            with Vertical(id="pp-body"):
+                with RadioSet(id="pp-radioset"):
+                    for key, info in PROFILES.items():
+                        yield RadioButton(f" {info['name']}  [dim]({key})[/]", id=f"profile-{key}")
+                yield Static("", id="pp-desc")
+                yield Static("[dim]Profile controls which tools the agent can use.[/]", id="pp-hint")
+            with Horizontal(id="pp-footer"):
+                yield Button("Cancel", variant="default", id="pp-cancel")
+                yield Button("Apply", variant="primary", id="pp-apply")
 
     def on_mount(self):
         try:
@@ -83,15 +86,19 @@ ProfilePickerOverlay {
 
     def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "pp-cancel":
-            self.remove_class("visible")
+            self.dismiss()
         elif event.button.id == "pp-apply":
             if self._selected:
                 app = self.app
                 if hasattr(app, '_apply_profile'):
                     app._apply_profile(self._selected)
-            self.remove_class("visible")
+            self.dismiss()
             try:
                 self.app.query_one("#input-field").focus()
             except Exception:
                 pass
+
+    def on_key(self, event):
+        if event.key == "escape":
+            self.dismiss()
 

@@ -18,6 +18,7 @@ from andromity.tui.overlays.trust import TrustPromptOverlay
 from andromity.tui.overlays.session import SessionBrowserOverlay
 from andromity.tui.overlays.cron import CronManagerOverlay
 from andromity.tui.overlays.undo import UndoConfirmOverlay
+from andromity.tui.overlays.settings import SettingsScreen
 from andromity.core.session import Session
 from andromity.core.agent import Agent
 from andromity.core.events import TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult
@@ -72,14 +73,6 @@ PlanPanel { height: 1fr; border-top: solid $accent-darken-2; }
 #suggestions.visible { display: block; padding: 0 2; }
 #model-overlay { display: none; }
 #model-overlay.visible { display: block; }
-#profile-overlay { display: none; }
-#profile-overlay.visible { display: block; }
-#trust-overlay { display: none; }
-#trust-overlay.visible { display: block; }
-#session-overlay { display: none; }
-#session-overlay.visible { display: block; }
-#cron-overlay { display: none; }
-#cron-overlay.visible { display: block; }
 
 .narrow #context-panel { display: none; }
 .narrow #left-panel { display: none; }
@@ -107,6 +100,7 @@ class AndromityApp(App):
         Binding("ctrl+l", "toggle_model", "Model", show=True),
         Binding("ctrl+j", "toggle_profile", "Profile", show=True),
         Binding("ctrl+o", "toggle_sessions", "Sessions", show=True),
+        Binding("ctrl+comma", "toggle_settings", "Settings", show=True),
         Binding("escape", "escape_pressed", show=False),
     ]
 
@@ -172,13 +166,6 @@ class AndromityApp(App):
             id="main-layout",
         )
         yield AppFooter(id="app-footer")
-        yield ProfilePickerOverlay(id="profile-overlay")
-        yield SessionBrowserOverlay(
-            self.session.id, self._project_path, id="session-overlay"
-        )
-        yield CronManagerOverlay(
-            self._cron_scheduler, self._project_path, id="cron-overlay"
-        )
 
     def on_resize(self, event):
         if event.size.width <= 120:
@@ -1177,8 +1164,7 @@ class AndromityApp(App):
                 f"[bold cyan]Get-Content -Wait '{LOG_PATH}'[/]"
             )
         elif command == "/cron":
-            overlay = self.query_one("#cron-overlay", CronManagerOverlay)
-            overlay.add_class("visible")
+            self.push_screen(CronManagerOverlay(self._cron_scheduler, self._project_path))
         elif command.startswith("/plan"):
             parts = cmd.split()
             if len(parts) > 1 and parts[1].strip().lower() == "clear":
@@ -1274,22 +1260,14 @@ class AndromityApp(App):
     def action_toggle_model(self):
         self.push_screen(ModelPickerOverlay())
 
+    def action_toggle_settings(self):
+        self.push_screen(SettingsScreen())
+
     def action_toggle_profile(self):
-        overlay = self.query_one("#profile-overlay")
-        if overlay.has_class("visible"):
-            overlay.remove_class("visible")
-        else:
-            overlay.add_class("visible")
+        self.push_screen(ProfilePickerOverlay())
 
     def action_toggle_sessions(self):
-        sb = self.query_one("#session-overlay", SessionBrowserOverlay)
-        if sb.has_class("visible"):
-            sb.remove_class("visible")
-        else:
-            sb._current_id = self.session.id
-            sb._project_path = self._project_path
-            sb._load_sessions()
-            sb.add_class("visible")
+        self.push_screen(SessionBrowserOverlay(self.session.id, self._project_path))
 
     def action_close_overlays(self):
         # Resolve pending tool approval if diff panel is visible
