@@ -80,8 +80,6 @@ PlanPanel { height: 1fr; border-top: solid $accent-darken-2; }
 #session-overlay.visible { display: block; }
 #cron-overlay { display: none; }
 #cron-overlay.visible { display: block; }
-#undo-overlay { display: none; }
-#undo-overlay.visible { display: block; }
 
 .narrow #context-panel { display: none; }
 .narrow #left-panel { display: none; }
@@ -175,14 +173,12 @@ class AndromityApp(App):
         )
         yield AppFooter(id="app-footer")
         yield ProfilePickerOverlay(id="profile-overlay")
-        yield TrustPromptOverlay(self._project_path, id="trust-overlay")
         yield SessionBrowserOverlay(
             self.session.id, self._project_path, id="session-overlay"
         )
         yield CronManagerOverlay(
             self._cron_scheduler, self._project_path, id="cron-overlay"
         )
-        yield UndoConfirmOverlay(id="undo-overlay")
 
     def on_resize(self, event):
         if event.size.width <= 120:
@@ -228,7 +224,9 @@ class AndromityApp(App):
         # Do NOT auto-load stale plan from disk — plans are session-scoped
         # Check trust FIRST before showing welcome
         if not config.is_trusted(self._project_path):
-            self.query_one("#trust-overlay").add_class("visible")
+            def _on_trust(trusted: bool | None) -> None:
+                self._on_trust_resolved(bool(trusted))
+            self.push_screen(TrustPromptOverlay(self._project_path), _on_trust)
         else:
             self._show_welcome()
 
@@ -1323,13 +1321,16 @@ class AndromityApp(App):
         checkpoint = self._undo_stack[-1]
         undone_prompt = checkpoint.get("prompt", "")
 
-        try:
-            overlay = self.query_one("#undo-overlay", UndoConfirmOverlay)
-            overlay.show_prompt(undone_prompt)
-            overlay.add_class("visible")
-        except Exception:
-            # Fallback if overlay not found: directly perform undo
-            self._perform_confirmed_undo()
+        def _on_undo_result(confirmed: bool | None) -> None:
+            if confirmed:
+                self._perform_confirmed_undo()
+            else:
+                try:
+                    self.focus_input()
+                except Exception:
+                    pass
+
+        self.push_screen(UndoConfirmOverlay(prompt=undone_prompt), _on_undo_result)
 
     def _perform_confirmed_undo(self):
         """
