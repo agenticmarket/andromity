@@ -65,42 +65,43 @@ CronManagerOverlay {
     def compose(self) -> ComposeResult:
         with Vertical(id="cron-dialog"):
             yield Static(" ⏱  Cron Manager", id="cron-title")
-        with Horizontal(id="cron-tabs"):
-            yield Button("Jobs", variant="primary", id="tab-jobs")
-            yield Button("History", variant="default", id="tab-history")
-        # ── Jobs tab ──
-        with Vertical(id="cron-tab-jobs"):
-            with Horizontal(id="cron-body"):
-                with Vertical(id="cron-list-pane"):
-                    yield VerticalScroll(id="cron-list-scroll")
-                with VerticalScroll(id="cron-form-pane"):
-                    yield Static("[bold]Add New Cron[/]\n", classes="form-label")
-                    yield Static("Name:", classes="form-label")
-                    yield Input(placeholder="e.g. Run Tests", id="cf-name")
-                    yield Static("Prompt:", classes="form-label")
-                    yield Input(placeholder="e.g. run pytest and report", id="cf-prompt")
-                    yield Static("Schedule:", classes="form-label")
-                    yield Input(placeholder="every 30m / every 2h / every 1d", id="cf-schedule")
-                    yield Static("Mode:", classes="form-label")
-                    yield Input(placeholder="safe / trust / yolo", id="cf-mode", value="trust")
-                    yield Static("Allowed cmds (comma-sep):", classes="form-label")
-                    yield Input(placeholder="pytest, git status", id="cf-allowed")
-                    yield Static("On failure:", classes="form-label")
-                    yield Input(placeholder="notify / disable / retry", id="cf-onfail", value="notify")
-                    yield Static("Timeout (seconds, 0=unlimited):", classes="form-label")
-                    yield Input(placeholder="600", id="cf-timeout", value="600")
-                    yield Button("+ Add Cron", variant="primary", id="btn-cron-add")
-        # ── History tab ──
-        with Vertical(id="cron-tab-history", classes="hidden"):
-            yield Static("[dim]Select a cron job, then click History →[/]", id="history-job-label")
-            with Horizontal(id="history-pane"):
-                yield VerticalScroll(id="history-run-list")
-                yield VerticalScroll(id="history-detail")
+            with Horizontal(id="cron-tabs"):
+                yield Button("Jobs", variant="primary", id="tab-jobs")
+                yield Button("History", variant="default", id="tab-history")
+            # ── Jobs tab ──
+            with Vertical(id="cron-tab-jobs"):
+                with Horizontal(id="cron-body"):
+                    with Vertical(id="cron-list-pane"):
+                        yield VerticalScroll(id="cron-list-scroll")
+                    with VerticalScroll(id="cron-form-pane"):
+                        yield Static("[bold]Add New Cron[/]\n", classes="form-label")
+                        yield Static("Name:", classes="form-label")
+                        yield Input(placeholder="e.g. Run Tests", id="cf-name")
+                        yield Static("Prompt:", classes="form-label")
+                        yield Input(placeholder="e.g. run pytest and report", id="cf-prompt")
+                        yield Static("Schedule:", classes="form-label")
+                        yield Input(placeholder="every 30m / every 2h / every 1d", id="cf-schedule")
+                        yield Static("Mode:", classes="form-label")
+                        yield Input(placeholder="safe / trust / yolo", id="cf-mode", value="trust")
+                        yield Static("Allowed cmds (comma-sep):", classes="form-label")
+                        yield Input(placeholder="pytest, git status", id="cf-allowed")
+                        yield Static("On failure:", classes="form-label")
+                        yield Input(placeholder="notify / disable / retry", id="cf-onfail", value="notify")
+                        yield Static("Timeout (seconds, 0=unlimited):", classes="form-label")
+                        yield Input(placeholder="600", id="cf-timeout", value="600")
+                        yield Button("+ Add Cron", variant="primary", id="btn-cron-add")
+            # ── History tab ──
+            with Vertical(id="cron-tab-history", classes="hidden"):
+                yield Static("[dim]Select a cron job, then click History →[/]", id="history-job-label")
+                with Horizontal(id="history-pane"):
+                    yield VerticalScroll(id="history-run-list")
+                    yield VerticalScroll(id="history-detail")
             with Horizontal(id="cron-footer"):
                 yield Button("Close", variant="default", id="btn-cron-close")
                 yield Button("Enable/Disable", variant="warning", id="btn-cron-toggle", disabled=True)
                 yield Button("Remove", variant="error", id="btn-cron-remove", disabled=True)
                 yield Button("View History", variant="primary", id="btn-cron-history", disabled=True)
+
 
     def on_mount(self):
         self._refresh_list()
