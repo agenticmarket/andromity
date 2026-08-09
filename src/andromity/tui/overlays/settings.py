@@ -64,10 +64,15 @@ SettingsScreen {
 .adv-label { width: 1fr; content-align: left middle; }
 
 /* MCP Items */
-.mcp-item { height: 4; border-left: tall $primary; margin-bottom: 1; padding: 0 1; background: $surface-darken-1; }
+.mcp-item { height: auto; border-left: tall $primary; margin-bottom: 1; padding: 0 1; background: $surface-darken-1; }
 .mcp-title { text-style: bold; color: $accent; width: 1fr; }
-.mcp-status { width: auto; color: $text-muted; margin-right: 2; }
+.mcp-status-running { width: auto; color: $success; margin-right: 2; }
+.mcp-status-stopped { width: auto; color: $warning; margin-right: 2; }
+.mcp-status-disabled { width: auto; color: $error; margin-right: 2; }
 .mcp-tools { width: auto; color: $text-muted; margin-right: 2; }
+.mcp-cmd { color: $text-muted; height: 1; }
+/* Profile desc rows */
+.prof-desc { color: $text-muted; padding: 0 2 1 2; margin-left: 3; }
 """
 
     def __init__(self, mcp_manager: MCPClientManager = None, project_path: str = "", **kwargs):
@@ -170,18 +175,17 @@ SettingsScreen {
                                 for s_name, s_conf in servers.items():
                                     with Vertical(classes="mcp-item"):
                                         with Horizontal():
-                                            yield Label(f" {s_name}", classes="mcp-title")
                                             disabled = s_conf.get("disabled", False)
                                             is_running = not disabled and s_name in self.mcp_manager.sessions
-                                            status = "running" if is_running else ("disabled" if disabled else "stopped")
-                                            tools_count = 0
-                                            if is_running:
-                                                session = self.mcp_manager.sessions[s_name]
-                                                tools_count = len(session.tools)
-                                            yield Label(f"{status}", classes="mcp-status")
+                                            status_text = "● running" if is_running else ("✕ disabled" if disabled else "○ stopped")
+                                            status_cls = "mcp-status-running" if is_running else ("mcp-status-disabled" if disabled else "mcp-status-stopped")
+                                            tools_count = len(self.mcp_manager.sessions[s_name].tools) if is_running else 0
+                                            yield Label(f" {s_name}", classes="mcp-title")
+                                            yield Label(status_text, classes=status_cls)
                                             yield Label(f"{tools_count} tools", classes="mcp-tools")
                                             yield Switch(value=not disabled, id=f"mcp-toggle-{s_name}")
-                                        yield Label(f"  [dim]{s_conf.get('command', '')} {' '.join(s_conf.get('args', []))}[/dim]")
+                                        cmd_str = f"{s_conf.get('command', '')} {' '.join(s_conf.get('args', []))}".strip()
+                                        yield Label(f"  {cmd_str}", classes="mcp-cmd")
                             else:
                                 yield Label("[dim]No MCP servers configured yet.[/]")
                         yield Label(
@@ -202,11 +206,9 @@ SettingsScreen {
                         from andromity.tui.overlays.profile import PROFILES
                         with RadioSet(id="setting-profiles"):
                             for key, info in PROFILES.items():
-                                rb = RadioButton(f"{info['name']} ({key})", id=f"prof-{key}")
-                                if key == curr_profile:
-                                    rb.value = True
-                                yield rb
-                                yield Label(f"   [dim]{info['desc']}[/]\n")
+                                yield RadioButton(f"{info['name']}  ({key})", id=f"prof-{key}")
+                        for key, info in PROFILES.items():
+                            yield Label(f"  [dim]{info['desc']}[/]", classes="prof-desc")
 
                     # ── Trust & Security ─────────────────────────────────────
                     with VerticalScroll(id="pane-trust", classes="settings-pane"):
@@ -270,6 +272,14 @@ SettingsScreen {
         target_id = mapping.get(perm, "#perm-safe")
         try:
             self.query_one(target_id, RadioButton).value = True
+        except Exception:
+            pass
+
+        # Active profile selection
+        curr_profile = config.get("default", "profile", "builder")
+        try:
+            rb = self.query_one(f"#prof-{curr_profile}", RadioButton)
+            rb.value = True
         except Exception:
             pass
 
