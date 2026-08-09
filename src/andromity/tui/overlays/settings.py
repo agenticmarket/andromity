@@ -438,31 +438,59 @@ SettingsScreen {
                                 classes="mcp-cmd-line")
 
                 # ── Auth sections ────────────────────────────────────────────
-                # CASE 1 — remote HTTP (serverUrl only, not yet converted to mcp-remote)
+                # CASE 1 — remote HTTP (serverUrl only, not yet connected)
                 if transport == "remote" and not already_converted:
-                    # Detect provider-specific instructions
+                    # Check if we already have an OAuth token stored
+                    from andromity.core.oauth import load_token, clear_token
+                    has_token   = bool(load_token(s_name))
                     is_supabase = "supabase.com" in server_url.lower()
-                    with Vertical(classes="mcp-auth-section"):
-                        yield Label("⚠  Auth Required — paste Personal Access Token (PAT):",
-                                    classes="mcp-auth-label")
-                        if is_supabase:
-                            with Horizontal(classes="mcp-token-row"):
-                                yield Label(
-                                    "[dim]Get your token at supabase.com/dashboard/account/tokens[/]",
-                                    classes="mcp-cmd-line")
-                                yield Button("🔗 Open",
-                                             id=f"mcp-openurl-dashboard-{s_name}",
-                                             classes="mcp-url-btn")
-                        with Horizontal(classes="mcp-token-row"):
-                            yield Input(
-                                placeholder="sbp_… (Supabase PAT)" if is_supabase
-                                            else f"{s_name} access token…",
-                                password=True,
-                                id=f"mcp-token-{s_name}")
-                            yield Button("Connect", variant="primary",
-                                         id=f"mcp-connect-{s_name}",
-                                         classes="mcp-connect-btn")
 
+                    with Vertical(classes="mcp-auth-section"):
+                        if has_token:
+                            # Token exists — show status + re-auth / revoke options
+                            yield Label("[green]✔[/] OAuth token cached",
+                                        classes="mcp-auth-label")
+                            with Horizontal(classes="mcp-token-row"):
+                                yield Button("🔁 Re-authenticate",
+                                             id=f"mcp-oauth-{s_name}",
+                                             classes="mcp-auth-btn")
+                                yield Button("🗑 Revoke Token",  variant="error",
+                                             id=f"mcp-revoke-{s_name}",
+                                             classes="mcp-auth-btn")
+                        else:
+                            yield Label("⚠  Auth required — choose method:",
+                                        classes="mcp-auth-label")
+                            with Horizontal(classes="mcp-token-row"):
+                                yield Button("🔐 Connect with OAuth",
+                                             variant="primary",
+                                             id=f"mcp-oauth-{s_name}",
+                                             classes="mcp-connect-btn")
+                                yield Button("🔑 Use PAT instead",
+                                             id=f"mcp-show-pat-{s_name}",
+                                             classes="mcp-auth-btn")
+                            # PAT input (hidden initially, shown on 'Use PAT' click)
+                            with Horizontal(classes="mcp-token-row",
+                                           id=f"mcp-pat-row-{s_name}"):
+                                yield Input(
+                                    placeholder="sbp_…" if is_supabase
+                                                else f"{s_name} access token…",
+                                    password=True,
+                                    id=f"mcp-token-{s_name}")
+                                yield Button("Save & Connect", variant="primary",
+                                             id=f"mcp-connect-{s_name}",
+                                             classes="mcp-connect-btn")
+                            if is_supabase:
+                                with Horizontal(classes="mcp-token-row"):
+                                    yield Label(
+                                        "[dim]PAT: supabase.com/dashboard/account/tokens[/]",
+                                        classes="mcp-cmd-line")
+                                    yield Button("🔗 Open",
+                                                 id=f"mcp-openurl-dashboard-{s_name}",
+                                                 classes="mcp-url-btn")
+
+                        # Live status label updated by OAuth worker
+                        yield Label("", id=f"mcp-oauth-status-{s_name}",
+                                    classes="mcp-cmd-line")
 
                 # CASE 2 — SSE proxy already running — show nothing extra
                 # CASE 2b — SSE proxy stopped — offer browser auth
@@ -725,6 +753,86 @@ SettingsScreen {
                     webbrowser.open(url)
                 else:
                     self.app.notify("No URL found for this server.", severity="warning")
+
+        elif btn_id.startswith("mcp-show-pat-"):
+            # Toggle visibility of the PAT input row
+            s_name = btn_id.replace("mcp-show-pat-", "")
+            try:
+                row = self.query_one(f"#mcp-pat-row-{s_name}")
+                row.display = not row.display
+            except Exception:
+                pass
+
+        elif btn_id.startswith("mcp-revoke-"):
+            # Clear stored OAuth token for this server
+            from andromity.core.oauth import clear_token
+            s_name = btn_id.replace("mcp-revoke-", "")
+            clear_token(s_name)
+            self.app.notify(f"{s_name}: OAuth token revoked.", severity="information")
+            await self._refresh_mcp_card(s_name)
+
+        elif btn_id.startswith("mcp-oauth-"):
+            # Full OAuth 2.1 + PKCE + DCR flow
+            s_name = btn_id.replace("mcp-oauth-", "")
+            mcp_conf = self.mcp_manager.load_config() if self.mcp_manager else {}
+            srv_conf = mcp_conf.get("mcpServers", {}).get(s_name, {})
+            server_url = srv_conf.get("serverUrl") or srv_conf.get("url") or ""
+            if not server_url:
+                self.app.notify(f"{s_name}: no serverUrl configured.", severity="warning")
+                return
+
+            # Update status label live as the worker progresses
+            def _set_status(msg: str):
+                try:
+                    lbl = self.query_one(f"#mcp-oauth-status-{s_name}", Label)
+                    lbl.update(f"[dim]{msg}[/]")
+                except Exception:
+                    pass
+
+            async def _do_oauth():
+                from andromity.core.oauth import full_oauth_flow
+                import shutil
+
+                _set_status("🔍 Starting OAuth flow…")
+                token = await full_oauth_flow(s_name, server_url, _set_status)
+
+                if not token:
+                    # Status label already shows error from full_oauth_flow
+                    return
+
+                # Start mcp-remote with the new token
+                npx     = shutil.which("npx") or "npx"
+                args    = ["mcp-remote", server_url,
+                           "--header", f"Authorization:Bearer {token}"]
+                env     = srv_conf.get("env", {})
+                from andromity.core.mcp import MCPStdioSession
+                session = MCPStdioSession(
+                    name=s_name, command=npx, args=args,
+                    env=env, cwd=self.mcp_manager.project_path if self.mcp_manager else "")
+                success = await session.start()
+                if success and self.mcp_manager:
+                    self.mcp_manager.sessions[s_name] = session
+                    self.mcp_manager.server_status[s_name] = {
+                        "status":  "running",
+                        "tools":   len(session.tools),
+                        "error":   None,
+                        "command": f"npx mcp-remote {server_url} (OAuth)",
+                    }
+                    self.app.notify(
+                        f"{s_name}: ✅ {len(session.tools)} tools via OAuth",
+                        severity="information")
+                else:
+                    _set_status(f"⚠ Connected but failed to start: {session.error}")
+
+                # Refresh card to reflect new state
+                await self._refresh_mcp_card(s_name)
+                # Refresh context panel in main app
+                try:
+                    self.app._update_status()
+                except Exception:
+                    pass
+
+            self.run_worker(_do_oauth(), exclusive=False)
 
         elif btn_id.startswith("mcp-browser-auth-"):
 

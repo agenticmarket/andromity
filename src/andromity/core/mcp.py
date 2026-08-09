@@ -337,18 +337,79 @@ class MCPClientManager:
         return {"mcpServers": merged_servers}
 
     async def start_all(self):
-        """Start all enabled configured MCP servers concurrently."""
-        config = self.load_config()
-        servers = config.get("mcpServers", {})
+        """Start all enabled configured MCP servers concurrently.
+
+        For remote HTTP servers (serverUrl only, no command):
+          - If a cached OAuth token exists → convert to mcp-remote with Bearer header
+          - Otherwise → mark as needs_auth so the settings UI shows Connect button
+        """
+        from andromity.core.oauth import load_token, ensure_fresh_token
+        from andromity.config import config as app_config
+
+        mcp_config = self.load_config()
+        servers    = mcp_config.get("mcpServers", {})
         self.server_status.clear()
 
         async def _start_one(name: str, srv_conf: dict):
-            command = srv_conf.get("command")
-            args = srv_conf.get("args", [])
-            env = srv_conf.get("env", {})
-            disabled = srv_conf.get("disabled", False)
-            if disabled or not command:
+            disabled   = srv_conf.get("disabled", False)
+            command    = srv_conf.get("command", "")
+            server_url = srv_conf.get("serverUrl") or srv_conf.get("url", "")
+            args       = srv_conf.get("args", [])
+            env        = srv_conf.get("env", {})
+
+            if disabled:
                 return
+
+            # ── Remote HTTP server (no stdio command yet) ──────────────────────
+            if server_url and not command:
+                # Check for cached OAuth token
+                token = await ensure_fresh_token(name)
+                if not token:
+                    # No token — check PAT headers in existing config
+                    headers = srv_conf.get("headers", {})
+                    pat = headers.get("Authorization", "").replace("Bearer ", "").strip()
+                    if not pat:
+                        # Mark as needs_auth — settings UI will show Connect button
+                        self.server_status[name] = {
+                            "status": "needs_auth",
+                            "tools": 0,
+                            "error": "Authentication required",
+                            "command": "",
+                        }
+                        return
+                    token = pat  # use PAT as bearer token
+
+                # We have a token → start mcp-remote with Bearer auth
+                import shutil
+                npx = shutil.which("npx") or "npx"
+                mcp_args = ["mcp-remote", server_url,
+                            "--header", f"Authorization:Bearer {token}"]
+                session = MCPStdioSession(
+                    name=name, command=npx, args=mcp_args,
+                    env=env, cwd=self.project_path)
+                success = await session.start()
+                cmd_str = f"npx mcp-remote {server_url} (Bearer token)"
+                if success:
+                    self.sessions[name] = session
+                    self.server_status[name] = {
+                        "status":  "running",
+                        "tools":   len(session.tools),
+                        "error":   None,
+                        "command": cmd_str,
+                    }
+                else:
+                    self.server_status[name] = {
+                        "status":  "error",
+                        "tools":   0,
+                        "error":   session.error or "Failed to connect",
+                        "command": cmd_str,
+                    }
+                return
+
+            # ── Stdio / mcp-remote server ──────────────────────────────────────
+            if not command:
+                return
+
             session = MCPStdioSession(
                 name=name, command=command, args=args,
                 env=env, cwd=self.project_path,
@@ -359,19 +420,19 @@ class MCPClientManager:
                 self.sessions[name] = session
                 self.server_status[name] = {
                     "status": "running",
-                    "tools": len(session.tools),
-                    "error": None,
+                    "tools":  len(session.tools),
+                    "error":  None,
                     "command": cmd_str,
                 }
             else:
                 self.server_status[name] = {
                     "status": "error",
-                    "tools": 0,
-                    "error": session.error or "Failed to connect",
+                    "tools":  0,
+                    "error":  session.error or "Failed to connect",
                     "command": cmd_str,
                 }
 
-        # Start all servers concurrently to avoid blocking
+        # Start all servers concurrently
         await asyncio.gather(*[
             _start_one(name, srv_conf)
             for name, srv_conf in servers.items()
