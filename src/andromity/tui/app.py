@@ -31,7 +31,7 @@ from andromity.config import config
 
 log = get_logger("app")
 
-COMMANDS = ["/help", "/mode", "/model", "/profile","/undo", "/keys", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear", "/cron", "/plan", "/mcp"]
+COMMANDS = ["/help", "/mode", "/model", "/profile","/undo", "/keys", "/settings", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear", "/cron", "/plan", "/mcp"]
 
 CSS = """\
 Screen { background: $surface; }
@@ -100,7 +100,7 @@ class AndromityApp(App):
         Binding("ctrl+l", "toggle_model", "Model", show=True),
         Binding("ctrl+j", "toggle_profile", "Profile", show=True),
         Binding("ctrl+o", "toggle_sessions", "Sessions", show=True),
-        Binding("ctrl+comma", "toggle_settings", "Settings", show=True),
+        Binding("ctrl+e", "toggle_settings", "Settings", show=True),
         Binding("escape", "escape_pressed", show=False),
     ]
 
@@ -1120,6 +1120,7 @@ class AndromityApp(App):
                 "  /sessions                Browse & switch sessions (Ctrl+O)\n"
                 "  /new                     Start a new session\n"
                 "  /rename <name>           Rename current session\n"
+                "  /settings                Open master settings panel\n"
                 "  /keys                    View status of all provider API keys\n"
                 "  /keys set <prov> <key>   Save API key to universal config\n"
                 "  /trust                   Trust this folder (enable file writes + shell)\n"
@@ -1163,6 +1164,8 @@ class AndromityApp(App):
                 f"To monitor logs live, open a new PowerShell window and run:\n"
                 f"[bold cyan]Get-Content -Wait '{LOG_PATH}'[/]"
             )
+        elif command in ("/settings", "/setting"):
+            self.push_screen(SettingsScreen())
         elif command == "/cron":
             self.push_screen(CronManagerOverlay(self._cron_scheduler, self._project_path))
         elif command.startswith("/plan"):
