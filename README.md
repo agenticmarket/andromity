@@ -6,6 +6,8 @@ Andromity is a terminal AI coding agent with a rich TUI. Point it at any codebas
 
 > **Beta notice:** This is `0.1.0b2` — an early beta. Expect rough edges.
 
+![Andromity Screenshot](screen_shot.png)
+
 ---
 
 ## Install

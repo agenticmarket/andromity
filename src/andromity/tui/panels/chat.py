@@ -97,6 +97,7 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
             pass
 
     def append_result(self, result: str):
+        self.mark_done()
         try:
             res_str = result
             if len(res_str) > 2000:
@@ -139,7 +140,7 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
         
         if self._done:
             status = f"done in {elapsed}s"
-            spin = ""
+            spin = "  "
         else:
             spin_char = self._SPINNER_CHARS[self._spinner_frame % len(self._SPINNER_CHARS)]
             spin = f"[dim #38bdf8]{spin_char}[/dim #38bdf8] "
@@ -173,7 +174,7 @@ class ThinkingBubble(Widget):
     DEFAULT_CSS = """\
 ThinkingBubble { width: 1fr; height: auto; padding: 0 1; margin: 0; }
 ThinkingBubble Collapsible { border: none; padding: 0; background: transparent; }
-#think-md { color: $text-muted; text-style: italic; padding: 0 0 1 3; }
+#think-md { color: #38bdf8; text-style: italic; padding: 0 0 1 3; }
 """
     _SPINNER_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
     
@@ -188,7 +189,7 @@ ThinkingBubble Collapsible { border: none; padding: 0; background: transparent; 
         self._pending = False
 
     def compose(self) -> ComposeResult:
-        with Collapsible(title="[dim #38bdf8]⠋[/dim #38bdf8]   [dim red italic]thinking (0s)[/dim red italic]", collapsed=True, id="think-col"):
+        with Collapsible(title="[dim #38bdf8]⠋[/dim #38bdf8]  [dim #38bdf8 italic]thinking (0s)[/dim #38bdf8 italic]", collapsed=True, id="think-col"):
             yield Static("", id="think-md", classes="dim italic")
 
     def on_mount(self):
@@ -202,7 +203,7 @@ ThinkingBubble Collapsible { border: none; padding: 0; background: transparent; 
             elapsed = int(time.time() - self._start_time)
             try:
                 col = self.query_one("#think-col", Collapsible)
-                col.title = f"[dim #38bdf8]{spin}[/dim #38bdf8]   [dim red italic]thinking ({elapsed}s)[/dim red italic]"
+                col.title = f"[dim #38bdf8]{spin}[/dim #38bdf8]  [dim #38bdf8 italic]thinking ({elapsed}s)[/dim #38bdf8 italic]"
             except Exception:
                 pass
 
@@ -229,7 +230,7 @@ ThinkingBubble Collapsible { border: none; padding: 0; background: transparent; 
         elapsed = int(time.time() - self._start_time)
         try:
             col = self.query_one("#think-col", Collapsible)
-            col.title = f"  [dim red italic]thought ({elapsed}s)[/dim red italic]"
+            col.title = f"   [dim #38bdf8 italic]thought ({elapsed}s)[/dim #38bdf8 italic]"
         except Exception:
             pass
 
@@ -417,16 +418,8 @@ class ChatPanel(VerticalScroll):
             pass
 
     def show_tool_end(self, tool_id: str):
-        try:
-            for ind in self.query(ToolIndicator):
-                if ind.tool_id == tool_id:
-                    ind.mark_done()
-                    return
-            indicators = self.query(ToolIndicator)
-            if indicators:
-                indicators.last().mark_done()
-        except Exception:
-            pass
+        # Tools are now marked done in show_tool_result so they keep spinning during execution/approval
+        pass
 
     def clear(self):
         self._messages.clear()
