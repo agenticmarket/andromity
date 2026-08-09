@@ -4,7 +4,7 @@ from rich.markup import escape
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual import on
-from textual.widgets import Input, Static, Tree, TextArea
+from textual.widgets import Input, Static, Tree, TextArea, Header , Footer
 from textual.containers import Horizontal, Vertical
 
 from andromity.tui.panels.chat import ChatPanel
@@ -101,7 +101,6 @@ class AndromityApp(App):
     TITLE = "Andromity"
     CSS = CSS
     BINDINGS = [
-        Binding("ctrl+c", "quit", "Quit", show=True),
         Binding("tab", "focus_next", "Next", show=False),
         Binding("shift+tab", "focus_prev", "Prev", show=False),
         Binding("ctrl+b", "toggle_filetree", "Files", show=True),
@@ -154,6 +153,7 @@ class AndromityApp(App):
         return get_context_limit_for_model(provider, model) if (provider and model) else 0
 
     def compose(self) -> ComposeResult:
+        yield Header()
         yield Horizontal(
             FileTreePanel(id="left-panel"),
             Vertical(
@@ -174,7 +174,6 @@ class AndromityApp(App):
             id="main-layout",
         )
         yield AppFooter(id="app-footer")
-        yield ModelPickerOverlay(id="model-overlay")
         yield ProfilePickerOverlay(id="profile-overlay")
         yield TrustPromptOverlay(self._project_path, id="trust-overlay")
         yield SessionBrowserOverlay(
@@ -204,7 +203,7 @@ class AndromityApp(App):
             from andromity.core.models import get_ollama_num_ctx
             self._ollama_num_ctx = get_ollama_num_ctx(model)
         self._update_status()
-        # Delay heavy dependency pre-import (litellm) until 1s after the UI
+        # Delay heavy dependency pre-import (litellm) until 1s after the UI load
         # is fully mounted and rendered, and run it in a background thread
         # so the UI launch is instantaneous (0 lag).
         self.set_timer(1.0, self._start_background_warmup)
@@ -1275,11 +1274,7 @@ class AndromityApp(App):
             diff.add_class("visible")
 
     def action_toggle_model(self):
-        overlay = self.query_one("#model-overlay")
-        if overlay.has_class("visible"):
-            overlay.remove_class("visible")
-        else:
-            overlay.add_class("visible")
+        self.push_screen(ModelPickerOverlay())
 
     def action_toggle_profile(self):
         overlay = self.query_one("#profile-overlay")

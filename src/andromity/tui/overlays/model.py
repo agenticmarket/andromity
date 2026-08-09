@@ -1,21 +1,24 @@
 from textual import work
 from textual.app import ComposeResult
-from textual.containers import Horizontal, VerticalScroll, Vertical
-from textual.widget import Widget
+from textual.containers import Horizontal, VerticalScroll, Vertical, Container
+from textual.screen import ModalScreen
 from textual.widgets import Static, Button, RadioButton, RadioSet, Input
 from textual.reactive import reactive
 from andromity.config import config
 from andromity.core.models import MODEL_CATALOG, fetch_live_models_sync
 
 
-class ModelPickerOverlay(Widget):
+class ModelPickerScreen(ModalScreen):
     """Two-step model picker: Provider -> Model selection with live model fetching."""
     DEFAULT_CSS = """\
-ModelPickerOverlay {
+ModelPickerScreen {
+    align: center middle;
+    background: $background 20%;
+}
+#mp-dialog {
     width: 72; height: 32;
     border: solid $accent-darken-2; background: $surface;
-    layer: overlay;
-    align: center middle;
+    padding: 0;
 }
 #mp-title { padding: 0 1; height: 1; background: $accent-darken-3; color: $text; text-style: bold; }
 #mp-step1 { height: 1fr; }
@@ -40,30 +43,31 @@ ModelPickerOverlay {
         self._ready: bool = False             # guards auto-jump on mount
 
     def compose(self) -> ComposeResult:
-        yield Static(" Step 1: Select Provider ", id="mp-title")
-        with Vertical(id="mp-step1"):
-            yield Static("[bold]Choose a provider:[/]", id="mp-providers-header")
-            with VerticalScroll(id="mp-providers"):
-                with RadioSet(id="mp-providers-radioset"):
-                    for key, info in MODEL_CATALOG.items():
-                        env = info.get("requires_env", "")
-                        label = f" {info['name']}"
-                        if env:
-                            label += f"  [dim]({env})[/]"
-                        else:
-                            label += "  [dim](local / free)[/]"
-                        yield RadioButton(label, id=f"provider-{key}")
-        with Vertical(id="mp-step2"):
-            yield Static("", id="mp-models-header")
-            with VerticalScroll(id="mp-models"):
-                yield RadioSet(id="mp-models-radioset")
-            with Horizontal(id="mp-custom-row"):
-                yield Input(placeholder="Or type custom model name (e.g. meta/llama3-70b-instruct)", id="mp-custom-model")
-            yield Static("", id="mp-model-desc", classes="mp-desc-panel")
-        with Horizontal(id="mp-footer"):
-            yield Button("Back", variant="default", id="mp-back")
-            yield Button("Cancel", variant="default", id="mp-cancel")
-            yield Button("Apply", variant="primary", id="mp-apply")
+        with Container(id="mp-dialog"):
+            yield Static(" Step 1: Select Provider ", id="mp-title")
+            with Vertical(id="mp-step1"):
+                yield Static("[bold]Choose a provider:[/]", id="mp-providers-header")
+                with VerticalScroll(id="mp-providers"):
+                    with RadioSet(id="mp-providers-radioset"):
+                        for key, info in MODEL_CATALOG.items():
+                            env = info.get("requires_env", "")
+                            label = f" {info['name']}"
+                            if env:
+                                label += f"  [dim]({env})[/]"
+                            else:
+                                label += "  [dim](local / free)[/]"
+                            yield RadioButton(label, id=f"provider-{key}")
+            with Vertical(id="mp-step2"):
+                yield Static("", id="mp-models-header")
+                with VerticalScroll(id="mp-models"):
+                    yield RadioSet(id="mp-models-radioset")
+                with Horizontal(id="mp-custom-row"):
+                    yield Input(placeholder="Or type custom model name (e.g. meta/llama3-70b-instruct)", id="mp-custom-model")
+                yield Static("", id="mp-model-desc", classes="mp-desc-panel")
+            with Horizontal(id="mp-footer"):
+                yield Button("Back", variant="default", id="mp-back")
+                yield Button("Cancel", variant="default", id="mp-cancel")
+                yield Button("Apply", variant="primary", id="mp-apply")
 
     def on_mount(self):
         self._show_step1()
@@ -188,7 +192,7 @@ ModelPickerOverlay {
                 rset = self.query_one("#mp-models-radioset", RadioSet)
                 rset.remove_children()
                 self.query_one("#mp-models-header").update(
-                    "[bold]Ollama (Local)[/] [red]⚠ Ollama is not running[/]"
+                    "[bold]Ollama (Local)[/] [red] ⚠  Ollama is not running[/]"
                 )
                 self.query_one("#mp-model-desc").update(
                     "  Start Ollama with: [bold]ollama serve[/]  then reopen this picker."
@@ -254,8 +258,7 @@ ModelPickerOverlay {
                     model_id = self._current_models[idx]["id"]
                     config.set("default", "model", model_id)
             else:
-                pass # User didn't type or choose — keep whatever was already set
-            pass
+                pass  # User didn't type or choose — keep whatever was already set
 
         # Warn if API key missing
         if self._selected_provider:
@@ -278,18 +281,22 @@ ModelPickerOverlay {
         if hasattr(app, "_refresh_agent"):
             app._refresh_agent()
 
-        self._show_step1()
-        self.remove_class("visible")
-        try:
-            self.app.query_one("#input-field").focus()
-        except Exception:
-            pass
+        self.dismiss()
 
     def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "mp-cancel":
             self._show_step1()
-            self.remove_class("visible")
+            self.dismiss()
         elif event.button.id == "mp-back":
             self._show_step1()
         elif event.button.id == "mp-apply":
             self._apply_selection()
+
+    def on_key(self, event):
+        if event.key == "escape":
+            self._show_step1()
+            self.dismiss()
+
+
+# Keep backward-compatible alias
+ModelPickerOverlay = ModelPickerScreen
