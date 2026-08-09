@@ -107,41 +107,42 @@ SettingsScreen {
 
 /* ── MCP Card ── */
 .mcp-card {
-    border: tall $surface-lighten-1;
+    border: tall $surface-lighten-2;
     background: $surface-darken-1;
     margin-bottom: 1;
     padding: 0;
     height: auto;
 }
-.mcp-card-header {
-    height: 3; padding: 0 1; background: $surface;
-}
+.mcp-card-header { height: 3; padding: 0 1; background: $surface; }
 .mcp-name  { width: 1fr; text-style: bold; color: $accent; content-align: left middle; }
-.mcp-badge-running  { width: auto; color: $success; content-align: right middle; margin-right: 1; }
-.mcp-badge-stopped  { width: auto; color: $warning; content-align: right middle; margin-right: 1; }
-.mcp-badge-error    { width: auto; color: $error; content-align: right middle; margin-right: 1; }
-.mcp-badge-disabled { width: auto; color: $text-muted; content-align: right middle; margin-right: 1; }
-.mcp-badge-auth     { width: auto; color: $warning-darken-1; content-align: right middle; margin-right: 1; }
-.mcp-tool-count { width: auto; color: $text-muted; content-align: right middle; margin-right: 1; }
+.mcp-badge-running  { width: auto; color: $success;           content-align: right middle; margin-right: 1; }
+.mcp-badge-stopped  { width: auto; color: $warning;           content-align: right middle; margin-right: 1; }
+.mcp-badge-error    { width: auto; color: $error;             content-align: right middle; margin-right: 1; }
+.mcp-badge-disabled { width: auto; color: $text-muted;        content-align: right middle; margin-right: 1; }
+.mcp-badge-auth     { width: auto; color: $warning-darken-1;  content-align: right middle; margin-right: 1; }
+.mcp-tool-count     { width: auto; color: $text-muted;        content-align: right middle; margin-right: 1; }
 .mcp-card-body  { padding: 0 2 1 2; height: auto; }
 .mcp-transport  { color: $text-muted; height: 1; }
 .mcp-cmd-line   { color: $text-muted; height: 1; }
-.mcp-error-line { color: $error; height: auto; }
-.mcp-auth-warn  { color: $warning-darken-1; height: auto; margin-top: 1; }
-.mcp-tools-head { color: $text-muted; height: 1; margin-top: 1; }
-.mcp-tool-row   { height: 1; padding: 0 1; }
-.mcp-tool-name  { color: $accent; width: 24; }
+.mcp-error-line { color: $error;      height: auto; }
+.mcp-tools-head { color: $text-muted; height: 1; margin-top: 1; text-style: bold; }
+.mcp-tool-row   { height: 1; padding-left: 2; }
+.mcp-tool-name  { color: $accent; width: 22; }
 .mcp-tool-desc  { color: $text-muted; width: 1fr; }
 .mcp-actions    { height: 3; padding: 0 1; }
 .mcp-restart-btn { margin-right: 1; }
 /* Auth section inside card */
-.mcp-auth-section { margin-top: 1; border-top: dashed $primary-darken-2; padding-top: 1; }
-.mcp-auth-label { color: $warning; height: 1; text-style: bold; }
-.mcp-token-row  { height: 3; margin-top: 1; }
-.mcp-token-hint { color: $text-muted; height: 1; }
-.mcp-card-footer { height: 3; padding: 0 1; background: $surface; }
-.mcp-remove-btn { margin-left: 1; }
-.mcp-connect-btn { margin-right: 1; }
+.mcp-auth-section   { padding: 0 2 1 2; height: auto; }
+.mcp-auth-label     { color: $warning; height: 1; text-style: bold; margin-bottom: 1; }
+.mcp-token-row      { height: 3; }
+.mcp-token-hint     { color: $text-muted; height: auto; margin-bottom: 1; }
+.mcp-url-btn        { width: auto; min-width: 8; margin-left: 1; }
+/* Card footer */
+.mcp-card-footer    { height: 3; padding: 0 1; border-top: solid $surface-lighten-1; }
+.mcp-install-date   { width: 1fr; color: $text-muted; content-align: left middle; }
+.mcp-remove-btn     { width: 12; }
+.mcp-connect-btn    { width: 10; margin-left: 1; }
+.mcp-auth-btn       { width: auto; margin-right: 1; }
 """
 
     def __init__(self, mcp_manager: MCPClientManager = None,
@@ -414,54 +415,52 @@ SettingsScreen {
                 yield Label(f"[dim]Transport:[/] {transport_label}",
                             classes="mcp-transport")
 
-                # Show URL or command
-                if server_url and not already_converted:
-                    short = server_url[:72] + "…" if len(server_url) > 72 else server_url
-                    yield Label(f"[dim]URL:[/] {short}", classes="mcp-cmd-line")
-                elif s_conf.get("command"):
+                # Command display
+                if s_conf.get("command"):
                     cmd_str = (f"{s_conf['command']} "
                                f"{' '.join(str(a) for a in s_conf.get('args', []))}").strip()
-                    cmd_str = cmd_str[:72] + "…" if len(cmd_str) > 72 else cmd_str
+                    cmd_str = cmd_str[:80] + "…" if len(cmd_str) > 80 else cmd_str
                     yield Label(f"[dim]Command:[/] {cmd_str}", classes="mcp-cmd-line")
 
-                # Description
+                # URL display — as clickable button + truncated label
+                if server_url and not already_converted:
+                    short = server_url[:60] + "…" if len(server_url) > 60 else server_url
+                    with Horizontal(classes="mcp-transport"):
+                        yield Label(f"[dim]URL:[/] {short}", classes="mcp-cmd-line")
+                        yield Button("🔗 Open",
+                                     id=f"mcp-openurl-{s_name}",
+                                     classes="mcp-url-btn")
+
+                # Description (1 line max)
                 desc = s_conf.get("description", "").strip()
                 if desc:
-                    yield Label(f"[dim]{desc[:100].replace(chr(10), ' ')}[/]",
+                    yield Label(f"[dim]{desc[:90].replace(chr(10), ' ')}[/]",
                                 classes="mcp-cmd-line")
 
-                # ── Auth section ──────────────────────────────────────────
-                # CASE 1 — remote HTTP (serverUrl only, not yet converted)
+                # ── Auth sections ────────────────────────────────────────────
+                # CASE 1 — remote HTTP (serverUrl only, not yet converted to mcp-remote)
                 if transport == "remote" and not already_converted:
                     with Vertical(classes="mcp-auth-section"):
-                        yield Label("⚠  Authentication Required",
+                        yield Label("⚠  Auth Required — paste Personal Access Token:",
                                     classes="mcp-auth-label")
-                        yield Label(
-                            "This server requires a Personal Access Token (PAT). "
-                            "Generate one at the provider dashboard, paste it below "
-                            "and click Connect — we'll configure mcp-remote for you.",
-                            classes="mcp-token-hint")
                         with Horizontal(classes="mcp-token-row"):
                             yield Input(
-                                placeholder=f"Paste {s_name} access token…",
+                                placeholder=f"{s_name} access token…",
                                 password=True,
                                 id=f"mcp-token-{s_name}")
                             yield Button("Connect", variant="primary",
                                          id=f"mcp-connect-{s_name}",
                                          classes="mcp-connect-btn")
 
-                # CASE 2 — SSE proxy (mcp-remote, needs browser OAuth like Neon)
+                # CASE 2 — SSE proxy already running — show nothing extra
+                # CASE 2b — SSE proxy stopped — offer browser auth
                 elif transport == "sse" and not is_running:
-                    with Vertical(classes="mcp-auth-section"):
-                        yield Label(
-                            "⚠  This server uses browser-based OAuth via mcp-remote.",
-                            classes="mcp-auth-label")
-                        yield Label(
-                            "Clicking the button will run mcp-remote in the background. "
-                            "Your browser will open for login. Once done, enable the toggle.",
-                            classes="mcp-token-hint")
+                    with Horizontal(classes="mcp-auth-section"):
+                        yield Label("⚠  Browser OAuth needed.",
+                                    classes="mcp-auth-label")
                         yield Button("Open Auth in Browser", variant="warning",
-                                     id=f"mcp-browser-auth-{s_name}")
+                                     id=f"mcp-browser-auth-{s_name}",
+                                     classes="mcp-auth-btn")
 
                 # CASE 3 — stdio with missing env var credentials
                 elif auth_keys:
@@ -472,40 +471,44 @@ SettingsScreen {
                             yield Label("⚠  Missing credentials:",
                                         classes="mcp-auth-label")
                             for env_key in missing:
-                                yield Label(env_key, classes="mcp-token-hint")
                                 with Horizontal(classes="mcp-token-row"):
+                                    yield Label(f"[dim]{env_key}[/]",
+                                                classes="mcp-cmd-line")
                                     yield Input(
-                                        placeholder=f"Value for {env_key}",
+                                        placeholder=f"Value…",
                                         password=True,
                                         id=f"mcp-env-{s_name}--{env_key}")
                                     yield Button("Save", variant="primary",
                                                  id=f"mcp-saveenv-{s_name}--{env_key}")
                     else:
                         yield Label(
-                            f"[green]✓[/] Credentials: {', '.join(auth_keys)}",
+                            f"[green]✓[/] Credentials set: {', '.join(auth_keys)}",
                             classes="mcp-transport")
 
                 # ── Error ─────────────────────────────────────────────────
                 if error_msg:
-                    yield Label(f"✕  {error_msg[:120]}", classes="mcp-error-line")
+                    yield Label(f"✕  {error_msg[:110]}", classes="mcp-error-line")
 
                 # ── Tool list ──────────────────────────────────────────────
                 if tools:
-                    yield Label(f"  Tools ({len(tools)}):", classes="mcp-tools-head")
+                    yield Label(f"Tools ({len(tools)}):", classes="mcp-tools-head")
                     for tool in tools:
                         with Horizontal(classes="mcp-tool-row"):
-                            yield Label(f"  {tool.name}", classes="mcp-tool-name")
-                            desc_short = (tool.description or "")[:60].replace("\n", " ")
+                            yield Label(tool.name, classes="mcp-tool-name")
+                            desc_short = (tool.description or "")[:55].replace("\n", " ")
                             yield Label(f"[dim]{desc_short}[/]",
                                         classes="mcp-tool-desc")
 
-            # ── Card footer with Remove button ────────────────────────────
+            # ── Card footer ──────────────────────────────────────────────
             with Horizontal(classes="mcp-card-footer"):
-                yield Label(f" [dim]installed: {s_conf.get('installedAt', 'unknown')}[/]",
-                            classes="mcp-name")
+                installed = s_conf.get("installedAt", "")
+                yield Label(
+                    f"[dim]{installed}[/]" if installed else "",
+                    classes="mcp-install-date")
                 yield Button("✕ Remove", variant="error",
                              id=f"mcp-remove-{s_name}",
                              classes="mcp-remove-btn")
+
 
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -546,7 +549,7 @@ SettingsScreen {
             except Exception:
                 pass
 
-    # ── MCP toggle (live start/stop) ──────────────────────────────────────────
+    # ── MCP toggle (live start/stop) ─────────────────────────────────────
 
     @on(Switch.Changed)
     async def _on_switch_changed(self, event: Switch.Changed):
@@ -612,13 +615,22 @@ SettingsScreen {
 
         elif btn_id == "mcp-restart-all":
             if self.mcp_manager:
-                await self.mcp_manager.stop_all()
-                await self.mcp_manager.start_all()
-                try:
-                    self.app.query_one(ChatPanel).add_system_message(
-                        "[green]✓ All MCP servers restarted.[/]")
-                except Exception:
-                    pass
+                self.app.notify("Restarting all MCP servers…",
+                                severity="information")
+                async def _restart():
+                    await self.mcp_manager.stop_all()
+                    await self.mcp_manager.start_all()
+                    n = len(self.mcp_manager.sessions)
+                    self.app.notify(
+                        f"MCP restart done: {n} server(s) active.",
+                        severity="information")
+                    try:
+                        from andromity.tui.panels.chat import ChatPanel
+                        self.app.query_one(ChatPanel).add_system_message(
+                            f"[green]✓ MCP restarted — {n} server(s) running.[/]")
+                    except Exception:
+                        pass
+                self.run_worker(_restart(), exclusive=True)
 
         elif btn_id.startswith("mcp-connect-"):
             # Remote HTTP: user pasted a PAT token → convert to mcp-remote
@@ -654,7 +666,20 @@ SettingsScreen {
             except Exception as e:
                 self.app.notify(f"Error: {e}", severity="error")
 
+        elif btn_id.startswith("mcp-openurl-"):
+            # Open a server URL in the default browser
+            import webbrowser
+            s_name = btn_id.replace("mcp-openurl-", "")
+            mcp_conf = self.mcp_manager.load_config() if self.mcp_manager else {}
+            srv_conf = mcp_conf.get("mcpServers", {}).get(s_name, {})
+            url = srv_conf.get("serverUrl") or srv_conf.get("url") or ""
+            if url:
+                webbrowser.open(url)
+            else:
+                self.app.notify("No URL found for this server.", severity="warning")
+
         elif btn_id.startswith("mcp-browser-auth-"):
+
             # SSE proxy (like Neon): open browser OAuth via mcp-remote
             import subprocess, shutil
             s_name = btn_id.replace("mcp-browser-auth-", "")

@@ -3,11 +3,24 @@ import asyncio
 import json
 import logging
 import os
+import sys
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
+
+# Suppress the Windows ProactorEventLoop "unclosed transport" ResourceWarning.
+# This is a known Python bug on Windows (bpo-43232) where pipe handles raise
+# ValueError("I/O operation on closed pipe") during GC after explicit close.
+# The pipes ARE closed — they just report incorrectly during __del__.
+if sys.platform == "win32":
+    warnings.filterwarnings(
+        "ignore",
+        message="unclosed transport",
+        category=ResourceWarning,
+    )
 
 
 @dataclass
@@ -37,7 +50,14 @@ class MCPToolInfo:
 class MCPStdioSession:
     """Manages an active stdio connection to a single MCP server."""
 
-    def __init__(self, name: str, command: str, args: List[str], env: Optional[Dict[str, str]] = None, cwd: Optional[str] = None):
+    def __init__(
+        self,
+        name: str,
+        command: str,
+        args: List[str],
+        env: Optional[Dict[str, str]] = None,
+        cwd: Optional[str] = None,
+    ):
         self.name = name
         self.command = command
         self.args = args
@@ -85,6 +105,7 @@ class MCPStdioSession:
             if not init_res:
                 self.error = "Initialize handshake timed out or failed"
                 log.warning("MCP server '%s' did not respond to initialize", self.name)
+                await self._cleanup()
                 return False
 
             # Send initialized notification
@@ -100,6 +121,7 @@ class MCPStdioSession:
         except Exception as e:
             self.error = str(e)
             log.warning("Failed to start MCP server '%s': %s", self.name, e)
+            await self._cleanup()
             return False
 
     async def refresh_tools(self) -> List[MCPToolInfo]:
@@ -142,7 +164,7 @@ class MCPStdioSession:
                     text_outputs.append(block.get("text", ""))
                 elif isinstance(block, str):
                     text_outputs.append(block)
-            
+
             result_str = "\n".join(text_outputs) if text_outputs else json.dumps(res, indent=2)
             if res.get("isError"):
                 return f"MCP Tool Error: {result_str}"
@@ -151,7 +173,12 @@ class MCPStdioSession:
         except Exception as e:
             return f"Error executing MCP tool '{tool_name}' on server '{self.name}': {e}"
 
-    async def send_request(self, method: str, params: Dict[str, Any], timeout: float = 30.0) -> Optional[Dict[str, Any]]:
+    async def send_request(
+        self,
+        method: str,
+        params: Dict[str, Any],
+        timeout: float = 30.0,
+    ) -> Optional[Dict[str, Any]]:
         """Send JSON-RPC request and await response."""
         if not self.process or not self.process.stdin:
             return None
@@ -225,21 +252,60 @@ class MCPStdioSession:
                 log.debug("MCP read error: %s", e)
                 break
 
-    async def stop(self):
-        """Gracefully terminate MCP server process."""
-        if self._reader_task:
+    async def _cleanup(self):
+        """
+        Close all subprocess pipes and cancel the reader task.
+        Called by both stop() and failed start() to prevent Windows
+        ResourceWarning: unclosed transport (bpo-43232).
+        """
+        # 1. Cancel and await the reader task so its pipe references die cleanly
+        if self._reader_task and not self._reader_task.done():
             self._reader_task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(self._reader_task), timeout=1.0)
+            except Exception:
+                pass
+        self._reader_task = None
+
+        # 2. Resolve all pending futures to avoid dangling coroutines
+        for fut in self._pending_requests.values():
+            if not fut.done():
+                fut.cancel()
+        self._pending_requests.clear()
+
+        # 3. Close stdin explicitly so the child process gets EOF
+        if self.process and self.process.stdin:
+            try:
+                self.process.stdin.close()
+                # On Windows, wait_closed() drains the WriteTransport
+                if hasattr(self.process.stdin, "wait_closed"):
+                    await asyncio.wait_for(self.process.stdin.wait_closed(), timeout=1.0)
+            except Exception:
+                pass
+
+        # 4. Small yield so the event loop can process the close callbacks
+        #    before GC runs — prevents the "closed pipe" ValueError in __repr__
+        await asyncio.sleep(0.05)
+
+    async def stop(self):
+        """Gracefully terminate MCP server process and close all pipes."""
+        self._initialized = False
+
+        # Terminate or kill the process
         if self.process:
             try:
                 self.process.terminate()
-                await asyncio.wait_for(self.process.wait(), timeout=2.0)
+                await asyncio.wait_for(self.process.wait(), timeout=3.0)
             except Exception:
                 try:
                     self.process.kill()
+                    await asyncio.wait_for(self.process.wait(), timeout=1.0)
                 except Exception:
                     pass
             self.process = None
-        self._initialized = False
+
+        # Then clean up pipes / tasks
+        await self._cleanup()
 
 
 class MCPClientManager:
@@ -262,7 +328,6 @@ class MCPClientManager:
             if p.is_file():
                 try:
                     data = json.loads(p.read_text(encoding="utf-8"))
-                    # Support both "mcpServers" (Claude/Gemini/Andromity format) and "servers" (VS Code format)
                     servers = data.get("mcpServers") or data.get("servers") or {}
                     for k, v in servers.items():
                         if k not in merged_servers and isinstance(v, dict):
@@ -272,32 +337,45 @@ class MCPClientManager:
         return {"mcpServers": merged_servers}
 
     async def start_all(self):
-        """Start all configured MCP servers."""
+        """Start all enabled configured MCP servers concurrently."""
         config = self.load_config()
         servers = config.get("mcpServers", {})
         self.server_status.clear()
-        for name, srv_conf in servers.items():
+
+        async def _start_one(name: str, srv_conf: dict):
             command = srv_conf.get("command")
             args = srv_conf.get("args", [])
             env = srv_conf.get("env", {})
-            if command:
-                session = MCPStdioSession(name=name, command=command, args=args, env=env, cwd=self.project_path)
-                success = await session.start()
-                if success:
-                    self.sessions[name] = session
-                    self.server_status[name] = {
-                        "status": "running",
-                        "tools": len(session.tools),
-                        "error": None,
-                        "command": f"{command} {' '.join(args)}".strip(),
-                    }
-                else:
-                    self.server_status[name] = {
-                        "status": "error",
-                        "tools": 0,
-                        "error": session.error or "Failed to connect",
-                        "command": f"{command} {' '.join(args)}".strip(),
-                    }
+            disabled = srv_conf.get("disabled", False)
+            if disabled or not command:
+                return
+            session = MCPStdioSession(
+                name=name, command=command, args=args,
+                env=env, cwd=self.project_path,
+            )
+            success = await session.start()
+            cmd_str = f"{command} {' '.join(str(a) for a in args)}".strip()
+            if success:
+                self.sessions[name] = session
+                self.server_status[name] = {
+                    "status": "running",
+                    "tools": len(session.tools),
+                    "error": None,
+                    "command": cmd_str,
+                }
+            else:
+                self.server_status[name] = {
+                    "status": "error",
+                    "tools": 0,
+                    "error": session.error or "Failed to connect",
+                    "command": cmd_str,
+                }
+
+        # Start all servers concurrently to avoid blocking
+        await asyncio.gather(*[
+            _start_one(name, srv_conf)
+            for name, srv_conf in servers.items()
+        ], return_exceptions=True)
 
     def get_status_summary(self) -> dict:
         """Return an aggregated status dict suitable for UI display."""
@@ -322,7 +400,6 @@ class MCPClientManager:
 
     async def execute_mcp_tool(self, full_tool_name: str, arguments: Dict[str, Any]) -> str:
         """Dispatch a tool call to the matching MCP server."""
-        # Expected format: mcp__<server_name>__<tool_name>
         if not full_tool_name.startswith("mcp__"):
             return f"Error: '{full_tool_name}' is not an MCP tool."
         parts = full_tool_name.split("__", 2)
@@ -335,7 +412,9 @@ class MCPClientManager:
         return await session.call_tool(tool_name, arguments)
 
     async def stop_all(self):
-        """Stop all running MCP servers."""
-        for session in list(self.sessions.values()):
-            await session.stop()
+        """Stop all running MCP servers concurrently."""
+        await asyncio.gather(*[
+            session.stop() for session in list(self.sessions.values())
+        ], return_exceptions=True)
         self.sessions.clear()
+        self.server_status.clear()
