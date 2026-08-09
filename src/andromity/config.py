@@ -141,6 +141,56 @@ class ConfigManager:
     def list_providers(self) -> list:
         return self._config_cache.get("providers", [])
 
+    # ─── User Management ─────────────────────────────────────────────────
+    def get_user(self) -> Dict[str, str]:
+        return self._config_cache.get("user", {})
+
+    def set_user(self, name: str, email: str):
+        if "user" not in self._config_cache:
+            self._config_cache["user"] = {}
+        if name is not None:
+            self._config_cache["user"]["name"] = name
+        if email is not None:
+            self._config_cache["user"]["email"] = email
+        self.save()
+
+    # ─── MCP Config ──────────────────────────────────────────────────────
+    def get_mcp_config_path(self, project_path: str = "") -> Path:
+        """Find the most specific mcp.json file available."""
+        candidates = []
+        if project_path:
+            candidates.extend([
+                Path(project_path) / ".andromity" / "mcp.json",
+                Path(project_path) / ".vscode" / "mcp.json",
+            ])
+        candidates.append(Path.home() / ".andromity" / "mcp.json")
+        for p in candidates:
+            if p.is_file():
+                return p
+        # Default to home if none exist
+        default_path = Path.home() / ".andromity" / "mcp.json"
+        default_path.parent.mkdir(parents=True, exist_ok=True)
+        if not default_path.exists():
+            import json
+            default_path.write_text(json.dumps({"mcpServers": {}}, indent=2), encoding="utf-8")
+        return default_path
+
+    def set_mcp_server_disabled(self, project_path: str, server_name: str, disabled: bool):
+        """Toggle the 'disabled' flag for a specific MCP server in the config."""
+        path = self.get_mcp_config_path(project_path)
+        if not path.exists():
+            return
+        try:
+            import json
+            data = json.loads(path.read_text(encoding="utf-8"))
+            servers = data.get("mcpServers") or data.get("servers") or {}
+            if server_name in servers and isinstance(servers[server_name], dict):
+                servers[server_name]["disabled"] = disabled
+                # Write back
+                path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
     # ─── Trust Management ────────────────────────────────────────────────
     def _trust_key(self, path: str) -> str:
         resolved = str(Path(path).resolve())

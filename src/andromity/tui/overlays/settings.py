@@ -1,9 +1,15 @@
+import asyncio
+import importlib.metadata
+from typing import Any
+from textual import on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Static, Button, ListView, ListItem, Label, ContentSwitcher, Input, RadioSet, RadioButton, Switch
 
 from andromity.config import config, get_shell
+from andromity.core.mcp import MCPClientManager
+from andromity.tui.panels.chat import ChatPanel
 
 
 PROVIDERS = ["anthropic", "openai", "google", "deepseek", "groq", "openrouter", "nvidia"]
@@ -56,7 +62,18 @@ SettingsScreen {
 .section-hint { color: $text-muted; margin-bottom: 1; }
 .adv-row { height: 3; margin-bottom: 1; }
 .adv-label { width: 1fr; content-align: left middle; }
+
+/* MCP Items */
+.mcp-item { height: 4; border-left: tall $primary; margin-bottom: 1; padding: 0 1; background: $surface-darken-1; }
+.mcp-title { text-style: bold; color: $accent; width: 1fr; }
+.mcp-status { width: auto; color: $text-muted; margin-right: 2; }
+.mcp-tools { width: auto; color: $text-muted; margin-right: 2; }
 """
+
+    def __init__(self, mcp_manager: MCPClientManager = None, project_path: str = "", **kwargs):
+        super().__init__(**kwargs)
+        self.mcp_manager = mcp_manager
+        self.project_path = project_path
 
     def compose(self) -> ComposeResult:
         with Vertical(id="settings-dialog"):
@@ -71,17 +88,26 @@ SettingsScreen {
                     yield ListItem(Label("Profiles"), id="nav-profiles")
                     yield ListItem(Label("Trust & Security"), id="nav-trust")
                     yield ListItem(Label("Advanced"), id="nav-advanced")
+                    yield ListItem(Label("About"), id="nav-about")
 
                 with ContentSwitcher(initial="pane-general", id="settings-content"):
 
                     # ── General ──────────────────────────────────────────────
                     with VerticalScroll(id="pane-general", classes="settings-pane"):
                         yield Label("General Settings", classes="settings-label")
+                        
+                        user = config.get_user()
+                        yield Label("Name:", classes="field-label")
+                        yield Input(value=user.get("name", ""), placeholder="Your Name", id="setting-user-name")
+                        yield Label("Email:", classes="field-label")
+                        yield Input(value=user.get("email", ""), placeholder="your@email.com", id="setting-user-email")
+                        
                         yield Label("Default Permission Mode:", classes="field-label")
                         with RadioSet(id="setting-permission-mode"):
                             yield RadioButton("Safe  (ask before writes & shell)", id="perm-safe")
                             yield RadioButton("Trust (auto-approve writes, ask shell)", id="perm-trust")
                             yield RadioButton("Full  (auto-approve everything)", id="perm-full")
+                        
                         yield Label("Shell (system, read-only):", classes="field-label")
                         yield Input(value=get_shell(), id="setting-shell", disabled=True)
 
@@ -134,9 +160,32 @@ SettingsScreen {
                     # ── MCP ──────────────────────────────────────────────────
                     with VerticalScroll(id="pane-mcp", classes="settings-pane"):
                         yield Label("Model Context Protocol (MCP)", classes="settings-label")
+                        
+                        if self.mcp_manager:
+                            mcp_conf = self.mcp_manager.load_config()
+                            servers = mcp_conf.get("mcpServers", {})
+                            if servers:
+                                yield Button("Restart All Servers", id="mcp-restart-all", variant="default")
+                                yield Label("") # spacing
+                                for s_name, s_conf in servers.items():
+                                    with Vertical(classes="mcp-item"):
+                                        with Horizontal():
+                                            yield Label(f" {s_name}", classes="mcp-title")
+                                            disabled = s_conf.get("disabled", False)
+                                            is_running = not disabled and s_name in self.mcp_manager.sessions
+                                            status = "running" if is_running else ("disabled" if disabled else "stopped")
+                                            tools_count = 0
+                                            if is_running:
+                                                session = self.mcp_manager.sessions[s_name]
+                                                tools_count = len(session.tools)
+                                            yield Label(f"{status}", classes="mcp-status")
+                                            yield Label(f"{tools_count} tools", classes="mcp-tools")
+                                            yield Switch(value=not disabled, id=f"mcp-toggle-{s_name}")
+                                        yield Label(f"  [dim]{s_conf.get('command', '')} {' '.join(s_conf.get('args', []))}[/dim]")
+                            else:
+                                yield Label("[dim]No MCP servers configured yet.[/]")
                         yield Label(
-                            "Use [bold cyan]/mcp[/] in chat to check status.\n"
-                            "Configure MCP servers directly in [dim]config.toml[/] (MCP UI editor coming soon).",
+                            "\nConfigure MCP servers directly in [dim]config.toml[/] or [dim].andromity/mcp.json[/]",
                             classes="section-hint"
                         )
 
@@ -151,10 +200,13 @@ SettingsScreen {
                         )
                         yield Label("\nAvailable profiles:", classes="field-label")
                         from andromity.tui.overlays.profile import PROFILES
-                        for key, info in PROFILES.items():
-                            marker = "[bold green]▶[/] " if key == curr_profile else "   "
-                            yield Label(f"{marker}[bold]{info['name']}[/] ({key})")
-                            yield Label(f"   [dim]{info['desc']}[/]")
+                        with RadioSet(id="setting-profiles"):
+                            for key, info in PROFILES.items():
+                                rb = RadioButton(f"{info['name']} ({key})", id=f"prof-{key}")
+                                if key == curr_profile:
+                                    rb.value = True
+                                yield rb
+                                yield Label(f"   [dim]{info['desc']}[/]\n")
 
                     # ── Trust & Security ─────────────────────────────────────
                     with VerticalScroll(id="pane-trust", classes="settings-pane"):
@@ -162,10 +214,12 @@ SettingsScreen {
                         yield Label("Trusted project folders:", classes="field-label")
                         trusted = config._config_cache.get("trusted_projects", {})
                         if trusted:
-                            for _key, info in trusted.items():
+                            for t_key, info in trusted.items():
                                 path = info.get("path", "Unknown")
                                 trusted_at = info.get("trusted_at", "")[:10]
-                                yield Label(f"  [green]✓[/] {path}  [dim](since {trusted_at})[/]", classes="trust-entry")
+                                with Horizontal():
+                                    yield Label(f"  [green]✓[/] {path}  [dim](since {trusted_at})[/]", classes="trust-entry")
+                                    yield Button("Revoke", variant="error", id=f"revoke-{t_key}")
                         else:
                             yield Label("  [dim]No trusted projects yet.[/]", classes="trust-entry")
                         yield Label(
@@ -184,9 +238,29 @@ SettingsScreen {
                             yield Label("Dry Run Mode  [dim](simulates tools, no real writes)[/]", classes="adv-label")
                             yield Switch(id="setting-dryrun")
 
+                    # ── About ────────────────────────────────────────────────
+                    with VerticalScroll(id="pane-about", classes="settings-pane"):
+                        yield Label("About Andromity", classes="settings-label")
+                        
+                        version = "Unknown"
+                        try:
+                            version = importlib.metadata.version("andromity")
+                        except Exception:
+                            pass
+                            
+                        yield Label(f"Version: [bold]{version}[/]")
+                        yield Label("GitHub:  [bold cyan]https://github.com/agenticmarket/andromity[/]")
+                        
+                        cfg_path = config.config_path
+                        yield Label(f"\nConfig file: [dim]{cfg_path}[/]")
+                        mcp_path = config.get_mcp_config_path(self.project_path)
+                        yield Label(f"MCP config:  [dim]{mcp_path}[/]")
+                        
+                        yield Label("\n© 2026 Agentic Market")
+
             with Horizontal(id="settings-footer"):
                 yield Button("Cancel", variant="default", id="settings-cancel")
-                yield Button("Save", variant="primary", id="settings-save")
+                yield Button("Save All", variant="primary", id="settings-save")
 
     def on_mount(self):
         """Load live values into form fields."""
@@ -216,15 +290,70 @@ SettingsScreen {
             except Exception:
                 pass
 
-    def on_button_pressed(self, event: Button.Pressed):
-        if event.button.id == "settings-cancel":
+    @on(Switch.Changed)
+    async def _on_switch_changed(self, event: Switch.Changed):
+        # Handle MCP toggles immediately
+        if event.switch.id and event.switch.id.startswith("mcp-toggle-"):
+            server_name = event.switch.id.replace("mcp-toggle-", "")
+            enable = event.value
+            config.set_mcp_server_disabled(self.project_path, server_name, not enable)
+            
+            if self.mcp_manager:
+                if enable:
+                    if server_name not in self.mcp_manager.sessions:
+                        # Re-load config to get command/args
+                        mcp_conf = self.mcp_manager.load_config()
+                        srv_conf = mcp_conf.get("mcpServers", {}).get(server_name)
+                        if srv_conf:
+                            from andromity.core.mcp import MCPStdioSession
+                            command = srv_conf.get("command")
+                            args = srv_conf.get("args", [])
+                            env = srv_conf.get("env", {})
+                            if command:
+                                session = MCPStdioSession(name=server_name, command=command, args=args, env=env, cwd=self.mcp_manager.project_path)
+                                success = await session.start()
+                                if success:
+                                    self.mcp_manager.sessions[server_name] = session
+                else:
+                    if server_name in self.mcp_manager.sessions:
+                        await self.mcp_manager.sessions[server_name].stop()
+                        del self.mcp_manager.sessions[server_name]
+
+    @on(Button.Pressed)
+    async def _on_button_pressed(self, event: Button.Pressed):
+        btn_id = event.button.id
+        if not btn_id:
+            return
+            
+        if btn_id == "settings-cancel":
             self.dismiss(False)
-        elif event.button.id == "settings-save":
+        elif btn_id == "settings-save":
             self._save_settings()
             self.dismiss(True)
+        elif btn_id == "mcp-restart-all":
+            if self.mcp_manager:
+                await self.mcp_manager.stop_all()
+                await self.mcp_manager.start_all()
+                self.app.query_one(ChatPanel).add_system_message("[green]✓ All active MCP servers restarted.[/]")
+        elif btn_id.startswith("revoke-"):
+            t_key = btn_id.replace("revoke-", "")
+            trusted = config._config_cache.get("trusted_projects", {})
+            if t_key in trusted:
+                path = trusted[t_key].get("path", "")
+                config.revoke_trust(path)
+                # Hide row by hiding parent Horizontal
+                event.button.parent.display = False
 
     def _save_settings(self):
-        # 1. Permission mode
+        # 1. User
+        try:
+            name = self.query_one("#setting-user-name", Input).value.strip()
+            email = self.query_one("#setting-user-email", Input).value.strip()
+            config.set_user(name, email)
+        except Exception:
+            pass
+
+        # 2. Permission mode
         perm_map = {"perm-safe": "safe", "perm-trust": "trust", "perm-full": "full"}
         try:
             rs = self.query_one("#setting-permission-mode", RadioSet)
@@ -233,7 +362,7 @@ SettingsScreen {
         except Exception:
             pass
 
-        # 2. API keys — only save non-empty values
+        # 3. API keys — only save non-empty values
         for provider in PROVIDERS:
             try:
                 val = self.query_one(f"#key-{provider}", Input).value.strip()
@@ -242,7 +371,7 @@ SettingsScreen {
             except Exception:
                 pass
 
-        # 3. Ollama base URL
+        # 4. Ollama base URL
         try:
             url = self.query_one("#setting-ollama-url", Input).value.strip()
             if url:
@@ -260,11 +389,21 @@ SettingsScreen {
         except Exception:
             pass
 
-        # 4. Debug / dry-run — apply to live app
+        # 5. Debug / dry-run — apply to live app
         try:
             app = self.app
             app._debug_mode = self.query_one("#setting-debug", Switch).value
             app.agent.dry_run = self.query_one("#setting-dryrun", Switch).value
+        except Exception:
+            pass
+
+        # 6. Profile
+        try:
+            prof_rs = self.query_one("#setting-profiles", RadioSet)
+            if prof_rs.pressed_button and prof_rs.pressed_button.id:
+                prof_id = prof_rs.pressed_button.id.replace("prof-", "")
+                if hasattr(self.app, '_apply_profile'):
+                    self.app._apply_profile(prof_id)
         except Exception:
             pass
 

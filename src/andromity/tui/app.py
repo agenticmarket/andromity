@@ -1165,7 +1165,7 @@ class AndromityApp(App):
                 f"[bold cyan]Get-Content -Wait '{LOG_PATH}'[/]"
             )
         elif command in ("/settings", "/setting"):
-            self.push_screen(SettingsScreen())
+            self.push_screen(SettingsScreen(self._mcp_manager, self._project_path))
         elif command == "/cron":
             self.push_screen(CronManagerOverlay(self._cron_scheduler, self._project_path))
         elif command.startswith("/plan"):
@@ -1264,7 +1264,7 @@ class AndromityApp(App):
         self.push_screen(ModelPickerOverlay())
 
     def action_toggle_settings(self):
-        self.push_screen(SettingsScreen())
+        self.push_screen(SettingsScreen(self._mcp_manager, self._project_path))
 
     def action_toggle_profile(self):
         self.push_screen(ProfilePickerOverlay())
