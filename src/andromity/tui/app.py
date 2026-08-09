@@ -206,8 +206,29 @@ class AndromityApp(App):
             self.refresh_cron_status()
         except Exception as e:
             log.error("Failed to start cron scheduler: %s", e)
-        # Start MCP client manager
-        asyncio.create_task(self._mcp_manager.start_all())
+        # Start MCP client manager — run in a background worker so the UI
+        # stays responsive, then refresh the context panel + show a toast.
+        async def _init_mcp():
+            await self._mcp_manager.start_all()
+            # Refresh context panel immediately — no need to wait for a message
+            try:
+                self._update_status()
+            except Exception:
+                pass
+            n_srv = len(self._mcp_manager.sessions)
+            n_tools = len(self._mcp_manager.get_all_tools())
+            if n_srv:
+                try:
+                    chat = self.query_one(ChatPanel)
+                    chat.add_system_message(
+                        f"[green]✓ MCP:[/] {n_srv} server(s) ready "
+                        f"({n_tools} tool(s) available)",
+                        ephemeral=True,
+                    )
+                except Exception:
+                    pass
+
+        self.run_worker(_init_mcp(), exclusive=False, group="mcp-init")
         # Do NOT auto-load stale plan from disk — plans are session-scoped
         # Check trust FIRST before showing welcome
         if not config.is_trusted(self._project_path):

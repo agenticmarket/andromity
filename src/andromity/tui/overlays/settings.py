@@ -440,17 +440,29 @@ SettingsScreen {
                 # ── Auth sections ────────────────────────────────────────────
                 # CASE 1 — remote HTTP (serverUrl only, not yet converted to mcp-remote)
                 if transport == "remote" and not already_converted:
+                    # Detect provider-specific instructions
+                    is_supabase = "supabase.com" in server_url.lower()
                     with Vertical(classes="mcp-auth-section"):
-                        yield Label("⚠  Auth Required — paste Personal Access Token:",
+                        yield Label("⚠  Auth Required — paste Personal Access Token (PAT):",
                                     classes="mcp-auth-label")
+                        if is_supabase:
+                            with Horizontal(classes="mcp-token-row"):
+                                yield Label(
+                                    "[dim]Get your token at supabase.com/dashboard/account/tokens[/]",
+                                    classes="mcp-cmd-line")
+                                yield Button("🔗 Open",
+                                             id=f"mcp-openurl-dashboard-{s_name}",
+                                             classes="mcp-url-btn")
                         with Horizontal(classes="mcp-token-row"):
                             yield Input(
-                                placeholder=f"{s_name} access token…",
+                                placeholder="sbp_… (Supabase PAT)" if is_supabase
+                                            else f"{s_name} access token…",
                                 password=True,
                                 id=f"mcp-token-{s_name}")
                             yield Button("Connect", variant="primary",
                                          id=f"mcp-connect-{s_name}",
                                          classes="mcp-connect-btn")
+
 
                 # CASE 2 — SSE proxy already running — show nothing extra
                 # CASE 2b — SSE proxy stopped — offer browser auth
@@ -510,8 +522,36 @@ SettingsScreen {
                              classes="mcp-remove-btn")
 
 
+    # ── MCP card live-refresh ───────────────────────────────────────────────
 
-    # ── Lifecycle ─────────────────────────────────────────────────────────────
+    async def _refresh_mcp_card(self, server_name: str):
+        """
+        Surgically remove and re-mount a single MCP card so its status,
+        badge, tool count and auth section all reflect the current live state.
+        This avoids rebuilding the entire MCP pane.
+        """
+        if not self.mcp_manager:
+            return
+        try:
+            # Fresh config from disk (might have changed — e.g. token saved)
+            mcp_conf = self.mcp_manager.load_config().get("mcpServers", {})
+            s_conf = mcp_conf.get(server_name)
+            if s_conf is None:
+                return  # server was removed
+
+            old_card = self.query_one(f"#card-{server_name}")
+            parent   = old_card.parent  # the VerticalScroll MCP pane
+
+            # Compose fresh widgets
+            new_widgets = list(self._compose_mcp_card(server_name, s_conf))
+
+            # Atomic swap: remove old, mount new in same position
+            await old_card.remove()
+            await parent.mount(*new_widgets)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).debug(
+                "_refresh_mcp_card(%s) failed: %s", server_name, exc)
 
     def on_mount(self):
         # Permission mode
@@ -624,6 +664,10 @@ SettingsScreen {
                     self.app.notify(
                         f"MCP restart done: {n} server(s) active.",
                         severity="information")
+                    # Refresh every card to reflect new live state
+                    mcp_conf = self.mcp_manager.load_config().get("mcpServers", {})
+                    for srv_name in list(mcp_conf.keys()):
+                        await self._refresh_mcp_card(srv_name)
                     try:
                         from andromity.tui.panels.chat import ChatPanel
                         self.app.query_one(ChatPanel).add_system_message(
@@ -643,40 +687,44 @@ SettingsScreen {
                 ok = config.convert_remote_to_mcp_remote(
                     self.project_path, s_name, token)
                 if ok:
-                    # Reload the MCP servers list and start immediately
-                    self._mcp_servers = (self.mcp_manager.load_config().get("mcpServers", {})
-                                         if self.mcp_manager else {})
-                    mcp_conf = self.mcp_manager.load_config() if self.mcp_manager else {}
-                    srv_conf = mcp_conf.get("mcpServers", {}).get(s_name, {})
-                    command  = srv_conf.get("command")
-                    args     = srv_conf.get("args", [])
-                    env      = srv_conf.get("env", {})
-                    if command and self.mcp_manager:
-                        session = MCPStdioSession(
-                            name=s_name, command=command, args=args, env=env,
-                            cwd=self.mcp_manager.project_path)
-                        success = await session.start()
-                        if success:
-                            self.mcp_manager.sessions[s_name] = session
+                    self._mcp_servers = (
+                        self.mcp_manager.load_config().get("mcpServers", {})
+                        if self.mcp_manager else {})
                     self.app.notify(
-                        f"{s_name} configured! Toggle to connect.",
+                        f"{s_name}: PAT saved! Toggle to connect.",
                         severity="information")
+                    # Refresh the card so auth section disappears and toggle appears
+                    await self._refresh_mcp_card(s_name)
                 else:
                     self.app.notify("Failed to save token.", severity="error")
             except Exception as e:
                 self.app.notify(f"Error: {e}", severity="error")
 
         elif btn_id.startswith("mcp-openurl-"):
-            # Open a server URL in the default browser
+            # Open a server URL or dashboard URL in the default browser
             import webbrowser
-            s_name = btn_id.replace("mcp-openurl-", "")
-            mcp_conf = self.mcp_manager.load_config() if self.mcp_manager else {}
-            srv_conf = mcp_conf.get("mcpServers", {}).get(s_name, {})
-            url = srv_conf.get("serverUrl") or srv_conf.get("url") or ""
-            if url:
-                webbrowser.open(url)
+            rest = btn_id.replace("mcp-openurl-", "")
+            # Special case: dashboard link for PAT generation
+            if rest.startswith("dashboard-"):
+                s_name = rest.replace("dashboard-", "")
+                mcp_conf = self.mcp_manager.load_config() if self.mcp_manager else {}
+                srv_url = (mcp_conf.get("mcpServers", {})
+                           .get(s_name, {})
+                           .get("serverUrl", ""))
+                if "supabase.com" in srv_url.lower():
+                    webbrowser.open("https://supabase.com/dashboard/account/tokens")
+                else:
+                    webbrowser.open(srv_url or "https://supabase.com/dashboard/account/tokens")
             else:
-                self.app.notify("No URL found for this server.", severity="warning")
+                # Regular server URL open
+                s_name = rest
+                mcp_conf = self.mcp_manager.load_config() if self.mcp_manager else {}
+                srv_conf = mcp_conf.get("mcpServers", {}).get(s_name, {})
+                url = srv_conf.get("serverUrl") or srv_conf.get("url") or ""
+                if url:
+                    webbrowser.open(url)
+                else:
+                    self.app.notify("No URL found for this server.", severity="warning")
 
         elif btn_id.startswith("mcp-browser-auth-"):
 
