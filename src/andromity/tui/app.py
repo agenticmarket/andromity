@@ -212,6 +212,8 @@ class AndromityApp(App):
         # is fully mounted and rendered, and run it in a background thread
         # so the UI launch is instantaneous (0 lag).
         self.set_timer(1.0, self._start_background_warmup)
+        # Auto-init git tracking in background (0.5s delay so UI paints first)
+        self.set_timer(0.5, self._ensure_git_tracking)
         # Start cron scheduler
         try:
             crons = self._cron_scheduler.list()
@@ -267,6 +269,24 @@ class AndromityApp(App):
             self.push_screen(TrustPromptOverlay(self._project_path), _on_trust)
         else:
             self._show_welcome()
+
+    def _ensure_git_tracking(self):
+        """Initialize git repo in the project folder if one doesn't exist.
+        Runs in a background thread so it never blocks the UI."""
+        def _job():
+            try:
+                from andromity.core.git_ops import ensure_git_tracking
+                _, was_created = ensure_git_tracking(Path(self._project_path))
+                if was_created:
+                    self.call_from_thread(
+                        self.query_one(ChatPanel).add_system_message,
+                        "[green]📸 Git initialized[/] for this folder. "
+                        "[dim]/undo will now work across all turns, even for newly created files.[/dim]",
+                        ephemeral=True,
+                    )
+            except Exception as e:
+                log.warning("ensure_git_tracking failed: %s", e)
+        self.run_worker(_job, thread=True, exclusive=False, group="git-init")
 
     def _start_background_warmup(self):
         """Pre-import litellm in an isolated worker thread so it never blocks the UI event loop."""
@@ -876,14 +896,13 @@ class AndromityApp(App):
         active_tool_args = ""
         tools_used = set()  # track which tools were called this stream
 
-        # ── Pre-turn checkpoint (for /undo) ──────────────────────────────────
+        # ── Pre-turn checkpoint (for /undo and batch review revert) ──────────
         snapshot_hash: str | None = None
         msg_count_before = len(self.session.messages)
         try:
-            from andromity.core.git_ops import get_repo, create_pre_edit_snapshot
-            repo = get_repo(Path(self._project_path))
-            if repo:
-                snapshot_hash = create_pre_edit_snapshot(repo)
+            from andromity.core.git_ops import ensure_git_tracking, create_pre_edit_snapshot
+            repo, _ = ensure_git_tracking(Path(self._project_path))
+            snapshot_hash = create_pre_edit_snapshot(repo)
         except Exception as snap_err:
             log.warning("Pre-turn snapshot failed: %s", snap_err)
         self._undo_stack.append({

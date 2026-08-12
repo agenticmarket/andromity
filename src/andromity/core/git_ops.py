@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 SNAPSHOT_BRANCH = "andromity-snapshots"
 
 
-def get_repo(path: Optional[Path] = None) -> Optional[Repo]:
+def get_repo(path: Optional[Path] = None) -> Optional["Repo"]:
     from git import Repo, InvalidGitRepositoryError, NoSuchPathError  # lazy
     if path is None:
         path = Path.cwd()
@@ -20,56 +20,140 @@ def get_repo(path: Optional[Path] = None) -> Optional[Repo]:
         return None
 
 
-def create_pre_edit_snapshot(repo: Repo) -> Optional[str]:
+def ensure_git_tracking(project_path: Path) -> tuple["Repo", bool]:
     """
-    Snapshot working tree state to shadow branch BEFORE any file modifications.
-    Returns commit hash of snapshot, or None on failure.
+    Ensure the project folder has a git repo.
+    If none exists, initialise one with a sensible .gitignore and an
+    initial 'andromity: baseline' commit so snapshots always work.
+
+    Returns (repo, was_just_created).
     """
+    from git import Repo, InvalidGitRepositoryError, NoSuchPathError
+
+    # Already inside a git repo — nothing to do.
+    try:
+        repo = Repo(project_path, search_parent_directories=True)
+        return repo, False
+    except (InvalidGitRepositoryError, NoSuchPathError):
+        pass
+
+    # Init a new repo and create an initial commit as the baseline.
+    repo = Repo.init(project_path)
+
+    # Write a sensible .gitignore so large build/cache dirs aren't tracked.
+    gitignore = project_path / ".gitignore"
+    if not gitignore.exists():
+        gitignore.write_text(
+            "# Andromity — auto-generated .gitignore\n"
+            "__pycache__/\n*.pyc\n*.pyo\n"
+            "venv/\n.venv/\nenv/\n"
+            "node_modules/\n.next/\ndist/\nbuild/\n"
+            ".env\n.env.*\n"
+            "*.db\n*.sqlite\n"
+            ".DS_Store\n",
+            encoding="utf-8",
+        )
+
+    # Stage everything and create baseline commit.
+    try:
+        repo.git.add("-A")
+        repo.index.commit("andromity: baseline snapshot")
+    except Exception:
+        pass
+
+    return repo, True
+
+
+def create_pre_edit_snapshot(repo: "Repo") -> Optional[str]:
+    """
+    Snapshot the FULL working tree state (tracked + untracked) before any
+    file modifications, using a temporary git index so the user's staging
+    area is never touched.
+
+    Returns a commit hash stored on the andromity-snapshots shadow branch,
+    or None on failure.
+    """
+    import os, tempfile
     from git.exc import GitCommandError
     try:
-        # Check if repo has any commits
+        # Need at least one commit for commit-tree to work.
         try:
             head_commit = repo.head.commit.hexsha
         except (ValueError, AttributeError):
-            # No commits yet - can't snapshot
-            return None
+            return None  # brand new empty repo with no commits yet
 
-        # Capture current state: if dirty, create stash commit; otherwise use head commit
-        snapshot_hash = head_commit
+        work_dir = Path(repo.working_tree_dir)
+
+        # ── Build a tree that includes untracked files ──────────────────────
+        # We use a temp index file so the user's real staging area is untouched.
+        tmp_index = tempfile.mktemp(prefix="andromity-idx-")
         try:
-            stash_hash = repo.git.stash("create")
-            if stash_hash and "No local changes" not in stash_hash:
-                snapshot_hash = stash_hash.strip()
-        except (GitCommandError, Exception):
-            snapshot_hash = head_commit
+            env = {**os.environ, "GIT_INDEX_FILE": tmp_index}
+            # Stage everything (tracked + untracked) into the temp index.
+            repo.git.execute(["git", "add", "-A"], env=env)
+            # Write the tree from the temp index.
+            tree_hash = repo.git.execute(["git", "write-tree"], env=env).strip()
+        finally:
+            try:
+                os.unlink(tmp_index)
+            except OSError:
+                pass
 
-        # Ensure shadow branch exists
+        # ── Create a real commit object on the shadow branch ────────────────
+        # Ensure shadow branch exists.
         try:
             repo.git.rev_parse(SNAPSHOT_BRANCH)
         except GitCommandError:
             repo.git.update_ref(f"refs/heads/{SNAPSHOT_BRANCH}", head_commit)
 
-        # Point shadow branch to snapshot
-        repo.git.update_ref(
-            f"refs/heads/{SNAPSHOT_BRANCH}",
-            snapshot_hash,
-            m="andromity: pre-edit snapshot"
-        )
-        return snapshot_hash
-    except (GitCommandError, Exception) as e:
-        print(f"Warning: Failed to create git snapshot: {e}")
+        snap_hash = repo.git.commit_tree(
+            tree_hash,
+            "-p", head_commit,
+            "-m", "andromity: pre-turn snapshot",
+        ).strip()
+
+        repo.git.update_ref(f"refs/heads/{SNAPSHOT_BRANCH}", snap_hash)
+        return snap_hash
+
+    except (Exception,) as e:
+        print(f"Warning: Failed to create snapshot: {e}")
         return None
 
 
-def restore_snapshot(repo: Repo, commit_hash: str) -> bool:
+def restore_snapshot(repo: "Repo", commit_hash: str, files: Optional[List[str]] = None) -> bool:
+    """
+    Restore working tree to snapshot state.
+
+    If `files` is provided, only those relative paths are restored (surgical).
+    Otherwise ALL files tracked in the snapshot are restored.
+
+    Uses restore_file_snapshot per-file so newly-created files (which
+    git checkout cannot restore) are deleted rather than left on disk.
+    NEVER runs git-clean, which would nuke unrelated files.
+    """
     from git.exc import GitCommandError
     try:
-        # Restore tracked files to snapshot state
-        repo.git.checkout("--force", commit_hash, "--", ".")
-        # Delete any new untracked files created since the snapshot
-        repo.git.clean("-fd")
+        if files:
+            for rel in files:
+                restore_file_snapshot(repo, commit_hash, rel)
+            return True
+
+        # Restore all files that exist in the snapshot tree.
+        try:
+            changed = repo.git.diff(
+                "--name-only", commit_hash, "HEAD"
+            ).splitlines()
+        except (GitCommandError, Exception):
+            changed = []
+
+        if changed:
+            for rel in changed:
+                restore_file_snapshot(repo, commit_hash, rel)
+        else:
+            # Nothing tracked changed — just do a fast checkout.
+            repo.git.checkout("--force", commit_hash, "--", ".")
         return True
-    except (GitCommandError, Exception) as e:
+    except Exception as e:
         print(f"Warning: Failed to restore snapshot: {e}")
         return False
 
