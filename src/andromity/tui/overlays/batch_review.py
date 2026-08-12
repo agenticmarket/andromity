@@ -178,34 +178,55 @@ BatchReviewOverlay {
         content_area = self.query_one("#batch-diff-content", Static)
 
         try:
+            # ── Priority 1: real git diff (tracked files with committed baseline) ──
             diff_text = _get_git_diff(path)
             if diff_text.strip():
                 content_area.update(_format_diff(diff_text))
                 return
 
-            # No git diff — figure out why and show something useful
+            # ── No git diff. Could be: untracked file, non-git folder, or empty delta ──
             if not path.exists():
                 content_area.update("[red]File was deleted.[/red]")
                 return
 
             try:
-                file_content = path.read_text(encoding="utf-8", errors="replace")
+                new_content = path.read_text(encoding="utf-8", errors="replace")
             except OSError as e:
                 content_area.update(f"[red]Cannot read file: {escape(str(e))}[/red]")
                 return
 
-            if not file_content.strip():
-                # Newly created empty file — common when agent scaffolds files
+            # ── Priority 2: difflib diff using pre_write_contents ──────────────────
+            # pre_write_contents[path] is None  → file was NEW this turn (agent created it)
+            # pre_write_contents[path] is bytes → file EXISTED and was modified
+            old_bytes = self.pre_write_contents.get(path)
+
+            if old_bytes is not None:
+                # File was modified — show only what actually changed using difflib
+                import difflib
+                old_text = old_bytes.decode("utf-8", errors="replace")
+                old_lines = old_text.splitlines(keepends=True)
+                new_lines = new_content.splitlines(keepends=True)
+                diff = list(difflib.unified_diff(
+                    old_lines, new_lines,
+                    fromfile=f"a/{path.name}",
+                    tofile=f"b/{path.name}",
+                    lineterm="",
+                ))
+                if diff:
+                    content_area.update(_format_diff("".join(diff)))
+                else:
+                    content_area.update("[dim]No visible changes (whitespace only or identical content).[/dim]")
+                return
+
+            # ── Priority 3: genuinely new file — show all content as + ─────────────
+            if not new_content.strip():
                 content_area.update(
                     f"[dim]New empty file[/dim] [bold]{escape(path.name)}[/bold]\n\n"
                     "[dim]The agent created this file with no content yet.\n"
                     "Accept to keep it, Reject to delete it.[/dim]"
                 )
             else:
-                # File exists with content but git can't diff it (non-git folder,
-                # or untracked with content that wasn't captured in snapshot).
-                # Show the file content directly as a synthetic "+ new file" diff.
-                lines = file_content.splitlines()
+                lines = new_content.splitlines()
                 synthetic = (
                     f"[bold cyan]--- /dev/null[/bold cyan]\n"
                     f"[bold cyan]+++ b/{escape(path.name)}[/bold cyan]\n"
@@ -213,6 +234,7 @@ BatchReviewOverlay {
                 )
                 synthetic += "\n".join(f"[green]+{escape(l)}[/green]" for l in lines)
                 content_area.update(synthetic)
+
 
         except Exception as e:
             content_area.update(f"[red]Error loading diff: {escape(str(e))}[/red]")
