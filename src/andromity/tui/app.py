@@ -762,7 +762,11 @@ class AndromityApp(App):
         self.run_worker(self._compact_worker(), exclusive=False)
 
     async def _compact_worker(self):
-        """Background worker: runs the same compaction logic as _compact_context but on demand."""
+        """Background async worker: runs context compaction on demand (/compact command).
+
+        IMPORTANT: This is an async worker (runs on the event loop), NOT a thread worker.
+        Never use call_from_thread() here — call UI methods directly.
+        """
         chat = self.query_one(ChatPanel)
         try:
             from andromity.core.provider import stream_completion
@@ -771,9 +775,7 @@ class AndromityApp(App):
             keep_last_n = 10
             msgs_to_summarize = self.session.messages[1:-keep_last_n]
             if not msgs_to_summarize:
-                self.call_from_thread(
-                    chat.add_system_message, "[dim]Not enough history to compact.[/]"
-                )
+                chat.add_system_message("[dim]Not enough history to compact.[/]")
                 return
 
             summary_prompt = (
@@ -795,16 +797,17 @@ class AndromityApp(App):
                     new_summary += event.text
 
             removed = self.session.compact_messages(new_summary, keep_last_n=keep_last_n)
-            self.call_from_thread(
-                chat.add_system_message,
+
+            chat.add_system_message(
                 f"[green]✓ Compacted.[/] Replaced {removed} messages with a summary block. "
                 f"Working context now has {len(self.session.messages)} messages."
             )
-            self.call_from_thread(self._update_status)
+            # Refresh token count + status bar so user sees updated numbers immediately
+            self._update_status()
+
         except Exception as e:
-            self.call_from_thread(
-                chat.add_system_message, f"[red]Compact failed:[/] {e}"
-            )
+            chat.add_system_message(f"[red]Compact failed:[/] {e}")
+
 
     def _load_session(self, session: Session):
         """Switch to a historical session and replay its chat history."""
