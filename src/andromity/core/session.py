@@ -152,18 +152,26 @@ class Session:
         return session
 
     @classmethod
-    def list_sessions(cls, project_path: Optional[str] = None) -> List["Session"]:
+    def list_sessions(cls, project_path: Optional[str] = None, limit: int = 20) -> List["Session"]:
         pp = project_path or str(Path.cwd())
         project_hash = hashlib.sha256(pp.encode()).hexdigest()[:16]
         sessions_dir = get_config_dir() / "sessions" / project_hash
         if not sessions_dir.exists():
             return []
+            
+        # Get all files and sort by modification time (newest first)
+        # This avoids parsing hundreds of JSON files just to find the top 20.
+        session_files = list(sessions_dir.glob("*.json"))
+        session_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+        
         sessions = []
-        for f in sessions_dir.glob("*.json"):
+        for f in session_files[:limit]:
             try:
                 sessions.append(cls.load(f))
             except Exception:
                 continue
-        sessions.sort(key=lambda s: s.created_at, reverse=True)
+                
+        # Final sort in case JSON updated_at differs slightly from mtime
         sessions.sort(key=lambda s: getattr(s, "updated_at", s.created_at), reverse=True)
         return sessions
+

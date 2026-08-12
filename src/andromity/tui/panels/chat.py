@@ -1,7 +1,7 @@
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.widget import Widget
-from textual.widgets import Static, Label, Markdown, Collapsible
+from textual.widgets import Static, Label, Markdown, Collapsible, Button
 from rich.markup import escape
 from textual.markup import MarkupError
 from andromity.tui.markup_utils import safe_markup, safe_update
@@ -322,10 +322,16 @@ StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
 
 
 class ChatPanel(VerticalScroll):
+    DEFAULT_CSS = """\
+ChatPanel { width: 1fr; height: 1fr; overflow-y: auto; background: $surface; }
+#load-more-chat { width: 100%; margin: 1; dock: top; }
+"""
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._streaming = None
         self._messages = []
+        self._unloaded_history = []
         self._turn_started = False
 
     def add_user_message(self, text: str):
@@ -434,23 +440,69 @@ class ChatPanel(VerticalScroll):
 
     def clear(self):
         self._messages.clear()
+        self._unloaded_history.clear()
         self._streaming = None
         self.remove_children()
 
     def load_history(self, messages: list):
         """Replay a session's message history into the chat panel visually."""
         self._messages.clear()
+        self._unloaded_history.clear()
         self._streaming = None
         self.remove_children()
-        for msg in messages:
+        
+        # Filter out empty content and system messages to match what we actually render
+        renderable = [m for m in messages if m.get("content") and m.get("role") in ("user", "assistant")]
+        
+        limit = 30
+        if len(renderable) > limit:
+            self._unloaded_history = renderable[:-limit]
+            visible_msgs = renderable[-limit:]
+            self.mount(Button(f"Load Previous Messages ({len(self._unloaded_history)} older)", id="load-more-chat"))
+        else:
+            visible_msgs = renderable
+
+        for msg in visible_msgs:
             role = msg.get("role", "")
-            content = msg.get("content", "") or ""
-            if not content:
-                continue
+            content = msg.get("content", "")
             if role == "user":
-                self._append_widget(ChatMessage("user", content))
+                self.mount(ChatMessage("user", content))
             elif role == "assistant":
-                self._append_widget(ChatMessage("assistant", content))
+                self.mount(ChatMessage("assistant", content))
+        
+        self.scroll_end()
+
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == "load-more-chat":
+            event.stop()
+            self._load_previous_messages()
+
+    def _load_previous_messages(self):
+        btn = self.query_one("#load-more-chat", Button)
+        limit = 30
+        
+        to_load = self._unloaded_history[-limit:]
+        self._unloaded_history = self._unloaded_history[:-limit]
+        
+        first_msg = None
+        for child in self.children:
+            if isinstance(child, ChatMessage):
+                first_msg = child
+                break
+                
+        for msg in to_load:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            widget = ChatMessage(role, content)
+            if first_msg:
+                self.mount(widget, before=first_msg)
+            else:
+                self.mount(widget)
+                
+        if self._unloaded_history:
+            btn.label = f"Load Previous Messages ({len(self._unloaded_history)} older)"
+        else:
+            btn.remove()
 
     def _append_widget(self, widget: Widget):
         self.mount(widget)

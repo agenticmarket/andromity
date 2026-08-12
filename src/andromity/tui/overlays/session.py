@@ -55,6 +55,7 @@ SessionBrowserOverlay {
         self._project_path = project_path
         self._sessions: list[Session] = []
         self._selected_idx: int = 0
+        self._session_limit: int = 20
 
     def compose(self) -> ComposeResult:
         with Vertical(id="sb-dialog"):
@@ -67,6 +68,7 @@ SessionBrowserOverlay {
                 yield Button("New Session", variant="default", id="sb-new")
                 yield Button("Delete", variant="error", id="sb-delete")
                 yield Button("Cancel", variant="default", id="sb-cancel")
+                yield Button("Load More", variant="default", id="sb-load-more")
                 yield Button("Open", variant="primary", id="sb-open")
 
     def on_mount(self):
@@ -75,9 +77,13 @@ SessionBrowserOverlay {
         self.query_one("#sb-title").update(f" Sessions — {short_path} ")
         self._load_sessions()
 
-    def _load_sessions(self):
-        self._sessions = Session.list_sessions(self._project_path)
+    def _load_sessions(self, keep_cursor: bool = False):
+        self._sessions = Session.list_sessions(self._project_path, limit=self._session_limit)
         table = self.query_one("#sb-data", DataTable)
+        
+        # Save cursor position if loading more
+        old_row = table.cursor_row if keep_cursor and table.row_count > 0 else 0
+        
         table.clear(columns=True)
         table.add_columns("Name", "Status", "Age", "Tokens", "Messages")
         for s in self._sessions:
@@ -87,8 +93,16 @@ SessionBrowserOverlay {
             msg_count = str(len([m for m in s.messages if m.get("role") in ("user", "assistant")]))
             name = s.name if s.name != "new-session" and s.name != "tui-session" else "[dim]Unnamed[/]"
             table.add_row(name, badge, age, tokens, msg_count)
+            
         if self._sessions:
-            table.move_cursor(row=0)
+            table.move_cursor(row=old_row)
+            
+        # Hide load more if we probably loaded everything
+        load_more_btn = self.query_one("#sb-load-more", Button)
+        if len(self._sessions) < self._session_limit:
+            load_more_btn.display = False
+        else:
+            load_more_btn.display = True
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected):
         self._selected_idx = event.cursor_row
@@ -113,6 +127,9 @@ SessionBrowserOverlay {
                 pass
         elif event.button.id == "sb-delete":
             self._delete_selected()
+        elif event.button.id == "sb-load-more":
+            self._session_limit += 20
+            self._load_sessions(keep_cursor=True)
 
     def _open_selected(self):
         if not self._sessions:
