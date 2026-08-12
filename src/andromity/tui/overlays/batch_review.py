@@ -215,6 +215,13 @@ BatchReviewOverlay {
         elif bid == "btn-reject-all":
             if self.repo and self.snapshot_hash:
                 restore_snapshot(self.repo, self.snapshot_hash)
+            else:
+                # No git snapshot available. Fallback: delete the files since the AI just touched them.
+                # (This is better than leaving them silently on disk when the user clicked Reject)
+                for f in self.files:
+                    if f.exists():
+                        try: f.unlink()
+                        except OSError: pass
             self.dismiss(False)
 
         elif bid == "btn-accept-sel":
@@ -234,6 +241,12 @@ BatchReviewOverlay {
                     restore_file_snapshot(self.repo, self.snapshot_hash, str(rel_path))
                 except ValueError:
                     pass
+            else:
+                # No git available. Just delete it.
+                if path_to_revert.exists():
+                    try: path_to_revert.unlink()
+                    except OSError: pass
+
             # Remove from list and refresh
             self.files.pop(self._selected_index)
             self._update_file_list()

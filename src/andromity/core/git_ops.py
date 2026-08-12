@@ -64,7 +64,9 @@ def create_pre_edit_snapshot(repo: Repo) -> Optional[str]:
 def restore_snapshot(repo: Repo, commit_hash: str) -> bool:
     from git.exc import GitCommandError
     try:
+        # Restore tracked files to snapshot state
         repo.git.checkout("--force", commit_hash, "--", ".")
+        # Delete any new untracked files created since the snapshot
         repo.git.clean("-fd")
         return True
     except (GitCommandError, Exception) as e:
@@ -81,10 +83,11 @@ def restore_file_snapshot(repo: Repo, commit_hash: str, rel_path: str) -> bool:
             repo.git.checkout("--force", commit_hash, "--", norm_path)
             return True
         except GitCommandError:
-            # Likely didn't exist in the snapshot; delete it to revert creation.
+            # File likely didn't exist in the snapshot (it was newly created).
+            # git checkout fails for untracked paths, so we must manually delete it.
             full_path = Path(repo.working_tree_dir) / norm_path
             if full_path.exists():
-                full_path.unlink()
+                full_path.unlink(missing_ok=True)
             return True
     except Exception as e:
         print(f"Warning: Failed to restore file {rel_path} from snapshot: {e}")
