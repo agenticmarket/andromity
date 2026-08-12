@@ -13,18 +13,27 @@ Andromity is a terminal AI coding agent with a rich TUI. Point it at any codebas
 
 ## Install
 
-**One command — works on macOS, Linux, and Windows:**
+### Easiest — one-line installer (recommended)
+
+**Linux / macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/agenticmarket/andromity/main/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/agenticmarket/andromity/main/install.ps1 | iex
+```
+
+> The scripts auto-install [pipx](https://pipx.pypa.io) if needed, install andromity globally, and patch your `PATH` — no manual steps.
+
+### Manual — pipx
 
 ```bash
 pipx install andromity
 ```
 
-> Don't have `pipx`? Get it: `pip install pipx` then `pipx ensurepath`
-
-**Or with plain pip:**
-```bash
-pip install andromity
-```
+> Don't have `pipx`? Install it first: `pip install pipx && pipx ensurepath`, then open a new terminal.
 
 **Requirements:** Python 3.11+
 
@@ -306,9 +315,13 @@ Clone the repo and install in editable mode — changes to source files take eff
 ```bash
 git clone https://github.com/agenticmarket/andromity
 cd andromity
+python3 -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -e ".[dev]"
 andromity
 ```
+
+> **Ubuntu/Debian users:** A venv is required — these systems use PEP 668 to protect the system Python. The commands above handle this correctly.
 
 **Run tests:**
 ```bash
