@@ -10,7 +10,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Static, Button, OptionList
 from textual.widgets.option_list import Option
 
-from andromity.core.git_ops import get_repo, restore_file_snapshot, restore_snapshot
+from andromity.core.git_ops import get_repo, restore_file_snapshot
 from andromity.tui.panels.diff import _get_git_diff, _format_diff
 
 
@@ -98,12 +98,23 @@ BatchReviewOverlay {
 """
 
 
-    def __init__(self, project_path: str, snapshot_hash: Optional[str], files: List[Path], **kwargs):
+    def __init__(
+        self,
+        project_path: str,
+        snapshot_hash: Optional[str],
+        files: List[Path],
+        pre_write_contents: Optional[dict] = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.project_path = Path(project_path)
-        self.snapshot_hash = snapshot_hash  # None when git unavailable — Reject still shows but can't revert
+        self.snapshot_hash = snapshot_hash  # None when git unavailable
         self.files = [p for p in files if p.is_absolute() and p.is_relative_to(self.project_path)]
         self.repo = get_repo(self.project_path)
+        # pre_write_contents: {Path -> bytes | None}
+        # bytes  = old file content (agent modified it this turn)
+        # None   = file didn't exist before this turn (agent created it)
+        self.pre_write_contents: dict = pre_write_contents or {}
         self._selected_index = 0
 
     def compose(self) -> ComposeResult:
@@ -206,6 +217,54 @@ BatchReviewOverlay {
         except Exception as e:
             content_area.update(f"[red]Error loading diff: {escape(str(e))}[/red]")
 
+    # ── Revert helpers ───────────────────────────────────────────────────
+
+    def _revert_one(self, path: Path) -> None:
+        """
+        Revert a SINGLE file to its state before this agent turn.
+
+        With git snapshot:
+          - Uses restore_file_snapshot() per file (not the whole tree!).
+            This precisely handles:
+              • Modified tracked file  → git checkout restores old content
+              • Newly created file     → git checkout fails gracefully, then deletes the file
+          - Does NOT run git clean or touch anything outside this file.
+
+        Without git snapshot (pre_write_contents fallback):
+          - old_content is None  → file was new this turn, delete it.
+          - old_content is bytes → file was modified, write the old bytes back.
+        """
+        if self.repo and self.snapshot_hash:
+            try:
+                rel = str(path.relative_to(self.project_path))
+                restore_file_snapshot(self.repo, self.snapshot_hash, rel)
+            except (ValueError, Exception):
+                pass
+            return
+
+        # No git — use the in-memory pre-write content we captured before the agent ran.
+        old_content: bytes | None = self.pre_write_contents.get(path)
+        if old_content is None:
+            # File didn't exist before this turn — agent created it. Delete it.
+            if path.exists():
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        else:
+            # File existed and was modified this turn. Restore the old bytes.
+            try:
+                path.write_bytes(old_content)
+            except OSError:
+                pass
+
+    def _revert_files(self, paths: List[Path]) -> None:
+        """Revert a list of files. Precise: only those files, nothing else in the workspace."""
+        for f in paths:
+            self._revert_one(f)
+
+    # ── Button handler ───────────────────────────────────────────────────
+
     def on_button_pressed(self, event: Button.Pressed):
         bid = event.button.id
 
@@ -213,19 +272,11 @@ BatchReviewOverlay {
             self.dismiss(True)
 
         elif bid == "btn-reject-all":
-            if self.repo and self.snapshot_hash:
-                restore_snapshot(self.repo, self.snapshot_hash)
-            else:
-                # No git snapshot available. Fallback: delete the files since the AI just touched them.
-                # (This is better than leaving them silently on disk when the user clicked Reject)
-                for f in self.files:
-                    if f.exists():
-                        try: f.unlink()
-                        except OSError: pass
+            # Revert every file in this batch precisely. No other files in the workspace are touched.
+            self._revert_files(self.files)
             self.dismiss(False)
 
         elif bid == "btn-accept-sel":
-            # Accept this file as-is — remove from review list, move to next
             if not (0 <= self._selected_index < len(self.files)):
                 return
             self.files.pop(self._selected_index)
@@ -235,18 +286,7 @@ BatchReviewOverlay {
             if not (0 <= self._selected_index < len(self.files)):
                 return
             path_to_revert = self.files[self._selected_index]
-            if self.repo and self.snapshot_hash:
-                try:
-                    rel_path = path_to_revert.relative_to(self.project_path)
-                    restore_file_snapshot(self.repo, self.snapshot_hash, str(rel_path))
-                except ValueError:
-                    pass
-            else:
-                # No git available. Just delete it.
-                if path_to_revert.exists():
-                    try: path_to_revert.unlink()
-                    except OSError: pass
-
-            # Remove from list and refresh
+            self._revert_one(path_to_revert)
             self.files.pop(self._selected_index)
             self._update_file_list()
+

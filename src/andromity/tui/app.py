@@ -147,6 +147,7 @@ class AndromityApp(App):
         # Undo checkpoint stack — each entry: {snapshot_hash, msg_count, prompt}
         self._undo_stack: list[dict] = []
         self._pending_batch_files: set[Path] = set()
+        self._pre_write_contents: dict[Path, bytes | None] = {}  # path → bytes before this turn (None = new file)
         self._pre_turn_snapshot: str | None = None
         log.info("=== Andromity started | project=%s ===", self._project_path)
 
@@ -388,7 +389,15 @@ class AndromityApp(App):
             if mode == "safe":
                 path = args.get("path") or args.get("target_path") or args.get("target_file")
                 if path:
-                    self._pending_batch_files.add(Path(path).resolve())
+                    p = Path(path).resolve()
+                    # Snapshot old content ONCE per file per turn, before the agent writes it.
+                    # None means the file didn't exist yet (agent is creating it).
+                    if p not in self._pre_write_contents:
+                        try:
+                            self._pre_write_contents[p] = p.read_bytes() if p.exists() else None
+                        except OSError:
+                            self._pre_write_contents[p] = None
+                    self._pending_batch_files.add(p)
             return True
 
         if mode in ("yolo", "full"):
@@ -883,6 +892,7 @@ class AndromityApp(App):
             "prompt": prompt,
         })
         self._pre_turn_snapshot = snapshot_hash
+        self._pre_write_contents.clear()  # fresh file-content tracking for this turn
         # Keep undo stack capped at 20
         if len(self._undo_stack) > 20:
             self._undo_stack.pop(0)
@@ -1017,7 +1027,15 @@ class AndromityApp(App):
                             except Exception:
                                 pass
 
-                    self.push_screen(BatchReviewOverlay(self._project_path, snapshot, files_to_review), _on_batch_review)
+                    self.push_screen(
+                        BatchReviewOverlay(
+                            self._project_path,
+                            snapshot,
+                            files_to_review,
+                            pre_write_contents=dict(self._pre_write_contents),
+                        ),
+                        _on_batch_review,
+                    )
                 
             if self._prompt_queue:
                 next_prompt = self._prompt_queue.pop(0)
