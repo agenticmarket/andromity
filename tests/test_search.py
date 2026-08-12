@@ -162,4 +162,4 @@ def test_find_files_no_matches():
     with tempfile.TemporaryDirectory() as tmpdir:
         (Path(tmpdir) / "test.txt").write_text("hello")
         res = find_files("*.rs", path=tmpdir)
-        assert "No files matching pattern" in res
+        assert "No files found matching pattern" in res

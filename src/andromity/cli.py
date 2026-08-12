@@ -2,10 +2,28 @@ import asyncio
 import click
 
 
-@click.group()
-def main():
-    """Andromity - The coding agent that never clocks out."""
-    pass
+@click.group(invoke_without_command=True)
+@click.pass_context
+def main(ctx):
+    """Andromity — The coding agent that never clocks out.
+
+    Run without arguments to launch the interactive TUI.
+    """
+    if ctx.invoked_subcommand is None:
+        # No subcommand given — launch TUI directly
+        _launch_tui()
+
+
+def _launch_tui():
+    from andromity.telemetry import maybe_ping
+    maybe_ping()
+
+    from rich.console import Console
+    console = Console()
+    with console.status("[bold cyan]✦ Starting Andromity...[/bold cyan]", spinner="dots12"):
+        from andromity.tui.app import AndromityApp
+        app = AndromityApp()
+    app.run()
 
 
 @main.command()
@@ -20,13 +38,9 @@ def run(prompt, yes, dry_run, profile):
 
 @main.command()
 def tui():
-    """Launch the interactive TUI."""
-    from rich.console import Console
-    console = Console()
-    with console.status("[bold cyan]✦ Initializing Andromity TUI...[/bold cyan]", spinner="dots12"):
-        from andromity.tui.app import AndromityApp
-        app = AndromityApp()
-    app.run()
+    """Launch the interactive TUI (same as running `andromity` with no args)."""
+    _launch_tui()
+
 
 
 async def _run_async(prompt, yes, dry_run, profile):

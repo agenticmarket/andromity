@@ -154,8 +154,8 @@ def extract_code_symbols(file_path: str, content: str) -> str:
 
 def read_file(
     path: str,
-    start: Optional[int] = None,
-    end: Optional[int] = None,
+    start_line: Optional[int] = None,
+    end_line: Optional[int] = None,
     max_lines: int = 500,
     symbols_only: bool = False,
 ) -> str:
@@ -183,9 +183,9 @@ def read_file(
             return f"File '{path}' is empty."
 
         # Range specified
-        if start is not None or end is not None:
-            s = max(1, start if start is not None else 1)
-            e = min(total_lines, end if end is not None else total_lines)
+        if start_line is not None or end_line is not None:
+            s = max(1, start_line if start_line is not None else 1)
+            e = min(total_lines, end_line if end_line is not None else total_lines)
             if s > total_lines:
                 return f"Error: start line {s} exceeds total lines ({total_lines})."
             if s > e:
@@ -201,7 +201,7 @@ def read_file(
             numbered = [f"{1 + i}: {line}" for i, line in enumerate(selected)]
             header = (
                 f"File: {path} | Total Lines: {total_lines} | Showing lines 1 to {max_lines}\n"
-                f"[NOTE: File has {total_lines} lines. Showing first {max_lines}. Use start={max_lines + 1}, end={min(total_lines, max_lines * 2)} to view more, or symbols_only=True for an outline.]"
+                f"[NOTE: File has {total_lines} lines. Showing first {max_lines}. Use start_line={max_lines + 1}, end_line={min(total_lines, max_lines * 2)} to view more, or symbols_only=True for an outline.]"
             )
             return header + "\n" + "".join(numbered)
         else:
@@ -346,6 +346,49 @@ def edit_file(
         return f"Error editing file: {e}"
 
 
+def edit_file_multi(path: str, edits: list) -> str:
+    """
+    Applies multiple non-contiguous edits to a file sequentially.
+    Each edit in the list must be a dict with 'old_str' and 'new_str'.
+    Optional 'start_line' and 'end_line' can be provided per edit.
+    """
+    if not _is_trusted():
+        return "Error: This folder is not trusted. Use /trust to allow file edits."
+    p = Path(path).resolve()
+    try:
+        _assert_safe_path(p)
+    except Exception as e:
+        return f"Error editing file: {e}"
+    if not p.is_file():
+        return f"Error: File '{path}' does not exist."
+
+    successes = []
+    errors = []
+    
+    for i, edit in enumerate(edits):
+        old_str = edit.get("old_str")
+        new_str = edit.get("new_str")
+        start_line = edit.get("start_line")
+        end_line = edit.get("end_line")
+        
+        if old_str is None or new_str is None:
+            errors.append(f"Edit {i+1} missing old_str or new_str.")
+            continue
+            
+        res = edit_file(path, old_str, new_str, start_line, end_line)
+        if res.startswith("Error"):
+            errors.append(f"Edit {i+1}: {res}")
+        else:
+            successes.append(f"Edit {i+1}: Success.")
+            
+    if not errors:
+        return f"Successfully applied all {len(successes)} edits to {path}."
+    
+    msg = [f"Applied {len(successes)} edits successfully, but {len(errors)} edits failed:"]
+    msg.extend(errors)
+    return "\n".join(msg)
+
+
 # ── Directory & Shell Operations ──────────────────────────────────────────────
 
 
@@ -444,20 +487,78 @@ def find_files(pattern: str = "*", path: str = ".", max_results: int = 50) -> st
 
 # ── Unified Plan & Progress Tracking ──────────────────────────────────────────
 
+def _sync_plan_md(plan=None, todo_list=None):
+    from andromity.core.planner import Plan
+    from andromity.core.todo import TodoList
+    project_root = str(_get_project_root())
+    
+    if not plan:
+        try:
+            plan = Plan.load(project_root)
+        except Exception:
+            plan = None
+            
+    if not todo_list:
+        try:
+            todo_list = TodoList.load(project_root)
+        except Exception:
+            todo_list = None
+            
+    if not plan and not todo_list:
+        return
+        
+    md_lines = []
+    if plan:
+        md_lines.append(f"# Plan: {plan.title}")
+        if plan.description:
+            md_lines.append(f"\n> {plan.description}\n")
+    else:
+        md_lines.append("# Plan Checklist\n")
 
-def write_plan(title: str, steps: list, description: str = "") -> str:
+    md_lines.append("## Steps")
+    if todo_list and todo_list.items:
+        for item in todo_list.items:
+            status_map = {
+                "pending": "[ ]",
+                "active": "[/]",
+                "done": "[x]",
+                "failed": "[-]",
+                "skipped": "[~]"
+            }
+            checkbox = status_map.get(item.status, "[ ]")
+            md_lines.append(f"- {checkbox} {item.title}")
+    else:
+        md_lines.append("*No steps yet.*")
+        
+    md_path = Path(project_root) / "PLAN.md"
+    try:
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(md_lines))
+    except Exception as e:
+        import logging
+        logging.getLogger("andromity.tools").warning(f"Failed to write PLAN.md: {e}")
+
+
+
+def write_plan(title: str, description: str = "", steps: list = None, questions: list = None, **kwargs) -> str:
     """
-    Create a structured plan for future work.
-    Automatically populates the live todo checklist and notifies UI panels.
+    Create a plan (title + description + optional questions) and convert steps
+    directly into todos. Steps are NOT stored separately in the Plan object —
+    todos ARE the steps. This avoids duplicating the same list twice.
+    steps is optional — if omitted, the plan is created with no todos yet.
     """
-    from andromity.core.planner import Plan, PlanStep
+    from andromity.core.planner import Plan
     from andromity.core.todo import TodoItem, TodoList
+
+    if steps is None:
+        steps = []
 
     if isinstance(steps, str):
         steps = [s.strip() for s in steps.split("\n") if s.strip()]
 
+    # Normalise each step to (text, status)
     step_items = []
-    for i, s in enumerate(steps):
+    for s in steps:
         if isinstance(s, dict):
             text = s.get("text") or s.get("title") or str(s)
             raw_status = s.get("status", "pending")
@@ -467,30 +568,40 @@ def write_plan(title: str, steps: list, description: str = "") -> str:
             status = "pending"
         step_items.append((text, status))
 
-    plan_steps = [PlanStep(index=i + 1, text=text) for i, (text, status) in enumerate(step_items)]
+    project_root = str(_get_project_root())
+
+    # Save plan metadata (title / description / questions / status only — no steps)
+    from andromity.config import config
+    mode = config.get("default", "permission_mode", "safe")
+    auto_approve = mode in ("yolo", "full")
+
     plan = Plan(
         title=title,
         description=description,
-        steps=plan_steps,
-        project_path=str(_get_project_root()),
+        questions=questions or [],
+        status="approved" if auto_approve else "pending",
+        project_path=project_root,
     )
     plan.save()
 
     if _current_session:
         _current_session.save_plan(plan.to_dict())
 
-    # Automatically sync steps to TodoList for unified visual checklist
-    todo_list = TodoList(project_path=str(_get_project_root()))
+    # Steps become todos — single source of truth
+    todo_list = TodoList(project_path=project_root)
     todo_list.items = [
         TodoItem(id=f"t{i + 1}", title=text, status=status)
         for i, (text, status) in enumerate(step_items)
     ]
     todo_list.save()
 
+    _sync_plan_md(plan, todo_list)
     _notify_plan(plan)
     _notify_todo()
 
-    return f"Plan '{title}' written with {len(steps)} steps. Awaiting user approval before proceeding."
+    if auto_approve:
+        return f"Plan '{title}' created with {len(step_items)} steps (auto-approved in {mode.upper()} mode). The detailed PLAN.md has been generated. Proceeding."
+    return f"Plan '{title}' created with {len(step_items)} steps. A detailed PLAN.md has been generated in the project root. Please review PLAN.md and confirm before making any changes."
 
 
 def update_plan_step(step_index: int, status: str) -> str:
@@ -509,9 +620,7 @@ def update_plan_step(step_index: int, status: str) -> str:
     todo_list = TodoList.load(project_path)
     item = todo_list.update(f"t{step_index}", status)
 
-    plan = Plan.load(project_path)
-    if plan:
-        _notify_plan(plan)
+    _sync_plan_md(todo_list=todo_list)
     _notify_todo()
 
     if item:
@@ -528,6 +637,7 @@ def create_todo(title: str) -> str:
     """Create a single todo item."""
     todo_list = _get_todo_list()
     item = todo_list.add(title)
+    _sync_plan_md(todo_list=todo_list)
     _notify_todo()
     return f"Created todo {item.id}: {item.title}"
 
@@ -541,6 +651,7 @@ def update_todo(todo_id: str, status: str) -> str:
     item = todo_list.update(todo_id, status)
     if not item:
         return f"Error: Todo '{todo_id}' not found."
+    _sync_plan_md(todo_list=todo_list)
     _notify_todo()
     return f"Updated {item.id} to {status}: {item.title}"
 
@@ -558,32 +669,46 @@ def list_todos() -> str:
 # ── Discovery & Deferred Tools ────────────────────────────────────────────────
 
 
-def tool_search(query: str) -> str:
+def list_tools(limit: int = 20, offset: int = 0, include_description: bool = False, search: str = "") -> str:
     """
-    Search available deferred tools (MCP servers, web tools, plugins)
-    and return their full JSON parameter schemas on demand.
+    List available deferred tools (MCP servers, plugins) with pagination and optional search.
+    Returns lightweight catalog or full schema based on include_description.
     """
-    query_terms = [w for w in query.lower().strip().split() if w]
     registry = ToolRegistry.get_instance()
     deferred_tools = registry.get_deferred_tools()
 
     matched = []
-    for tool in deferred_tools:
-        name = tool.get("name", "").lower()
-        desc = tool.get("description", "").lower()
-        combined = f"{name} {desc}"
-        if any(term in combined for term in query_terms):
-            matched.append(tool)
+    if search:
+        query_terms = [w for w in search.lower().strip().split() if w]
+        for tool in deferred_tools:
+            name = tool.get("name", "").lower()
+            desc = tool.get("description", "").lower()
+            combined = f"{name} {desc}"
+            if any(term in combined for term in query_terms):
+                matched.append(tool)
+    else:
+        matched = deferred_tools
 
-    if not matched:
-        return f"No deferred tools found matching query '{query}'."
+    total = len(matched)
+    if total == 0:
+        return f"No deferred tools found" + (f" matching '{search}'." if search else ".")
 
-    output_lines = [f"Found {len(matched)} matching deferred tool(s):\n"]
-    for t in matched:
-        output_lines.append(f"### Tool: `{t['name']}`")
-        output_lines.append(f"**Description:** {t['description']}")
-        output_lines.append(f"**Parameters Schema:**\n```json\n{json.dumps(t.get('parameters', {}), indent=2)}\n```\n")
+    # Paginate
+    end_idx = min(offset + limit, total)
+    page_tools = matched[offset:end_idx]
 
+    output_lines = [f"Found {total} deferred tool(s). Showing {offset + 1}-{end_idx}:\n"]
+    for t in page_tools:
+        if include_description:
+            output_lines.append(f"### Tool: `{t['name']}`")
+            output_lines.append(f"**Description:** {t['description']}")
+            output_lines.append(f"**Parameters Schema:**\n```json\n{json.dumps(t.get('parameters', {}), indent=2)}\n```\n")
+        else:
+            output_lines.append(f"- `{t['name']}`: {t.get('description', '')}")
+
+    if end_idx < total:
+        output_lines.append(f"\n*More tools available. Call list_tools(offset={end_idx}, search='{search}', include_description={include_description}) to see the next page.*")
+    
     return "\n".join(output_lines)
 
 
@@ -594,13 +719,13 @@ CORE_TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Reads the contents of a file with line numbers. Use start/end for line ranges, or symbols_only=True to get an AST outline of classes/functions for large files.",
+            "description": "Reads the contents of a file with line numbers. Use start_line/end_line for line ranges, or symbols_only=True to get an AST outline of classes/functions for large files.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Path to the file"},
-                    "start": {"type": "integer", "description": "Starting line number (1-indexed, optional)"},
-                    "end": {"type": "integer", "description": "Ending line number (inclusive, optional)"},
+                    "start_line": {"type": "integer", "description": "Starting line number (1-indexed, optional)"},
+                    "end_line": {"type": "integer", "description": "Ending line number (inclusive, optional)"},
                     "symbols_only": {"type": "boolean", "description": "If true, returns only an outline of classes and functions with line numbers (saves tokens on large files)."},
                 },
                 "required": ["path"],
@@ -677,6 +802,34 @@ CORE_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "edit_file_multi",
+            "description": "Applies multiple non-contiguous edits to a file in a single tool call. More token efficient than calling edit_file multiple times.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the file"},
+                    "edits": {
+                        "type": "array",
+                        "description": "List of edits to apply",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_str": {"type": "string", "description": "String/block to replace"},
+                                "new_str": {"type": "string", "description": "Replacement string/block"},
+                                "start_line": {"type": "integer", "description": "Optional start line"},
+                                "end_line": {"type": "integer", "description": "Optional end line"}
+                            },
+                            "required": ["old_str", "new_str"]
+                        }
+                    }
+                },
+                "required": ["path", "edits"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "shell_exec",
             "description": "Executes a shell command (running tests, build commands, git, etc.).",
             "parameters": {
@@ -712,10 +865,11 @@ CORE_TOOLS = [
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "Short title for the plan"},
-                    "steps": {"type": "array", "items": {"type": "string"}, "description": "List of step descriptions"},
+                    "steps": {"type": "array", "items": {"type": "string"}, "description": "List of step descriptions (optional — can be omitted and added later)"},
                     "description": {"type": "string", "description": "Optional overview or notes"},
+                    "questions": {"type": "array", "items": {"type": "string"}, "description": "Optional list of clarifying questions for the user before execution"},
                 },
-                "required": ["title", "steps"],
+                "required": ["title"],
             },
         },
     },
@@ -737,17 +891,50 @@ CORE_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "tool_search",
-            "description": "Search available deferred tools (MCP servers, web tools, external skills) and fetch their full parameter schemas on demand.",
+            "name": "list_tools",
+            "description": "List available deferred tools (e.g. MCP servers) with optional search, pagination, and descriptions.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query or tool name"},
+                    "limit": {"type": "integer", "description": "Max number of tools to return (default 20)"},
+                    "offset": {"type": "integer", "description": "Pagination offset (default 0)"},
+                    "include_description": {"type": "boolean", "description": "If true, includes full descriptions and schemas. If false, returns a lightweight list (default false)."},
+                    "search": {"type": "string", "description": "Optional search term to filter tools by name or description"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web for up-to-date documentation, technical solutions, and references.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query"},
+                    "max_results": {"type": "integer", "description": "Max results to return (default 5)"},
                 },
                 "required": ["query"],
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_url",
+            "description": "Fetch content from a URL via HTTP GET, sanitize HTML into clean markdown, and return safe data.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The URL to fetch"},
+                    "max_chars": {"type": "integer", "description": "Maximum characters to return (default 4000)"},
+                },
+                "required": ["url"],
+            },
+        },
+    }
 ]
 
 
@@ -761,40 +948,12 @@ class ToolRegistry:
             t["function"]["name"]: t for t in CORE_TOOLS
         }
         self._deferred_tools: Dict[str, Dict[str, Any]] = {}
-        self._register_default_deferred()
 
     @classmethod
     def get_instance(cls) -> "ToolRegistry":
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
-
-    def _register_default_deferred(self):
-        """Register built-in deferred tools (web_search, fetch_url)."""
-        self.register_deferred(
-            name="web_search",
-            description="Search the web for up-to-date documentation, technical solutions, and references.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "The search query"},
-                    "max_results": {"type": "integer", "description": "Max results to return (default 5)"},
-                },
-                "required": ["query"],
-            },
-        )
-        self.register_deferred(
-            name="fetch_url",
-            description="Fetch content from a URL via HTTP GET, sanitize HTML into clean markdown, and return safe data.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "The URL to fetch"},
-                    "max_chars": {"type": "integer", "description": "Maximum characters to return (default 4000)"},
-                },
-                "required": ["url"],
-            },
-        )
 
     def register_deferred(self, name: str, description: str, parameters: Dict[str, Any], category: str = "custom"):
         """Register a Tier 2 deferred tool (names-only in prompt, loaded on demand)."""
@@ -806,20 +965,20 @@ class ToolRegistry:
         }
 
     def get_eager_tools(self, profile: str = "builder") -> List[Dict[str, Any]]:
-        """Return full schemas for active Tier 1 tools filtered by profile."""
+        """Return full schemas for active Tier 1 tools filtered by profile, plus MCP tools."""
         from andromity.core.profiles import PROFILES
-        prof_obj = PROFILES.get(profile)
-        if not prof_obj:
-            return list(self._eager_tools.values())
+        prof_obj = PROFILES.get(profile, {})
+        allowed_tools = prof_obj.get("tools", [])
 
         filtered = []
         for name, tool_def in self._eager_tools.items():
-            if name in prof_obj.tools or "all" in prof_obj.tools:
+            if name in allowed_tools or "all" in allowed_tools:
                 filtered.append(tool_def)
+                
         return filtered
 
     def get_deferred_tools(self) -> List[Dict[str, Any]]:
-        """Return all registered deferred tools (including MCP tools)."""
+        """Return all registered deferred tools (including MCP)."""
         tools = list(self._deferred_tools.values())
         if _mcp_manager:
             for mcp_tool in _mcp_manager.get_all_tools():
@@ -838,7 +997,7 @@ class ToolRegistry:
         lines = ["<available-deferred-tools>"]
         for t in deferred:
             lines.append(f"• {t['name']}: {t['description']}")
-        lines.append("Use tool_search(query) to retrieve the full schema before calling any deferred tool.")
+        lines.append("Use list_tools() to retrieve the full catalog or specific schemas before calling any deferred tool.")
         lines.append("</available-deferred-tools>")
         return "\n".join(lines)
 
@@ -878,6 +1037,8 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
         return write_file(**args)
     elif name == "edit_file":
         return edit_file(**args)
+    elif name == "edit_file_multi":
+        return edit_file_multi(**args)
     elif name == "shell_exec":
         return shell_exec(**args)
     elif name == "list_dir":
@@ -892,8 +1053,8 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
         return update_todo(**args)
     elif name == "list_todos":
         return list_todos()
-    elif name == "tool_search":
-        return tool_search(**args)
+    elif name == "list_tools":
+        return list_tools(**args)
 
     # 2. Web Tools
     elif name == "web_search":

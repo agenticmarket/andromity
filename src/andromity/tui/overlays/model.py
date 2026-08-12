@@ -71,6 +71,7 @@ ModelPickerScreen {
 
     def on_mount(self):
         self._show_step1()
+        current_provider = ""
         # Highlight current provider button BUT don't trigger Changed event yet.
         # We set _ready=True only after call_after_refresh so the RadioSet.Changed
         # fired by setting .value=True below doesn't jump to Step 2.
@@ -83,6 +84,8 @@ ModelPickerScreen {
             pass
         # ... but _ready is still False here, so on_radio_set_changed ignores it.
         self.call_after_refresh(self._set_ready)
+        if current_provider:
+            self.call_after_refresh(lambda: self._show_step2(current_provider))
 
     def _set_ready(self):
         """Allow RadioSet.Changed to respond AFTER initial mount is complete."""

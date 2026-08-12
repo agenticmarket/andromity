@@ -7,6 +7,16 @@ import urllib.parse
 import urllib.request
 from typing import Optional
 
+try:
+    from markdownify import markdownify
+except ImportError:
+    markdownify = None
+
+try:
+    from ddgs import DDGS
+except ImportError:
+    DDGS = None
+
 log = logging.getLogger("andromity.web")
 
 # Safe user agent
@@ -15,7 +25,13 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 
 def _clean_html(html_text: str) -> str:
     """Convert HTML string to readable plain text / markdown snippet."""
-    # Remove scripts, styles, head, comments
+    if markdownify:
+        try:
+            return markdownify(html_text, heading_style="ATX", escape_asterisks=False).strip()
+        except Exception as e:
+            log.warning("markdownify failed, falling back to regex: %s", e)
+
+    # Fallback: Remove scripts, styles, head, comments
     cleaned = re.sub(r"<(script|style|head|noscript)[^>]*>.*?</\1>", " ", html_text, flags=re.DOTALL | re.IGNORECASE)
     cleaned = re.sub(r"<!--.*?-->", " ", cleaned, flags=re.DOTALL)
     
@@ -84,6 +100,21 @@ def web_search(query: str, max_results: int = 5) -> str:
     if not query:
         return "Error: Search query cannot be empty."
 
+    if DDGS:
+        try:
+            results = DDGS().text(query, max_results=max_results)
+            if not results:
+                return f"No results found for search query: '{query}'"
+            
+            output = [f"### Web Search Results for: `{query}`\n"]
+            for i, r in enumerate(results, 1):
+                output.append(f"**{i}. {r.get('title', 'Untitled')}**\n- Link: {r.get('href', '')}\n- Summary: {r.get('body', '')}\n")
+            
+            return "\n".join(output)
+        except Exception as e:
+            log.warning("DDGS API search failed for %s: %s, falling back to HTML scrape", query, e)
+
+    # Fallback to HTML scraping
     try:
         # Use DuckDuckGo HTML search API endpoint for lightweight text parsing
         encoded_query = urllib.parse.urlencode({"q": query})

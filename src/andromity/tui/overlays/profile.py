@@ -9,7 +9,12 @@ PROFILES = {
     "builder": {
         "name": "Builder",
         "desc": "Full access — read, write, edit files. Default for coding tasks.",
-        "tools": "read_file, write_file, edit_file, list_dir, shell_exec",
+        "tools": "read_file, write_file, edit_file, edit_file_multi, list_dir, shell_exec",
+    },
+    "coder": {
+        "name": "Fast Coder",
+        "desc": "Quick code edits — read, write, edit files. No planning.",
+        "tools": "read_file, write_file, edit_file, edit_file_multi, list_dir, shell_exec",
     },
     "reviewer": {
         "name": "Reviewer",
@@ -32,7 +37,7 @@ ProfilePickerOverlay {
     background: $background 20%;
 }
 #pp-dialog {
-    width: 62; height: 22;
+    width: 62; height: 26;
     border: solid $accent-darken-2; background: $surface;
 }
 #pp-title { padding: 0 1; height: 1; background: $accent-darken-3; color: $text; text-style: bold; }

@@ -1,0 +1,14 @@
+name = "andromity-telemetry"
+main = "worker.js"
+compatibility_date = "2024-03-29"
+
+# We use KV to store simple install counters
+# 1. Run `npx wrangler kv:namespace create TELEMETRY_KV`
+# 2. Paste the id below
+kv_namespaces = [
+  { binding = "TELEMETRY_KV", id = "${TELEMETRY_KV_ID}" }
+]
+
+routes = [
+  { pattern = "telemetry.agenticmarket.dev", custom_domain = true }
+]

@@ -72,6 +72,26 @@ def restore_snapshot(repo: Repo, commit_hash: str) -> bool:
         return False
 
 
+def restore_file_snapshot(repo: Repo, commit_hash: str, rel_path: str) -> bool:
+    """Restores a single file from a snapshot. If it didn't exist then, deletes it."""
+    from git.exc import GitCommandError
+    try:
+        norm_path = rel_path.replace("\\", "/")
+        try:
+            repo.git.checkout("--force", commit_hash, "--", norm_path)
+            return True
+        except GitCommandError:
+            # Likely didn't exist in the snapshot; delete it to revert creation.
+            full_path = Path(repo.working_tree_dir) / norm_path
+            if full_path.exists():
+                full_path.unlink()
+            return True
+    except Exception as e:
+        print(f"Warning: Failed to restore file {rel_path} from snapshot: {e}")
+        return False
+
+
+
 def list_snapshots(repo: Repo, limit: int = 20) -> List[dict]:
     from git.exc import GitCommandError
     try:
@@ -145,3 +165,22 @@ def get_file_diff(repo: Repo, rel_path: str) -> str:
     except Exception:
         return ""
 
+
+def ensure_gitignore_entry(project_path: str, pattern: str) -> None:
+    """Idempotently add `pattern` to <project_path>/.gitignore.
+    Never raises — best-effort only."""
+    try:
+        gi = Path(project_path) / ".gitignore"
+        existing = gi.read_text(encoding="utf-8") if gi.exists() else ""
+        lines = existing.splitlines()
+        # Already present (exact or trailing slash variants)
+        normalised = pattern.rstrip("/")
+        for line in lines:
+            if line.strip().rstrip("/") == normalised:
+                return
+        # Append with a blank separator if file is non-empty and doesn't end with newline
+        sep = "\n" if existing and not existing.endswith("\n") else ""
+        with gi.open("a", encoding="utf-8") as f:
+            f.write(f"{sep}{pattern}\n")
+    except Exception:
+        pass

@@ -1,9 +1,25 @@
 Metadata-Version: 2.4
 Name: andromity
-Version: 0.1.0b1
-Summary: The coding agent that never clocks out.
+Version: 0.1.0
+Summary: AI coding agent with a beautiful terminal UI. Works with Claude, Gemini, GPT, Ollama and more.
+Author-email: Agentic Market <hello@agenticmarket.dev>
 License: MIT
+Project-URL: Homepage, https://agenticmarket.dev
+Project-URL: Repository, https://github.com/agenticmarket/andromity
+Project-URL: Bug Tracker, https://github.com/agenticmarket/andromity/issues
+Keywords: ai,coding-agent,tui,terminal,llm,claude,gemini,mcp,cli
+Classifier: Development Status :: 4 - Beta
+Classifier: Environment :: Console
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: Software Development
+Classifier: Topic :: Terminals
 Requires-Python: >=3.11
+Description-Content-Type: text/markdown
 License-File: LICENSE
 Requires-Dist: textual>=3.0
 Requires-Dist: litellm>=1.50
@@ -12,7 +28,266 @@ Requires-Dist: tomli-w>=1.0
 Requires-Dist: gitpython>=3.1
 Requires-Dist: rich>=13.0
 Requires-Dist: click>=8.0
+Requires-Dist: mcp>=1.0.0
+Requires-Dist: httpx>=0.28.0
+Requires-Dist: httpx-sse>=0.4.0
+Requires-Dist: watchdog>=3.0
+Requires-Dist: markdownify>=0.14.0
+Requires-Dist: duckduckgo-search>=6.0.0
 Provides-Extra: dev
 Requires-Dist: pytest>=7.0; extra == "dev"
 Requires-Dist: pytest-asyncio>=0.21; extra == "dev"
 Dynamic: license-file
+
+# Andromity
+
+![Andromity Screenshot](screen_shot.png)
+> The coding agent that never clocks out.
+
+Andromity is a terminal AI coding agent with a rich TUI. Point it at any codebase, pick a model, and it reads, writes, and runs code — with clear tool approval before any changes.
+
+> **Beta notice:** This is `0.1.0b2` — an early beta. Expect rough edges.
+
+
+---
+
+## Install
+
+**One command — works on macOS, Linux, and Windows:**
+
+```bash
+pipx install andromity
+```
+
+> Don't have `pipx`? Get it: `pip install pipx` then `pipx ensurepath`
+
+**Or with plain pip:**
+```bash
+pip install andromity
+```
+
+**Requirements:** Python 3.11+
+
+---
+
+## Quick Start
+
+```bash
+andromity
+```
+
+That's it. The TUI opens. Point it at any codebase and start building.
+
+---
+
+## Usage
+
+### Interactive TUI
+
+```bash
+andromity          # launch TUI (default)
+andromity tui      # same thing
+```
+
+### Headless / Scripted
+
+```bash
+andromity run "refactor this module to use async"
+andromity run "add error handling to tools.py" --yes       # auto-approve all
+andromity run "write tests for session.py" --dry-run       # preview only
+```
+
+---
+
+## 🔒 Privacy & Telemetry
+
+Andromity collects a **single, anonymous ping on first launch** to help us understand usage and prioritize platform support. 
+
+**What is collected (exactly):**
+```json
+{ "event": "first_launch", "os": "windows", "python": "3.12", "version": "0.1.0" }
+```
+**What is NEVER collected:**
+- No file paths, code, or prompts
+- No API keys or environment variables
+- No persistent IDs or user identities
+
+### How to Opt-Out
+We respect developer privacy. You can disable this entirely in three ways:
+1. Turn it off in the TUI Settings menu (**Ctrl+E** -> **Advanced**)
+2. Set an environment variable: `export DO_NOT_TRACK=1`
+3. Edit `~/.andromity/config.toml` and set `telemetry = false` under `[default]`
+
+---
+
+## Configuration
+
+Config lives at `~/.andromity/config.toml` (created automatically on first run).
+
+```toml
+[default]
+provider = "anthropic"
+model    = "claude-sonnet-4-5"
+profile  = "builder"
+
+[providers.anthropic]
+api_key = "sk-ant-..."
+
+[providers.openai]
+api_key = "sk-..."
+
+[providers.ollama]
+base_url = "http://localhost:11434"
+```
+
+API keys can also be set via environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, etc.).
+
+Andromity uses [LiteLLM](https://github.com/BerriAI/litellm) under the hood and is wired to support multiple providers. However, see the **Tested On** section below for what has actually been verified.
+
+---
+
+## Tested On
+
+This beta has only been tested with **Ollama running locally**. The code is wired for other providers via LiteLLM, but the following have **not been tested** by the maintainer:
+
+| Provider | Status |
+|----------|--------|
+| Ollama (local) | ✅ Tested |
+| NVIDIA NIM | ✅ Tested |
+| Groq | ✅ Tested |
+| OpenRouter | ✅ Tested |
+| Google Gemini | ✅ Tested |
+| Anthropic (Claude) | ❌ Not tested — no API access |
+| OpenAI (GPT) | ❌ Not tested — no API access |
+| Grok (xAI) | ❌ Not tested — no API access |
+
+If you test with any of these and find issues, please open an issue.
+
+Note: context window handling has known rough edges at high token counts — see [Known Issues](#known-issues).
+
+---
+
+## Profiles
+
+Switch the agent's role with `--profile` (CLI) or `/profile` (TUI) or via the **Ctrl+J** menu in the TUI:
+
+| Profile | What it does | Tools available |
+|---------|-------------|-----------------|
+| `builder` (default) | Plans and implements step-by-step | read, search, write, edit, shell, web, tools, plans |
+| `coder` | Direct implementation, no planning phase | read, search, write, edit, shell, web, tools |
+| `reviewer` | Read-only audit producing HIGH/MED/LOW findings | read, search, list, web, tools |
+| `planner` | Produces step-by-step plans without modifying code | read, search, list, tools, write_plan |
+
+---
+
+## Agent Tools
+
+The agent interacts with the codebase using these built-in tools:
+
+| Tool | What it does |
+|------|-------------|
+| `read_file` | Reads a file or specific line range (protected against path traversal) |
+| `write_file` | Creates or overwrites a file in the workspace |
+| `edit_file` | Replaces a specific string inside a file |
+| `edit_file_multi` | Applies multiple non-contiguous edits to a file in one call |
+| `shell_exec` | Executes a shell command in the project directory |
+| `list_dir` | Lists directory contents |
+| `grep_search` | Ripgrep-style search across the codebase |
+| `find_files` | Find files matching a glob pattern |
+| `write_plan` | Creates a step-by-step plan for approval |
+| `create_todo` | Creates a todo item |
+| `update_todo` | Updates a todo status (active / done / failed) |
+| `list_todos` | Shows active todos and progress |
+| `list_tools` | Discovers connected MCP servers and lazy-loaded plugins |
+| `web_search` | Searches the internet for up-to-date documentation and fixes |
+| `fetch_url` | Downloads and converts a webpage to readable markdown |
+
+In `SAFE` mode (default), all write, edit, and shell operations require explicit user approval. UI remains completely responsive during execution thanks to background thread dispatch.
+
+---
+
+## Modes & Permissions
+
+Andromity operates under four different permission modes, controlling how the AI gets your approval for plans and file changes.
+
+| Mode | Plan Required? | Plan Gate | Batch Review |
+|------|---------------|-----------|--------------|
+| **SAFE** (default) | Yes (for complex) | 🔴 User must approve | 🔴 Blocking overlay |
+| **TRUST** | Yes (for complex) | 🔴 User must approve | 🔴 Blocking overlay |
+| **FULL** | Yes (for complex) | ✅ Auto-approved | 🟡 Non-blocking toast |
+| **YOLO** | Yes (shown as FYI) | ✅ Auto-approved | ✅ Silent |
+
+- **Plans:** For multi-file or complex changes, the AI generates a Plan in the chat first. In `SAFE` and `TRUST`, it waits for your explicit approval before executing. In `FULL` and `YOLO`, it auto-approves and proceeds immediately.
+- **Batch Review:** After executing file changes, `SAFE` and `TRUST` will pop up a Batch Review overlay where you can accept or reject individual file changes before they are committed to your working tree. `FULL` shows a non-blocking toast, and `YOLO` commits silently.
+---
+
+## MCP (Model Context Protocol) Support
+
+Andromity supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) to connect to external tools and APIs natively. 
+
+**Smart Lazy-Loading**: Andromity uses a deferred-tool architecture for MCP. It injects a tiny index of available MCP tools into the system prompt and dynamically loads the massive JSON schemas only when the LLM requests them via `tool_search`. This prevents token limit exhaustion and keeps responses lightning fast even with 50+ MCP tools connected.
+
+**Usage:**
+- Configure servers in `.andromity/mcp.json` or `.vscode/mcp.json`.
+- Type `/mcp` in the chat to view connected servers and available tools.
+
+---
+
+## System Prompts & Customization
+
+System prompts are fully open and defined in:
+
+```
+src/andromity/core/profiles.py -> get_system_prompt(profile)
+```
+
+The prompt dynamically injects your operating system, shell, Python version, working directory, and Git branch to ensure the agent has accurate local context.
+
+---
+
+## Project Structure
+
+```
+src/andromity/
+├── cli.py             # CLI commands (run, tui, config)
+├── config.py          # Configuration and trust management
+├── core/
+│   ├── agent.py       # Main agent execution loop and streaming
+│   ├── profiles.py    # AI profiles and dynamic system prompt builder
+│   ├── tools.py       # Core tool implementations with safety guards
+│   ├── provider.py    # LiteLLM client wrapper
+│   ├── session.py     # Session persistence and token tracking
+│   ├── models.py      # Model catalog and context limits
+│   ├── git_ops.py     # Git snapshots and rollback operations
+│   └── cron.py        # Project-level background task scheduler
+└── tui/
+    ├── app.py         # Textual-based interactive UI
+    ├── chat.py        # Message history and markdown rendering
+    ├── diff_panel.py  # Side-by-side diffs and tool approval dialogs
+    ├── plan_panel.py  # Real-time plan tracking and todo list
+    └── ...
+```
+
+---
+
+## Known Issues
+
+| Issue | Workaround |
+|-------|-----------|
+| Context window overflow — token counter keeps climbing and model errors when limit is hit | Use `/new` to start a fresh session before hitting the limit |
+| Untested on cloud providers (Anthropic, OpenAI, etc.) | Contributions and test reports welcome |
+| Session files stored in plaintext at `~/.andromity/sessions/` | Do not use Andromity on shared machines with sensitive codebases |
+| Cron jobs in `.andromity/crons.json` are auto-loaded from project directory | Review via `/cron` before trusting a cloned repo |
+| **Cohere models (via OpenRouter) may fail with empty tool results** — `all elements in tool_results must have the 'outputs' property specified` | Fixed in 0.1.0b2. Was caused by `list_dir` returning an empty string on empty directories. Update to latest and retry. |
+
+---
+
+## Contributing
+
+This is an early open-source beta. If you test against a provider not listed above, open an issue or PR with your findings. Bug reports and honest feedback are more useful than feature requests at this stage.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).

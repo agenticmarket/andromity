@@ -1,4 +1,5 @@
 """Model catalog - available models per provider with descriptions."""
+from pathlib import Path
 
 MODEL_CATALOG = {
     "anthropic": {
@@ -126,11 +127,29 @@ _CTX_SIZE_MAP = {
 }
 
 
+def _get_context_cache_path() -> Path:
+    from andromity.config import get_config_dir
+    return get_config_dir() / "model_context_cache.json"
+
 def get_context_limit_for_model(provider_key: str, model_id: str) -> int:
     """Return context window size in tokens for a given provider + model.
-    Falls back to Ollama live query for unknown Ollama models.
-    Returns 32768 if unknown to avoid crashing on new model releases.
+    Checks live cache first, then falls back to catalog and Ollama live query.
+    Returns 32768 if unknown.
     """
+    # 1. Check live cache from recent API fetches
+    cache_path = _get_context_cache_path()
+    if cache_path.exists():
+        try:
+            import json
+            with open(cache_path, "r", encoding="utf-8") as f:
+                cache = json.load(f)
+            cached_ctx = cache.get(provider_key, {}).get(model_id)
+            if cached_ctx:
+                return cached_ctx
+        except Exception:
+            pass
+
+    # 2. Check hardcoded catalog
     provider = MODEL_CATALOG.get(provider_key, {})
     for m in provider.get("models", []):
         if m["id"] == model_id:
@@ -145,7 +164,8 @@ def get_context_limit_for_model(provider_key: str, model_id: str) -> int:
     # Unknown model — try Ollama live query
     if provider_key == "ollama":
         return get_ollama_num_ctx(model_id)
-    return 32768
+    # Unknown cloud model — assume 128K (safe minimum for modern cloud models)
+    return 131072
 
 
 def get_ollama_num_ctx(model: str, base_url: str = "http://localhost:11434") -> int:
@@ -174,13 +194,15 @@ def get_ollama_num_ctx(model: str, base_url: str = "http://localhost:11434") -> 
                         break
                     except (ValueError, IndexError):
                         pass
-        return int(ctx) if ctx else 32768
+        return int(ctx) if ctx else 131072  # 128K default if Ollama doesn't report ctx
     except Exception:
         return 32768
 
 
 def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str = None) -> list[dict]:
-    """Fetch live models from provider API. Returns list of model dicts or empty list on failure."""
+    """Fetch live models from provider API. Returns list of model dicts or empty list on failure.
+    Caches the context windows to disk for future use.
+    """
     import json
     import urllib.request
     import urllib.error
@@ -366,6 +388,41 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
                 "desc": "NVIDIA NIM accelerated model",
                 "context": "128K",
             })
-        return models
+        return _cache_and_return(provider_key, models)
 
-    return []
+    return _cache_and_return(provider_key, [])
+
+def _cache_and_return(provider_key: str, models: list[dict]) -> list[dict]:
+    """Save context limits to cache before returning the models."""
+    if not models:
+        return models
+    try:
+        import json
+        cache_path = _get_context_cache_path()
+        cache = {}
+        if cache_path.exists():
+            with open(cache_path, "r", encoding="utf-8") as f:
+                cache = json.load(f)
+                
+        if provider_key not in cache:
+            cache[provider_key] = {}
+            
+        for m in models:
+            ctx_str = m.get("context", "")
+            if not ctx_str or ctx_str == "Local" or ctx_str == "Auto" or ctx_str == "Unknown":
+                continue
+            # Parse shorthand (e.g. "128K")
+            try:
+                if ctx_str in _CTX_SIZE_MAP:
+                    cache[provider_key][m["id"]] = _CTX_SIZE_MAP[ctx_str]
+                else:
+                    # e.g. "128K" to 131072 if strictly parsing numbers, but _CTX_SIZE_MAP handles most
+                    pass
+            except Exception:
+                pass
+                
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(cache, f, indent=2)
+    except Exception:
+        pass
+    return models

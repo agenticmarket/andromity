@@ -1,93 +1,79 @@
-"""Plan model — reads/writes .andromity/plan.md as a reference document."""
-import re
+"""Plan model — stored as JSON in <project>/.andromity/plan.json (never exposed to the AI as a file path)."""
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
 
 @dataclass
-class PlanStep:
-    index: int
-    text: str
-
-
-@dataclass
 class Plan:
     title: str = "Untitled Plan"
     description: str = ""
-    steps: List[PlanStep] = field(default_factory=list)
+    questions: List[str] = field(default_factory=list)
+    status: str = "pending"   # pending | approved | rejected
     project_path: str = ""
 
-    @property
-    def plan_path(self) -> Path:
-        andromity_dir = Path(self.project_path) / ".andromity"
-        andromity_dir.mkdir(parents=True, exist_ok=True)
-        return andromity_dir / "plan.md"
+    # ── Persistence ──────────────────────────────────────────────────────────
 
-    def save(self):
-        lines = [
-            f"# Plan: {self.title}",
-            f"",
-        ]
-        if self.description:
-            lines += [self.description, ""]
-        lines.append("## Steps")
-        lines.append("")
-        for step in self.steps:
-            lines.append(f"- {step.index}. {step.text}")
-        lines.append("")
-        with open(self.plan_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
+    @property
+    def _dir(self) -> Path:
+        """Resolved .andromity dir inside the project. Raises if project_path is empty."""
+        if not self.project_path:
+            raise ValueError("project_path must be set before saving a Plan")
+        d = Path(self.project_path).resolve() / ".andromity"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def save(self) -> None:
+        path = self._dir / "plan.json"
+        path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+        # Ensure .andromity/ is gitignored so we never pollute the user's repo
+        try:
+            from andromity.core.git_ops import ensure_gitignore_entry
+            ensure_gitignore_entry(self.project_path, ".andromity/")
+        except Exception:
+            pass
 
     @classmethod
-    def clear(cls, project_path: str):
-        path = Path(project_path) / ".andromity" / "plan.md"
+    def clear(cls, project_path: str) -> None:
+        path = Path(project_path).resolve() / ".andromity" / "plan.json"
         if path.exists():
             path.unlink()
 
     @classmethod
     def load(cls, project_path: str) -> Optional["Plan"]:
-        path = Path(project_path) / ".andromity" / "plan.md"
+        if not project_path:
+            return None
+        path = Path(project_path).resolve() / ".andromity" / "plan.json"
         if not path.exists():
+            # Backwards-compat: also try old plan.md
+            md_path = Path(project_path).resolve() / ".andromity" / "plan.md"
+            if not md_path.exists():
+                return None
+            # Silently skip old format — it will be overwritten next write_plan call
             return None
         try:
-            return cls._parse(path.read_text(encoding="utf-8"), project_path)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return cls.from_dict(data, project_path)
         except Exception:
             return None
 
-    @classmethod
-    def _parse(cls, text: str, project_path: str) -> "Plan":
-        plan = cls(project_path=project_path)
-        lines = text.splitlines()
-
-        for line in lines:
-            m = re.match(r"^#\s+Plan:\s*(.+)", line)
-            if m:
-                plan.title = m.group(1).strip()
-                break
-
-        step_pattern = re.compile(r"^-\s+(\d+)\.\s+(.+)")
-        for line in lines:
-            m = step_pattern.match(line)
-            if m:
-                plan.steps.append(PlanStep(index=int(m.group(1)), text=m.group(2).strip()))
-
-        return plan
+    # ── Serialisation ─────────────────────────────────────────────────────────
 
     def to_dict(self) -> dict:
         return {
             "title": self.title,
             "description": self.description,
-            "steps": [{"index": s.index, "text": s.text} for s in self.steps],
+            "status": self.status,
+            "questions": self.questions,
         }
 
     @classmethod
     def from_dict(cls, data: dict, project_path: str = "") -> "Plan":
-        plan = cls(
+        return cls(
             title=data.get("title", "Untitled Plan"),
             description=data.get("description", ""),
+            status=data.get("status", "pending"),
+            questions=data.get("questions", []),
             project_path=project_path,
         )
-        for s in data.get("steps", []):
-            plan.steps.append(PlanStep(index=s.get("index", 0), text=s.get("text", "")))
-        return plan

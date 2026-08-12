@@ -42,3 +42,8 @@ class Done(StreamEvent):
 class ToolResult(StreamEvent):
     tool_id: str
     result: str
+
+
+@dataclass
+class PlanApprovalRequired(StreamEvent):
+    plan: Any

@@ -5,8 +5,9 @@ import sys
 import tempfile
 import pytest
 from pathlib import Path
+from unittest.mock import patch
 from andromity.core.mcp import MCPClientManager, MCPToolInfo, MCPStdioSession
-from andromity.core.tools import register_mcp_manager, ToolRegistry, execute_tool, execute_tool_async, tool_search
+from andromity.core.tools import register_mcp_manager, ToolRegistry, execute_tool, execute_tool_async, list_tools
 
 
 # Python code for a mock MCP server communicating over stdio JSON-RPC
@@ -190,8 +191,9 @@ async def test_mcp_live_stdio_server_integration(tmp_path):
     }), encoding="utf-8")
 
     # 3. Start MCP Client Manager
-    manager = MCPClientManager(str(tmp_path))
-    await manager.start_all()
+    with patch("pathlib.Path.home", return_value=tmp_path):
+        manager = MCPClientManager(str(tmp_path))
+        await manager.start_all()
 
     try:
         # Check server connected and discovered tools
@@ -227,7 +229,7 @@ async def test_mcp_live_stdio_server_integration(tmp_path):
         prompt_catalog = registry.get_deferred_prompt_catalog()
         assert "mcp__mockserver__calc_add" in prompt_catalog
 
-        # 7. Check tool_search and execute_tool_async
+        # 7. Check list_tools and execute_tool_async
         register_mcp_manager(manager)
         executed = await execute_tool_async("mcp__mockserver__calc_add", {"a": 15, "b": 25})
         assert executed == "40"
@@ -261,8 +263,9 @@ async def test_mcp_server_failure_handling(tmp_path):
     andromity_dir.mkdir(parents=True)
     (andromity_dir / "mcp.json").write_text(json.dumps(bad_config), encoding="utf-8")
 
-    manager = MCPClientManager(project_path=str(tmp_path))
-    await manager.start_all()
+    with patch("pathlib.Path.home", return_value=tmp_path):
+        manager = MCPClientManager(project_path=str(tmp_path))
+        await manager.start_all()
 
     summary = manager.get_status_summary()
     assert summary["configured"] == 1

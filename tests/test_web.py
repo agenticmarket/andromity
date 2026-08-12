@@ -20,7 +20,7 @@ def test_clean_html():
     """
     cleaned = _clean_html(raw_html)
     assert "Main Title" in cleaned
-    assert "This is a test paragraph with a link." in cleaned
+    assert "This is a **test** paragraph with a [link]" in cleaned
     assert "Second section with details." in cleaned
     assert "alert('malicious')" not in cleaned
     assert "<style>" not in cleaned

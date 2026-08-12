@@ -8,3 +8,11 @@ __pycache__/
 venv/
 env/
 .venv/
+telemetry-worker/.wrangler/
+fake.html
+bell.mp3
+test.py
+test2.py
+scratch/
+src/test.txt
+.github/workflows/publish.yml

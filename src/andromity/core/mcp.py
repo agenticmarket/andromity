@@ -252,11 +252,15 @@ class MCPStdioSession:
                 log.debug("MCP read error: %s", e)
                 break
 
-    async def _cleanup(self):
+    async def _cleanup(self, process=None):
         """
         Close all subprocess pipes and cancel the reader task.
         Called by both stop() and failed start() to prevent Windows
         ResourceWarning: unclosed transport (bpo-43232).
+
+        ``process`` should be passed explicitly by stop() so this method
+        can close stdin/stdout BEFORE the caller nulls self.process.
+        Falls back to self.process for backward compat (e.g. failed start).
         """
         # 1. Cancel and await the reader task so its pipe references die cleanly
         if self._reader_task and not self._reader_task.done():
@@ -273,39 +277,155 @@ class MCPStdioSession:
                 fut.cancel()
         self._pending_requests.clear()
 
-        # 3. Close stdin explicitly so the child process gets EOF
-        if self.process and self.process.stdin:
-            try:
-                self.process.stdin.close()
-                # On Windows, wait_closed() drains the WriteTransport
-                if hasattr(self.process.stdin, "wait_closed"):
-                    await asyncio.wait_for(self.process.stdin.wait_closed(), timeout=1.0)
-            except Exception:
-                pass
+        # 3. Close transports explicitly to prevent Windows ResourceWarning.
+        proc = process or self.process
+        if proc:
+            if proc.stdin:
+                try:
+                    proc.stdin.close()
+                except Exception:
+                    pass
+            # Force close the underlying BaseSubprocessTransport to cleanly shut down Proactor pipes
+            if hasattr(proc, "_transport") and proc._transport:
+                try:
+                    proc._transport.close()
+                except Exception:
+                    pass
 
-        # 4. Small yield so the event loop can process the close callbacks
-        #    before GC runs — prevents the "closed pipe" ValueError in __repr__
-        await asyncio.sleep(0.05)
+        # 4. Yield so the event loop processes close callbacks before GC.
+        await asyncio.sleep(0.1)
 
     async def stop(self):
         """Gracefully terminate MCP server process and close all pipes."""
         self._initialized = False
 
-        # Terminate or kill the process
-        if self.process:
+        proc = self.process  # save ref BEFORE nulling — passed to _cleanup()
+        self.process = None  # null early so send_request() gates exit immediately
+
+        if proc:
+            # Terminate or kill the child process
             try:
-                self.process.terminate()
-                await asyncio.wait_for(self.process.wait(), timeout=3.0)
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=3.0)
             except Exception:
                 try:
-                    self.process.kill()
-                    await asyncio.wait_for(self.process.wait(), timeout=1.0)
+                    proc.kill()
+                    await asyncio.wait_for(proc.wait(), timeout=1.0)
                 except Exception:
                     pass
-            self.process = None
 
-        # Then clean up pipes / tasks
-        await self._cleanup()
+        # Clean up pipes/tasks, passing the saved proc so stdin/stdout can
+        # be closed even though self.process is now None.
+        await self._cleanup(process=proc)
+
+
+class MCPSseSession:
+    """Connects to a remote MCP server over HTTP SSE using the official python SDK."""
+    def __init__(self, name: str, url: str, headers: Optional[Dict[str, str]] = None):
+        self.name = name
+        self.url = url
+        self.headers = headers or {}
+        self.tools: List[Any] = []
+        self.error: Optional[str] = None
+        
+        self._session = None
+        self._bg_task: Optional[asyncio.Task] = None
+        self._init_event = asyncio.Event()
+
+    async def start(self) -> bool:
+        self.error = None
+        self._init_event.clear()
+        self._bg_task = asyncio.create_task(self._run())
+        await self._init_event.wait()
+        return self._session is not None
+
+    async def _run(self):
+        from mcp.client.sse import sse_client
+        from mcp.client.session import ClientSession
+        
+        try:
+            async with sse_client(self.url, headers=self.headers) as (read_stream, write_stream):
+                async with ClientSession(read_stream, write_stream) as session:
+                    self._session = session
+                    await session.initialize()
+                    
+                    # Fetch tools — normalize raw SDK Tool objects → MCPToolInfo
+                    tools_response = await session.list_tools()
+                    self.tools = [
+                        MCPToolInfo(
+                            server_name=self.name,
+                            name=getattr(t, 'name', '') or '',
+                            description=getattr(t, 'description', '') or '',
+                            input_schema=getattr(t, 'inputSchema', None) or {},
+                        )
+                        for t in (tools_response.tools or [])
+                    ]
+                    log.info("MCP SSE Server '%s' started with %d tools.", self.name, len(self.tools))
+                    
+                    self._init_event.set()
+                    
+                    # Wait until cancelled
+                    try:
+                        # Dummy await forever
+                        await asyncio.sleep(86400 * 365)
+                    except asyncio.CancelledError:
+                        pass
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            self.error = f"Failed to connect to SSE: {e}"
+            log.error(self.error)
+        finally:
+            self._session = None
+            if not self._init_event.is_set():
+                self._init_event.set()
+
+    async def stop(self):
+        if self._bg_task:
+            self._bg_task.cancel()
+            try:
+                await self._bg_task
+            except asyncio.CancelledError:
+                pass
+            self._bg_task = None
+        self._session = None
+        
+    async def get_tools(self) -> List[Any]:
+        if self._session:
+            try:
+                resp = await self._session.list_tools()
+                # Normalize to MCPToolInfo so callers always get a uniform type
+                self.tools = [
+                    MCPToolInfo(
+                        server_name=self.name,
+                        name=getattr(t, 'name', '') or '',
+                        description=getattr(t, 'description', '') or '',
+                        input_schema=getattr(t, 'inputSchema', None) or {},
+                    )
+                    for t in (resp.tools or [])
+                ]
+            except Exception as e:
+                log.error("Failed to list tools: %s", e)
+        return self.tools
+        
+    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        if not self._session:
+            return f"Session '{self.name}' not connected"
+        try:
+            resp = await self._session.call_tool(tool_name, arguments)
+            # The SDK returns CallToolResult with .content array of TextContent
+            return "\n".join(c.text for c in resp.content if hasattr(c, 'text'))
+        except Exception as e:
+            return f"Error executing tool '{tool_name}': {e}"
+            
+    async def send_request(self, method: str, params: Dict[str, Any], timeout: float = 30.0) -> Optional[Dict[str, Any]]:
+        # Map internal JSON-RPC calls to SDK calls if necessary, but TUI usually uses call_tool directly.
+        # This acts as a dummy fallback for compatibility.
+        log.warning("MCPSseSession.send_request called for %s - use SDK methods instead", method)
+        return None
+
+    async def send_notification(self, method: str, params: Dict[str, Any]):
+        pass
 
 
 class MCPClientManager:
@@ -322,6 +442,7 @@ class MCPClientManager:
             Path(self.project_path) / ".andromity" / "mcp.json",
             Path(self.project_path) / ".vscode" / "mcp.json",
             Path.home() / ".andromity" / "mcp.json",
+            Path.home() / ".gemini" / "config" / "mcp_config.json",
         ]
         merged_servers: Dict[str, Any] = {}
         for p in candidates:
@@ -349,114 +470,148 @@ class MCPClientManager:
         mcp_config = self.load_config()
         servers    = mcp_config.get("mcpServers", {})
         self.server_status.clear()
+        for name in servers.keys():
+            self.server_status[name] = {"status": "initializing", "tools": 0, "error": None, "command": ""}
 
-        async def _start_one(name: str, srv_conf: dict):
-            disabled   = srv_conf.get("disabled", False)
-            command    = srv_conf.get("command", "")
-            server_url = srv_conf.get("serverUrl") or srv_conf.get("url", "")
-            args       = srv_conf.get("args", [])
-            env        = srv_conf.get("env", {})
+        # Start all servers concurrently
+        await asyncio.gather(*[
+            self.start_server(name, srv_conf)
+            for name, srv_conf in servers.items()
+        ], return_exceptions=True)
 
-            if disabled:
-                return
+    async def start_server(self, name: str, srv_conf: Optional[dict] = None):
+        """Start a single configured MCP server."""
+        from andromity.core.oauth import ensure_fresh_token
 
-            # ── Remote HTTP server (no stdio command yet) ──────────────────────
-            if server_url and not command:
-                # Check for cached OAuth token
-                token = await ensure_fresh_token(name)
-                if not token:
-                    # No token — check PAT headers in existing config
-                    headers = srv_conf.get("headers", {})
-                    pat = headers.get("Authorization", "").replace("Bearer ", "").strip()
-                    if not pat:
-                        # Mark as needs_auth — settings UI will show Connect button
-                        self.server_status[name] = {
-                            "status": "needs_auth",
-                            "tools": 0,
-                            "error": "Authentication required",
-                            "command": "",
-                        }
-                        return
-                    token = pat  # use PAT as bearer token
+        # Set initializing state
+        self.server_status[name] = {"status": "initializing", "tools": 0, "error": None, "command": ""}
 
-                # We have a token → start mcp-remote with Bearer auth
-                import shutil
-                npx = shutil.which("npx") or "npx"
-                mcp_args = ["mcp-remote", server_url,
-                            "--header", f"Authorization:Bearer {token}"]
-                session = MCPStdioSession(
-                    name=name, command=npx, args=mcp_args,
-                    env=env, cwd=self.project_path)
-                success = await session.start()
-                cmd_str = f"npx mcp-remote {server_url} (Bearer token)"
-                if success:
-                    self.sessions[name] = session
+        if srv_conf is None:
+            srv_conf = self.load_config().get("mcpServers", {}).get(name, {})
+
+        disabled   = srv_conf.get("disabled", False)
+        command    = srv_conf.get("command", "")
+        server_url = srv_conf.get("serverUrl") or srv_conf.get("url", "")
+        args       = srv_conf.get("args", [])
+        env        = srv_conf.get("env", {})
+
+        if disabled:
+            return
+
+        # Check if this is an explicit remote server OR a legacy mcp-remote proxy command
+        is_legacy_sse = "mcp-remote" in args or "mcp-remote" in command
+        if is_legacy_sse:
+            # Extract URL from args (e.g. ['-y', 'mcp-remote', 'https://mcp.neon.tech/sse'])
+            for arg in args:
+                if arg.startswith("http://") or arg.startswith("https://"):
+                    server_url = arg
+                    break
+            command = "" # Nullify command to force remote mode
+
+        # ── Remote HTTP / SSE server ──────────────────────────────────────
+        if server_url and not command:
+            # Check for cached OAuth token
+            token = await ensure_fresh_token(name)
+            if not token:
+                # No token — check PAT headers in existing config
+                headers = srv_conf.get("headers", {})
+                pat = headers.get("Authorization", "").replace("Bearer ", "").strip()
+                if not pat:
+                    # Mark as needs_auth — settings UI will show Connect button
                     self.server_status[name] = {
-                        "status":  "running",
-                        "tools":   len(session.tools),
-                        "error":   None,
-                        "command": cmd_str,
+                        "status": "needs_auth",
+                        "tools": 0,
+                        "error": "Authentication required",
+                        "command": "",
                     }
-                else:
-                    self.server_status[name] = {
-                        "status":  "error",
-                        "tools":   0,
-                        "error":   session.error or "Failed to connect",
-                        "command": cmd_str,
-                    }
-                return
+                    return
+                token = pat
 
-            # ── Stdio / mcp-remote server ──────────────────────────────────────
-            if not command:
-                return
-
-            session = MCPStdioSession(
-                name=name, command=command, args=args,
-                env=env, cwd=self.project_path,
-            )
+            # Start native Python SSE session
+            headers = {"Authorization": f"Bearer {token}"}
+            session = MCPSseSession(name=name, url=server_url, headers=headers)
             success = await session.start()
-            cmd_str = f"{command} {' '.join(str(a) for a in args)}".strip()
+            cmd_str = f"SSE {server_url}"
             if success:
                 self.sessions[name] = session
                 self.server_status[name] = {
-                    "status": "running",
-                    "tools":  len(session.tools),
-                    "error":  None,
+                    "status":  "running",
+                    "tools":   len(session.tools),
+                    "error":   None,
                     "command": cmd_str,
                 }
             else:
                 self.server_status[name] = {
-                    "status": "error",
-                    "tools":  0,
-                    "error":  session.error or "Failed to connect",
+                    "status":  "error",
+                    "tools":   0,
+                    "error":   session.error or "Failed to connect",
                     "command": cmd_str,
                 }
+            return
 
-        # Start all servers concurrently
-        await asyncio.gather(*[
-            _start_one(name, srv_conf)
-            for name, srv_conf in servers.items()
-        ], return_exceptions=True)
+        # ── Stdio server ──────────────────────────────────────
+        if not command:
+            return
+
+        session = MCPStdioSession(
+            name=name, command=command, args=args,
+            env=env, cwd=self.project_path,
+        )
+        success = await session.start()
+        cmd_str = f"{command} {' '.join(str(a) for a in args)}".strip()
+        if success:
+            self.sessions[name] = session
+            self.server_status[name] = {
+                "status": "running",
+                "tools":  len(session.tools),
+                "error":  None,
+                "command": cmd_str,
+            }
+        else:
+            self.server_status[name] = {
+                "status": "error",
+                "tools":  0,
+                "error":  session.error or "Failed to connect",
+                "command": cmd_str,
+            }
 
     def get_status_summary(self) -> dict:
         """Return an aggregated status dict suitable for UI display."""
         configured = len(self.server_status)
         active = len(self.sessions)
         failed = sum(1 for s in self.server_status.values() if s.get("status") == "error")
+        initializing = sum(1 for s in self.server_status.values() if s.get("status") == "initializing")
         total_tools = len(self.get_all_tools())
         return {
             "configured": configured,
             "active": active,
             "failed": failed,
+            "initializing": initializing,
             "tools_count": total_tools,
             "servers": dict(self.server_status),
         }
 
     def get_all_tools(self) -> List[MCPToolInfo]:
-        """Collect all discovered tools across all active MCP sessions."""
+        """Collect all discovered tools across all active MCP sessions.
+        Only returns MCPToolInfo instances — filters out any raw SDK Tool objects
+        that may have slipped through (e.g. from SSE sessions before normalization).
+        """
         all_tools = []
         for session in self.sessions.values():
-            all_tools.extend(session.tools)
+            for t in session.tools:
+                if isinstance(t, MCPToolInfo):
+                    all_tools.append(t)
+                else:
+                    # Defensive: wrap raw SDK Tool objects into MCPToolInfo
+                    try:
+                        all_tools.append(MCPToolInfo(
+                            server_name=session.name,
+                            name=getattr(t, 'name', '') or '',
+                            description=getattr(t, 'description', '') or '',
+                            input_schema=getattr(t, 'inputSchema', None) or {},
+                        ))
+                    except Exception:
+                        pass
         return all_tools
 
     async def execute_mcp_tool(self, full_tool_name: str, arguments: Dict[str, Any]) -> str:

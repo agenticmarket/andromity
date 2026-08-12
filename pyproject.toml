@@ -1,9 +1,26 @@
 [project]
 name = "andromity"
-version = "0.1.0b2"
-description = "The coding agent that never clocks out."
+version = "0.1.0"
+description = "AI coding agent with a beautiful terminal UI. Works with Claude, Gemini, GPT, Ollama and more."
+readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
+authors = [{ name = "Agentic Market", email = "hello@agenticmarket.dev" }]
+keywords = ["ai", "coding-agent", "tui", "terminal", "llm", "claude", "gemini", "mcp", "cli"]
+
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: Terminals",
+]
+
 dependencies = [
     "textual>=3.0",
     "litellm>=1.50",
@@ -12,7 +29,18 @@ dependencies = [
     "gitpython>=3.1",
     "rich>=13.0",
     "click>=8.0",
+    "mcp>=1.0.0",
+    "httpx>=0.28.0",
+    "httpx-sse>=0.4.0",
+    "watchdog>=3.0",
+    "markdownify>=0.14.0",
+    "ddgs>=1.0.0",
 ]
+
+[project.urls]
+Homepage = "https://agenticmarket.dev"
+Repository = "https://github.com/agenticmarket/andromity"
+"Bug Tracker" = "https://github.com/agenticmarket/andromity/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]
@@ -26,6 +54,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+andromity = ["assets/sounds/*.wav"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

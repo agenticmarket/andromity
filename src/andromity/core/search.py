@@ -100,6 +100,7 @@ def grep_search(
     case_sensitive: bool = False,
     file_pattern: Optional[str] = None,
     max_results: int = 50,
+    multiline: bool = False,
 ) -> str:
     """
     Search for a text pattern across the codebase.
@@ -123,6 +124,9 @@ def grep_search(
                 "--color=never",
                 f"--max-count={max_results * 2}",
             ]
+            if multiline:
+                cmd.append("-U")
+                cmd.append("--multiline-dotall")
             if not case_sensitive:
                 cmd.append("-i")
             for exc in DEFAULT_EXCLUDED_DIRS:
@@ -271,9 +275,10 @@ def _format_grep_output(lines: List[str], root: Path, max_results: int) -> str:
     return f"{count_msg}:\n" + "\n".join(formatted)
 
 
-def find_files(pattern: str = "*", path: str = ".", max_results: int = 50) -> str:
+def find_files(pattern: str = "*", path: str = ".", max_results: int = 50, contains: Optional[str] = None) -> str:
     """
     Find files matching a glob pattern (e.g. `*.py`, `*test*`, `src/**/*.tsx`).
+    If 'contains' is provided, only files containing that exact string will be returned.
     Excludes node_modules, .venv, .git, and other blacklisted directories.
     """
     root = Path(path).resolve()
@@ -301,17 +306,40 @@ def find_files(pattern: str = "*", path: str = ".", max_results: int = 50) -> st
                 rel_path = str(file_path).replace("\\", "/")
 
             if fnmatch.fnmatch(fname, pattern) or fnmatch.fnmatch(rel_path, pattern):
-                matched_files.append(rel_path)
+                matched_files.append(str(file_path))
                 if len(matched_files) >= max_results:
                     break
 
         if len(matched_files) >= max_results:
             break
 
-    if not matched_files:
-        return f"No files matching pattern '{pattern}' in '{path}'."
+    # Apply contains filter
+    if contains:
+        filtered_files = []
+        for f in matched_files:
+            try:
+                with open(f, "r", encoding="utf-8", errors="ignore") as file_handle:
+                    if contains in file_handle.read():
+                        filtered_files.append(f)
+            except Exception:
+                pass
+        matched_files = filtered_files
 
-    count_msg = f"Found {len(matched_files)} file{'s' if len(matched_files) != 1 else ''}"
-    if len(matched_files) >= max_results:
+    if not matched_files:
+        msg = f"No files found matching pattern '{pattern}'"
+        if contains:
+            msg += f" and containing '{contains}'"
+        return msg + f" in '{path}'."
+
+    # Convert absolute paths back to relative for output
+    results = []
+    for f in matched_files:
+        try:
+            results.append(str(Path(f).relative_to(root)).replace("\\", "/"))
+        except ValueError:
+            results.append(f)
+
+    count_msg = f"Found {len(results)} file{'s' if len(results) != 1 else ''}"
+    if len(results) >= max_results:
         count_msg += f" (capped at {max_results})"
-    return f"{count_msg}:\n" + "\n".join(sorted(matched_files))
+    return f"{count_msg}:\n" + "\n".join(sorted(results))

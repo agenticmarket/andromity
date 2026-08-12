@@ -6,9 +6,8 @@ from andromity.core.session import Session
 
 
 def test_undo_overlay_prompt_display():
-    overlay = UndoConfirmOverlay()
     prompt_text = "Refactor the database connection pool to use retry logic"
-    overlay.show_prompt(prompt_text)
+    overlay = UndoConfirmOverlay(prompt=prompt_text)
     assert overlay._prompt == prompt_text
 
 

@@ -4,7 +4,7 @@ from rich.markup import escape
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual import on
-from textual.widgets import Input, Static, Tree, TextArea, Header , Footer
+from textual.widgets import Input, Static, Tree, TextArea, Header , Footer, Button
 from textual.containers import Horizontal, Vertical
 
 from andromity.tui.panels.chat import ChatPanel
@@ -19,9 +19,12 @@ from andromity.tui.overlays.session import SessionBrowserOverlay
 from andromity.tui.overlays.cron import CronManagerOverlay
 from andromity.tui.overlays.undo import UndoConfirmOverlay
 from andromity.tui.overlays.settings import SettingsScreen
+from andromity.tui.overlays.batch_review import BatchReviewOverlay
 from andromity.core.session import Session
 from andromity.core.agent import Agent
-from andromity.core.events import TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult
+from andromity.core.events import (
+    StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired
+)
 from andromity.core.models import get_context_limit_for_model
 from andromity.core.debug_log import get_logger, LOG_PATH
 from andromity.core.cron import CronScheduler, CronJob
@@ -31,7 +34,7 @@ from andromity.config import config
 
 log = get_logger("app")
 
-COMMANDS = ["/help", "/mode", "/model", "/profile","/undo", "/keys", "/settings", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear", "/cron", "/plan", "/mcp"]
+COMMANDS = ["/help", "/mode", "/model", "/profile","/undo", "/keys", "/settings", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear", "/cron", "/plan", "/mcp", "/compact"]
 
 CSS = """\
 Screen { background: $surface; }
@@ -49,7 +52,7 @@ Screen { background: $surface; }
 #center-panel { width: 1fr; }
 #diff-panel {
     display: none;
-    width: 60;
+    width: 1fr;
     height: 1fr;
     border-left: solid $accent-darken-2;
 }
@@ -63,9 +66,15 @@ Screen { background: $surface; }
     padding: 1 1;
 }
 ChatPanel { height: 1fr; overflow-y: auto; padding: 1 2; }
+ChatPanel Markdown { padding: 0; margin: 0; }
 ChatPanel MarkdownParagraph { margin: 0 0 1 0; }
-ChatPanel MarkdownBulletList { margin: 0 0 1 2; }
-ChatPanel MarkdownOrderedList { margin: 0 0 1 2; }
+ChatPanel MarkdownListItem { margin: 0; padding: 0; }
+ChatPanel MarkdownListItem > Vertical { height: auto; margin: 0; padding: 0; }
+ChatPanel MarkdownListItem MarkdownParagraph { margin: 0; padding: 0; }
+ChatPanel MarkdownBulletList { margin: 0 0 1 1; padding: 0; }
+ChatPanel MarkdownOrderedList { margin: 0 0 1 1; padding: 0; }
+ChatPanel MarkdownHeader { margin: 1 0 0 0; }
+ChatPanel MarkdownH1, ChatPanel MarkdownH2, ChatPanel MarkdownH3, ChatPanel MarkdownH4, ChatPanel MarkdownH5, ChatPanel MarkdownH6 { margin: 0; padding: 0; }
 ChatPanel MarkdownHorizontalRule { margin: 0; padding: 0; border: none; border-top: solid $accent-darken-2; }
 FileTreePanel { height: 1fr; overflow-y: auto; padding: 1; }
 PlanPanel { height: 1fr; border-top: solid $accent-darken-2; }
@@ -73,6 +82,10 @@ PlanPanel { height: 1fr; border-top: solid $accent-darken-2; }
 #suggestions.visible { display: block; padding: 0 2; }
 #model-overlay { display: none; }
 #model-overlay.visible { display: block; }
+
+/* Scrollable file tabs */
+#viewer-tabs > TabBar { overflow-x: auto; overflow-y: hidden; }
+#viewer-tabs > TabBar Tab { min-width: 12; max-width: 28; }
 
 .narrow #context-panel { display: none; }
 .narrow #left-panel { display: none; }
@@ -133,6 +146,8 @@ class AndromityApp(App):
         self._cron_running_jobs: set = set()  # tracks which cron job IDs are currently executing
         # Undo checkpoint stack — each entry: {snapshot_hash, msg_count, prompt}
         self._undo_stack: list[dict] = []
+        self._pending_batch_files: set[Path] = set()
+        self._pre_turn_snapshot: str | None = None
         log.info("=== Andromity started | project=%s ===", self._project_path)
 
     def _get_ctx_limit(self) -> int:
@@ -145,7 +160,7 @@ class AndromityApp(App):
         return get_context_limit_for_model(provider, model) if (provider and model) else 0
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        yield Header(show_clock=True, name="Andromity")
         yield Horizontal(
             FileTreePanel(id="left-panel"),
             Vertical(
@@ -179,6 +194,12 @@ class AndromityApp(App):
             self.remove_class("hide-files")
 
     def on_mount(self):
+        try:
+            from andromity.telemetry import send_session_start
+            send_session_start()
+        except Exception:
+            pass
+            
         self.focus_input()
         provider = config.get("default", "provider", "")
         model = config.get("default", "model", "")
@@ -209,6 +230,14 @@ class AndromityApp(App):
         # Start MCP client manager — run in a background worker so the UI
         # stays responsive, then refresh the context panel + show a toast.
         async def _init_mcp():
+            try:
+                cfg = self._mcp_manager.load_config().get("mcpServers", {})
+                for k in cfg.keys():
+                    self._mcp_manager.server_status[k] = {"status": "initializing", "tools": 0, "error": None, "command": ""}
+                self._update_status()
+            except Exception:
+                pass
+                
             await self._mcp_manager.start_all()
             # Refresh context panel immediately — no need to wait for a message
             try:
@@ -339,7 +368,7 @@ class AndromityApp(App):
 
     async def _on_tool_approval(self, tool_name: str, args: dict) -> bool:
         if not config.is_trusted(self._project_path):
-            if tool_name in ("write_file", "edit_file", "shell_exec"):
+            if tool_name in ("write_file", "edit_file", "edit_file_multi", "delete_file", "shell_exec"):
                 chat = self.query_one(ChatPanel)
                 chat.add_system_message(f"[red]✗ Blocked '{tool_name}'[/] — Folder is untrusted. Use [bold cyan]/trust[/] to enable.")
                 return False
@@ -348,19 +377,23 @@ class AndromityApp(App):
             return True
 
         mode = config.get("default", "permission_mode", "safe")
-        if mode in ("yolo", "full"):
-            return True
-
+        
         sensitive_patterns = [".env", ".ssh", ".git", "config.toml", "secret", "password"]
         target_path = str(args.get("path", "")).lower()
         is_sensitive = any(p in target_path for p in sensitive_patterns) if target_path else False
         
+        if tool_name in ("write_file", "edit_file", "edit_file_multi", "delete_file"):
+            if mode != "yolo":
+                path = args.get("path") or args.get("target_path") or args.get("target_file")
+                if path:
+                    self._pending_batch_files.add(Path(path).resolve())
+            return True
+
+        if mode in ("yolo", "full"):
+            return True
+
         needs_approval = False
-        
-        if tool_name in ("write_file", "edit_file"):
-            if mode == "safe" or is_sensitive:
-                needs_approval = True
-        elif tool_name == "shell_exec":
+        if tool_name == "shell_exec":
             command = str(args.get("command", "")).strip()
             if mode == "safe":
                 needs_approval = True
@@ -406,31 +439,42 @@ class AndromityApp(App):
             
         return True
 
+    def _resolve_tool_approval(self, approved: bool) -> None:
+        """Called to resolve a pending tool approval (e.g. from UI buttons or panel closing)."""
+        if getattr(self, "_tool_approval_future", None) and not self._tool_approval_future.done():
+            self._tool_approval_future.set_result(approved)
+
     # ── Plan callbacks ────────────────────────────────────────────────────────
 
     def _on_plan_written(self, plan):
-        """Called by tools.py on write_plan AND update_plan_step. Runs in agent thread."""
+        """Called by tools.py on write_plan. Runs in agent thread."""
         if plan:
             self.call_from_thread(self._refresh_plan_in_ui, plan)
 
     def _refresh_plan_in_ui(self, plan):
+        """Show plan in DiffPanel (file viewer) and todos in PlanPanel sidebar."""
+        # Show plan card in the file viewer (#diff-panel is the CSS id)
+        try:
+            diff = self.query_one("#diff-panel", DiffPanel)
+            diff.show_plan(plan)
+            diff.add_class("visible")   # #diff-panel.visible { display: block }
+        except Exception as e:
+            log.warning("_refresh_plan_in_ui: diff panel error: %s", e)
+
+        # Update right-sidebar todo tracker
         try:
             panel = self.query_one(PlanPanel)
-            if panel._plan is plan:
-                # Same plan object — step status changed, just refresh
-                panel.refresh_plan()
-            else:
-                # New plan — load it and notify user
-                panel.load_plan(plan)
-                # Auto-show right sidebar so user can see approve/reject buttons
-                sidebar = self.query_one("#right-sidebar")
-                if sidebar.styles.display == "none":
-                    sidebar.remove_class("force-hidden")
-                    sidebar.add_class("force-show")
-                chat = self.query_one(ChatPanel)
+            panel.load_plan(plan)
+        except Exception:
+            pass
+
+        # Chat notification
+        try:
+            chat = self.query_one(ChatPanel)
+            if plan.status == "pending":
                 chat.add_system_message(
-                    f"📋 [bold]Plan ready:[/] [cyan]{escape(plan.title)}[/] ({len(plan.steps)} steps)\n"
-                    "[dim]Review the plan in the right panel → Approve or Reject[/]"
+                    f"📋 [bold]Plan ready:[/] [cyan]{escape(plan.title)}[/]\n"
+                    "[dim]Open Viewer (Ctrl+D) → optional comment → Approve or Reject[/]"
                 )
         except Exception:
             pass
@@ -450,37 +494,39 @@ class AndromityApp(App):
         except Exception:
             pass
 
-    def _on_plan_approved(self, plan):
-        """Called when user clicks Approve in PlanPanel."""
-        if self.session:
-            self.session.save_plan(plan.to_dict())
+    def _on_plan_approved(self, plan, comment: str = ""):
+        """Called when user clicks Approve in DiffPanel."""
+        plan.status = "approved"
+        plan.save()
         chat = self.query_one(ChatPanel)
-        chat.add_system_message(f"[green]Plan approved.[/] Creating todos...")
-        steps_text = "\n".join(f"- {s.index}. {s.text}" for s in plan.steps)
-        self._send_to_agent(
-            f"The plan was approved. Do these things in order:\n"
-            f"1. Write the plan to '.andromity/plan.md' as a reference document\n"
-            f"2. Create a todo for EACH step using create_todo tool\n"
-            f"3. Mark the first todo as active using update_todo\n"
-            f"4. Then execute the work\n\n"
-            f"Plan steps:\n{steps_text}\n\n"
-            f"Do NOT ask for confirmation — just execute."
-        )
-
-    def _on_plan_rejected(self, plan, feedback: str):
-        """Called when user clicks Reject + submits feedback in PlanPanel."""
-        # Save rejected state to session
-        if self.session:
-            self.session.save_plan(plan.to_dict())
-        chat = self.query_one(ChatPanel)
-        msg = f"[red]✗ Plan rejected.[/]"
-        if feedback:
-            msg += f" Reason: {escape(feedback)}"
-            # Feed rejection back to agent as a new message
-            self._process_message(f"The plan was rejected. Reason: {feedback}. Please revise the plan.")
+        suffix = f" Comment: {escape(comment)}" if comment else ""
+        chat.add_system_message(f"✅ [green]Plan approved.[/]{suffix}")
+        msg = "The plan has been approved by the user. Proceed with execution of the todos in order."
+        if comment:
+            msg += f" User note: {comment}"
+            
+        if getattr(self, "_plan_approval_future", None) and not self._plan_approval_future.done():
+            self._send_to_agent(msg)
+            self._plan_approval_future.set_result(True)
         else:
-            self._process_message("The plan was rejected. Please revise the plan and try again.")
-        chat.add_system_message(msg)
+            self._send_to_agent(msg)
+
+    def _on_plan_rejected(self, plan, feedback: str = ""):
+        """Called when user clicks Reject in DiffPanel."""
+        plan.status = "rejected"
+        plan.save()
+        chat = self.query_one(ChatPanel)
+        suffix = f" Reason: {escape(feedback)}" if feedback else ""
+        chat.add_system_message(f"❌ [red]Plan rejected.[/]{suffix}")
+        msg = "The plan was rejected by the user. Please revise the plan and present a new one."
+        if feedback:
+            msg += f" User reason: {feedback}"
+            
+        if getattr(self, "_plan_approval_future", None) and not self._plan_approval_future.done():
+            self._process_message(msg)
+            self._plan_approval_future.set_result(False)
+        else:
+            self._process_message(msg)
 
     # ── Cron callbacks ────────────────────────────────────────────────────────
 
@@ -637,7 +683,9 @@ class AndromityApp(App):
         chat.add_system_message(f"Provider: [bold]{provider}[/] | Model: [bold cyan]{model}[/]")
 
     def _apply_profile(self, profile: str):
-        """Apply a new profile from the profile picker."""
+        """Apply a new profile from the profile picker and persist it."""
+        from andromity.config import config
+        config.set("default", "profile", profile)
         self.agent = Agent(self.session, profile=profile, on_tool_approval=self._on_tool_approval, ctx_limit=self._get_ctx_limit())
         self._update_status()
         chat = self.query_one(ChatPanel)
@@ -669,13 +717,63 @@ class AndromityApp(App):
             pass
         chat.add_system_message("[green]New session started.[/] Previous session saved.")
         self._update_status()
-        # Refresh session browser overlay
+
+    def _run_compact(self):
+        """Manually trigger context window compaction via /compact command."""
+        chat = self.query_one(ChatPanel)
+        n = len(self.session.messages)
+        if n <= 4:
+            chat.add_system_message("[dim]Context is short — nothing to compact yet.[/]")
+            return
+        chat.add_system_message(
+            f"[cyan]Compacting context…[/] Summarizing {n - 1} messages → will keep last 10 turns."
+        )
+        self.run_worker(self._compact_worker(), exclusive=False)
+
+    async def _compact_worker(self):
+        """Background worker: runs the same compaction logic as _compact_context but on demand."""
+        chat = self.query_one(ChatPanel)
         try:
-            sb = self.query_one("#session-overlay", SessionBrowserOverlay)
-            sb._current_id = self.session.id
-            sb._project_path = self._project_path
-        except Exception:
-            pass
+            from andromity.core.provider import stream_completion
+            from andromity.core.events import TextDelta
+
+            keep_last_n = 10
+            msgs_to_summarize = self.session.messages[1:-keep_last_n]
+            if not msgs_to_summarize:
+                self.call_from_thread(
+                    chat.add_system_message, "[dim]Not enough history to compact.[/]"
+                )
+                return
+
+            summary_prompt = (
+                "Summarize the following conversation history concisely. "
+                "Focus on: decisions made, files created/edited, the overarching goal, "
+                "and any important constraints or facts. Be terse but complete:\n\n"
+            )
+            for m in msgs_to_summarize:
+                role = m.get("role", "unknown")
+                content = str(m.get("content", ""))
+                if len(content) > 600:
+                    content = content[:600] + " …[truncated]"
+                summary_prompt += f"{role.upper()}: {content}\n\n"
+
+            summary_msgs = [{"role": "user", "content": summary_prompt}]
+            new_summary = ""
+            async for event in stream_completion(summary_msgs, tools=[]):
+                if isinstance(event, TextDelta):
+                    new_summary += event.text
+
+            removed = self.session.compact_messages(new_summary, keep_last_n=keep_last_n)
+            self.call_from_thread(
+                chat.add_system_message,
+                f"[green]✓ Compacted.[/] Replaced {removed} messages with a summary block. "
+                f"Working context now has {len(self.session.messages)} messages."
+            )
+            self.call_from_thread(self._update_status)
+        except Exception as e:
+            self.call_from_thread(
+                chat.add_system_message, f"[red]Compact failed:[/] {e}"
+            )
 
     def _load_session(self, session: Session):
         """Switch to a historical session and replay its chat history."""
@@ -782,6 +880,7 @@ class AndromityApp(App):
             "msg_count": msg_count_before,
             "prompt": prompt,
         })
+        self._pre_turn_snapshot = snapshot_hash
         # Keep undo stack capped at 20
         if len(self._undo_stack) > 20:
             self._undo_stack.pop(0)
@@ -820,7 +919,7 @@ class AndromityApp(App):
                     log.debug("TOOL RESULT: %s", event.tool_id)
                     chat.show_tool_result(event.tool_id, event.result)
                     
-                    if active_tool_name in ("write_file", "edit_file", "delete_file", "shell_exec"):
+                    if active_tool_name in ("write_file", "edit_file", "edit_file_multi", "delete_file", "shell_exec"):
                         import json
                         try:
                             args = json.loads(active_tool_args)
@@ -829,6 +928,11 @@ class AndromityApp(App):
                                 self.query_one(FileTreePanel).highlight_recent_change(Path(target_path).absolute())
                         except Exception:
                             pass
+                elif isinstance(event, PlanApprovalRequired):
+                    log.info("Plan approval required. Pausing agent loop.")
+                    self._plan_approval_future = asyncio.Future()
+                    await self._plan_approval_future
+                    self._plan_approval_future = None
                 elif isinstance(event, Done):
                     log.info("DONE usage=%s", event.usage)
                     self._update_status()
@@ -852,8 +956,17 @@ class AndromityApp(App):
             chat.end_assistant_message()
             self._update_status()
             
+            # Play done sound if enabled
+            from andromity.config import config as _cfg
+            try:
+                if _cfg.get("default", "sound_done", True):
+                    from andromity.core.audio import play_sound
+                    play_sound("done.wav")
+            except Exception:
+                pass
+            
             # Refresh file tree only if file-modifying tools were used
-            file_tools = {"write_file", "edit_file", "delete_file", "shell_exec"}
+            file_tools = {"write_file", "edit_file", "edit_file_multi", "delete_file", "shell_exec"}
             if tools_used & file_tools:
                 try:
                     self.query_one(FileTreePanel).refresh_tree()
@@ -876,6 +989,27 @@ class AndromityApp(App):
             if self._pending_mode_change:
                 self._pending_mode_change = False
                 self._apply_mode_change()
+                
+            # Trigger batch review if files were modified
+            if getattr(self, "_pending_batch_files", None) and getattr(self, "_pre_turn_snapshot", None):
+                files_to_review = list(self._pending_batch_files)
+                self._pending_batch_files.clear()
+                
+                mode = config.get("default", "permission_mode", "safe")
+                if mode == "full":
+                    chat.add_system_message(f"[green]✓ {len(files_to_review)} files saved (auto-approved in FULL mode).[/]")
+                elif mode in ("safe", "trust"):
+                    def _on_batch_review(accepted: bool | None):
+                        if accepted:
+                            chat.add_system_message(f"[green]✓ Batch review accepted for {len(files_to_review)} files.[/]")
+                        else:
+                            chat.add_system_message("[yellow]⚠ Batch review completed. Unaccepted files were reverted.[/]")
+                            try:
+                                self.query_one(FileTreePanel).refresh_tree()
+                            except Exception:
+                                pass
+                                
+                    self.push_screen(BatchReviewOverlay(self._project_path, self._pre_turn_snapshot, files_to_review), _on_batch_review)
                 
             if self._prompt_queue:
                 next_prompt = self._prompt_queue.pop(0)
@@ -1009,8 +1143,7 @@ class AndromityApp(App):
         chat = self.query_one(ChatPanel)
 
         if command == "/model":
-            overlay = self.query_one("#model-overlay")
-            overlay.add_class("visible")
+            self.action_toggle_model()
         elif command == "/profile":
             if len(parts) > 1 and parts[1].strip():
                 # Direct profile name provided
@@ -1021,8 +1154,7 @@ class AndromityApp(App):
                     chat.add_system_message(f"Unknown profile: {profile}. Use builder, reviewer, or planner.")
             else:
                 # Open profile picker overlay
-                overlay = self.query_one("#profile-overlay")
-                overlay.add_class("visible")
+                self.action_toggle_profile()
         elif command == "/keys":
             if len(parts) > 1 and parts[1].strip():
                 subparts = parts[1].strip().split(maxsplit=2)
@@ -1060,13 +1192,11 @@ class AndromityApp(App):
             lines.append("\n[dim]To set a key: /keys set <provider> <key>[/]")
             chat.add_system_message("\n".join(lines))
         elif command == "/sessions":
-            sb = self.query_one("#session-overlay", SessionBrowserOverlay)
-            sb._current_id = self.session.id
-            sb._project_path = self._project_path
-            sb._load_sessions()
-            sb.add_class("visible")
+            self.action_toggle_sessions()
         elif command == "/new":
             self._new_session()
+        elif command == "/compact":
+            self._run_compact()
         elif command == "/rename":
             if len(parts) > 1 and parts[1].strip():
                 new_name = parts[1].strip()
@@ -1140,6 +1270,7 @@ class AndromityApp(App):
                 "  /mcp                     Show MCP server status & available tools\n"
                 "  /sessions                Browse & switch sessions (Ctrl+O)\n"
                 "  /new                     Start a new session\n"
+                "  /compact                  Summarize & compress old context (frees token space)\n"
                 "  /rename <name>           Rename current session\n"
                 "  /settings                Open master settings panel\n"
                 "  /keys                    View status of all provider API keys\n"
@@ -1240,9 +1371,12 @@ class AndromityApp(App):
                     lines.append("")
                     lines.append("[bold]Available Tools[/]")
                     for t in all_tools:
-                        lines.append(f"  [cyan]{escape(t.full_name)}[/]")
-                        if t.description:
-                            desc = t.description[:80] + ("…" if len(t.description) > 80 else "")
+                        # Guard: only MCPToolInfo objects have .full_name
+                        full_name = getattr(t, 'full_name', None) or getattr(t, 'name', str(t))
+                        description = getattr(t, 'description', '') or ''
+                        lines.append(f"  [cyan]{escape(full_name)}[/]")
+                        if description:
+                            desc = description[:80] + ("\u2026" if len(description) > 80 else "")
                             lines.append(f"    [dim]{escape(desc)}[/]")
 
                 lines.append("")
@@ -1281,6 +1415,34 @@ class AndromityApp(App):
         else:
             diff.add_class("visible")
 
+    @on(Button.Pressed, "#btn-apply")
+    def on_btn_apply(self, event: Button.Pressed):
+        self._resolve_tool_approval(True)
+        try:
+            self.query_one("#diff-panel", DiffPanel).dismiss_tool()
+        except Exception:
+            pass
+        self.query_one("#diff-panel").remove_class("visible")
+
+    @on(Button.Pressed, "#btn-reject")
+    def on_btn_reject(self, event: Button.Pressed):
+        self._resolve_tool_approval(False)
+        try:
+            self.query_one("#diff-panel", DiffPanel).dismiss_tool()
+        except Exception:
+            pass
+        self.query_one("#diff-panel").remove_class("visible")
+
+    @on(Button.Pressed, "#btn-allow-domain")
+    def on_btn_allow_domain(self, event: Button.Pressed):
+        self._resolve_tool_approval(True)
+        try:
+            self.query_one("#diff-panel", DiffPanel).dismiss_tool()
+        except Exception:
+            pass
+        self.query_one("#diff-panel").remove_class("visible")
+
+
     def action_toggle_model(self):
         self.push_screen(ModelPickerOverlay())
 
@@ -1304,7 +1466,7 @@ class AndromityApp(App):
 
     def _resolve_tool_approval(self, result: bool):
         """Resolve pending tool approval future if one exists."""
-        if self._tool_approval_future and not self._tool_approval_future.done():
+        if getattr(self, '_tool_approval_future', None) and not self._tool_approval_future.done():
             self._tool_approval_future.set_result(result)
             self._tool_approval_future = None
 

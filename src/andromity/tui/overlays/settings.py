@@ -15,7 +15,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
     Static, Button, ListView, ListItem, Label,
-    ContentSwitcher, Input, RadioSet, RadioButton, Switch,
+    ContentSwitcher, Input, RadioSet, RadioButton, Switch, Collapsible
 )
 
 from andromity.config import config, get_shell
@@ -131,6 +131,15 @@ SettingsScreen {
 .mcp-tool-desc  { color: $text-muted; width: 1fr; }
 .mcp-actions    { height: 3; padding: 0 1; }
 .mcp-restart-btn { margin-right: 1; }
+/* Per-card minimal restart button */
+.mcp-btn-restart {
+    border: none !important;
+    background: transparent !important;
+    color: $text-muted !important;
+    min-width: 0 !important; height: 1 !important;
+    padding: 0 1 !important;
+}
+.mcp-btn-restart:hover { color: $accent !important; }
 /* Auth section inside card */
 .mcp-auth-section   { padding: 0 2 1 2; height: auto; }
 .mcp-auth-label     { color: $warning; height: 1; text-style: bold; margin-bottom: 1; }
@@ -143,6 +152,12 @@ SettingsScreen {
 .mcp-remove-btn     { width: 12; }
 .mcp-connect-btn    { width: 10; margin-left: 1; }
 .mcp-auth-btn       { width: auto; margin-right: 1; }
+.mcp-pat-input      { display: none; height: 3; margin-top: 1; margin-bottom: 1; }
+.mcp-link-btn       { border: none !important; background: transparent !important; color: $accent !important; min-width: 0 !important; height: 1 !important; padding: 0 1 !important; }
+.mcp-link-btn:hover { background: transparent !important; color: $accent-lighten-1 !important; text-style: none !important; }
+.mcp-link-error       { color: $error !important; }
+.mcp-link-error:hover { color: $error-lighten-1 !important; }
+.mcp-auth-methods   { height: 1; margin-bottom: 1; margin-top: 1; }
 """
 
     def __init__(self, mcp_manager: MCPClientManager = None,
@@ -304,9 +319,9 @@ SettingsScreen {
                                         classes="trust-path")
                                     yield Label(trusted_at,
                                                 classes="trust-date")
-                                    yield Button("Revoke", variant="error",
+                                    yield Button("[u]Revoke[/u]",
                                                  id=f"revoke-{t_key}",
-                                                 classes="trust-btn")
+                                                 classes="mcp-link-btn mcp-link-error")
                         else:
                             yield Label("[dim]No trusted projects yet.[/]",
                                         classes="section-hint")
@@ -331,6 +346,21 @@ SettingsScreen {
                                 "Dry Run Mode  [dim](simulate tools, no real writes)[/]",
                                 classes="adv-label")
                             yield Switch(id="setting-dryrun")
+                        with Horizontal(classes="adv-row"):
+                            yield Label(
+                                "Anonymous Telemetry  [dim](one ping on first launch to count users)[/]",
+                                classes="adv-label")
+                            yield Switch(id="setting-telemetry")
+                        with Horizontal(classes="adv-row"):
+                            yield Label(
+                                "Sound Alerts (Attention)  [dim](play sound when AI needs approval)[/]",
+                                classes="adv-label")
+                            yield Switch(id="setting-sound-attention")
+                        with Horizontal(classes="adv-row"):
+                            yield Label(
+                                "Sound Alerts (Done)  [dim](play sound when AI finishes a response)[/]",
+                                classes="adv-label")
+                            yield Switch(id="setting-sound-done")
 
                     # ── 8. About ──────────────────────────────────────────────
                     with VerticalScroll(id="pane-about", classes="settings-pane"):
@@ -400,154 +430,119 @@ SettingsScreen {
             # ── Header ───────────────────────────────────────────────────
             with Horizontal(classes="mcp-card-header"):
                 yield Label(f" {s_name}", classes="mcp-name")
-                yield Label(badge_txt, classes=badge_cls)
+                yield Label(badge_txt, classes=f"mcp-badge {badge_cls}",
+                            id=f"mcp-badge-{s_name}")
                 yield Label(
                     f"{len(tools)} tool{'s' if len(tools) != 1 else ''}",
-                    classes="mcp-tool-count")
+                    classes="mcp-tool-count",
+                    id=f"mcp-toolcount-{s_name}")
+                # Minimal restart button — only for startable servers
+                if transport in ("stdio", "sse") or already_converted:
+                    yield Button(
+                        "↺",
+                        id=f"mcp-restart-{s_name}",
+                        classes="mcp-btn-restart",
+                        tooltip="Restart this server",
+                    )
                 # Toggle only for startable servers
                 if transport in ("stdio", "sse") or already_converted:
                     yield Switch(value=not disabled, id=f"mcp-toggle-{s_name}")
                 else:
                     yield Label("[dim]—[/]")
+            yield Label(f"[dim]Transport:[/] {transport_label}",
+                        classes="mcp-transport")
 
-            # ── Body ─────────────────────────────────────────────────────
-            with Vertical(classes="mcp-card-body"):
-                yield Label(f"[dim]Transport:[/] {transport_label}",
-                            classes="mcp-transport")
+            # Command display
+            if s_conf.get("command"):
+                cmd_str = (f"{s_conf['command']} "
+                           f"{' '.join(str(a) for a in s_conf.get('args', []))}").strip()
+                cmd_str = cmd_str[:80] + "…" if len(cmd_str) > 80 else cmd_str
+                yield Label(f"[dim]Command:[/] {cmd_str}", classes="mcp-cmd-line")
 
-                # Command display
-                if s_conf.get("command"):
-                    cmd_str = (f"{s_conf['command']} "
-                               f"{' '.join(str(a) for a in s_conf.get('args', []))}").strip()
-                    cmd_str = cmd_str[:80] + "…" if len(cmd_str) > 80 else cmd_str
-                    yield Label(f"[dim]Command:[/] {cmd_str}", classes="mcp-cmd-line")
+            # URL display — as clickable button + truncated label
+            if server_url and not already_converted:
+                short = server_url[:60] + "…" if len(server_url) > 60 else server_url
+                with Horizontal(classes="mcp-transport"):
+                    yield Label(f"[dim]URL:[/] {short}", classes="mcp-cmd-line")
+                    yield Button("🔗 Open",
+                                 id=f"mcp-openurl-{s_name}",
+                                 classes="mcp-url-btn")
 
-                # URL display — as clickable button + truncated label
-                if server_url and not already_converted:
-                    short = server_url[:60] + "…" if len(server_url) > 60 else server_url
-                    with Horizontal(classes="mcp-transport"):
-                        yield Label(f"[dim]URL:[/] {short}", classes="mcp-cmd-line")
-                        yield Button("🔗 Open",
-                                     id=f"mcp-openurl-{s_name}",
-                                     classes="mcp-url-btn")
+            # Description (1 line max)
+            desc = s_conf.get("description", "").strip()
+            if desc:
+                yield Label(f"[dim]{desc[:90].replace(chr(10), ' ')}[/]",
+                            classes="mcp-cmd-line")
 
-                # Description (1 line max)
-                desc = s_conf.get("description", "").strip()
-                if desc:
-                    yield Label(f"[dim]{desc[:90].replace(chr(10), ' ')}[/]",
-                                classes="mcp-cmd-line")
+            # Tools Collapsible
+            if tools:
+                with Collapsible(title=f"View {len(tools)} tools exposed by {s_name}", classes="mcp-tools-collapsible"):
+                    for t in tools:
+                        name = getattr(t, 'name', 'unknown_tool')
+                        d = getattr(t, 'description', '')
+                        yield Label(f"• {name}: [dim]{d}[/]", classes="mcp-tool-label")
 
-                # ── Auth sections ────────────────────────────────────────────
-                # CASE 1 — remote HTTP (serverUrl only, not yet connected)
-                if transport == "remote" and not already_converted:
-                    # Check if we already have an OAuth token stored
-                    from andromity.core.oauth import load_token, clear_token
-                    has_token   = bool(load_token(s_name))
-                    is_supabase = "supabase.com" in server_url.lower()
-
-                    with Vertical(classes="mcp-auth-section"):
-                        if has_token:
-                            # Token exists — show status + re-auth / revoke options
-                            yield Label("[green]✔[/] OAuth token cached",
-                                        classes="mcp-auth-label")
-                            with Horizontal(classes="mcp-token-row"):
-                                yield Button("🔁 Re-authenticate",
-                                             id=f"mcp-oauth-{s_name}",
-                                             classes="mcp-auth-btn")
-                                yield Button("🗑 Revoke Token",  variant="error",
-                                             id=f"mcp-revoke-{s_name}",
-                                             classes="mcp-auth-btn")
-                        else:
-                            yield Label("⚠  Auth required — choose method:",
-                                        classes="mcp-auth-label")
-                            with Horizontal(classes="mcp-token-row"):
-                                yield Button("🔐 Connect with OAuth",
-                                             variant="primary",
-                                             id=f"mcp-oauth-{s_name}",
-                                             classes="mcp-connect-btn")
-                                yield Button("🔑 Use PAT instead",
-                                             id=f"mcp-show-pat-{s_name}",
-                                             classes="mcp-auth-btn")
-                            # PAT input (hidden initially, shown on 'Use PAT' click)
-                            with Horizontal(classes="mcp-token-row",
-                                           id=f"mcp-pat-row-{s_name}"):
-                                yield Input(
-                                    placeholder="sbp_…" if is_supabase
-                                                else f"{s_name} access token…",
-                                    password=True,
-                                    id=f"mcp-token-{s_name}")
-                                yield Button("Save & Connect", variant="primary",
-                                             id=f"mcp-connect-{s_name}",
-                                             classes="mcp-connect-btn")
-                            if is_supabase:
-                                with Horizontal(classes="mcp-token-row"):
-                                    yield Label(
-                                        "[dim]PAT: supabase.com/dashboard/account/tokens[/]",
-                                        classes="mcp-cmd-line")
-                                    yield Button("🔗 Open",
-                                                 id=f"mcp-openurl-dashboard-{s_name}",
-                                                 classes="mcp-url-btn")
-
-                        # Live status label updated by OAuth worker
-                        yield Label("", id=f"mcp-oauth-status-{s_name}",
-                                    classes="mcp-cmd-line")
-
-                # CASE 2 — SSE proxy already running — show nothing extra
-                # CASE 2b — SSE proxy stopped — offer browser auth
-                elif transport == "sse" and not is_running:
-                    with Horizontal(classes="mcp-auth-section"):
-                        yield Label("⚠  Browser OAuth needed.",
-                                    classes="mcp-auth-label")
-                        yield Button("Open Auth in Browser", variant="warning",
-                                     id=f"mcp-browser-auth-{s_name}",
-                                     classes="mcp-auth-btn")
-
-                # CASE 3 — stdio with missing env var credentials
-                elif auth_keys:
-                    env_block = s_conf.get("env", {})
-                    missing = [k for k in auth_keys if not env_block.get(k)]
-                    if missing:
-                        with Vertical(classes="mcp-auth-section"):
-                            yield Label("⚠  Missing credentials:",
-                                        classes="mcp-auth-label")
-                            for env_key in missing:
-                                with Horizontal(classes="mcp-token-row"):
-                                    yield Label(f"[dim]{env_key}[/]",
-                                                classes="mcp-cmd-line")
-                                    yield Input(
-                                        placeholder=f"Value…",
-                                        password=True,
-                                        id=f"mcp-env-{s_name}--{env_key}")
-                                    yield Button("Save", variant="primary",
-                                                 id=f"mcp-saveenv-{s_name}--{env_key}")
+            # ── Auth sections ────────────────────────────────────────────
+            # Remote HTTP or SSE server
+            if transport in ("remote", "sse"):
+                from andromity.core.oauth import load_token, clear_token
+                has_token = bool(load_token(s_name))
+                        
+                with Vertical(classes="mcp-auth-section"):
+                    if has_token:
+                        yield Label("✅ Token active", classes="mcp-success")
+                        with Horizontal(classes="mcp-auth-methods"):
+                            yield Button("[u]Re-Authenticate[/u]", id=f"mcp-oauth-{s_name}", classes="mcp-link-btn")
+                            yield Button("[u]Revoke[/u]", id=f"mcp-revoke-{s_name}", classes="mcp-link-btn mcp-link-error")
                     else:
-                        yield Label(
-                            f"[green]✓[/] Credentials set: {', '.join(auth_keys)}",
-                            classes="mcp-transport")
+                        yield Label("⚠ Authentication required", classes="mcp-warning")
+                        with Horizontal(classes="mcp-auth-methods"):
+                            yield Button("[u]🌐 Authenticate[/u]", id=f"mcp-oauth-{s_name}", classes="mcp-link-btn")
+                            yield Button("[u]🔑 Use PAT[/u]", id=f"mcp-pat-toggle-{s_name}", classes="mcp-link-btn")
 
-                # ── Error ─────────────────────────────────────────────────
-                if error_msg:
-                    yield Label(f"✕  {error_msg[:110]}", classes="mcp-error-line")
+                        with Horizontal(classes="mcp-pat-input", id=f"mcp-pat-container-{s_name}"):
+                            yield Input(placeholder="Paste Personal Access Token (PAT)", id=f"mcp-pat-{s_name}")
+                            yield Button("Save", id=f"mcp-pat-save-{s_name}", variant="success")
 
-                # ── Tool list ──────────────────────────────────────────────
-                if tools:
-                    yield Label(f"Tools ({len(tools)}):", classes="mcp-tools-head")
-                    for tool in tools:
-                        with Horizontal(classes="mcp-tool-row"):
-                            yield Label(tool.name, classes="mcp-tool-name")
-                            desc_short = (tool.description or "")[:55].replace("\n", " ")
-                            yield Label(f"[dim]{desc_short}[/]",
-                                        classes="mcp-tool-desc")
+                        yield Label("", id=f"mcp-oauth-status-{s_name}", classes="mcp-oauth-status")
 
+            # CASE 3 — stdio with missing env var credentials
+            elif auth_keys:
+                env_block = s_conf.get("env", {})
+                missing = [k for k in auth_keys if not env_block.get(k)]
+                if missing:
+                    with Vertical(classes="mcp-auth-section"):
+                        yield Label("⚠  Missing credentials:",
+                                    classes="mcp-auth-label")
+                        for env_key in missing:
+                            with Horizontal(classes="mcp-token-row"):
+                                yield Label(f"[dim]{env_key}[/]",
+                                            classes="mcp-cmd-line")
+                                yield Input(
+                                    placeholder=f"Value…",
+                                    password=True,
+                                    id=f"mcp-env-{s_name}--{env_key}")
+                                yield Button("Save", variant="primary",
+                                             id=f"mcp-saveenv-{s_name}--{env_key}")
+                else:
+                    yield Label(
+                        f"[green]✓[/] Credentials set: {', '.join(auth_keys)}",
+                        classes="mcp-transport")
+
+            # ── Error ─────────────────────────────────────────────────
+            if error_msg:
+                yield Label(f"✕  {error_msg[:110]}", classes="mcp-error-line")
+
+            # ── Tool list ──────────────────────────────────────────────
             # ── Card footer ──────────────────────────────────────────────
             with Horizontal(classes="mcp-card-footer"):
                 installed = s_conf.get("installedAt", "")
                 yield Label(
                     f"[dim]{installed}[/]" if installed else "",
                     classes="mcp-install-date")
-                yield Button("✕ Remove", variant="error",
+                yield Button("[u]Uninstall[/u]",
                              id=f"mcp-remove-{s_name}",
-                             classes="mcp-remove-btn")
+                             classes="mcp-link-btn mcp-link-error")
 
 
     # ── MCP card live-refresh ───────────────────────────────────────────────
@@ -574,8 +569,9 @@ SettingsScreen {
             new_widgets = list(self._compose_mcp_card(server_name, s_conf))
 
             # Atomic swap: remove old, mount new in same position
+            if new_widgets:
+                await parent.mount(new_widgets[0], before=old_card)
             await old_card.remove()
-            await parent.mount(*new_widgets)
         except Exception as exc:
             import logging
             logging.getLogger(__name__).debug(
@@ -603,6 +599,9 @@ SettingsScreen {
             app = self.app
             self.query_one("#setting-debug",  Switch).value = getattr(app, "_debug_mode", False)
             self.query_one("#setting-dryrun", Switch).value = getattr(app.agent, "dry_run", False)
+            self.query_one("#setting-telemetry", Switch).value = config.get("default", "telemetry", True)
+            self.query_one("#setting-sound-attention", Switch).value = config.get("default", "sound_attention", True)
+            self.query_one("#setting-sound-done", Switch).value = config.get("default", "sound_done", True)
         except Exception:
             pass
 
@@ -637,49 +636,42 @@ SettingsScreen {
             # Don't re-start if already running
             if server_name in self.mcp_manager.sessions:
                 return
-            mcp_conf = self.mcp_manager.load_config()
-            srv_conf = mcp_conf.get("mcpServers", {}).get(server_name, {})
-            command  = srv_conf.get("command")
-            args     = srv_conf.get("args", [])
-            env      = srv_conf.get("env", {})
-            if command:
-                session = MCPStdioSession(
-                    name=server_name, command=command, args=args, env=env,
-                    cwd=self.mcp_manager.project_path)
-                success = await session.start()
-                if success:
-                    self.mcp_manager.sessions[server_name] = session
-                    self.mcp_manager.server_status[server_name] = {
-                        "status": "running",
-                        "tools":  len(session.tools),
-                        "error":  None,
-                        "command": f"{command} {' '.join(str(a) for a in args)}".strip(),
-                    }
-                else:
-                    self.mcp_manager.server_status[server_name] = {
-                        "status": "error",
-                        "tools":  0,
-                        "error":  session.error or "Failed to connect",
-                        "command": f"{command} {' '.join(str(a) for a in args)}".strip(),
-                    }
+            
+            async def _start():
+                await self.mcp_manager.start_server(server_name)
+                await self._refresh_mcp_card(server_name)
+            
+            self.run_worker(_start(), exclusive=False)
+            return
         else:
             if server_name in self.mcp_manager.sessions:
                 await self.mcp_manager.sessions[server_name].stop()
                 del self.mcp_manager.sessions[server_name]
             self.mcp_manager.server_status.pop(server_name, None)
 
+        # Refresh the card so badge/tools/auth sections reflect new state
+        await self._refresh_mcp_card(server_name)
+
+
     # ── Button handlers ───────────────────────────────────────────────────────
 
     @on(Button.Pressed)
     async def _on_button_pressed(self, event: Button.Pressed):
+        event.stop()
         btn_id = event.button.id or ""
 
         if btn_id == "settings-cancel":
-            self.dismiss(False)
+            try:
+                self.dismiss(False)
+            except Exception:
+                pass
 
         elif btn_id == "settings-save":
             self._save_settings()
-            self.dismiss(True)
+            try:
+                self.dismiss(True)
+            except Exception:
+                pass
 
         elif btn_id == "mcp-restart-all":
             if self.mcp_manager:
@@ -687,7 +679,18 @@ SettingsScreen {
                                 severity="information")
                 async def _restart():
                     await self.mcp_manager.stop_all()
+                    try:
+                        mcp_conf = self.mcp_manager.load_config().get("mcpServers", {})
+                        for k in mcp_conf.keys():
+                            self.mcp_manager.server_status[k] = {"status": "initializing", "tools": 0, "error": None, "command": ""}
+                        self.app._update_status()
+                    except Exception:
+                        pass
                     await self.mcp_manager.start_all()
+                    try:
+                        self.app._update_status()
+                    except Exception:
+                        pass
                     n = len(self.mcp_manager.sessions)
                     self.app.notify(
                         f"MCP restart done: {n} server(s) active.",
@@ -704,14 +707,82 @@ SettingsScreen {
                         pass
                 self.run_worker(_restart(), exclusive=True)
 
-        elif btn_id.startswith("mcp-connect-"):
-            # Remote HTTP: user pasted a PAT token → convert to mcp-remote
-            s_name = btn_id.replace("mcp-connect-", "")
+        elif btn_id.startswith("mcp-restart-"):
+            # Per-server restart — preserve all settings state
+            s_name = btn_id[len("mcp-restart-"):]
+            if not self.mcp_manager:
+                return
+
+            # 1. Immediately show "restarting…" in the badge (no full rebuild)
             try:
-                token = self.query_one(f"#mcp-token-{s_name}", Input).value.strip()
+                badge = self.query_one(f"#mcp-badge-{s_name}", Label)
+                badge.update("⟳ restarting…")
+                badge.set_classes("mcp-badge mcp-badge-stopped")
+            except Exception:
+                pass
+            # Disable the restart button while in progress
+            try:
+                event.button.disabled = True
+            except Exception:
+                pass
+
+            async def _restart_one(name: str = s_name):
+                try:
+                    # Stop existing session
+                    if name in self.mcp_manager.sessions:
+                        await self.mcp_manager.sessions[name].stop()
+                        del self.mcp_manager.sessions[name]
+                    self.mcp_manager.server_status.pop(name, None)
+                    
+                    self.mcp_manager.server_status[name] = {"status": "initializing", "tools": 0, "error": None, "command": ""}
+                    try:
+                        self.app._update_status()
+                    except Exception:
+                        pass
+
+                    # Start fresh (reads config from disk — no re-save needed)
+                    await self.mcp_manager.start_server(name)
+
+                    # Refresh just this card
+                    await self._refresh_mcp_card(name)
+
+                    # Update main app status bar
+                    try:
+                        self.app._update_status()
+                    except Exception:
+                        pass
+
+                    status_info = self.mcp_manager.server_status.get(name, {})
+                    status = status_info.get("status", "unknown")
+                    if status == "running":
+                        n_tools = status_info.get("tools", 0)
+                        self.app.notify(
+                            f"\u21ba {name}: running ({n_tools} tool{'s' if n_tools != 1 else ''})",
+                            severity="information")
+                    else:
+                        err = status_info.get("error", "unknown error")
+                        self.app.notify(f"\u21ba {name}: failed \u2014 {err}", severity="error")
+                except Exception as exc:
+                    self.app.notify(f"↺ {name}: error — {exc}", severity="error")
+                    # Re-enable button even on failure
+                    try:
+                        self.query_one(f"#mcp-restart-{name}", Button).disabled = False
+                    except Exception:
+                        pass
+
+            self.run_worker(_restart_one(), exclusive=False)
+
+
+        elif btn_id.startswith("mcp-pat-save-"):
+            # Remote HTTP: user pasted a PAT token
+            s_name = btn_id.replace("mcp-pat-save-", "")
+            try:
+                token = self.query_one(f"#mcp-pat-{s_name}", Input).value.strip()
                 if not token:
                     self.app.notify("Please paste a token first.", severity="warning")
                     return
+                
+                # Save the PAT token
                 ok = config.convert_remote_to_mcp_remote(
                     self.project_path, s_name, token)
                 if ok:
@@ -721,6 +792,13 @@ SettingsScreen {
                     self.app.notify(
                         f"{s_name}: PAT saved! Toggle to connect.",
                         severity="information")
+                    
+                    if self.mcp_manager:
+                        if s_name in self.mcp_manager.sessions:
+                            await self.mcp_manager.sessions[s_name].stop()
+                            del self.mcp_manager.sessions[s_name]
+                        self.mcp_manager.server_status.pop(s_name, None)
+                        
                     # Refresh the card so auth section disappears and toggle appears
                     await self._refresh_mcp_card(s_name)
                 else:
@@ -754,12 +832,12 @@ SettingsScreen {
                 else:
                     self.app.notify("No URL found for this server.", severity="warning")
 
-        elif btn_id.startswith("mcp-show-pat-"):
+        elif btn_id.startswith("mcp-pat-toggle-"):
             # Toggle visibility of the PAT input row
-            s_name = btn_id.replace("mcp-show-pat-", "")
+            s_name = btn_id.replace("mcp-pat-toggle-", "")
             try:
-                row = self.query_one(f"#mcp-pat-row-{s_name}")
-                row.display = not row.display
+                container = self.query_one(f"#mcp-pat-container-{s_name}")
+                container.styles.display = "flex" if container.styles.display == "none" else "none"
             except Exception:
                 pass
 
@@ -768,20 +846,34 @@ SettingsScreen {
             from andromity.core.oauth import clear_token
             s_name = btn_id.replace("mcp-revoke-", "")
             clear_token(s_name)
+            
+            if self.mcp_manager:
+                if s_name in self.mcp_manager.sessions:
+                    await self.mcp_manager.sessions[s_name].stop()
+                    del self.mcp_manager.sessions[s_name]
+                self.mcp_manager.server_status.pop(s_name, None)
+                
             self.app.notify(f"{s_name}: OAuth token revoked.", severity="information")
             await self._refresh_mcp_card(s_name)
 
         elif btn_id.startswith("mcp-oauth-"):
-            # Full OAuth 2.1 + PKCE + DCR flow
+            # Full native Python OAuth flow
             s_name = btn_id.replace("mcp-oauth-", "")
             mcp_conf = self.mcp_manager.load_config() if self.mcp_manager else {}
             srv_conf = mcp_conf.get("mcpServers", {}).get(s_name, {})
-            server_url = srv_conf.get("serverUrl") or srv_conf.get("url") or ""
+            server_url = srv_conf.get("serverUrl") or srv_conf.get("url")
+            
+            # If server_url missing but args has it (legacy config)
+            if not server_url:
+                for a in srv_conf.get("args", []):
+                    if isinstance(a, str) and (a.startswith("http://") or a.startswith("https://")):
+                        server_url = a
+                        break
+
             if not server_url:
                 self.app.notify(f"{s_name}: no serverUrl configured.", severity="warning")
                 return
 
-            # Update status label live as the worker progresses
             def _set_status(msg: str):
                 try:
                     lbl = self.query_one(f"#mcp-oauth-status-{s_name}", Label)
@@ -791,42 +883,36 @@ SettingsScreen {
 
             async def _do_oauth():
                 from andromity.core.oauth import full_oauth_flow
-                import shutil
-
-                _set_status("🔍 Starting OAuth flow…")
+                _set_status("🔍 Discovering endpoints…")
                 token = await full_oauth_flow(s_name, server_url, _set_status)
 
                 if not token:
-                    # Status label already shows error from full_oauth_flow
+                    # If OAuth fails (e.g., no metadata for Supabase), show PAT field automatically
+                    try:
+                        container = self.query_one(f"#mcp-pat-container-{s_name}")
+                        if container.styles.display == "none":
+                            container.styles.display = "flex"
+                    except Exception:
+                        pass
                     return
 
-                # Start mcp-remote with the new token
-                npx     = shutil.which("npx") or "npx"
-                args    = ["mcp-remote", server_url,
-                           "--header", f"Authorization:Bearer {token}"]
-                env     = srv_conf.get("env", {})
-                from andromity.core.mcp import MCPStdioSession
-                session = MCPStdioSession(
-                    name=s_name, command=npx, args=args,
-                    env=env, cwd=self.mcp_manager.project_path if self.mcp_manager else "")
-                success = await session.start()
-                if success and self.mcp_manager:
-                    self.mcp_manager.sessions[s_name] = session
-                    self.mcp_manager.server_status[s_name] = {
-                        "status":  "running",
-                        "tools":   len(session.tools),
-                        "error":   None,
-                        "command": f"npx mcp-remote {server_url} (OAuth)",
-                    }
-                    self.app.notify(
-                        f"{s_name}: ✅ {len(session.tools)} tools via OAuth",
-                        severity="information")
-                else:
-                    _set_status(f"⚠ Connected but failed to start: {session.error}")
-
-                # Refresh card to reflect new state
+                # Successfully authenticated, restart the MCP sessions to pick up the token natively!
+                _set_status("✅ Connected! Initializing…")
+                self.app.notify(f"{s_name} authenticated successfully!", severity="information")
+                
+                if self.mcp_manager:
+                    try:
+                        self.mcp_manager.server_status[s_name] = {"status": "initializing", "tools": 0, "error": None, "command": ""}
+                        self.app._update_status()
+                    except Exception:
+                        pass
+                    await self.mcp_manager.start_all()
+                    try:
+                        self.app._update_status()
+                    except Exception:
+                        pass
+                    
                 await self._refresh_mcp_card(s_name)
-                # Refresh context panel in main app
                 try:
                     self.app._update_status()
                 except Exception:
@@ -834,37 +920,10 @@ SettingsScreen {
 
             self.run_worker(_do_oauth(), exclusive=False)
 
-        elif btn_id.startswith("mcp-browser-auth-"):
 
-            # SSE proxy (like Neon): open browser OAuth via mcp-remote
-            import subprocess, shutil
-            s_name = btn_id.replace("mcp-browser-auth-", "")
-            mcp_conf = self.mcp_manager.load_config() if self.mcp_manager else {}
-            srv_conf = mcp_conf.get("mcpServers", {}).get(s_name, {})
-            args = srv_conf.get("args", [])
-            # Find the URL in args (after mcp-remote)
-            remote_url = ""
-            for i, a in enumerate(args):
-                if a.startswith("http") and "mcp" in a.lower():
-                    remote_url = a
-                    break
-            if remote_url:
-                try:
-                    # Run mcp-remote in a new window to trigger browser OAuth
-                    npx = shutil.which("npx") or "npx"
-                    subprocess.Popen(
-                        [npx, "-y", "mcp-remote", remote_url, "--port", "3334"],
-                        creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-                    )
-                    self.app.notify(
-                        f"Opening browser for {s_name} OAuth login…",
-                        severity="information")
-                except Exception as e:
-                    self.app.notify(f"Failed to launch mcp-remote: {e}",
-                                    severity="error")
-            else:
-                self.app.notify("Could not find remote URL in config.",
-                                severity="warning")
+
+
+
 
         elif btn_id.startswith("mcp-saveenv-"):
             # Save a single env var for a stdio server
@@ -971,11 +1030,18 @@ SettingsScreen {
         except Exception:
             pass
 
-        # 5. Debug / dry-run
+        # 5. Debug / dry-run / telemetry
         try:
             app = self.app
             app._debug_mode  = self.query_one("#setting-debug",  Switch).value
             app.agent.dry_run = self.query_one("#setting-dryrun", Switch).value
+            telemetry_enabled = self.query_one("#setting-telemetry", Switch).value
+            config.set("default", "telemetry", telemetry_enabled)
+            
+            sound_attn = self.query_one("#setting-sound-attention", Switch).value
+            config.set("default", "sound_attention", sound_attn)
+            sound_done = self.query_one("#setting-sound-done", Switch).value
+            config.set("default", "sound_done", sound_done)
         except Exception:
             pass
 

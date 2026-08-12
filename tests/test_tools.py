@@ -11,7 +11,7 @@ from andromity.core.tools import (
     list_dir,
     shell_exec,
     execute_tool,
-    tool_search,
+    list_tools,
     write_plan,
     update_plan_step,
     ToolRegistry,
@@ -70,7 +70,7 @@ def test_read_file_with_lines(monkeypatch):
         _trusted(monkeypatch, tmpdir)
         path = os.path.join(tmpdir, "test.txt")
         write_file(path, "line1\nline2\nline3\nline4\n")
-        content = read_file(path, start=2, end=3)
+        content = read_file(path, start_line=2, end_line=3)
         assert "2: line2" in content and "3: line3" in content
         assert "line1" not in content and "line4" not in content
 
@@ -248,11 +248,11 @@ def test_read_file_range_edge_cases(monkeypatch):
         write_file(path, "line 1\nline 2\nline 3\n")
         
         # start > total_lines
-        res = read_file(path, start=10, end=12)
+        res = read_file(path, start_line=10, end_line=12)
         assert "Error: start line 10 exceeds total lines" in res
         
         # start > end
-        res2 = read_file(path, start=3, end=1)
+        res2 = read_file(path, start_line=3, end_line=1)
         assert "Error: start line 3 is greater than end line 1" in res2
 
         # Empty file
@@ -291,11 +291,12 @@ def test_core_tools_structure():
     assert "list_dir" in tool_names
     assert "shell_exec" in tool_names
     assert "write_plan" in tool_names
-    assert "tool_search" in tool_names
+    assert "list_tools" in tool_names
 
 
-def test_tool_registry_and_tool_search():
+def test_tool_registry_and_list_tools():
     registry = ToolRegistry()
+    ToolRegistry._instance = registry
     registry.register_deferred(
         name="fetch_url",
         description="Fetch documentation web page",
@@ -308,32 +309,65 @@ def test_tool_registry_and_tool_search():
     assert "fetch_url" in catalog
 
     # Search for tool
-    search_res = registry.search("fetch web documentation")
-    assert "matching tools" in search_res
+    search_res = list_tools(search="fetch web documentation", include_description=True)
+    assert "Found 1 deferred tool" in search_res
     assert "fetch_url" in search_res
     assert "parameters" in search_res.lower()
-
+    
+    # Test offset and limit
+    res_paginated = list_tools(limit=1, offset=0, include_description=False)
+    assert "fetch_url" in res_paginated
+    assert "Description:" not in res_paginated
 
 def test_write_plan_syncs_todo(tmp_path):
     plan_data = {
         "title": "Refactor Database Module",
         "steps": [
-            {"index": 1, "text": "Create database interface", "status": "in_progress"},
-            {"index": 2, "text": "Implement sqlite adapter", "status": "pending"},
+            "Create database interface",
+            "Implement sqlite adapter",
         ]
     }
     with patch("andromity.core.tools._get_project_root", return_value=tmp_path):
         res = write_plan(**plan_data)
         assert "Refactor Database Module" in res
         assert "2 steps" in res
-        
-        # Verify TodoList was synced automatically
+
+        # Verify TodoList was synced automatically (steps → todos)
         todo_list = TodoList.load(str(tmp_path))
         assert len(todo_list.items) == 2
         assert todo_list.items[0].title == "Create database interface"
-        assert todo_list.items[0].status == "active"
         assert todo_list.items[1].title == "Implement sqlite adapter"
+
+
+def test_write_plan_dict_steps_syncs_todo(tmp_path):
+    """Steps provided as dicts with text/status are handled correctly."""
+    plan_data = {
+        "title": "Auth Refactor",
+        "steps": [
+            {"text": "Create interface", "status": "in_progress"},
+            {"text": "Add tests", "status": "pending"},
+        ]
+    }
+    with patch("andromity.core.tools._get_project_root", return_value=tmp_path):
+        res = write_plan(**plan_data)
+        assert "Auth Refactor" in res
+        todo_list = TodoList.load(str(tmp_path))
+        assert len(todo_list.items) == 2
+        assert todo_list.items[0].title == "Create interface"
+        assert todo_list.items[0].status == "active"   # in_progress → active
         assert todo_list.items[1].status == "pending"
+
+
+def test_write_plan_no_steps_in_plan_dict(tmp_path):
+    """Plan dict must NOT contain a 'steps' key — todos are the steps."""
+    with patch("andromity.core.tools._get_project_root", return_value=tmp_path):
+        write_plan(title="Clean arch", steps=["Do A", "Do B"])
+        from andromity.core.planner import Plan
+        p = Plan.load(str(tmp_path))
+        assert p is not None
+        assert p.title == "Clean arch"
+        assert not hasattr(p, "steps") or not p.to_dict().get("steps"), \
+            "Plan dict should not have a steps key — use TodoList instead"
 
 
 # ─── Trust guard tests ────────────────────────────────────────────────────────

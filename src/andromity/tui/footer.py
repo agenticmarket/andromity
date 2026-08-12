@@ -50,8 +50,12 @@ ContextPanel {
             if mcp_summary and mcp_summary.get("configured", 0) > 0:
                 active = mcp_summary.get("active", 0)
                 failed = mcp_summary.get("failed", 0)
+                initializing = mcp_summary.get("initializing", 0)
                 tools_cnt = mcp_summary.get("tools_count", 0)
-                if failed > 0:
+                
+                if initializing > 0:
+                    safe_update(self.query_one("#ctx-mcp"), f"[bold yellow]⟳[/] MCP: {initializing} initializing [dim]({active} ok)[/dim]")
+                elif failed > 0:
                     safe_update(self.query_one("#ctx-mcp"), f"[bold red]✗[/] MCP: {failed} failed [dim]({active} ok, {tools_cnt} tools)[/dim]")
                 else:
                     safe_update(self.query_one("#ctx-mcp"), f"[bold green]●[/] MCP: [green]{active} active[/] [dim]({tools_cnt} tools)[/dim]")
@@ -81,8 +85,14 @@ AppFooter {
     height: 1; background: $surface-darken-1; padding: 0 1;
     layout: horizontal;
 }
-#footer-left { width: auto; content-align: left middle; }
-#footer-right { width: 1fr; content-align: right middle; }
+#footer-left { width: 1fr; content-align: left middle; }
+#footer-settings {
+    width: auto; min-width: 12; height: 1;
+    border: none !important; background: transparent !important;
+    color: $text-muted !important;
+    padding: 0 1 !important;
+}
+#footer-settings:hover { color: $accent !important; }
 """
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -90,24 +100,27 @@ AppFooter {
 
     def compose(self) -> ComposeResult:
         yield Static("", id="footer-left")
-        yield Static("", id="footer-right")
+        yield Button("⚙  Settings", id="footer-settings")
 
     def on_mount(self):
-        self.set_interval(1.0, self._refresh_text)
+        self._refresh_text()
 
     def _refresh_text(self):
         try:
-            import datetime
             from andromity import __version__
-            now = datetime.datetime.now().strftime("%I:%M %p")
             version = f"v{__version__}"
             cwd_part = f" [bold magenta]{escape(self.cwd)}[/]" if self.cwd else ""
             left_text = f" [bold]Andromity {version}[/] |{cwd_part}"
-            right_text = f"{now} "
             safe_update(self.query_one("#footer-left"), left_text)
-            safe_update(self.query_one("#footer-right"), right_text)
         except Exception:
             pass
+
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == "footer-settings":
+            try:
+                self.app.action_toggle_settings()
+            except Exception:
+                pass
 
     def update_footer(self, cwd: str = ""):
         self.cwd = cwd

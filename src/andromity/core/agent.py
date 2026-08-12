@@ -6,7 +6,7 @@ from andromity.core.session import Session
 from andromity.core.profiles import get_system_prompt, filter_tools_for_profile
 from andromity.core.tools import CORE_TOOLS, ToolRegistry, execute_tool, register_session
 from andromity.core.events import (
-    StreamEvent, TextDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult
+    StreamEvent, TextDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired
 )
 from andromity.config import config
 
@@ -44,7 +44,7 @@ class Agent:
             model = config.get("default", "model", "")
             limit = get_context_limit_for_model(provider, model)
         if limit <= 0:
-            limit = 32768
+            limit = 131072  # 128K default for unknown models
 
         # Use real API-reported token count as primary source.
         # Fall back to a crude character estimate only if we haven't had any API reply yet.
@@ -54,8 +54,14 @@ class Agent:
             current_tokens = sum(len(str(m.get("content", ""))) // 4 for m in self.session.messages)
         threshold = int(limit * 0.8)
 
-        if current_tokens > threshold and len(self.session.messages) > 6:
-            yield TextDelta(text="\n*Context window near limit. Compacting memory...*\n\n")
+        # Also compact if history has grown beyond 30 user/assistant turns
+        # regardless of token count — keeps the window fresh for long sessions.
+        non_system = [m for m in self.session.messages if m.get("role") != "system"]
+        turn_limit_hit = len(non_system) > 60  # 30 user + 30 assistant = 60 messages
+
+        if (current_tokens > threshold or turn_limit_hit) and len(self.session.messages) > 6:
+            reason = "turn limit (30 turns)" if turn_limit_hit else "token limit"
+            yield TextDelta(text=f"\n*Context window near {reason}. Compacting memory...*\n\n")
             
             keep_last_n = 10
             msgs_to_summarize = self.session.messages[1:-keep_last_n]
@@ -151,12 +157,12 @@ class Agent:
                 if limit > 0 and current_tokens > limit * 0.9:
                     warning = (
                         f"\n**[No response from model]** Context full ({current_tokens:,}/{limit:,} tokens). "
-                        "Try `/new` for a fresh session, or switch model with **Ctrl+M**.\n"
+                        "Try `/new` for a fresh session, or switch model with **Ctrl+L**.\n"
                     )
                 else:
                     warning = (
                         "\n**[No response from model]** The model returned an empty response. "
-                        "Try rephrasing your message or switch model with **Ctrl+M**.\n"
+                        "Try rephrasing your message or switch model with **Ctrl+L**.\n"
                     )
                 yield TextDelta(text=warning)
                 break
@@ -197,3 +203,9 @@ class Agent:
 
                 self.session.add_message("tool", content=str(result), name=tool_name, tool_call_id=tool_call["id"])
                 yield ToolResult(tool_id=tool_call["id"], result=str(result))
+
+                if tool_name == "write_plan":
+                    plan = self.session.load_plan_obj()
+                    if plan and plan.status == "pending":
+                        yield PlanApprovalRequired(plan=plan)
+
