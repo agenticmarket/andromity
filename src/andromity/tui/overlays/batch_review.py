@@ -51,10 +51,10 @@ BatchReviewOverlay {
 #batch-footer Button { margin: 0 1; }
 """
 
-    def __init__(self, project_path: str, snapshot_hash: str, files: List[Path], **kwargs):
+    def __init__(self, project_path: str, snapshot_hash: Optional[str], files: List[Path], **kwargs):
         super().__init__(**kwargs)
         self.project_path = Path(project_path)
-        self.snapshot_hash = snapshot_hash
+        self.snapshot_hash = snapshot_hash  # None when git unavailable — Reject still shows but can't revert
         self.files = [p for p in files if p.is_absolute() and p.is_relative_to(self.project_path)]
         self.repo = get_repo(self.project_path)
         self._selected_index = 0

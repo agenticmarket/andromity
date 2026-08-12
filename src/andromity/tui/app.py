@@ -990,15 +990,19 @@ class AndromityApp(App):
                 self._pending_mode_change = False
                 self._apply_mode_change()
                 
-            # Trigger batch review if files were modified
-            if getattr(self, "_pending_batch_files", None) and getattr(self, "_pre_turn_snapshot", None):
+            # Trigger batch review if files were modified in safe/trust mode.
+            # NOTE: We check _pending_batch_files only — NOT _pre_turn_snapshot.
+            # The snapshot is only needed for the Reject revert; the overlay must
+            # still open even when git is unavailable (non-git folder, snap failed).
+            if getattr(self, "_pending_batch_files", None):
                 files_to_review = list(self._pending_batch_files)
                 self._pending_batch_files.clear()
-                
+
                 mode = config.get("default", "permission_mode", "safe")
                 if mode == "full":
                     chat.add_system_message(f"[green]✓ {len(files_to_review)} files saved (auto-approved in FULL mode).[/]")
                 elif mode in ("safe", "trust"):
+                    snapshot = getattr(self, "_pre_turn_snapshot", None)  # may be None in non-git folders
                     def _on_batch_review(accepted: bool | None):
                         if accepted:
                             chat.add_system_message(f"[green]✓ Batch review accepted for {len(files_to_review)} files.[/]")
@@ -1008,8 +1012,8 @@ class AndromityApp(App):
                                 self.query_one(FileTreePanel).refresh_tree()
                             except Exception:
                                 pass
-                                
-                    self.push_screen(BatchReviewOverlay(self._project_path, self._pre_turn_snapshot, files_to_review), _on_batch_review)
+
+                    self.push_screen(BatchReviewOverlay(self._project_path, snapshot, files_to_review), _on_batch_review)
                 
             if self._prompt_queue:
                 next_prompt = self._prompt_queue.pop(0)
