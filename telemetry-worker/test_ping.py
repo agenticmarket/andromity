@@ -2,7 +2,7 @@ import urllib.request
 import urllib.error
 import json
 
-data = json.dumps({'event': 'first_launch', 'os': 'windows', 'version': '0.1.0'}).encode()
+data = json.dumps({'event': 'first_launch', 'os': 'windows', 'version': '0.1.1'}).encode()
 req = urllib.request.Request(
     'https://andromity-telemetry.shekharpachlore99.workers.dev/ping', 
     data=data, 
