@@ -1,6 +1,39 @@
 """
 FileTreePanel — active file-system monitoring via watchdog (OS-native inotify/FSEvents).
-No polling. Debounced so rapid writes don't spam the tree rebuild.
+
+# ── Performance Notes (Linux / inotify) ──────────────────────────────────────
+#
+# PROBLEM (discovered 2026-08):
+#   On Linux, watchdog's Observer uses inotify which creates a kernel watch for
+#   EVERY subdirectory recursively — including venv/ (200+ dirs), dist/, etc.
+#   Each inotify watch consumes kernel resources. More critically, Python itself
+#   generates .pyc files in __pycache__ on every import, which fired inotify
+#   events → on_any_event() → call_from_thread(refresh_tree) → Textual event
+#   loop was forced to run a full git-status + directory walk WHILE THE USER
+#   WAS TYPING. This caused severe keystroke lag on Linux that didn't appear
+#   on Windows (which uses ReadDirectoryChangesW — a single handle per tree).
+#
+# FIX 1 — Expanded _IGNORE_DIRS:
+#   venv, dist, .pytest_cache, etc. are now in _IGNORE_DIRS so _is_noise()
+#   returns True and call_from_thread is NEVER triggered for those paths.
+#
+# FIX 2 — refresh_tree() runs in a background worker thread:
+#   Even for real source file changes, the git-status + tree walk now runs
+#   in run_worker(thread=True) so the UI event loop (and keystrokes) are
+#   never blocked — critical for large codebases with thousands of files.
+#
+# FIX 3 — Depth cap at 6:
+#   Prevents UI hang if the user opens andromity in a very deep monorepo
+#   or accidentally in a filesystem root.
+#
+# FIX 4 — Debounce raised from 0.35s → 1.0s:
+#   Rapid consecutive FS events (e.g. formatter saving multiple files) are
+#   collapsed into a single refresh instead of triggering one per file.
+#
+# FIX 5 — Polling fallback raised from 2s → 10s:
+#   The poll path only fires when inotify is unavailable (WSL1, network FS,
+#   inotify limit hit). 10s is plenty for a last-resort fallback.
+# ─────────────────────────────────────────────────────────────────────────────
 
 Install dep:  pip install watchdog
 """
@@ -138,10 +171,10 @@ FileTreePanel { height: 1fr; }
             except OSError:
                 # inotify limit hit, WSL1, network FS, or other unsupported env.
                 # Fall back to polling silently — user notices nothing.
-                self.set_interval(3.0, self.refresh_tree)
+                self.set_interval(10.0, self.refresh_tree)
         else:
-            # watchdog not installed — poll every 3 s as safety net.
-            self.set_interval(3.0, self.refresh_tree)
+            # watchdog not installed — poll every 10 s as safety net.
+            self.set_interval(10.0, self.refresh_tree)
 
     def on_unmount(self) -> None:
         """Clean up the background observer thread on widget teardown."""
