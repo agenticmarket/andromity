@@ -171,7 +171,12 @@ FileTreePanel { height: 1fr; }
 
     # ── Tree builders ──────────────────────────────────────────────────────────
 
-    def _build_tree(self, parent_node: TreeNode, path: Path, git_status: dict | None = None):
+    def _build_tree(self, parent_node: TreeNode, path: Path, git_status: dict | None = None, _depth: int = 0):
+        # Cap depth at 6 — prevents UI hang on very deep monorepos or
+        # accidentally open filesystem roots.
+        if _depth > 6:
+            parent_node.add_leaf("[dim]… (too deep)[/dim]")
+            return
         if git_status is None:
             repo = get_repo(path)
             git_status = get_git_status(repo) if repo else {}
@@ -182,7 +187,7 @@ FileTreePanel { height: 1fr; }
         for item in items:
             if item.name.startswith(".") and item.name != ".andromity":
                 continue
-            if item.name in _IGNORE_DIRS:
+            if item.name in _IGNORE_DIRS or item.name.endswith(".egg-info"):
                 continue
             try:
                 rel_path = str(item.relative_to(self.project_path))
@@ -191,7 +196,7 @@ FileTreePanel { height: 1fr; }
             git_marker = _git_marker(rel_path, git_status)
             if item.is_dir():
                 node = parent_node.add(f"[bold blue]{item.name}/[/]{git_marker}", data=str(item))
-                self._build_tree(node, item, git_status)
+                self._build_tree(node, item, git_status, _depth + 1)
             else:
                 color = _ext_color(item.suffix)
                 parent_node.add_leaf(f"[{color}]{item.name}[/{color}]{git_marker}", data=str(item))
@@ -278,36 +283,46 @@ FileTreePanel { height: 1fr; }
             self.set_timer(3.0, reset_label)
 
     def refresh_tree(self):
-        """Full tree rescan — preserves expanded state."""
+        """Full tree rescan — runs in a background worker so it never blocks
+        the event loop (critical for large codebases with many files)."""
         # Skip rebuild if the panel is hidden (display: none) — no point
         # doing expensive git + tree work that nobody can see.
         if not self.display:
             return
-        tree = self.query_one("#file-tree", Tree)
 
-        # Snapshot which dirs are expanded before clearing
-        expanded: set[str] = set()
-        def collect_expanded(n):
-            if n.is_expanded and n.data:
-                expanded.add(str(n.data))
-            for child in n.children:
-                collect_expanded(child)
-        collect_expanded(tree.root)
+        def _do_refresh():
+            """Runs in Textual worker thread — safe to do I/O here."""
+            try:
+                tree = self.query_one("#file-tree", Tree)
 
-        tree.clear()
-        
-        query = getattr(self, "_last_query", "")
-        if not query:
-            self._build_tree(tree.root, self.project_path)
-        else:
-            self._build_filtered_tree(tree.root, self.project_path, query)
+                # Snapshot which dirs are expanded before clearing
+                expanded: set[str] = set()
+                def collect_expanded(n):
+                    if n.is_expanded and n.data:
+                        expanded.add(str(n.data))
+                    for child in n.children:
+                        collect_expanded(child)
+                collect_expanded(tree.root)
 
-        def restore_expanded(n):
-            if str(n.data) in expanded:
-                n.expand()
-            for child in n.children:
-                restore_expanded(child)
-        restore_expanded(tree.root)
+                tree.clear()
+
+                query = getattr(self, "_last_query", "")
+                if not query:
+                    self._build_tree(tree.root, self.project_path)
+                else:
+                    self._build_filtered_tree(tree.root, self.project_path, query)
+
+                def restore_expanded(n):
+                    if str(n.data) in expanded:
+                        n.expand()
+                    for child in n.children:
+                        restore_expanded(child)
+                restore_expanded(tree.root)
+            except Exception:
+                pass
+
+        # run_worker keeps the heavy I/O off the UI event loop
+        self.run_worker(_do_refresh, thread=True, exclusive=True, group="tree-refresh")
 
 
 # ─── Shared helpers ─────────────────────────────────────────────────────────────
