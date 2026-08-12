@@ -19,37 +19,84 @@ class BatchReviewOverlay(ModalScreen[bool]):
     DEFAULT_CSS = """\
 BatchReviewOverlay {
     align: center middle;
-    background: $background 30%;
+    background: $background 50%;
 }
 #batch-dialog {
-    width: 90%; height: 90%;
-    border: solid $accent; background: $surface;
+    width: 92%; height: 88%;
+    border: solid $primary-darken-2;
+    background: $surface;
     padding: 0;
 }
 #batch-header {
-    height: 3; padding: 1 2;
-    background: $accent-darken-2; color: $text; text-style: bold;
+    height: 2; padding: 0 2;
+    background: $primary-darken-3;
+    color: $text;
     dock: top;
+    content-align: left middle;
 }
 #batch-body {
     height: 1fr;
 }
 #batch-file-list {
-    width: 30;
+    width: 32;
     height: 1fr;
-    border-right: solid $surface-lighten-2;
+    border-right: solid $surface-lighten-1;
+    padding: 0;
 }
 #batch-diff-view {
     height: 1fr;
     padding: 1 2;
     overflow-y: auto;
 }
+
+/* ── Footer ──────────────────────────────────────────────────── */
 #batch-footer {
-    dock: bottom; height: 3; padding: 0 1;
+    dock: bottom;
+    height: 3;
+    padding: 0 2;
     background: $surface-darken-1;
+    border-top: solid $surface-lighten-1;
+    align: left middle;
 }
-#batch-footer Button { margin: 0 1; }
+#batch-footer-divider {
+    width: 1;
+    height: 1;
+    color: $surface-lighten-2;
+    margin: 0 1;
+    content-align: center middle;
+}
+
+/* Flat minimal button base */
+#batch-footer Button {
+    border: none !important;
+    background: transparent !important;
+    height: 1 !important;
+    min-width: 0 !important;
+    padding: 0 2 !important;
+    margin: 0 !important;
+    text-style: none;
+}
+
+/* Per-file actions — muted until hovered */
+#btn-reject-sel  { color: $error-darken-1 !important; }
+#btn-accept-sel  { color: $success-darken-1 !important; }
+#btn-reject-sel:hover { color: $error !important; text-style: bold; }
+#btn-accept-sel:hover { color: $success !important; text-style: bold; }
+
+/* Bulk actions — slightly more prominent */
+#btn-reject-all {
+    color: $error !important;
+    text-style: bold;
+    margin-left: 1 !important;
+}
+#btn-accept-all {
+    color: $success !important;
+    text-style: bold;
+}
+#btn-reject-all:hover { color: $error-lighten-1 !important; }
+#btn-accept-all:hover { color: $success-lighten-1 !important; }
 """
+
 
     def __init__(self, project_path: str, snapshot_hash: Optional[str], files: List[Path], **kwargs):
         super().__init__(**kwargs)
@@ -61,15 +108,24 @@ BatchReviewOverlay {
 
     def compose(self) -> ComposeResult:
         with Vertical(id="batch-dialog"):
-            yield Static("🔍 Batch Review: Modified Files", id="batch-header")
+            yield Static(self._header_text(), id="batch-header")
             with Horizontal(id="batch-body"):
                 yield OptionList(id="batch-file-list")
                 with VerticalScroll(id="batch-diff-view"):
                     yield Static("", id="batch-diff-content")
             with Horizontal(id="batch-footer"):
-                yield Button("Reject Selected", variant="error", id="btn-reject-sel")
-                yield Button("Reject All", variant="error", id="btn-reject-all")
-                yield Button("Accept All", variant="success", id="btn-accept-all")
+                # Per-file actions
+                yield Button("✕ Reject", id="btn-reject-sel")
+                yield Button("✓ Accept", id="btn-accept-sel")
+                # Divider
+                yield Static("│", id="batch-footer-divider")
+                # Bulk actions
+                yield Button("✕ Reject All", id="btn-reject-all")
+                yield Button("✓ Accept All", id="btn-accept-all")
+
+    def _header_text(self) -> str:
+        n = len(self.files)
+        return f"[bold]🔍 Batch Review[/bold]  [dim]{n} file{'s' if n != 1 else ''} modified — review before accepting[/dim]"
 
     def on_mount(self):
         self._update_file_list()
@@ -77,7 +133,7 @@ BatchReviewOverlay {
     def _update_file_list(self):
         option_list = self.query_one("#batch-file-list", OptionList)
         option_list.clear_options()
-        
+
         if not self.files:
             self.dismiss(True)
             return
@@ -88,10 +144,16 @@ BatchReviewOverlay {
                 option_list.add_option(Option(str(rel), id=str(rel)))
             except ValueError:
                 pass
-                
+
         if self.files:
             option_list.highlighted = 0
             self._show_diff_for_index(0)
+
+        # Keep header count in sync
+        try:
+            self.query_one("#batch-header", Static).update(self._header_text())
+        except Exception:
+            pass
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted):
         self._selected_index = event.option_index
@@ -146,19 +208,25 @@ BatchReviewOverlay {
 
     def on_button_pressed(self, event: Button.Pressed):
         bid = event.button.id
-        
+
         if bid == "btn-accept-all":
             self.dismiss(True)
-            
+
         elif bid == "btn-reject-all":
             if self.repo and self.snapshot_hash:
                 restore_snapshot(self.repo, self.snapshot_hash)
             self.dismiss(False)
-            
+
+        elif bid == "btn-accept-sel":
+            # Accept this file as-is — remove from review list, move to next
+            if not (0 <= self._selected_index < len(self.files)):
+                return
+            self.files.pop(self._selected_index)
+            self._update_file_list()
+
         elif bid == "btn-reject-sel":
             if not (0 <= self._selected_index < len(self.files)):
                 return
-            
             path_to_revert = self.files[self._selected_index]
             if self.repo and self.snapshot_hash:
                 try:
@@ -166,7 +234,6 @@ BatchReviewOverlay {
                     restore_file_snapshot(self.repo, self.snapshot_hash, str(rel_path))
                 except ValueError:
                     pass
-            
-            # Remove from list
+            # Remove from list and refresh
             self.files.pop(self._selected_index)
             self._update_file_list()
