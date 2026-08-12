@@ -84,7 +84,8 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
             yield Static("", id="tool-result")
 
     def on_mount(self):
-        self._timer = self.set_interval(0.1, self._tick)
+        # 250ms (was 100ms) — spinner is cosmetic, 4fps is indistinguishable from 10fps
+        self._timer = self.set_interval(0.25, self._tick)
 
     def append_args(self, args_chunk: str):
         self._args_json += args_chunk
@@ -193,8 +194,9 @@ ThinkingBubble Collapsible { border: none; padding: 0; background: transparent; 
             yield Static("", id="think-md", classes="dim italic")
 
     def on_mount(self):
-        self._timer = self.set_interval(0.1, self._tick_time)
-        self._md_timer = self.set_interval(0.1, self._flush)
+        # 200ms intervals (was 100ms) — thinking spinner/flush is cosmetic, halving rate reduces CPU
+        self._timer = self.set_interval(0.2, self._tick_time)
+        self._md_timer = self.set_interval(0.2, self._flush)
 
     def _tick_time(self):
         if not self._done:
@@ -249,6 +251,7 @@ StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
         self._timer = None
         self._spinner_frame = 0
         self._first_content_received = False
+        self._last_rendered_len = 0  # track how many chars were last rendered
 
     def compose(self) -> ComposeResult:
         if self._show_header:
@@ -257,7 +260,8 @@ StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
         yield Markdown(" ", id="md-view")
 
     def on_mount(self):
-        self._timer = self.set_interval(0.09, self._flush)
+        # 150ms interval (was 90ms) — Markdown re-render is expensive; reduce frequency
+        self._timer = self.set_interval(0.15, self._flush)
 
     def hide_placeholder(self):
         if not self._first_content_received:
@@ -277,16 +281,22 @@ StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
             except Exception:
                 pass
         elif self._pending:
+            current_len = len(self._text)
+            # Skip re-render if fewer than 30 new chars since last render
+            # (avoids constant repaints on slow/trickle token streams)
+            if current_len - self._last_rendered_len < 30:
+                return
             self._pending = False
+            self._last_rendered_len = current_len
             try:
                 # Find the parent ChatPanel to check scroll position
                 chat_panel = self.app.query_one("ChatPanel")
                 # Check if we are at or very near the bottom
                 at_bottom = chat_panel.scroll_y >= (chat_panel.max_scroll_y - 5)
-                
+
                 md = self.query_one("#md-view")
                 md.update(self._text if self._text.strip() else " ")
-                
+
                 # Auto-scroll only if user hasn't scrolled up to read history
                 if at_bottom:
                     chat_panel.scroll_end(animate=False)
@@ -307,6 +317,7 @@ StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
             self._timer.stop()
         self.hide_placeholder()
         self._pending = True
+        self._last_rendered_len = 0  # force a final full render
         self._flush()
 
 

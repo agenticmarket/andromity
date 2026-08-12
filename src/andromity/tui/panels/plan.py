@@ -17,7 +17,7 @@ from andromity.core.todo import TodoList
 
 # Braille spinner frames — fast, lightweight, visually distinct from static icons
 _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-_SPINNER_INTERVAL = 0.1  # seconds between frames
+_SPINNER_INTERVAL = 0.25  # seconds between frames (purely cosmetic — 4fps vs 10fps is invisible)
 
 
 class PlanPanel(Widget):

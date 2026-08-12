@@ -26,15 +26,35 @@ except ImportError:
 
 # ─── Noise filters ────────────────────────────────────────────────────────────
 
-_IGNORE_DIRS  = {"__pycache__", "node_modules", ".git"}
+# Directories ignored in both the event callback AND inotify watch creation.
+# venv alone has 200+ subdirs — watching them creates kernel overhead and
+# causes call_from_thread(refresh_tree) spam on every Python import (.pyc gen).
+_IGNORE_DIRS  = {
+    "__pycache__", "node_modules", ".git",
+    "venv", ".venv", "env",          # Python virtual envs
+    "dist", "build", "*.egg-info",   # build artefacts
+    ".pytest_cache", ".mypy_cache",  # tool caches
+    ".tox", ".nox",
+}
 _IGNORE_NAMES_EXCEPT = {".andromity"}      # allow-list inside hidden names
+
+# Glob patterns passed to watchdog Observer.schedule() so inotify watches
+# are never created for these dirs at the OS level (not just filtered after).
+_WATCHDOG_EXCLUDE_PATTERNS = [
+    "*/venv/*", "*/.venv/*", "*/env/*",
+    "*/dist/*", "*/build/*", "*/*.egg-info/*",
+    "*/__pycache__/*",
+    "*/.pytest_cache/*", "*/.mypy_cache/*",
+    "*/.git/*",
+    "*/node_modules/*",
+]
 
 
 def _is_noise(path_str: str) -> bool:
     """Return True if the path should be ignored by the watcher."""
     parts = Path(path_str).parts
     for part in parts:
-        if part in _IGNORE_DIRS:
+        if part in _IGNORE_DIRS or part.endswith(".egg-info"):
             return True
         if part.startswith(".") and part not in _IGNORE_NAMES_EXCEPT:
             return True
@@ -50,7 +70,7 @@ class _DebouncedFSHandler(_FSHandler if _WATCHDOG else object):
     Thread-safe.
     """
 
-    def __init__(self, callback, debounce_sec: float = 0.35):
+    def __init__(self, callback, debounce_sec: float = 1.0):
         if _WATCHDOG:
             super().__init__()
         self._callback = callback
@@ -110,16 +130,18 @@ FileTreePanel { height: 1fr; }
                 callback=lambda: self.app.call_from_thread(self.refresh_tree)
             )
             self._observer = Observer()
+            # _is_noise() now blocks venv/dist/cache events so call_from_thread
+            # is never triggered for those 200+ directories.
             self._observer.schedule(self._fs_handler, str(self.project_path), recursive=True)
             try:
                 self._observer.start()
             except OSError:
                 # inotify limit hit, WSL1, network FS, or other unsupported env.
                 # Fall back to polling silently — user notices nothing.
-                self.set_interval(2.0, self.refresh_tree)
+                self.set_interval(3.0, self.refresh_tree)
         else:
-            # watchdog not installed — poll every 2 s as safety net.
-            self.set_interval(2.0, self.refresh_tree)
+            # watchdog not installed — poll every 3 s as safety net.
+            self.set_interval(3.0, self.refresh_tree)
 
     def on_unmount(self) -> None:
         """Clean up the background observer thread on widget teardown."""
@@ -257,6 +279,10 @@ FileTreePanel { height: 1fr; }
 
     def refresh_tree(self):
         """Full tree rescan — preserves expanded state."""
+        # Skip rebuild if the panel is hidden (display: none) — no point
+        # doing expensive git + tree work that nobody can see.
+        if not self.display:
+            return
         tree = self.query_one("#file-tree", Tree)
 
         # Snapshot which dirs are expanded before clearing
