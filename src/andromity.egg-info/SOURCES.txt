@@ -11,8 +11,10 @@ src/andromity.egg-info/dependency_links.txt
 src/andromity.egg-info/entry_points.txt
 src/andromity.egg-info/requires.txt
 src/andromity.egg-info/top_level.txt
+src/andromity/assets/sounds/done.wav
 src/andromity/core/__init__.py
 src/andromity/core/agent.py
+src/andromity/core/audio.py
 src/andromity/core/cron.py
 src/andromity/core/debug_log.py
 src/andromity/core/events.py
