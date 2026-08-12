@@ -896,28 +896,34 @@ class AndromityApp(App):
         active_tool_args = ""
         tools_used = set()  # track which tools were called this stream
 
-        # ── Pre-turn checkpoint (for /undo and batch review revert) ──────────
-        snapshot_hash: str | None = None
+        # ── UI feedback FIRST — zero perceived lag ────────────────────────────
+        # Show "thinking" state immediately before any blocking work.
         msg_count_before = len(self.session.messages)
+        self._pre_write_contents.clear()  # fresh file-content tracking for this turn
+        chat.start_assistant_message()
+
+        # ── Pre-turn checkpoint (for /undo) — runs in thread, never blocks UI ─
+        # asyncio.to_thread offloads the git subprocess calls (git add -A,
+        # write-tree, commit-tree) to the OS thread pool so the event loop
+        # and TUI stay fully responsive while the snapshot is created.
+        snapshot_hash: str | None = None
         try:
-            from andromity.core.git_ops import ensure_git_tracking, create_pre_edit_snapshot
-            repo, _ = ensure_git_tracking(Path(self._project_path))
-            snapshot_hash = create_pre_edit_snapshot(repo)
+            def _take_snapshot() -> str | None:
+                from andromity.core.git_ops import ensure_git_tracking, create_pre_edit_snapshot
+                repo, _ = ensure_git_tracking(Path(self._project_path))
+                return create_pre_edit_snapshot(repo)
+            snapshot_hash = await asyncio.to_thread(_take_snapshot)
         except Exception as snap_err:
             log.warning("Pre-turn snapshot failed: %s", snap_err)
+
         self._undo_stack.append({
             "snapshot_hash": snapshot_hash,
             "msg_count": msg_count_before,
             "prompt": prompt,
         })
         self._pre_turn_snapshot = snapshot_hash
-        self._pre_write_contents.clear()  # fresh file-content tracking for this turn
-        # Keep undo stack capped at 20
         if len(self._undo_stack) > 20:
             self._undo_stack.pop(0)
-
-        # Start response placeholder immediately so there is ZERO perceived lag/freeze
-        chat.start_assistant_message()
 
         try:
             async for event in self.agent.run(prompt):
