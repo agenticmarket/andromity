@@ -195,12 +195,12 @@ Type these directly in the chat bar to manage the agent and session:
 
 ## Modes & Permissions
 
-| Mode | Plan Required? | Plan Gate | Batch Review |
-|------|---------------|-----------|--------------|
-| **SAFE** (default) | Yes (for complex) | 🔴 User must approve | 🔴 Blocking overlay |
-| **TRUST** | Yes (for complex) | 🔴 User must approve | 🔴 Blocking overlay |
-| **FULL** | Yes (for complex) | ✅ Auto-approved | 🟡 Non-blocking toast |
-| **YOLO** | Yes (shown as FYI) | ✅ Auto-approved | ✅ Silent |
+| Mode | Plan Required? | Plan Gate | File Writes |
+|------|---------------|-----------|-------------|
+| **SAFE** (default) | Yes (for complex) | 🔴 User must approve | 🔴 Batch review overlay after turn |
+| **TRUST** | Yes (for complex) | 🔴 User must approve | ✅ Written directly, no review |
+| **FULL** | Yes (for complex) | ✅ Auto-approved | ✅ Written directly, no review |
+| **YOLO** | Yes (shown as FYI) | ✅ Auto-approved | ✅ Silent, no review |
 
 ---
 

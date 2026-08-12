@@ -383,7 +383,9 @@ class AndromityApp(App):
         is_sensitive = any(p in target_path for p in sensitive_patterns) if target_path else False
         
         if tool_name in ("write_file", "edit_file", "edit_file_multi", "delete_file"):
-            if mode != "yolo":
+            # Only track for batch review in SAFE mode.
+            # TRUST/FULL/YOLO all auto-approve writes — no review overlay needed.
+            if mode == "safe":
                 path = args.get("path") or args.get("target_path") or args.get("target_file")
                 if path:
                     self._pending_batch_files.add(Path(path).resolve())
@@ -999,10 +1001,12 @@ class AndromityApp(App):
                 self._pending_batch_files.clear()
 
                 mode = config.get("default", "permission_mode", "safe")
-                if mode == "full":
-                    chat.add_system_message(f"[green]✓ {len(files_to_review)} files saved (auto-approved in FULL mode).[/]")
-                elif mode in ("safe", "trust"):
-                    snapshot = getattr(self, "_pre_turn_snapshot", None)  # may be None in non-git folders
+                if mode in ("full", "trust", "yolo"):
+                    # These modes auto-approve writes — just confirm silently
+                    if files_to_review:
+                        chat.add_system_message(f"[green]✓ {len(files_to_review)} file(s) saved.[/]")
+                elif mode == "safe":
+                    snapshot = getattr(self, "_pre_turn_snapshot", None)
                     def _on_batch_review(accepted: bool | None):
                         if accepted:
                             chat.add_system_message(f"[green]✓ Batch review accepted for {len(files_to_review)} files.[/]")
