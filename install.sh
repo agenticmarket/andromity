@@ -126,20 +126,15 @@ fi
 
 export PATH="$HOME/.local/bin:$PATH"
 
-# ── 5. Verify ─────────────────────────────────────────────────────────────
+# ── 5. Verify & Launch ──────────────────────────────────────────────────────
 
 echo ""
 if command -v andromity &>/dev/null; then
     success "andromity is ready at $(which andromity)"
     echo ""
-    echo -e "  ${BOLD}Usage:${RESET}"
-    echo -e "    cd your-project"
-    echo -e "    andromity"
-    echo ""
-    echo -e "  ${BOLD}Quick start:${RESET}"
-    echo -e "    andromity           # Launch TUI"
-    echo -e "    andromity --help    # Show all options"
-    echo ""
+    info "Starting Andromity automatically..."
+    sleep 1
+    exec andromity
 else
     warn "andromity installed but not yet on PATH in this shell session."
     echo ""
