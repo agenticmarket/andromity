@@ -2,13 +2,28 @@ name = "andromity-telemetry"
 main = "worker.js"
 compatibility_date = "2024-03-29"
 
-# We use KV to store simple install counters
-# 1. Run `npx wrangler kv:namespace create TELEMETRY_KV`
-# 2. Paste the id below
+# KV namespace for telemetry counters.
+# The ID is loaded from the TELEMETRY_KV_ID environment variable (never commit it).
+# Setup: copy .env.example → .env and fill in your namespace ID.
+# Deploy: run `npm run deploy` (see package.json / README) which loads .env first.
 kv_namespaces = [
   { binding = "TELEMETRY_KV", id = "${TELEMETRY_KV_ID}" }
 ]
 
+# Layer 1: Cloudflare Workers native rate limiting (IP-based)
+# 10 requests per 60 seconds per IP — stops bots/scrapers at the edge
+# namespace_id is a logical identifier (any unique number per binding)
+[[unsafe.bindings]]
+name = "RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 10, period = 60 }
+
 routes = [
   { pattern = "telemetry.agenticmarket.dev", custom_domain = true }
 ]
+
+# Enable Workers Logs — surfaces console.log / console.error in the
+# Cloudflare dashboard (Workers > Logs) and via `wrangler tail`.
+[observability]
+enabled = true

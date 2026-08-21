@@ -338,6 +338,62 @@ def test_write_plan_syncs_todo(tmp_path):
         assert todo_list.items[0].title == "Create database interface"
         assert todo_list.items[1].title == "Implement sqlite adapter"
 
+        # PLAN.md mirror must live inside .andromity/, never the project root
+        assert (tmp_path / ".andromity" / "PLAN.md").exists()
+        assert not (tmp_path / "PLAN.md").exists()
+        # .andromity/ gets gitignored so internal state never pollutes the repo
+        gitignore = tmp_path / ".gitignore"
+        assert gitignore.exists() and ".andromity/" in gitignore.read_text()
+
+
+def test_write_plan_rich_md_body(tmp_path):
+    """plan_md produces a full PLAN.md: AI-written body + auto-appended live checklist."""
+    plan_md = (
+        "## Overview\n"
+        "A complete rewrite of the storage layer.\n\n"
+        "## Architecture\n"
+        "- `src/db.py`: new adapter interface\n"
+        "- `src/db_sqlite.py`: sqlite implementation\n\n"
+        "## Verification\n"
+        "1. Run `pytest tests/test_db.py`\n"
+    )
+    plan_data = {
+        "title": "Storage Rewrite",
+        "description": "Replace the storage layer",
+        "plan_md": plan_md,
+        "steps": ["Create interface", "Implement sqlite adapter"],
+    }
+    with patch("andromity.core.tools._get_project_root", return_value=tmp_path):
+        res = write_plan(**plan_data)
+        assert "Storage Rewrite" in res
+        md = (tmp_path / ".andromity" / "PLAN.md").read_text(encoding="utf-8")
+        # AI-written body is preserved verbatim
+        assert "## Architecture" in md
+        assert "- `src/db.py`: new adapter interface" in md
+        assert "## Verification" in md
+        # Live checklist is auto-appended and stays in sync with steps
+        assert "## Progress" in md
+        assert "- [ ] Create interface" in md
+        assert "- [ ] Implement sqlite adapter" in md
+        # Body is persisted in plan.json so later re-syncs don't lose it
+        from andromity.core.planner import Plan
+        p = Plan.load(str(tmp_path))
+        assert p is not None and p.body == plan_md.strip()
+
+
+def test_update_plan_step_preserves_plan_body(tmp_path):
+    """Step updates re-sync PLAN.md without losing the AI-written document."""
+    plan_md = "## Architecture\n- module A\n- module B\n"
+    with patch("andromity.core.tools._get_project_root", return_value=tmp_path):
+        write_plan(title="Arch", plan_md=plan_md, steps=["Step A", "Step B"])
+        res = update_plan_step(1, "done")
+        assert "Updated Step 1" in res
+        md = (tmp_path / ".andromity" / "PLAN.md").read_text(encoding="utf-8")
+        assert "## Architecture" in md
+        assert "- module A" in md
+        assert "- [x] Step A" in md   # checkbox updated
+        assert "- [ ] Step B" in md
+
 
 def test_write_plan_dict_steps_syncs_todo(tmp_path):
     """Steps provided as dicts with text/status are handled correctly."""
@@ -400,3 +456,52 @@ def test_shell_blocked_when_untrusted():
     with patch("andromity.core.tools._is_trusted", return_value=False):
         result = shell_exec("echo hello")
         assert "not trusted" in result.lower()
+
+
+# ─── Shell invocation & execution ────────────────────────────────────────────
+
+def test_shell_invocation_flags():
+    """Each shell must receive the flag that actually runs a command string."""
+    from andromity.core.tools import _shell_invocation
+    assert _shell_invocation("cmd", "echo hi") == ["cmd", "/d", "/c", "echo hi"]
+    assert _shell_invocation("C:\\Windows\\System32\\cmd.exe", "x") == [
+        "C:\\Windows\\System32\\cmd.exe", "/d", "/c", "x"]
+    assert _shell_invocation("powershell", "x") == ["powershell", "-Command", "x"]
+    assert _shell_invocation("pwsh", "x") == ["pwsh", "-Command", "x"]
+    assert _shell_invocation("/bin/bash", "x") == ["/bin/bash", "-c", "x"]
+    assert _shell_invocation("zsh", "x") == ["zsh", "-c", "x"]
+
+
+def test_shell_exec_runs_command(monkeypatch):
+    """shell_exec actually runs the command through the configured shell."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _trusted(monkeypatch, tmpdir)
+        result = shell_exec("echo hello-shell")
+        assert "hello-shell" in result
+
+
+def test_shell_exec_runs_in_project_dir(monkeypatch):
+    """Commands must run with the project root as cwd, not the launcher's dir."""
+    from andromity.config import get_shell
+    shell = get_shell()
+    if "powershell" in shell.lower() or "pwsh" in shell.lower():
+        pwd_cmd = "(Get-Location).Path"
+    elif shell.lower().endswith("cmd") or "cmd.exe" in shell.lower():
+        pwd_cmd = "cd"
+    else:
+        pwd_cmd = "pwd"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _trusted(monkeypatch, tmpdir)
+        result = shell_exec(pwd_cmd)
+        printed = Path(result.strip().splitlines()[0]).resolve()
+        assert printed == Path(tmpdir).resolve()
+        # Sanity: shell_exec must not have run from wherever pytest was launched
+        assert printed != Path.cwd().resolve() or Path.cwd().resolve() == Path(tmpdir).resolve()
+
+
+def test_shell_exec_errors_reported(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _trusted(monkeypatch, tmpdir)
+        # Command guaranteed to fail in every shell
+        result = shell_exec("definitely-not-a-real-command-xyz", timeout=5)
+        assert result.startswith("Error") or result != "Command executed successfully with no output."

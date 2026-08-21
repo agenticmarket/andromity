@@ -29,10 +29,10 @@ def _get_git_branch() -> str:
     return _git_branch_cache
 
 PROFILES = {
-    "builder": {"tools": ["read_file", "grep_search", "find_files", "write_file", "edit_file", "edit_file_multi", "shell_exec", "list_dir", "write_plan", "update_plan_step", "list_tools", "create_todo", "update_todo", "list_todos", "web_search", "fetch_url"]},
-    "coder": {"tools": ["read_file", "grep_search", "find_files", "write_file", "edit_file", "edit_file_multi", "shell_exec", "list_dir", "list_tools", "create_todo", "update_todo", "list_todos", "web_search", "fetch_url"]},
-    "reviewer": {"tools": ["read_file", "grep_search", "find_files", "list_dir", "list_tools", "web_search", "fetch_url"]},
-    "planner":  {"tools": ["read_file", "grep_search", "find_files", "list_dir", "write_plan", "update_plan_step", "list_tools", "create_todo", "update_todo", "list_todos"]},
+    "builder": {"tools": ["read_file", "grep_search", "find_files", "write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_read", "shell_kill", "shell_list", "list_dir", "write_plan", "update_plan_step", "ask_questions", "list_tools", "create_todo", "update_todo", "list_todos", "web_search", "fetch_url"]},
+    "coder":   {"tools": ["read_file", "grep_search", "find_files", "write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_read", "shell_kill", "shell_list", "list_dir", "list_tools", "create_todo", "update_todo", "list_todos", "web_search", "fetch_url"]},
+    "reviewer":{"tools": ["read_file", "grep_search", "find_files", "list_dir", "list_tools", "web_search", "fetch_url"]},
+    "planner": {"tools": ["read_file", "grep_search", "find_files", "list_dir", "write_plan", "update_plan_step", "ask_questions", "list_tools", "create_todo", "update_todo", "list_todos"]},
 }
 
 
@@ -63,14 +63,14 @@ def get_system_prompt(profile: str) -> str:
 - If a tool call returns an error, report it to the user clearly. Do NOT silently retry more than once.
 - Before editing any file, always call `read_file` first for exact current content. Never rely on memory.
 - For large files (>300 lines), use `read_file` with `symbols_only=True` first, then read specific sections.
-- For large work, create a todo list using `create_todo` and update it as you go.
+- For complex tasks, create a structured plan using `write_plan` and update step progress using `update_plan_step` after each step is completed.
 - Do not repeat code blocks already shown. Reference them by filename.
 - Use markdown format for all responses.
 - CRITICAL: Use `list_tools(include_description=True)` to discover deferred tools and their exact schemas. NEVER hallucinate parameters.
 """
     if profile == "reviewer":
         extra = """
-[PROFILE: SWE Reviewer]
+[CURRENT PROFILE: SWE Reviewer]
 Your role is to act as a security and code quality auditor.
 - You have READ-ONLY access. Do not use tools to modify files.
 - Focus on finding bugs, security vulnerabilities (SQLi, XSS, etc.), logic gap, behavioural issues, performance, scalability issues and anti-patterns.
@@ -81,17 +81,18 @@ Your role is to act as a security and code quality auditor.
 """
     elif profile == "planner":
         extra = """
-[PROFILE: Planner]
+[CURRENT PROFILE: Planner]
 Your role is to act as an architect and system designer.
 - Think in phases. Break complex tasks into small, verifiable steps using `write_plan`.
-- When writing a plan, the `description` MUST include "Proposed Changes" and "Verification Plan" sections in markdown.
+- If the user's request is ambiguous, use `ask_questions` (1-3 structured questions) BEFORE writing a plan instead of guessing.
+- When writing a plan, pass a full markdown document via `plan_md` covering: Overview, Goals & Non-Goals, Architecture / System Design, Proposed Changes (file by file), Data Flow, Edge Cases & Risks, and Verification / Testing Plan. Keep the `steps` argument as the short actionable checklist (it drives the progress tracker).
 - Ask clarifying questions before suggesting implementations.
 - Always describe your reasoning before writing a plan.
 - If anything need to write a file or create something ask user to change the profile to coder or builder.
 """
     elif profile == "coder":
         extra = """
-[PROFILE: Fast Coder]
+[CURRENT PROFILE: Fast Coder]
 Your role is to execute code changes quickly and precisely.
 - You have full access to read, write, edit files, and execute commands.
 - Prefer `edit_file_multi` over multiple `edit_file` calls for the same file.
@@ -101,12 +102,13 @@ Your role is to execute code changes quickly and precisely.
 """
     else:
         extra = """
-[PROFILE: Builder]
+[CURRENT PROFILE: Builder]
 Your role is to act as the primary implementer.
 - You have full access to read, write, edit files, and execute commands.
 - For SIMPLE changes (1 file, mechanical edits like typos, adding a comment, or minor fixes), execute directly using `edit_file` or `write_file`. Do NOT create a plan.
-- For COMPLEX changes (2+ files, architectural decisions, ambiguous requirements), ALWAYS create a plan using `write_plan` BEFORE editing files. The `description` MUST contain detailed "Proposed Changes" and "Verification Plan" sections.
-- Wait for the user to review PLAN.md and approve (unless running in YOLO mode) before making changes.
+- For COMPLEX changes (2+ files, architectural decisions, ambiguous requirements), ALWAYS create a plan using `write_plan` BEFORE editing files. Write a thorough markdown document in the `plan_md` argument with sections like Overview, Architecture / System Design, File-by-File Proposed Changes, Data Flow, Edge Cases & Risks, and Verification / Testing Plan. Keep `steps` short and actionable (they drive the progress tracker). The document is saved to .andromity/PLAN.md and shown in the Viewer.
+- If the user's request is ambiguous or important choices are missing, use `ask_questions` (1-3 structured questions) BEFORE acting — don't guess on vague requirements.
+- Wait for the user to review the plan (shown in the Viewer with Ctrl+D, mirror file at .andromity/PLAN.md) and approve (unless running in YOLO mode) before making changes.
 """
     return base + "\n" + extra
 

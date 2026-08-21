@@ -14,6 +14,7 @@ async def stream_completion(
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]] = None,
     provider_name: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> AsyncGenerator[StreamEvent, None]:
     # Lazy-import litellm — it has a heavy import chain (~2-4s), so we defer
     # it until the first actual AI call rather than paying the cost at startup.
@@ -71,8 +72,11 @@ async def stream_completion(
     # instead of "litellm". See https://openrouter.ai/docs#provider-routing
     if provider_name == "openrouter":
         kwargs["extra_headers"] = {
-            "HTTP-Referer": "https://github.com/andromity-ai/andromity",
+            "User-Agent": "Andromity",
+            "HTTP-Referer": "https://github.com/agenticmarket/andromity",
             "X-Title": "Andromity",
+            "X-OpenRouter-Title": "Andromity",
+            "X-OpenRouter-Categories": "cli-agent",
         }
 
     log.info("stream_completion start: provider=%s model=%s litellm_model=%s",
@@ -86,10 +90,19 @@ async def stream_completion(
                 "clear_thinking": False
             }
 
+        # Inject reasoning effort when set
+        if reasoning_effort and reasoning_effort != "off":
+            if provider_name == "openrouter":
+                kwargs.setdefault("extra_body", {})
+                kwargs["extra_body"]["reasoning"] = {"effort": reasoning_effort, "exclude": False}
+            else:
+                # OpenAI o-series and compatible providers
+                kwargs["reasoning_effort"] = reasoning_effort
+
         response_stream = await acompletion(**kwargs)
     except Exception as e:
         log.error("acompletion initial error: %s", e, exc_info=True)
-        yield TextDelta(text=f"\n[Error communicating with provider: {e}]\n")
+        yield TextDelta(text=_format_error_text(e))
         yield Done()
         return
 
@@ -101,11 +114,8 @@ async def stream_completion(
         async for chunk in response_stream:
             if not chunk.choices:
                 if hasattr(chunk, "usage") and chunk.usage:
-                    usage = {
-                        "prompt_tokens": getattr(chunk.usage, "prompt_tokens", 0) or 0,
-                        "completion_tokens": getattr(chunk.usage, "completion_tokens", 0) or 0,
-                        "total_tokens": getattr(chunk.usage, "total_tokens", 0) or 0,
-                    }
+                    from andromity.core.usage import normalize_usage
+                    usage = normalize_usage(chunk.usage)
                 continue
 
             delta = chunk.choices[0].delta
@@ -124,6 +134,7 @@ async def stream_completion(
                     val = getattr(delta, attr, None)
                     if val:
                         yield ThinkingDelta(text=val)
+                        break
                 
                 if getattr(delta, "content", None) and not current_tool_id:
                     text = delta.content
@@ -153,11 +164,8 @@ async def stream_completion(
                     current_tool_id = None
 
             if hasattr(chunk, "usage") and chunk.usage:
-                usage = {
-                    "prompt_tokens": getattr(chunk.usage, "prompt_tokens", 0) or 0,
-                    "completion_tokens": getattr(chunk.usage, "completion_tokens", 0) or 0,
-                    "total_tokens": getattr(chunk.usage, "total_tokens", 0) or 0,
-                }
+                from andromity.core.usage import normalize_usage
+                usage = normalize_usage(chunk.usage)
 
     except litellm.RateLimitError as e:
         yield _handle_rate_limit(e)
@@ -168,10 +176,22 @@ async def stream_completion(
             yield _handle_rate_limit(e)
         else:
             log.error("Mid-stream error (%s): %s", type(e).__name__, e, exc_info=True)
-            err_type = type(e).__name__
-            yield TextDelta(text=f"\n[Stream error ({err_type})] {e}\n")
+            yield TextDelta(text=_format_error_text(e))
 
     yield Done(usage=usage)
+
+def _format_error_text(e: Exception) -> str:
+    """Turn an arbitrary provider exception into a short, human-readable line.
+    Never dumps the raw exception (which can be a huge nested JSON blob)."""
+    msg = str(e)
+    low = msg.lower()
+    if "429" in msg or "rate limit" in low or "ratelimit" in low or "quota" in low:
+        return _handle_rate_limit(e).text
+    first_line = msg.splitlines()[0] if msg else type(e).__name__
+    if len(first_line) > 160:
+        first_line = first_line[:157] + "..."
+    return f"\n[Error: {type(e).__name__}] {first_line}\n"
+
 
 def _handle_rate_limit(e: Exception) -> TextDelta:
     import re

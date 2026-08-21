@@ -6,9 +6,22 @@ from andromity.core.git_ops import get_repo, get_file_diff
 
 
 def test_get_repo_invalid_path():
+    # A path that doesn't exist can never be a repo.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        missing = Path(tmpdir) / "does-not-exist"
+        assert get_repo(missing) is None
+
+
+def test_get_repo_enclosing_repo():
+    """get_repo walks up to the enclosing repo, e.g. $HOME is a git repo or
+    the project is a subfolder of a monorepo. A bare dir inside one must
+    resolve to that enclosing repo, never crash or return a random repo."""
     with tempfile.TemporaryDirectory() as tmpdir:
         repo = get_repo(Path(tmpdir))
-        assert repo is None
+        if repo is not None:
+            root = Path(repo.working_tree_dir).resolve()
+            assert Path(tmpdir).resolve().is_relative_to(root)
+            repo.close()
 
 
 def test_get_repo_valid():

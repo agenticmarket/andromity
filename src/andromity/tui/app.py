@@ -1,25 +1,32 @@
 import asyncio
+import threading
+import time
 from pathlib import Path
-from rich.markup import escape
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual import on
 from textual.widgets import Input, Static, Tree, TextArea, Header , Footer, Button
 from textual.containers import Horizontal, Vertical
 
+from typing import Any
+
 from andromity.tui.panels.chat import ChatPanel
 from andromity.tui.panels.filetree import FileTreePanel
 from andromity.tui.panels.diff import DiffPanel
 from andromity.tui.panels.plan import PlanPanel
 from andromity.tui.footer import StatusBar, InputBar, ContextPanel, AppFooter, QueuePanel, CronStatusPanel
+from andromity.tui.markup_utils import escape_textual as escape
 from andromity.tui.overlays.model import ModelPickerOverlay
 from andromity.tui.overlays.profile import ProfilePickerOverlay
+from andromity.tui.overlays.help import HelpScreen
 from andromity.tui.overlays.trust import TrustPromptOverlay
 from andromity.tui.overlays.session import SessionBrowserOverlay
+from andromity.tui.command_palette import CommandPalette
+from andromity.tui.skill_mentions import SkillMentionPanel, mention_query
 from andromity.tui.overlays.cron import CronManagerOverlay
 from andromity.tui.overlays.undo import UndoConfirmOverlay
-from andromity.tui.overlays.settings import SettingsScreen
 from andromity.tui.overlays.batch_review import BatchReviewOverlay
+from andromity.tui.overlays.questions import QuestionPanel, format_question_answers, normalize_questions
 from andromity.core.session import Session
 from andromity.core.agent import Agent
 from andromity.core.events import (
@@ -34,7 +41,38 @@ from andromity.config import config
 
 log = get_logger("app")
 
-COMMANDS = ["/help", "/mode", "/model", "/profile","/undo", "/keys", "/settings", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear", "/cron", "/plan", "/mcp", "/compact"]
+
+# ── Textual workarounds ────────────────────────────────────────────────────
+# Content.get_height() (used by OptionList and other nowrap widgets during
+# layout) calls _wrap_and_format(width) with no guard against width == 0.
+# Folding then runs `range(0, cell_length, width)`, and a zero width raises
+# "ValueError: range() arg 3 must not be zero". On Windows, resizing the
+# terminal fires WINDOW_BUFFER_SIZE_EVENT with transiently tiny sizes (e.g.
+# 4x1 while dragging), which makes an open OptionList overlay compute a
+# 0-width option region and crash the whole app mid-resize. render_strips()
+# already guards `if not width`; mirror that here by clamping the width.
+def _apply_textual_workarounds() -> None:
+    import functools
+    from textual.content import Content
+    from andromity.tui.patches import apply_textual_patches
+
+    apply_textual_patches()
+
+    original = Content._wrap_and_format
+    if getattr(original, "_andromity_guarded", False):
+        return
+
+    @functools.wraps(original)
+    def _wrap_and_format(self, width, *args, **kwargs):
+        return original(self, max(1, width), *args, **kwargs)
+
+    _wrap_and_format._andromity_guarded = True
+    Content._wrap_and_format = _wrap_and_format
+
+
+_apply_textual_workarounds()
+
+COMMANDS = ["/help", "/mode", "/model", "/profile", "/reason", "/update", "/context-menu", "/undo", "/keys", "/settings", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear", "/cron", "/plan", "/mcp", "/skills", "/compact"]
 
 CSS = """\
 Screen { background: $surface; }
@@ -78,8 +116,6 @@ ChatPanel MarkdownH1, ChatPanel MarkdownH2, ChatPanel MarkdownH3, ChatPanel Mark
 ChatPanel MarkdownHorizontalRule { margin: 0; padding: 0; border: none; border-top: solid $accent-darken-2; }
 FileTreePanel { height: 1fr; overflow-y: auto; padding: 1; }
 PlanPanel { height: 1fr; border-top: solid $accent-darken-2; }
-#suggestions { display: none; }
-#suggestions.visible { display: block; padding: 0 2; }
 #model-overlay { display: none; }
 #model-overlay.visible { display: block; }
 
@@ -97,7 +133,19 @@ PlanPanel { height: 1fr; border-top: solid $accent-darken-2; }
     background: $surface;
     border-right: solid $accent-darken-2;
 }
-.narrow #right-panel { width: 0; min-width: 0; border-left: none; }
+.narrow #right-sidebar { width: 0; min-width: 0; border-left: none; }
+
+/* Minimal copy buttons — mirror the permission/Apply buttons (transparent, muted) */
+.copy-btn, .copy-tools-btn {
+    height: 1 !important; width: auto !important; min-width: 0 !important;
+    border: none !important; background: transparent !important;
+    color: $text-muted !important; padding: 0 1 !important; margin: 0 !important;
+}
+.copy-btn:hover, .copy-tools-btn:hover { color: $accent !important; }
+
+/* One-line response footer: copy button + timing + tool calls */
+.response-footer { height: 1; margin: 0 0 1 0; }
+.resp-time { color: #22d3ee; padding: 0 1; height: 1; content-align: left middle; }
 """
 
 
@@ -111,7 +159,7 @@ class AndromityApp(App):
         Binding("ctrl+r", "toggle_right_panel", "Context", show=True),
         Binding("ctrl+d", "toggle_diff", "Viewer", show=True),
         Binding("ctrl+l", "toggle_model", "Model", show=True),
-        Binding("ctrl+j", "toggle_profile", "Profile", show=True),
+        Binding("ctrl+u", "toggle_profile", "Profile", show=True),
         Binding("ctrl+o", "toggle_sessions", "Sessions", show=True),
         Binding("ctrl+e", "toggle_settings", "Settings", show=True),
         Binding("escape", "escape_pressed", show=False),
@@ -122,7 +170,10 @@ class AndromityApp(App):
         self._project_path = str(Path.cwd())
         self.session = Session(name="new-session", project_path=self._project_path)
         self._ollama_num_ctx = 0
-        self.agent = Agent(self.session, on_tool_approval=self._on_tool_approval, ctx_limit=self._get_ctx_limit())
+        init_effort = config.get("default", "reasoning_effort", "medium")
+        self.agent = Agent(self.session, on_tool_approval=self._on_tool_approval,
+                           on_questions=self._on_ask_questions, ctx_limit=self._get_ctx_limit(),
+                           reasoning_effort=init_effort)
         self._esc_count = 0
         self._esc_time = 0.0
         self._esc_timer = None
@@ -146,6 +197,7 @@ class AndromityApp(App):
         self._cron_running_jobs: set = set()  # tracks which cron job IDs are currently executing
         # Undo checkpoint stack — each entry: {snapshot_hash, msg_count, prompt}
         self._undo_stack: list[dict] = []
+        self._undo_in_progress: bool = False
         self._pending_batch_files: set[Path] = set()
         self._pre_write_contents: dict[Path, bytes | None] = {}  # path → bytes before this turn (None = new file)
         self._pre_turn_snapshot: str | None = None
@@ -167,8 +219,10 @@ class AndromityApp(App):
             Vertical(
                 ChatPanel(id="chat"),
                 StatusBar(id="status-bar"),
-                Static("", id="suggestions"),
+                CommandPalette(id="command-palette"),
+                SkillMentionPanel(id="skill-mentions"),
                 QueuePanel(id="queue-panel"),
+                QuestionPanel(id="question-panel"),
                 InputBar(id="input-bar"),
                 id="center-panel",
             ),
@@ -184,6 +238,11 @@ class AndromityApp(App):
         yield AppFooter(id="app-footer")
 
     def on_resize(self, event):
+        if event.size.width <= 100:
+            self.add_class("narrow")
+        else:
+            self.remove_class("narrow")
+            
         if event.size.width <= 120:
             self.add_class("hide-context")
         else:
@@ -214,6 +273,8 @@ class AndromityApp(App):
         self.set_timer(1.0, self._start_background_warmup)
         # Auto-init git tracking in background (0.5s delay so UI paints first)
         self.set_timer(0.5, self._ensure_git_tracking)
+        # Check for updates and auto-register Windows context menu (2.0s delay)
+        self.set_timer(2.0, self._start_background_checks)
         # Start cron scheduler
         try:
             crons = self._cron_scheduler.list()
@@ -270,6 +331,14 @@ class AndromityApp(App):
         else:
             self._show_welcome()
 
+    def on_unmount(self):
+        """Flush any pending debounced session writes to disk on app exit."""
+        if hasattr(self, "session") and self.session:
+            try:
+                self.session.flush()
+            except Exception:
+                pass
+
     def _ensure_git_tracking(self):
         """Initialize git repo in the project folder if one doesn't exist.
         Runs in a background thread so it never blocks the UI."""
@@ -286,10 +355,11 @@ class AndromityApp(App):
                     )
             except Exception as e:
                 log.warning("ensure_git_tracking failed: %s", e)
-        self.run_worker(_job, thread=True, exclusive=False, group="git-init")
+        t = threading.Thread(target=_job, daemon=True, name="git-init")
+        t.start()
 
     def _start_background_warmup(self):
-        """Pre-import litellm in an isolated worker thread so it never blocks the UI event loop."""
+        """Pre-import litellm in an isolated daemon worker thread so it never blocks the UI event loop or teardown."""
         def _import_job():
             try:
                 import litellm  # noqa: F401
@@ -298,7 +368,62 @@ class AndromityApp(App):
             except Exception as e:
                 log.warning("litellm background warm-up failed: %s", e)
 
-        self.run_worker(_import_job, thread=True, exclusive=False, group="warmup")
+        t = threading.Thread(target=_import_job, daemon=True, name="litellm-warmup")
+        t.start()
+
+    def _start_background_checks(self):
+        """Auto-register context menu on first run and check for updates asynchronously."""
+        # 1. Windows Context Menu auto-registration on first run
+        try:
+            from andromity.core.context_menu import maybe_auto_install_context_menu
+            if maybe_auto_install_context_menu():
+                try:
+                    self.call_from_thread(
+                        self.query_one(ChatPanel).add_system_message,
+                        "[green]✓ Added 'Open in Andromity' to Windows right-click context menu.[/] "
+                        "[dim](Toggle in /settings or with /context-menu)[/dim]",
+                        ephemeral=True
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # 2. Asynchronous update check (24h cached)
+        try:
+            from andromity.core.updater import check_for_updates_async
+            def _on_update_result(info: dict):
+                if info and info.get("update_available"):
+                    latest = info.get("latest_version", "")
+                    def _update_ui():
+                        try:
+                            self.query_one(AppFooter).set_update_available(latest)
+                            self.query_one(ChatPanel).add_system_message(
+                                f"🚀 [bold #fbbf24]Update available: v{latest}[/] — run [bold cyan]/update[/] or click the footer badge to upgrade.",
+                                ephemeral=True
+                            )
+                        except Exception:
+                            pass
+                    self.call_from_thread(_update_ui)
+
+            check_for_updates_async(_on_update_result)
+        except Exception:
+            pass
+
+    def action_run_update(self):
+        """Perform an in-app upgrade of Andromity in the background."""
+        chat = self.query_one(ChatPanel)
+        chat.add_system_message("[cyan]⟳ Checking for updates and upgrading Andromity...[/]")
+
+        def _do_upgrade():
+            from andromity.core.updater import perform_update
+            ok, msg = perform_update()
+            if ok:
+                self.call_from_thread(chat.add_system_message, f"[bold green]✓ {msg}[/]")
+            else:
+                self.call_from_thread(chat.add_system_message, f"[bold red]✗ {msg}[/]")
+
+        self.run_worker(_do_upgrade, thread=True, exclusive=False, group="app-update")
 
     def focus_input(self):
         """Force focus back to the main chat input field."""
@@ -348,7 +473,9 @@ class AndromityApp(App):
         else:
             ctx_limit = get_context_limit_for_model(provider, model) if (provider and model) else 0
         
-        display_tokens = live_tokens if live_tokens is not None else self.session.token_total
+        # The footer is a context-window indicator, not the cumulative bill.
+        # token_total is retained for usage analytics and spend accounting.
+        display_tokens = live_tokens if live_tokens is not None else self.session.context_tokens
         is_estimated = live_tokens is not None
         
         try:
@@ -357,6 +484,7 @@ class AndromityApp(App):
             ctx.update_context(
                 tokens=display_tokens,
                 cost=self.session.cost_usd,
+                cost_source=self.session.cost_source,
                 profile=self.agent.profile,
                 model=display,
                 ctx_limit=ctx_limit,
@@ -368,17 +496,23 @@ class AndromityApp(App):
             pass
 
         active_mode = "yolo" if self._yolo_session else config.get("default", "permission_mode", "safe")
-        self.query_one(StatusBar).update_status(
-            tokens=display_tokens,
-            cost=self.session.cost_usd,
-            profile=self.agent.profile,
-            model=display,
-            ctx_limit=ctx_limit,
-            estimated=is_estimated,
-            session_name=self.session.name,
-            permission_mode=active_mode
-        )
-        self.query_one(AppFooter).update_footer(cwd=self._project_path)
+        effort = getattr(self.agent, "reasoning_effort", None) or config.get("default", "reasoning_effort", "medium")
+        try:
+            self.query_one(StatusBar).update_status(
+                tokens=display_tokens,
+                cost=self.session.cost_usd,
+                cost_source=self.session.cost_source,
+                profile=self.agent.profile,
+                model=display,
+                ctx_limit=ctx_limit,
+                estimated=is_estimated,
+                session_name=self.session.name,
+                permission_mode=active_mode,
+                effort=effort,
+            )
+        except Exception:
+            pass
+        self.query_one(AppFooter).update_footer(cwd=self._project_path, profile=self.agent.profile)
 
     def refresh_cron_status(self):
         try:
@@ -389,7 +523,7 @@ class AndromityApp(App):
 
     async def _on_tool_approval(self, tool_name: str, args: dict) -> bool:
         if not config.is_trusted(self._project_path):
-            if tool_name in ("write_file", "edit_file", "edit_file_multi", "delete_file", "shell_exec"):
+            if tool_name in ("write_file", "edit_file", "edit_file_multi", "delete_file", "shell_exec", "shell_bg", "shell_kill"):
                 chat = self.query_one(ChatPanel)
                 chat.add_system_message(f"[red]✗ Blocked '{tool_name}'[/] — Folder is untrusted. Use [bold cyan]/trust[/] to enable.")
                 return False
@@ -424,7 +558,7 @@ class AndromityApp(App):
             return True
 
         needs_approval = False
-        if tool_name == "shell_exec":
+        if tool_name in ("shell_exec", "shell_bg"):
             command = str(args.get("command", "")).strip()
             if mode == "safe":
                 needs_approval = True
@@ -434,6 +568,9 @@ class AndromityApp(App):
                     needs_approval = True
                 elif not any(command.startswith(prefix) for prefix in allowed):
                     needs_approval = True
+        elif tool_name == "shell_kill":
+            if mode == "safe":
+                needs_approval = True
         elif tool_name == "read_file":
             if is_sensitive:
                 needs_approval = True
@@ -474,6 +611,48 @@ class AndromityApp(App):
         """Called to resolve a pending tool approval (e.g. from UI buttons or panel closing)."""
         if getattr(self, "_tool_approval_future", None) and not self._tool_approval_future.done():
             self._tool_approval_future.set_result(approved)
+
+    async def _on_ask_questions(self, questions: Any):
+        """Agent-loop callback for ask_questions: show the inline question panel
+        above the input bar (chat stays visible), wait for the user, and return
+        the answers formatted as the tool result."""
+        # Attention sound — same "AI needs you" signal as tool-approval prompts,
+        # so a question panel is never silently missed while the user is away.
+        try:
+            if config.get("default", "sound_attention", True):
+                from andromity.core.audio import play_sound
+                play_sound("done.wav")
+        except Exception:
+            pass
+
+        norm_questions = normalize_questions(questions)
+        if not norm_questions:
+            return "The user did not answer the questions. Proceed with reasonable assumptions."
+
+        fut = asyncio.Future()
+
+        def _on_done(answers):
+            if not fut.done():
+                fut.set_result(answers)
+
+        try:
+            panel = self.query_one("#question-panel", QuestionPanel)
+            await panel.ask(norm_questions, _on_done)
+        except Exception as e:
+            log.warning("QuestionPanel error in ask: %s", e)
+            if not fut.done():
+                fut.set_result(None)
+
+        try:
+            answers = await fut
+        except asyncio.CancelledError:
+            try:
+                self.query_one("#question-panel", QuestionPanel).hide_questions()
+            except Exception:
+                pass
+            raise
+
+        return format_question_answers(norm_questions, answers)
 
     # ── Plan callbacks ────────────────────────────────────────────────────────
 
@@ -708,7 +887,10 @@ class AndromityApp(App):
             self._ollama_num_ctx = get_ollama_num_ctx(model)
         else:
             self._ollama_num_ctx = 0
-        self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval, ctx_limit=self._get_ctx_limit())
+        current_effort = getattr(self.agent, "reasoning_effort", None) or config.get("default", "reasoning_effort", "medium")
+        self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval,
+                           on_questions=self._on_ask_questions, ctx_limit=self._get_ctx_limit(),
+                           reasoning_effort=current_effort)
         self._update_status()
         chat = self.query_one(ChatPanel)
         chat.add_system_message(f"Provider: [bold]{provider}[/] | Model: [bold cyan]{model}[/]")
@@ -717,14 +899,44 @@ class AndromityApp(App):
         """Apply a new profile from the profile picker and persist it."""
         from andromity.config import config
         config.set("default", "profile", profile)
-        self.agent = Agent(self.session, profile=profile, on_tool_approval=self._on_tool_approval, ctx_limit=self._get_ctx_limit())
+        current_effort = getattr(self.agent, "reasoning_effort", None) or config.get("default", "reasoning_effort", "medium")
+        self.agent = Agent(self.session, profile=profile, on_tool_approval=self._on_tool_approval,
+                           on_questions=self._on_ask_questions, ctx_limit=self._get_ctx_limit(),
+                           reasoning_effort=current_effort)
         self._update_status()
         chat = self.query_one(ChatPanel)
         chat.add_system_message(f"Profile: {profile}")
 
+    def on_reasoning_effort_changed(self, effort: str):
+        """Called by StatusBar or slash command when reasoning effort changes."""
+        self.agent.reasoning_effort = effort
+        try:
+            config.set("default", "reasoning_effort", effort)
+        except Exception:
+            pass
+        label = "off" if effort == "off" else effort
+        try:
+            self.query_one(ChatPanel).add_system_message(
+                f"[cyan]Reasoning effort:[/] [bold]{label}[/]"
+                + (" — sent as reasoning.effort in every request." if effort != "off" else " — no reasoning param sent.")
+            )
+        except Exception:
+            pass
+
+    def action_show_trust_prompt(self) -> None:
+        """Open the trust prompt overlay to allow trusting or untrusting the workspace."""
+        def _on_trust(trusted: bool | None) -> None:
+            if trusted is not None:
+                self._on_trust_resolved(bool(trusted))
+        self.push_screen(TrustPromptOverlay(self._project_path), _on_trust)
+
     def _on_trust_resolved(self, trusted: bool):
         """Called after the trust prompt is answered."""
         chat = self.query_one(ChatPanel)
+        try:
+            self.query_one(AppFooter).set_trust_state(trusted)
+        except Exception:
+            pass
         if trusted:
             chat.add_system_message(f"[green]✓ Folder trusted.[/] Full access enabled.")
         else:
@@ -734,13 +946,19 @@ class AndromityApp(App):
             )
         self._show_welcome()
 
-    def _new_session(self):
+    async def _new_session(self):
         """Start a fresh session, preserving the old one in storage."""
+        if hasattr(self, "session") and self.session:
+            try:
+                self.session.flush()
+            except Exception:
+                pass
         self.session = Session(name="new-session", project_path=self._project_path)
-        self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval, ctx_limit=self._get_ctx_limit())
+        self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval,
+                           on_questions=self._on_ask_questions, ctx_limit=self._get_ctx_limit())
         self._session_named = False
         chat = self.query_one(ChatPanel)
-        chat.clear()
+        await chat.clear()
         # Plan is session-scoped — new session starts with no plan
         try:
             self.query_one(PlanPanel).clear_plan()
@@ -748,6 +966,7 @@ class AndromityApp(App):
             pass
         chat.add_system_message("[green]New session started.[/] Previous session saved.")
         self._update_status()
+        self.focus_input()
 
     def _run_compact(self):
         """Manually trigger context window compaction via /compact command."""
@@ -809,13 +1028,19 @@ class AndromityApp(App):
             chat.add_system_message(f"[red]Compact failed:[/] {e}")
 
 
-    def _load_session(self, session: Session):
+    async def _load_session(self, session: Session):
         """Switch to a historical session and replay its chat history."""
+        if hasattr(self, "session") and self.session:
+            try:
+                self.session.flush()
+            except Exception:
+                pass
         self.session = session
-        self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval, ctx_limit=self._get_ctx_limit())
+        self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval,
+                           on_questions=self._on_ask_questions, ctx_limit=self._get_ctx_limit())
         self._session_named = True  # already named
         chat = self.query_one(ChatPanel)
-        chat.load_history(session.messages)
+        await chat.load_history(session.messages)
         self._update_status()
         # Load plan from session (if any)
         try:
@@ -831,19 +1056,35 @@ class AndromityApp(App):
             f"[green]Session loaded:[/] [bold]{session.name}[/]  "
             f"[dim]({len(session.messages)} messages, {session.token_total:,} tokens)[/]"
         )
+        self.focus_input()
 
-    def _show_suggestions(self, text: str):
-        suggestions = self.query_one("#suggestions")
-        if text.startswith("/"):
-            matches = [c for c in COMMANDS if c.startswith(text)]
-            if matches:
-                suggestions.update("  ".join(matches))
-                suggestions.add_class("visible")
-                return
-        suggestions.remove_class("visible")
+    def _update_command_palette(self, text: str):
+        """Show the slash-command palette while the user types a `/command`
+        prefix (no arguments yet); hide it once args or non-command text appear."""
+        palette = self.query_one("#command-palette", CommandPalette)
+        if text.startswith("/") and " " not in text[1:] and "/" not in text[1:]:
+            palette.show_commands(text[1:])
+        else:
+            palette.hide_commands()
 
     def action_escape_pressed(self):
         import time
+        # Esc belongs to whatever modal is on top. Modals stop the event in
+        # their own handlers; this guard is the safety net so a modal's Esc
+        # can never count toward cancelling a streaming AI response.
+        try:
+            if len(self.screen_stack) > 1:
+                return
+        except Exception:
+            pass
+        # If question panel is open, let escape skip questions rather than cancel agent
+        try:
+            panel = self.query_one("#question-panel", QuestionPanel)
+            if panel.is_open():
+                panel.action_skip()
+                return
+        except Exception:
+            pass
         now = time.time()
         if self._esc_count > 0 and (now - self._esc_time) > 1.0:
             self._esc_count = 0
@@ -874,7 +1115,8 @@ class AndromityApp(App):
     def _update_queue_display(self):
         """Update the static queue panel above input bar."""
         panel = self.query_one("#queue-panel", QueuePanel)
-        panel.update_queue(self._prompt_queue)
+        # Queue entries are (prompt, images) tuples — show just the prompt text.
+        panel.update_queue([p for p, _ in self._prompt_queue])
 
     def _remove_from_queue(self, index: int):
         """Remove a message from the queue by index."""
@@ -884,19 +1126,22 @@ class AndromityApp(App):
             chat = self.query_one(ChatPanel)
             chat.add_system_message(f"[dim]Removed message #{index+1} from queue.[/]")
 
-    async def _stream_agent(self, prompt: str):
+    async def _stream_agent(self, prompt: str, images: list | None = None):
         chat = self.query_one(ChatPanel)
         status_bar = self.query_one(StatusBar)
         status_bar.set_streaming(True)
         self._is_streaming = True
         self._current_task = asyncio.current_task()
         log.info("USER: %s", prompt[:200])
-        estimated_tokens = 0
-        delta_count = 0
-        first_text_seen = False
 
-        active_tool_name = ""
-        active_tool_args = ""
+        # Images are passed as raw paths/bytes to agent.run() which handles
+        # its own encoding via build_image_data_uri — no pre-conversion here.
+        turn_started = time.time()
+        tool_calls_count = 0
+        estimated_tokens = 0
+        first_text_seen = False
+        new_files_created = False  # True only when write_file creates a brand-new file
+
         tools_used = set()  # track which tools were called this stream
 
         # ── UI feedback FIRST — zero perceived lag ────────────────────────────
@@ -922,14 +1167,14 @@ class AndromityApp(App):
         self._undo_stack.append({
             "snapshot_hash": snapshot_hash,
             "msg_count": msg_count_before,
-            "prompt": prompt,
+            "prompt": prompt[:20000] if len(prompt) > 20000 else prompt,
         })
         self._pre_turn_snapshot = snapshot_hash
         if len(self._undo_stack) > 20:
             self._undo_stack.pop(0)
 
         try:
-            async for event in self.agent.run(prompt):
+            async for event in self.agent.run(prompt, images=images or None):
                 if isinstance(event, ThinkingDelta):
                     if not hasattr(chat, "_thinking") or not getattr(chat, "_thinking", None):
                         chat.start_thinking_message()
@@ -942,15 +1187,13 @@ class AndromityApp(App):
                     chat.append_text(event.text)
                     estimated_tokens += len(event.text) // 4
                 elif isinstance(event, ToolCallStart):
-                    active_tool_name = event.tool_name
-                    active_tool_args = ""
                     tools_used.add(event.tool_name)
+                    tool_calls_count += 1
                     log.debug("TOOL START: %s", event.tool_name)
                     if self._debug_mode:
                         chat.add_system_message(f"[dim]▶ tool: {event.tool_name}[/]")
                     chat.show_tool_start(event.tool_name, event.tool_id)
                 elif isinstance(event, ToolCallDelta):
-                    active_tool_args += event.args_json_chunk
                     chat.append_tool_args(event.tool_id, event.args_json_chunk)
                 elif isinstance(event, ToolCallEnd):
                     log.debug("TOOL END: %s", event.tool_id)
@@ -959,15 +1202,32 @@ class AndromityApp(App):
                     log.debug("TOOL RESULT: %s", event.tool_id)
                     chat.show_tool_result(event.tool_id, event.result)
                     
-                    if active_tool_name in ("write_file", "edit_file", "edit_file_multi", "delete_file", "shell_exec"):
-                        import json
-                        try:
-                            args = json.loads(active_tool_args)
-                            target_path = args.get("path") or args.get("target_path") or args.get("target_file")
-                            if target_path:
-                                self.query_one(FileTreePanel).highlight_recent_change(Path(target_path).absolute())
-                        except Exception:
-                            pass
+                    # Look up this tool's own args from its indicator — with
+                    # parallel tool calls, active_tool_name/args only hold the
+                    # last tool that started.
+                    try:
+                        from andromity.tui.panels.chat import ToolIndicator
+                        for ind in chat.query(ToolIndicator):
+                            if ind.tool_id == event.tool_id:
+                                if ind.tool_name in ("write_file", "edit_file", "edit_file_multi", "delete_file", "shell_exec"):
+                                    import json
+                                    try:
+                                        args = json.loads(ind._args_json)
+                                        target_path = args.get("path") or args.get("target_path") or args.get("target_file")
+                                        if target_path:
+                                            abs_path = Path(target_path).absolute()
+                                            # Track if this write_file created a genuinely new file
+                                            # (didn't exist before the tool ran — needs tree rebuild)
+                                            if ind.tool_name == "write_file" and not abs_path.exists():
+                                                new_files_created = True
+                                            if ind.tool_name == "delete_file":
+                                                new_files_created = True
+                                            self.query_one(FileTreePanel).highlight_recent_change(abs_path)
+                                    except Exception:
+                                        pass
+                                break
+                    except Exception:
+                        pass
                 elif isinstance(event, PlanApprovalRequired):
                     log.info("Plan approval required. Pausing agent loop.")
                     self._plan_approval_future = asyncio.Future()
@@ -978,16 +1238,17 @@ class AndromityApp(App):
                     self._update_status()
                     estimated_tokens = 0
                 
-                # Live token update
-                delta_count += 1
-                if delta_count % 10 == 0 and estimated_tokens > 0 and not isinstance(event, Done):
-                    self._update_status(live_tokens=self.session.token_total + estimated_tokens)
+                # Token count is updated at Done (real usage from API).
+                # No mid-stream status rebuilds needed.
 
         except asyncio.CancelledError:
             log.info("Stream cancelled by user")
         except Exception as e:
             log.error("Unhandled exception in _stream_agent: %s", e, exc_info=True)
-            chat.append_text(f"\n[Unexpected error: {type(e).__name__}] {e}\n")
+            _err_msg = str(e)
+            if len(_err_msg) > 160:
+                _err_msg = _err_msg[:157] + "..."
+            chat.append_text(f"\n[Unexpected error: {type(e).__name__}] {_err_msg}\n")
         finally:
             self._current_task = None
             self._is_streaming = False
@@ -995,6 +1256,14 @@ class AndromityApp(App):
             chat.stop_thinking_message()
             chat.end_assistant_message()
             self._update_status()
+
+            # Show how long the response took as a distinct colored footnote,
+            # e.g. "⏱ 3.5s · 4 tool calls" (kept separate from the AI text)
+            try:
+                elapsed = time.time() - turn_started
+                chat.add_response_time(elapsed, tool_calls_count)
+            except Exception:
+                pass
             
             # Play done sound if enabled
             from andromity.config import config as _cfg
@@ -1005,9 +1274,11 @@ class AndromityApp(App):
             except Exception:
                 pass
             
-            # Refresh file tree only if file-modifying tools were used
-            file_tools = {"write_file", "edit_file", "edit_file_multi", "delete_file", "shell_exec"}
-            if tools_used & file_tools:
+            # Refresh file tree only if a new file was created or a file was deleted.
+            # Plain edits (edit_file, edit_file_multi, write_file to existing path) are
+            # already reflected by highlight_recent_change() during the stream — a full
+            # rebuild is not needed and causes the visible flicker/reload the user sees.
+            if new_files_created:
                 try:
                     self.query_one(FileTreePanel).refresh_tree()
                 except Exception:
@@ -1030,7 +1301,7 @@ class AndromityApp(App):
                 self._pending_mode_change = False
                 self._apply_mode_change()
                 
-            # Trigger batch review if files were modified in safe/trust mode.
+            # Trigger batch review if files were modified in safe mode.(not for trust mode)
             # NOTE: We check _pending_batch_files only — NOT _pre_turn_snapshot.
             # The snapshot is only needed for the Reject revert; the overlay must
             # still open even when git is unavailable (non-git folder, snap failed).
@@ -1066,20 +1337,25 @@ class AndromityApp(App):
                     )
                 
             if self._prompt_queue:
-                next_prompt = self._prompt_queue.pop(0)
+                next_prompt, next_images = self._prompt_queue.pop(0)
                 self._update_queue_display()
                 # Process next queued message after a short delay (survives cancel better)
-                self.set_timer(0.3, lambda p=next_prompt: self._process_message(p))
+                self.set_timer(0.3, lambda p=next_prompt, imgs=next_images: self._process_message(p, imgs))
             else:
                 self.focus_input()
 
     @on(InputBar.Submitted)
     def on_input_submitted(self, event: InputBar.Submitted):
         prompt = event.text.strip()
-        if not prompt:
+        images = event.images or []
+        if not prompt and not images:
             return
         self._esc_count = 0
-        self.query_one("#suggestions").remove_class("visible")
+        self.query_one("#command-palette", CommandPalette).hide_commands()
+        try:
+            self.query_one("#skill-mentions", SkillMentionPanel).hide()
+        except Exception:
+            pass
         
         # Guard: no model configured
         model = config.get("default", "model", "")
@@ -1096,25 +1372,40 @@ class AndromityApp(App):
             return
 
         if self._is_streaming:
+            if getattr(event, "steer", False):
+                # STEER: Immediately cancel active response and inject new instruction
+                if self._current_task and not self._current_task.done():
+                    self._current_task.cancel()
+                chat = self.query_one(ChatPanel)
+                chat.add_system_message("⚡ [bold #38bdf8]Steered agent with new instruction[/]")
+                self._process_message(prompt, images)
+                return
+
             if len(self._prompt_queue) >= 10:
                 self.query_one(ChatPanel).add_system_message("Queue is full (max 10). Please wait for the agent to finish.")
                 return
 
-            self._prompt_queue.append(prompt)
+            self._prompt_queue.append((prompt, images))
             log.info("Queued: %s (queue size: %d)", prompt[:50], len(self._prompt_queue))
             self._update_queue_display()
             return
             
-        self._process_message(prompt)
+        self._process_message(prompt, images)
 
-    def _process_message(self, prompt: str):
+    def _process_message(self, prompt: str, images: list | None = None):
         chat = self.query_one(ChatPanel)
         chat.clear_ephemeral()
         
         if prompt.startswith("/"):
             self._handle_command(prompt)
         else:
-            chat.add_user_message(prompt)
+            # Turn @skill mentions into explicit attach directives.
+            try:
+                from andromity.core.skills import SkillsManager, attach_skill_mentions
+                prompt = attach_skill_mentions(prompt, SkillsManager(self._project_path))
+            except Exception:
+                pass
+            chat.add_user_message(prompt, image_count=len(images) if images else 0)
             # Auto-name session from the first user message
             if not self._session_named:
                 self._session_named = True
@@ -1122,11 +1413,20 @@ class AndromityApp(App):
                 self.session.rename(name)
                 self._update_status()
                 asyncio.create_task(self._generate_ai_session_name(prompt))
-            self.run_worker(self._stream_agent(prompt), exclusive=False)
+            self.run_worker(self._stream_agent(prompt, images), exclusive=False)
 
     @on(TextArea.Changed, "#input-field")
     def on_input_changed(self, event: TextArea.Changed):
-        self._show_suggestions(event.text_area.text)
+        self._update_command_palette(event.text_area.text)
+        # @skill mention completion (hidden while typing a slash command)
+        try:
+            panel = self.query_one("#skill-mentions", SkillMentionPanel)
+            if event.text_area.text.startswith("/"):
+                panel.hide()
+            else:
+                panel.update_query(mention_query(event.text_area.text, event.text_area.cursor_location))
+        except Exception:
+            pass
 
     @on(Tree.NodeSelected, "#file-tree")
     def on_file_tree_selected(self, event: Tree.NodeSelected):
@@ -1177,7 +1477,7 @@ class AndromityApp(App):
                 kwargs["api_base"] = base_url
                 
             messages = [
-                {"role": "system", "content": "You are a helpful assistant. Generate a very short (3-5 words) descriptive title for a conversation starting with the following message. Output ONLY the title, no quotes or prefixes."},
+                {"role": "system", "content": "You are a coding agent. Generate a very short (4-8 words) descriptive title for a conversation thread that starts with the following message and can continue with followup messages. Output ONLY the title, no quotes or prefixes."},
                 {"role": "user", "content": prompt}
             ]
             kwargs["messages"] = messages
@@ -1209,6 +1509,39 @@ class AndromityApp(App):
             else:
                 # Open profile picker overlay
                 self.action_toggle_profile()
+        elif command in ("/reason", "/effort"):
+            if len(parts) > 1 and parts[1].strip():
+                effort_arg = parts[1].strip().lower()
+                if effort_arg in ("off", "low", "medium", "high", "xhigh", "max"):
+                    self.on_reasoning_effort_changed(effort_arg)
+                    self._update_status()
+                else:
+                    chat.add_system_message(f"Unknown effort level: {effort_arg}. Choose: off, low, medium, high, xhigh, max")
+            else:
+                try:
+                    self.query_one(StatusBar)._cycle_effort()
+                except Exception:
+                    pass
+        elif command == "/update":
+            self.action_run_update()
+        elif command in ("/context-menu", "/context"):
+            from andromity.core.context_menu import install_context_menu, remove_context_menu, is_context_menu_installed
+            subcmd = parts[1].strip().lower() if len(parts) > 1 else ""
+            if subcmd == "install":
+                ok, msg = install_context_menu()
+                chat.add_system_message(f"[{'green' if ok else 'red'}]{msg}[/]")
+            elif subcmd in ("remove", "uninstall"):
+                ok, msg = remove_context_menu()
+                chat.add_system_message(f"[{'green' if ok else 'red'}]{msg}[/]")
+            else:
+                installed = is_context_menu_installed()
+                status_str = "[bold green]Installed[/]" if installed else "[yellow]Not Installed[/]"
+                chat.add_system_message(
+                    f"Windows Context Menu Status: {status_str}\n\n"
+                    "Usage:\n"
+                    "  [bold cyan]/context-menu install[/] — Add 'Open in Andromity' to right-click menu\n"
+                    "  [bold cyan]/context-menu remove[/]  — Remove from right-click menu"
+                )
         elif command == "/keys":
             if len(parts) > 1 and parts[1].strip():
                 subparts = parts[1].strip().split(maxsplit=2)
@@ -1248,7 +1581,7 @@ class AndromityApp(App):
         elif command == "/sessions":
             self.action_toggle_sessions()
         elif command == "/new":
-            self._new_session()
+            self.run_worker(self._new_session())
         elif command == "/compact":
             self._run_compact()
         elif command == "/rename":
@@ -1262,12 +1595,20 @@ class AndromityApp(App):
                 chat.add_system_message("Usage: /rename <new name>")
         elif command == "/trust":
             config.set_trusted(self._project_path)
+            try:
+                self.query_one(AppFooter).set_trust_state(True)
+            except Exception:
+                pass
             chat.add_system_message(f"[green]✓ Folder trusted:[/] {self._project_path}\nFull file access and shell commands are now enabled.")
         elif command == "/untrust":
             config.revoke_trust(self._project_path)
+            try:
+                self.query_one(AppFooter).set_trust_state(False)
+            except Exception:
+                pass
             chat.add_system_message(f"[yellow]Folder untrusted:[/] {self._project_path}\nFile writes and shell commands are now blocked.")
         elif command == "/clear":
-            chat.clear()
+            self.run_worker(chat.clear())
         elif command == "/mode":
             if len(parts) > 1:
                 subparts = parts[1].strip().split()
@@ -1315,37 +1656,7 @@ class AndromityApp(App):
             else:
                 chat.add_system_message("Usage: /mode <safe|trust|full|yolo>")
         elif command == "/help":
-            chat.add_system_message(
-                "Commands:\n"
-                "  /model                   Switch provider & model (Ctrl+L)\n"
-                "  /profile [name]          Switch profile (builder/reviewer/planner, Ctrl+J)\n"
-                "  /mode [safe|trust|yolo]  Set permission mode for file/shell approvals\n"
-                "  /undo                    Undo last prompt & revert all file changes\n"
-                "  /mcp                     Show MCP server status & available tools\n"
-                "  /sessions                Browse & switch sessions (Ctrl+O)\n"
-                "  /new                     Start a new session\n"
-                "  /compact                  Summarize & compress old context (frees token space)\n"
-                "  /rename <name>           Rename current session\n"
-                "  /settings                Open master settings panel\n"
-                "  /keys                    View status of all provider API keys\n"
-                "  /keys set <prov> <key>   Save API key to universal config\n"
-                "  /trust                   Trust this folder (enable file writes + shell)\n"
-                "  /untrust                 Remove trust for this folder\n"
-                "  /dry-run                 Toggle dry-run mode (simulate tools, no writes)\n"
-                "  /debug                   Toggle debug mode (show tool calls inline + log path)\n"
-                "  /logs                    Show last 30 lines of the debug log\n"
-                "  /clear                   Clear chat history\n"
-                "  /help                    Show this help\n\n"
-                "Shortcuts:\n"
-                "  Ctrl+B     Toggle file tree\n"
-                "  Ctrl+D     Toggle diff panel\n"
-                "  Ctrl+L     Model picker\n"
-                "  Ctrl+J     Profile picker\n"
-                "  Ctrl+O     Session browser\n"
-                "  ↑/↓ arrows  Navigate prompt history (when input is empty)\n"
-                "  Escape x2  Cancel current response\n\n"
-                f"[dim]Log: {LOG_PATH}[/]"
-            )
+            self.push_screen(HelpScreen())
         elif command == "/dry-run":
             self.agent.dry_run = not self.agent.dry_run
             state = "ON" if self.agent.dry_run else "OFF"
@@ -1371,7 +1682,11 @@ class AndromityApp(App):
                 f"[bold cyan]Get-Content -Wait '{LOG_PATH}'[/]"
             )
         elif command in ("/settings", "/setting"):
+            from andromity.tui.overlays.settings import SettingsScreen
             self.push_screen(SettingsScreen(self._mcp_manager, self._project_path))
+        elif command == "/skills":
+            from andromity.tui.overlays.skills import SkillsScreen
+            self.push_screen(SkillsScreen(self._project_path))
         elif command == "/cron":
             self.push_screen(CronManagerOverlay(self._cron_scheduler, self._project_path))
         elif command.startswith("/plan"):
@@ -1412,9 +1727,21 @@ class AndromityApp(App):
                     if status == "running":
                         icon = "[bold green]●[/]"
                         status_str = f"[green]running[/] [dim]({tools_count} tools)[/]"
-                    else:
+                    elif status == "needs_auth":
+                        icon = "[bold yellow]⚠[/]"
+                        status_str = "[yellow]needs token[/] [dim]— authenticate in Settings → MCP[/]"
+                    elif status == "disabled":
+                        icon = "[dim]◌[/]"
+                        status_str = "[dim]disabled[/]"
+                    elif status == "initializing":
+                        icon = "[cyan]⟳[/]"
+                        status_str = "[cyan]starting…[/]"
+                    elif status == "error":
                         icon = "[bold red]✗[/]"
                         status_str = f"[red]error[/] [dim]{escape(err or '')}[/]"
+                    else:
+                        icon = "[dim]○[/]"
+                        status_str = "[dim]stopped[/]"
                     lines.append(f"  {icon} [bold]{escape(name)}[/]  {status_str}")
                     if cmd_str:
                         lines.append(f"      [dim]cmd: {escape(cmd_str)}[/]")
@@ -1434,8 +1761,28 @@ class AndromityApp(App):
                             lines.append(f"    [dim]{escape(desc)}[/]")
 
                 lines.append("")
-                lines.append(f"[dim]Config: .andromity/mcp.json  |  Restart Andromity to reload servers[/]")
+                lines.append(f"[dim]Config: .andromity/mcp.json  |  Manage servers in Settings → MCP[/]")
                 chat.add_system_message("\n".join(lines))
+        elif command == "/attach":
+            if len(parts) > 1 and parts[1].strip():
+                raw = parts[1].strip().strip('"').strip("'")
+                from pathlib import Path as _Path
+                p = _Path(raw).expanduser()
+                if not p.is_file():
+                    chat.add_system_message(f"[red]File not found:[/] {escape(raw)}")
+                else:
+                    try:
+                        ok = self.query_one(InputBar).attach_path(p)
+                    except Exception as e:
+                        ok = False
+                        chat.add_system_message(f"[red]Could not attach image:[/] {e}")
+                    if ok:
+                        chat.add_system_message(f"[green]✓ Image attached:[/] {escape(str(p))}\n[dim]Now type your question and press Enter.[/]")
+            else:
+                chat.add_system_message(
+                    "Usage: /attach <path-to-image>\n"
+                    "Example: /attach C:\\Users\\you\\Pictures\\shot.png"
+                )
         elif command == "/undo":
             self._run_undo()
         else:
@@ -1501,6 +1848,7 @@ class AndromityApp(App):
         self.push_screen(ModelPickerOverlay())
 
     def action_toggle_settings(self):
+        from andromity.tui.overlays.settings import SettingsScreen
         self.push_screen(SettingsScreen(self._mcp_manager, self._project_path))
 
     def action_toggle_profile(self):
@@ -1529,6 +1877,9 @@ class AndromityApp(App):
         Trigger confirmation modal to undo the last AI turn.
         """
         chat = self.query_one(ChatPanel)
+        if getattr(self, "_undo_in_progress", False):
+            chat.add_system_message("[yellow]Undo operation is already in progress.[/]")
+            return
         if not self._undo_stack:
             chat.add_system_message("[yellow]Nothing to undo — no turns on the stack.[/]")
             return
@@ -1554,71 +1905,82 @@ class AndromityApp(App):
         """
         Execute confirmed undo:
           1. Revert all file changes from that turn using git snapshot.
-          2. Trim session.messages back to pre-turn state.
+          2. Trim session.messages back to pre-turn state and reset context tokens.
           3. Reload the visual chat panel so chat & prompt context are cleanly rolled back.
           4. Restore the undone prompt into the user input bar.
         """
-        if not self._undo_stack:
+        if getattr(self, "_undo_in_progress", False) or not self._undo_stack:
             return
-
+        self._undo_in_progress = True
         checkpoint = self._undo_stack.pop()
-        snapshot_hash = checkpoint.get("snapshot_hash")
-        msg_count = checkpoint.get("msg_count", 0)
-        undone_prompt = checkpoint.get("prompt", "")
+        self.run_worker(self._async_perform_undo(checkpoint), exclusive=True)
 
-        # ── 1. Revert file changes ────────────────────────────────────────────
-        files_reverted = False
-        if snapshot_hash:
+    async def _async_perform_undo(self, checkpoint: dict):
+        try:
+            snapshot_hash = checkpoint.get("snapshot_hash")
+            msg_count = checkpoint.get("msg_count", 0)
+            undone_prompt = checkpoint.get("prompt", "")
+
+            # ── 1. Revert file changes (in background thread) ─────────────────
+            files_reverted = False
+            if snapshot_hash:
+                try:
+                    from andromity.core.git_ops import get_repo, restore_snapshot
+                    def _restore():
+                        repo = get_repo(Path(self._project_path))
+                        if repo:
+                            return restore_snapshot(repo, snapshot_hash)
+                        return False
+                    files_reverted = await asyncio.to_thread(_restore)
+                except Exception as e:
+                    log.warning("Undo file revert failed: %s", e)
+
+            # ── 2. Trim session messages & recalculate context tokens ─────────
+            if msg_count <= len(self.session.messages):
+                self.session.messages = self.session.messages[:msg_count]
+                self.session.context_tokens = sum(
+                    len(str(msg.get("content", ""))) // 4 for msg in self.session.messages
+                )
+                self.session.save()
+
+            # ── 3. Clean visual chat panel rollback (await before system msg) ─
+            chat = self.query_one(ChatPanel)
             try:
-                from andromity.core.git_ops import get_repo, restore_snapshot
-                repo = get_repo(Path(self._project_path))
-                if repo:
-                    files_reverted = restore_snapshot(repo, snapshot_hash)
+                await chat.load_history(self.session.messages)
             except Exception as e:
-                log.warning("Undo file revert failed: %s", e)
+                log.warning("Failed to reload chat history: %s", e)
 
-        # ── 2. Trim session messages ─────────────────────────────────────────
-        if msg_count <= len(self.session.messages):
-            self.session.messages = self.session.messages[:msg_count]
-            self.session.save()
+            # ── 4. Refresh Sidebar UI & Diff ──────────────────────────────────
+            try:
+                self.query_one(FileTreePanel).refresh_tree()
+            except Exception:
+                pass
+            try:
+                panel = self.query_one(PlanPanel)
+                plan = self.session.load_plan_obj()
+                if plan:
+                    panel.load_plan(plan)
+                else:
+                    panel.clear_plan()
+            except Exception:
+                pass
 
-        # ── 3. Clean visual chat panel rollback (prevents chat/LLM context pollution)
-        chat = self.query_one(ChatPanel)
-        try:
-            chat.load_history(self.session.messages)
-        except Exception as e:
-            log.warning("Failed to reload chat history: %s", e)
+            short = undone_prompt[:60] + ("…" if len(undone_prompt) > 60 else "")
+            file_note = "[green]✓ Files reverted[/] " if files_reverted else "[yellow]⚠ File revert unavailable (no git repo)[/] "
+            chat.add_system_message(
+                f"[bold green]↩ Undone:[/] \"{escape(short)}\"\n"
+                f"{file_note}│ [dim]Conversation rolled back to {len(self.session.messages)} messages[/] │ [cyan]Prompt restored to input[/]"
+            )
 
-        # ── 4. Refresh Sidebar UI & Diff ──────────────────────────────────────
-        try:
-            self.query_one(FileTreePanel).refresh_tree()
-        except Exception:
-            pass
-        try:
-            panel = self.query_one(PlanPanel)
-            plan = self.session.load_plan_obj()
-            if plan:
-                panel.load_plan(plan)
-            else:
-                panel.clear_plan()
-        except Exception:
-            pass
+            # ── 5. Restore prompt into the user input box ─────────────────────
+            try:
+                input_field = self.query_one("InputBar").query_one("#input-field", TextArea)
+                input_field.text = undone_prompt
+                input_field.move_cursor(input_field.get_cursor_line_end_location())
+                self.focus_input()
+            except Exception:
+                pass
 
-        short = undone_prompt[:60] + ("…" if len(undone_prompt) > 60 else "")
-        file_note = "[green]✓ Files reverted[/] " if files_reverted else "[yellow]⚠ File revert unavailable (no git repo)[/] "
-        chat.add_system_message(
-            f"[bold green]↩ Undone:[/] \"{escape(short)}\"\n"
-            f"{file_note}│ [dim]Conversation rolled back {len(self.session.messages)} messages[/] │ [cyan]Prompt restored to input[/]"
-        )
-
-        # ── 5. Restore prompt into the user input box ─────────────────────────
-        try:
-            input_field = self.query_one("InputBar").query_one("#input-field", TextArea)
-            input_field.text = undone_prompt
-            input_field.move_cursor(input_field.get_cursor_line_end_location())
-            self.focus_input()
-        except Exception:
-            pass
-
-        self._update_status()
-
+            self._update_status()
+        finally:
+            self._undo_in_progress = False

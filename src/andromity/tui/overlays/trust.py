@@ -57,4 +57,6 @@ TrustPromptOverlay {
     def on_key(self, event):
         # ESC = read-only mode (don't block startup)
         if event.key == "escape":
+            # Never let a modal's Esc bubble to the app (it cancels streaming).
+            event.stop()
             self.dismiss(False)

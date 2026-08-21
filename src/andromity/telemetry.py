@@ -53,7 +53,7 @@ def _send_ping_worker(event: str = "first_launch", provider: str = None, profile
             "event": event,
             "os": platform.system().lower(),
             "python": f"{sys.version_info.major}.{sys.version_info.minor}",
-            "version": "0.1.1",
+            "version": "0.2.0",
             "user_id": _get_or_create_user_id()
         }
         if provider:
@@ -64,7 +64,7 @@ def _send_ping_worker(event: str = "first_launch", provider: str = None, profile
         req = urllib.request.Request(
             "https://telemetry.agenticmarket.dev/ping",
             data=json.dumps(data).encode("utf-8"),
-            headers={"Content-Type": "application/json", "User-Agent": "andromity-cli/0.1.1"},
+            headers={"Content-Type": "application/json", "User-Agent": "andromity-cli/0.2.0"},
             method="POST"
         )
         # Fast timeout so it doesn't hang the app if the network is down

@@ -119,6 +119,46 @@ if __name__ == "__main__":
 """
 
 
+# Python code for a mock MCP server that also writes to stderr
+MOCK_MCP_SERVER_STDERR_CODE = """
+import sys
+import json
+
+def main():
+    print("boot warning from mock", file=sys.stderr)
+    sys.stderr.flush()
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except Exception:
+            continue
+        req_id = req.get("id")
+        method = req.get("method")
+        if method == "initialize":
+            resp = {"jsonrpc": "2.0", "id": req_id, "result": {
+                "protocolVersion": "2024-11-05",
+                "serverInfo": {"name": "mock", "version": "1.0"},
+                "capabilities": {"tools": {}}}}
+            sys.stdout.write(json.dumps(resp) + "\\n"); sys.stdout.flush()
+        elif method == "tools/list":
+            resp = {"jsonrpc": "2.0", "id": req_id, "result": {"tools": []}}
+            sys.stdout.write(json.dumps(resp) + "\\n"); sys.stdout.flush()
+
+if __name__ == "__main__":
+    main()
+"""
+
+
+def _write_mcp_config(tmp_path: Path, servers: dict):
+    andromity_dir = tmp_path / ".andromity"
+    andromity_dir.mkdir(parents=True, exist_ok=True)
+    (andromity_dir / "mcp.json").write_text(
+        json.dumps({"mcpServers": servers}), encoding="utf-8")
+
+
 def test_mcp_tool_info_to_schema():
     tool = MCPToolInfo(
         server_name="git",
@@ -273,4 +313,131 @@ async def test_mcp_server_failure_handling(tmp_path):
     assert summary["failed"] == 1
     assert summary["servers"]["bad_server"]["status"] == "error"
     assert summary["servers"]["bad_server"]["error"] is not None
+
+
+@pytest.mark.asyncio
+async def test_mcp_stderr_captured(tmp_path):
+    """Server stderr is drained into stderr_tail (never deadlocks the pipe)."""
+    server_script = tmp_path / "mock_stderr.py"
+    server_script.write_text(MOCK_MCP_SERVER_STDERR_CODE, encoding="utf-8")
+    _write_mcp_config(tmp_path, {
+        "mockserver": {"command": sys.executable, "args": [str(server_script)]},
+    })
+
+    with patch("pathlib.Path.home", return_value=tmp_path):
+        manager = MCPClientManager(str(tmp_path))
+        await manager.start_all()
+    try:
+        session = manager.sessions["mockserver"]
+        assert session.is_alive()
+        assert any("boot warning" in line for line in session.stderr_tail), \
+            f"expected stderr captured, got {session.stderr_tail}"
+    finally:
+        await manager.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_mcp_liveness_detects_dead_process(tmp_path):
+    """A server whose process dies must flip to 'error' via check_liveness()."""
+    server_script = tmp_path / "mock_mcp_server.py"
+    server_script.write_text(MOCK_MCP_SERVER_CODE, encoding="utf-8")
+    _write_mcp_config(tmp_path, {
+        "mockserver": {"command": sys.executable, "args": [str(server_script)]},
+    })
+
+    with patch("pathlib.Path.home", return_value=tmp_path):
+        manager = MCPClientManager(str(tmp_path))
+        await manager.start_all()
+    try:
+        assert "mockserver" in manager.sessions
+        # Kill the process behind the manager's back
+        session = manager.sessions["mockserver"]
+        session.process.terminate()
+        await asyncio.wait_for(session.process.wait(), timeout=5)
+        await asyncio.sleep(0.2)
+
+        changed = manager.check_liveness()
+        assert "mockserver" in changed
+        assert "mockserver" not in manager.sessions
+        status = manager.server_status["mockserver"]
+        assert status["status"] == "error"
+        assert "exit code" in status["error"]
+        assert "updated_at" in status
+        assert status["started_at"] is None
+    finally:
+        await manager.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_mcp_disabled_server_status(tmp_path):
+    """Disabled servers get an explicit 'disabled' status, not stale state."""
+    _write_mcp_config(tmp_path, {
+        "off": {"command": "some_binary", "args": [], "disabled": True},
+    })
+    with patch("pathlib.Path.home", return_value=tmp_path):
+        manager = MCPClientManager(str(tmp_path))
+        await manager.start_all()
+
+    summary = manager.get_status_summary()
+    assert summary["disabled"] == 1
+    assert summary["servers"]["off"]["status"] == "disabled"
+    assert "off" not in manager.sessions
+
+
+class _FakeSession:
+    """Minimal stand-in for a session exposing just what get_all_tools reads."""
+
+    def __init__(self, name, tools):
+        self.name = name
+        self.tools = tools
+
+
+def test_get_all_tools_skips_disabled_servers():
+    """A disabled server's tools must never leak into the agent's registry."""
+    manager = MCPClientManager()
+    manager.sessions["enabled"] = _FakeSession("enabled", [
+        MCPToolInfo("enabled", "tool_a", "desc", {}),
+    ])
+    manager.sessions["off"] = _FakeSession("off", [
+        MCPToolInfo("off", "tool_b", "desc", {}),
+    ])
+    manager.server_status["enabled"] = {"status": "running"}
+    manager.server_status["off"] = {"status": "disabled"}
+
+    tools = manager.get_all_tools()
+    assert [t.full_name for t in tools] == ["mcp__enabled__tool_a"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_unknown_transport_error(tmp_path):
+    """A server with neither command nor serverUrl is a clear error."""
+    _write_mcp_config(tmp_path, {"broken": {}})
+    with patch("pathlib.Path.home", return_value=tmp_path):
+        manager = MCPClientManager(str(tmp_path))
+        await manager.start_all()
+
+    status = manager.server_status["broken"]
+    assert status["status"] == "error"
+    assert "No command or serverUrl" in status["error"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_restart(tmp_path):
+    """restart() stops and starts a server, landing back in 'running'."""
+    server_script = tmp_path / "mock_mcp_server.py"
+    server_script.write_text(MOCK_MCP_SERVER_CODE, encoding="utf-8")
+    _write_mcp_config(tmp_path, {
+        "mockserver": {"command": sys.executable, "args": [str(server_script)]},
+    })
+    with patch("pathlib.Path.home", return_value=tmp_path):
+        manager = MCPClientManager(str(tmp_path))
+        await manager.start_all()
+    try:
+        assert manager.server_status["mockserver"]["status"] == "running"
+        ok = await manager.restart("mockserver")
+        assert ok is True
+        assert manager.server_status["mockserver"]["status"] == "running"
+        assert "mockserver" in manager.sessions
+    finally:
+        await manager.stop_all()
 

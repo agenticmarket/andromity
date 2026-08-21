@@ -15,6 +15,22 @@
       "creatorUrl": "https://agenticmarket.dev/agenticmarket",
       "serverUrl": "https://agenticmarket.dev/agenticmarket/exchange-rate",
       "installedAt": "8/8/2026, 4:30:39 am"
+    },
+    "hackernews": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "agenticmarket",
+        "proxy",
+        "agenticmarket/hackernews"
+      ],
+      "description": "A simple MCP server that brings Hacker News into your AI workflows. It exposes a set of tools to fetch top stories, individual posts with comments, and the latest Ask HN / Show HN discussions — all in a clean, structured format that’s easy for agents",
+      "price_cents": 0,
+      "author": "agenticmarket",
+      "server": "hackernews",
+      "creatorUrl": "https://agenticmarket.dev/agenticmarket",
+      "serverUrl": "https://agenticmarket.dev/agenticmarket/hackernews",
+      "installedAt": "20/8/2026, 4:53:58 pm"
     }
   }
 }

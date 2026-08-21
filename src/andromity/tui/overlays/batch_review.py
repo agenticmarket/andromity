@@ -3,7 +3,7 @@ import asyncio
 from pathlib import Path
 from typing import List, Optional
 
-from rich.markup import escape
+from andromity.tui.markup_utils import escape_textual as escape
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen

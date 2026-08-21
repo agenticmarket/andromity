@@ -1,5 +1,6 @@
 """Model catalog - available models per provider with descriptions."""
 from pathlib import Path
+from typing import Any
 
 MODEL_CATALOG = {
     "anthropic": {
@@ -233,7 +234,7 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
                 "desc": f"Locally installed ({size_gb})" if size_gb else "Locally installed",
                 "context": f"{num_ctx // 1024}K" if num_ctx else "Local",
             })
-        return models
+        return _cache_and_return(provider_key, models)
 
     # ── Anthropic ──────────────────────────────────────────────────────────────
     elif provider_key == "anthropic" and api_key:
@@ -253,7 +254,7 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
                 "desc": "Anthropic model",
                 "context": "200K+",
             })
-        return models
+        return _cache_and_return(provider_key, models)
 
     # ── OpenAI ────────────────────────────────────────────────────────────────
     elif provider_key == "openai" and api_key:
@@ -275,7 +276,7 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
                     "desc": "OpenAI chat model",
                     "context": "Auto",
                 })
-        return models
+        return _cache_and_return(provider_key, models)
 
     # ── Google (Gemini) ───────────────────────────────────────────────────────
     elif provider_key == "google" and api_key:
@@ -294,14 +295,19 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
             m_id = name_full.replace("models/", "")
             m_name = item.get("displayName", m_id)
             in_tokens = item.get("inputTokenLimit", 0)
-            ctx = f"{in_tokens // 1000}K" if in_tokens >= 1000 else str(in_tokens)
+            if in_tokens >= 1_000_000:
+                ctx = f"{in_tokens // 1_000_000}M"
+            elif in_tokens >= 1000:
+                ctx = f"{in_tokens // 1000}K"
+            else:
+                ctx = str(in_tokens)
             models.append({
                 "id": m_id,
                 "name": m_name,
                 "desc": item.get("description", "")[:60] if item.get("description") else "Google Gemini model",
                 "context": ctx,
             })
-        return models
+        return _cache_and_return(provider_key, models)
 
     # ── Groq ──────────────────────────────────────────────────────────────────
     elif provider_key == "groq" and api_key:
@@ -324,7 +330,7 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
                 "desc": "Groq ultra-fast inference",
                 "context": ctx_str,
             })
-        return models
+        return _cache_and_return(provider_key, models)
 
     # ── DeepSeek ──────────────────────────────────────────────────────────────
     elif provider_key == "deepseek" and api_key:
@@ -343,7 +349,7 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
                 "desc": "DeepSeek model",
                 "context": "128K",
             })
-        return models
+        return _cache_and_return(provider_key, models)
 
     # ── OpenRouter ────────────────────────────────────────────────────────────
     elif provider_key == "openrouter":
@@ -353,6 +359,27 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
         data = _get("https://openrouter.ai/api/v1/models", headers)
         if not data:
             return []
+        
+        # Cache pricing rates for all returned OpenRouter models
+        pricing_cache: dict[str, dict] = {}
+        for item in data.get("data", []):
+            m_id = item.get("id", "")
+            p_data = item.get("pricing", {})
+            if m_id and p_data:
+                try:
+                    p_prompt = float(p_data.get("prompt", 0) or 0)
+                    p_comp = float(p_data.get("completion", 0) or 0)
+                    p_cache = float(p_data.get("input_cache_read", 0) or 0)
+                    pricing_cache[m_id] = {
+                        "prompt": p_prompt,
+                        "completion": p_comp,
+                        "cached": p_cache,
+                    }
+                except (ValueError, TypeError):
+                    pass
+        if pricing_cache:
+            _save_pricing_cache("openrouter", pricing_cache)
+
         models = []
         for item in data.get("data", [])[:80]:  # cap at 80 to keep list manageable
             m_id = item.get("id", "")
@@ -360,13 +387,27 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
             ctx = item.get("context_length", 0)
             ctx_str = f"{ctx // 1000}K" if isinstance(ctx, int) and ctx >= 1000 else str(ctx)
             desc = (item.get("description", "")[:55] + "…") if item.get("description") else ""
-            models.append({
+
+            p_info = pricing_cache.get(m_id, {})
+            p_prompt = p_info.get("prompt", 0.0)
+            p_comp = p_info.get("completion", 0.0)
+            if p_prompt > 0 or p_comp > 0:
+                pricing_str = f"${p_prompt * 1_000_000:.3f}/${p_comp * 1_000_000:.3f} per MTok"
+            elif ":free" in m_id.lower() or (p_prompt == 0 and p_comp == 0 and p_info):
+                pricing_str = "Free"
+            else:
+                pricing_str = ""
+
+            m_entry: dict[str, Any] = {
                 "id": m_id,
                 "name": m_name,
                 "desc": desc,
                 "context": ctx_str,
-            })
-        return models
+            }
+            if pricing_str:
+                m_entry["pricing"] = pricing_str
+            models.append(m_entry)
+        return _cache_and_return(provider_key, models)
 
     # ── NVIDIA NIM ────────────────────────────────────────────────────────────
     elif provider_key == "nvidia" and api_key:
@@ -376,6 +417,10 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
         )
         if not data:
             return []
+        # NVIDIA's /v1/models endpoint exposes no context window per model.
+        # "128K" is an approximate default for all entries (incl. Gemma 3 27B
+        # and Phi-4, which actually use smaller windows); real values are not
+        # published by the API.
         models = [{"id": "google/gemma-2-2b-it", "name": "Gemma 2 2B IT", "desc": "NVIDIA NIM accelerated model", "context": "128K"}]
         for item in data.get("data", []):
             m_id = item.get("id", "")
@@ -391,6 +436,28 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
         return _cache_and_return(provider_key, models)
 
     return _cache_and_return(provider_key, [])
+
+
+def _get_pricing_cache_path() -> Path:
+    from andromity.config import get_config_dir
+    return get_config_dir() / "model_pricing_cache.json"
+
+
+def _save_pricing_cache(provider_key: str, pricing_dict: dict[str, dict]):
+    try:
+        import json
+        cache_path = _get_pricing_cache_path()
+        cache = {}
+        if cache_path.exists():
+            with open(cache_path, "r", encoding="utf-8") as f:
+                cache = json.load(f)
+        if provider_key not in cache:
+            cache[provider_key] = {}
+        cache[provider_key].update(pricing_dict)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(cache, f, indent=2)
+    except Exception:
+        pass
 
 def _cache_and_return(provider_key: str, models: list[dict]) -> list[dict]:
     """Save context limits to cache before returning the models."""
@@ -409,20 +476,40 @@ def _cache_and_return(provider_key: str, models: list[dict]) -> list[dict]:
             
         for m in models:
             ctx_str = m.get("context", "")
-            if not ctx_str or ctx_str == "Local" or ctx_str == "Auto" or ctx_str == "Unknown":
+            if not ctx_str or ctx_str in ("Local", "Auto", "Unknown"):
                 continue
-            # Parse shorthand (e.g. "128K")
-            try:
-                if ctx_str in _CTX_SIZE_MAP:
-                    cache[provider_key][m["id"]] = _CTX_SIZE_MAP[ctx_str]
-                else:
-                    # e.g. "128K" to 131072 if strictly parsing numbers, but _CTX_SIZE_MAP handles most
-                    pass
-            except Exception:
-                pass
+            tokens = _parse_ctx_shorthand(ctx_str)
+            if tokens:
+                cache[provider_key][m["id"]] = tokens
                 
         with open(cache_path, "w", encoding="utf-8") as f:
             json.dump(cache, f, indent=2)
     except Exception:
         pass
     return models
+
+
+def _parse_ctx_shorthand(ctx_str: str) -> int | None:
+    """Parse a context-window string into a token count.
+
+    Handles plain numbers ("131072"), known shorthand keys ("128K", "1M"),
+    and any numeric shorthand ("262K", "1048K", "1.5M") that is not a key in
+    _CTX_SIZE_MAP. Returns None when the string is not parseable.
+    """
+    import re
+    raw = (ctx_str or "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        pass
+    if raw in _CTX_SIZE_MAP:
+        return _CTX_SIZE_MAP[raw] or None  # 0-valued placeholders ("Local") are not real limits
+    match = re.match(r"^(\d+(?:\.\d+)?)\s*([KMG]?)$", raw, re.I)
+    if not match:
+        return None
+    num = float(match.group(1))
+    suffix = match.group(2).upper()
+    mult = {"K": 1_000, "M": 1_000_000, "G": 1_000_000_000}.get(suffix, 1)
+    return int(num * mult)

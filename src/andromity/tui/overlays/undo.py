@@ -3,7 +3,7 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Static, Button
-from rich.markup import escape
+from andromity.tui.markup_utils import escape_textual as escape
 
 
 class UndoConfirmOverlay(ModalScreen[bool]):
@@ -36,6 +36,7 @@ UndoConfirmOverlay {
     def __init__(self, prompt: str = "", **kwargs):
         super().__init__(**kwargs)
         self._prompt = prompt
+        self._dismissed = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="undo-dialog"):
@@ -65,13 +66,28 @@ UndoConfirmOverlay {
                 pass
 
     def on_button_pressed(self, event: Button.Pressed):
+        if self._dismissed:
+            event.stop()
+            return
         if event.button.id == "undo-confirm":
+            self._dismissed = True
+            event.button.disabled = True
             self.dismiss(True)
         elif event.button.id == "undo-cancel":
+            self._dismissed = True
+            event.button.disabled = True
             self.dismiss(False)
 
     def on_key(self, event):
+        if self._dismissed:
+            event.stop()
+            return
         if event.key == "escape":
+            # Never let a modal's Esc bubble to the app (it cancels streaming).
+            event.stop()
+            self._dismissed = True
             self.dismiss(False)
         elif event.key == "enter":
+            event.stop()
+            self._dismissed = True
             self.dismiss(True)
