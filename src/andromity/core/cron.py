@@ -261,6 +261,19 @@ class CronScheduler:
     def list(self) -> List[CronJob]:
         return list(self._crons)
 
+    def run_now(self, job_id: str) -> bool:
+        """Trigger a job immediately, bypassing the schedule. Returns True if
+        the job was found and handed to the app's trigger callback."""
+        cron = next((c for c in self._crons if c.id == job_id), None)
+        if cron is None:
+            return False
+        try:
+            self._on_trigger(cron)
+            return True
+        except Exception as e:
+            log.error("run_now failed for '%s': %s", job_id, e)
+            return False
+
     def mark_result(self, job_id: str, success: bool, error: Optional[str] = None,
                     run: Optional[CronRun] = None):
         for cron in self._crons:

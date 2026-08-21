@@ -12,7 +12,7 @@ Andromity collects a **single anonymous ping on first launch** and a **ping on s
   "event": "first_launch", 
   "os": "windows", 
   "python": "3.12", 
-  "version": "0.1.1",
+  "version": "0.2.0",
   "user_id": "a1b2c3d4..." 
 }
 ```
@@ -31,7 +31,7 @@ We respect developer privacy. You can disable this entirely in three ways:
 
 ## Deployment
 
-1. Install wrangler:
+1. Install dependencies:
    ```bash
    npm install -g wrangler
    ```
@@ -43,18 +43,22 @@ We respect developer privacy. You can disable this entirely in three ways:
 
 3. Create the KV namespace:
    ```bash
-   wrangler kv:namespace create TELEMETRY_KV
+   npx wrangler kv namespace create TELEMETRY_KV
    ```
 
-4. Create a `.env` file inside this folder with the ID from step 3:
-   ```
-   TELEMETRY_KV_ID="<your_id_here>"
-   ```
-
-5. Deploy the worker:
+4. Copy `.env.example` to `.env` and fill in the KV namespace ID from step 3:
    ```bash
-   wrangler deploy
+   cp .env.example .env
+   # then edit .env and set TELEMETRY_KV_ID=<your_id_here>
    ```
 
-6. Once deployed, Cloudflare will give you a URL (e.g., `https://andromity-telemetry.<your-username>.workers.dev`). 
-   Update `src/andromity/telemetry.py` to point to this URL instead of the default one.
+5. Deploy:
+   ```bash
+   node deploy.js
+   # or: npm run deploy
+   ```
+   This script reads your `.env`, injects the KV ID, deploys, and removes any
+   temporary files with secrets automatically.
+
+6. Cloudflare will output the worker URL. Update `src/andromity/telemetry.py`
+   to point to `https://telemetry.agenticmarket.dev/ping`.

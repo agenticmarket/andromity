@@ -19,7 +19,6 @@ import json
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-from rich.markup import escape
 from rich.syntax import Syntax
 from textual import on
 from textual.app import ComposeResult
@@ -27,7 +26,7 @@ from textual.containers import VerticalScroll, Horizontal, Container
 from textual.widgets import Static, Button, TabbedContent, TabPane, ContentSwitcher, Label, Input
 
 from andromity.core.git_ops import get_repo, get_file_diff
-from andromity.tui.markup_utils import safe_update
+from andromity.tui.markup_utils import safe_update, escape_textual as escape
 
 
 class DiffPanel(VerticalScroll):
@@ -306,6 +305,14 @@ DiffPanel { height: 1fr; }
 
         if plan.description:
             lines.append(f"[dim]{escape(plan.description)}[/dim]")
+            lines.append("")
+
+        # Full markdown document written by the agent (architecture, file-by-file
+        # changes, verification plan, …) — escaped so it renders as safe plain
+        # text in the single in-place Static.
+        body = getattr(plan, "body", "") or ""
+        if body:
+            lines.append(escape(body))
             lines.append("")
 
         questions = getattr(plan, "questions", [])

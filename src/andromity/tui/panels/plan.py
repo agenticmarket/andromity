@@ -7,7 +7,7 @@ checklist so the user can track progress at a glance.
 IMPORTANT: Never define _render() here — it is a Textual internal that
 must return a Visual object.  Use _paint_todos() instead.
 """
-from rich.markup import escape
+from andromity.tui.markup_utils import escape_textual as escape
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.widget import Widget

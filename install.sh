@@ -132,9 +132,15 @@ echo ""
 if command -v andromity &>/dev/null; then
     success "andromity is ready at $(which andromity)"
     echo ""
-    info "Starting Andromity automatically..."
+    info "Starting Andromity..."
     sleep 1
-    exec andromity
+    if [ -t 0 ]; then
+        exec andromity
+    elif [ -e /dev/tty ] && [ -r /dev/tty ]; then
+        exec andromity < /dev/tty
+    else
+        echo -e "  Run: ${BOLD}andromity${RESET}"
+    fi
 else
     warn "andromity installed but not yet on PATH in this shell session."
     echo ""
@@ -142,5 +148,7 @@ else
     echo -e "    source ~/.bashrc           # bash"
     echo -e "    source ~/.zshrc            # zsh"
     echo -e "    exec \$SHELL               # reload current shell"
+    echo ""
+    echo -e "  Then run: ${BOLD}andromity${RESET}"
     echo ""
 fi

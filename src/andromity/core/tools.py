@@ -8,6 +8,10 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+import collections
+import threading
+import time as _time
+
 from andromity.config import config, get_shell
 from andromity.core.debug_log import get_logger
 from andromity.core.git_ops import create_pre_edit_snapshot, get_repo
@@ -18,6 +22,11 @@ _PLAN_CALLBACKS: List[Callable] = []  # list of callables(plan) to notify on pla
 _TODO_CALLBACKS: List[Callable] = []  # list of callables() to notify on todo changes
 _current_session = None  # set by agent before tool execution
 _mcp_manager = None  # global MCPClientManager instance
+
+# ── Background process registry ────────────────────────────────────────────────
+# Maps process_id → {"proc": Popen, "buf": deque, "cmd": str, "started": float}
+_bg_processes: Dict[str, Any] = {}
+_bg_lock = threading.Lock()
 
 
 def register_plan_callback(cb: Callable):
@@ -391,26 +400,174 @@ def edit_file_multi(path: str, edits: list) -> str:
 
 # ── Directory & Shell Operations ──────────────────────────────────────────────
 
+def _shell_invocation(shell: str, command: str) -> list[str]:
+    """Build the argv that tells this shell to run `command`.
 
-def shell_exec(command: str, timeout: int = 30) -> str:
-    """Executes a shell command."""
+    Different shells need different flags:
+      - powershell / pwsh     ->  -Command
+      - cmd (Windows)         ->  /d /c   (cmd has no -c; /d skips AutoRun)
+      - bash / sh / zsh / …  ->  -c
+    Handles both bare names and full paths (e.g. C:\\Windows\\System32\\cmd.exe).
+    """
+    name = os.path.basename(shell).lower()
+    if name.endswith(".exe"):
+        name = name[:-4]
+    if name in ("powershell", "pwsh"):
+        return [shell, "-Command", command]
+    if name == "cmd":
+        return [shell, "/d", "/c", command]
+    return [shell, "-c", command]
+
+
+def shell_exec(command: str, timeout: int = 120) -> str:
+    """Executes a shell command (blocking — waits for it to finish)."""
     if not _is_trusted():
         return "Error: This folder is not trusted. Use /trust to allow shell commands."
     shell = get_shell()
     try:
-        if shell == "powershell":
-            cmd = ["powershell", "-Command", command]
-        else:
-            cmd = [shell, "-c", command]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=os.getcwd())
+        cmd = _shell_invocation(shell, command)
+        try:
+            cwd = str(_get_project_root())
+        except Exception:
+            cwd = os.getcwd()
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, errors="replace",
+            timeout=timeout, cwd=cwd,
+        )
         output = result.stdout
         if result.stderr:
             output += f"\nSTDERR:\n{result.stderr}"
         return output.strip() if output.strip() else "Command executed successfully with no output."
     except subprocess.TimeoutExpired:
-        return f"Error: Command timed out after {timeout} seconds."
+        return (
+            f"Error: Command timed out after {timeout} seconds. "
+            "If you need to run a long-running process (e.g. a dev server), use "
+            "shell_bg instead — it starts the process in the background and lets "
+            "you read its output any time with shell_read."
+        )
     except Exception as e:
         return f"Error executing command: {e}"
+
+
+def shell_bg(command: str, process_id: str = "") -> str:
+    """Start a long-running command in the background (dev servers, watchers, etc.).
+
+    Returns immediately with a process_id. Use shell_read(process_id) to check
+    live output, shell_kill(process_id) to stop it.
+    """
+    if not _is_trusted():
+        return "Error: This folder is not trusted. Use /trust to allow shell commands."
+
+    import uuid
+    pid = process_id.strip() or command.split()[0].split("/")[-1][:20]
+    # Make unique if already taken
+    with _bg_lock:
+        if pid in _bg_processes:
+            pid = f"{pid}-{uuid.uuid4().hex[:4]}"
+
+    shell = get_shell()
+    try:
+        cwd = str(_get_project_root())
+    except Exception:
+        cwd = os.getcwd()
+
+    try:
+        cmd = _shell_invocation(shell, command)
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, errors="replace", cwd=cwd,
+            bufsize=1,
+        )
+    except Exception as e:
+        return f"Error starting background process: {e}"
+
+    buf: collections.deque = collections.deque(maxlen=500)  # keep last 500 lines
+
+    def _reader():
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                buf.append(line.rstrip("\n"))
+        except Exception:
+            pass
+        finally:
+            buf.append(f"[process '{pid}' exited with code {proc.wait()}]")
+
+    t = threading.Thread(target=_reader, daemon=True, name=f"bg-reader-{pid}")
+    t.start()
+
+    with _bg_lock:
+        _bg_processes[pid] = {
+            "proc": proc,
+            "buf": buf,
+            "cmd": command,
+            "started": _time.time(),
+        }
+
+    return (
+        f"Background process started with id '{pid}' (PID {proc.pid}).\n"
+        f"Use shell_read('{pid}') to see live output, "
+        f"shell_kill('{pid}') to stop it."
+    )
+
+
+def shell_read(process_id: str, lines: int = 50) -> str:
+    """Read the latest output lines from a background process started with shell_bg."""
+    with _bg_lock:
+        entry = _bg_processes.get(process_id)
+    if not entry:
+        ids = list(_bg_processes.keys())
+        hint = f" Running ids: {ids}" if ids else " No background processes are running."
+        return f"Error: No background process with id '{process_id}'.{hint}"
+
+    proc = entry["proc"]
+    buf: collections.deque = entry["buf"]
+    alive = proc.poll() is None
+    status = "running" if alive else f"exited (code {proc.returncode})"
+    elapsed = int(_time.time() - entry['started'])
+
+    recent = list(buf)[-lines:]
+    output = "\n".join(recent) if recent else "(no output yet)"
+    return (
+        f"Process '{process_id}' | {status} | {elapsed}s elapsed\n"
+        f"Command: {entry['cmd']}\n"
+        f"--- last {min(lines, len(recent))} lines ---\n"
+        f"{output}"
+    )
+
+
+def shell_kill(process_id: str) -> str:
+    """Kill a background process started with shell_bg."""
+    with _bg_lock:
+        entry = _bg_processes.pop(process_id, None)
+    if not entry:
+        return f"Error: No background process with id '{process_id}'."
+    proc = entry["proc"]
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        return f"Process '{process_id}' (PID {proc.pid}) terminated."
+    except Exception as e:
+        return f"Error killing process '{process_id}': {e}"
+
+
+def shell_list() -> str:
+    """List all background processes currently running (started with shell_bg)."""
+    with _bg_lock:
+        entries = dict(_bg_processes)
+    if not entries:
+        return "No background processes are running."
+    lines = []
+    for pid, entry in entries.items():
+        proc = entry["proc"]
+        alive = proc.poll() is None
+        status = "running" if alive else f"exited ({proc.returncode})"
+        elapsed = int(_time.time() - entry['started'])
+        lines.append(f"  '{pid}' | {status} | {elapsed}s | {entry['cmd']}")
+    return "Background processes:\n" + "\n".join(lines)
 
 
 def list_dir(path: str = ".", show_hidden: bool = False) -> str:
@@ -512,10 +669,23 @@ def _sync_plan_md(plan=None, todo_list=None):
         md_lines.append(f"# Plan: {plan.title}")
         if plan.description:
             md_lines.append(f"\n> {plan.description}\n")
+        # Full markdown document written by the AI (architecture, file-by-file
+        # changes, verification plan, etc.). Written verbatim, then the live
+        # checklist is appended below so progress stays in sync. When the model
+        # omitted plan_md, fall back to a small structured skeleton so the
+        # file is still organised.
+        body = getattr(plan, "body", "") or ""
+        if body:
+            md_lines.append(body.rstrip())
+            md_lines.append("")
+        else:
+            md_lines.append("## Verification Plan")
+            md_lines.append("*No verification plan was provided. Describe how each change will be tested before executing.*")
+            md_lines.append("")
     else:
         md_lines.append("# Plan Checklist\n")
 
-    md_lines.append("## Steps")
+    md_lines.append("## Progress")
     if todo_list and todo_list.items:
         for item in todo_list.items:
             status_map = {
@@ -530,22 +700,34 @@ def _sync_plan_md(plan=None, todo_list=None):
     else:
         md_lines.append("*No steps yet.*")
         
-    md_path = Path(project_root) / "PLAN.md"
+    # Keep the human-readable mirror inside .andromity/ with the rest of
+    # Andromity's internal state (plan.json, todos.md) — never in the
+    # project root, and it's gitignored via ensure_gitignore_entry below.
+    md_path = Path(project_root) / ".andromity" / "PLAN.md"
     try:
+        md_path.parent.mkdir(parents=True, exist_ok=True)
         with open(md_path, "w", encoding="utf-8") as f:
             f.write("\n".join(md_lines))
+        try:
+            from andromity.core.git_ops import ensure_gitignore_entry
+            ensure_gitignore_entry(project_root, ".andromity/")
+        except Exception:
+            pass
     except Exception as e:
         import logging
         logging.getLogger("andromity.tools").warning(f"Failed to write PLAN.md: {e}")
 
 
 
-def write_plan(title: str, description: str = "", steps: list = None, questions: list = None, **kwargs) -> str:
+def write_plan(title: str, description: str = "", plan_md: str = "", steps: list = None, questions: list = None, **kwargs) -> str:
     """
-    Create a plan (title + description + optional questions) and convert steps
-    directly into todos. Steps are NOT stored separately in the Plan object —
-    todos ARE the steps. This avoids duplicating the same list twice.
-    steps is optional — if omitted, the plan is created with no todos yet.
+    Create a plan (title + description + optional full markdown document) and
+    convert steps directly into todos. Steps are NOT stored separately in the
+    Plan object — todos ARE the steps. This avoids duplicating the same list
+    twice. steps is optional — if omitted, the plan is created with no todos
+    yet. plan_md is the full human-readable plan document (architecture, file
+    changes, verification plan) written into .andromity/PLAN.md; the step
+    checklist is auto-appended to it.
     """
     from andromity.core.planner import Plan
     from andromity.core.todo import TodoItem, TodoList
@@ -578,6 +760,7 @@ def write_plan(title: str, description: str = "", steps: list = None, questions:
     plan = Plan(
         title=title,
         description=description,
+        body=(plan_md or "").strip(),
         questions=questions or [],
         status="approved" if auto_approve else "pending",
         project_path=project_root,
@@ -599,9 +782,15 @@ def write_plan(title: str, description: str = "", steps: list = None, questions:
     _notify_plan(plan)
     _notify_todo()
 
+    detail_hint = ""
+    if not (plan_md or "").strip():
+        detail_hint = (
+            " Note: no plan_md was provided. For architecture-level plans, pass plan_md "
+            "containing Overview, Architecture, File-by-File Changes and Verification sections."
+        )
     if auto_approve:
-        return f"Plan '{title}' created with {len(step_items)} steps (auto-approved in {mode.upper()} mode). The detailed PLAN.md has been generated. Proceeding."
-    return f"Plan '{title}' created with {len(step_items)} steps. A detailed PLAN.md has been generated in the project root. Please review PLAN.md and confirm before making any changes."
+        return f"Plan '{title}' created with {len(step_items)} steps (auto-approved in {mode.upper()} mode). A detailed PLAN.md has been generated in .andromity/. Proceeding.{detail_hint}"
+    return f"Plan '{title}' created with {len(step_items)} steps. A detailed PLAN.md has been generated in .andromity/PLAN.md. Review it in the Viewer (Ctrl+D) or open the file, then confirm before making any changes.{detail_hint}"
 
 
 def update_plan_step(step_index: int, status: str) -> str:
@@ -628,42 +817,7 @@ def update_plan_step(step_index: int, status: str) -> str:
     return f"Updated Step {step_index} status to '{status}'."
 
 
-def _get_todo_list():
-    from andromity.core.todo import TodoList
-    return TodoList.load(str(_get_project_root()))
 
-
-def create_todo(title: str) -> str:
-    """Create a single todo item."""
-    todo_list = _get_todo_list()
-    item = todo_list.add(title)
-    _sync_plan_md(todo_list=todo_list)
-    _notify_todo()
-    return f"Created todo {item.id}: {item.title}"
-
-
-def update_todo(todo_id: str, status: str) -> str:
-    """Update a todo status."""
-    valid = ("pending", "active", "done", "failed", "skipped")
-    if status not in valid:
-        return f"Error: status must be one of {valid}"
-    todo_list = _get_todo_list()
-    item = todo_list.update(todo_id, status)
-    if not item:
-        return f"Error: Todo '{todo_id}' not found."
-    _sync_plan_md(todo_list=todo_list)
-    _notify_todo()
-    return f"Updated {item.id} to {status}: {item.title}"
-
-
-def list_todos() -> str:
-    """List todos and progress."""
-    todo_list = _get_todo_list()
-    if not todo_list.items:
-        return "No todos yet."
-    done, total = todo_list.progress()
-    parts = [f"{item.icon} {item.id}. {item.title}" for item in todo_list.items]
-    return f"{done}/{total} done:\n" + "\n".join(parts)
 
 
 # ── Discovery & Deferred Tools ────────────────────────────────────────────────
@@ -831,15 +985,80 @@ CORE_TOOLS = [
         "type": "function",
         "function": {
             "name": "shell_exec",
-            "description": "Executes a shell command (running tests, build commands, git, etc.).",
+            "description": (
+                "Executes a shell command (running tests, build commands, git, etc.). "
+                "IMPORTANT: This is a blocking call — the command must exit before control returns. "
+                "Do NOT use for long-running processes like dev servers (npm run dev, python manage.py runserver, etc.) "
+                "as they will block until timeout. For such processes, use a background flag: "
+                "`npm run dev &` on Unix/Mac or `Start-Process npm -ArgumentList 'run','dev'` on Windows."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {"type": "string", "description": "Command to execute"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds (default 30)"},
+                    "timeout": {"type": "integer", "description": "Timeout in seconds (default 120). Increase for slow builds."},
                 },
                 "required": ["command"],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "shell_bg",
+            "description": (
+                "Start a long-running command in the background (dev servers, watchers, compilers, etc.). "
+                "Returns immediately with a process_id — the process keeps running. "
+                "Use shell_read(process_id) to check live output at any time. "
+                "Use shell_kill(process_id) to stop it. "
+                "Use this instead of shell_exec for: npm run dev, vite, webpack --watch, "
+                "python manage.py runserver, pytest --watch, tail -f, etc."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Command to run in background"},
+                    "process_id": {"type": "string", "description": "Optional friendly name for this process (e.g. 'dev-server'). Auto-generated if omitted."},
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "shell_read",
+            "description": "Read the latest output from a background process started with shell_bg. Call this to check logs, errors, or status of a running server/watcher.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "process_id": {"type": "string", "description": "The process id returned by shell_bg"},
+                    "lines": {"type": "integer", "description": "Number of recent lines to return (default 50)"},
+                },
+                "required": ["process_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "shell_kill",
+            "description": "Kill a background process started with shell_bg.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "process_id": {"type": "string", "description": "The process id to kill"},
+                },
+                "required": ["process_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "shell_list",
+            "description": "List all background processes currently running (started with shell_bg).",
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -859,14 +1078,41 @@ CORE_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "ask_questions",
+            "description": "Ask the user structured clarifying questions when the request is ambiguous or important choices are missing. Pauses until answered — the user picks options or types an answer. Use sparingly: max 3 questions, and prefer good defaults over asking when the request is clear enough.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "questions": {
+                        "type": "array",
+                        "description": "Questions to ask. type='single' uses the options as exclusive choices; type='multi' allows selecting several options; type='text' expects a free-form answer (options ignored).",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "question": {"type": "string", "description": "The question, phrased clearly and specifically"},
+                                "type": {"type": "string", "enum": ["single", "multi", "text"], "description": "single (default), multi, or text"},
+                                "options": {"type": "array", "items": {"type": "string"}, "description": "Answer choices for single/multi questions (ignored for text)"},
+                            },
+                            "required": ["question"],
+                        },
+                    }
+                },
+                "required": ["questions"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "write_plan",
-            "description": "Create a structured plan for complex tasks. Steps automatically sync to the visual progress tracker. User must approve before execution.",
+            "description": "Create a structured plan for complex tasks. Steps automatically sync to the visual progress tracker. User must approve before execution. For large or architecture-level work, also pass a full markdown document via plan_md.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": {"type": "string", "description": "Short title for the plan"},
-                    "steps": {"type": "array", "items": {"type": "string"}, "description": "List of step descriptions (optional — can be omitted and added later)"},
-                    "description": {"type": "string", "description": "Optional overview or notes"},
+                    "steps": {"type": "array", "items": {"type": "string"}, "description": "List of step descriptions (optional — can be omitted and added later). Steps drive the progress tracker, so keep them short and actionable."},
+                    "description": {"type": "string", "description": "Optional 1-3 sentence overview or notes"},
+                    "plan_md": {"type": "string", "description": "Optional full markdown plan document. RECOMMENDED for complex or architecture-level tasks. Write a thorough document with sections like: Overview, Goals & Non-Goals, Architecture / System Design, File-by-File Proposed Changes (with concrete file paths), Data Flow, Edge Cases & Risks, and Verification / Testing Plan. Write it as raw markdown. Do NOT include a step checklist here — the tool appends the live checklist automatically from the steps argument."},
                     "questions": {"type": "array", "items": {"type": "string"}, "description": "Optional list of clarifying questions for the user before execution"},
                 },
                 "required": ["title"],
@@ -1041,20 +1287,24 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
         return edit_file_multi(**args)
     elif name == "shell_exec":
         return shell_exec(**args)
+    elif name == "shell_bg":
+        return shell_bg(**args)
+    elif name == "shell_read":
+        return shell_read(**args)
+    elif name == "shell_kill":
+        return shell_kill(**args)
+    elif name == "shell_list":
+        return shell_list()
     elif name == "list_dir":
         return list_dir(**args)
     elif name == "write_plan":
         return write_plan(**args)
     elif name == "update_plan_step":
         return update_plan_step(**args)
-    elif name == "create_todo":
-        return create_todo(**args)
-    elif name == "update_todo":
-        return update_todo(**args)
-    elif name == "list_todos":
-        return list_todos()
     elif name == "list_tools":
         return list_tools(**args)
+    elif name in ("ask_questions", "ask_question"):
+        return "Error: ask_questions is handled interactively by the agent loop and cannot be executed directly."
 
     # 2. Web Tools
     elif name == "web_search":

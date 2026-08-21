@@ -157,7 +157,48 @@ if ($installedViaPipx) {
                 [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
 }
 
-# ── 5. Verify & Launch ──────────────────────────────────────────────────────
+# ── 5. Register Windows Context Menu ───────────────────────────────────────
+
+try {
+    Write-Info "Registering 'Open with Andromity' in Windows context menu..."
+    $appDataAndromity = "$env:APPDATA\andromity"
+    if (-not (Test-Path $appDataAndromity)) {
+        $null = New-Item -ItemType Directory -Path $appDataAndromity -Force
+    }
+
+    $homeAndromity = "$HOME\.andromity"
+    if (-not (Test-Path $homeAndromity)) {
+        $null = New-Item -ItemType Directory -Path $homeAndromity -Force
+    }
+
+    $iconDest = "$appDataAndromity\andromity.ico"
+    $homeIconDest = "$homeAndromity\andromity.ico"
+    $localIco = Join-Path $PSScriptRoot "andromity.ico"
+    $localAssetIco = Join-Path $PSScriptRoot "src\andromity\assets\andromity.ico"
+
+    if (Test-Path $localIco) {
+        Copy-Item -Path $localIco -Destination $iconDest -Force
+        Copy-Item -Path $localIco -Destination $homeIconDest -Force
+    } elseif (Test-Path $localAssetIco) {
+        Copy-Item -Path $localAssetIco -Destination $iconDest -Force
+        Copy-Item -Path $localAssetIco -Destination $homeIconDest -Force
+    } else {
+        if (-not (Test-Path $iconDest) -or -not (Test-Path $homeIconDest)) {
+            try {
+                $icoUrl = "https://raw.githubusercontent.com/agenticmarket/andromity/main/andromity.ico"
+                Invoke-WebRequest -Uri $icoUrl -OutFile $homeIconDest -UseBasicParsing -TimeoutSec 10 -ErrorAction SilentlyContinue
+                Copy-Item -Path $homeIconDest -Destination $iconDest -Force -ErrorAction SilentlyContinue
+            } catch {}
+        }
+    }
+
+    $null = & andromity install-context-menu 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Success "Added 'Open with Andromity' to right-click menu"
+    }
+} catch {}
+
+# ── 6. Verify & Launch ──────────────────────────────────────────────────────
 
 Write-Host ""
 $andromityCmd = Get-Command andromity -ErrorAction SilentlyContinue

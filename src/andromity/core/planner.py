@@ -9,6 +9,7 @@ from typing import List, Optional
 class Plan:
     title: str = "Untitled Plan"
     description: str = ""
+    body: str = ""           # full markdown document written by the AI (optional)
     questions: List[str] = field(default_factory=list)
     status: str = "pending"   # pending | approved | rejected
     project_path: str = ""
@@ -64,6 +65,7 @@ class Plan:
         return {
             "title": self.title,
             "description": self.description,
+            "body": self.body,
             "status": self.status,
             "questions": self.questions,
         }
@@ -73,6 +75,7 @@ class Plan:
         return cls(
             title=data.get("title", "Untitled Plan"),
             description=data.get("description", ""),
+            body=data.get("body", ""),
             status=data.get("status", "pending"),
             questions=data.get("questions", []),
             project_path=project_path,

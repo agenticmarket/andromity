@@ -51,6 +51,7 @@ class ConfigManager:
                 "model": "claude-sonnet-4-6",
                 "profile": "builder",
                 "permission_mode": "safe",
+                "reasoning_effort": "medium",
                 "allowed_commands": ["npm run", "npm test", "npm list", "npm run dev", "pytest", "python -m pytest", "git status", "git diff", "git log", "ls", "dir", "cat", "echo"]
             },
             "providers": [
@@ -74,6 +75,13 @@ class ConfigManager:
         if section not in self._config_cache:
             self._config_cache[section] = {}
         self._config_cache[section][key] = value
+        self.save()
+        
+    def get_root(self, key: str, default: Any = None) -> Any:
+        return self._config_cache.get(key, default)
+        
+    def set_root(self, key: str, value: Any):
+        self._config_cache[key] = value
         self.save()
 
     def get_provider_config(self, provider_name: str) -> Optional[Dict[str, Any]]:
@@ -175,20 +183,30 @@ class ConfigManager:
             default_path.write_text(json.dumps({"mcpServers": {}}, indent=2), encoding="utf-8")
         return default_path
 
-    def set_mcp_server_disabled(self, project_path: str, server_name: str, disabled: bool):
+    def set_mcp_server_disabled(self, project_path: str, server_name: str, disabled: bool) -> bool:
         """Toggle the 'disabled' flag for a specific MCP server in the config."""
-        path = self.get_mcp_config_path(project_path)
-        if not path.exists():
-            return
+        path, data, srv_key = self._find_mcp_file_for_server(project_path, server_name)
+        if path is None:
+            path = self.get_mcp_config_path(project_path)
+            if not path.exists():
+                return False
+            try:
+                import json
+                data = json.loads(path.read_text(encoding="utf-8"))
+                srv_key = "mcpServers" if "mcpServers" in data else ("servers" if "servers" in data else "mcpServers")
+            except Exception:
+                return False
+
         try:
             import json
-            data = json.loads(path.read_text(encoding="utf-8"))
-            servers = data.get("mcpServers") or data.get("servers") or {}
+            servers = data.setdefault(srv_key, {})
             if server_name in servers and isinstance(servers[server_name], dict):
                 servers[server_name]["disabled"] = disabled
                 path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                return True
         except Exception:
             pass
+        return False
 
     def _find_mcp_file_for_server(self, project_path: str, server_name: str):
         """
@@ -245,6 +263,28 @@ class ConfigManager:
         try:
             import json
             del data[srv_key][server_name]
+            path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            return True
+        except Exception:
+            return False
+
+    def add_mcp_server(self, project_path: str, server_name: str, conf: dict) -> bool:
+        """Add or replace an MCP server entry in <project>/.andromity/mcp.json.
+
+        Merges into any existing mcpServers so other servers are preserved.
+        Returns True on success."""
+        try:
+            import json
+            path = Path(project_path) / ".andromity" / "mcp.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            data = {}
+            if path.exists():
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    data = {}
+            servers = data.setdefault("mcpServers", {})
+            servers[server_name] = conf
             path.write_text(json.dumps(data, indent=2), encoding="utf-8")
             return True
         except Exception:

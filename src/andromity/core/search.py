@@ -150,7 +150,7 @@ def grep_search(
             log.warning("rg search failed, falling back: %s", e)
 
     # 2. Try git grep (Tier 2 - fast git index)
-    if shutil.which("git") and (search_path / ".git").exists() or _is_git_worktree(search_path):
+    if shutil.which("git") and ((search_path / ".git").exists() or _is_git_worktree(search_path)):
         try:
             cmd = ["git", "grep", "-n", "-I"]
             if not case_sensitive:

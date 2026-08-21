@@ -8,6 +8,11 @@ def get_resolved_future():
     f.set_result(True)
     return f
 
+@pytest.fixture(autouse=True)
+def _mock_trusted(monkeypatch):
+    from andromity.config import config
+    monkeypatch.setattr(config, "is_trusted", lambda *args, **kwargs: True)
+
 @pytest.mark.asyncio
 async def test_permission_mode_yolo():
     app = AndromityApp()

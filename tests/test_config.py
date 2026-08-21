@@ -76,6 +76,30 @@ def test_trust_different_paths_independent():
         assert cm.is_trusted(p2) is False
 
 
+def test_add_mcp_server_writes_and_merges():
+    """add_mcp_server writes to <project>/.andromity/mcp.json and preserves
+    existing servers when adding more."""
+    import json
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cm = ConfigManager(config_dir=Path(tmpdir))
+        assert cm.add_mcp_server(tmpdir, "first", {"command": "npx", "args": ["a"]})
+        mcp_file = Path(tmpdir) / ".andromity" / "mcp.json"
+        assert mcp_file.exists()
+        data = json.loads(mcp_file.read_text(encoding="utf-8"))
+        assert data["mcpServers"]["first"]["command"] == "npx"
+
+        # Second add merges instead of overwriting
+        assert cm.add_mcp_server(tmpdir, "second", {"serverUrl": "https://x/sse"})
+        data = json.loads(mcp_file.read_text(encoding="utf-8"))
+        assert "first" in data["mcpServers"]
+        assert data["mcpServers"]["second"]["serverUrl"] == "https://x/sse"
+
+        # Replacing an existing name keeps the file valid
+        assert cm.add_mcp_server(tmpdir, "first", {"command": "uvx", "args": []})
+        data = json.loads(mcp_file.read_text(encoding="utf-8"))
+        assert data["mcpServers"]["first"]["command"] == "uvx"
+
+
 def test_nvidia_provider_catalog_and_key(monkeypatch):
     from andromity.core.models import MODEL_CATALOG, get_models_for_provider
     assert "nvidia" in MODEL_CATALOG

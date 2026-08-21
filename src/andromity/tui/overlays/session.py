@@ -5,6 +5,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Static, Button, DataTable
 from andromity.core.session import Session
+from andromity.tui.markup_utils import escape_textual
 
 
 def _time_ago(iso_str: str) -> str:
@@ -31,6 +32,28 @@ def _time_ago(iso_str: str) -> str:
         return ""
 
 
+def _session_label(s: Session) -> str:
+    """Best-effort row label: real name, else the first user message, else a placeholder."""
+    if s.name and s.name not in ("new-session", "tui-session", "headless-session"):
+        return escape_textual(s.name)
+    for m in s.messages:
+        if m.get("role") == "user":
+            content = str(m.get("content", "")).strip()
+            if content:
+                return escape_textual(Session.auto_name_from_message(content))
+            break
+    return "[dim]Empty session[/]"
+
+
+def _session_status(s: Session, current_id: str) -> str:
+    """Status badge for a session row: active, idle, or empty."""
+    if s.id == current_id:
+        return "[bold green]● active[/]"
+    if s.messages:
+        return "[dim]○ idle[/]"
+    return "[dim]○ empty[/]"
+
+
 class SessionBrowserOverlay(ModalScreen):
     """Browse, switch, and manage sessions for the current project."""
     DEFAULT_CSS = """\
@@ -45,8 +68,22 @@ SessionBrowserOverlay {
 #sb-title { padding: 0 1; height: 1; background: $accent-darken-3; color: $text; text-style: bold; }
 #sb-table { height: 1fr; overflow-y: auto; }
 #sb-hint { height: 1; padding: 0 1; color: $text-muted; }
-#sb-footer { dock: bottom; height: 3; padding: 0 1; }
-#sb-footer Button { margin: 0 1; }
+#sb-footer {
+    dock: bottom; height: 1; padding: 0 1;
+    content-align: center middle;
+}
+#sb-footer Button {
+    height: 1 !important; width: auto !important; min-width: 0 !important;
+    border: none !important; background: transparent !important;
+    color: $text-muted !important; text-style: none !important;
+    padding: 0 1 !important; margin: 0 0 0 1;
+}
+#sb-footer Button:hover { color: $text !important; }
+#sb-footer Button:focus { color: $text !important; text-style: bold; }
+#sb-footer #sb-open { color: $accent !important; }
+#sb-footer #sb-new:hover { color: $success !important; }
+#sb-footer #sb-load-more:hover { color: $warning !important; }
+#sb-footer #sb-delete:hover { color: $error !important; }
 """
 
     def __init__(self, current_session_id: str, project_path: str, **kwargs):
@@ -62,8 +99,8 @@ SessionBrowserOverlay {
             yield Static("", id="sb-title")
             with Vertical():
                 with VerticalScroll(id="sb-table"):
-                    yield DataTable(id="sb-data", cursor_type="row", zebra_stripes=True)
-                yield Static("[dim]↑↓ Navigate   Enter / Open to load session   Delete to remove[/]", id="sb-hint")
+                    yield DataTable(id="sb-data", cursor_type="row")
+                yield Static("[dim]↑↓ Navigate   Enter / Open to load session   Delete to remove   Esc Close[/]", id="sb-hint")
             with Horizontal(id="sb-footer"):
                 yield Button("New Session", variant="default", id="sb-new")
                 yield Button("Delete", variant="error", id="sb-delete")
@@ -76,6 +113,10 @@ SessionBrowserOverlay {
         short_path = cwd if len(cwd) <= 50 else "..." + cwd[-47:]
         self.query_one("#sb-title").update(f" Sessions — {short_path} ")
         self._load_sessions()
+        try:
+            self.query_one("#sb-data", DataTable).focus()
+        except Exception:
+            pass
 
     def _load_sessions(self, keep_cursor: bool = False):
         self._sessions = Session.list_sessions(self._project_path, limit=self._session_limit)
@@ -87,15 +128,14 @@ SessionBrowserOverlay {
         table.clear(columns=True)
         table.add_columns("Name", "Status", "Age", "Tokens", "Messages")
         for s in self._sessions:
-            badge = "[bold green]active[/]" if s.id == self._current_id else ""
             age = _time_ago(getattr(s, "updated_at", s.created_at))
             tokens = f"{s.token_total:,}" if s.token_total else "—"
             msg_count = str(len([m for m in s.messages if m.get("role") in ("user", "assistant")]))
-            name = s.name if s.name != "new-session" and s.name != "tui-session" else "[dim]Unnamed[/]"
-            table.add_row(name, badge, age, tokens, msg_count)
+            table.add_row(_session_label(s), _session_status(s, self._current_id), age, tokens, msg_count)
             
         if self._sessions:
-            table.move_cursor(row=old_row)
+            clamped_row = max(0, min(old_row, len(self._sessions) - 1))
+            table.move_cursor(row=clamped_row)
             
         # Hide load more if we probably loaded everything
         load_more_btn = self.query_one("#sb-load-more", Button)
@@ -106,6 +146,7 @@ SessionBrowserOverlay {
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected):
         self._selected_idx = event.cursor_row
+        self._open_selected()
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted):
         self._selected_idx = event.cursor_row
@@ -122,7 +163,7 @@ SessionBrowserOverlay {
         elif event.button.id == "sb-new":
             self.dismiss()
             try:
-                self.app._new_session()
+                self.app.run_worker(self.app._new_session())
             except Exception:
                 pass
         elif event.button.id == "sb-delete":
@@ -134,18 +175,22 @@ SessionBrowserOverlay {
     def _open_selected(self):
         if not self._sessions:
             return
-        idx = min(self._selected_idx, len(self._sessions) - 1)
+        table = self.query_one("#sb-data", DataTable)
+        idx = table.cursor_row if table.cursor_row is not None and 0 <= table.cursor_row < len(self._sessions) else self._selected_idx
+        idx = max(0, min(idx, len(self._sessions) - 1))
         session = self._sessions[idx]
         self.dismiss()
         try:
-            self.app._load_session(session)
+            self.app.run_worker(self.app._load_session(session))
         except Exception:
             pass
 
     def _delete_selected(self):
         if not self._sessions:
             return
-        idx = min(self._selected_idx, len(self._sessions) - 1)
+        table = self.query_one("#sb-data", DataTable)
+        idx = table.cursor_row if table.cursor_row is not None and 0 <= table.cursor_row < len(self._sessions) else self._selected_idx
+        idx = max(0, min(idx, len(self._sessions) - 1))
         session = self._sessions[idx]
         if session.id == self._current_id:
             return  # don't delete active session
@@ -153,8 +198,12 @@ SessionBrowserOverlay {
             session.file_path.unlink(missing_ok=True)
         except Exception:
             pass
-        self._load_sessions()
+        self._load_sessions(keep_cursor=True)
 
     def on_key(self, event):
         if event.key == "escape":
+            # Never let a modal's Esc bubble to the app (it cancels streaming).
+            event.stop()
             self.dismiss()
+        elif event.key in ("delete", "backspace"):
+            self._delete_selected()

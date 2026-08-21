@@ -1,0 +1,9 @@
+{
+  "name": "andromity-telemetry",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "deploy": "node deploy.js",
+    "dev": "npx wrangler dev"
+  }
+}

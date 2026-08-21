@@ -6,6 +6,7 @@ import os
 import sys
 import warnings
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -67,6 +68,8 @@ class MCPStdioSession:
         self._request_id = 0
         self._pending_requests: Dict[int, asyncio.Future] = {}
         self._reader_task: Optional[asyncio.Task] = None
+        self._stderr_task: Optional[asyncio.Task] = None
+        self.stderr_tail: List[str] = []   # ring buffer of recent stderr lines
         self.tools: List[MCPToolInfo] = []
         self._initialized = False
         self.error: Optional[str] = None
@@ -93,8 +96,11 @@ class MCPStdioSession:
                 cwd=self.cwd,
             )
 
-            # Start background stdout reader
+            # Start background stdout reader + stderr tail capture. The stderr
+            # pipe MUST be drained or a chatty server can fill the pipe buffer
+            # and deadlock. We keep the tail so failures are diagnosable.
             self._reader_task = asyncio.create_task(self._read_loop())
+            self._stderr_task = asyncio.create_task(self._stderr_loop())
 
             # Perform initialize handshake
             init_res = await self.send_request("initialize", {
@@ -252,6 +258,33 @@ class MCPStdioSession:
                 log.debug("MCP read error: %s", e)
                 break
 
+    async def _stderr_loop(self):
+        """Drain the server's stderr into a ring buffer (never block the pipe)."""
+        if not self.process or not self.process.stderr:
+            return
+        try:
+            while True:
+                line = await self.process.stderr.readline()
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace").rstrip()
+                if text:
+                    self.stderr_tail.append(text)
+                    if len(self.stderr_tail) > 50:
+                        del self.stderr_tail[:-50]
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+
+    def is_alive(self) -> bool:
+        """True while the process is running and the handshake completed."""
+        return (
+            self._initialized
+            and self.process is not None
+            and self.process.returncode is None
+        )
+
     async def _cleanup(self, process=None):
         """
         Close all subprocess pipes and cancel the reader task.
@@ -262,14 +295,17 @@ class MCPStdioSession:
         can close stdin/stdout BEFORE the caller nulls self.process.
         Falls back to self.process for backward compat (e.g. failed start).
         """
-        # 1. Cancel and await the reader task so its pipe references die cleanly
-        if self._reader_task and not self._reader_task.done():
-            self._reader_task.cancel()
-            try:
-                await asyncio.wait_for(asyncio.shield(self._reader_task), timeout=1.0)
-            except Exception:
-                pass
-        self._reader_task = None
+        # 1. Cancel and await the reader + stderr tasks so their pipe references
+        #    die cleanly.
+        for task_attr in ("_reader_task", "_stderr_task"):
+            task = getattr(self, task_attr)
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=1.0)
+                except Exception:
+                    pass
+            setattr(self, task_attr, None)
 
         # 2. Resolve all pending futures to avoid dangling coroutines
         for fut in self._pending_requests.values():
@@ -327,10 +363,15 @@ class MCPSseSession:
         self.headers = headers or {}
         self.tools: List[Any] = []
         self.error: Optional[str] = None
-        
+        self.stderr_tail: List[str] = []
+
         self._session = None
         self._bg_task: Optional[asyncio.Task] = None
         self._init_event = asyncio.Event()
+
+    def is_alive(self) -> bool:
+        """True while the SSE background connection task is still running."""
+        return self._bg_task is not None and not self._bg_task.done()
 
     async def start(self) -> bool:
         self.error = None
@@ -436,6 +477,33 @@ class MCPClientManager:
         self.sessions: Dict[str, MCPStdioSession] = {}
         self.server_status: Dict[str, dict] = {}
 
+    def _set_status(self, name: str, status: str = None, tools: int = None,
+                    error: str = None, command: str = None,
+                    error_detail: str = None) -> None:
+        """Update one server's status entry, stamping timestamps.
+
+        Status entries carry: status, tools, error, command, error_detail,
+        started_at (ISO), updated_at (ISO).
+        """
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        entry = dict(self.server_status.get(name, {}))
+        if status is not None:
+            entry["status"] = status
+        if tools is not None:
+            entry["tools"] = tools
+        if error is not None:
+            entry["error"] = error
+        if command is not None:
+            entry["command"] = command
+        if error_detail is not None:
+            entry["error_detail"] = error_detail
+        entry["updated_at"] = now
+        if entry.get("status") == "running" and not entry.get("started_at"):
+            entry["started_at"] = now
+        elif entry.get("status") in ("error", "stopped", "disabled", "needs_auth"):
+            entry["started_at"] = None
+        self.server_status[name] = entry
+
     def load_config(self) -> Dict[str, Any]:
         """Load MCP server definitions from project or global config."""
         candidates = [
@@ -471,7 +539,7 @@ class MCPClientManager:
         servers    = mcp_config.get("mcpServers", {})
         self.server_status.clear()
         for name in servers.keys():
-            self.server_status[name] = {"status": "initializing", "tools": 0, "error": None, "command": ""}
+            self._set_status(name, status="initializing", tools=0, error=None, command="")
 
         # Start all servers concurrently
         await asyncio.gather(*[
@@ -484,7 +552,7 @@ class MCPClientManager:
         from andromity.core.oauth import ensure_fresh_token
 
         # Set initializing state
-        self.server_status[name] = {"status": "initializing", "tools": 0, "error": None, "command": ""}
+        self._set_status(name, status="initializing", tools=0, error=None, command="")
 
         if srv_conf is None:
             srv_conf = self.load_config().get("mcpServers", {}).get(name, {})
@@ -496,6 +564,16 @@ class MCPClientManager:
         env        = srv_conf.get("env", {})
 
         if disabled:
+            self._set_status(name, status="disabled", tools=0, error=None,
+                             command=f"{command} {' '.join(str(a) for a in args)}".strip())
+            return
+
+        if not command and not server_url:
+            self._set_status(
+                name, status="error", tools=0,
+                error="No command or serverUrl configured",
+                error_detail="Add a 'command' (stdio) or 'serverUrl' (remote) entry to mcp.json.",
+            )
             return
 
         # Check if this is an explicit remote server OR a legacy mcp-remote proxy command
@@ -518,12 +596,14 @@ class MCPClientManager:
                 pat = headers.get("Authorization", "").replace("Bearer ", "").strip()
                 if not pat:
                     # Mark as needs_auth — settings UI will show Connect button
-                    self.server_status[name] = {
-                        "status": "needs_auth",
-                        "tools": 0,
-                        "error": "Authentication required",
-                        "command": "",
-                    }
+                    self._set_status(
+                        name, status="needs_auth", tools=0,
+                        error="Authentication required", command="",
+                        error_detail=(
+                            f"Server '{name}' needs an OAuth token or PAT. "
+                            "Open Settings → MCP and authenticate to connect."
+                        ),
+                    )
                     return
                 token = pat
 
@@ -534,19 +614,12 @@ class MCPClientManager:
             cmd_str = f"SSE {server_url}"
             if success:
                 self.sessions[name] = session
-                self.server_status[name] = {
-                    "status":  "running",
-                    "tools":   len(session.tools),
-                    "error":   None,
-                    "command": cmd_str,
-                }
+                self._set_status(name, status="running", tools=len(session.tools),
+                                 error=None, command=cmd_str)
             else:
-                self.server_status[name] = {
-                    "status":  "error",
-                    "tools":   0,
-                    "error":   session.error or "Failed to connect",
-                    "command": cmd_str,
-                }
+                self._set_status(name, status="error", tools=0,
+                                 error=session.error or "Failed to connect",
+                                 command=cmd_str, error_detail=session.error)
             return
 
         # ── Stdio server ──────────────────────────────────────
@@ -561,19 +634,51 @@ class MCPClientManager:
         cmd_str = f"{command} {' '.join(str(a) for a in args)}".strip()
         if success:
             self.sessions[name] = session
-            self.server_status[name] = {
-                "status": "running",
-                "tools":  len(session.tools),
-                "error":  None,
-                "command": cmd_str,
-            }
+            self._set_status(name, status="running", tools=len(session.tools),
+                             error=None, command=cmd_str)
         else:
-            self.server_status[name] = {
-                "status": "error",
-                "tools":  0,
-                "error":  session.error or "Failed to connect",
-                "command": cmd_str,
-            }
+            self._set_status(name, status="error", tools=0,
+                             error=session.error or "Failed to connect",
+                             command=cmd_str,
+                             error_detail="\n".join(session.stderr_tail[-25:]) or session.error)
+
+    async def restart(self, name: str) -> bool:
+        """Stop (if running) and start a single server. Returns True if running."""
+        if name in self.sessions:
+            await self.sessions[name].stop()
+            del self.sessions[name]
+        self.server_status.pop(name, None)
+        await self.start_server(name)
+        return self.server_status.get(name, {}).get("status") == "running"
+
+    def check_liveness(self) -> List[str]:
+        """
+        Detect sessions whose process/connection died since the last check and
+        mark them errored so the UI shows live status instead of stale 'running'.
+
+        Returns the list of server names whose status changed. Runs synchronously
+        (it only inspects process objects) — safe to call from the UI loop.
+        """
+        changed = []
+        for name, session in list(self.sessions.items()):
+            if session.is_alive():
+                continue
+            if isinstance(session, MCPStdioSession):
+                code = session.process.returncode if session.process else None
+                detail = "\n".join(session.stderr_tail[-25:])
+                err = "Process exited unexpectedly"
+                if code is not None:
+                    err += f" (exit code {code})"
+            else:
+                err = "Connection lost"
+                detail = ""
+            self._set_status(name, status="error", tools=0, error=err,
+                             error_detail=detail or None,
+                             command=self.server_status.get(name, {}).get("command", ""))
+            changed.append(name)
+        for name in changed:
+            self.sessions.pop(name, None)
+        return changed
 
     def get_status_summary(self) -> dict:
         """Return an aggregated status dict suitable for UI display."""
@@ -581,12 +686,16 @@ class MCPClientManager:
         active = len(self.sessions)
         failed = sum(1 for s in self.server_status.values() if s.get("status") == "error")
         initializing = sum(1 for s in self.server_status.values() if s.get("status") == "initializing")
+        needs_auth = sum(1 for s in self.server_status.values() if s.get("status") == "needs_auth")
+        disabled = sum(1 for s in self.server_status.values() if s.get("status") == "disabled")
         total_tools = len(self.get_all_tools())
         return {
             "configured": configured,
             "active": active,
             "failed": failed,
             "initializing": initializing,
+            "needs_auth": needs_auth,
+            "disabled": disabled,
             "tools_count": total_tools,
             "servers": dict(self.server_status),
         }
@@ -595,9 +704,12 @@ class MCPClientManager:
         """Collect all discovered tools across all active MCP sessions.
         Only returns MCPToolInfo instances — filters out any raw SDK Tool objects
         that may have slipped through (e.g. from SSE sessions before normalization).
+        Servers disabled in mcp.json are skipped even if a stale session lingers.
         """
         all_tools = []
-        for session in self.sessions.values():
+        for name, session in self.sessions.items():
+            if self.server_status.get(name, {}).get("status") == "disabled":
+                continue
             for t in session.tools:
                 if isinstance(t, MCPToolInfo):
                     all_tools.append(t)
@@ -626,6 +738,16 @@ class MCPClientManager:
         if not session:
             return f"Error: MCP server '{server_name}' is not active or configured."
         return await session.call_tool(tool_name, arguments)
+
+    async def stop_server(self, name: str):
+        """Safely stop and remove a single running MCP server session."""
+        session = self.sessions.pop(name, None)
+        if session:
+            try:
+                await session.stop()
+            except Exception as e:
+                log.warning("Error stopping MCP server %s: %s", name, e)
+        self.server_status.pop(name, None)
 
     async def stop_all(self):
         """Stop all running MCP servers concurrently."""

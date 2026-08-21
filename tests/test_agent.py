@@ -16,7 +16,7 @@ def session(tmp_path):
 async def test_agent_simple_text(session):
     agent = Agent(session, profile="builder", auto_approve=True)
 
-    async def mock_stream(messages, tools=None):
+    async def mock_stream(messages, tools=None, **kwargs):
         yield TextDelta(text="Hi there")
         yield Done(usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15})
 
@@ -36,7 +36,7 @@ async def test_agent_dry_run(session):
     agent = Agent(session, profile="builder", auto_approve=True, dry_run=True)
     call_count = 0
 
-    async def mock_stream(messages, tools=None):
+    async def mock_stream(messages, tools=None, **kwargs):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
