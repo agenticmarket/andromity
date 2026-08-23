@@ -1079,13 +1079,13 @@ CORE_TOOLS = [
         "type": "function",
         "function": {
             "name": "ask_questions",
-            "description": "Ask the user structured clarifying questions when the request is ambiguous or important choices are missing. Pauses until answered — the user picks options or types an answer. Use sparingly: max 3 questions, and prefer good defaults over asking when the request is clear enough.",
+            "description": "Ask the user structured clarifying questions when the request is ambiguous or important choices are missing. Pauses until answered — the user picks options or types an answer. Use sparingly: max 3 questions, and prefer good recommendations over asking when the request is clear enough.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "questions": {
                         "type": "array",
-                        "description": "Questions to ask. type='single' uses the options as exclusive choices; type='multi' allows selecting several options; type='text' expects a free-form answer (options ignored).",
+                        "description": "Questions to ask. type='single' uses the options as exclusive choices; type='multi' allows selecting several options; type='text' expects a free-form answer.",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -1105,7 +1105,7 @@ CORE_TOOLS = [
         "type": "function",
         "function": {
             "name": "write_plan",
-            "description": "Create a structured plan for complex tasks. Steps automatically sync to the visual progress tracker. User must approve before execution. For large or architecture-level work, also pass a full markdown document via plan_md.",
+            "description": "Create a structured plan for complex tasks or asked to. Steps automatically sync to the visual progress tracker. User must approve before execution. For large or architecture-level work, also pass a full markdown document via plan_md.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1123,7 +1123,7 @@ CORE_TOOLS = [
         "type": "function",
         "function": {
             "name": "update_plan_step",
-            "description": "Update plan step progress. Call with 'active' when starting, 'done' when finished, 'failed' on error.",
+            "description": "Update plan step progress. Call with 'active' when starting, 'done' must for finished, 'failed' on error. after overall process check steps status properly",
             "parameters": {
                 "type": "object",
                 "properties": {

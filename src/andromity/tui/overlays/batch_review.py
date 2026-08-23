@@ -46,7 +46,13 @@ BatchReviewOverlay {
 #batch-diff-view {
     height: 1fr;
     padding: 1 2;
+    overflow-x: auto;
     overflow-y: auto;
+}
+#batch-diff-view Static {
+    width: auto;
+    min-width: 100%;
+    text-wrap: nowrap;
 }
 
 /* ── Footer ──────────────────────────────────────────────────── */

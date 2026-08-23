@@ -45,34 +45,6 @@ Andromity is built for **autonomous, scheduled work**.
 - **Terminal-native** — no IDE, no browser, no cloud lock-in
 - **Local-first** — your code, your keys, your machine
 - **Model-agnostic** — LiteLLM under the hood: Anthropic, OpenAI, Gemini, Groq, OpenRouter, Ollama, NVIDIA NIM, and more
-
----
-
-## What's New in v0.2.0
-
-### ⚡ Instant Startup — Blank Screen Eliminated
-
-- **Removed dead `litellm` import** in the settings module that forced a full `litellm` dependency-graph load at startup, adding 3–18 seconds of blank screen before the TUI appeared.
-- **Lazy-loaded `SettingsScreen`** — the 87KB settings module is now imported only when you open Settings, not at app boot.
-
-### 🏃 Long-Session Performance & Memory Stability
-
-A full audit and remediation of runtime bottlenecks that accumulate over long, multi-turn sessions:
-
-| Fix | What was wrong | What changed |
-|-----|---------------|--------------|
-| **Debounced Session I/O** | Every streamed token wrote synchronously to disk | 1.5s debounced background save with `flush()` on switch/exit |
-| **Widget Timer Teardown** | `set_interval()` timers kept firing after message widgets were removed | `on_unmount()` hooks cancel all timers on every sub-widget |
-| **DOM History Serialization** | Pruned chat messages stayed in memory as live Textual Widget trees | Messages beyond 60 in view are serialized to dicts; re-inflated on scroll |
-| **File Watcher Thread Churn** | Every filesystem event spawned a new `threading.Timer` thread | Single persistent daemon worker thread with `threading.Condition` |
-| **Undo Stack Capping** | Large pastes accumulated megabytes in undo history | Prompt previews capped at 20,000 chars per checkpoint |
-| **Accurate Auto-Compaction** | Context threshold used character-math estimates | Uses real `context_tokens` from provider usage reports when available |
-| **Daemon Threads for Warmup** | Background import warmup blocked test pilots and app teardown | `threading.Thread(daemon=True)` used for warmup and git init |
-
-### ✅ Test Suite
-
-68 tests across session, agent, file tree, undo, status bar, interactive questions, and config — all green.
-
 ---
 
 ## Install
@@ -150,58 +122,6 @@ Andromity supports [MCP](https://modelcontextprotocol.io/) to connect external t
 
 ---
 
-## Benchmarks (SWE-bench Lite)
-
-Andromity solves complex, real-world GitHub issues autonomously. We benchmarked it against a random subset of [SWE-bench Lite](https://www.swebench.com/) — a dataset of real Python issues from major open-source projects.
-
-**Setup:**
-- **Dataset:** SWE-bench Lite (random subset of 25 tasks)
-- **Model:** DeepSeek V4 Flash (via OpenRouter)
-- **Mode:** Headless (`andromity run --file prompt.txt --yes --profile coder`)
-
-**Results (official SWE-bench Docker evaluation):**
-- **Resolve rate: 73.7%** — **14 of 19** generated patches passed the official SWE-bench test suite (FAIL_TO_PASS + PASS_TO_PASS, run with the official `swebench.harness` Docker evaluator)
-- **End-to-end: 56%** — 14 of the 25 sampled tasks fully resolved, including the 6 tasks where no patch was produced
-- **Patch generation rate: 76%** — 19 of 25 tasks produced a valid git diff autonomously; all 19 applied cleanly to their base commits
-- **Speed:** ~167 seconds per successful task on average
-- The agent consistently used standard UNIX tools to navigate, search, and patch each repo
-
-> **Honest comparison:** published SWE-bench resolve rates for leading agent frameworks are roughly Aider ~26% (SWE-bench Lite), Cursor ~38–42%, and Claude Code ~45–53% (mostly reported on SWE-bench *Verified*; figures vary by source and are frequently updated). Andromity's 56% end-to-end on this 25-task sample (95% confidence interval roughly 35–75%) is competitive with or ahead of those — achieved with **DeepSeek V4 Flash**, a commodity model costing a small fraction of proprietary equivalents. Caveat: 25 tasks is a small sample; run the full 300-task benchmark before drawing strong conclusions.
-
-### Example Fixes
-
-The agent navigated large codebases, isolated root causes, and generated correct diffs for complex bugs:
-
-**Astropy Issue #12907 (separable models logic):**
-The agent correctly identified the hardcoded `1` and replaced it with the `right` matrix object in `astropy/modeling/separable.py`.
-```diff
---- a/astropy/modeling/separable.py
-+++ b/astropy/modeling/separable.py
-@@ -242,7 +242,7 @@ def _cstack(left, right):
-         cright = _coord_matrix(right, 'right', noutp)
-     else:
-         cright = np.zeros((noutp, right.shape[1]))
--        cright[-right.shape[0]:, -right.shape[1]:] = 1
-+        cright[-right.shape[0]:, -right.shape[1]:] = right
- 
-     return np.hstack([cleft, cright])
-```
-
-**Astropy Issue #14995 (NDData arithmetic with masked operand):**
-The agent spotted the missing `operand.mask is None` case in `astropy/nddata/mixins/ndarithmetic.py` and generalized the condition — verified to pass the official test suite.
-```diff
---- a/astropy/nddata/mixins/ndarithmetic.py
-+++ b/astropy/nddata/mixins/ndarithmetic.py
-@@ -520,7 +520,7 @@ class NDArithmeticMixin:
-         elif self.mask is None and operand is not None:
-             # Make a copy so there is no reference in the result.
-             return deepcopy(operand.mask)
--        elif operand is None:
-+        elif operand is None or operand.mask is None:
-             return deepcopy(self.mask)
-```
-
----
 
 ## Modes & Permissions
 
@@ -255,9 +175,6 @@ Switch the agent's role with `--profile` (CLI) or `/profile` (TUI) or via the **
 | `grep_search` | Ripgrep-style search across the codebase |
 | `find_files` | Find files matching a glob pattern |
 | `write_plan` | Creates a step-by-step plan for approval |
-| `create_todo` | Creates a todo item |
-| `update_todo` | Updates a todo status (active / done / failed) |
-| `list_todos` | Shows active todos and progress |
 | `list_tools` | Discovers connected MCP servers and lazy-loaded plugins |
 | `web_search` | Searches the internet for up-to-date documentation and fixes |
 | `fetch_url` | Downloads and converts a webpage to readable markdown |
@@ -428,6 +345,31 @@ pytest tests
 
 **Project layout follows `src/` layout** — all source lives under `src/andromity/`.
 
+---
+## What's New in v0.2.0
+
+### ⚡ Instant Startup — Blank Screen Eliminated
+
+- **Removed dead `litellm` import** in the settings module that forced a full `litellm` dependency-graph load at startup, adding 3–18 seconds of blank screen before the TUI appeared.
+- **Lazy-loaded `SettingsScreen`** — the 87KB settings module is now imported only when you open Settings, not at app boot.
+
+### 🏃 Long-Session Performance & Memory Stability
+
+A full audit and remediation of runtime bottlenecks that accumulate over long, multi-turn sessions:
+
+| Fix | What was wrong | What changed |
+|-----|---------------|--------------|
+| **Debounced Session I/O** | Every streamed token wrote synchronously to disk | 1.5s debounced background save with `flush()` on switch/exit |
+| **Widget Timer Teardown** | `set_interval()` timers kept firing after message widgets were removed | `on_unmount()` hooks cancel all timers on every sub-widget |
+| **DOM History Serialization** | Pruned chat messages stayed in memory as live Textual Widget trees | Messages beyond 60 in view are serialized to dicts; re-inflated on scroll |
+| **File Watcher Thread Churn** | Every filesystem event spawned a new `threading.Timer` thread | Single persistent daemon worker thread with `threading.Condition` |
+| **Undo Stack Capping** | Large pastes accumulated megabytes in undo history | Prompt previews capped at 20,000 chars per checkpoint |
+| **Accurate Auto-Compaction** | Context threshold used character-math estimates | Uses real `context_tokens` from provider usage reports when available |
+| **Daemon Threads for Warmup** | Background import warmup blocked test pilots and app teardown | `threading.Thread(daemon=True)` used for warmup and git init |
+
+### ✅ Test Suite
+
+68 tests across session, agent, file tree, undo, status bar, interactive questions, and config — all green.
 ---
 
 ## Contributing

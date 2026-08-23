@@ -6,6 +6,7 @@ helper scripts. Skills are installed from public GitHub registries into:
 
     ~/.andromity/skills/<name>/      (available in every project)
     <project>/.andromity/skills/     (available in this project only)
+    ~/.agent/skills/<name>/      (available in all )
 
 Installed skills are injected into the agent's system prompt so it knows what
 is available and can follow a skill's SKILL.md when the user asks for it by

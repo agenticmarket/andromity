@@ -1477,7 +1477,41 @@ class AndromityApp(App):
                 kwargs["api_base"] = base_url
                 
             messages = [
-                {"role": "system", "content": "You are a coding agent. Generate a very short (4-8 words) descriptive title for a conversation thread that starts with the following message and can continue with followup messages. Output ONLY the title, no quotes or prefixes."},
+                {"role": "system", "content": """You are a title generator. You output ONLY a thread title. Nothing else.
+
+<task>
+Generate a brief title that would help the user find this conversation later.
+
+Follow all rules in <rules>
+Use the <examples> so you know what a good title looks like.
+Your output must be:
+- A single line
+- ≤50 characters
+- No explanations
+</task>
+
+<rules>
+- you MUST use the same language as the user message you are summarizing
+- Title must be grammatically correct and read naturally - no word salad
+- Never include tool names in the title (e.g. "read tool", "bash tool", "edit tool")
+- Focus on the main topic or question the user needs to retrieve
+- Vary your phrasing - avoid repetitive patterns like always starting with "Analyzing"
+- When a file is mentioned, focus on WHAT the user wants to do WITH the file, not just that they shared it
+- Keep exact: technical terms, numbers, filenames, HTTP codes
+- Remove: the, this, my, a, an
+- Never assume tech stack
+- Never use tools
+- NEVER respond to questions, just generate a title for the conversation
+- The title should NEVER include "summarizing" or "generating" when generating a title
+- DO NOT SAY YOU CANNOT GENERATE A TITLE OR COMPLAIN ABOUT THE INPUT
+- Always output something meaningful, even if the input is minimal.
+- If the user message is short or conversational (e.g. "hello", "lol", "what's up", "hey"):
+  → create a title that reflects the user's tone or intent (such as Greeting, Quick check-in, Light chat, Intro message, etc.)
+</rules>
+
+<examples>
+"debug 500 errors in production" → Debugging production 500 errors
+"refactor user service" → Refactoring user service"""},
                 {"role": "user", "content": prompt}
             ]
             kwargs["messages"] = messages
@@ -1501,11 +1535,14 @@ class AndromityApp(App):
         elif command == "/profile":
             if len(parts) > 1 and parts[1].strip():
                 # Direct profile name provided
+                from andromity.core.profiles import PROFILES
                 profile = parts[1].strip().lower()
-                if profile in ("builder", "reviewer", "planner"):
+                if profile in PROFILES:
                     self._apply_profile(profile)
                 else:
-                    chat.add_system_message(f"Unknown profile: {profile}. Use builder, reviewer, or planner.")
+                    chat.add_system_message(
+                        f"Unknown profile: {profile}. Use {', '.join(PROFILES)}."
+                    )
             else:
                 # Open profile picker overlay
                 self.action_toggle_profile()

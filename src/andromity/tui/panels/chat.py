@@ -3,6 +3,7 @@ from textual.containers import VerticalScroll, Vertical, Horizontal
 from textual.widget import Widget
 from textual.widgets import Static, Markdown, Collapsible, Button
 
+from andromity.config import config
 from andromity.tui.markup_utils import safe_markup, safe_update, escape_textual as escape
 import re
 import time
@@ -22,10 +23,10 @@ ChatMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
 
     def compose(self) -> ComposeResult:
         if self.role == "user":
-            yield Static(f"[bold cyan]You:[/bold cyan] {escape(self._content)}")
+            yield Static(f"[bold cyan]◆ You:[/bold cyan] {escape(self._content)}")
         elif self.role == "assistant":
             if self._show_header:
-                yield Static("[bold green]Andromity:[/bold green]", classes="assistant-header")
+                yield Static("[bold #22c55e]■ Andromity:[/bold #22c55e]", classes="assistant-header")
             if self._content.strip():
                 yield Markdown(self._content)
             else:
@@ -292,6 +293,7 @@ ToolSequence Collapsible { border: none; padding: 0; background: transparent; }
         self._started = time.time()
         self._count = 0
         self._finished = False
+        self._user_toggled = False
         self._timer = None
         self._pending_tools: list[Widget] = []
         self._last_tool = ""
@@ -299,7 +301,9 @@ ToolSequence Collapsible { border: none; padding: 0; background: transparent; }
         self._last_tool_done = False
 
     def compose(self) -> ComposeResult:
-        with Collapsible(title=self._title(), collapsed=True, id="tools-col"):
+        auto_expand = config.get("default", "expand_tools_while_working", True)
+        is_collapsed = self._finished or not auto_expand
+        with Collapsible(title=self._title(), collapsed=is_collapsed, id="tools-col"):
             yield Button("⧉ Copy tool log", classes="copy-tools-btn")
             yield Vertical(id="tools-list")
 
@@ -322,14 +326,12 @@ ToolSequence Collapsible { border: none; padding: 0; background: transparent; }
         if self._finished:
             # Replayed sequences have no recorded duration — just say complete
             status = "complete" if elapsed < 1 else f"worked for {elapsed}s"
-        elif not self._last_tool_done:
-            if self._last_tool:
-                # Only the header shows the currently-running tool, in its own color
-                status = f"[#38bdf8]{escape(self._last_tool)}[/#38bdf8] working… ({elapsed}s)"
-            else:
-                status = f"working… ({elapsed}s)"
+        elif not self._last_tool_done and self._last_tool:
+            # A specific tool is actively executing
+            status = f"[#38bdf8]{escape(self._last_tool)}[/#38bdf8] working… ({elapsed}s)"
         else:
-            status = f"done ({elapsed}s)"
+            # Turn/block is still active (thinking, between tools, or preparing next step)
+            status = f"working… ({elapsed}s)"
         return f"[dim]{self._TOOL_ICON} {label} · {status}[/dim]"
 
     def _tick(self):
@@ -339,6 +341,11 @@ ToolSequence Collapsible { border: none; padding: 0; background: transparent; }
             self.query_one("#tools-col", Collapsible).title = self._title()
         except Exception:
             pass
+
+    def on_collapsible_toggled(self, event: Collapsible.Toggled):
+        if event.collapsible.id == "tools-col":
+            if not self._finished:
+                self._user_toggled = True
 
     def add_tool(self, indicator: "ToolIndicator"):
         self._count += 1
@@ -379,7 +386,7 @@ ToolSequence Collapsible { border: none; padding: 0; background: transparent; }
             self._timer = None
 
     def finish(self):
-        """Freeze the summary — called when the turn ends."""
+        """Freeze the summary and collapse the section once the turn ends."""
         self._finished = True
         if self._timer is not None:
             try:
@@ -388,7 +395,10 @@ ToolSequence Collapsible { border: none; padding: 0; background: transparent; }
                 pass
             self._timer = None
         try:
-            self.query_one("#tools-col", Collapsible).title = self._title()
+            col = self.query_one("#tools-col", Collapsible)
+            col.title = self._title()
+            if not self._user_toggled:
+                col.collapsed = True
         except Exception:
             pass
 
@@ -546,14 +556,14 @@ StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
         self._header_shown = True
         try:
             if not self.query(".assistant-header"):
-                self.mount(Static("[bold green]Andromity:[/bold green]", classes="assistant-header"), before="#stream-content")
+                self.mount(Static("[bold #22c55e]■ Andromity:[/bold #22c55e]", classes="assistant-header"), before="#stream-content")
         except Exception:
             # #stream-content may not be mounted yet when text starts in the
             # same tick — defer until the DOM settles.
             def _defer():
                 try:
                     if not self.query(".assistant-header"):
-                        self.mount(Static("[bold green]Andromity:[/bold green]", classes="assistant-header"), before="#stream-content")
+                        self.mount(Static("[bold #22c55e]■ Andromity:[/bold #22c55e]", classes="assistant-header"), before="#stream-content")
                 except Exception:
                     pass
             self.call_after_refresh(_defer)
@@ -705,7 +715,7 @@ def _deserialize_widget(d: dict) -> Widget | None:
         tb.set_content(d.get("text", ""))
         return tb
     elif wtype == "header":
-        return Static("[bold green]Andromity:[/bold green]", classes="assistant-header")
+        return Static("[bold #22c55e]■ Andromity:[/bold #22c55e]", classes="assistant-header")
     return None
 
 
@@ -844,12 +854,12 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
             child.remove()
 
     def _ensure_assistant_header(self, before=None):
-        """Mount the single 'Andromity:' label at the TOP of the assistant's
+        """Mount the single '■ Andromity:' label at the TOP of the assistant's
         turn — before thinking and tool blocks — so it always appears first."""
         if self._header_shown:
             return
         self._header_shown = True
-        header = Static("[bold green]Andromity:[/bold green]", classes="assistant-header")
+        header = Static("[bold #22c55e]■ Andromity:[/bold #22c55e]", classes="assistant-header")
         try:
             if before is not None:
                 self.mount(header, before=before)

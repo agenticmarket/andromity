@@ -121,9 +121,38 @@ SettingsScreen {
     border-right: solid $primary-darken-2;
     background: $surface-darken-1;
 }
-#settings-content { height: 1fr; padding: 1 2; }
-#settings-footer { dock: bottom; height: 3; padding: 0 1; }
-#settings-footer Button { margin: 0 1; }
+#settings-footer {
+    dock: bottom;
+    height: 3;
+    padding: 1 1 0 1;
+    background: $surface-darken-2;
+    border-top: solid $accent-darken-2;
+    align: right middle;
+}
+#settings-footer Button {
+    height: 1;
+    min-width: 14;
+    margin: 0 1;
+    padding: 0 2;
+    border: none;
+}
+#settings-footer #settings-save {
+    background: $success;
+    color: $background;
+    text-style: bold;
+}
+#settings-footer #settings-save:hover, #settings-footer #settings-save:focus {
+    background: $success-lighten-1;
+    color: $background;
+}
+#settings-footer #settings-cancel {
+    background: $surface;
+    color: $text-muted;
+}
+#settings-footer #settings-cancel:hover, #settings-footer #settings-cancel:focus {
+    background: $error;
+    color: $text;
+}
 
 /* ── Pane ── */
 .settings-pane  { height: 1fr; overflow-y: auto; }
@@ -468,6 +497,11 @@ SettingsScreen {
                             yield Switch(id="setting-telemetry")
                         with Horizontal(classes="adv-row"):
                             yield Label(
+                                "Auto-expand Tools  [dim](expand while running, collapse when done)[/]",
+                                classes="adv-label")
+                            yield Switch(value=config.get("default", "expand_tools_while_working", True), id="setting-auto-expand-tools")
+                        with Horizontal(classes="adv-row"):
+                            yield Label(
                                 "Sound Alerts (Attention)  [dim](play sound when AI needs approval)[/]",
                                 classes="adv-label")
                             yield Switch(id="setting-sound-attention")
@@ -504,8 +538,8 @@ SettingsScreen {
                         yield Label("\n[dim]© 2026 Agentic Market[/]")
 
             with Horizontal(id="settings-footer"):
-                yield Button("Cancel",   variant="default", id="settings-cancel")
-                yield Button("Save All", variant="primary",  id="settings-save")
+                yield Button("Cancel (Esc)", id="settings-cancel")
+                yield Button("Save All (Ctrl+S)", id="settings-save")
 
     # ── MCP pane composer ────────────────────────────────────────────────────
 
@@ -1630,6 +1664,9 @@ SettingsScreen {
             app.agent.dry_run = self.query_one("#setting-dryrun", Switch).value
             telemetry_enabled = self.query_one("#setting-telemetry", Switch).value
             config.set("default", "telemetry", telemetry_enabled)
+            
+            expand_tools = self.query_one("#setting-auto-expand-tools", Switch).value
+            config.set("default", "expand_tools_while_working", expand_tools)
             
             sound_attn = self.query_one("#setting-sound-attention", Switch).value
             config.set("default", "sound_attention", sound_attn)
