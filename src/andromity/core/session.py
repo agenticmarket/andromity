@@ -82,7 +82,7 @@ class Session:
                     tool_calls: Optional[List[Dict]] = None,
                     name: Optional[str] = None, tool_call_id: Optional[str] = None,
                     thinking: Optional[str] = None):
-        msg: Dict[str, Any] = {"role": role}
+        msg: Dict[str, Any] = {"role": role, "ts": datetime.now(timezone.utc).isoformat()}
         if content is not None:
             msg["content"] = content
         if tool_calls is not None:

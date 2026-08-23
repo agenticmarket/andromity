@@ -72,7 +72,7 @@ def _apply_textual_workarounds() -> None:
 
 _apply_textual_workarounds()
 
-COMMANDS = ["/help", "/mode", "/model", "/profile", "/reason", "/update", "/context-menu", "/undo", "/keys", "/settings", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear", "/cron", "/plan", "/mcp", "/skills", "/compact"]
+COMMANDS = ["/help", "/mode", "/model", "/profile", "/reason", "/update", "/context-menu", "/undo", "/keys", "/settings", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear", "/cron", "/plan", "/mcp", "/skills", "/compact", "/export"]
 
 CSS = """\
 Screen { background: $surface; }
@@ -1644,6 +1644,26 @@ Your output must be:
             except Exception:
                 pass
             chat.add_system_message(f"[yellow]Folder untrusted:[/] {self._project_path}\nFile writes and shell commands are now blocked.")
+        elif command == "/export":
+            arg = parts[1].strip().strip('"\'') if len(parts) > 1 else ""
+            from andromity.core.export import export_session
+            try:
+                out_path = export_session(self.session, output_path=arg, project_path=self._project_path)
+                path_str = str(out_path)
+                self.notify(
+                    f"Session exported to {path_str}",
+                    title="Export complete",
+                    severity="information",
+                    timeout=5,
+                )
+                chat.add_system_message(
+                    f"[green]✓ Session exported:[/] [link=file://{path_str}]{escape(path_str)}[/link]"
+                )
+            except ValueError as e:
+                chat.add_system_message(f"[red]{escape(str(e))}[/]\n[dim]Usage: /export [filename.md|filename.html|filename.json][/]")
+            except OSError as e:
+                log.error("Export failed: %s", e)
+                chat.add_system_message(f"[red]✗ Export failed:[/] {escape(str(e))}")
         elif command == "/clear":
             self.run_worker(chat.clear())
         elif command == "/mode":

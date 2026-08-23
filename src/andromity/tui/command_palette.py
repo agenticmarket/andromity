@@ -27,6 +27,7 @@ COMMAND_DESCRIPTIONS = {
     "/attach":   "Attach an image file (path) to the next message",
     "/settings": "Open master settings panel",
     "/sessions": "Browse & switch sessions (Ctrl+O)",
+    "/export":  "Export this chat to Markdown / HTML / JSON",
     "/new":      "Start a new session",
     "/compact":  "Summarize & compress old context (frees tokens)",
     "/rename":   "Rename current session",
