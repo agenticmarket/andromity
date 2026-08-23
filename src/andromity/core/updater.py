@@ -154,15 +154,30 @@ def perform_update() -> Tuple[bool, str]:
         log.info("Running upgrade command: %s", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if result.returncode == 0:
-            # Clear update cache on successful upgrade
+            # Clear update cache on successful check/upgrade
             try:
                 if CACHE_FILE.exists():
                     CACHE_FILE.unlink()
             except Exception:
                 pass
-            return True, f"Successfully upgraded Andromity! Restart the app to apply the update.\n\n{result.stdout.strip()}"
+
+            out = (result.stdout or "").strip()
+            out_lower = out.lower()
+            if any(phrase in out_lower for phrase in (
+                "already at latest version",
+                "requirement already satisfied",
+                "already up-to-date",
+                "already up to date",
+                "up to date",
+            )):
+                return True, f"Andromity is already at the latest version ({__version__})."
+
+            return True, f"Successfully upgraded Andromity! Restart the app to apply the update.\n\n{out}"
         else:
-            return False, f"Upgrade failed (exit code {result.returncode}):\n{result.stderr.strip() or result.stdout.strip()}"
+            err = result.stderr.strip() or result.stdout.strip()
+            if "WinError 32" in err or "used by another process" in err:
+                return False, "Cannot update while Andromity is running. Please close the app and run 'pip install --upgrade andromity' in a separate terminal."
+            return False, f"Upgrade failed (exit code {result.returncode}):\n{err}"
     except Exception as e:
         log.error("Update execution error: %s", e)
         return False, f"Update failed: {e}"
