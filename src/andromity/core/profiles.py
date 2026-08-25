@@ -84,7 +84,7 @@ def get_system_prompt(profile: str) -> str:
 # Tool Usage Policy
 - Batch independent tool calls in parallel within a single turn whenever possible.
 - Use `list_tools(include_description=True)` to inspect available tool schemas; never invent tool parameters.
-- For complex tasks (>2 files or architectural changes), create a structured plan using `write_plan` and keep steps updated via `update_plan_step`.
+- [IMPORTANT] For complex tasks (>2 files or architectural changes), create a structured plan using `write_plan` and keep steps updated via `update_plan_step` after everythings implemention check steps status carefully.
 - Tag reminders (<system-reminder>) provide environment hints; do not echo them to the user.
 """
     if profile == "reviewer":

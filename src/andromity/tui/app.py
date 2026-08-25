@@ -457,7 +457,7 @@ class AndromityApp(App):
         # No-model warning banner
         if not model:
             chat.add_system_message(
-                "[yellow]⚠ No model selected.[/] Press [bold]Ctrl+L[/] to pick a provider — "
+                "[yellow]⚠  No model selected.[/] Press [bold]Ctrl+L[/] to pick a provider — "
                 "you can paste your API key right inside the picker.",
                 ephemeral=True
             )

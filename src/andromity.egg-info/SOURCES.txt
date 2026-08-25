@@ -21,8 +21,10 @@ src/andromity/core/context_menu.py
 src/andromity/core/cron.py
 src/andromity/core/debug_log.py
 src/andromity/core/events.py
+src/andromity/core/export.py
 src/andromity/core/git_ops.py
 src/andromity/core/images.py
+src/andromity/core/lore.py
 src/andromity/core/mcp.py
 src/andromity/core/models.py
 src/andromity/core/oauth.py
@@ -69,13 +71,17 @@ tests/test_command_palette.py
 tests/test_config.py
 tests/test_context_menu.py
 tests/test_cron.py
+tests/test_diff_panel.py
 tests/test_events.py
+tests/test_export.py
 tests/test_filetree.py
 tests/test_git.py
 tests/test_help_screen.py
 tests/test_images.py
+tests/test_lore.py
 tests/test_mcp.py
 tests/test_modal_esc.py
+tests/test_model_picker_key.py
 tests/test_models.py
 tests/test_parallel_tools.py
 tests/test_permissions.py
@@ -94,4 +100,5 @@ tests/test_todo.py
 tests/test_tools.py
 tests/test_undo.py
 tests/test_usage.py
+tests/test_usage_chart_format.py
 tests/test_web.py

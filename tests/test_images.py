@@ -217,6 +217,41 @@ async def test_paste_chip_removal():
         assert not bar.has_class("has-items")
 
 
+@pytest.mark.asyncio
+async def test_no_duplicate_paste_when_key_and_bracketed_paste():
+    from textual.events import Paste
+    host = _InputHost()
+    async with host.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        chat_input = host.query_one("#input-field", ChatInput)
+        with patch("andromity.core.images.paste_image_from_clipboard", return_value=None):
+            await pilot.press("ctrl+v")
+            await host._post_message(Paste("hello world"))
+            await pilot.pause()
+
+        assert chat_input.text == "hello world"
+        chat_input.action_undo()
+        await pilot.pause()
+        assert chat_input.text == ""
+
+
+@pytest.mark.asyncio
+async def test_windows_terminal_empty_paste_with_clipboard_image():
+    """Windows Terminal sends empty paste event when clipboard holds an image."""
+    pytest.importorskip("PIL")
+    from PIL import Image
+    from textual.events import Paste
+
+    host = _InputHost()
+    async with host.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        with patch("andromity.core.images.paste_image_from_clipboard",
+                   return_value=Image.new("RGB", (16, 16))):
+            await host._post_message(Paste(""))
+            await pilot.pause()
+        assert len(_chips(host)) == 1
+
+
 def test_image_to_data_uri_roundtrip():
     pytest.importorskip("PIL")
     from PIL import Image

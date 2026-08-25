@@ -40,7 +40,7 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 - **Bounded undo memory**: Capped prompt previews in undo history at 20k characters so pasting giant files doesn't balloon memory.
 - **Accurate token counts**: Uses real `context_tokens` from provider APIs for compaction thresholds instead of guessing by character length.
 
----
+---ro
 
 ## [0.2.0] — 2026-08-15
 
