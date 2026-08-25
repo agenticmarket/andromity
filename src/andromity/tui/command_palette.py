@@ -27,6 +27,7 @@ COMMAND_DESCRIPTIONS = {
     "/attach":   "Attach an image file (path) to the next message",
     "/settings": "Open master settings panel",
     "/sessions": "Browse & switch sessions (Ctrl+O)",
+    "/export":  "Export this chat to Markdown / HTML / JSON",
     "/new":      "Start a new session",
     "/compact":  "Summarize & compress old context (frees tokens)",
     "/rename":   "Rename current session",
@@ -40,7 +41,8 @@ COMMAND_DESCRIPTIONS = {
     "/skills":   "Browse & install skills (one-click)",
     "/plan":     "Show or clear the active plan",
     "/mcp":      "Show MCP server status & available tools",
-    "/update":   "Check for updates & upgrade Andromity",
+    "/tips":     "Get a curated developer & coding tip",
+    "/news":     "Show latest release notes & announcements",
     "/context-menu": "Toggle 'Open in Andromity' in Windows context menu",
 }
 

@@ -236,3 +236,115 @@ def test_template_fills_form():
             assert modal.query_one("#cf-prompt").value
 
     asyncio.run(_run())
+
+
+def test_cron_run_store_full_telemetry_and_sanitization():
+    proj = tempfile.mkdtemp()
+    sched = CronScheduler(proj, on_trigger=lambda c: None)
+    job = sched.add(name="Linter", prompt="run ruff check", schedule="every 1h",
+                    provider="anthropic", model="claude-sonnet-4-6")
+
+    # Start run
+    run = sched.start_run(job.id, job.prompt, f"{job.provider}/{job.model}", session_id="test-sess-123")
+    assert run is not None
+    assert run.job_id == job.id
+    assert run.session_id == "test-sess-123"
+
+    # Populate full telemetry
+    run.output = "All 42 checks passed successfully in 0.45s.\nFile: src/main.py clean."
+    run.tools_used = ["shell_exec"]
+    run.files_modified = ["src/main.py"]
+    run.tool_executions = [{
+        "tool_name": "shell_exec",
+        "args": {"command": "ruff check"},
+        "result": "All checks passed.",
+        "duration_ms": 450,
+        "status": "ok",
+    }]
+    sched.mark_result(job.id, success=True, run=run)
+
+    # Reload from store
+    runs = sched.list_runs(job.id)
+    assert len(runs) == 1
+    loaded = runs[0]
+    assert loaded.output == run.output
+    assert loaded.status == "success"
+    assert len(loaded.tool_executions) == 1
+    assert loaded.tool_executions[0]["tool_name"] == "shell_exec"
+    assert loaded.files_modified == ["src/main.py"]
+
+    # Test sanitization of stale running runs
+    stale_run = sched.start_run(job.id, job.prompt, "test-model")
+    assert stale_run.status == "running"
+    # Create new scheduler on same project path -> auto-sanitizes
+    new_sched = CronScheduler(proj, on_trigger=lambda c: None)
+    reloaded_stale = new_sched.get_run(job.id, stale_run.id)
+    assert reloaded_stale is not None
+    assert reloaded_stale.status == "interrupted"
+
+
+def test_modal_history_view_and_full_view_modal():
+    async def _run():
+        from textual.app import App, ComposeResult
+        from textual.widgets import Static
+
+        from andromity.tui.overlays.cron import CronManagerOverlay, CronRunLogModal
+
+        class T(App):
+            def compose(self) -> ComposeResult:
+                yield Static("host")
+
+        proj = tempfile.mkdtemp()
+        sched = CronScheduler(proj, on_trigger=lambda c: None)
+        job = sched.add(name="Test Job", prompt="run tests", schedule="every 30m",
+                        provider="ollama", model="m", mode="trust")
+        run = sched.start_run(job.id, job.prompt, "ollama/m")
+        run.output = "Pytest results:\n310 passed, 0 failures\nRuntime: 12.4s"
+        run.tool_executions = [{"tool_name": "shell_exec", "args": {"command": "pytest"}, "result": "310 passed", "duration_ms": 12400, "status": "ok"}]
+        sched.mark_result(job.id, success=True, run=run)
+
+        app = T()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.pause()
+            app._cron_scheduler = sched
+            app._cron_running_jobs = set()
+            app.push_screen(CronManagerOverlay(sched, proj))
+            for _ in range(10):
+                await pilot.pause()
+
+            modal = app.screen
+            # Select job
+            await pilot.press("down")
+            await pilot.pause()
+
+            # Switch to History tab
+            await pilot.press("h")
+            for _ in range(10):
+                await pilot.pause()
+
+            assert modal._active_tab == "history"
+            assert len(modal.query(".history-row")) == 1
+
+            # Detail pane should display output
+            detail = modal.query_one("#history-detail")
+            assert len(detail.children) > 0
+
+            # Press 'v' to open fullscreen log modal
+            await pilot.press("v")
+            for _ in range(10):
+                await pilot.pause()
+
+            assert isinstance(app.screen, CronRunLogModal)
+            log_modal = app.screen
+            statics = list(log_modal.query("#run-log-content Static"))
+            assert len(statics) > 0
+            assert any("310 passed" in str(getattr(s, "content", getattr(s, "renderable", ""))) for s in statics)
+
+            # Close log modal with Esc
+            await pilot.press("escape")
+            for _ in range(5):
+                await pilot.pause()
+            assert isinstance(app.screen, CronManagerOverlay)
+
+    asyncio.run(_run())
+

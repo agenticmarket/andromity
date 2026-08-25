@@ -797,9 +797,26 @@ def update_plan_step(step_index: int, status: str) -> str:
     """
     Update step progress (e.g. 'active', 'done', 'failed', 'skipped').
     Updates both the plan and the corresponding todo checklist in real-time.
+    Automatically marks any previously active step as 'done' when starting a new active step.
     """
     from andromity.core.planner import Plan
     from andromity.core.todo import TodoList
+
+    # Normalize common status aliases from various LLM models
+    status_aliases = {
+        "in_progress": "active",
+        "running": "active",
+        "working": "active",
+        "started": "active",
+        "completed": "done",
+        "finished": "done",
+        "passed": "done",
+        "success": "done",
+        "error": "failed",
+        "skip": "skipped",
+    }
+    raw_status = str(status).lower().strip()
+    status = status_aliases.get(raw_status, raw_status)
 
     valid_statuses = ("pending", "active", "done", "failed", "skipped")
     if status not in valid_statuses:
@@ -807,6 +824,14 @@ def update_plan_step(step_index: int, status: str) -> str:
 
     project_path = str(_get_project_root())
     todo_list = TodoList.load(project_path)
+
+    # When transitioning a step to 'active', automatically mark any
+    # previously 'active' steps as 'done' so unfinished active steps don't linger.
+    if status == "active":
+        for item in todo_list.items:
+            if item.id != f"t{step_index}" and item.status == "active":
+                item.status = "done"
+
     item = todo_list.update(f"t{step_index}", status)
 
     _sync_plan_md(todo_list=todo_list)
@@ -814,7 +839,7 @@ def update_plan_step(step_index: int, status: str) -> str:
 
     if item:
         return f"Updated Step {step_index} ({item.title}) to '{status}'."
-    return f"Updated Step {step_index} status to '{status}'."
+    return f"Updated Step {step_index} status to '{status}'."   
 
 
 
@@ -1079,13 +1104,13 @@ CORE_TOOLS = [
         "type": "function",
         "function": {
             "name": "ask_questions",
-            "description": "Ask the user structured clarifying questions when the request is ambiguous or important choices are missing. Pauses until answered — the user picks options or types an answer. Use sparingly: max 3 questions, and prefer good defaults over asking when the request is clear enough.",
+            "description": "Ask the user structured clarifying questions when the request is ambiguous or important choices are missing. Pauses until answered — the user picks options or types an answer. Use sparingly: max 3 questions, and prefer good recommendations over asking when the request is clear enough.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "questions": {
                         "type": "array",
-                        "description": "Questions to ask. type='single' uses the options as exclusive choices; type='multi' allows selecting several options; type='text' expects a free-form answer (options ignored).",
+                        "description": "Questions to ask. type='single' uses the options as exclusive choices; type='multi' allows selecting several options; type='text' expects a free-form answer.",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -1105,7 +1130,7 @@ CORE_TOOLS = [
         "type": "function",
         "function": {
             "name": "write_plan",
-            "description": "Create a structured plan for complex tasks. Steps automatically sync to the visual progress tracker. User must approve before execution. For large or architecture-level work, also pass a full markdown document via plan_md.",
+            "description": "Create a structured plan for complex tasks or asked to. Steps automatically sync to the visual progress tracker. User must approve before execution. For large or architecture-level work, also pass a full markdown document via plan_md.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1123,7 +1148,7 @@ CORE_TOOLS = [
         "type": "function",
         "function": {
             "name": "update_plan_step",
-            "description": "Update plan step progress. Call with 'active' when starting, 'done' when finished, 'failed' on error.",
+            "description": "Update plan step progress. Call with 'active' when starting, 'done' must for finished, 'failed' on error. after overall process check steps status properly",
             "parameters": {
                 "type": "object",
                 "properties": {

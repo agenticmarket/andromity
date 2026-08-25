@@ -52,7 +52,8 @@ class ConfigManager:
                 "profile": "builder",
                 "permission_mode": "safe",
                 "reasoning_effort": "medium",
-                "allowed_commands": ["npm run", "npm test", "npm list", "npm run dev", "pytest", "python -m pytest", "git status", "git diff", "git log", "ls", "dir", "cat", "echo"]
+                "expand_tools_while_working": True,
+                "allowed_commands": ["npm run", "npm test", "npm list", "npm run dev", "git status", "git diff", "git log", "ls", "dir", "cat", "echo"]
             },
             "providers": [
                 {"name": "anthropic", "type": "anthropic"},
@@ -133,7 +134,7 @@ class ConfigManager:
             self._config_cache["providers"] = providers
         self.save()
 
-        # Also set in os.environ for immediate use by litellm
+        # Also set in os.environ for immediate so it can be used by litellm
         env_map = {
             "anthropic": "ANTHROPIC_API_KEY",
             "openai": "OPENAI_API_KEY",
@@ -193,7 +194,7 @@ class ConfigManager:
             try:
                 import json
                 data = json.loads(path.read_text(encoding="utf-8"))
-                srv_key = "mcpServers" if "mcpServers" in data else ("servers" if "servers" in data else "mcpServers")
+                srv_key = "mcpServers" if "mcpServers" in data else ("servers" if "servers" in data else "mcpServers") #compatible with both version Antigravity and VSCode
             except Exception:
                 return False
 
@@ -296,7 +297,7 @@ class ConfigManager:
         """
         Convert a remote HTTP server (serverUrl only) to use npx mcp-remote
         with an Authorization: Bearer header, so it can be launched as stdio.
-        Searches project and global Gemini config. Returns True on success.
+        Searches project and global config. Returns True on success.
         """
         path, data, srv_key = self._find_mcp_file_for_server(project_path, server_name)
         if path is None:

@@ -34,6 +34,8 @@ def _time_ago(iso_str: str) -> str:
 
 def _session_label(s: Session) -> str:
     """Best-effort row label: real name, else the first user message, else a placeholder."""
+    if s.name and s.name.startswith("cron:"):
+        return f"[yellow]⏱[/] [bold]{escape_textual(s.name)}[/]"
     if s.name and s.name not in ("new-session", "tui-session", "headless-session"):
         return escape_textual(s.name)
     for m in s.messages:
@@ -62,7 +64,8 @@ SessionBrowserOverlay {
     background: $background 20%;
 }
 #sb-dialog {
-    width: 76; height: 28;
+    width: 90%; max-width: 76;
+    height: 85%; max-height: 28; min-height: 18;
     border: solid $accent-darken-2; background: $surface;
 }
 #sb-title { padding: 0 1; height: 1; background: $accent-darken-3; color: $text; text-style: bold; }

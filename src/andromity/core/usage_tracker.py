@@ -82,8 +82,13 @@ class UsageTracker:
         stats: list[SessionStat] = []
         if project_path:
             import hashlib
-            p_hash = hashlib.sha256(project_path.encode()).hexdigest()[:16]
+            from pathlib import Path
+            resolved_p = str(Path(project_path).resolve())
+            p_hash = hashlib.sha256(resolved_p.encode()).hexdigest()[:16]
             target = sessions_root / p_hash
+            if not target.exists():
+                raw_hash = hashlib.sha256(project_path.encode()).hexdigest()[:16]
+                target = sessions_root / raw_hash
             dirs = [target] if target.exists() else []
         else:
             dirs = [d for d in sessions_root.iterdir() if d.is_dir()]

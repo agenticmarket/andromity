@@ -31,7 +31,7 @@ def _make_stream(calls):
     calls, every later call yields a plain text answer."""
     count = 0
 
-    async def mock_stream(messages, tools=None):
+    async def mock_stream(messages, tools=None, **kwargs):
         nonlocal count
         count += 1
         if count == 1:

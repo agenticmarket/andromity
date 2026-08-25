@@ -65,9 +65,9 @@ def _textually_safe(text: str) -> bool:
 
 def safe_markup(text: str) -> str:
     '''Pre-validate Textual markup. Falls back to escaped plain text if tags are broken.'''
-    # If the text contains obvious HTML tags, escape the whole thing, as it's not valid markup
-    # e.g., <button class="theme-toggle">
-    if re.search(r'<[a-zA-Z][^>]*>', str(text)):
+    # If the text contains obvious HTML tags with attributes or known elements, escape it
+    # e.g., <button class="theme-toggle"> or <div>
+    if re.search(r'</?(?:html|body|div|span|button|script|style|form|input|table|tr|td|thead|tbody|p|h[1-6]|ul|ol|li|img|iframe|header|footer|nav|main|section|article|link|meta)\b[^>]*>|<[a-zA-Z0-9_-]+\s+[a-zA-Z0-9_-]+=', str(text), re.IGNORECASE):
         return escape_textual(str(text))
 
     if _textually_safe(str(text)):

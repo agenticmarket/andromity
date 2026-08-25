@@ -44,3 +44,12 @@ def test_coder_has_todo_tools():
     tools = get_allowed_tools("coder")
     assert all(t in tools for t in ["create_todo", "update_todo", "list_todos"])
     assert "write_plan" not in tools  # coder doesn't plan
+
+
+def test_slash_profile_accepts_every_registered_profile():
+    """Regression: /profile parser must accept every key in PROFILES (coder was missing)."""
+    from andromity.core.profiles import PROFILES
+
+    for name in PROFILES:
+        assert name in ("builder", "coder", "reviewer", "planner"), name
+        assert get_system_prompt(name)  # every registered profile has a prompt

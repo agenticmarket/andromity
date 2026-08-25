@@ -37,7 +37,7 @@ async def test_run_with_images_sends_content_parts_but_keeps_session_text(sessio
     agent = Agent(session, profile="builder", auto_approve=True, dry_run=True)
     seen = {}
 
-    async def mock_stream(messages, tools=None):
+    async def mock_stream(messages, tools=None, **kwargs):
         seen["messages"] = messages
         yield TextDelta(text="I see the screenshot")
         yield Done(usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15})
@@ -98,7 +98,7 @@ async def test_openrouter_model_not_blocked_on_supports_vision_false(session):
     agent = Agent(session, profile="builder", auto_approve=True, dry_run=True)
     seen = {}
 
-    async def mock_stream(messages, tools=None):
+    async def mock_stream(messages, tools=None, **kwargs):
         seen["messages"] = messages
         yield TextDelta(text="I see it")
         yield Done(usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})

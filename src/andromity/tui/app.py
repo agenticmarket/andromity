@@ -1,4 +1,5 @@
 import asyncio
+import re
 import threading
 import time
 from pathlib import Path
@@ -72,17 +73,17 @@ def _apply_textual_workarounds() -> None:
 
 _apply_textual_workarounds()
 
-COMMANDS = ["/help", "/mode", "/model", "/profile", "/reason", "/update", "/context-menu", "/undo", "/keys", "/settings", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear", "/cron", "/plan", "/mcp", "/skills", "/compact"]
+COMMANDS = ["/help", "/mode", "/model", "/profile", "/reason", "/update", "/context-menu", "/undo", "/keys", "/settings", "/sessions", "/new", "/rename", "/trust", "/untrust", "/dry-run", "/debug", "/logs", "/clear", "/cron", "/plan", "/mcp", "/skills", "/compact", "/export", "/tips", "/news"]
 
 CSS = """\
 Screen { background: $surface; }
 #main-layout { height: 1fr; }
 #left-panel {
     width: 34; min-width: 16; max-width: 35;
-    border-right: solid $accent-darken-2; overflow-y: auto;
+    border-right: solid $panel-lighten-2; overflow-y: auto;
 }
-.hide-files #left-panel { display: none; }
 .hide-context #right-sidebar { display: none; }
+.hide-files #left-panel { display: none; }
 #left-panel.force-hidden { display: none; }
 #left-panel.force-show { display: block; }
 #right-sidebar.force-hidden { display: none; }
@@ -92,12 +93,12 @@ Screen { background: $surface; }
     display: none;
     width: 1fr;
     height: 1fr;
-    border-left: solid $accent-darken-2;
+    border-left: solid $panel-lighten-2;
 }
 #diff-panel.visible { display: block; }
 #right-sidebar {
     width: 45; height: 1fr;
-    border-left: solid $accent-darken-2;
+    border-left: solid $panel-lighten-2;
 }
 #context-panel {
     height: auto;
@@ -113,9 +114,9 @@ ChatPanel MarkdownBulletList { margin: 0 0 1 1; padding: 0; }
 ChatPanel MarkdownOrderedList { margin: 0 0 1 1; padding: 0; }
 ChatPanel MarkdownHeader { margin: 1 0 0 0; }
 ChatPanel MarkdownH1, ChatPanel MarkdownH2, ChatPanel MarkdownH3, ChatPanel MarkdownH4, ChatPanel MarkdownH5, ChatPanel MarkdownH6 { margin: 0; padding: 0; }
-ChatPanel MarkdownHorizontalRule { margin: 0; padding: 0; border: none; border-top: solid $accent-darken-2; }
+ChatPanel MarkdownHorizontalRule { margin: 0; padding: 0; border: none; border-top: solid $panel-lighten-2; }
 FileTreePanel { height: 1fr; overflow-y: auto; padding: 1; }
-PlanPanel { height: 1fr; border-top: solid $accent-darken-2; }
+PlanPanel { height: 1fr; border-top: solid $panel-lighten-2; }
 #model-overlay { display: none; }
 #model-overlay.visible { display: block; }
 
@@ -131,7 +132,7 @@ PlanPanel { height: 1fr; border-top: solid $accent-darken-2; }
     width: 35;
     height: 100%;
     background: $surface;
-    border-right: solid $accent-darken-2;
+    border-right: solid $panel-lighten-2;
 }
 .narrow #right-sidebar { width: 0; min-width: 0; border-left: none; }
 
@@ -145,7 +146,7 @@ PlanPanel { height: 1fr; border-top: solid $accent-darken-2; }
 
 /* One-line response footer: copy button + timing + tool calls */
 .response-footer { height: 1; margin: 0 0 1 0; }
-.resp-time { color: #22d3ee; padding: 0 1; height: 1; content-align: left middle; }
+.resp-time { color: $text-muted; padding: 0 1; height: 1; content-align: left middle; }
 """
 
 
@@ -201,7 +202,13 @@ class AndromityApp(App):
         self._pending_batch_files: set[Path] = set()
         self._pre_write_contents: dict[Path, bytes | None] = {}  # path → bytes before this turn (None = new file)
         self._pre_turn_snapshot: str | None = None
-        log.info("=== Andromity started | project=%s ===", self._project_path)
+        log.info(
+            "=== Andromity started | project=%s | session=%s | cron=%s | mcp=%s ===",
+            self._project_path,
+            getattr(self, "session", None),
+            getattr(self, "_cron_scheduler", None),
+            getattr(self, "_mcp_manager", None),
+        )
 
     def _get_ctx_limit(self) -> int:
         """Return live context limit for current provider/model."""
@@ -238,17 +245,16 @@ class AndromityApp(App):
         yield AppFooter(id="app-footer")
 
     def on_resize(self, event):
-        if event.size.width <= 100:
+        # Responsive ladder, priority chat > context > file tree:
+        # full layout → hide file tree (≤135) → chat-only narrow mode (≤110).
+        # Context/token stats stay visible until narrow mode. Manual Ctrl+B
+        # toggles use per-element force-show/force-hidden classes that always win.
+        if event.size.width <= 110:
             self.add_class("narrow")
         else:
             self.remove_class("narrow")
-            
-        if event.size.width <= 120:
-            self.add_class("hide-context")
-        else:
-            self.remove_class("hide-context")
-            
-        if event.size.width <= 200:
+
+        if event.size.width <= 135:
             self.add_class("hide-files")
         else:
             self.remove_class("hide-files")
@@ -399,7 +405,7 @@ class AndromityApp(App):
                         try:
                             self.query_one(AppFooter).set_update_available(latest)
                             self.query_one(ChatPanel).add_system_message(
-                                f"🚀 [bold #fbbf24]Update available: v{latest}[/] — run [bold cyan]/update[/] or click the footer badge to upgrade.",
+                                f"🚀 [bold $warning]Update available: v{latest}[/] — run [bold cyan]/update[/] or click the footer badge to upgrade.",
                                 ephemeral=True
                             )
                         except Exception:
@@ -439,10 +445,10 @@ class AndromityApp(App):
 
         # Always show a welcome banner first
         chat.add_system_message(
-            "[bold green]✦ Welcome to Andromity![/bold green]  "
+            "[bold $success]✦ Welcome to Andromity![/]  "
             "Your AI coding assistant is ready.\n"
             "  [dim]Type a message and press [bold]Enter[/] to chat  ·  "
-            "[bold cyan]/help[/] for commands  ·  "
+            "[bold]/help[/] for commands  ·  "
             "[bold]Ctrl+L[/] to switch model  ·  "
             "[bold]Shift+Enter[/] for new line[/dim]",
             ephemeral=True
@@ -451,7 +457,8 @@ class AndromityApp(App):
         # No-model warning banner
         if not model:
             chat.add_system_message(
-                "[yellow]⚠ No model selected.[/] Use [bold cyan]/model[/] or [bold]Ctrl+L[/] to pick a provider and model first.",
+                "[yellow]⚠ No model selected.[/] Press [bold]Ctrl+L[/] to pick a provider — "
+                "you can paste your API key right inside the picker.",
                 ephemeral=True
             )
             self.call_after_refresh(lambda: self.action_toggle_model())
@@ -460,7 +467,8 @@ class AndromityApp(App):
                 not config.get_api_key("google") and not config.get_api_key("openrouter"):
             if model and provider not in ("ollama",):
                 chat.add_system_message(
-                    "[yellow]⚠ No cloud API key configured.[/] Use [bold cyan]/keys set <provider> <key>[/] or set environment variables.",
+                    "[yellow]⚠ No cloud API key configured.[/] Press [bold]Ctrl+L[/], choose your provider, "
+                    "and paste the key there — it's saved automatically.",
                     ephemeral=True
                 )
 
@@ -758,34 +766,36 @@ class AndromityApp(App):
         cron_panel.push_notification(
             f"⏱ [yellow bold]Cron:[/] [bold]{escape(cron.name)}[/] is firing…"
         )
-        # Temporarily switch to cron's model/provider if different
-        current_provider = config.get("default", "provider", "")
-        current_model = config.get("default", "model", "")
-        is_different = (cron.provider != current_provider or cron.model != current_model)
 
-        if is_different:
-            config.set("default", "provider", cron.provider)
-            config.set("default", "model", cron.model)
-
-        # Create a temporary agent with isolated session and cron's permission mode
-        cron_session = Session(name=f"cron-{cron.name}", project_path=self._project_path)
+        # Create an isolated session for this cron run
+        cron_session = Session(name=f"cron: {cron.name}", project_path=self._project_path)
         cron_agent = Agent(
             cron_session,
             profile=self.agent.profile,
             on_tool_approval=self._make_cron_approval(cron),
             ctx_limit=self._get_ctx_limit(),
+            provider=cron.provider,
+            model=cron.model,
         )
 
         # Start a run record for history tracking
-        model_display = f"{cron.provider}/{cron.model}"
-        run = self._cron_scheduler.start_run(cron.id, cron.prompt, model_display)
+        model_display = f"{cron.provider}/{cron.model}" if cron.provider else cron.model
+        run = self._cron_scheduler.start_run(
+            cron.id,
+            cron.prompt,
+            model_display,
+            provider=cron.provider,
+            session_id=cron_session.id,
+        )
 
         async def _run():
-            run_messages = []
+            import json
+            import time
             tools_used = set()
             files_modified = set()
+            tool_executions = []
+            active_tool_calls = {}  # tool_id -> {tool_name, args, start_time}
             output_text = ""
-            # ID is already added to _cron_running_jobs in _on_cron_trigger
 
             async def _execute():
                 nonlocal output_text
@@ -794,6 +804,42 @@ class AndromityApp(App):
                         output_text += event.text
                     elif isinstance(event, ToolCallStart):
                         tools_used.add(event.tool_name)
+                        active_tool_calls[event.tool_id] = {
+                            "tool_name": event.tool_name,
+                            "args": "",
+                            "start_time": time.time(),
+                        }
+                    elif isinstance(event, ToolCallDelta):
+                        if event.tool_id in active_tool_calls:
+                            active_tool_calls[event.tool_id]["args"] += event.args_json_chunk
+                    elif isinstance(event, ToolResult):
+                        rec = active_tool_calls.pop(event.tool_id, None)
+                        dur = int((time.time() - rec["start_time"]) * 1000) if rec else 0
+                        tool_name = rec["tool_name"] if rec else "tool"
+                        raw_args = rec["args"] if rec else ""
+                        try:
+                            parsed_args = json.loads(raw_args) if raw_args else {}
+                        except Exception:
+                            parsed_args = {"raw": raw_args}
+
+                        # Track modified files
+                        if tool_name in ("write_file", "edit_file", "write_to_file", "replace_file_content"):
+                            fpath = parsed_args.get("path") or parsed_args.get("target_file") or parsed_args.get("file_path") or parsed_args.get("TargetFile")
+                            if fpath:
+                                files_modified.add(str(fpath))
+                        elif tool_name == "multi_replace_file_content":
+                            fpath = parsed_args.get("TargetFile")
+                            if fpath:
+                                files_modified.add(str(fpath))
+
+                        res_str = str(event.result) if event.result is not None else ""
+                        tool_executions.append({
+                            "tool_name": tool_name,
+                            "args": parsed_args,
+                            "result": res_str[:3000],
+                            "duration_ms": dur,
+                            "status": "rejected" if "[Rejected by User]" in res_str else "ok",
+                        })
 
             try:
                 timeout = cron.timeout_seconds if cron.timeout_seconds > 0 else None
@@ -802,13 +848,16 @@ class AndromityApp(App):
                 else:
                     await _execute()
 
-                # Collect session messages from this run
-                run_messages = cron_session.messages[-10:]
+                cron_session.flush()
+                run_messages = cron_session.messages
                 if run:
                     run.messages = run_messages
                     run.tools_used = sorted(tools_used)
                     run.files_modified = sorted(files_modified)
+                    run.tool_executions = tool_executions
+                    run.output = output_text
                     run.output_preview = output_text[:500] if output_text else ""
+                    run.cost_usd = getattr(cron_session, "cost_usd", 0.0)
 
                 self._cron_scheduler.mark_result(cron.id, success=True, run=run)
                 cron_panel.push_notification(f"[green]✓ Cron '{escape(cron.name)}' completed.[/]")
@@ -817,14 +866,16 @@ class AndromityApp(App):
             except asyncio.TimeoutError:
                 timeout_msg = f"Timed out after {cron.timeout_seconds}s"
                 log.warning("Cron '%s' timed out after %ds", cron.name, cron.timeout_seconds)
+                cron_session.flush()
                 if run:
                     run.error = timeout_msg
+                    run.messages = cron_session.messages
+                    run.tools_used = sorted(tools_used)
+                    run.files_modified = sorted(files_modified)
+                    run.tool_executions = tool_executions
+                    run.output = output_text
+                    run.output_preview = output_text[:500] if output_text else ""
                 self._cron_scheduler.mark_result(cron.id, success=False, error=timeout_msg, run=run)
-                # Mark status as timeout distinctly so history shows it clearly
-                for c in self._cron_scheduler.list():
-                    if c.id == cron.id:
-                        c.last_status = "timeout"
-                        break
                 cron_panel.push_notification(
                     f"[yellow]⏱ Cron '{escape(cron.name)}' timed out[/] after {cron.timeout_seconds}s. "
                     f"Job is free to run again next interval."
@@ -832,16 +883,20 @@ class AndromityApp(App):
                 self.refresh_cron_status()
 
             except Exception as e:
+                cron_session.flush()
                 if run:
                     run.error = str(e)
+                    run.messages = cron_session.messages
+                    run.tools_used = sorted(tools_used)
+                    run.files_modified = sorted(files_modified)
+                    run.tool_executions = tool_executions
+                    run.output = output_text
+                    run.output_preview = output_text[:500] if output_text else ""
                 self._cron_scheduler.mark_result(cron.id, success=False, error=str(e), run=run)
                 cron_panel.push_notification(f"[red]✗ Cron '{escape(cron.name)}' failed:[/] {escape(str(e))}")
                 self.refresh_cron_status()
             finally:
-                self._cron_running_jobs.discard(cron.id)  # ALWAYS release — timeout, fail, or success
-                if is_different:
-                    config.set("default", "provider", current_provider)
-                    config.set("default", "model", current_model)
+                self._cron_running_jobs.discard(cron.id)
 
         self.run_worker(_run(), exclusive=False)
 
@@ -850,7 +905,7 @@ class AndromityApp(App):
         async def _approval(tool_name: str, args: dict) -> bool:
             if cron.mode == "yolo":
                 return True
-            if tool_name == "shell_exec":
+            if tool_name in ("shell_exec", "shell_bg"):
                 command = str(args.get("command", "")).strip()
                 if cron.allowed_commands and any(command.startswith(p) for p in cron.allowed_commands):
                     return True
@@ -860,7 +915,7 @@ class AndromityApp(App):
                     f"[yellow]⏱ Cron '{escape(cron.name)}':[/] blocked '{escape(tool_name)}' (not in allowlist)"
                 )
                 return False
-            if tool_name in ("write_file", "edit_file") and cron.mode == "safe":
+            if tool_name in ("write_file", "edit_file", "write_to_file", "replace_file_content", "multi_replace_file_content") and cron.mode == "safe":
                 cron_panel = self.query_one(CronStatusPanel)
                 cron_panel.push_notification(
                     f"[yellow]⏱ Cron '{escape(cron.name)}':[/] blocked '{escape(tool_name)}' (safe mode)"
@@ -946,6 +1001,73 @@ class AndromityApp(App):
             )
         self._show_welcome()
 
+    def _update_status(self, live_tokens: int | None = None):
+        model = config.get("default", "model", "")
+        provider = config.get("default", "provider", "")
+        display = f"{provider}/{model}" if provider and model else model
+        if provider == "ollama" and getattr(self, "_ollama_num_ctx", 0) > 0:
+            ctx_limit = self._ollama_num_ctx
+        else:
+            from andromity.core.models import get_context_limit_for_model
+            ctx_limit = get_context_limit_for_model(provider, model) if (provider and model) else 0
+        
+        # The footer is a context-window indicator, not the cumulative bill.
+        # token_total is retained for usage analytics and spend accounting.
+        display_tokens = live_tokens if live_tokens is not None else self.session.context_tokens
+        is_estimated = live_tokens is not None
+        
+        try:
+            mcp_summary = self._mcp_manager.get_status_summary() if hasattr(self, "_mcp_manager") else None
+            ctx = self.query_one(ContextPanel)
+            ctx.update_context(
+                tokens=display_tokens,
+                cost=self.session.cost_usd,
+                cost_source=self.session.cost_source,
+                profile=self.agent.profile,
+                model=display,
+                ctx_limit=ctx_limit,
+                estimated=is_estimated,
+                session_name=self.session.name,
+                mcp_summary=mcp_summary,
+            )
+        except Exception:
+            pass
+
+        active_mode = "yolo" if self._yolo_session else config.get("default", "permission_mode", "safe")
+        effort = getattr(self.agent, "reasoning_effort", None) or config.get("default", "reasoning_effort", "medium")
+        try:
+            self.query_one(StatusBar).update_status(
+                tokens=display_tokens,
+                cost=self.session.cost_usd,
+                cost_source=self.session.cost_source,
+                profile=self.agent.profile,
+                model=display,
+                ctx_limit=ctx_limit,
+                estimated=is_estimated,
+                session_name=self.session.name,
+                permission_mode=active_mode,
+                effort=effort,
+            )
+            # Keep status bar todo progress in sync with session plan
+            plan = self.session.load_plan_obj() if hasattr(self, "session") and self.session else None
+            if plan:
+                from andromity.core.todo import TodoList
+                todo_list = TodoList.load(self._project_path)
+                done, total = todo_list.progress()
+                self.query_one(StatusBar).update_todo_progress(done, total)
+            else:
+                self.query_one(StatusBar).update_todo_progress(0, 0)
+        except Exception:
+            pass
+        self.query_one(AppFooter).update_footer(cwd=self._project_path, profile=self.agent.profile)
+
+    def refresh_cron_status(self):
+        try:
+            panel = self.query_one(CronStatusPanel)
+            panel.refresh_jobs(self._cron_scheduler.list())
+        except Exception:
+            pass
+
     async def _new_session(self):
         """Start a fresh session, preserving the old one in storage."""
         if hasattr(self, "session") and self.session:
@@ -959,9 +1081,12 @@ class AndromityApp(App):
         self._session_named = False
         chat = self.query_one(ChatPanel)
         await chat.clear()
-        # Plan is session-scoped — new session starts with no plan
+        # Plan & todos are session-scoped — new session starts with no plan or leftover todos
         try:
             self.query_one(PlanPanel).clear_plan()
+            self.query_one(StatusBar).update_todo_progress(0, 0)
+            from andromity.core.todo import TodoList
+            TodoList(project_path=self._project_path).save()
         except Exception:
             pass
         chat.add_system_message("[green]New session started.[/] Previous session saved.")
@@ -1040,7 +1165,7 @@ class AndromityApp(App):
                            on_questions=self._on_ask_questions, ctx_limit=self._get_ctx_limit())
         self._session_named = True  # already named
         chat = self.query_one(ChatPanel)
-        await chat.load_history(session.messages)
+        await chat.load_history(session.messages, getattr(session, "compacted_history", None))
         self._update_status()
         # Load plan from session (if any)
         try:
@@ -1048,8 +1173,13 @@ class AndromityApp(App):
             panel = self.query_one(PlanPanel)
             if plan:
                 panel.load_plan(plan)
+                from andromity.core.todo import TodoList
+                todo_list = TodoList.load(self._project_path)
+                done, total = todo_list.progress()
+                self.query_one(StatusBar).update_todo_progress(done, total)
             else:
                 panel.clear_plan()
+                self.query_one(StatusBar).update_todo_progress(0, 0)
         except Exception:
             pass
         chat.add_system_message(
@@ -1357,18 +1487,19 @@ class AndromityApp(App):
         except Exception:
             pass
         
-        # Guard: no model configured
+        # Slash commands always execute regardless of whether a model is configured
+        if prompt.startswith("/"):
+            self._process_message(prompt)
+            return
+
+        # Guard: no model configured for natural language chatting
         model = config.get("default", "model", "")
         if not model:
             chat = self.query_one(ChatPanel)
             chat.add_system_message(
                 "[red]No model selected.[/] Please choose a provider and model first:\n"
-                "  [bold cyan]/model[/] or [bold]Ctrl+M[/]"
+                "  [bold cyan]/model[/] or [bold]Ctrl+L[/]"
             )
-            return
-
-        if prompt.startswith("/"):
-            self._process_message(prompt)
             return
 
         if self._is_streaming:
@@ -1377,7 +1508,7 @@ class AndromityApp(App):
                 if self._current_task and not self._current_task.done():
                     self._current_task.cancel()
                 chat = self.query_one(ChatPanel)
-                chat.add_system_message("⚡ [bold #38bdf8]Steered agent with new instruction[/]")
+                chat.add_system_message("[bold $primary]Steered agent with new instruction[/]")
                 self._process_message(prompt, images)
                 return
 
@@ -1477,7 +1608,41 @@ class AndromityApp(App):
                 kwargs["api_base"] = base_url
                 
             messages = [
-                {"role": "system", "content": "You are a coding agent. Generate a very short (4-8 words) descriptive title for a conversation thread that starts with the following message and can continue with followup messages. Output ONLY the title, no quotes or prefixes."},
+                {"role": "system", "content": """You are a title generator. You output ONLY a thread title. Nothing else.
+
+<task>
+Generate a brief title that would help the user find this conversation later.
+
+Follow all rules in <rules>
+Use the <examples> so you know what a good title looks like.
+Your output must be:
+- A single line
+- ≤50 characters
+- No explanations
+</task>
+
+<rules>
+- you MUST use the same language as the user message you are summarizing
+- Title must be grammatically correct and read naturally - no word salad
+- Never include tool names in the title (e.g. "read tool", "bash tool", "edit tool")
+- Focus on the main topic or question the user needs to retrieve
+- Vary your phrasing - avoid repetitive patterns like always starting with "Analyzing"
+- When a file is mentioned, focus on WHAT the user wants to do WITH the file, not just that they shared it
+- Keep exact: technical terms, numbers, filenames, HTTP codes
+- Remove: the, this, my, a, an
+- Never assume tech stack
+- Never use tools
+- NEVER respond to questions, just generate a title for the conversation
+- The title should NEVER include "summarizing" or "generating" when generating a title
+- DO NOT SAY YOU CANNOT GENERATE A TITLE OR COMPLAIN ABOUT THE INPUT
+- Always output something meaningful, even if the input is minimal.
+- If the user message is short or conversational (e.g. "hello", "lol", "what's up", "hey"):
+  → create a title that reflects the user's tone or intent (such as Greeting, Quick check-in, Light chat, Intro message, etc.)
+</rules>
+
+<examples>
+"debug 500 errors in production" → Debugging production 500 errors
+"refactor user service" → Refactoring user service"""},
                 {"role": "user", "content": prompt}
             ]
             kwargs["messages"] = messages
@@ -1501,11 +1666,14 @@ class AndromityApp(App):
         elif command == "/profile":
             if len(parts) > 1 and parts[1].strip():
                 # Direct profile name provided
+                from andromity.core.profiles import PROFILES
                 profile = parts[1].strip().lower()
-                if profile in ("builder", "reviewer", "planner"):
+                if profile in PROFILES:
                     self._apply_profile(profile)
                 else:
-                    chat.add_system_message(f"Unknown profile: {profile}. Use builder, reviewer, or planner.")
+                    chat.add_system_message(
+                        f"Unknown profile: {profile}. Use {', '.join(PROFILES)}."
+                    )
             else:
                 # Open profile picker overlay
                 self.action_toggle_profile()
@@ -1607,6 +1775,26 @@ class AndromityApp(App):
             except Exception:
                 pass
             chat.add_system_message(f"[yellow]Folder untrusted:[/] {self._project_path}\nFile writes and shell commands are now blocked.")
+        elif command == "/export":
+            arg = parts[1].strip().strip('"\'') if len(parts) > 1 else ""
+            from andromity.core.export import export_session
+            try:
+                out_path = export_session(self.session, output_path=arg, project_path=self._project_path)
+                path_str = str(out_path)
+                self.notify(
+                    f"Session exported to {path_str}",
+                    title="Export complete",
+                    severity="information",
+                    timeout=5,
+                )
+                chat.add_system_message(
+                    f"[green]✓ Session exported:[/] [link=file://{path_str}]{escape(path_str)}[/link]"
+                )
+            except ValueError as e:
+                chat.add_system_message(f"[red]{escape(str(e))}[/]\n[dim]Usage: /export [filename.md|filename.html|filename.json][/]")
+            except OSError as e:
+                log.error("Export failed: %s", e)
+                chat.add_system_message(f"[red]✗ Export failed:[/] {escape(str(e))}")
         elif command == "/clear":
             self.run_worker(chat.clear())
         elif command == "/mode":
@@ -1785,8 +1973,86 @@ class AndromityApp(App):
                 )
         elif command == "/undo":
             self._run_undo()
+        elif command in ("/tips", "/tip"):
+            subtag = parts[1].strip().lstrip("#") if len(parts) > 1 and parts[1].strip() else None
+            self.run_worker(self._handle_tip_command(subtag))
+        elif command == "/news":
+            self.run_worker(self._handle_news_command())
+        elif command in (
+            "/void", "/tao", "/roast", "/council", "/trial", "/sus", "/mirror",
+            "/graveyard", "/archaeology", "/founder", "/matrix", "/zombie",
+            "/secret", "/oracle", "/ghost"
+        ):
+            sub_prompt = parts[1].strip() if len(parts) > 1 else ""
+            self.run_worker(self._handle_lore_command(command, sub_prompt))
         else:
             chat.add_system_message(f"Unknown: {command}. Type /help")
+
+    async def _handle_tip_command(self, tag: str | None = None):
+        chat = self.query_one(ChatPanel)
+        from andromity.core.lore import fetch_random_tip
+        data = await fetch_random_tip(tag)
+        if data and data.get("tip"):
+            tag_str = f" [dim cyan]#{escape(data.get('tag', 'dev'))}[/]" if data.get('tag') else ""
+            season_str = f"\n[dim yellow]{escape(data.get('season'))}[/]" if data.get('season') else ""
+            tip_content = data['tip']
+            tip_formatted = re.sub(r'`([^`]+)`', r'[bold cyan]\1[/]', tip_content)
+            chat.add_system_message(
+                f"[bold cyan]💡 Developer Tip[/]{tag_str}\n\n"
+                f"{tip_formatted}"
+                f"{season_str}"
+            )
+        else:
+            chat.add_system_message(
+                "💡 [bold cyan]Developer Tip[/]\n\n"
+                "Keep functions small, test boundaries, and use [bold cyan]/cron[/] for autonomous scheduled maintenance."
+            )
+
+    async def _handle_news_command(self):
+        chat = self.query_one(ChatPanel)
+        from andromity.core.lore import fetch_latest_news
+        data = await fetch_latest_news()
+        if data and data.get("version"):
+            lines = [f"[bold green]📢 {data.get('title', 'Andromity News')}[/]\n"]
+            if data.get("season_banner"):
+                lines.append(f"[yellow]{data['season_banner']}[/]\n")
+            for h in data.get("highlights", []):
+                lines.append(f"  • {h}")
+            if data.get("docs_url"):
+                lines.append(f"\n[dim]GitHub: {data['docs_url']}[/dim]")
+            chat.add_system_message("\n".join(lines))
+        else:
+            chat.add_system_message(
+                "[bold green]📢 Andromity 0.2.2[/]\n"
+                "• Built-in Cron Scheduler for autonomous scheduled runs\n"
+                "• MCP Tool Support & Dynamic Profiles\n"
+                "• Real-time Telemetry & Edge Intelligence"
+            )
+
+    async def _handle_lore_command(self, command: str, user_query: str):
+        chat = self.query_one(ChatPanel)
+        from andromity.core.lore import fetch_lore_directive
+        lore = await fetch_lore_directive(command)
+
+        if not lore or not lore.get("directive"):
+            chat.add_system_message(f"Unknown: {command}. Type /help")
+            return
+
+        cmd_name = command.lstrip("/")
+        prompt_display = f"/{cmd_name}" + (f" {user_query}" if user_query else "")
+        chat.add_user_message(prompt_display)
+
+        directive_text = lore["directive"]
+        if lore.get("seasonal_modifier"):
+            directive_text += f"\n\n[Active Season Event: {lore.get('seasonal', 'seasonal')}]\n{lore['seasonal_modifier']}"
+
+        combined_prompt = (
+            f"<special_instruction>\n{directive_text}\n</special_instruction>\n\n"
+            + (f"User query / context: {user_query}" if user_query else "Execute your directive on the active repository or problem context.")
+        )
+
+        self.run_worker(self._stream_agent(combined_prompt, None), exclusive=False)
+
 
     def action_toggle_filetree(self):
         panel = self.query_one("#left-panel")
@@ -1946,7 +2212,7 @@ class AndromityApp(App):
             # ── 3. Clean visual chat panel rollback (await before system msg) ─
             chat = self.query_one(ChatPanel)
             try:
-                await chat.load_history(self.session.messages)
+                await chat.load_history(self.session.messages, getattr(self.session, "compacted_history", None))
             except Exception as e:
                 log.warning("Failed to reload chat history: %s", e)
 

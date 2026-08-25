@@ -73,7 +73,7 @@ def update_cmd():
 @main.command(name="install-context-menu")
 @click.option("--icon", "-i", type=click.Path(exists=True), help="Optional path to custom .ico icon file")
 def install_context_menu_cmd(icon):
-    """Add 'Open in Andromity' to the Windows right-click context menu."""
+    """Add 'Open with Andromity' to the Windows right-click context menu.For better UX"""
     from andromity.core.context_menu import install_context_menu
     ok, msg = install_context_menu(icon_path=icon)
     if ok:
@@ -84,7 +84,7 @@ def install_context_menu_cmd(icon):
 
 @main.command(name="uninstall-context-menu")
 def uninstall_context_menu_cmd():
-    """Remove 'Open in Andromity' from the Windows right-click context menu."""
+    """Remove 'Open with Andromity' from the Windows right-click context menu."""
     from andromity.core.context_menu import remove_context_menu
     ok, msg = remove_context_menu()
     if ok:

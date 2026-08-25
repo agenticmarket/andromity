@@ -158,6 +158,57 @@ def test_click_perm_segment_cycles_mode():
     asyncio.run(_run())
 
 
+def test_perm_segment_has_no_stray_backslash():
+    """Regression: '\\[FULL\\]' rendered a literal backslash — Textual only
+    needs the opening bracket escaped; '\\]' shows as backslash + bracket."""
+    async def _run():
+        async with HostApp().run_test(size=(120, 30)) as pilot:
+            await _settle(pilot)
+            sb = pilot.app.query_one(StatusBar)
+            for mode in ("safe", "trust", "full"):
+                seg = sb._seg_perm()
+                assert "\\]" not in seg, (mode, seg)
+                assert "\\[" in seg, (mode, seg)
+
+    asyncio.run(_run())
+
+
+def test_context_panel_does_not_duplicate_status_bar_metrics():
+    """Cost/profile rows were removed from ContextPanel — status bar and footer
+    own those numbers. Only session/model/MCP/fill-bar remain."""
+    async def _run():
+        from andromity.tui.footer import ContextPanel
+
+        class CtxHost(App):
+            def compose(self) -> ComposeResult:
+                yield ContextPanel()
+
+        async with CtxHost().run_test(size=(60, 20)) as pilot:
+            await _settle(pilot)
+            panel = pilot.app.query_one(ContextPanel)
+            panel.update_context(
+                tokens=9000, cost=0.1234, profile="builder",
+                model="openai/gpt-4o-mini", ctx_limit=128000,
+                session_name="my-session",
+            )
+            await _settle(pilot)
+            ids = [w.id for w in panel.query("Static")]
+            assert "ctx-cost" not in ids, ids
+            assert "ctx-profile" not in ids, ids
+            texts = []
+            for w in panel.query("Static"):
+                try:
+                    texts.append(str(w.visual))
+                except Exception:
+                    texts.append(str(getattr(w, "_content", "")))
+            joined = "\n".join(texts)
+            assert "$0.1234" not in joined, "cost must not appear in context panel"
+            assert "Profile:" not in joined
+            assert "my-session" in joined
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     import os
 

@@ -13,23 +13,87 @@ class ModelPickerScreen(ModalScreen):
     DEFAULT_CSS = """\
 ModelPickerScreen {
     align: center middle;
-    background: $background 20%;
+    background: $background 30%;
 }
 #mp-dialog {
-    width: 72; height: 32;
-    border: solid $accent-darken-2; background: $surface;
+    width: 90%; max-width: 72;
+    height: 85%; max-height: 32; min-height: 20;
+    border: solid $accent-darken-2;
+    background: $surface;
     padding: 0;
 }
-#mp-title { padding: 0 1; height: 1; background: $accent-darken-3; color: $text; text-style: bold; }
-#mp-step1 { height: 1fr; }
-#mp-step2 { height: 1fr; display: none; }
+#mp-title {
+    padding: 0 1;
+    height: 1;
+    background: $accent-darken-3;
+    color: $text;
+    text-style: bold;
+}
+#mp-step1 { height: 1fr; padding: 1 2 0 2; }
+#mp-step2 { height: 1fr; padding: 1 2 0 2; display: none; }
 #mp-step2.visible { display: block; }
 #mp-providers { height: 1fr; overflow-y: auto; padding: 0 1; }
 #mp-models { height: 1fr; overflow-y: auto; padding: 0 1; }
-#mp-custom-row { height: 3; padding: 0 1; }
-#mp-model-desc { height: 2; padding: 0 2; color: $text-muted; }
-#mp-footer { dock: bottom; height: 3; padding: 0 1; }
-#mp-footer Button { margin: 0 1; }
+#mp-key-row {
+    height: 3;
+    padding: 0;
+    margin-bottom: 1;
+    display: none;
+    align: left middle;
+}
+#mp-key-row.visible { display: block; }
+#mp-key-input { width: 1fr; height: 3; }
+#mp-connect {
+    height: 3;
+    min-width: 12;
+    margin-left: 1;
+    padding: 0 2;
+    border: none;
+    background: $accent;
+    color: $background;
+    text-style: bold;
+}
+#mp-connect:hover, #mp-connect:focus {
+    background: $accent-lighten-1;
+    color: $background;
+}
+#mp-key-hint { height: 1; padding: 0 1; color: $warning; display: none; }
+#mp-key-hint.visible { display: block; }
+#mp-custom-row { height: 3; padding: 0; }
+#mp-model-desc { height: 2; padding: 0 1; color: $text-muted; }
+#mp-footer {
+    dock: bottom;
+    height: 3;
+    padding: 0 1;
+    background: $surface-darken-2;
+    border-top: solid $surface-lighten-1;
+    align: right middle;
+}
+#mp-footer Button {
+    height: 1;
+    min-width: 14;
+    margin: 0 1;
+    padding: 0 2;
+    border: none;
+}
+#mp-back, #mp-cancel {
+    background: $surface-lighten-1;
+    color: $text-muted;
+}
+#mp-back:hover, #mp-back:focus,
+#mp-cancel:hover, #mp-cancel:focus {
+    background: $surface-lighten-2;
+    color: $text;
+}
+#mp-apply {
+    background: $accent;
+    color: $background;
+    text-style: bold;
+}
+#mp-apply:hover, #mp-apply:focus {
+    background: $accent-lighten-1;
+    color: $background;
+}
 """
 
     _step: reactive[int] = reactive(1)
@@ -41,6 +105,7 @@ ModelPickerScreen {
         self._selected_model_idx: int = -1   # -1 = nothing chosen yet
         self._gen: int = 0                    # generation counter for unique IDs
         self._ready: bool = False             # guards auto-jump on mount
+        self._key_just_connected: bool = False  # key saved this session — enables rejection hint
 
     def compose(self) -> ComposeResult:
         with Container(id="mp-dialog"):
@@ -59,15 +124,19 @@ ModelPickerScreen {
                             yield RadioButton(label, id=f"provider-{key}")
             with Vertical(id="mp-step2"):
                 yield Static("", id="mp-models-header")
+                with Horizontal(id="mp-key-row"):
+                    yield Input(placeholder="Paste API key…", password=True, id="mp-key-input")
+                    yield Button("Connect", id="mp-connect")
+                yield Static("", id="mp-key-hint")
                 with VerticalScroll(id="mp-models"):
                     yield RadioSet(id="mp-models-radioset")
                 with Horizontal(id="mp-custom-row"):
                     yield Input(placeholder="Or type custom model name (e.g. meta/llama3-70b-instruct)", id="mp-custom-model")
                 yield Static("", id="mp-model-desc", classes="mp-desc-panel")
             with Horizontal(id="mp-footer"):
-                yield Button("Back", variant="default", id="mp-back")
-                yield Button("Cancel", variant="default", id="mp-cancel")
-                yield Button("Apply", variant="primary", id="mp-apply")
+                yield Button("Back", id="mp-back")
+                yield Button("Cancel", id="mp-cancel")
+                yield Button("Apply", id="mp-apply")
 
     def on_mount(self):
         self._show_step1()
@@ -133,14 +202,56 @@ ModelPickerScreen {
         header_text = f"[bold]{provider.get('name', provider_key)} — Select a model:[/]"
         has_key = bool(config.get_api_key(provider_key))
         req_env = provider.get("requires_env")
+        key_row = self.query_one("#mp-key-row", Horizontal)
+        if req_env and not has_key:
+            key_row.add_class("visible")
+            header_text += " [yellow](API key required)[/]"
+        else:
+            key_row.remove_class("visible")
+        self.query_one("#mp-key-hint", Static).remove_class("visible")
         if req_env and has_key:
             header_text += " [dim](fetching live models...)[/]"
         elif req_env and not has_key:
-            header_text += " [yellow](no API key — showing catalog only)[/]"
+            header_text = f"[bold]{provider.get('name', provider_key)} — Select a model:[/] [yellow](API key required)[/]"
+            self.query_one("#mp-models-header").update(header_text)
+            self.call_after_refresh(self._focus_key_input)
+            return
         self.query_one("#mp-models-header").update(header_text)
 
         if req_env and has_key:
             self._fetch_live_models_worker(provider_key)
+
+    def _focus_key_input(self):
+        try:
+            self.query_one("#mp-key-input", Input).focus()
+        except Exception:
+            pass
+
+    def _connect_key(self):
+        """Save the pasted API key and kick off live model fetching."""
+        try:
+            key = self.query_one("#mp-key-input", Input).value.strip()
+            if not key:
+                self._show_key_hint("[yellow]Paste a key first — then press Connect.[/]")
+                return
+            provider_key = self._selected_provider
+            config.set_api_key(provider_key, key)
+            self._key_just_connected = True
+            self.query_one("#mp-key-row", Horizontal).remove_class("visible")
+            self.query_one("#mp-key-hint", Static).remove_class("visible")
+            provider = MODEL_CATALOG.get(provider_key, {})
+            self.query_one("#mp-models-header").update(
+                f"[bold]{provider.get('name', provider_key)} — Select a model:[/] [dim](fetching live models...)[/]"
+            )
+            self._populate_models(provider.get("models", []), provider_key)
+            self._fetch_live_models_worker(provider_key)
+        except Exception:
+            self._show_key_hint("[red]Could not save key — check permissions and retry.[/]")
+
+    def _show_key_hint(self, text: str):
+        hint = self.query_one("#mp-key-hint", Static)
+        hint.update(text)
+        hint.add_class("visible")
 
     # ─── Model list population ────────────────────────────────────────────────
 
@@ -201,10 +312,18 @@ ModelPickerScreen {
                     "  Start Ollama with: [bold]ollama serve[/]  then reopen this picker."
                 )
             else:
-                self.query_one("#mp-models-header").update(
-                    f"[bold]{provider.get('name', provider_key)}[/] "
-                    "[yellow]— live fetch failed, showing catalog[/]"
-                )
+                just_added = self._key_just_connected
+                self._key_just_connected = False
+                header = f"[bold]{provider.get('name', provider_key)}[/] "
+                if just_added:
+                    header += "[red]— key rejected or network error. Verify the key:[/]"
+                    self.query_one("#mp-key-row", Horizontal).add_class("visible")
+                    inp = self.query_one("#mp-key-input", Input)
+                    inp.value = ""
+                    self.call_after_refresh(self._focus_key_input)
+                else:
+                    header += "[yellow]— live fetch failed, showing catalog[/]"
+                self.query_one("#mp-models-header").update(header)
             return
 
         self.query_one("#mp-models-header").update(
@@ -287,6 +406,10 @@ ModelPickerScreen {
         self.dismiss()
 
     def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == "mp-connect":
+            event.stop()
+            self._connect_key()
+            return
         if event.button.id == "mp-cancel":
             self._show_step1()
             self.dismiss()
@@ -294,6 +417,12 @@ ModelPickerScreen {
             self._show_step1()
         elif event.button.id == "mp-apply":
             self._apply_selection()
+
+    def on_input_submitted(self, event: Input.Submitted):
+        # Enter inside the key field connects without leaving the keyboard.
+        if event.input.id == "mp-key-input":
+            event.stop()
+            self._connect_key()
 
     def on_key(self, event):
         if event.key == "escape":

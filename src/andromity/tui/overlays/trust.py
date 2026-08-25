@@ -10,19 +10,66 @@ class TrustPromptOverlay(ModalScreen):
     DEFAULT_CSS = """\
 TrustPromptOverlay {
     align: center middle;
-    background: $background 20%;
+    background: $background 30%;
 }
 #tp-dialog {
-    width: 62; height: 20;
-    border: solid $warning; background: $surface;
+    width: 90%; max-width: 62;
+    height: auto;
+    border: solid $warning;
+    background: $surface;
     padding: 0;
 }
-#tp-title { padding: 0 1; height: 1; background: $warning-darken-2; color: $text; text-style: bold; }
-#tp-body { height: 1fr; padding: 1 2; }
-#tp-path { color: $accent; padding: 0 0 1 0; text-style: bold; }
-#tp-info { color: $text-muted; height: auto; }
-#tp-footer { dock: bottom; height: 3; padding: 0 1; }
-#tp-footer Button { margin: 0 1; }
+#tp-title {
+    padding: 0 1;
+    height: 1;
+    background: $warning-darken-2;
+    color: $text;
+    text-style: bold;
+}
+#tp-body {
+    height: auto;
+    padding: 1 2;
+}
+#tp-path {
+    color: $accent;
+    padding: 0 0 1 0;
+    text-style: bold;
+}
+#tp-info {
+    color: $text;
+    height: auto;
+}
+#tp-footer {
+    height: 3;
+    padding: 0 1;
+    background: $surface-darken-2;
+    border-top: solid $surface-lighten-1;
+    align: right middle;
+}
+#tp-footer Button {
+    height: 1;
+    min-width: 16;
+    margin: 0 1;
+    padding: 0 2;
+    border: none;
+}
+#tp-footer #tp-readonly {
+    background: $surface-lighten-1;
+    color: $text-muted;
+}
+#tp-footer #tp-readonly:hover, #tp-footer #tp-readonly:focus {
+    background: $surface-lighten-2;
+    color: $text;
+}
+#tp-footer #tp-trust {
+    background: $success;
+    color: $background;
+    text-style: bold;
+}
+#tp-footer #tp-trust:hover, #tp-footer #tp-trust:focus {
+    background: $success-lighten-1;
+    color: $background;
+}
 """
 
     def __init__(self, project_path: str, **kwargs):
@@ -31,20 +78,20 @@ TrustPromptOverlay {
 
     def compose(self) -> ComposeResult:
         with Vertical(id="tp-dialog"):
-            yield Static(" \u26a0  Untrusted Folder ", id="tp-title")
+            yield Static(" ⚠  Untrusted Folder ", id="tp-title")
             with Vertical(id="tp-body"):
                 yield Static(self._project_path, id="tp-path")
                 yield Static(
                     "Do you trust the files in this folder?\n\n"
-                    "  [green]\u2713[/] Read files — always allowed\n"
-                    "  [yellow]\u26a0[/] Write and edit files [dim](requires trust)[/]\n"
-                    "  [yellow]\u26a0[/] Run shell commands [dim](requires trust)[/]\n\n"
+                    "  [green]✓[/]  Read files [dim]— always allowed[/]\n"
+                    "  [yellow]⚠[/]  Write and edit files [dim]— requires trust[/]\n"
+                    "  [yellow]⚠[/]  Run shell commands [dim]— requires trust[/]\n\n"
                     "[dim]Trust is saved permanently. Use /untrust to revoke.[/]",
                     id="tp-info"
                 )
             with Horizontal(id="tp-footer"):
-                yield Button("Read-only Mode", variant="default", id="tp-readonly")
-                yield Button("Trust Folder", variant="primary", id="tp-trust")
+                yield Button("Read-only (Esc)", id="tp-readonly")
+                yield Button("Trust Folder", id="tp-trust")
 
     def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "tp-trust":

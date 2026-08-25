@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: andromity
-Version: 0.2.0
+Version: 0.2.1
 Summary: AI coding agent with a beautiful terminal UI. Works with Claude, Gemini, GPT, Ollama and more.
 Author-email: Agentic Market <hello@agenticmarket.dev>
 License: MIT
@@ -35,7 +35,7 @@ Requires-Dist: httpx-sse>=0.4.0
 Requires-Dist: watchdog>=3.0
 Requires-Dist: markdownify>=0.14.0
 Requires-Dist: ddgs>=1.0.0
-Requires-Dist: textual-plotext>=0.2.0
+Requires-Dist: textual-plotext>=0.2.1
 Provides-Extra: dev
 Requires-Dist: pytest>=7.0; extra == "dev"
 Requires-Dist: pytest-asyncio>=0.21; extra == "dev"
@@ -55,7 +55,7 @@ Dynamic: license-file
 
   <p align="center">
     <a href="https://pypi.org/project/andromity/"><img src="https://img.shields.io/pypi/v/andromity" alt="PyPI version" /></a>
-    <img src="https://img.shields.io/badge/version-0.2.0-blueviolet" alt="Version 0.2.0" />
+    <img src="https://img.shields.io/badge/version-0.2.1-blueviolet" alt="Version 0.2.1" />
     <img src="https://img.shields.io/badge/python-3.11+-blue" alt="Python" />
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT" /></a>
   </p>
@@ -91,7 +91,7 @@ Andromity is built for **autonomous, scheduled work**.
 
 ---
 
-## What's New in v0.2.0
+## What's New in v0.2.1
 
 ### ⚡ Instant Startup — Blank Screen Eliminated
 

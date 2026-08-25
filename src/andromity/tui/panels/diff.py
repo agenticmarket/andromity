@@ -17,6 +17,7 @@ from __future__ import annotations
 import difflib
 import json
 from pathlib import Path
+import re
 from typing import Dict, Any, Optional
 
 from rich.syntax import Syntax
@@ -54,7 +55,8 @@ DiffPanel { height: 1fr; }
 #viewer-tabs    { height: 1fr; }
 #viewer-tabs > TabBar { overflow-x: auto; overflow-y: hidden; }
 #viewer-tabs > TabBar Tab { min-width: 10; max-width: 26; }
-.tab-content    { height: 1fr; overflow-y: auto; padding: 0 1; }
+.tab-content    { height: 1fr; overflow-x: auto; overflow-y: auto; padding: 0 1; }
+.diff-content   { width: auto; min-width: 100%; text-wrap: nowrap; }
 
 /* Per-tab toolbar */
 .tab-toolbar {
@@ -87,7 +89,7 @@ DiffPanel { height: 1fr; }
 
 /* Tool viewer */
 #tool-viewer { height: 1fr; }
-#tool-content { height: 1fr; padding: 0 1; }
+#tool-content { height: 1fr; overflow-x: auto; overflow-y: auto; padding: 0 1; }
 #tool-buttons {
     dock: bottom; height: 2; padding: 0 1;
     background: $surface-darken-1;
@@ -423,6 +425,9 @@ DiffPanel { height: 1fr; }
             area = self.query_one(f"#content-{tab_id}", VerticalScroll)
             area.remove_children()
         except Exception:
+            # The pane attaches asynchronously (add_pane returns AwaitComplete);
+            # retry after refresh instead of leaving the new tab blank.
+            self.call_after_refresh(self._render_tab, tab_id)
             return
 
         if self._tab_showing_diff.get(tab_id):
@@ -430,7 +435,7 @@ DiffPanel { height: 1fr; }
             if not diff_text.strip():
                 area.mount(Static("[dim]  No uncommitted changes.[/dim]"))
             else:
-                area.mount(Static(_format_diff(diff_text)))
+                area.mount(Static(_format_diff(diff_text), classes="diff-content"))
         else:
             try:
                 # Detect binary files before attempting text render
@@ -453,8 +458,8 @@ DiffPanel { height: 1fr; }
                     return
                 area.mount(Static(Syntax(
                     code, _lexer(path), theme="monokai",
-                    line_numbers=True, word_wrap=True,
-                )))
+                    line_numbers=True, word_wrap=False,
+                ), classes="diff-content"))
             except Exception as e:
                 area.mount(Static(f"[red]{escape(str(e))}[/red]"))
 
@@ -493,7 +498,7 @@ DiffPanel { height: 1fr; }
         if not diff:
             c.mount(Static("[dim]No changes.[/dim]"))
         else:
-            c.mount(Static(_format_diff("\n".join(l.rstrip("\r\n") for l in diff))))
+            c.mount(Static(_format_diff("\n".join(l.rstrip("\r\n") for l in diff)), classes="diff-content"))
 
     def _render_edit_diff(self, c: VerticalScroll, args: Dict[str, Any]) -> None:
         path_str = args.get("path", "?")
@@ -505,7 +510,7 @@ DiffPanel { height: 1fr; }
         if not diff:
             c.mount(Static("[dim]No changes.[/dim]"))
         else:
-            c.mount(Static(_format_diff("\n".join(l.rstrip("\r\n") for l in diff))))
+            c.mount(Static(_format_diff("\n".join(l.rstrip("\r\n") for l in diff)), classes="diff-content"))
 
     def _render_edit_multi_diff(self, c: VerticalScroll, args: Dict[str, Any]) -> None:
         path_str = args.get("path", "?")
@@ -531,34 +536,39 @@ DiffPanel { height: 1fr; }
         if not diffs:
             c.mount(Static("[dim]No changes.[/dim]"))
         else:
-            c.mount(Static(_format_diff("\n".join(l.rstrip("\r\n") for l in diffs))))
+            c.mount(Static(_format_diff("\n".join(l.rstrip("\r\n") for l in diffs)), classes="diff-content"))
 
     def _render_command(self, c: VerticalScroll, args: Dict[str, Any]) -> None:
         c.mount(Static(
-            f"[dim]Shell command:[/dim]\n\n[bold white]{escape(args.get('command', ''))}[/bold white]"
+            f"[dim]Shell command:[/dim]\n\n[bold white]{escape(args.get('command', ''))}[/bold white]",
+            classes="diff-content",
         ))
 
     def _render_sensitive(self, c: VerticalScroll, args: Dict[str, Any]) -> None:
         c.mount(Static(
             f"[yellow]Agent wants to read:[/yellow]\n\n"
             f"[bold white]{escape(args.get('path', '?'))}[/bold white]\n\n"
-            f"[dim]Verify this is safe before approving.[/dim]"
+            f"[dim]Verify this is safe before approving.[/dim]",
+            classes="diff-content",
         ))
 
     def _render_web_search(self, c: VerticalScroll, args: Dict[str, Any]) -> None:
         c.mount(Static(
-            f"[dim]Web search:[/dim]\n\n[bold cyan]{escape(args.get('query', ''))}[/bold cyan]"
+            f"[dim]Web search:[/dim]\n\n[bold cyan]{escape(args.get('query', ''))}[/bold cyan]",
+            classes="diff-content",
         ))
 
     def _render_fetch_url(self, c: VerticalScroll, args: Dict[str, Any]) -> None:
         c.mount(Static(
             f"[dim]Fetch URL:[/dim]\n\n[bold cyan]{escape(args.get('url', ''))}[/bold cyan]\n\n"
-            f"[dim]'Allow Domain' skips future prompts for this site.[/dim]"
+            f"[dim]'Allow Domain' skips future prompts for this site.[/dim]",
+            classes="diff-content",
         ))
 
     def _render_mcp(self, c: VerticalScroll, args: Dict[str, Any]) -> None:
         c.mount(Static(
-            f"[dim]MCP call:[/dim]\n\n[bold cyan]{escape(json.dumps(args, indent=2))}[/bold cyan]"
+            f"[dim]MCP call:[/dim]\n\n[bold cyan]{escape(json.dumps(args, indent=2))}[/bold cyan]",
+            classes="diff-content",
         ))
 
 
@@ -576,19 +586,67 @@ def _get_git_diff(path: Path) -> str:
 
 
 def _format_diff(diff_text: str) -> str:
-    """Colour a unified diff string with Rich markup."""
+    """Colour a unified diff string with clean single-column line numbers and Rich markup."""
     lines = []
+    old_lineno: Optional[int] = None
+    new_lineno: Optional[int] = None
+
+    # First pass: find maximum line number to calculate gutter column width
+    max_line = 0
     for line in diff_text.splitlines():
-        if line.startswith(("+++", "---")):
-            lines.append(f"[bold cyan]{escape(line)}[/bold cyan]")
-        elif line.startswith("@@"):
-            lines.append(f"[bold magenta]{escape(line)}[/bold magenta]")
-        elif line.startswith("+"):
-            lines.append(f"[green]{escape(line)}[/green]")
-        elif line.startswith("-"):
-            lines.append(f"[red]{escape(line)}[/red]")
+        if line.startswith("@@"):
+            m_new = re.search(r"\+(\d+)(?:,(\d+))?", line)
+            if m_new:
+                start = int(m_new.group(1))
+                count = int(m_new.group(2)) if m_new.group(2) else 1
+                max_line = max(max_line, start + count)
+            m_old = re.search(r"-(\d+)(?:,(\d+))?", line)
+            if m_old:
+                start = int(m_old.group(1))
+                count = int(m_old.group(2)) if m_old.group(2) else 1
+                max_line = max(max_line, start + count)
+
+    width = max(3, len(str(max_line))) if max_line > 0 else 3
+    empty_gutter = " " * width
+
+    for raw_line in diff_text.splitlines():
+        line_clean = raw_line.rstrip("\r\n")
+
+        if line_clean.startswith(("diff --git", "index ", "new file", "deleted file", "similarity")):
+            lines.append(f"[dim]{escape(line_clean)}[/dim]")
+        elif line_clean.startswith(("---", "+++")):
+            lines.append(f"[dim]{empty_gutter} │[/dim] [bold cyan]{escape(line_clean)}[/bold cyan]")
+        elif line_clean.startswith("@@"):
+            m = re.match(r"^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@(.*)", line_clean)
+            if m:
+                old_lineno = int(m.group(1))
+                new_lineno = int(m.group(2))
+                heading = m.group(3).strip()
+                heading_str = f" [dim]{escape(heading)}[/dim]" if heading else ""
+                hunk_header = line_clean if not heading else line_clean[:line_clean.find(heading)].rstrip()
+                lines.append(f"[dim]{empty_gutter} │[/dim] [bold magenta]{escape(hunk_header)}[/bold magenta]{heading_str}")
+            else:
+                lines.append(f"[dim]{empty_gutter} │[/dim] [bold magenta]{escape(line_clean)}[/bold magenta]")
+        elif line_clean.startswith("-"):
+            num_str = f"{old_lineno:>{width}}" if old_lineno is not None else empty_gutter
+            lines.append(f"[dim]{num_str} │[/dim] [red]{escape(line_clean)}[/red]")
+            if old_lineno is not None:
+                old_lineno += 1
+        elif line_clean.startswith("+"):
+            num_str = f"{new_lineno:>{width}}" if new_lineno is not None else empty_gutter
+            lines.append(f"[dim]{num_str} │[/dim] [green]{escape(line_clean)}[/green]")
+            if new_lineno is not None:
+                new_lineno += 1
         else:
-            lines.append(escape(line))
+            # Context line (unchanged)
+            current_no = new_lineno if new_lineno is not None else old_lineno
+            num_str = f"{current_no:>{width}}" if current_no is not None else empty_gutter
+            lines.append(f"[dim]{num_str} │[/dim] {escape(line_clean)}")
+            if old_lineno is not None:
+                old_lineno += 1
+            if new_lineno is not None:
+                new_lineno += 1
+
     return "\n".join(lines)
 
 

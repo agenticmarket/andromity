@@ -44,9 +44,10 @@ class CronJob:
     allowed_commands: List[str]
     on_failure: str        # "notify" | "disable" | "retry"
     enabled: bool = True
+    retry_delay_seconds: int = 0
     timeout_seconds: int = 600  # max wall-clock time per run; 0 = unlimited
     last_run: Optional[str] = None
-    last_status: str = "never"   # "never" | "success" | "failed" | "timeout"
+    last_status: str = "never"   # "never" | "success" | "failed" | "timeout" | "interrupted"
     last_error: Optional[str] = None
     run_count: int = 0
     fail_count: int = 0
@@ -59,7 +60,8 @@ class CronJob:
             return True
         last = datetime.fromisoformat(self.last_run)
         elapsed = (datetime.now(timezone.utc) - last).total_seconds()
-        return elapsed >= self.interval_seconds
+        required_interval = self.retry_delay_seconds if (self.retry_count > 0 and self.retry_delay_seconds > 0) else self.interval_seconds
+        return elapsed >= required_interval
 
     def mark_run(self, success: bool, error: Optional[str] = None):
         self.run_count += 1
@@ -67,6 +69,7 @@ class CronJob:
             self.last_status = "success"
             self.last_error = None
             self.retry_count = 0
+            self.retry_delay_seconds = 0
             self.last_run = datetime.now(timezone.utc).isoformat()
         else:
             self.last_status = "failed"
@@ -74,9 +77,12 @@ class CronJob:
             self.fail_count += 1
             if self.on_failure == "retry" and self.retry_count < 3:
                 self.retry_count += 1
-                # Do not update last_run, so it fires again next tick
+                backoffs = [60, 120, 300]
+                self.retry_delay_seconds = backoffs[min(self.retry_count - 1, len(backoffs) - 1)]
+                self.last_run = datetime.now(timezone.utc).isoformat()
             else:
                 self.retry_count = 0
+                self.retry_delay_seconds = 0
                 self.last_run = datetime.now(timezone.utc).isoformat()
                 
             if self.on_failure == "disable":
@@ -87,7 +93,7 @@ class CronJob:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CronJob":
-        return cls(**data)
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
     def next_run_in(self) -> str:
         """Human-readable time until next run."""
@@ -95,7 +101,10 @@ class CronJob:
             return "now"
         last = datetime.fromisoformat(self.last_run)
         elapsed = (datetime.now(timezone.utc) - last).total_seconds()
-        remaining = max(0, self.interval_seconds - elapsed)
+        interval = self.retry_delay_seconds if (self.retry_count > 0 and self.retry_delay_seconds > 0) else self.interval_seconds
+        remaining = max(0, interval - elapsed)
+        if remaining <= 0:
+            return "now"
         if remaining < 60:
             return f"{int(remaining)}s"
         elif remaining < 3600:
@@ -139,21 +148,27 @@ class CronStore:
 
 @dataclass
 class CronRun:
-    """A single execution record for a cron job."""
+    """A single execution record for a cron job with full telemetry."""
     id: str
     job_id: str
     job_name: str
     started_at: str
     finished_at: Optional[str] = None
     duration_ms: int = 0
-    status: str = "running"  # "running" | "success" | "failed"
+    status: str = "running"  # "running" | "success" | "failed" | "timeout" | "interrupted"
     prompt: str = ""
     model: str = ""
-    messages: List[Dict[str, Any]] = field(default_factory=list)
+    provider: str = ""
+    session_id: Optional[str] = None
+    output: str = ""                         # full untruncated response
+    output_preview: str = ""                 # compact summary
+    tool_executions: List[Dict[str, Any]] = field(default_factory=list) # [{tool_name, args, result, status, duration_ms}]
     tools_used: List[str] = field(default_factory=list)
     files_modified: List[str] = field(default_factory=list)
+    messages: List[Dict[str, Any]] = field(default_factory=list)
     error: Optional[str] = None
-    output_preview: str = ""
+    error_traceback: Optional[str] = None
+    cost_usd: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -175,7 +190,25 @@ class CronRunStore:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    def sanitize_stale_runs(self, active_run_ids: Optional[set] = None):
+        """Mark any runs still in 'running' state as 'interrupted' if not currently active."""
+        active = active_run_ids or set()
+        if not self._base.exists():
+            return
+        for f in self._base.glob("*/*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                if data.get("status") == "running" and data.get("id") not in active:
+                    data["status"] = "interrupted"
+                    data["error"] = data.get("error") or "Execution interrupted (app closed or restarted)"
+                    data["finished_at"] = data.get("finished_at") or data.get("started_at")
+                    f.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            except Exception:
+                continue
+
     def save_run(self, run: CronRun):
+        if not run.output_preview and run.output:
+            run.output_preview = run.output[:500]
         path = self._job_dir(run.job_id) / f"{run.id}.json"
         path.write_text(json.dumps(run.to_dict(), indent=2), encoding="utf-8")
 
@@ -199,6 +232,16 @@ class CronRunStore:
                 pass
         return None
 
+    def delete_run(self, job_id: str, run_id: str) -> bool:
+        path = self._job_dir(job_id) / f"{run_id}.json"
+        if path.exists():
+            try:
+                path.unlink()
+                return True
+            except Exception:
+                pass
+        return False
+
 
 # ── Scheduler ──────────────────────────────────────────────────────────────
 
@@ -214,6 +257,10 @@ class CronScheduler:
         self._crons: List[CronJob] = self._store.load()
         self._on_trigger = on_trigger
         self._task: Optional[asyncio.Task] = None
+        try:
+            self._run_store.sanitize_stale_runs()
+        except Exception:
+            pass
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -281,7 +328,7 @@ class CronScheduler:
                 cron.mark_run(success, error)
                 self._store.save(self._crons)
                 if run:
-                    run.status = "success" if success else "failed"
+                    run.status = "success" if success else ("timeout" if error and "timed out" in error.lower() else "failed")
                     run.error = error
                     run.finished_at = datetime.now(timezone.utc).isoformat()
                     # Calculate duration
@@ -294,7 +341,7 @@ class CronScheduler:
                     self._run_store.save_run(run)
                 break
 
-    def start_run(self, job_id: str, prompt: str, model: str) -> Optional[CronRun]:
+    def start_run(self, job_id: str, prompt: str, model: str, provider: str = "", session_id: Optional[str] = None) -> Optional[CronRun]:
         """Create a new run record and return it for tracking."""
         cron = next((c for c in self._crons if c.id == job_id), None)
         if not cron:
@@ -306,6 +353,8 @@ class CronScheduler:
             started_at=datetime.now(timezone.utc).isoformat(),
             prompt=prompt,
             model=model,
+            provider=provider or cron.provider,
+            session_id=session_id,
         )
         self._run_store.save_run(run)
         return run
@@ -315,6 +364,9 @@ class CronScheduler:
 
     def get_run(self, job_id: str, run_id: str) -> Optional[CronRun]:
         return self._run_store.get_run(job_id, run_id)
+
+    def delete_run(self, job_id: str, run_id: str) -> bool:
+        return self._run_store.delete_run(job_id, run_id)
 
     # ── Internal ───────────────────────────────────────────────────────────
 

@@ -12,7 +12,7 @@ Andromity collects a **single anonymous ping on first launch** and a **ping on s
   "event": "first_launch", 
   "os": "windows", 
   "python": "3.12", 
-  "version": "0.2.0",
+  "version": "0.2.1",
   "user_id": "a1b2c3d4..." 
 }
 ```

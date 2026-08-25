@@ -112,6 +112,49 @@ def test_option_list_does_not_take_focus():
     asyncio.run(_run())
 
 
+def test_slash_command_executes_without_model():
+    """Verify that submitting slash commands works even when no model is configured."""
+    from andromity.config import config
+    from andromity.tui.app import AndromityApp
+
+    async def _run():
+        old_model = config.get("default", "model", "")
+        old_provider = config.get("default", "provider", "")
+        try:
+            config.set("default", "model", "")
+            config.set("default", "provider", "")
+
+            app = AndromityApp()
+            async with app.run_test(size=(120, 35)) as pilot:
+                await _settle(pilot)
+                # Close startup model picker if popped
+                if len(app.screen_stack) > 1:
+                    await pilot.press("escape")
+                    await _settle(pilot)
+
+                # Submit /cron command
+                app.on_input_submitted(InputBar.Submitted("/cron"))
+                await _settle(pilot)
+
+                # Cron overlay should be pushed
+                from andromity.tui.overlays.cron import CronManagerOverlay
+                assert any(isinstance(s, CronManagerOverlay) for s in app.screen_stack)
+
+                # Close cron overlay
+                await pilot.press("escape")
+                await _settle(pilot)
+
+                # Submit a regular chat prompt without a model -> should NOT stream, should warn
+                app.on_input_submitted(InputBar.Submitted("hello assistant"))
+                await _settle(pilot)
+                assert not app._is_streaming
+        finally:
+            config.set("default", "model", old_model)
+            config.set("default", "provider", old_provider)
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     import pytest
 

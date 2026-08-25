@@ -15,7 +15,8 @@ class Agent:
     def __init__(self, session: Session, profile: str = None, dry_run: bool = False,
                  auto_approve: bool = False, on_tool_approval: Optional[Callable] = None,
                  on_questions: Optional[Callable] = None, ctx_limit: int = 0,
-                 reasoning_effort: Optional[str] = None):
+                 reasoning_effort: Optional[str] = None,
+                 provider: Optional[str] = None, model: Optional[str] = None):
         self.session = session
         self.profile = profile or config.get("default", "profile", "builder")
         self.dry_run = dry_run
@@ -24,6 +25,8 @@ class Agent:
         self.on_questions = on_questions
         self.ctx_limit = ctx_limit
         self.reasoning_effort = reasoning_effort if reasoning_effort is not None else config.get("default", "reasoning_effort", "medium")
+        self.provider = provider
+        self.model = model
         self.allowed_tools = filter_tools_for_profile(CORE_TOOLS, self.profile)
         self._empty_retried = False
         # Set when the current turn carries pasted images (see run()).
@@ -81,8 +84,8 @@ class Agent:
         allowed through and the provider itself returns a clear error if the
         model truly rejects images.
         """
-        provider = config.get("default", "provider", "")
-        model = config.get("default", "model", "")
+        provider = self.provider or config.get("default", "provider", "")
+        model = self.model or config.get("default", "model", "")
         litellm_model = f"{provider}/{model}" if model and "/" not in model else model
         if not litellm_model:
             return True
@@ -99,61 +102,97 @@ class Agent:
 
     async def _compact_context(self) -> AsyncGenerator[StreamEvent, None]:
         limit = self.ctx_limit
-        if limit <= 0:
+        msg_count = len(self.session.messages)
+
+        # ── Decide whether compaction is needed ──────────────────────────
+        # Two independent triggers:
+        #   1. Token-based (primary): context_tokens > 80% of model's
+        #      context window — scales naturally with model capability.
+        #   2. Message-count safety ceiling: > 1000 messages — prevents
+        #      multi-MB JSON session files from freezing the UI, even when
+        #      token estimates are unavailable or inaccurate.
+        compact_reason = ""
+
+        if limit > 0:
+            current_tokens = getattr(self.session, "context_tokens", 0)
+            if current_tokens <= 0:
+                current_tokens = sum(len(str(m.get("content", ""))) // 4 for m in self.session.messages)
+            if current_tokens > limit * 0.80:
+                limit_k = f"{limit / 1000:.0f}K" if limit < 1_000_000 else f"{limit / 1_000_000:.1f}M"
+                pct = min(current_tokens / limit * 100, 100.0)
+                compact_reason = f"context limit reached (~{pct:.0f}% of {limit_k} tokens)"
+
+        if not compact_reason and msg_count > 1000:
+            compact_reason = f"message count ceiling reached ({msg_count:,} messages)"
+
+        if not compact_reason:
             return
 
-        current_tokens = getattr(self.session, "context_tokens", 0)
-        if current_tokens <= 0:
-            current_tokens = sum(len(str(m.get("content", ""))) // 4 for m in self.session.messages)
-        if current_tokens <= limit * 0.85:
+        old_count = len(self.session.messages)
+        non_system = [m for m in self.session.messages if m.get("role") != "system"]
+        keep_turns = non_system[-6:] if len(non_system) > 6 else []
+        to_compact = non_system[:-6] if len(non_system) > 6 else non_system
+
+        if not to_compact:
             return
 
-        yield TextDelta(text="\n\n*Context window nearly full. Auto-compacting conversation history...*\n\n")
+        yield TextDelta(text=f"\n*[Context compacting — {compact_reason}]*\n\n")
 
-        # Keep system message (index 0) and the last 4 messages intact
-        if len(self.session.messages) <= 6:
-            return
-
-        to_compact = self.session.messages[1:-4]
-        keep_recent = self.session.messages[-4:]
-
-        conversation_text = ""
+        lines = []
         for m in to_compact:
             role = m.get("role", "unknown")
             content = m.get("content", "")
-            if isinstance(content, list):
-                # Vision message parts
-                content = " ".join(p.get("text", "") for p in content if isinstance(p, dict) and "text" in p)
-            conversation_text += f"{role.upper()}: {content}\n\n"
+            if content:
+                lines.append(f"{role.upper()}: {content[:300]}")
+            for tc in m.get("tool_calls", []):
+                fn = tc.get("function", {})
+                lines.append(f"TOOL CALL: {fn.get('name')}({fn.get('arguments', '')[:100]})")
+        transcript_snippet = "\n".join(lines)
 
-        compact_prompt = [
-            {"role": "system", "content": "You are a concise summarizer. Summarize the following conversation into a dense, high-signal summary preserving all key user requirements, decisions, files created/modified, and current progress. Keep it under 500 words."},
-            {"role": "user", "content": conversation_text}
+        system_msg = self.session.messages[0] if (self.session.messages and self.session.messages[0].get("role") == "system") else None
+        summary_prompt = [
+            {"role": "system", "content": "You are a concise summarizer. Produce a dense summary of the conversation so far, preserving key facts, user goals, and current progress."},
+            {"role": "user", "content": f"Summarize this conversation snippet concisely for context preservation:\n\n{transcript_snippet}"}
         ]
 
-        summary_content = ""
-        try:
-            async for event in stream_completion(compact_prompt):
-                if isinstance(event, TextDelta):
-                    summary_content += event.text
-        except Exception as e:
-            # Compaction failed — non-fatal, continue with uncompacted history
+        summary_text = ""
+        compaction_kwargs = {}
+        if self.provider:
+            compaction_kwargs["provider_name"] = self.provider
+        if self.model:
+            compaction_kwargs["model"] = self.model
+
+        async for event in stream_completion(summary_prompt, **compaction_kwargs):
+            if isinstance(event, TextDelta):
+                summary_text += event.text
+
+        if not summary_text.strip():
+            yield TextDelta(text="*[Context compaction skipped — summary generation failed]*\n\n")
             return
 
-        if summary_content:
-            new_messages = [
-                self.session.messages[0],  # System prompt
-                {
-                    "role": "user",
-                    "content": f"[Conversation summary of earlier turns]:\n{summary_content}"
-                },
-                {"role": "assistant", "content": "Understood. I have the context of our earlier discussion and will continue from here."},
-                *keep_recent
-            ]
-            self.session.messages = new_messages
-            self.session.context_tokens = 0
-            self.session.save()
-            yield TextDelta(text="*Context compacted successfully.*\n\n")
+        preserved_history = [m for m in self.session.messages if m.get("role") != "system"]
+        if not hasattr(self.session, "compacted_history"):
+            self.session.compacted_history = []
+        self.session.compacted_history.extend(preserved_history)
+
+        new_messages = []
+        if system_msg:
+            new_messages.append(system_msg)
+        new_messages.append({
+            "role": "user",
+            "content": f"[Previous context summary ({old_count} messages compacted)]:\n{summary_text.strip()}",
+        })
+        new_messages.append({
+            "role": "assistant",
+            "content": "Understood. I have the context from our previous conversation and will continue from here.",
+        })
+        new_messages.extend(keep_turns)
+
+        self.session.messages = new_messages
+        self.session.context_tokens = 0
+        self.session.save()
+        yield TextDelta(text=f"*Context compacted successfully ({old_count} → {len(new_messages)} messages).*\n\n")
+        yield Done()
 
     async def run(self, user_input: str, images: list = None, image_uris: list = None) -> AsyncGenerator[StreamEvent, None]:
         """Run one user turn.
@@ -171,7 +210,7 @@ class Agent:
 
         if _uris:
             if not self._model_supports_vision():
-                model_name = config.get("default", "model", "the current model")
+                model_name = self.model or config.get("default", "model", "the current model")
                 yield TextDelta(text=f"\n[Image not sent] {model_name} does not support images. Switch to a vision model (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-flash) with /model.\n")
                 yield Done()
                 return
@@ -195,6 +234,10 @@ class Agent:
             last_usage = None
 
             stream_kwargs: Dict[str, Any] = {"tools": self.allowed_tools}
+            if self.provider:
+                stream_kwargs["provider_name"] = self.provider
+            if self.model:
+                stream_kwargs["model"] = self.model
             if self.reasoning_effort and self.reasoning_effort != "off":
                 stream_kwargs["reasoning_effort"] = self.reasoning_effort
 
@@ -224,7 +267,9 @@ class Agent:
                 elif isinstance(event, Done):
                     last_usage = event.usage
 
-            model_id = f"{config.get('default', 'provider', 'ollama')}/{config.get('default', 'model', '')}"
+            current_p = self.provider or config.get('default', 'provider', 'ollama')
+            current_m = self.model or config.get('default', 'model', '')
+            model_id = f"{current_p}/{current_m}"
             if last_usage:
                 self.session.update_usage(last_usage, model=model_id)
             else:

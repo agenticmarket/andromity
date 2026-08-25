@@ -1,4 +1,6 @@
+import copy
 import json
+import os
 import uuid
 import hashlib
 import threading
@@ -32,6 +34,7 @@ class Session:
         }
         self.cost_source = "unpriced"
         self.plan: Optional[Dict[str, Any]] = None  # session-scoped plan
+        self.compacted_history: List[Dict[str, Any]] = []  # old messages preserved for chat UI after compaction
         from andromity.config import config
         self.provider = config.get("default", "provider", "")
         self.model = config.get("default", "model", "")
@@ -63,7 +66,9 @@ class Session:
             if getattr(self, "_dirty", False):
                 self._dirty = False
                 self._save_timer = None
-                self.save()
+                # Snapshot under lock, then serialize+write outside the lock
+                # so the main thread (and Textual event loop) are never blocked.
+                self._save_snapshot()
 
     def flush(self):
         """Immediately write any pending debounced save to disk."""
@@ -82,7 +87,7 @@ class Session:
                     tool_calls: Optional[List[Dict]] = None,
                     name: Optional[str] = None, tool_call_id: Optional[str] = None,
                     thinking: Optional[str] = None):
-        msg: Dict[str, Any] = {"role": role}
+        msg: Dict[str, Any] = {"role": role, "ts": datetime.now(timezone.utc).isoformat()}
         if content is not None:
             msg["content"] = content
         if tool_calls is not None:
@@ -118,18 +123,26 @@ class Session:
         self.cost_source = result.source if self.cost_source in ("unpriced", result.source) else "mixed"
         self._mark_dirty()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self, snapshot: bool = False) -> Dict[str, Any]:
+        """Return a serializable dict of the session.
+
+        When *snapshot=True* the messages list (and nested dicts) are
+        deep-copied so the returned dict is safe to serialize on a
+        background thread without racing the main event loop.
+        """
+        msgs = copy.deepcopy(self.messages) if snapshot else self.messages
         return {
             "id": self.id, "name": self.name, "project": self.project_hash,
             "project_path": self.project_path,
             "parent_session": self.parent_session, "branch_point": self.branch_point,
-            "created_at": self.created_at, "updated_at": self.updated_at, "messages": self.messages,
+            "created_at": self.created_at, "updated_at": self.updated_at, "messages": msgs,
             "token_total": self.token_total, "cost_usd": self.cost_usd,
             "context_tokens": self.context_tokens,
-            "usage_breakdown": self.usage_breakdown, "cost_source": self.cost_source,
+            "usage_breakdown": dict(self.usage_breakdown), "cost_source": self.cost_source,
             "provider": getattr(self, "provider", ""),
             "model": getattr(self, "model", ""),
-            "plan": self.plan,
+            "plan": copy.deepcopy(self.plan) if snapshot and self.plan else self.plan,
+            "compacted_history": self.compacted_history if not snapshot else copy.deepcopy(self.compacted_history),
         }
 
     def compact_messages(self, new_summary: str, keep_last_n: int = 10) -> int:
@@ -142,19 +155,26 @@ class Session:
         # The system prompt is at index 0. We want to keep it.
         # We also want to keep the last `keep_last_n` messages.
         # Everything in between is compacted.
-        
         system_msg = self.messages[0]
+        compacted_away = self.messages[1:-keep_last_n]
         recent_msgs = self.messages[-keep_last_n:]
         
-        # Check if the last compacted block is already there, if so, we can just replace it.
-        # But building a new message array is cleaner.
+        # Preserve compacted messages for chat UI history replay
+        if not hasattr(self, "compacted_history") or self.compacted_history is None:
+            self.compacted_history = []
+        self.compacted_history.extend(compacted_away)
+
         summary_msg = {
-            "role": "system",
-            "content": f"PREVIOUS MEMORY SUMMARY: {new_summary}"
+            "role": "user",
+            "content": f"[Conversation summary of earlier turns]:\n{new_summary}"
+        }
+        ack_msg = {
+            "role": "assistant",
+            "content": "Understood. I have the context of our earlier discussion and will continue from here."
         }
         
-        removed_count = len(self.messages) - 1 - keep_last_n
-        self.messages = [system_msg, summary_msg] + recent_msgs
+        removed_count = len(compacted_away)
+        self.messages = [system_msg, summary_msg, ack_msg] + recent_msgs
         self.context_tokens = 0  # Force recalculation of the next prompt size
         self.save()
         return removed_count
@@ -178,7 +198,20 @@ class Session:
         self.plan = None
         self.save()
 
+    def _save_snapshot(self):
+        """Snapshot state under lock, then serialize + atomic-write outside it.
+
+        This is the preferred save path from background timer threads:
+        the deep-copy runs under the GIL in ~1-2ms, but the heavy
+        json.dumps() and file I/O happen entirely outside any lock so
+        the Textual event loop is never starved.
+        """
+        self.updated_at = datetime.now(timezone.utc).isoformat()
+        data = self.to_dict(snapshot=True)
+        self._write_json(data)
+
     def save(self):
+        """Immediate, synchronous save (used for first-write, plan save, etc.)."""
         with getattr(self, "_save_lock", None) or threading.Lock():
             if getattr(self, "_save_timer", None) is not None:
                 try:
@@ -188,8 +221,32 @@ class Session:
                 self._save_timer = None
             self._dirty = False
         self.updated_at = datetime.now(timezone.utc).isoformat()
-        with open(self.file_path, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(), f, indent=2)
+        data = self.to_dict(snapshot=True)
+        self._write_json(data)
+
+    def _write_json(self, data: Dict[str, Any]):
+        """Atomic write: serialize to a temp file, then os.replace().
+
+        Uses compact JSON (no indent) for sessions with >50 messages
+        to cut serialization time from seconds to milliseconds for
+        large sessions, preventing GIL starvation that freezes the UI.
+        """
+        num_msgs = len(data.get("messages", []))
+        indent = 2 if num_msgs <= 50 else None
+        separators = None if indent else (",", ":")
+        tmp_path = self.file_path.with_suffix(".tmp")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=indent, separators=separators)
+            os.replace(str(tmp_path), str(self.file_path))
+        except OSError:
+            # Fallback: direct write if os.replace fails (e.g. cross-device)
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            with open(self.file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=indent, separators=separators)
 
     def rename(self, name: str):
         """Rename this session and persist."""
@@ -229,6 +286,7 @@ class Session:
         session.provider = data.get("provider", "")
         session.model = data.get("model", "")
         session.plan = data.get("plan")
+        session.compacted_history = data.get("compacted_history", [])
         session.storage_dir = file_path.parent
         session.file_path = file_path
         session._save_timer = None
@@ -259,3 +317,15 @@ class Session:
         # Final sort in case JSON updated_at differs slightly from mtime
         sessions.sort(key=lambda s: getattr(s, "updated_at", s.created_at), reverse=True)
         return sessions
+
+    @classmethod
+    def load_by_id(cls, session_id: str, project_path: Optional[str] = None) -> Optional["Session"]:
+        pp = project_path or str(Path.cwd())
+        project_hash = hashlib.sha256(pp.encode()).hexdigest()[:16]
+        session_file = get_config_dir() / "sessions" / project_hash / f"{session_id}.json"
+        if session_file.exists():
+            try:
+                return cls.load(session_file)
+            except Exception:
+                pass
+        return None

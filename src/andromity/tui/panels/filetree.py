@@ -332,10 +332,10 @@ FileTreePanel { height: 1fr; }
     def _label_for(self, item: Path, is_dir: bool, git_status: dict) -> str:
         """Single source of truth for node labels (used by populate, sync, search)."""
         try:
-            rel_path = str(item.relative_to(self.project_path))
+            rel_path = item.relative_to(self.project_path).as_posix()
         except ValueError:
-            rel_path = item.name
-        git_marker = _git_marker(rel_path, git_status)
+            rel_path = item.name.replace("\\", "/")
+        git_marker = _git_marker(rel_path, git_status, is_dir=is_dir)
         if is_dir:
             return f"[bold blue]{item.name}/[/]{git_marker}"
         color = _ext_color(item.suffix)
@@ -698,12 +698,23 @@ FileTreePanel { height: 1fr; }
 
         node = find_node(tree.root)
         if node and node != tree.root:
-            original_label = node.label
+            raw_plain = _label_text(node.label)
+            clean_plain = raw_plain.replace(" [Modified]", "").strip()
+            original_label = getattr(node, "_base_unhighlighted_label", None)
+            if original_label is None or " [Modified]" in _label_text(original_label):
+                original_label = node.label
+                if isinstance(original_label, Text):
+                    original_label = original_label.copy()
+                    original_label.plain = clean_plain
+
+            node._base_unhighlighted_label = original_label
             node.set_label(Text.assemble(original_label, Text(" [Modified]", style="bold yellow")))
 
             def reset_label():
                 try:
-                    node.set_label(original_label)
+                    if hasattr(node, "_base_unhighlighted_label"):
+                        node.set_label(node._base_unhighlighted_label)
+                        delattr(node, "_base_unhighlighted_label")
                 except Exception:
                     pass
             self.set_timer(3.0, reset_label)
@@ -764,8 +775,24 @@ FileTreePanel { height: 1fr; }
 
 # ─── Shared helpers ─────────────────────────────────────────────────────────────
 
-def _git_marker(rel_path: str, git_status: dict) -> str:
-    if rel_path not in git_status:
+def _git_marker(rel_path: str, git_status: dict, is_dir: bool = False) -> str:
+    if not git_status:
+        return ""
+    norm = rel_path.replace("\\", "/").rstrip("/")
+    if is_dir:
+        prefix = f"{norm}/"
+        child_statuses = [v for k, v in git_status.items() if k.startswith(prefix)]
+        if not child_statuses:
+            return ""
+        if "M" in child_statuses or "D" in child_statuses or "R" in child_statuses:
+            return " [yellow]M[/]"
+        if "A" in child_statuses:
+            return " [green]A[/]"
+        if "U" in child_statuses:
+            return " [cyan]?[/]"
+        return " [yellow]M[/]"
+
+    if norm not in git_status:
         return ""
     markers = {
         "M": "[yellow]M[/]",
@@ -774,7 +801,7 @@ def _git_marker(rel_path: str, git_status: dict) -> str:
         "R": "[blue]R[/]",
         "U": "[cyan]?[/]",
     }
-    return f" {markers.get(git_status[rel_path], '')}"
+    return f" {markers.get(git_status[norm], '')}"
 
 
 def _ext_color(suffix: str) -> str:
