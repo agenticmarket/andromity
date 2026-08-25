@@ -453,7 +453,7 @@ ThinkingBubble Collapsible > Contents { padding: 0; margin: 0; }
     def compose(self) -> ComposeResult:
         # Collapsed by default — shows the live spinner + elapsed time in the
         # title; expand to read the reasoning. Stays in place once finished.
-        title = "   [dim $primary italic]thought[/dim $primary italic]" if self._done else "[dim $primary]⠋[/dim $primary]  [dim $primary italic]thinking (0s)[/dim $primary italic]"
+        title = "   [dim italic]thought[/dim italic]" if self._done else "[dim $primary]⠋[/dim $primary]  [dim italic]thinking (0s)[/dim italic]"
         with Collapsible(title=title, collapsed=True, id="think-col"):
             yield Static(escape(self._text), id="think-md", classes="dim italic")
 
@@ -519,7 +519,7 @@ ThinkingBubble Collapsible > Contents { padding: 0; margin: 0; }
         elapsed = int(time.time() - self._start_time)
         try:
             col = self.query_one("#think-col", Collapsible)
-            col.title = f"   [dim $primary italic]thought ({elapsed}s)[/dim $primary italic]"
+            col.title = f"   [dim italic]thought ({elapsed}s)[/dim italic]"
         except Exception:
             pass
 
