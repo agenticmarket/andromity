@@ -450,7 +450,7 @@ class AndromityApp(App):
             "  [dim]Type a message and press [bold]Enter[/] to chat  ·  "
             "[bold]/help[/] for commands  ·  "
             "[bold]Ctrl+L[/] to switch model  ·  "
-            "[bold]Shift+Enter[/] for new line[/dim]",
+            "[bold]Alt+N[/] for new line[/dim]",
             ephemeral=True
         )
 
@@ -2023,7 +2023,7 @@ Your output must be:
             chat.add_system_message("\n".join(lines))
         else:
             chat.add_system_message(
-                "[bold green]📢 Andromity 0.2.2[/]\n"
+                "[bold green]📢 Andromity 0.2.3[/]\n"
                 "• Built-in Cron Scheduler for autonomous scheduled runs\n"
                 "• MCP Tool Support & Dynamic Profiles\n"
                 "• Real-time Telemetry & Edge Intelligence"

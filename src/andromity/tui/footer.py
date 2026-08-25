@@ -558,6 +558,7 @@ class ChatInput(TextArea):
         Binding("enter", "submit", "Send", priority=True),
         Binding("shift+enter", "newline", "New Line", priority=True),
         Binding("alt+enter", "newline", "New Line", priority=True),
+        Binding("alt+n", "newline", "New Line", priority=True),
         Binding("ctrl+j", "steer", "Steer", priority=True),
         Binding("ctrl+enter", "steer", "Steer", priority=True),
         # priority=True so it shadows TextArea's default paste — lets us grab
@@ -689,6 +690,13 @@ class ChatInput(TextArea):
         if result := self._replace_via_keyboard(event.text, *self.selection):
             self.move_cursor(result.end_location)
             self.focus()
+
+    def on_click(self, event) -> None:
+        """Ctrl+Click to select all text."""
+        if event.control:
+            self.select_all()
+            event.prevent_default()
+            event.stop()
 
     def action_newline(self):
         self.insert("\n")

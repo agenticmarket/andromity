@@ -18,7 +18,7 @@ SHORTCUTS = [
     ("Ctrl+R", "Toggle context panel"),
     ("Ctrl+D", "Toggle diff viewer"),
     ("Ctrl+E", "Open settings"),
-    ("Shift+Enter", "New line in input"),
+    ("Alt+N", "New line in input"),
     ("↑ / ↓", "Prompt history (empty input)"),
     ("Tab", "Insert highlighted command without running"),
     ("Esc", "Close dialog"),
