@@ -34,18 +34,77 @@ class ProfilePickerOverlay(ModalScreen):
     DEFAULT_CSS = """\
 ProfilePickerOverlay {
     align: center middle;
-    background: $background 20%;
+    background: $background 30%;
 }
 #pp-dialog {
-    width: 62; height: 26;
-    border: solid $accent-darken-2; background: $surface;
+    width: 90%; max-width: 62;
+    height: auto; max-height: 28;
+    border: solid $accent-darken-2;
+    background: $surface;
+    padding: 0;
 }
-#pp-title { padding: 0 1; height: 1; background: $accent-darken-3; color: $text; text-style: bold; }
-#pp-list { height: 1fr; overflow-y: auto; padding: 0 1; }
-#pp-desc { height: 4; padding: 0 2; color: $text-muted; }
-#pp-hint { height: 1; padding: 0 1; }
-#pp-footer { dock: bottom; height: 3; padding: 0 1; }
-#pp-footer Button { margin: 0 1; }
+#pp-title {
+    padding: 0 1;
+    height: 1;
+    background: $accent-darken-3;
+    color: $text;
+    text-style: bold;
+}
+#pp-body {
+    height: auto;
+    padding: 1 2;
+}
+#pp-radioset {
+    height: auto;
+    border: none;
+    background: transparent;
+    padding: 0;
+}
+#pp-desc {
+    height: auto;
+    padding: 1 0;
+    margin-top: 1;
+    border-top: solid $surface-lighten-1;
+    color: $text-muted;
+}
+#pp-hint {
+    height: 1;
+    padding: 0;
+    margin-top: 1;
+    margin-bottom: 1;
+    color: $text-muted;
+}
+#pp-footer {
+    height: 3;
+    padding: 0 1;
+    background: $surface-darken-2;
+    border-top: solid $surface-lighten-1;
+    align: right middle;
+}
+#pp-footer Button {
+    height: 1;
+    min-width: 14;
+    margin: 0 1;
+    padding: 0 2;
+    border: none;
+}
+#pp-cancel {
+    background: $surface-lighten-1;
+    color: $text-muted;
+}
+#pp-cancel:hover, #pp-cancel:focus {
+    background: $surface-lighten-2;
+    color: $text;
+}
+#pp-apply {
+    background: $accent;
+    color: $background;
+    text-style: bold;
+}
+#pp-apply:hover, #pp-apply:focus {
+    background: $accent-lighten-1;
+    color: $background;
+}
 """
 
     _selected: reactive[str] = reactive("")
@@ -60,8 +119,8 @@ ProfilePickerOverlay {
                 yield Static("", id="pp-desc")
                 yield Static("[dim]Profile controls which tools the agent can use.[/]", id="pp-hint")
             with Horizontal(id="pp-footer"):
-                yield Button("Cancel", variant="default", id="pp-cancel")
-                yield Button("Apply", variant="primary", id="pp-apply")
+                yield Button("Cancel", id="pp-cancel")
+                yield Button("Apply", id="pp-apply")
 
     def on_mount(self):
         try:

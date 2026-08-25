@@ -425,6 +425,9 @@ DiffPanel { height: 1fr; }
             area = self.query_one(f"#content-{tab_id}", VerticalScroll)
             area.remove_children()
         except Exception:
+            # The pane attaches asynchronously (add_pane returns AwaitComplete);
+            # retry after refresh instead of leaving the new tab blank.
+            self.call_after_refresh(self._render_tab, tab_id)
             return
 
         if self._tab_showing_diff.get(tab_id):
@@ -456,7 +459,7 @@ DiffPanel { height: 1fr; }
                 area.mount(Static(Syntax(
                     code, _lexer(path), theme="monokai",
                     line_numbers=True, word_wrap=False,
-                )))
+                ), classes="diff-content"))
             except Exception as e:
                 area.mount(Static(f"[red]{escape(str(e))}[/red]"))
 
@@ -537,30 +540,35 @@ DiffPanel { height: 1fr; }
 
     def _render_command(self, c: VerticalScroll, args: Dict[str, Any]) -> None:
         c.mount(Static(
-            f"[dim]Shell command:[/dim]\n\n[bold white]{escape(args.get('command', ''))}[/bold white]"
+            f"[dim]Shell command:[/dim]\n\n[bold white]{escape(args.get('command', ''))}[/bold white]",
+            classes="diff-content",
         ))
 
     def _render_sensitive(self, c: VerticalScroll, args: Dict[str, Any]) -> None:
         c.mount(Static(
             f"[yellow]Agent wants to read:[/yellow]\n\n"
             f"[bold white]{escape(args.get('path', '?'))}[/bold white]\n\n"
-            f"[dim]Verify this is safe before approving.[/dim]"
+            f"[dim]Verify this is safe before approving.[/dim]",
+            classes="diff-content",
         ))
 
     def _render_web_search(self, c: VerticalScroll, args: Dict[str, Any]) -> None:
         c.mount(Static(
-            f"[dim]Web search:[/dim]\n\n[bold cyan]{escape(args.get('query', ''))}[/bold cyan]"
+            f"[dim]Web search:[/dim]\n\n[bold cyan]{escape(args.get('query', ''))}[/bold cyan]",
+            classes="diff-content",
         ))
 
     def _render_fetch_url(self, c: VerticalScroll, args: Dict[str, Any]) -> None:
         c.mount(Static(
             f"[dim]Fetch URL:[/dim]\n\n[bold cyan]{escape(args.get('url', ''))}[/bold cyan]\n\n"
-            f"[dim]'Allow Domain' skips future prompts for this site.[/dim]"
+            f"[dim]'Allow Domain' skips future prompts for this site.[/dim]",
+            classes="diff-content",
         ))
 
     def _render_mcp(self, c: VerticalScroll, args: Dict[str, Any]) -> None:
         c.mount(Static(
-            f"[dim]MCP call:[/dim]\n\n[bold cyan]{escape(json.dumps(args, indent=2))}[/bold cyan]"
+            f"[dim]MCP call:[/dim]\n\n[bold cyan]{escape(json.dumps(args, indent=2))}[/bold cyan]",
+            classes="diff-content",
         ))
 
 

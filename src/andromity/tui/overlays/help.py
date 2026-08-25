@@ -33,7 +33,8 @@ HelpScreen {
     background: $background 20%;
 }
 #help-dialog {
-    width: 82; height: 34;
+    width: 90%; max-width: 82;
+    height: 85%; max-height: 34; min-height: 20;
     border: solid $accent-darken-2; background: $surface;
 }
 #help-title { padding: 0 1; height: 1; background: $accent-darken-3; color: $text; text-style: bold; }
@@ -67,6 +68,7 @@ HelpScreen {
                 yield Static("Shortcuts", id="help-section-keys")
                 for key, desc in SHORTCUTS:
                     yield Static(f"  [bold yellow]{key}[/]  [dim]{desc}[/]", classes="help-shortcut")
+                yield Static("\n[dim]✦  Not all commands are listed here. Discovery is part of the experience.[/dim]", id="help-lore-hint")
             yield Static("[dim]↑↓ navigate · Enter run · click a command to run it · Esc close[/dim]", id="help-hint")
             with Horizontal(id="help-footer"):
                 yield Button("Close", variant="primary", id="help-close")

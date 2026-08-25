@@ -39,3 +39,38 @@ def test_format_diff_empty_or_no_hunk():
     result = _format_diff("")
     assert result == ""
 
+
+async def test_file_viewer_long_lines_scroll_horizontally(tmp_path):
+    """Long lines in the file viewer must overflow (scrollable), not clip.
+
+    Regression: Static(Syntax(...)) was mounted without width:auto sizing CSS,
+    so virtual_size stayed at container width and overflow-x never activated.
+    """
+    from textual.app import App, ComposeResult
+    from andromity.tui.panels.diff import DiffPanel
+
+    long_line = "x" * 300
+    f = tmp_path / "long_lines.md"
+    f.write_text(f"short line\n{long_line}\nanother short\n", encoding="utf-8")
+
+    class Host(App):
+        def compose(self) -> ComposeResult:
+            yield DiffPanel(id="diff-panel")
+
+    app = Host()
+    async with app.run_test(size=(120, 30)) as pilot:
+        panel = app.query_one(DiffPanel)
+        panel.show_file(f)
+        for _ in range(6):
+            await pilot.pause()
+
+        area = panel.query_one("#content-tab-1")
+        assert area.virtual_size.width > area.size.width, (
+            f"content should overflow horizontally: virtual={area.virtual_size} size={area.size}"
+        )
+        assert area.max_scroll_x > 0, "horizontal scrollbar must be active"
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
+

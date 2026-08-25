@@ -28,7 +28,6 @@ def _plain_len(s: str) -> int:
 
 
 def _format_tok_compact(n: int) -> str:
-    """Format token count into clean human readable shorthand (e.g. 20K, 131K, 1.3M)."""
     if n >= 1_000_000:
         val = n / 1_000_000
         return f"{val:.1f}M" if val % 1 != 0 and val < 10 else f"{int(round(val))}M"
@@ -91,26 +90,15 @@ ContextPanel {
     def compose(self) -> ComposeResult:
         yield Static("[bold]Context[/]", id="ctx-title")
         yield Static("", id="ctx-session")
-        yield Static("", id="ctx-cost")
-        yield Static("", id="ctx-profile")
         yield Static("", id="ctx-model")
         yield Static("", id="ctx-mcp")
         yield Static("", id="ctx-lsp")
 
     def update_context(self, tokens: int = 0, cost: float = 0.0, profile: str = "builder", model: str = "", ctx_limit: int = 0, estimated: bool = False, session_name: str = "", mcp_summary: dict | None = None, cost_source: str = "unpriced"):
-        self.tokens = tokens
-        self.cost = cost
-        self.profile = profile
+        # Cost and profile are intentionally NOT shown here — the status bar's
+        # cost segment and the footer's profile badge are the canonical spots.
         try:
-            tok_prefix = "~" if estimated else ""
             safe_update(self.query_one("#ctx-session"), f"Session: [bold]{escape(session_name)}[/]")
-            if cost_source == "free":
-                cost_text = "$0.00 (free)"
-            else:
-                cost_prefix = "~" if "estimate" in cost_source else ("?" if cost_source == "unpriced" else "")
-                cost_text = f"{cost_prefix}${cost:.4f}"
-            safe_update(self.query_one("#ctx-cost"), f"{cost_text} spent")
-            safe_update(self.query_one("#ctx-profile"), f"Profile: {escape(profile)}")
             short_model = model.split("/")[-1] if "/" in model else model
             safe_update(self.query_one("#ctx-model"), f"[dim]{escape(short_model or '—')}[/dim]")
 
@@ -132,17 +120,16 @@ ContextPanel {
 
             if ctx_limit > 0:
                 pct = min(tokens / ctx_limit * 100, 100.0)
-                bar_width = 10
+                bar_width = 14
                 filled = int(bar_width * pct / 100)
                 bar = "█" * filled + "░" * (bar_width - filled)
                 color = "green" if pct < 70 else ("yellow" if pct < 90 else "red")
-                ctx_limit_str = _format_tok_compact(ctx_limit)
+                # Visual fill only — exact numbers live in the status bar's tok segment.
                 safe_update(self.query_one("#ctx-lsp"),
-                    f"[{color}]{bar}[/{color}] [{color}]{pct:.1f}%[/{color}]\n"
-                    f"[dim]{tokens:,} / {ctx_limit_str} ctx[/dim]"
+                    f"[{color}]{bar}[/{color}] [{color}]{pct:.0f}%[/{color}]"
                 )
             else:
-                safe_update(self.query_one("#ctx-lsp"), f"[dim]{tokens:,} tokens used[/dim]")
+                safe_update(self.query_one("#ctx-lsp"), "")
         except Exception:
             pass
 
@@ -203,13 +190,8 @@ AppFooter {
             parts = []
             if self.cwd:
                 display_path = _format_smart_path(self.cwd, max_len=35)
-                parts.append(f"[bold magenta]📁 {escape(display_path)}[/]")
-                # Shield trust badge — industry standard for workspace trust (VS Code, JetBrains, GitHub)
-                if self._is_trusted is True:
-                    parts.append("[bold #22c55e]🛡 Trusted[/]")
-                elif self._is_trusted is False:
-                    parts.append("[bold #f59e0b]🛡 Restricted[/]")
-               
+                parts.append(f"[bold]⌂ {escape(display_path)}[/]")
+
             if self._git_branch:
                 parts.append(f"[bold cyan]⎇ {escape(self._git_branch)}[/]")
 
@@ -229,12 +211,12 @@ AppFooter {
             elif self.cwd:
                 footer_left.tooltip = f"Working directory: {self.cwd}"
 
-            profile_text = f"[bold #38bdf8]⚡ {escape(self._profile)}[/]" if self._profile else ""
+            profile_text = f"[bold $info]» {escape(self._profile)}[/]" if self._profile else ""
             safe_update(self.query_one("#footer-profile"), profile_text)
 
             version_text = f"[dim]Andromity {version}[/dim]"
             if self._update_available and self._latest_version:
-                version_text += f" [bold #fbbf24]▲ v{escape(self._latest_version)}[/]"
+                version_text += f" [bold $warning]▲ v{escape(self._latest_version)}[/]"
             safe_update(self.query_one("#footer-version"), version_text)
         except Exception:
             pass
@@ -402,7 +384,7 @@ StatusBar {
         perm_mode = getattr(self, "permission_mode", "safe")
         perm_colors = {"safe": "green", "trust": "yellow", "yolo": "red"}
         pcolor = perm_colors.get(perm_mode, "white")
-        return f"[{pcolor}]\\[{perm_mode.upper()}\\][/{pcolor}] [dim]·[/dim] "
+        return f"[{pcolor}]\\[{perm_mode.upper()}][/][{pcolor}] [dim]·[/dim] "
 
     def _seg_ctx(self) -> str:
         tok = self.tokens
@@ -506,7 +488,7 @@ StatusBar {
             config.set("default", "permission_mode", nxt)
             if getattr(app, "_is_streaming", False):
                 app._pending_mode_change = True
-                self.show_hint(f"Mode change to {nxt.upper()} pending…", 2.0)
+                self.show_hint(f"Mode change to {nxt.upper()} pending…", 10.0)
             else:
                 app._apply_mode_change()
         except Exception:
@@ -795,7 +777,7 @@ QueuePanel {
     display: none;
     padding: 0 1;
     background: $surface-darken-1;
-    border-top: solid $accent-darken-2;
+    border-top: solid $panel-lighten-2;
 }
 QueuePanel.has-items { display: block; }
 #queue-list { height: auto; max-height: 5; }
@@ -810,16 +792,16 @@ QueuePanel.has-items { display: block; }
     padding: 0 1 !important;
     margin: 0 !important;
     background: transparent !important;
-    color: #f87171 !important;
+    color: $text-muted !important;
     text-style: bold;
 }
 .queue-del-btn:hover, .queue-item Button:hover {
-    background: #ef4444 30% !important;
-    color: #fca5a5 !important;
+    background: $error 30% !important;
+    color: $error-lighten-2 !important;
 }
 .queue-del-btn:focus, .queue-item Button:focus {
-    background: #ef4444 40% !important;
-    color: #ffffff !important;
+    background: $error 40% !important;
+    color: $text !important;
     border: none !important;
 }
 """
@@ -859,7 +841,7 @@ class CronStatusPanel(Widget):
 CronStatusPanel {
     height: auto; max-height: 15;
     padding: 1 1;
-    border-top: solid $accent-darken-2;
+    border-top: solid $panel-lighten-2;
     display: none;
 }
 CronStatusPanel.has-crons { display: block; }
@@ -994,8 +976,8 @@ InputBar {
     background: $surface;
 }
 """
-    _PLACEHOLDER = "Ask Andromity… (Enter to send, /help for commands)"
-
+    _PLACEHOLDER = "Ask Andromity… (Enter to send, / for commands, @ for skills)"
+ 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._attachments: list = []

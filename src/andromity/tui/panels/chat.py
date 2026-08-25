@@ -8,6 +8,8 @@ from andromity.tui.markup_utils import safe_markup, safe_update, escape_textual 
 import re
 import time
 
+_ASSISTANT_HEADER = "[bold $success]■ Andromity:[/bold $success]"
+
 class ChatMessage(Widget):
     DEFAULT_CSS = """\
 ChatMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
@@ -26,7 +28,7 @@ ChatMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
             yield Static(f"[bold cyan]◆ You:[/bold cyan] {escape(self._content)}")
         elif self.role == "assistant":
             if self._show_header:
-                yield Static("[bold #22c55e]■ Andromity:[/bold #22c55e]", classes="assistant-header")
+                yield Static(_ASSISTANT_HEADER, classes="assistant-header")
             if self._content.strip():
                 yield Markdown(self._content)
             else:
@@ -74,7 +76,7 @@ QueuedMessageBadge {
     width: 1fr; height: auto; min-height: 1;
     padding: 0 1; margin: 0;
     border-left: tall $warning-darken-1;
-    background: #1a1800;
+    background: $warning 15%;
 }
 """
     def __init__(self, prompt: str, queue_pos: int, **kwargs):
@@ -220,22 +222,22 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
         icon = self._get_icon()
 
         if self._done:
-            status_color = "#22c55e"
+            status_color = "$success"
             status = f"done in {elapsed}s"
             spin = "  "
             timeout_warn = ""
         else:
             spin_char = self._SPINNER_CHARS[self._spinner_frame % len(self._SPINNER_CHARS)]
-            spin = f"[dim #38bdf8]{spin_char}[/dim #38bdf8] "
+            spin = f"[dim $primary]{spin_char}[/dim $primary] "
             # Warn when approaching the 120s default timeout
             if elapsed >= 100:
-                status_color = "#ef4444"
+                status_color = "$error"
                 status = f"running ({elapsed}s) ⚠ timeout soon"
             elif elapsed >= 60:
-                status_color = "#f97316"
+                status_color = "$warning"
                 status = f"running ({elapsed}s)"
             else:
-                status_color = "#eab308"
+                status_color = "$warning"
                 status = f"running ({elapsed}s)"
             timeout_warn = ""
 
@@ -328,7 +330,7 @@ ToolSequence Collapsible { border: none; padding: 0; background: transparent; }
             status = "complete" if elapsed < 1 else f"worked for {elapsed}s"
         elif not self._last_tool_done and self._last_tool:
             # A specific tool is actively executing
-            status = f"[#38bdf8]{escape(self._last_tool)}[/#38bdf8] working… ({elapsed}s)"
+            status = f"[$primary]{escape(self._last_tool)}[/$primary] working… ({elapsed}s)"
         else:
             # Turn/block is still active (thinking, between tools, or preparing next step)
             status = f"working… ({elapsed}s)"
@@ -425,7 +427,7 @@ class ThinkingBubble(Widget):
 ThinkingBubble { width: 1fr; height: auto; padding: 0 1; margin: 0; }
 ThinkingBubble Collapsible { border: none; padding: 0; margin: 0; background: transparent; }
 ThinkingBubble Collapsible > Contents { padding: 0; margin: 0; }
-#think-md { color: #38bdf8; text-style: italic; padding: 0 0 0 3; margin: 0; }
+#think-md { color: $primary; text-style: italic; padding: 0 0 0 3; margin: 0; }
 """
     _SPINNER_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
     
@@ -451,7 +453,7 @@ ThinkingBubble Collapsible > Contents { padding: 0; margin: 0; }
     def compose(self) -> ComposeResult:
         # Collapsed by default — shows the live spinner + elapsed time in the
         # title; expand to read the reasoning. Stays in place once finished.
-        title = "   [dim #38bdf8 italic]thought[/dim #38bdf8 italic]" if self._done else "[dim #38bdf8]⠋[/dim #38bdf8]  [dim #38bdf8 italic]thinking (0s)[/dim #38bdf8 italic]"
+        title = "   [dim $primary italic]thought[/dim $primary italic]" if self._done else "[dim $primary]⠋[/dim $primary]  [dim $primary italic]thinking (0s)[/dim $primary italic]"
         with Collapsible(title=title, collapsed=True, id="think-col"):
             yield Static(escape(self._text), id="think-md", classes="dim italic")
 
@@ -482,7 +484,7 @@ ThinkingBubble Collapsible > Contents { padding: 0; margin: 0; }
             elapsed = int(time.time() - self._start_time)
             try:
                 col = self.query_one("#think-col", Collapsible)
-                col.title = f"[dim #38bdf8]{spin}[/dim #38bdf8]  [dim #38bdf8 italic]thinking ({elapsed}s)[/dim #38bdf8 italic]"
+                col.title = f"[dim $primary]{spin}[/dim $primary]  [dim $primary italic]thinking ({elapsed}s)[/dim $primary italic]"
             except Exception:
                 pass
 
@@ -517,14 +519,14 @@ ThinkingBubble Collapsible > Contents { padding: 0; margin: 0; }
         elapsed = int(time.time() - self._start_time)
         try:
             col = self.query_one("#think-col", Collapsible)
-            col.title = f"   [dim #38bdf8 italic]thought ({elapsed}s)[/dim #38bdf8 italic]"
+            col.title = f"   [dim $primary italic]thought ({elapsed}s)[/dim $primary italic]"
         except Exception:
             pass
 
 class StreamingMessage(Widget):
     DEFAULT_CSS = """\
 StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
-#stream-placeholder { color: #38bdf8; margin: 0 0 0 1; }
+#stream-placeholder { color: $primary; margin: 0 0 0 1; }
 """
     _SPINNER_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
@@ -544,7 +546,7 @@ StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
         return "".join(self._chunks)
 
     def compose(self) -> ComposeResult:
-        yield Static("[dim #38bdf8]⠋ Thinking…[/dim #38bdf8]", id="stream-placeholder")
+        yield Static("[dim $primary]⠋ Thinking…[/dim $primary]", id="stream-placeholder")
         yield Markdown("", id="stream-content")
 
     def show_header(self):
@@ -556,14 +558,14 @@ StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
         self._header_shown = True
         try:
             if not self.query(".assistant-header"):
-                self.mount(Static("[bold #22c55e]■ Andromity:[/bold #22c55e]", classes="assistant-header"), before="#stream-content")
+                self.mount(Static(_ASSISTANT_HEADER, classes="assistant-header"), before="#stream-content")
         except Exception:
             # #stream-content may not be mounted yet when text starts in the
             # same tick — defer until the DOM settles.
             def _defer():
                 try:
                     if not self.query(".assistant-header"):
-                        self.mount(Static("[bold #22c55e]■ Andromity:[/bold #22c55e]", classes="assistant-header"), before="#stream-content")
+                        self.mount(Static(_ASSISTANT_HEADER, classes="assistant-header"), before="#stream-content")
                 except Exception:
                     pass
             self.call_after_refresh(_defer)
@@ -586,7 +588,7 @@ StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
             spin = self._SPINNER_CHARS[self._spinner_frame % len(self._SPINNER_CHARS)]
             try:
                 placeholder = self.query_one("#stream-placeholder", Static)
-                placeholder.update(f"[dim #38bdf8]{spin} Thinking…[/dim #38bdf8]")
+                placeholder.update(f"[dim $primary]{spin} Thinking…[/dim $primary]")
             except Exception:
                 pass
         elif self._pending:
@@ -715,7 +717,7 @@ def _deserialize_widget(d: dict) -> Widget | None:
         tb.set_content(d.get("text", ""))
         return tb
     elif wtype == "header":
-        return Static("[bold #22c55e]■ Andromity:[/bold #22c55e]", classes="assistant-header")
+        return Static(_ASSISTANT_HEADER, classes="assistant-header")
     return None
 
 
@@ -859,7 +861,7 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
         if self._header_shown:
             return
         self._header_shown = True
-        header = Static("[bold #22c55e]■ Andromity:[/bold #22c55e]", classes="assistant-header")
+        header = Static(_ASSISTANT_HEADER, classes="assistant-header")
         try:
             if before is not None:
                 self.mount(header, before=before)
@@ -1118,7 +1120,7 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
         self._header_shown = False
         await self.remove_children()
 
-    async def load_history(self, messages: list):
+    async def load_history(self, messages: list, compacted_history: list | None = None):
         """Replay a session's message history into the chat panel visually.
 
         Reconstructs the collapsible tool blocks (args + results) from the
@@ -1126,6 +1128,11 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
         shows what the agent actually did. Thinking is replayed if persisted.
         Older messages beyond the viewport limit are serialized into lightweight
         data so live widget instances are not kept in memory.
+
+        If *compacted_history* is provided (old messages that were summarized
+        away by auto-compaction), they are prepended so the chat UI shows the
+        full conversation timeline. The AI never sees these — it only gets
+        the summary + recent messages from ``session.messages``.
         """
         self._unloaded_history.clear()
         self._streaming = None
@@ -1133,6 +1140,16 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
         self._tool_seq = None
         self._header_shown = False
         await self.remove_children()
+
+        # Build full visual timeline: compacted old messages + current messages.
+        # Skip system-role messages from compacted history (system prompt,
+        # memory summaries) — they add noise to the chat UI.
+        full_messages = []
+        if compacted_history:
+            full_messages.extend(
+                m for m in compacted_history if m.get("role") not in ("system",)
+            )
+        full_messages.extend(messages)
 
         # ── Replay render ────────────────────────────────────────────────────
         widgets: list[Widget] = []
@@ -1155,7 +1172,7 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
                 widgets.append(Static("[bold green]Andromity:[/bold green]", classes="assistant-header"))
                 turn_header_shown = True
 
-        for msg in messages:
+        for msg in full_messages:
             role = msg.get("role", "")
             content = msg.get("content") or ""
             if role == "user":

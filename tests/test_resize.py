@@ -63,6 +63,53 @@ def test_resize_to_tiny_sizes_with_palette_open_does_not_crash():
     asyncio.run(_run())
 
 
+def test_resize_ladder_hides_file_tree_before_context():
+    """Regression: file tree has LOWER priority than context — it auto-hides
+    first (<=135), while the context/right sidebar holds until narrow mode
+    (<=110). Chat is never hidden."""
+    from textual import events as _events
+    from textual.geometry import Size as _Size
+
+    async def _run():
+        app = AndromityApp()
+        async with app.run_test(size=(140, 34)) as pilot:
+            await _settle(pilot)
+
+            def resize_to(w):
+                app.on_resize(_events.Resize(_Size(w, 34), _Size(w, 34)))
+
+            # Wide terminal: full layout — everything visible
+            resize_to(140)
+            await _settle(pilot)
+            assert "hide-files" not in app.classes, sorted(app.classes)
+            assert "hide-context" not in app.classes
+            assert "narrow" not in app.classes
+            assert not app.query_one("#left-panel").has_class("force-hidden")
+
+            # Mid width: file tree hidden first, context still visible
+            resize_to(130)
+            await _settle(pilot)
+            assert "hide-files" in app.classes
+            assert "hide-context" not in app.classes
+            assert "narrow" not in app.classes
+
+            # Narrow: chat + context only (file tree stays hidden)
+            resize_to(105)
+            await _settle(pilot)
+            assert "narrow" in app.classes
+            assert "hide-files" in app.classes
+            assert "hide-context" not in app.classes
+
+            # Back to wide: everything restored
+            resize_to(160)
+            await _settle(pilot)
+            assert "hide-context" not in app.classes
+            assert "narrow" not in app.classes
+            assert "hide-files" not in app.classes
+
+    asyncio.run(_run())
+
+
 if __name__ == "__main__":
     import pytest as _pytest
 

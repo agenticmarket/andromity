@@ -205,19 +205,23 @@ def get_git_status(repo: Repo) -> dict:
         status = {}
         # Unstaged changes (Index vs Working tree)
         for item in repo.index.diff(None):
-            status[item.a_path] = item.change_type
+            if item.a_path:
+                status[item.a_path.replace("\\", "/")] = item.change_type
         # Staged changes (HEAD vs Index)
         try:
             for item in repo.head.commit.diff():
                 path = item.b_path or item.a_path
-                status[path] = item.change_type
+                if path:
+                    status[path.replace("\\", "/")] = item.change_type
         except (ValueError, AttributeError):
             # Brand new repo with no commits yet — all staged files are 'A'
             for entry in getattr(repo.index, "entries", {}).keys():
                 path = entry[0] if isinstance(entry, tuple) else str(entry)
-                status[path] = "A"
+                if path:
+                    status[path.replace("\\", "/")] = "A"
         for path in repo.untracked_files:
-            status[path] = "U"
+            if path:
+                status[path.replace("\\", "/")] = "U"
         return status
     except (GitCommandError, Exception):
         return {}

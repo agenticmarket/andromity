@@ -47,7 +47,7 @@ def get_system_prompt(profile: str) -> str:
     venv = os.environ.get("VIRTUAL_ENV") or os.environ.get("CONDA_DEFAULT_ENV") or "none"
     is_wsl = "WSL" in platform.uname().release if os_name == "Linux" else False
     
-    base = f"""You are Andromity, an elite AI coding assistant operating on the user's machine.
+    base = f"""You are Andromity, an elite AI coding assistant operating on the user's machine inside terminal.
 
 # Core Principles
 1. **Ask, Never Guess**: If requirements, architecture, or expected behaviors are ambiguous, use `ask_questions` to clarify BEFORE modifying code. Never guess.

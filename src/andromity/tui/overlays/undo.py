@@ -11,15 +11,26 @@ class UndoConfirmOverlay(ModalScreen[bool]):
     DEFAULT_CSS = """\
 UndoConfirmOverlay {
     align: center middle;
-    background: $background 20%;
+    background: $background 30%;
 }
 #undo-dialog {
-    width: 66; height: 21;
-    border: solid $warning; background: $surface;
+    width: 90%; max-width: 66;
+    height: auto; max-height: 24;
+    border: solid $warning;
+    background: $surface;
     padding: 0;
 }
-#undo-title { padding: 0 1; height: 1; background: $warning-darken-2; color: $text; text-style: bold; }
-#undo-body { height: 1fr; padding: 1 2; }
+#undo-title {
+    padding: 0 1;
+    height: 1;
+    background: $warning-darken-2;
+    color: $text;
+    text-style: bold;
+}
+#undo-body {
+    height: auto;
+    padding: 1 2;
+}
 #undo-prompt-box {
     background: $surface-darken-1;
     border-left: tall $warning;
@@ -28,9 +39,42 @@ UndoConfirmOverlay {
     height: 4;
     overflow-y: auto;
 }
-#undo-info { color: $text-muted; height: auto; }
-#undo-footer { dock: bottom; height: 3; padding: 0 1; }
-#undo-footer Button { margin: 0 1; }
+#undo-info {
+    color: $text-muted;
+    height: auto;
+    margin-bottom: 1;
+}
+#undo-footer {
+    height: 3;
+    padding: 0 1;
+    background: $surface-darken-2;
+    border-top: solid $surface-lighten-1;
+    align: right middle;
+}
+#undo-footer Button {
+    height: 1;
+    min-width: 16;
+    margin: 0 1;
+    padding: 0 2;
+    border: none;
+}
+#undo-cancel {
+    background: $surface-lighten-1;
+    color: $text-muted;
+}
+#undo-cancel:hover, #undo-cancel:focus {
+    background: $surface-lighten-2;
+    color: $text;
+}
+#undo-confirm {
+    background: $warning;
+    color: $background;
+    text-style: bold;
+}
+#undo-confirm:hover, #undo-confirm:focus {
+    background: $warning-lighten-1;
+    color: $background;
+}
 """
 
     def __init__(self, prompt: str = "", **kwargs):
@@ -52,8 +96,8 @@ UndoConfirmOverlay {
                     id="undo-info"
                 )
             with Horizontal(id="undo-footer"):
-                yield Button("Cancel (Esc)", variant="default", id="undo-cancel")
-                yield Button("Undo Turn (Enter)", variant="warning", id="undo-confirm")
+                yield Button("Cancel (Esc)", id="undo-cancel")
+                yield Button("Undo Turn (Enter)", id="undo-confirm")
 
     def on_mount(self):
         if self._prompt:

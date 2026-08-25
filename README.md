@@ -1,383 +1,139 @@
 <div align="center">
+  <img src="andromity.png" alt="Andromity" width="60" height="60" />
 
-  <h1>
-    <img src="andromity.png" alt="Andromity Logo" width="50" height="50" valign="middle" />
-    Andromity
-    <br>
-  <strong>The coding agent that never clocks out.</strong>
-  </h1>
+  # Andromity
 
-  <img src="screen_shot.png" alt="Andromity Screenshot" width="100%" />
+  **Your terminal. Your rules. AI does the work.**
 
+  <img src="screen_shot.png" alt="Andromity in action" width="100%" />
 
-  <p align="center">
-    <a href="https://pypi.org/project/andromity/"><img src="https://img.shields.io/pypi/v/andromity" alt="PyPI version" /></a>
-    <img src="https://img.shields.io/badge/version-0.2.0-blueviolet" alt="Version 0.2.0" />
-    <img src="https://img.shields.io/badge/python-3.11+-blue" alt="Python" />
-    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT" /></a>
-  </p>
-  <p align="center">
-    <strong>One command to install. One command to run. No browser. No IDE. No lock-in.</strong>
-  </p>
-  <p align="center">
-    Andromity is an open-source terminal AI coding agent with a built-in cron scheduler and MCP support.<br>
-    Schedule it to run while you sleep, connect any MCP server, and approve every change before it lands.
-  </p>
+  [![PyPI](https://img.shields.io/pypi/v/andromity)](https://pypi.org/project/andromity/)
+  ![Version](https://img.shields.io/badge/version-0.2.2-blueviolet)
+  ![Python](https://img.shields.io/badge/python-3.11+-blue)
+  [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-
-
-  <br />
-
-  
 </div>
 
+---
 
+Andromity is a terminal workspace with an AI agent built in. Not a chat window. Not a plugin. A proper workspace — sessions, diffs, file viewer, cron scheduler, profiles — all in your terminal, with an AI agent that actually does things.
 
-## Why Andromity?
+The thing that makes it different: **nothing runs until you say the folder is trusted.**
 
-Most AI coding agents are interactive only: you start them, prompt them, and wait.
+---
 
-Andromity is built for **autonomous, scheduled work**.
+## How the trust model works
 
-- **Cron jobs** — run fixes, reviews, and tests on a timer, even while you sleep
-- **MCP support** — connect external tools without writing integrations
-- **Approval modes** — from full manual control to full autonomy (SAFE → YOLO)
-- **Terminal-native** — no IDE, no browser, no cloud lock-in
-- **Local-first** — your code, your keys, your machine
-- **Model-agnostic** — LiteLLM under the hood: Anthropic, OpenAI, Gemini, Groq, OpenRouter, Ollama, NVIDIA NIM, and more
+When you open a folder, Andromity asks if you trust it. That answer controls everything — not your permission mode, not your API key, not your settings. If you say no, the agent cannot write a file, run a command, or touch anything. Full stop.
+
+If you say yes, you pick how much rope the agent gets:
+
+| Mode | Plans | File writes | Shell commands |
+|------|-------|-------------|----------------|
+| **SAFE** | Approve each one | Approve each one | Approve each one |
+| **TRUST** | Approve | Direct — no review | Direct — no review |
+| **FULL** | Auto | Direct | Direct |
+| **YOLO** | Auto (shown as FYI) | Silent | Silent |
+
+Start in SAFE. Move to YOLO when you know what the agent does in your codebase. `/trust` and `/untrust` any time.
+
 ---
 
 ## Install
 
-### Easiest — one-line installer (recommended)
-
-**Linux / macOS:**
 ```bash
+# Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/agenticmarket/andromity/main/install.sh | bash
-```
 
-**Windows (PowerShell):**
-```powershell
+# Windows (PowerShell)
 irm https://raw.githubusercontent.com/agenticmarket/andromity/main/install.ps1 | iex
-```
 
-> The scripts auto-install [pipx](https://pipx.pypa.io) if needed, install andromity globally, and patch your `PATH` — no manual steps.
-
-### Manual — pipx
-
-```bash
+# Or with pipx
 pipx install andromity
 ```
 
-> Don't have `pipx`? Install it first: `pip install pipx && pipx ensurepath`, then open a new terminal.
-
-**Requirements:** Python 3.11+
+Needs Python 3.11+. The installer handles pipx if you don't have it.
 
 ---
 
-## Quick Start
+## Start
 
 ```bash
 andromity
 ```
 
-That's it. The TUI opens. Point it at any codebase and start building. No model configured yet? The model picker opens automatically — hit **Ctrl+L** anytime to switch provider or model.
-
-### Headless / Scripted
+That opens the workspace. Point it at a folder, answer the trust prompt, pick a model — done. No config file needed to get started.
 
 ```bash
-andromity run "refactor this module to use async"
-andromity run "add error handling to tools.py" --yes       # auto-approve all
-andromity run "write tests for session.py" --dry-run       # preview only
+# Headless / scripted
+andromity run "add error handling to auth.py"
+andromity run "refactor this to async" --yes      # auto-approve everything
+andromity run "review session.py" --dry-run       # see what it would do
 ```
 
 ---
 
-## Run it on a schedule
-
-Most agents stop when you close the terminal. Andromity doesn't have to.
-
-Type `/cron` in the TUI to open the Cron Manager and schedule the agent to work in the background:
-
-- **Every morning at 2am** — "Run the test suite and fix any failing tests"
-- **Every 30 minutes** — "Check for dependency vulnerabilities and open a PR"
-- **Every day** — "Review uncommitted changes and summarize them"
-- **Every 2 hours** — "Tail the error log and investigate new exceptions"
-
-Each job gets its own model, permission mode (use `yolo` for fully autonomous background work), and prompt. Jobs run asynchronously and only interrupt you when they need attention.
-
-Jobs are stored locally in your project at `.andromity/crons.json`.
+<!-- Replace with GIF showing trust prompt → diff → approval flow -->
+![Andromity diff and approval flow](screen_shot.png)
 
 ---
 
-## MCP (Model Context Protocol) Support
+## What's inside
 
-Andromity supports [MCP](https://modelcontextprotocol.io/) to connect external tools and APIs natively.
+**Scheduler.** Run the agent on a timer while you sleep. `/cron` opens the scheduler. Jobs persist per project in `.andromity/crons.json`. Works with any permission mode — use YOLO for fully unattended runs.
 
-**Smart lazy-loading:** MCP tool schemas are injected into the system prompt as a compact index and loaded fully only when the LLM requests them — preventing token exhaustion with 50+ tools connected.
+**Profiles.** Switch what the agent is trying to do.
+- `builder` — plans, then implements
+- `coder` — implements directly, no planning phase
+- `reviewer` — read-only, produces findings
+- `planner` — plans only, touches nothing
 
-**Usage:**
-- Configure servers in `.andromity/mcp.json` or `.vscode/mcp.json`
-- Type `/mcp` in the chat to view connected servers and available tools
+**MCP support.** Drop a `mcp.json` in your project. Tools load lazily — schemas index first, full payloads load only when the agent actually needs them. Keeps token use sane with 50+ tools connected.
 
----
+**Sessions.** Everything is saved. Switch between sessions with `/sessions` or `Ctrl+O`. `/compact` when context gets heavy. `/undo` to revert the last turn and all its file changes.
 
+**Sound notifications.** The agent pings you when it needs approval or finishes a turn. Toggle them independently under `Ctrl+E → Advanced → Sounds`.
 
-## Modes & Permissions
-
-| Mode | Plan Required? | Plan Gate | File Writes |
-|------|---------------|-----------|-------------|
-| **SAFE** (default) | Yes (for complex) | 🔴 User must approve | 🔴 Batch review overlay after turn |
-| **TRUST** | Yes (for complex) | 🔴 User must approve | ✅ Written directly, no review |
-| **FULL** | Yes (for complex) | ✅ Auto-approved | ✅ Written directly, no review |
-| **YOLO** | Yes (shown as FYI) | ✅ Auto-approved | ✅ Silent, no review |
+**Model-agnostic.** LiteLLM under the hood. Anthropic, OpenAI, Gemini, Groq, OpenRouter, Ollama, NVIDIA NIM. Switch mid-session with `Ctrl+L`.
 
 ---
 
-## Privacy & Security
+## How it compares
 
-Andromity is local-first: **code never leaves your machine except to the LLM provider you configure.**
+> ⚠️ **Verify before publishing** — confirm competitor columns are accurate against their current docs.
 
-- API keys stored locally in `~/.andromity/config.toml`
+| | Andromity | Aider | OpenCode |
+|--|-----------|-------|----------|
+| Folder trust model | ✅ | ❌ | ❌ |
+| Permission levels (SAFE → YOLO) | ✅ | ❌ | Partial |
+| Built-in cron scheduler | ✅ | ❌ | ❌ |
+| Inline diff viewer | ✅ | ✅ | ✅ |
+| Session management | ✅ | ❌ | ✅ |
+| Agent profiles | ✅ | ❌ | Partial |
+| Local-first, BYOK | ✅ | ✅ | ✅ |
+| MCP support | ✅ | ❌ | ✅ |
+
+---
+
+## Privacy
+
+Your code goes to one place: the LLM provider you configure. Not us.
+
+- API keys live in `~/.andromity/config.toml`
 - Sessions stored locally in `~/.andromity/sessions/`
-- Anonymous ping on first launch and session start — no file paths, code, API keys, or personal data collected. Full details in the [Telemetry Privacy Policy](telemetry-worker/README.md)
-- Opt out via the TUI (**Ctrl+E → Advanced → Telemetry**), `export DO_NOT_TRACK=1`, or `telemetry = false` in `config.toml`
-
-**Security notes:**
-- Session files are stored in plaintext — don't use Andromity on shared machines with sensitive codebases
-- Cron jobs in `.andromity/crons.json` auto-load from the project directory — review via `/cron` before trusting a cloned repo
+- Anonymous ping on first launch — no code, no paths, no keys. Full details in [telemetry-worker/README.md](telemetry-worker/README.md)
+- Opt out: `export DO_NOT_TRACK=1`, or `telemetry = false` in config, or `Ctrl+E → Advanced → Telemetry`
 
 ---
 
-## Profiles
+> ✦ *Not every command is documented here. Discovery is part of the experience.*
 
-Switch the agent's role with `--profile` (CLI) or `/profile` (TUI) or via the **Ctrl+J** menu in the TUI:
-
-| Profile | What it does | Tools available |
-|---------|-------------|-----------------|
-| `builder` (default) | Plans and implements step-by-step | read, search, write, edit, shell, web, tools, plans |
-| `coder` | Direct implementation, no planning phase | read, search, write, edit, shell, web, tools |
-| `reviewer` | Read-only audit producing HIGH/MED/LOW findings | read, search, list, web, tools |
-| `planner` | Produces step-by-step plans without modifying code | read, search, list, tools, write_plan |
-
----
-
-## Agent Tools
-
-| Tool | What it does |
-|------|-------------|
-| `read_file` | Reads a file or specific line range (protected against path traversal) |
-| `write_file` | Creates or overwrites a file in the workspace |
-| `edit_file` | Replaces a specific string inside a file |
-| `edit_file_multi` | Applies multiple non-contiguous edits to a file in one call |
-| `shell_exec` | Executes a shell command in the project directory |
-| `list_dir` | Lists directory contents |
-| `grep_search` | Ripgrep-style search across the codebase |
-| `find_files` | Find files matching a glob pattern |
-| `write_plan` | Creates a step-by-step plan for approval |
-| `list_tools` | Discovers connected MCP servers and lazy-loaded plugins |
-| `web_search` | Searches the internet for up-to-date documentation and fixes |
-| `fetch_url` | Downloads and converts a webpage to readable markdown |
-
-In `SAFE` mode (default), all write, edit, and shell operations require explicit user approval.
-
----
-
-## Chat Commands
-
-Type these directly in the chat bar to manage the agent and session:
-
-| Command | Description |
-|---------|-------------|
-| `/model` | Switch provider & model (or **Ctrl+L**) |
-| `/profile [name]` | Switch profile (`builder`/`reviewer`/`planner`) (or **Ctrl+J**) |
-| `/mode [safe\|trust\|full\|yolo]` | Set permission mode for file/shell approvals |
-| `/undo` | Undo the last prompt and revert all file changes |
-| `/mcp` | Show MCP server status and available tools |
-| `/sessions` | Browse and switch sessions (or **Ctrl+O**) |
-| `/new` | Start a new session |
-| `/rename <name>` | Rename the current session |
-| `/compact` | Summarize & compress old context to free up token space |
-| `/settings` | Open the master settings panel (or **Ctrl+E**) |
-| `/keys` | View status of all provider API keys |
-| `/keys set <prov> <key>` | Save an API key securely to your universal config |
-| `/trust` | Trust the current folder (enables file writes + shell) |
-| `/untrust` | Remove trust for the current folder |
-| `/dry-run` | Toggle dry-run mode (simulates tools without writing/running) |
-| `/debug` | Toggle debug mode (shows tool calls inline) |
-| `/logs` | Display log file location and trailing instructions |
-| `/cron` | Open the background task scheduler |
-| `/plan clear` | Clear the active session plan |
-| `/clear` | Clear the chat history |
-
----
-
-## Configuration
-
-Config lives at `~/.andromity/config.toml` (created automatically on first run).
-
-```toml
-[default]
-provider = "anthropic"
-model    = "claude-sonnet-4-5"
-profile  = "builder"
-
-[[providers]]
-name = "anthropic"
-type = "anthropic"
-api_key = "sk-ant-..."
-
-[[providers]]
-name = "openai"
-type = "openai"
-api_key = "sk-..."
-
-[[providers]]
-name = "gemini"
-type = "google"
-api_key = "AI..."
-
-[[providers]]
-name = "openrouter"
-type = "openrouter"
-api_key = "sk-or-..."
-
-[[providers]]
-name = "ollama"
-type = "ollama"
-base_url = "http://localhost:11434"
-```
-
-API keys can also be set via environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, etc.).
-
-**Provider support:** Andromity uses [LiteLLM](https://github.com/BerriAI/litellm) under the hood, so it works with any LiteLLM-supported provider — Anthropic, OpenAI, Gemini, Groq, OpenRouter, Ollama, NVIDIA NIM, and more. Currently tested with Ollama, NVIDIA NIM, Groq, OpenRouter, and Google Gemini.
-
----
-
-## Sound Notifications
-
-Andromity plays a sound when:
-- **Attention needed** — the AI is paused waiting for you to approve or reject a tool call
-- **Response done** — the AI has finished its full response turn
-
-Both sounds can be toggled independently under **Ctrl+E → Advanced → Sounds**.
-
----
-
-## 📁 Data & Logs Location
-
-All local configuration, session history, and logs are stored locally on your machine.
-
-**Default Location:**
-```bash
-# macOS / Linux
-~/.andromity/
-
-# Windows
-%APPDATA%\andromity\
-```
-
-**⚠️ Windows Store Python Users:**
-If you installed Python via the Microsoft Store, Windows heavily virtualizes application data. Your files will NOT be in the standard `%APPDATA%` directory. Instead, you can find your `config.toml`, logs, and sessions at:
-```bash
-%LOCALAPPDATA%\Packages\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\LocalCache\Roaming\andromity\
-```
-*(Note: The exact path changes slightly depending on your Python version, e.g., `Python.3.11...` or `Python.3.13...`)*
-
----
-
-## Project Structure
-
-```
-src/andromity/
-├── cli.py              # CLI commands (run, tui)
-├── config.py           # Configuration and trust management
-├── assets/
-│   └── sounds/         # Bundled notification sounds
-├── core/
-│   ├── agent.py        # Main agent execution loop and streaming
-│   ├── audio.py        # Cross-platform sound notifications
-│   ├── profiles.py     # AI profiles and dynamic system prompt builder
-│   ├── tools.py        # Core tool implementations with safety guards
-│   ├── provider.py     # LiteLLM client wrapper
-│   ├── session.py      # Session persistence and token tracking
-│   ├── models.py       # Model catalog and context limits
-│   ├── git_ops.py      # Git snapshots and rollback operations
-│   ├── cron.py         # Project-level background task scheduler
-│   ├── mcp.py          # MCP server discovery and tool loading
-│   ├── planner.py      # Plan generation and approval flow
-│   ├── security.py     # Path traversal and shell safety guards
-│   └── web.py          # Web search and page fetching
-└── tui/
-    ├── app.py          # Textual-based interactive UI
-    ├── footer.py       # Input bar and status bar
-    ├── panels/
-    │   ├── chat.py     # Message history and markdown rendering
-    │   ├── diff.py     # Side-by-side diffs and tool approval dialogs
-    │   └── plan.py     # Real-time plan tracking and todo list
-    └── overlays/
-        ├── settings.py # Settings UI (model, profiles, MCP, advanced)
-        ├── model.py    # Model picker overlay
-        └── profile.py  # Profile picker overlay
-```
-
----
-
-## Development Setup
-
-Clone the repo and install in editable mode — changes to source files take effect immediately without reinstalling:
-
-```bash
-git clone https://github.com/agenticmarket/andromity
-cd andromity
-python3 -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install -e ".[dev]"
-andromity
-```
-
-> **Ubuntu/Debian users:** A venv is required — these systems use PEP 668 to protect the system Python. The commands above handle this correctly.
-
-**Run tests:**
-```bash
-pytest tests
-```
-
-**Project layout follows `src/` layout** — all source lives under `src/andromity/`.
-
----
-## What's New in v0.2.0
-
-### ⚡ Instant Startup — Blank Screen Eliminated
-
-- **Removed dead `litellm` import** in the settings module that forced a full `litellm` dependency-graph load at startup, adding 3–18 seconds of blank screen before the TUI appeared.
-- **Lazy-loaded `SettingsScreen`** — the 87KB settings module is now imported only when you open Settings, not at app boot.
-
-### 🏃 Long-Session Performance & Memory Stability
-
-A full audit and remediation of runtime bottlenecks that accumulate over long, multi-turn sessions:
-
-| Fix | What was wrong | What changed |
-|-----|---------------|--------------|
-| **Debounced Session I/O** | Every streamed token wrote synchronously to disk | 1.5s debounced background save with `flush()` on switch/exit |
-| **Widget Timer Teardown** | `set_interval()` timers kept firing after message widgets were removed | `on_unmount()` hooks cancel all timers on every sub-widget |
-| **DOM History Serialization** | Pruned chat messages stayed in memory as live Textual Widget trees | Messages beyond 60 in view are serialized to dicts; re-inflated on scroll |
-| **File Watcher Thread Churn** | Every filesystem event spawned a new `threading.Timer` thread | Single persistent daemon worker thread with `threading.Condition` |
-| **Undo Stack Capping** | Large pastes accumulated megabytes in undo history | Prompt previews capped at 20,000 chars per checkpoint |
-| **Accurate Auto-Compaction** | Context threshold used character-math estimates | Uses real `context_tokens` from provider usage reports when available |
-| **Daemon Threads for Warmup** | Background import warmup blocked test pilots and app teardown | `threading.Thread(daemon=True)` used for warmup and git init |
-
-### ✅ Test Suite
-
-68 tests across session, agent, file tree, undo, status bar, interactive questions, and config — all green.
 ---
 
 ## Contributing
 
-Open an issue or PR. Bug reports and honest feedback are more useful than feature requests at this stage.
+Open an issue or PR. Honest feedback and bug reports are more useful than feature requests right now.
 
----
+See [CONTRIBUTING.md](CONTRIBUTING.md) for project layout and dev setup.
 
-## License
-
-MIT — see [LICENSE](LICENSE).
+**MIT** — see [LICENSE](LICENSE).

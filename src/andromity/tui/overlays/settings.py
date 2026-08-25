@@ -28,6 +28,31 @@ try:
 except ImportError:
     PlotextPlot = None
 
+def _format_cost(v: float) -> str:
+    if v == 0:
+        return "$0"
+    a = abs(v)
+    if a >= 1_000_000:
+        return f"${v/1_000_000:.1f}m"
+    if a >= 1_000:
+        return f"${v/1_000:.1f}k"
+    if a >= 10:
+        return f"${v:.0f}"
+    if a >= 1:
+        return f"${v:.2f}"
+    return "$" + f"{v:.4f}".rstrip("0").rstrip(".")
+
+
+def _format_tokens(v: int) -> str:
+    if v >= 1_000_000:
+        return f"{v/1_000_000:.1f}M"
+    if v >= 10_000:
+        return f"{v/1_000:.0f}k"
+    if v >= 1_000:
+        return f"{v/1_000:.1f}k"
+    return f"{v:g}" if isinstance(v, float) else str(v)
+
+
 if PlotextPlot:
     class UsageChart(PlotextPlot):
         DEFAULT_CSS = "UsageChart { width: 1fr; height: 12; margin-bottom: 1; border: tall $surface-lighten-2; background: $surface-darken-1; padding: 1 1; }"
@@ -40,27 +65,34 @@ if PlotextPlot:
             plt = self.plt
             plt.clear_figure()
             plt.theme("clear")
+            fmt = _format_cost if self.metric == "cost" else _format_tokens
+            ranked = sorted(
+                self.chart_data.items(),
+                key=lambda kv: kv[1].get(self.metric, 0.0),
+                reverse=True,
+            )[:3]
             labels = []
             values = []
-            for m, stats in list(self.chart_data.items())[:8]:
+            for m, stats in ranked:
                 short_m = m.split("/")[-1] if "/" in m else m
                 if len(short_m) > 16:
                     short_m = short_m[:14] + "…"
                 labels.append(short_m)
                 values.append(stats.get(self.metric, 0.0))
-            
+
             max_val = max(values) if values else 0.0
+            plt.bar(labels, values, color="cyan", marker="fhd")
             if self.metric == "cost" and max_val == 0.0:
-                plt.bar(labels, values, color="cyan", marker="fhd")
                 plt.ylim(0.0, 1.0)
-                title = "Total Cost ($) by Model — All Free ($0.0000)"
+                plt.yticks([0.0], ["$0.00"])
+                title = "Total Cost ($) by Model — All Free ($0.00)"
             else:
+                top = max_val * 1.15 if max_val > 0 else 1.0
+                plt.ylim(0.0, top)
+                ticks = [top * frac for frac in (0.0, 0.25, 0.5, 0.75, 1.0)]
+                tick_labels = [fmt(t) for t in ticks]
                 title = "Total Cost ($) by Model" if self.metric == "cost" else "Total Tokens by Model"
-                plt.bar(labels, values, color="cyan", marker="fhd")
-                if max_val > 0:
-                    plt.ylim(0.0, max_val * 1.15)
-                else:
-                    plt.ylim(0.0, 1.0)
+                plt.yticks(ticks, tick_labels)
             plt.title(title)
             self.refresh()
 PROVIDERS = ["anthropic", "openai", "google", "deepseek", "groq", "openrouter", "nvidia"]
@@ -108,7 +140,7 @@ SettingsScreen {
 }
 #settings-dialog {
     width: 90%; height: 90%;
-    border: solid $accent-darken-2; background: $surface;
+    border: solid $panel-lighten-2; background: $surface;
     padding: 0;
 }
 #settings-title {
@@ -126,7 +158,7 @@ SettingsScreen {
     height: 3;
     padding: 1 1 0 1;
     background: $surface-darken-2;
-    border-top: solid $accent-darken-2;
+    border-top: solid $panel-lighten-2;
     align: right middle;
 }
 #settings-footer Button {
@@ -223,7 +255,8 @@ SettingsScreen {
 .mcp-auth-label     { color: $warning; height: 1; text-style: bold; margin-bottom: 1; }
 .mcp-token-row      { height: 3; }
 .mcp-token-hint     { color: $text-muted; height: auto; margin-bottom: 1; }
-.mcp-url-btn        { width: auto; min-width: 8; margin-left: 1; }
+.mcp-url-btn       { border: none !important; background: transparent !important; color: $accent !important; min-width: 0 !important; height: 1 !important; padding: 0 1 !important; margin-left: 1; }
+.mcp-url-btn:hover { background: transparent !important; color: $accent-lighten-1 !important; text-style: underline !important; }
 /* Card footer */
 .mcp-card-footer    { height: 3; padding: 0 1; border-top: solid $surface-lighten-1; }
 .mcp-install-date   { width: 1fr; color: $text-muted; content-align: left middle; }
@@ -250,16 +283,23 @@ SettingsScreen {
     border: tall $surface-lighten-2;
     padding: 0 1;
 }
-.usage-tab-btn:hover, .usage-metric-btn:hover {
-    background: $surface;
-    color: $text;
-    border: tall $accent-darken-1;
+.usage-tab-btn:hover, .usage-metric-btn:hover,
+.usage-tab-btn:focus, .usage-metric-btn:focus {
+    background: $surface !important;
+    color: $text !important;
+    border: tall $panel-lighten-2 !important;
 }
 .usage-tab-btn.active, .usage-metric-btn.active {
     background: $accent;
     color: $background;
     text-style: bold;
     border: tall $accent-lighten-1;
+}
+.usage-tab-btn.active:hover, .usage-metric-btn.active:hover,
+.usage-tab-btn.active:focus, .usage-metric-btn.active:focus {
+    background: $accent-lighten-1 !important;
+    color: $background !important;
+    border: tall $accent-lighten-2 !important;
 }
 .usage-stat-row   { height: 5; margin-bottom: 1; }
 .usage-stat-card  {
@@ -291,6 +331,10 @@ SettingsScreen {
     border: tall $surface-lighten-1;
     background: $surface-darken-1;
     padding: 0 1;
+}
+.usage-model-row:hover {
+    background: $surface-lighten-1;
+    border: tall $accent;
 }
 .usage-model-name  { width: 1fr; color: $text; content-align: left middle; }
 .usage-model-count { width: 10; color: $text-muted; content-align: right middle; }
@@ -349,7 +393,7 @@ SettingsScreen {
                         user = config.get_user()
                         yield Label("Your Name:", classes="field-label")
                         yield Input(value=user.get("name", ""),
-                                    placeholder="e.g. Chand",
+                                    placeholder="e.g. Alex",
                                     id="setting-user-name")
                         yield Label("Email (for login):", classes="field-label")
                         yield Input(value=user.get("email", ""),
@@ -520,11 +564,8 @@ SettingsScreen {
                     # ── 8. About ──────────────────────────────────────────────
                     with VerticalScroll(id="pane-about", classes="settings-pane"):
                         yield Label("About Andromity", classes="settings-label")
-                        version = "Unknown"
-                        try:
-                            version = importlib.metadata.version("andromity")
-                        except Exception:
-                            pass
+                        from andromity import __version__
+                        version = f"v{__version__}"
                         yield Label(f"Version:     [bold]{version}[/]")
                         yield Label(
                             "GitHub:      [bold cyan]"
@@ -539,7 +580,7 @@ SettingsScreen {
 
             with Horizontal(id="settings-footer"):
                 yield Button("Cancel (Esc)", id="settings-cancel")
-                yield Button("Save All (Ctrl+S)", id="settings-save")
+                yield Button("Save All", id="settings-save")
 
     # ── MCP pane composer ────────────────────────────────────────────────────
 
@@ -725,7 +766,8 @@ SettingsScreen {
                     yield Label(f"[dim]URL:[/] {short}", classes="mcp-cmd-line")
                     yield Button("🔗 Open",
                                  id=f"mcp-openurl-{s_name}",
-                                 classes="mcp-url-btn")
+                                 classes="mcp-url-btn",
+                                 tooltip=f"Open full URL in browser: {server_url}")
 
             # Description (1 line max)
             desc = s_conf.get("description", "").strip()
@@ -1438,30 +1480,18 @@ SettingsScreen {
                 self.app.notify(f"Error: {e}", severity="error")
 
         elif btn_id.startswith("mcp-openurl-"):
-            # Open a server URL or dashboard URL in the default browser
+            # Open server URL in the default browser (always opens the full, un-truncated URL)
             import webbrowser
-            rest = btn_id.replace("mcp-openurl-", "")
-            # Special case: dashboard link for PAT generation
-            if rest.startswith("dashboard-"):
-                s_name = rest.replace("dashboard-", "")
-                mcp_conf = self.mcp_manager.load_config() if self.mcp_manager else {}
-                srv_url = (mcp_conf.get("mcpServers", {})
-                           .get(s_name, {})
-                           .get("serverUrl", ""))
-                if "supabase.com" in srv_url.lower():
-                    webbrowser.open("https://supabase.com/dashboard/account/tokens")
-                else:
-                    webbrowser.open(srv_url or "https://supabase.com/dashboard/account/tokens")
+            s_name = btn_id.replace("mcp-openurl-", "")
+            mcp_conf = self.mcp_manager.load_config() if self.mcp_manager else {}
+            srv_conf = mcp_conf.get("mcpServers", {}).get(s_name, {})
+            if not srv_conf and s_name in self._mcp_servers:
+                srv_conf = self._mcp_servers[s_name]
+            url = srv_conf.get("serverUrl") or srv_conf.get("url") or ""
+            if url:
+                webbrowser.open(url)
             else:
-                # Regular server URL open
-                s_name = rest
-                mcp_conf = self.mcp_manager.load_config() if self.mcp_manager else {}
-                srv_conf = mcp_conf.get("mcpServers", {}).get(s_name, {})
-                url = srv_conf.get("serverUrl") or srv_conf.get("url") or ""
-                if url:
-                    webbrowser.open(url)
-                else:
-                    self.app.notify("No URL found for this server.", severity="warning")
+                self.app.notify("No URL found for this server.", severity="warning")
 
         elif btn_id.startswith("mcp-pat-toggle-"):
             # Toggle visibility of the PAT input row
@@ -1742,10 +1772,18 @@ SettingsScreen {
                 return
                 
             # Top Stats
+            total_cost = summary.total_cost_usd
+            if total_cost == 0.0:
+                cost_text = "$0.00"
+            elif total_cost < 0.01:
+                cost_text = f"${total_cost:.4f}"
+            else:
+                cost_text = f"${total_cost:.2f}"
+
             stats_row = Horizontal(
                 Vertical(
                     Label("Total Cost", classes="usage-stat-label"),
-                    Label(f"${summary.total_cost_usd:.4f}", classes="usage-stat-value"),
+                    Label(cost_text, classes="usage-stat-value"),
                     classes="usage-stat-card"
                 ),
                 Vertical(
@@ -1767,8 +1805,8 @@ SettingsScreen {
                 await area.mount(UsageChart(summary.by_model, metric=self._usage_metric))
 
             # By Model Table
-            order_label = " (Sorted by Tokens)" if self._usage_metric == "tokens" else " (Sorted by Cost)"
-            await area.mount(Label(f"Usage by Model{order_label}", classes="usage-section-title"))
+            sort_label = "Tokens" if self._usage_metric == "tokens" else "Cost"
+            await area.mount(Label(f"Usage by Model (Sorted by {sort_label})", classes="usage-section-title"))
             hdr = Horizontal(
                 Label("Model / Provider", classes="usage-tbl-hdr-name"),
                 Label("Sessions", classes="usage-tbl-hdr-count"),
@@ -1790,25 +1828,34 @@ SettingsScreen {
                     key=lambda x: (x[1].get("cost", 0.0), x[1].get("tokens", 0)),
                     reverse=True
                 )
+
+            # Build all rows first, then mount in a single batch for instant rendering
+            rows = []
             for m, stats in sorted_models:
                 provider = stats.get("provider", "")
                 disp = f"{provider} / {m}" if provider and provider != "unknown" else m
+                full_name = disp
                 cost = stats.get("cost", 0.0)
                 is_free = (":free" in m.lower() or str(provider).lower() in ("ollama", "local"))
                 if cost > 0:
-                    cost_str = f"${cost:.4f}"
+                    cost_str = f"${cost:.4f}" if cost < 0.01 else f"${cost:.2f}"
                 elif is_free:
-                    cost_str = "$0.0000 (Free)"
+                    cost_str = "$0.00 (Free)"
                 else:
-                    cost_str = "$0.0000"
-                row = Horizontal(
-                    Label(disp, classes="usage-model-name"),
+                    cost_str = "$0.00 (Free / Unpriced)" if stats.get("tokens", 0) > 0 else "$0.00"
+                name_label = Label(self._truncate_name(disp), classes="usage-model-name")
+                name_label.tooltip = full_name
+                rows.append(Horizontal(
+                    name_label,
                     Label(str(stats.get("sessions", 0)), classes="usage-model-count"),
                     Label(self._fmt_tokens(stats.get("tokens", 0)), classes="usage-model-tok"),
                     Label(cost_str, classes="usage-model-cost"),
                     classes="usage-model-row"
-                )
-                await area.mount(row)
+                ))
+            if rows:
+                await area.mount_all(rows)
+            else:
+                await area.mount(Label("No model data available.", classes="usage-empty"))
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"Usage render error: {e}")
@@ -1819,3 +1866,7 @@ SettingsScreen {
         if val >= 1_000:
             return f"{val/1_000:.1f}k"
         return str(val)
+
+    @staticmethod
+    def _truncate_name(name: str, limit: int = 46) -> str:
+        return name if len(name) <= limit else name[:limit - 1] + "…"

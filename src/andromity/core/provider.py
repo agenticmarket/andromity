@@ -14,6 +14,7 @@ async def stream_completion(
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]] = None,
     provider_name: Optional[str] = None,
+    model: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
 ) -> AsyncGenerator[StreamEvent, None]:
     # Lazy-import litellm — it has a heavy import chain (~2-4s), so we defer
@@ -23,7 +24,8 @@ async def stream_completion(
 
     if provider_name is None:
         provider_name = config.get("default", "provider", "anthropic")
-    model = config.get("default", "model", "claude-sonnet-4-6")
+    if model is None:
+        model = config.get("default", "model", "claude-sonnet-4-6")
     provider_cfg = config.get_provider_config(provider_name)
 
     if provider_name == "google":

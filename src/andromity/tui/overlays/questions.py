@@ -225,6 +225,7 @@ class QuestionPanel(Widget):
 QuestionPanel {
     display: none;
     height: 24;
+    max-height: 60%;
     border-top: solid $accent-darken-2;
     background: $surface-darken-1;
     padding: 0 1 0 1;

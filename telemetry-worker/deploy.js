@@ -3,8 +3,8 @@
  * deploy.js — Securely deploys the telemetry worker without exposing secrets.
  *
  * How it works:
- *  1. Reads TELEMETRY_KV_ID from .env (gitignored — never committed)
- *  2. Generates a temporary wrangler.deploy.toml with the real ID injected
+ *  1. Reads TELEMETRY_KV_ID and optional STATS_SECRET from .env (gitignored — never committed)
+ *  2. Generates a temporary wrangler.deploy.toml with the real values injected
  *  3. Runs: wrangler deploy --config wrangler.deploy.toml
  *  4. Deletes the temp file immediately after deploy (success or failure)
  *
@@ -49,16 +49,20 @@ if (!kvId || kvId === 'your_kv_namespace_id_here') {
   process.exit(1);
 }
 
-// ── 2. Read wrangler.toml and inject the real KV ID ──────────────────────────
+// ── 2. Read wrangler.toml and inject the real KV ID & vars ───────────────────
 const tomlTemplate = fs.readFileSync(
   path.join(__dirname, 'wrangler.toml'),
   'utf8'
 );
-const tomlResolved = tomlTemplate.replace(/\$\{TELEMETRY_KV_ID\}/g, kvId);
+let tomlResolved = tomlTemplate.replace(/\$\{TELEMETRY_KV_ID\}/g, kvId);
+
+if (env['STATS_SECRET']) {
+  tomlResolved += `\n\n[vars]\nSTATS_SECRET = "${env['STATS_SECRET']}"\n`;
+}
 
 const tempConfig = path.join(__dirname, 'wrangler.deploy.toml');
 fs.writeFileSync(tempConfig, tomlResolved, 'utf8');
-console.log('✅  Config resolved. Deploying...\n');
+console.log('✅  Config resolved securely from .env. Deploying...\n');
 
 // ── 3. Deploy using the resolved config ──────────────────────────────────────
 let exitCode = 0;
