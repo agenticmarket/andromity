@@ -4,6 +4,15 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 
 ---
 
+## [0.2.3] — 2026-08-25
+
+### Internationalization & Documentation
+- **Multi-language Localized READMEs**: Full coverage and cross-navigation for 8 major developer languages (Simplified Chinese, Russian, Brazilian Portuguese, Japanese, German, French, Spanish, and Hindi).
+- **Dynamic Media Showcase**: Integrated high-definition video walkthroughs on CDN for immediate preview without repo bloat.
+
+### UI & Styling
+- **Thought Bubble Contrast Fix**: Tuned collapsible reasoning header styling to ensure clear contrast when highlighted across all terminal themes.
+
 ## [0.2.2] — 2026-08-24
 
 ### Terminal UI & Visual Hierarchy
@@ -40,7 +49,7 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 - **Bounded undo memory**: Capped prompt previews in undo history at 20k characters so pasting giant files doesn't balloon memory.
 - **Accurate token counts**: Uses real `context_tokens` from provider APIs for compaction thresholds instead of guessing by character length.
 
----
+---ro
 
 ## [0.2.0] — 2026-08-15
 

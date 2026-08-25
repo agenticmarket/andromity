@@ -558,6 +558,7 @@ class ChatInput(TextArea):
         Binding("enter", "submit", "Send", priority=True),
         Binding("shift+enter", "newline", "New Line", priority=True),
         Binding("alt+enter", "newline", "New Line", priority=True),
+        Binding("alt+n", "newline", "New Line", priority=True),
         Binding("ctrl+j", "steer", "Steer", priority=True),
         Binding("ctrl+enter", "steer", "Steer", priority=True),
         # priority=True so it shadows TextArea's default paste — lets us grab
@@ -571,6 +572,7 @@ class ChatInput(TextArea):
         self._history_idx: int = -1
         self._draft: str = ""
         self._is_placeholder: bool = False
+        self._just_attached_image: bool = False
 
     def _command_palette(self):
         try:
@@ -650,47 +652,51 @@ class ChatInput(TextArea):
             self.text = ""
 
     def action_paste_image_or_text(self):
-        """Ctrl+V: if the clipboard holds an image, attach it; otherwise paste
-        text exactly like TextArea normally would."""
         try:
             from andromity.core.images import paste_image_from_clipboard
             img = paste_image_from_clipboard()
         except Exception:
             img = None
         if img is not None:
+            self._just_attached_image = True
             self.post_message(InputBar.ImagePasted(image=img))
             return
-        self.action_paste()
 
     async def _on_paste(self, event):
-        """Intercept bracketed-paste events.
+        event.prevent_default()
+        event.stop()
 
-        Terminals that swallow Ctrl+V (notably Windows Terminal) deliver the
-        paste as an event instead of a keypress, so the ctrl+v binding above
-        never fires there. Whenever a paste arrives we check the OS clipboard
-        for an image, and also accept a pasted image file path (WT pastes
-        copied files as a quoted path). If neither matches, fall through to
-        the normal text paste.
-        """
-        try:
-            from andromity.core.images import paste_image_from_clipboard, extract_image_path
-            img = paste_image_from_clipboard()
-        except Exception:
-            img = None
-        path = None
-        if img is None:
-            path = extract_image_path(getattr(event, "text", ""))
-        if img is not None or path is not None:
-            # prevent_default() stops the MRO walk, so TextArea's own _on_paste
-            # won't insert the pasted text; stop() halts bubbling to parents.
+        if getattr(self, "_just_attached_image", False):
+            self._just_attached_image = False
+            return
+
+        from andromity.core.images import extract_image_path, paste_image_from_clipboard
+        path = extract_image_path(getattr(event, "text", ""))
+        if path is not None:
+            self.post_message(InputBar.ImagePasted(path=path))
+            return
+
+        if not getattr(event, "text", ""):
+            try:
+                img = paste_image_from_clipboard()
+            except Exception:
+                img = None
+            if img is not None:
+                self.post_message(InputBar.ImagePasted(image=img))
+                return
+
+        if self.read_only:
+            return
+        if result := self._replace_via_keyboard(event.text, *self.selection):
+            self.move_cursor(result.end_location)
+            self.focus()
+
+    def on_click(self, event) -> None:
+        """Ctrl+Click to select all text."""
+        if event.control:
+            self.select_all()
             event.prevent_default()
             event.stop()
-            self.post_message(
-                InputBar.ImagePasted(path=path) if path is not None
-                else InputBar.ImagePasted(image=img)
-            )
-            return
-        await super()._on_paste(event)
 
     def action_newline(self):
         self.insert("\n")
@@ -855,7 +861,7 @@ CronStatusPanel.has-crons { display: block; }
         self._notifs = []
 
     def compose(self) -> ComposeResult:
-        yield Static("⏱ Cron Status", id="cron-status-title")
+        yield Static("⏱  Cron Status", id="cron-status-title")
         yield Static("", id="cron-jobs-list")
         yield Static("", id="cron-notifs")
 
