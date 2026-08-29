@@ -33,7 +33,29 @@ class Agent:
         self._turn_image_parts = None
         # Register session so plan tools can store plan in it
         register_session(session)
+        
+        # Initialize SubAgent orchestrator and SessionBus registration
+        from andromity.core.subagent_orchestrator import SubAgentOrchestrator
+        from andromity.core.session_bus import SessionBus
+
+        self.orchestrator = SubAgentOrchestrator(
+            parent_session_id=self.session.id,
+            project_path=self.session.project_path
+        )
+        self.session._orchestrator = self.orchestrator
+
+        try:
+            SessionBus.get_instance().register(
+                session_id=self.session.id,
+                name=self.session.name,
+                project_path=self.session.project_path,
+                capabilities=[self.profile],
+            )
+        except Exception:
+            pass
+
         sys_prompt = get_system_prompt(self.profile)
+
         deferred_catalog = ToolRegistry.get_instance().get_deferred_prompt_catalog()
         if deferred_catalog:
             sys_prompt += "\n\n" + deferred_catalog
@@ -387,12 +409,11 @@ class Agent:
 
             # ── Phase 2: run all accepted calls CONCURRENTLY. Results are
             # yielded as each call finishes so the UI can mark that tool's
-            # indicator done immediately; the model-facing context records them
-            # in the original tool-call order below.
-            # (Only non-question calls reach this point — ask_questions was
-            # answered inline above.)
+            # indicator done immediately; subagent progress events are also
+            # yielded live to the UI as they occur.
             if prepared:
                 import asyncio
+                from andromity.core.tools import register_subagent_progress_callback, unregister_subagent_progress_callback
 
                 async def _execute(prep: tuple[dict, str, dict]) -> tuple[str, str]:
                     tool_call, tool_name, args = prep
@@ -405,11 +426,47 @@ class Agent:
                         result = f"Error executing {tool_name}: {e}"
                     return tool_call["id"], str(result)
 
+                progress_queue: asyncio.Queue = asyncio.Queue()
+
+                def _on_subagent_prog(evt):
+                    progress_queue.put_nowait(evt)
+
+                register_subagent_progress_callback(_on_subagent_prog)
                 tasks = [asyncio.create_task(_execute(prep)) for prep in prepared]
-                for task in asyncio.as_completed(tasks):
-                    call_id, result = await task
-                    final_results[call_id] = result
-                    yield ToolResult(tool_id=call_id, result=result)
+                pending_tasks = set(tasks)
+
+                try:
+                    while pending_tasks:
+                        queue_task = asyncio.create_task(progress_queue.get())
+                        done, _ = await asyncio.wait(
+                            pending_tasks | {queue_task},
+                            return_when=asyncio.FIRST_COMPLETED
+                        )
+                        if queue_task in done:
+                            prog_evt = queue_task.result()
+                            yield prog_evt
+                        else:
+                            queue_task.cancel()
+
+                        for t in done:
+                            if t in pending_tasks:
+                                pending_tasks.remove(t)
+                                call_id, result = t.result()
+                                final_results[call_id] = result
+                                yield ToolResult(tool_id=call_id, result=result)
+
+                        # Flush any backlog in progress queue
+                        while not progress_queue.empty():
+                            yield progress_queue.get_nowait()
+                except asyncio.CancelledError:
+                    self.kill_subagents("turn_cancelled")
+                    for t in pending_tasks:
+                        if not t.done():
+                            t.cancel()
+                    raise
+                finally:
+                    unregister_subagent_progress_callback(_on_subagent_prog)
+
 
             # ── Phase 3: record tool messages into session context in the
             # original tool-call order (models expect results in call order).
@@ -428,3 +485,36 @@ class Agent:
                     plan = self.session.load_plan_obj()
                     if plan and plan.status == "pending":
                         yield PlanApprovalRequired(plan=plan)
+
+    async def spawn_subagent(
+        self,
+        role: str,
+        task: str,
+        model_override: Optional[str] = None,
+        provider_override: Optional[str] = None,
+        tools_override: Optional[list] = None,
+        timeout: Optional[float] = None,
+        wait: bool = True,
+    ):
+        """Spawn a subagent managed by this agent's orchestrator."""
+        return await self.orchestrator.spawn(
+            role=role,
+            task=task,
+            model_override=model_override,
+            provider_override=provider_override,
+            tools_override=tools_override,
+            timeout=timeout,
+            wait=wait,
+        )
+
+    def kill_subagents(self, reason: str = "agent_cancelled"):
+        """Terminate all active subagents spawned by this agent."""
+        if hasattr(self, "orchestrator") and self.orchestrator:
+            self.orchestrator.kill_all(reason=reason)
+
+    async def await_subagents(self):
+        """Wait for all active subagents to finish and return their results."""
+        if hasattr(self, "orchestrator") and self.orchestrator:
+            return await self.orchestrator.await_all()
+        return []
+

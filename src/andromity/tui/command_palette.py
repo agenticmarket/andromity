@@ -41,10 +41,12 @@ COMMAND_DESCRIPTIONS = {
     "/skills":   "Browse & install skills (one-click)",
     "/plan":     "Show or clear the active plan",
     "/mcp":      "Show MCP server status & available tools",
+    "/subagent": "Configure sub-agent models, tools & roles",
     "/tips":     "Get a curated developer & coding tip",
     "/news":     "Show latest release notes & announcements",
     "/context-menu": "Toggle 'Open in Andromity' in Windows context menu",
 }
+
 
 
 class CommandPalette(Widget):

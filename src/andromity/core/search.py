@@ -204,9 +204,9 @@ def _python_grep(
 ) -> str:
     flags = 0 if case_sensitive else re.IGNORECASE
     try:
-        regex = re.compile(re.escape(query), flags)
-    except Exception:
         regex = re.compile(query, flags)
+    except re.error:
+        regex = re.compile(re.escape(query), flags)
 
     matches: List[str] = []
 

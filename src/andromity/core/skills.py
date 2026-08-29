@@ -274,12 +274,18 @@ class SkillsManager:
 
         target = (self._user_dir if scope == "user" else self._project_dir) / name
         target.mkdir(parents=True, exist_ok=True)
+        target_resolved = target.resolve()
         for f in files:
             rel = f[len(skill_dir) + 1:]
             if not rel:
                 continue
-            content = self._fetch(RAW_URL.format(repo=src["repo"], branch=src["branch"], path=f))
             out = target / rel
+            try:
+                if not out.resolve().is_relative_to(target_resolved):
+                    raise ValueError(f"Path traversal detected in skill tree entry: {f!r}")
+            except ValueError:
+                continue
+            content = self._fetch(RAW_URL.format(repo=src["repo"], branch=src["branch"], path=f))
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(content, encoding="utf-8")
 

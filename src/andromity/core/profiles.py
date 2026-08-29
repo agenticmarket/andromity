@@ -29,11 +29,43 @@ def _get_git_branch() -> str:
     return _git_branch_cache
 
 PROFILES = {
-    "builder": {"tools": ["read_file", "grep_search", "find_files", "write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_read", "shell_kill", "shell_list", "list_dir", "write_plan", "update_plan_step", "ask_questions", "list_tools", "create_todo", "update_todo", "list_todos", "web_search", "fetch_url"]},
-    "coder":   {"tools": ["read_file", "grep_search", "find_files", "write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_read", "shell_kill", "shell_list", "list_dir", "list_tools", "create_todo", "update_todo", "list_todos", "web_search", "fetch_url"]},
-    "reviewer":{"tools": ["read_file", "grep_search", "find_files", "list_dir", "list_tools", "web_search", "fetch_url"]},
-    "planner": {"tools": ["read_file", "grep_search", "find_files", "list_dir", "write_plan", "update_plan_step", "ask_questions", "list_tools", "create_todo", "update_todo", "list_todos"]},
+    "builder": {
+        "tools": [
+            "read_file", "grep_search", "find_files", "write_file", "edit_file", "edit_file_multi",
+            "shell_exec", "shell_bg", "shell_read", "shell_kill", "shell_list", "list_dir",
+            "write_plan", "update_plan_step", "ask_questions", "list_tools", "create_todo",
+            "update_todo", "list_todos", "web_search", "fetch_url",
+            "spawn_subagent", "session_send_message", "session_ask_question", "session_broadcast",
+            "session_list", "shared_state_set", "shared_state_get", "write_handoff", "read_handoff"
+        ]
+    },
+    "coder": {
+        "tools": [
+            "read_file", "grep_search", "find_files", "write_file", "edit_file", "edit_file_multi",
+            "shell_exec", "shell_bg", "shell_read", "shell_kill", "shell_list", "list_dir",
+            "list_tools", "create_todo", "update_todo", "list_todos", "web_search", "fetch_url",
+            "session_send_message", "session_ask_question", "session_list", "shared_state_set",
+            "shared_state_get", "write_handoff", "read_handoff"
+        ]
+    },
+    "reviewer": {
+        "tools": [
+            "read_file", "grep_search", "find_files", "list_dir", "list_tools",
+            "web_search", "fetch_url", "session_send_message", "session_list",
+            "shared_state_get", "read_handoff"
+        ]
+    },
+    "planner": {
+        "tools": [
+            "read_file", "grep_search", "find_files", "list_dir", "write_plan",
+            "update_plan_step", "ask_questions", "list_tools", "create_todo",
+            "update_todo", "list_todos", "spawn_subagent", "session_send_message",
+            "session_ask_question", "session_broadcast", "session_list",
+            "shared_state_set", "shared_state_get", "write_handoff", "read_handoff"
+        ]
+    },
 }
+
 
 
 def get_system_prompt(profile: str) -> str:
@@ -86,6 +118,22 @@ def get_system_prompt(profile: str) -> str:
 - Use `list_tools(include_description=True)` to inspect available tool schemas; never invent tool parameters.
 - [IMPORTANT] For complex tasks (>2 files or architectural changes), create a structured plan using `write_plan` and keep steps updated via `update_plan_step` after everythings implemention check steps status carefully.
 - Tag reminders (<system-reminder>) provide environment hints; do not echo them to the user.
+- Use `spawn_subagent` for tasks that are independent, bounded, and can run in parallel or in isolation:
+  - **Parallel work**: research, search, file scanning, or analysis that doesn't block the main task
+  - **Isolated execution**: tasks that need their own tool context (e.g. a `reviewer` that only reads, a `search` that only fetches)
+  - **Large scoped subtasks**: implementing a single module, writing tests for a specific file, or auditing a subsystem — anything self-contained with a clear deliverable
+  - **Context protection**: offload token-heavy tasks (log parsing, large file scanning) to keep the main context lean
+- **Do NOT spawn a subagent when:**
+  - The task is a single tool call or trivially fast (< 5s)
+  - The subtask requires back-and-forth with the user (subagents are fire-and-forget)
+  - Shared mutable state is needed mid-execution (use `shared_state` tools for coordination instead)
+  - The result is needed inline immediately and spawning adds latency with no parallelism benefit
+- **Role selection guide:**
+  - `search` → web fetch, docs lookup, API exploration
+  - `coder` → write/modify files, implement features
+  - `reviewer` → audit, read-only analysis, security review
+  - `analyst` → summarize, compare, plan, reason over data
+  - `general` → anything that doesn't fit a specific role
 """
     if profile == "reviewer":
         extra = """

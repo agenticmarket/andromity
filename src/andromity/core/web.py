@@ -60,6 +60,13 @@ def fetch_url(url: str, max_chars: int = 10000) -> str:
     if not url.startswith(("http://", "https://")):
         return f"Error: URL must start with http:// or https://. Received: {url}"
 
+    from andromity.core.security import get_domain, _is_private_ip
+    host = get_domain(url)
+    if not host:
+        return f"Error: Cannot determine host from URL: {url}"
+    if _is_private_ip(host):
+        return f"Error: Fetching private/internal addresses is not allowed: {url}"
+
     try:
         req = urllib.request.Request(
             url,

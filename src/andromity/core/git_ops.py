@@ -86,8 +86,9 @@ def create_pre_edit_snapshot(repo: "Repo") -> Optional[str]:
 
         # ── Build a tree that includes untracked files ──────────────────────
         # We use a temp index file so the user's real staging area is untouched.
-        tmp_index = tempfile.mktemp(prefix="andromity-idx-")
+        tmp_fd, tmp_index = tempfile.mkstemp(prefix="andromity-idx-")
         try:
+            os.close(tmp_fd)
             env = {**os.environ, "GIT_INDEX_FILE": tmp_index}
             # Stage everything (tracked + untracked) into the temp index.
             repo.git.execute(["git", "add", "-A"], env=env)

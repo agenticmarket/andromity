@@ -20,6 +20,17 @@ def _launch_tui():
 
     from rich.console import Console
     console = Console()
+    print("""
+
+ █████╗ ███╗   ██╗██████╗ ██████╗  ██████╗ ███╗   ███╗██╗████████╗██╗   ██╗
+██╔══██╗████╗  ██║██╔══██╗██╔══██╗██╔═══██╗████╗ ████║██║╚══██╔══╝╚██╗ ██╔╝
+███████║██╔██╗ ██║██║  ██║██████╔╝██║   ██║██╔████╔██║██║   ██║    ╚████╔╝ 
+██╔══██║██║╚██╗██║██║  ██║██╔══██╗██║   ██║██║╚██╔╝██║██║   ██║     ╚██╔╝  
+██║  ██║██║ ╚████║██████╔╝██║  ██║╚██████╔╝██║ ╚═╝ ██║██║   ██║      ██║   
+╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚═╝   ╚═╝      ╚═╝                                                                   
+    A terminal AI coding agent. Autonomous by choice, gated by trust.
+    
+    """)
     with console.status("[bold cyan]✦ Starting Andromity...[/bold cyan]", spinner="dots12"):
         from andromity.tui.app import AndromityApp
         app = AndromityApp()
@@ -110,7 +121,25 @@ async def _run_async(prompt, yes, dry_run, profile):
         ctx_limit = get_ollama_num_ctx(model)
     else:
         ctx_limit = get_context_limit_for_model(provider, model) if (provider and model) else 0
-    agent = Agent(session, profile=profile, dry_run=dry_run, auto_approve=yes, ctx_limit=ctx_limit)
+
+    async def _cli_approval(tool_name: str, args: dict) -> bool:
+        import json as _json
+        print(f"\n[Approval required] Tool: {tool_name}")
+        print(_json.dumps(args, indent=2))
+        try:
+            answer = input("Allow? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+        return answer in ("y", "yes")
+
+    agent = Agent(
+        session,
+        profile=profile,
+        dry_run=dry_run,
+        auto_approve=yes,
+        on_tool_approval=None if yes else _cli_approval,
+        ctx_limit=ctx_limit,
+    )
     print(f"\nUser: {prompt}\n")
     print("Andromity:", end=" ", flush=True)
     async for event in agent.run(prompt):

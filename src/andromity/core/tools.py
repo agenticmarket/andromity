@@ -20,6 +20,7 @@ log = get_logger("tools")
 
 _PLAN_CALLBACKS: List[Callable] = []  # list of callables(plan) to notify on plan write/update
 _TODO_CALLBACKS: List[Callable] = []  # list of callables() to notify on todo changes
+_SUBAGENT_PROGRESS_CALLBACKS: List[Callable] = []  # list of callables(StreamEvent) for subagent activity
 _current_session = None  # set by agent before tool execution
 _mcp_manager = None  # global MCPClientManager instance
 
@@ -35,6 +36,17 @@ def register_plan_callback(cb: Callable):
 
 def register_todo_callback(cb: Callable):
     _TODO_CALLBACKS.append(cb)
+
+
+def register_subagent_progress_callback(cb: Callable):
+    if cb not in _SUBAGENT_PROGRESS_CALLBACKS:
+        _SUBAGENT_PROGRESS_CALLBACKS.append(cb)
+
+
+def unregister_subagent_progress_callback(cb: Callable):
+    if cb in _SUBAGENT_PROGRESS_CALLBACKS:
+        _SUBAGENT_PROGRESS_CALLBACKS.remove(cb)
+
 
 
 def register_session(session):
@@ -84,7 +96,7 @@ def _assert_safe_path(p: Path) -> None:
 
 
 def _is_trusted() -> bool:
-    return config.is_trusted(str(Path.cwd()))
+    return config.is_trusted(str(_get_project_root()))
 
 
 def _ensure_snapshot():
@@ -459,7 +471,8 @@ def shell_bg(command: str, process_id: str = "") -> str:
         return "Error: This folder is not trusted. Use /trust to allow shell commands."
 
     import uuid
-    pid = process_id.strip() or command.split()[0].split("/")[-1][:20]
+    _cmd_tokens = command.split()
+    pid = process_id.strip() or (_cmd_tokens[0].split("/")[-1][:20] if _cmd_tokens else "bg")
     # Make unique if already taken
     with _bg_lock:
         if pid in _bg_processes:
@@ -692,8 +705,8 @@ def _sync_plan_md(plan=None, todo_list=None):
                 "pending": "[ ]",
                 "active": "[/]",
                 "done": "[x]",
-                "failed": "[-]",
-                "skipped": "[~]"
+                "failed": "[!]",
+                "skipped": "[-]"
             }
             checkbox = status_map.get(item.status, "[ ]")
             md_lines.append(f"- {checkbox} {item.title}")
@@ -891,9 +904,167 @@ def list_tools(limit: int = 20, offset: int = 0, include_description: bool = Fal
     return "\n".join(output_lines)
 
 
+# ── Sub-Agent & Session Coordination Tools ───────────────────────────────────
+
+async def spawn_subagent_async(
+    role: str,
+    task: str,
+    model_override: Optional[str] = None,
+    provider_override: Optional[str] = None,
+    tools: Optional[List[str]] = None,
+    timeout: Optional[float] = None,
+    wait: bool = True,
+    context_snapshot: Optional[Any] = None,
+) -> str:
+    from andromity.core.subagent_orchestrator import SubAgentOrchestrator
+    parent_id = _current_session.id if _current_session else "root"
+    proj_path = getattr(_current_session, "project_path", None) if _current_session else None
+    
+    orchestrator = getattr(_current_session, "_orchestrator", None) if _current_session else None
+    if not orchestrator:
+        orchestrator = SubAgentOrchestrator(parent_session_id=parent_id, project_path=proj_path)
+        if _current_session:
+            _current_session._orchestrator = orchestrator
+
+    def _on_subagent_progress(evt):
+        for cb in list(_SUBAGENT_PROGRESS_CALLBACKS):
+            try:
+                cb(evt)
+            except Exception:
+                pass
+
+    res = await orchestrator.spawn(
+        role=role,
+        task=task,
+        model_override=model_override,
+        provider_override=provider_override,
+        tools_override=tools,
+        timeout=timeout,
+        wait=wait,
+        progress_callback=_on_subagent_progress,
+        context_snapshot=context_snapshot,
+    )
+    if _current_session and hasattr(res, "tokens_used") and res.tokens_used:
+        try:
+            _current_session.update_usage(res.tokens_used)
+        except Exception:
+            pass
+
+    return json.dumps(res.to_dict(), indent=2)
+
+
+
+async def session_send_message_async(to_session: str, content: str) -> str:
+    from andromity.core.session_bus import SessionBus
+    bus = SessionBus.get_instance()
+    sender_id = _current_session.id if _current_session else "anonymous"
+    success = await bus.send_message(
+        from_session_id=sender_id,
+        to_target=to_session,
+        content=content,
+    )
+    if success:
+        return f"Message sent successfully to '{to_session}'."
+    return f"Failed to send message: target session '{to_session}' was not found or is offline."
+
+
+async def session_ask_question_async(to_session: str, question: str, timeout: float = 60.0) -> str:
+    from andromity.core.session_bus import SessionBus
+    bus = SessionBus.get_instance()
+    sender_id = _current_session.id if _current_session else "anonymous"
+    return await bus.ask_question(
+        from_session_id=sender_id,
+        to_target=to_session,
+        question=question,
+        timeout=timeout,
+    )
+
+
+async def session_broadcast_async(content: str) -> str:
+    from andromity.core.session_bus import SessionBus
+    bus = SessionBus.get_instance()
+    sender_id = _current_session.id if _current_session else "anonymous"
+    count = await bus.broadcast(from_session_id=sender_id, content=content)
+    return f"Broadcast message delivered to {count} active session(s)."
+
+
+def session_list() -> str:
+    from andromity.core.session_bus import SessionBus
+    bus = SessionBus.get_instance()
+    proj = getattr(_current_session, "project_path", None) if _current_session else None
+    sessions = bus.list_sessions(project_path=proj)
+    if not sessions:
+        return "No other active sessions found."
+    lines = ["Active Sessions:"]
+    for s in sessions:
+        lines.append(f"- **{s['name']}** (id: `{s['session_id'][:8]}...`, path: `{s['project_path']}`, registered: {s['registered_at']})")
+    return "\n".join(lines)
+
+
+def shared_state_set(key: str, value: Any) -> str:
+    from andromity.core.shared_state import SharedStateBoard
+    proj = getattr(_current_session, "project_path", None) if _current_session else None
+    author = _current_session.name if _current_session else "anonymous"
+    board = SharedStateBoard.get_instance(project_path=proj)
+    board.set(key, value, author_session=author)
+    return f"Shared state updated: '{key}' = {json.dumps(value) if not isinstance(value, str) else value}"
+
+
+def shared_state_get(key: str) -> str:
+    from andromity.core.shared_state import SharedStateBoard
+    proj = getattr(_current_session, "project_path", None) if _current_session else None
+    board = SharedStateBoard.get_instance(project_path=proj)
+    val = board.get(key)
+    if val is None:
+        prefix_matches = board.snapshot(prefix=key)
+        if prefix_matches:
+            return json.dumps(prefix_matches, indent=2)
+        return f"No value found for key '{key}'."
+    return json.dumps(val, indent=2) if isinstance(val, (dict, list)) else str(val)
+
+
+def write_handoff_tool(
+    phase: str,
+    status: str,
+    produced: Optional[Dict[str, Any]] = None,
+    blocked_on: Optional[List[str]] = None,
+    next_steps: Optional[List[str]] = None,
+    notes: str = "",
+) -> str:
+    from andromity.core.handoff import write_handoff
+    proj = getattr(_current_session, "project_path", None) if _current_session else None
+    author = _current_session.name if _current_session else "anonymous"
+    res = write_handoff(
+        phase=phase,
+        from_session=author,
+        status=status,
+        produced=produced,
+        blocked_on=blocked_on,
+        next_steps=next_steps,
+        notes=notes,
+        project_path=proj,
+    )
+    return f"Handoff document for phase '{phase}' ({status}) saved successfully:\n```json\n{json.dumps(res, indent=2)}\n```"
+
+
+def read_handoff_tool(phase: str = "") -> str:
+    from andromity.core.handoff import read_handoff, list_handoffs
+    proj = getattr(_current_session, "project_path", None) if _current_session else None
+    if not phase or phase == "list":
+        docs = list_handoffs(project_path=proj)
+        if not docs:
+            return "No handoff documents available."
+        return json.dumps(docs, indent=2)
+    doc = read_handoff(phase, project_path=proj)
+    if not doc:
+        return f"No handoff document found for phase '{phase}'."
+    return json.dumps(doc, indent=2)
+
+
 # ── Core Tool Schemas & Tool Registry ─────────────────────────────────────────
 
 CORE_TOOLS = [
+
     {
         "type": "function",
         "function": {
@@ -1205,6 +1376,147 @@ CORE_TOOLS = [
                 "required": ["url"],
             },
         },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "spawn_subagent",
+            "description": "Spawn a specialized sub-agent for a delegated subtask (e.g. search, coder, reviewer, analyst). Returns a structured, compressed summary.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "role": {"type": "string", "description": "Subagent role: 'search', 'coder', 'reviewer', 'analyst', or 'general'"},
+                    "task": {"type": "string", "description": "Specific, actionable task instructions for the subagent"},
+                    "model_override": {"type": "string", "description": "Optional model override for this subagent"},
+                    "provider_override": {"type": "string", "description": "Optional provider override"},
+                    "tools": {"type": "array", "items": {"type": "string"}, "description": "Optional list of tools allowed for this subagent"},
+                    "timeout": {"type": "number", "description": "Optional timeout in seconds (default 180s)"},
+                    "wait": {"type": "boolean", "description": "Whether to wait for completion (default true)"},
+                    "context_snapshot": {"type": "object", "description": "Optional curated dictionary or key context facts to pass into the subagent"},
+                },
+                "required": ["role", "task"],
+
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "session_send_message",
+            "description": "Send an asynchronous message to another active session in the workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to_session": {"type": "string", "description": "Target session name or session ID"},
+                    "content": {"type": "string", "description": "Message content to send"},
+                },
+                "required": ["to_session", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "session_ask_question",
+            "description": "Ask another active session a question and wait for its answer. Use when one session needs decisions or clarifications from another.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to_session": {"type": "string", "description": "Target session name or ID"},
+                    "question": {"type": "string", "description": "Question to ask"},
+                    "timeout": {"type": "number", "description": "Timeout in seconds (default 60s)"},
+                },
+                "required": ["to_session", "question"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "session_broadcast",
+            "description": "Broadcast an update or status change to all other active sessions on the project.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "Announcement or update message"},
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "session_list",
+            "description": "List all active agent sessions in the workspace, their registered names, IDs, and paths.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "shared_state_set",
+            "description": "Set a namespaced key-value fact on the shared state board (e.g. 'auth.endpoints', 'ui.theme', 'db.schema').",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Namespaced key name (e.g. 'auth.jwt_secret', 'db.tables')"},
+                    "value": {"description": "Value to store (string, boolean, number, list, or dictionary)"},
+                },
+                "required": ["key", "value"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "shared_state_get",
+            "description": "Get a value or prefix snapshot from the shared state board.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Key or key prefix to lookup"},
+                },
+                "required": ["key"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_handoff",
+            "description": "Write a structured phase handoff document (e.g. 'authentication', 'database', 'frontend') for other sessions to consume without context bloat.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phase": {"type": "string", "description": "Phase name (e.g. 'authentication', 'database_migration')"},
+                    "status": {"type": "string", "description": "Status: 'complete', 'in_progress', or 'blocked'"},
+                    "produced": {"type": "object", "description": "Dictionary of produced artifacts, endpoints, files, env vars"},
+                    "blocked_on": {"type": "array", "items": {"type": "string"}, "description": "List of blockers"},
+                    "next_steps": {"type": "array", "items": {"type": "string"}, "description": "Suggested next steps for other sessions"},
+                    "notes": {"type": "string", "description": "Key architectural constraints or notes"},
+                },
+                "required": ["phase", "status"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_handoff",
+            "description": "Read a structured handoff document produced by another session, or list all handoffs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phase": {"type": "string", "description": "Phase name to read (or 'list' to see all)"},
+                },
+                "required": ["phase"],
+            },
+        },
     }
 ]
 
@@ -1294,7 +1606,7 @@ class ToolRegistry:
 
 
 def execute_tool(name: str, args: Dict[str, Any]) -> str:
-    """Execute any tool (Core, Web, or MCP) with logging and error handling."""
+    """Execute any tool (Core, Web, Coordination, or MCP) with logging and error handling."""
     log.debug("TOOL CALL: %s(%s)", name, {k: (str(v)[:80] + '...' if isinstance(v, str) and len(v) > 80 else v) for k, v in args.items()})
 
     # 1. Core Built-in Tools
@@ -1331,7 +1643,31 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
     elif name in ("ask_questions", "ask_question"):
         return "Error: ask_questions is handled interactively by the agent loop and cannot be executed directly."
 
-    # 2. Web Tools
+    # 2. Sub-Agent and Session Coordination Tools
+    elif name == "spawn_subagent":
+        import asyncio
+        return asyncio.run(spawn_subagent_async(**args))
+    elif name == "session_send_message":
+        import asyncio
+        return asyncio.run(session_send_message_async(**args))
+    elif name == "session_ask_question":
+        import asyncio
+        return asyncio.run(session_ask_question_async(**args))
+    elif name == "session_broadcast":
+        import asyncio
+        return asyncio.run(session_broadcast_async(**args))
+    elif name == "session_list":
+        return session_list()
+    elif name == "shared_state_set":
+        return shared_state_set(**args)
+    elif name == "shared_state_get":
+        return shared_state_get(**args)
+    elif name == "write_handoff":
+        return write_handoff_tool(**args)
+    elif name == "read_handoff":
+        return read_handoff_tool(**args)
+
+    # 3. Web Tools
     elif name == "web_search":
         from andromity.core.web import web_search
         return web_search(**args)
@@ -1339,7 +1675,7 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
         from andromity.core.web import fetch_url
         return fetch_url(**args)
 
-    # 3. Model Context Protocol (MCP) Tools
+    # 4. Model Context Protocol (MCP) Tools
     elif name.startswith("mcp__"):
         if _mcp_manager:
             import asyncio
@@ -1356,11 +1692,22 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
 
 
 async def execute_tool_async(name: str, args: Dict[str, Any]) -> str:
-    """Asynchronous tool execution (natively awaits MCP tools, dispatches core tools)."""
+    """Asynchronous tool execution (natively awaits MCP tools and async coordination tools, dispatches core tools)."""
     if name.startswith("mcp__"):
         if _mcp_manager:
             return await _mcp_manager.execute_mcp_tool(name, args)
         return f"Error: MCP tool '{name}' called but no MCPClientManager is active."
+
+    # Sub-agent and session coordination async tools
+    if name == "spawn_subagent":
+        return await spawn_subagent_async(**args)
+    elif name == "session_send_message":
+        return await session_send_message_async(**args)
+    elif name == "session_ask_question":
+        return await session_ask_question_async(**args)
+    elif name == "session_broadcast":
+        return await session_broadcast_async(**args)
     
     # Run blocking core tools in a background thread to prevent freezing the Textual UI
     return await asyncio.to_thread(execute_tool, name, args)
+

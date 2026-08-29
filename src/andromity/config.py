@@ -353,5 +353,58 @@ class ConfigManager:
             del trusted[key]
             self.save()
 
+    # ─── Subagent Management ─────────────────────────────────────────────
+    def get_subagents_config(self) -> Dict[str, Any]:
+        return self._config_cache.get("subagents", {})
+
+    def get_subagent_role(self, role_name: str) -> Optional[Dict[str, Any]]:
+
+        roles = self._config_cache.get("subagents", {}).get("roles", [])
+        for r in roles:
+            if isinstance(r, dict) and r.get("name", "").lower() == role_name.lower():
+                return r
+        return None
+
+    def set_subagent_role(
+        self,
+        role_name: str,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
+        tools: Optional[list] = None,
+        description: Optional[str] = None,
+    ):
+        if "subagents" not in self._config_cache:
+            self._config_cache["subagents"] = {}
+        roles = self._config_cache["subagents"].setdefault("roles", [])
+        found = False
+        for r in roles:
+            if isinstance(r, dict) and r.get("name", "").lower() == role_name.lower():
+                if model is not None:
+                    r["model"] = model
+                if provider is not None:
+                    r["provider"] = provider
+                if tools is not None:
+                    r["tools"] = tools
+                if description is not None:
+                    r["description"] = description
+                found = True
+                break
+        if not found:
+            entry = {"name": role_name}
+            if model is not None:
+                entry["model"] = model
+            if provider is not None:
+                entry["provider"] = provider
+            if tools is not None:
+                entry["tools"] = tools
+            if description is not None:
+                entry["description"] = description
+            roles.append(entry)
+        self.save()
+
+    def list_subagent_roles(self) -> list:
+        return self._config_cache.get("subagents", {}).get("roles", [])
+
 
 config = ConfigManager()
+

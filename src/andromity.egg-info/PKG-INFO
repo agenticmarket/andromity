@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: andromity
-Version: 0.2.2
+Version: 0.2.3
 Summary: AI coding agent with a beautiful terminal UI. Works with Claude, Gemini, GPT, Ollama and more.
 Author-email: Agentic Market <hello@agenticmarket.dev>
 License: MIT
@@ -46,39 +46,18 @@ Dynamic: license-file
 
   # Andromity
 
-  **Your terminal. Your rules. AI does the work.**
+  **A terminal AI coding agent. Autonomous by choice, gated by trust.**
 
-  <img src="screen_shot.png" alt="Andromity in action" width="100%" />
+  <video src="https://github.com/user-attachments/assets/5203a1d8-9c6d-4d8f-bee3-7b4316f6fb22" autoplay loop muted playsinline width="100%"></video>
 
   [![PyPI](https://img.shields.io/pypi/v/andromity)](https://pypi.org/project/andromity/)
-  ![Version](https://img.shields.io/badge/version-0.2.2-blueviolet)
+  ![Version](https://img.shields.io/badge/version-0.2.3-blueviolet)
   ![Python](https://img.shields.io/badge/python-3.11+-blue)
   [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
+  English | [简体中文](README.zh-CN.md) | [Русский](README.ru.md) | [Português (Brasil)](README.pt-BR.md) | [日本語](README.ja.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [हिन्दी](README.hi.md)
+
 </div>
-
----
-
-Andromity is a terminal workspace with an AI agent built in. Not a chat window. Not a plugin. A proper workspace — sessions, diffs, file viewer, cron scheduler, profiles — all in your terminal, with an AI agent that actually does things.
-
-The thing that makes it different: **nothing runs until you say the folder is trusted.**
-
----
-
-## How the trust model works
-
-When you open a folder, Andromity asks if you trust it. That answer controls everything — not your permission mode, not your API key, not your settings. If you say no, the agent cannot write a file, run a command, or touch anything. Full stop.
-
-If you say yes, you pick how much rope the agent gets:
-
-| Mode | Plans | File writes | Shell commands |
-|------|-------|-------------|----------------|
-| **SAFE** | Approve each one | Approve each one | Approve each one |
-| **TRUST** | Approve | Direct — no review | Direct — no review |
-| **FULL** | Auto | Direct | Direct |
-| **YOLO** | Auto (shown as FYI) | Silent | Silent |
-
-Start in SAFE. Move to YOLO when you know what the agent does in your codebase. `/trust` and `/untrust` any time.
 
 ---
 
@@ -97,27 +76,48 @@ pipx install andromity
 
 Needs Python 3.11+. The installer handles pipx if you don't have it.
 
----
-
-## Start
+Then:
 
 ```bash
 andromity
 ```
 
-That opens the workspace. Point it at a folder, answer the trust prompt, pick a model — done. No config file needed to get started.
+Point it at a folder, answer the trust prompt, pick a model — you're in.
+
+---
+
+Andromity is not a chat window. Not a plugin. It's a proper terminal workspace — sessions, diffs, file viewer, cron scheduler, profiles — with an AI agent wired into all of it.
+
+It works with Claude, Gemini, GPT, Groq, Ollama, and anything LiteLLM supports. Run it entirely local with Ollama and pay nothing. Swap models mid-session with `Ctrl+L`.
+
+The thing that makes it different: **nothing runs until you say the folder is trusted.**
+
+---
+
+## How the trust model works
+
+When you open a folder, Andromity asks if you trust it. That answer controls everything — not your permission mode, not your API key, not your settings. Say no, and the agent cannot write a file, run a command, or touch anything. Full stop.
+
+Say yes, and you pick how much rope the agent gets:
+
+| Mode | Plans | File writes | Shell commands |
+|------|-------|-------------|----------------|
+| **SAFE** | Approve each one | Approve each one | Approve each one |
+| **TRUST** | Approve | Direct — no review | Direct — no review |
+| **FULL** | Auto | Direct | Direct |
+| **YOLO** | Auto (shown as FYI) | Silent | Silent |
+
+Start in SAFE. Move to YOLO when you know what the agent does in your codebase. `/trust` and `/untrust` any time.
+
+---
+
+## Headless / scripted
 
 ```bash
-# Headless / scripted
 andromity run "add error handling to auth.py"
 andromity run "refactor this to async" --yes      # auto-approve everything
 andromity run "review session.py" --dry-run       # see what it would do
 ```
-
----
-
-<!-- Replace with GIF showing trust prompt → diff → approval flow -->
-![Andromity diff and approval flow](screen_shot.png)
 
 ---
 
@@ -131,7 +131,7 @@ andromity run "review session.py" --dry-run       # see what it would do
 - `reviewer` — read-only, produces findings
 - `planner` — plans only, touches nothing
 
-**MCP support.** Drop a `mcp.json` in your project. Tools load lazily — schemas index first, full payloads load only when the agent actually needs them. Keeps token use sane with 50+ tools connected.
+**MCP support.** Drop a `mcp.json` in your project. Tool schemas index first, full payloads load only when the agent needs them. Keeps token use sane with 50+ tools connected.
 
 **Sessions.** Everything is saved. Switch between sessions with `/sessions` or `Ctrl+O`. `/compact` when context gets heavy. `/undo` to revert the last turn and all its file changes.
 
@@ -143,18 +143,17 @@ andromity run "review session.py" --dry-run       # see what it would do
 
 ## How it compares
 
-> ⚠️ **Verify before publishing** — confirm competitor columns are accurate against their current docs.
-
-| | Andromity | Aider | OpenCode |
-|--|-----------|-------|----------|
-| Folder trust model | ✅ | ❌ | ❌ |
-| Permission levels (SAFE → YOLO) | ✅ | ❌ | Partial |
-| Built-in cron scheduler | ✅ | ❌ | ❌ |
-| Inline diff viewer | ✅ | ✅ | ✅ |
-| Session management | ✅ | ❌ | ✅ |
-| Agent profiles | ✅ | ❌ | Partial |
-| Local-first, BYOK | ✅ | ✅ | ✅ |
-| MCP support | ✅ | ❌ | ✅ |
+| | Andromity | Aider | Cursor | Claude Code |
+|--|-----------|-------|--------|-------------|
+| Folder trust model | ✅ | ❌ | ❌ | ❌ |
+| Permission levels (SAFE → YOLO) | ✅ | ❌ | Partial | ❌ |
+| Built-in cron scheduler | ✅ | ❌ | ❌ | ❌ |
+| Inline diff viewer | ✅ | ✅ | ✅ | ✅ |
+| Session management + `/undo` | ✅ | ❌ | Partial | ❌ |
+| Agent profiles | ✅ | ❌ | ❌ | Partial |
+| Local-first / Ollama / BYOK | ✅ | ✅ | ❌ | ❌ |
+| MCP support | ✅ | ❌ | Partial | ✅ |
+| TUI workspace | ✅ | ❌ | ❌ | ❌ |
 
 ---
 
@@ -169,7 +168,7 @@ Your code goes to one place: the LLM provider you configure. Not us.
 
 ---
 
-> ✦ *Not every command is documented here. Discovery is part of the experience.*
+> 💡 Run `/help` inside the workspace. Not every feature is documented here — discovery is part of the experience.
 
 ---
 
@@ -180,3 +179,9 @@ Open an issue or PR. Honest feedback and bug reports are more useful than featur
 See [CONTRIBUTING.md](CONTRIBUTING.md) for project layout and dev setup.
 
 **MIT** — see [LICENSE](LICENSE).
+
+---
+
+<div align="center">
+  <img src="screen_shot.png" alt="Andromity in action" width="100%" />
+</div>

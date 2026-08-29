@@ -206,10 +206,14 @@ async def run_callback_server(
                 _http(writer, 200, _SUCCESS_HTML, b"text/html")
                 if not code_fut.done():
                     code_fut.set_result(code)
-            else:
+            elif path.split("?")[0] in ("/callback", "/"):
+                # Request is to the callback path but state mismatched — genuine CSRF.
                 _http(writer, 403, _error_html("Invalid state — possible CSRF attack."))
                 if not code_fut.done():
                     code_fut.set_result(None)
+            else:
+                # Unrelated path (favicon, OPTIONS preflight, etc.) — ignore silently.
+                _http(writer, 404, b"")
         except Exception as exc:
             log.debug("Callback handler: %s", exc)
             if not code_fut.done():

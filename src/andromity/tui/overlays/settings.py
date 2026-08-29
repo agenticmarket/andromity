@@ -380,10 +380,12 @@ SettingsScreen {
                     yield ListItem(Label(mcp_label),         id="nav-mcp")
                     yield ListItem(Label("Skills"),          id="nav-skills")
                     yield ListItem(Label("Profiles"),        id="nav-profiles")
+                    yield ListItem(Label("Subagents"),       id="nav-subagents")
                     yield ListItem(Label("Trust & Security"),id="nav-trust")
                     yield ListItem(Label("Usage"),           id="nav-usage")
                     yield ListItem(Label("Advanced"),        id="nav-advanced")
                     yield ListItem(Label("About"),           id="nav-about")
+
 
                 with ContentSwitcher(initial="pane-general", id="settings-content"):
 
@@ -503,8 +505,36 @@ SettingsScreen {
                             "commands to manage trust from chat.[/]",
                             classes="section-hint")
 
+                    # ── 6.4 Subagents ─────────────────────────────────────────
+                    with VerticalScroll(id="pane-subagents", classes="settings-pane"):
+                        yield Label("Subagent Configuration", classes="settings-label")
+                        yield Label("Configure AI models, providers, and concurrency limits per subagent role.", classes="section-hint")
+
+                        from andromity.core.subagent_config import DEFAULT_SUBAGENT_ROLES, SubAgentConfigManager
+                        for rname, rcfg in DEFAULT_SUBAGENT_ROLES.items():
+                            cur_cfg = SubAgentConfigManager.get_role_config(rname)
+                            yield Label(f"[bold cyan]{rname.upper()}[/] — [dim]{rcfg.description}[/]", classes="field-label")
+                            with Horizontal(classes="adv-row"):
+                                yield Label("Model:", classes="adv-label")
+                                yield Input(value=cur_cfg.model or "", placeholder="e.g. gemini-2.5-flash", id=f"setting-subagent-model-{rname}", classes="settings-input")
+                            with Horizontal(classes="adv-row"):
+                                yield Label("Provider:", classes="adv-label")
+                                yield Input(value=cur_cfg.provider or "", placeholder="e.g. google", id=f"setting-subagent-provider-{rname}", classes="settings-input")
+
+                        yield Label("\n[bold]Global Subagent Settings[/]", classes="field-label")
+                        with Horizontal(classes="adv-row"):
+                            yield Label("Max Concurrent Subagents:", classes="adv-label")
+                            yield Input(value=str(SubAgentConfigManager.get_max_concurrent()), placeholder="5", id="setting-subagent-max-concurrent", classes="settings-input")
+                        with Horizontal(classes="adv-row"):
+                            yield Label("Execution Timeout (seconds):", classes="adv-label")
+                            yield Input(value=str(int(SubAgentConfigManager.get_default_timeout())), placeholder="180", id="setting-subagent-timeout", classes="settings-input")
+                        with Horizontal(classes="adv-row"):
+                            yield Label("Result Max Tokens (budget):", classes="adv-label")
+                            yield Input(value=str(SubAgentConfigManager.get_result_max_tokens()), placeholder="750", id="setting-subagent-max-tokens", classes="settings-input")
+
                     # ── 6.5 Usage ─────────────────────────────────────────────
                     with VerticalScroll(id="pane-usage", classes="settings-pane"):
+
                         yield Label("Usage Analytics", classes="settings-label")
                         yield Label("Track tokens, costs, and model usage across sessions.", classes="section-hint")
                         with Horizontal(classes="usage-controls-row"):
@@ -1724,6 +1754,33 @@ SettingsScreen {
                     self.app._apply_profile(prof_id)
         except Exception:
             pass
+
+        # 7. Subagents
+        try:
+            from andromity.core.subagent_config import DEFAULT_SUBAGENT_ROLES
+            for rname in DEFAULT_SUBAGENT_ROLES.keys():
+                try:
+                    m_val = self.query_one(f"#setting-subagent-model-{rname}", Input).value.strip() or None
+                    p_val = self.query_one(f"#setting-subagent-provider-{rname}", Input).value.strip() or None
+                    config.set_subagent_role(rname, model=m_val, provider=p_val)
+                except Exception:
+                    pass
+
+            try:
+                max_c = self.query_one("#setting-subagent-max-concurrent", Input).value.strip()
+                if max_c:
+                    config.set("subagents", "max_concurrent", int(max_c))
+                timeout_val = self.query_one("#setting-subagent-timeout", Input).value.strip()
+                if timeout_val:
+                    config.set("subagents", "timeout_seconds", float(timeout_val))
+                tok_val = self.query_one("#setting-subagent-max-tokens", Input).value.strip()
+                if tok_val:
+                    config.set("subagents", "result_max_tokens", int(tok_val))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
 
     def on_key(self, event):
         if event.key == "escape":

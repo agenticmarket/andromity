@@ -108,7 +108,8 @@ async def stream_completion(
         yield Done()
         return
 
-    current_tool_id = None
+    # Map tool_call index → tool_id for interleaved parallel tool call streams
+    open_tools: dict[int, str] = {}
     usage = None
     in_thinking = False
 
@@ -124,13 +125,17 @@ async def stream_completion(
 
             if getattr(delta, "tool_calls", None):
                 for tool_call in delta.tool_calls:
+                    idx = getattr(tool_call, "index", 0) or 0
                     if tool_call.id:
-                        if current_tool_id:
-                            yield ToolCallEnd(tool_id=current_tool_id)
-                        current_tool_id = tool_call.id
-                        yield ToolCallStart(tool_name=tool_call.function.name, tool_id=current_tool_id)
+                        # New tool call starting at this index
+                        if idx in open_tools:
+                            yield ToolCallEnd(tool_id=open_tools[idx])
+                        open_tools[idx] = tool_call.id
+                        yield ToolCallStart(tool_name=tool_call.function.name, tool_id=tool_call.id)
                     if tool_call.function and getattr(tool_call.function, "arguments", None):
-                        yield ToolCallDelta(tool_id=current_tool_id, args_json_chunk=tool_call.function.arguments)
+                        current_id = open_tools.get(idx)
+                        if current_id:
+                            yield ToolCallDelta(tool_id=current_id, args_json_chunk=tool_call.function.arguments)
             elif any(getattr(delta, attr, None) for attr in ["content", "thinking", "reasoning_content", "reasoning", "thought"]):
                 for attr in ["thinking", "reasoning_content", "reasoning", "thought"]:
                     val = getattr(delta, attr, None)
@@ -138,7 +143,7 @@ async def stream_completion(
                         yield ThinkingDelta(text=val)
                         break
                 
-                if getattr(delta, "content", None) and not current_tool_id:
+                if getattr(delta, "content", None) and not open_tools:
                     text = delta.content
                     # Handle <think>...</think> tag boundaries across chunks
                     while text:
@@ -161,9 +166,9 @@ async def stream_completion(
 
             finish_reason = chunk.choices[0].finish_reason
             if finish_reason:
-                if current_tool_id:
-                    yield ToolCallEnd(tool_id=current_tool_id)
-                    current_tool_id = None
+                for tid in list(open_tools.values()):
+                    yield ToolCallEnd(tool_id=tid)
+                open_tools.clear()
 
             if hasattr(chunk, "usage") and chunk.usage:
                 from andromity.core.usage import normalize_usage
