@@ -3103,12 +3103,35 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 3px 10px;
+      padding: 4px 10px;
       font-size: 10px;
       color: var(--muted);
       border-top: 1px solid var(--border);
       background: var(--bg);
       flex-shrink: 0;
+      gap: 8px;
+    }
+    .status-bar-left, .status-bar-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .token-capacity-widget {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+    }
+    .status-bar .prompt-pill-btn {
+      padding: 1px 6px;
+      font-size: 10px;
+      height: 18px;
+      border-radius: 4px;
+    }
+    .status-bar .prompt-pill-btn svg {
+      width: 10px;
+      height: 10px;
     }
 
     /* Trust Prompt Banner */
@@ -3524,19 +3547,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <!-- Status Bar Footer -->
   <div class="status-bar" id="status-bar-footer">
     <div class="status-bar-left">
+      <button class="prompt-pill-btn" id="btn-prompt-profile" title="Agent Profile Persona (Click to cycle)" aria-label="Agent profile">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+          <circle cx="12" cy="7" r="4"></circle>
+        </svg>
+        <span id="prompt-profile-label">${(this._currentProfile || 'builder').toUpperCase()}</span>
+      </button>
       <div class="token-capacity-widget" id="token-capacity-widget" title="Token Usage & Model Capacity">
         <svg class="token-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
         <span id="token-label">0 tokens</span>
         <div class="token-mini-track" id="token-mini-track">
           <div class="token-mini-bar" id="token-mini-bar" style="width: 0%;"></div>
         </div>
-        <button class="prompt-pill-btn" id="btn-prompt-profile" title="Agent Profile Persona (Click to cycle)" aria-label="Agent profile">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-        <circle cx="12" cy="7" r="4"></circle>
-        </svg>
-        <span id="prompt-profile-label">${(this._currentProfile || 'builder').toUpperCase()}</span>
-        </button>
       </div>
     </div>
     <div class="status-bar-right">
