@@ -62,23 +62,14 @@ class Plan:
     # ── Serialisation ─────────────────────────────────────────────────────────
 
     def to_dict(self) -> dict:
-        d = {
+        return {
             "title": self.title,
             "description": self.description,
             "body": self.body,
             "status": self.status,
             "questions": self.questions,
             "project_path": self.project_path,
-            "steps": [],
         }
-        if self.project_path:
-            try:
-                from andromity.core.todo import TodoList
-                tl = TodoList.load(self.project_path)
-                d["steps"] = [item.to_dict() for item in tl.items]
-            except Exception:
-                pass
-        return d
 
     @classmethod
     def from_dict(cls, data: dict, project_path: str = "") -> "Plan":

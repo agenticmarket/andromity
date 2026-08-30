@@ -101,15 +101,15 @@ export class SettingsPanel {
     try {
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       const [configData, models, providers, skills, mcpServers, usage, systemInfo, trustData, crons] = await Promise.all([
-        this._rpcClient.call<any>("config.get", { project_path: workspaceFolder }, 3000).catch(() => ({})),
-        this._rpcClient.call<ModelInfo[]>("config.list_models", {}, 3000).catch(() => []),
-        this._rpcClient.call<ProviderInfo[]>("config.list_providers", {}, 3000).catch(() => []),
-        this._rpcClient.call<any[]>("skills.list", { project_path: workspaceFolder }, 3000).catch(() => []),
-        this._rpcClient.call<any[]>("mcp.list", {}, 3000).catch(() => []),
-        this._rpcClient.call<any>("usage.get", {}, 3000).catch(() => ({})),
-        this._rpcClient.call<any>("system.info", {}, 3000).catch(() => ({})),
-        this._rpcClient.call<any>("trust.status", { project_path: workspaceFolder }, 3000).catch(() => ({ is_trusted: true, trusted_projects: [] })),
-        this._rpcClient.call<any[]>("cron.list", { project_path: workspaceFolder }, 3000).catch(() => []),
+        this._rpcClient.call<any>("config.get", { project_path: workspaceFolder }, 15000).catch(() => ({})),
+        this._rpcClient.call<ModelInfo[]>("config.list_models", {}, 15000).catch(() => []),
+        this._rpcClient.call<ProviderInfo[]>("config.list_providers", {}, 15000).catch(() => []),
+        this._rpcClient.call<any[]>("skills.list", { project_path: workspaceFolder }, 15000).catch(() => []),
+        this._rpcClient.call<any[]>("mcp.list", {}, 15000).catch(() => []),
+        this._rpcClient.call<any>("usage.get", {}, 15000).catch(() => ({})),
+        this._rpcClient.call<any>("system.info", {}, 15000).catch(() => ({})),
+        this._rpcClient.call<any>("trust.status", { project_path: workspaceFolder }, 15000).catch(() => ({ is_trusted: true, trusted_projects: [] })),
+        this._rpcClient.call<any[]>("cron.list", { project_path: workspaceFolder }, 15000).catch(() => []),
       ]);
 
       const vscodeConfig = vscode.workspace.getConfiguration("andromity");
@@ -307,8 +307,42 @@ export class SettingsPanel {
       }
 
       case "open_url": {
-        if (message.url) {
+        if (message.url && typeof message.url === "string" && message.url.startsWith("https://")) {
           vscode.env.openExternal(vscode.Uri.parse(message.url));
+        }
+        break;
+      }
+
+      case "check_setup": {
+        vscode.commands.executeCommand("andromity.checkSetup");
+        break;
+      }
+
+      case "restartDaemon": {
+        vscode.commands.executeCommand("andromity.restartServer");
+        break;
+      }
+
+      case "configure_python_path": {
+        // Keep for backwards compat but open settings instead
+        vscode.commands.executeCommand("workbench.action.openSettings", "andromity.pythonPath");
+        break;
+      }
+
+      case "fetch_usage": {
+        try {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          const usage = await this._rpcClient.call<any>("usage.get", {
+            time_range: message.timeRange || "all",
+            project_path: workspaceFolder,
+          }, 3000).catch(() => ({}));
+          this._panel.webview.postMessage({
+            type: "usage_loaded",
+            usage: usage || {},
+            timeRange: message.timeRange || "all",
+          });
+        } catch (err: any) {
+          console.error("[SettingsPanel] Failed to fetch usage:", err);
         }
         break;
       }
@@ -344,6 +378,13 @@ export class SettingsPanel {
 
       case "cron_delete": {
         try {
+          const confirm = await vscode.window.showWarningMessage(
+            "Are you sure you want to delete this scheduled cron job?",
+            { modal: true },
+            "Delete"
+          );
+          if (confirm !== "Delete") break;
+
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           await this._rpcClient.call("cron.delete", {
             id: message.id,
@@ -361,12 +402,34 @@ export class SettingsPanel {
         try {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           vscode.window.showInformationMessage(`Triggering cron job "${message.name || message.id}"...`);
-          // Also dispatch as prompt in Chat if requested
+          await this._rpcClient.call("cron.run_now", {
+            id: message.id,
+            project_path: workspaceFolder,
+          });
+          await this.loadData();
           if (message.prompt) {
             await vscode.commands.executeCommand("andromity.sendPrompt", message.prompt);
           }
         } catch (e: any) {
           vscode.window.showErrorMessage(`Failed to trigger cron job: ${e.message}`);
+        }
+        break;
+      }
+
+      case "fetch_cron_runs": {
+        try {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          const runs = await this._rpcClient.call<any[]>("cron.runs", {
+            id: message.id,
+            project_path: workspaceFolder,
+          });
+          this._panel.webview.postMessage({
+            type: "cron_runs_loaded",
+            jobId: message.id,
+            runs: runs || [],
+          });
+        } catch (e: any) {
+          vscode.window.showErrorMessage(`Failed to fetch cron history: ${e.message}`);
         }
         break;
       }
@@ -500,6 +563,58 @@ export class SettingsPanel {
 
     .cron-card:hover {
       border-color: var(--card-hover-border);
+    }
+
+    /* Usage Analytics Styles */
+    .usage-progress-bar-wrap {
+      width: 100%;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-top: 4px;
+    }
+    .usage-progress-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.4s ease;
+    }
+    .usage-item-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px 10px;
+      background: rgba(255, 255, 255, 0.025);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+    }
+    .usage-item-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+    }
+    .usage-chart-svg {
+      width: 100%;
+      height: 160px;
+      display: block;
+    }
+    .chart-bar {
+      fill: #2ea043;
+      rx: 2;
+      ry: 2;
+      transition: fill 0.15s, opacity 0.15s;
+      cursor: pointer;
+    }
+    .chart-bar:hover {
+      fill: #3fb950;
+      opacity: 0.9;
+    }
+    .chart-axis {
+      font-size: 10px;
+      fill: var(--text-muted);
+      text-anchor: middle;
+      font-family: var(--font-family);
     }
 
     .cron-card-left {
@@ -1384,7 +1499,21 @@ export class SettingsPanel {
               <option value="every 6h">Every 6 hours (every 6h)</option>
               <option value="every 12h">Every 12 hours (every 12h)</option>
               <option value="every 1d">Every 1 day (every 1d)</option>
+              <option value="custom">Custom Schedule Expression...</option>
             </select>
+            <input type="text" id="cron-custom-schedule" style="display:none; margin-top:6px;" placeholder="e.g. every 45m or every 3h">
+          </div>
+        </div>
+        <div class="cron-form-row">
+          <div class="cron-form-col">
+            <label>AI Model</label>
+            <select id="cron-model-select">
+              <option value="">Default Active Model</option>
+            </select>
+          </div>
+          <div class="cron-form-col">
+            <label>Allowed Shell Commands (Optional)</label>
+            <input type="text" id="cron-commands-input" placeholder="e.g. pytest, npm test, git status">
           </div>
         </div>
         <div class="cron-form-row">
@@ -1450,22 +1579,77 @@ export class SettingsPanel {
       <div class="section-header">
         <div>
           <h2 class="section-title">Usage & Cost Analytics</h2>
-          <p class="section-desc">Monitor token consumption, prompt cache efficiency, and estimated expenditures.</p>
+          <p class="section-desc">Track token volume, estimated API expenditure, model usage share, and session history.</p>
+        </div>
+        <div class="filter-chips" id="usage-range-chips" style="margin: 0;">
+          <div class="chip active" data-usage-range="all">All Time</div>
+          <div class="chip" data-usage-range="month">30 Days</div>
+          <div class="chip" data-usage-range="week">7 Days</div>
+          <div class="chip" data-usage-range="today">Today</div>
         </div>
       </div>
 
       <div class="stats-row">
         <div class="stat-card">
-          <div class="stat-val" id="stat-tokens">0</div>
-          <div class="stat-lbl">Session Tokens</div>
+          <div class="stat-val" id="stat-usage-tokens">0</div>
+          <div class="stat-lbl">Total Tokens</div>
         </div>
         <div class="stat-card">
-          <div class="stat-val" id="stat-cost">$0.0000</div>
-          <div class="stat-lbl">Estimated Session Cost</div>
+          <div class="stat-val" id="stat-usage-cost">$0.0000</div>
+          <div class="stat-lbl">Estimated Cost (USD)</div>
         </div>
         <div class="stat-card">
-          <div class="stat-val" id="stat-messages">0</div>
-          <div class="stat-lbl">Total Interaction Turns</div>
+          <div class="stat-val" id="stat-usage-sessions">0</div>
+          <div class="stat-lbl">Total Sessions</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" id="stat-usage-avg">0</div>
+          <div class="stat-lbl">Avg Tokens / Session</div>
+        </div>
+      </div>
+
+      <!-- GitHub-Style Daily Activity Chart -->
+      <div class="settings-card" style="margin-top: 14px;">
+        <div class="setting-label" style="display:flex; justify-content:space-between; align-items:center;">
+          <span>Daily Token Activity (GitHub Style)</span>
+          <span style="font-size:11px; font-weight:normal; color:var(--text-muted);">Last 14 Days</span>
+        </div>
+        <div id="usage-chart-container" style="margin-top: 12px; overflow-x: auto;"></div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-top: 14px;">
+        <!-- Model Distribution Breakdown -->
+        <div class="settings-card">
+          <div class="setting-label">Model Distribution</div>
+          <div class="setting-desc">Token consumption breakdown across AI models</div>
+          <div id="usage-models-breakdown" style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px;"></div>
+        </div>
+
+        <!-- Provider Distribution Breakdown -->
+        <div class="settings-card">
+          <div class="setting-label">Provider Distribution</div>
+          <div class="setting-desc">Token share across configured API providers</div>
+          <div id="usage-providers-breakdown" style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px;"></div>
+        </div>
+      </div>
+
+      <!-- Recent Sessions Table -->
+      <div class="settings-card" style="margin-top: 14px;">
+        <div class="setting-label">Recent Session Activity</div>
+        <div class="setting-desc">Detailed log of past agent conversations and token volume</div>
+        <div style="overflow-x: auto; margin-top: 10px;">
+          <table class="diag-table" id="usage-sessions-table">
+            <thead>
+              <tr style="background: rgba(255,255,255,0.03); border-bottom: 1px solid var(--card-border);">
+                <th style="text-align:left; padding:8px 12px; font-size:11px; color:var(--text-muted);">Session Name</th>
+                <th style="text-align:left; padding:8px 12px; font-size:11px; color:var(--text-muted);">Model / Provider</th>
+                <th style="text-align:right; padding:8px 12px; font-size:11px; color:var(--text-muted);">Tokens</th>
+                <th style="text-align:right; padding:8px 12px; font-size:11px; color:var(--text-muted);">Cost (USD)</th>
+                <th style="text-align:right; padding:8px 12px; font-size:11px; color:var(--text-muted);">Date</th>
+              </tr>
+            </thead>
+            <tbody id="usage-sessions-body"></tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -1614,8 +1798,13 @@ export class SettingsPanel {
       <div class="section-header">
         <div>
           <h2 class="section-title">About & System Diagnostics</h2>
-          <p class="section-desc">Daemon runtime details, environment paths, and registered tool capabilities.</p>
+          <p class="section-desc">AI Engine runtime details, environment paths, and registered tool capabilities.</p>
         </div>
+      </div>
+
+      <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px;">
+        <button class="btn" data-action="run-setup-check">Run Diagnostics</button>
+        <button class="btn btn-secondary" data-action="restart-daemon">Restart Engine</button>
       </div>
 
       <div class="settings-card" style="max-width: 800px; margin-bottom: 16px;">
@@ -1625,12 +1814,16 @@ export class SettingsPanel {
             <td id="diag-version">v0.2.3</td>
           </tr>
           <tr>
-            <td>Python Version</td>
+            <td>Engine Mode</td>
+            <td id="diag-engine-mode">Loading...</td>
+          </tr>
+          <tr>
+            <td>Runtime Version</td>
             <td id="diag-py-ver">Loading...</td>
           </tr>
           <tr>
-            <td>Python Executable</td>
-            <td id="diag-py-exe">Loading...</td>
+            <td>AI Engine Executable</td>
+            <td id="diag-py-exe" style="font-size:11px; word-break:break-all;">Loading...</td>
           </tr>
           <tr>
             <td>Operating System</td>
@@ -1785,15 +1978,50 @@ export class SettingsPanel {
       vscode.postMessage({ type: "toggle_sound", value: checkSound.checked });
     });
 
-    // Trust Toggle
-    const btnToggleTrust = document.getElementById("btn-toggle-current-trust");
-    btnToggleTrust.addEventListener("click", () => {
-      if (trustInfo.is_trusted) {
-        vscode.postMessage({ type: "revoke_trust", path: currentWorkspacePath });
-      } else {
-        vscode.postMessage({ type: "trust_folder", path: currentWorkspacePath });
+    // Delegated actions
+    document.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-action]");
+      if (!btn) return;
+      const action = btn.dataset.action;
+      
+      if (action === "select-model") {
+        selectModel(btn.dataset.id, btn.dataset.provider);
+      } else if (action === "save-key") {
+        saveKey(btn.dataset.id);
+      } else if (action === "open-portal") {
+        openExternalUrl(btn.dataset.url);
+      } else if (action === "revoke-trust") {
+        revokeTrustPath(btn.dataset.path);
+      } else if (action === "restart-daemon") {
+        vscode.postMessage({ command: "restartDaemon" });
+      } else if (action === "run-setup-check") {
+        vscode.postMessage({ type: "check_setup" });
+      } else if (action === "configure-python-path") {
+        vscode.postMessage({ type: "configure_python_path" });
+      } else if (action === "install-python-web") {
+        vscode.postMessage({ type: "install_python" });
+      } else if (action === "install-skill") {
+        const name = btn.dataset.skillName;
+        const sourceId = btn.dataset.sourceId;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinning-loader"></span> Installing...';
+        vscode.postMessage({ type: "install_skill", name, sourceId });
+      } else if (action === "history") {
+        vscode.postMessage({ type: "cron_run_history", id: btn.dataset.id });
       }
     });
+
+    const usageRangeChips = document.getElementById("usage-range-chips");
+    if (usageRangeChips) {
+      usageRangeChips.addEventListener("click", (e) => {
+        const chip = e.target.closest("[data-usage-range]");
+        if (!chip) return;
+        usageRangeChips.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
+        chip.classList.add("active");
+        const range = chip.dataset.usageRange || "all";
+        vscode.postMessage({ type: "fetch_usage", timeRange: range });
+      });
+    }
 
     window.addEventListener("message", (event) => {
       const msg = event.data;
@@ -1810,6 +2038,7 @@ export class SettingsPanel {
           allRemoteSkills = msg.remoteSkills || [];
           allMcpServers = msg.mcpServers || [];
           trustInfo = msg.trustData || {};
+          usageData = msg.usage || {};
           currentWorkspacePath = msg.currentWorkspace || trustInfo.project_path || "";
           activeModelId = currentConfig.default_model || "";
           activeModelProvider = (currentConfig.default_provider || "").toLowerCase();
@@ -1833,13 +2062,20 @@ export class SettingsPanel {
           if (checkAutoCompact) checkAutoCompact.checked = currentConfig.auto_compact !== false;
           if (checkSound) checkSound.checked = msg.soundNotifications !== false;
 
-          const usage = msg.usage || {};
-          setEl("stat-tokens", (usage.session_tokens || 0).toLocaleString());
-          setEl("stat-cost", "$" + (usage.session_cost_usd || 0).toFixed(4));
-          setEl("stat-messages", usage.message_count || 0);
-
           const sys = msg.systemInfo || {};
           if (sys.version) setEl("diag-version", "v" + sys.version);
+
+          // Engine mode: show badge style
+          if (sys.engine_mode) {
+            const modeEl = document.getElementById("diag-engine-mode");
+            if (modeEl) {
+              const isBundled = sys.is_bundled;
+              modeEl.innerHTML = isBundled
+                ? '<span style="color:#4ade80;font-weight:600;">⚡ ' + sys.engine_mode + ' (Zero-Python)</span>'
+                : '<span style="color:#60a5fa;">' + sys.engine_mode + '</span>';
+            }
+          }
+
           if (sys.python_version) setEl("diag-py-ver", sys.python_version);
           if (sys.python_executable) setEl("diag-py-exe", sys.python_executable);
           if (sys.os) setEl("diag-os", sys.os);
@@ -1851,6 +2087,12 @@ export class SettingsPanel {
             diagTools.innerHTML = sys.tools.map(t => '<span class="badge blue">' + escapeHtml(t) + '</span>').join('');
           }
 
+          const cronModelSel = document.getElementById("cron-model-select");
+          if (cronModelSel && allModels && allModels.length > 0) {
+            cronModelSel.innerHTML = '<option value="">Default Active Model (' + escapeHtml(activeModelId) + ')</option>' +
+              allModels.map(m => '<option value="' + escapeHtml(m.id) + '">' + escapeHtml(m.name || m.id) + ' (' + escapeHtml(m.provider || '') + ')</option>').join('');
+          }
+
           allCrons = msg.crons || [];
           renderModels();
           renderProviders();
@@ -1858,6 +2100,12 @@ export class SettingsPanel {
           renderMcp();
           renderCrons();
           renderTrust();
+          renderUsage();
+          break;
+        }
+        case "usage_loaded": {
+          usageData = msg.usage || {};
+          renderUsage();
           break;
         }
         case "models_refreshed": {
@@ -1898,6 +2146,47 @@ export class SettingsPanel {
           renderSkills();
           break;
         }
+        case "cron_runs_loaded": {
+          const runsDiv = document.getElementById("cron-runs-" + msg.jobId);
+          if (runsDiv) {
+            const runs = msg.runs || [];
+            if (runs.length === 0) {
+              runsDiv.innerHTML = '<div style="font-size:11px; color:var(--text-muted); padding:4px 0;">No recorded runs yet for this job. Click "Run Now" to trigger.</div>';
+            } else {
+              runsDiv.innerHTML = '<div style="font-size:11px; font-weight:600; margin-bottom:8px; color:var(--fg); display:flex; justify-content:space-between; align-items:center;"><span>Execution History (' + runs.length + ' runs):</span><button class="btn btn-secondary" style="padding:1px 6px; font-size:10px;" data-action="history" data-id="' + escapeHtml(msg.jobId) + '">Refresh</button></div>' +
+                runs.map(r => {
+                  const runTime = r.started_at ? new Date(r.started_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Unknown time';
+                  const isOk = r.status === 'success';
+                  const stClass = isOk ? 'active' : (r.status === 'running' ? 'badge blue' : 'paused');
+                  const dur = r.duration_ms ? ((r.duration_ms / 1000).toFixed(1) + 's') : '';
+                  const toolsStr = r.tools_used && r.tools_used.length > 0 ? r.tools_used.join(', ') : '';
+                  const outText = r.output || r.output_preview || '';
+
+                  return '<div style="display:flex; flex-direction:column; gap:4px; padding:8px 10px; background:rgba(255,255,255,0.03); margin-bottom:6px; font-size:11.5px; border:1px solid var(--border); border-radius:6px;">' +
+                    '<div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">' +
+                      '<div style="display:flex; align-items:center; gap:6px;">' +
+                        '<span class="cron-status-pill ' + stClass + '" style="font-size:9.5px; padding:2px 6px;">' + escapeHtml((r.status || 'unknown').toUpperCase()) + '</span>' +
+                        '<span style="font-weight:500;">' + escapeHtml(runTime) + '</span>' +
+                      '</div>' +
+                      '<div style="display:flex; align-items:center; gap:6px;">' +
+                        (r.model ? ('<span style="color:var(--text-muted); font-size:10px;">' + escapeHtml(r.model) + '</span>') : '') +
+                        (dur ? ('<span style="color:var(--accent); font-size:10.5px; font-weight:600;">' + escapeHtml(dur) + '</span>') : '') +
+                      '</div>' +
+                    '</div>' +
+                    (toolsStr ? ('<div style="font-size:10.5px; color:var(--text-muted); margin-top:2px;"><span style="font-weight:600;">Tools:</span> ' + escapeHtml(toolsStr) + '</div>') : '') +
+                    (outText ? (
+                      '<details style="margin-top:4px; background:rgba(0,0,0,0.25); border:1px solid var(--border); border-radius:4px; padding:4px 8px;">' +
+                        '<summary style="font-size:11px; font-weight:600; color:var(--accent); cursor:pointer; user-select:none;">AI Model Response Output</summary>' +
+                        '<div style="font-family:var(--vscode-editor-font-family, monospace); font-size:11px; color:var(--fg); white-space:pre-wrap; line-height:1.5; margin-top:6px; max-height:220px; overflow-y:auto; padding-top:4px; border-top:1px solid rgba(255,255,255,0.06);">' + escapeHtml(outText) + '</div>' +
+                      '</details>'
+                    ) : '') +
+                    (r.error ? ('<div style="color:var(--red); font-size:11px; margin-top:2px; padding:4px 6px; background:rgba(239,68,68,0.1); border-radius:4px; border:1px solid rgba(239,68,68,0.25);">Error: ' + escapeHtml(r.error) + '</div>') : '') +
+                  '</div>';
+                }).join('');
+            }
+          }
+          break;
+        }
       }
     });
 
@@ -1911,10 +2200,17 @@ export class SettingsPanel {
         .replace(/'/g, "&#039;");
     }
 
+    function formatTokens(n) {
+      if (!n || isNaN(n)) return '0';
+      if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, "") + 'M';
+      if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + 'k';
+      return Number(n).toLocaleString();
+    }
+
     function formatCtx(limit) {
       if (!limit) return "";
       if (typeof limit === "string") return limit;
-      if (limit >= 1000000) return (limit / 1000000).toFixed(1).replace(/\\.0$/, "") + "M ctx";
+      if (limit >= 1000000) return (limit / 1000000).toFixed(1).replace(/\.0$/, "") + "M ctx";
       if (limit >= 1000) return Math.round(limit / 1000) + "K ctx";
       return limit + " ctx";
     }
@@ -1943,10 +2239,6 @@ export class SettingsPanel {
       vscode.postMessage({ type: "revoke_trust", path });
     };
 
-    window.installSkill = function(name, sourceId) {
-      vscode.postMessage({ type: "install_skill", name, sourceId });
-    };
-
     function renderTrust() {
       const isTrusted = trustInfo.is_trusted;
       const badge = document.getElementById("trust-status-badge");
@@ -1954,35 +2246,32 @@ export class SettingsPanel {
       const desc = document.getElementById("trust-current-status-desc");
 
       if (isTrusted) {
-        badge.className = "badge green";
-        badge.textContent = "Trusted Workspace";
-        btn.className = "btn btn-danger";
-        btn.textContent = "Revoke Trust";
-        desc.textContent = "Folder: " + (currentWorkspacePath || "Current Project") + " (Write and shell execution fully enabled)";
+        if (badge) { badge.className = "badge green"; badge.textContent = "Trusted Workspace"; }
+        if (btn) { btn.className = "btn btn-danger"; btn.textContent = "Revoke Trust"; }
+        if (desc) desc.textContent = "Folder: " + (currentWorkspacePath || "Current Project") + " (Write and shell execution fully enabled)";
       } else {
-        badge.className = "badge orange";
-        badge.textContent = "Untrusted / Restricted";
-        btn.className = "btn";
-        btn.textContent = "Trust Folder";
-        desc.textContent = "Folder: " + (currentWorkspacePath || "Current Project") + " (Restricted Mode — file writes and shell commands require confirmation)";
+        if (badge) { badge.className = "badge orange"; badge.textContent = "Untrusted / Restricted"; }
+        if (btn) { btn.className = "btn"; btn.textContent = "Trust Folder"; }
+        if (desc) desc.textContent = "Folder: " + (currentWorkspacePath || "Current Project") + " (Restricted Mode — file writes and shell commands require confirmation)";
       }
 
       const list = document.getElementById("trusted-folders-list");
+      if (!list) return;
       const projects = trustInfo.trusted_projects || [];
       if (projects.length === 0) {
-        list.innerHTML = \`<div style="color: var(--text-muted); font-size: 12px;">No trusted folders recorded yet.</div>\`;
+        list.innerHTML = '<div style="color: var(--text-muted); font-size: 12px;">No trusted folders recorded yet.</div>';
         return;
       }
 
-      list.innerHTML = projects.map(p => \`
-        <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: rgba(255,255,255,0.03); border: 1px solid var(--card-border); border-radius: 4px;">
-          <div>
-            <div style="font-size: 12px; font-weight: 500; word-break: break-all;">\${escapeHtml(p.path)}</div>
-            <div style="font-size: 10px; color: var(--text-muted);">Trusted at: \${escapeHtml(p.trusted_at ? p.trusted_at.slice(0,10) : 'N/A')}</div>
-          </div>
-          <button class="btn btn-danger" style="padding: 3px 8px; font-size: 11px;" onclick="revokeTrustPath('\${escapeHtml(p.path)}')">Revoke</button>
-        </div>
-      \`).join("");
+      list.innerHTML = projects.map(p => 
+        '<div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: rgba(255,255,255,0.03); border: 1px solid var(--card-border); border-radius: 4px;">' +
+          '<div>' +
+            '<div style="font-size: 12px; font-weight: 500; word-break: break-all;">' + escapeHtml(p.path) + '</div>' +
+            '<div style="font-size: 10px; color: var(--text-muted);">Trusted at: ' + escapeHtml(p.trusted_at ? p.trusted_at.slice(0,10) : 'N/A') + '</div>' +
+          '</div>' +
+          '<button class="btn btn-danger" style="padding: 3px 8px; font-size: 11px;" data-action="revoke-trust" data-path="' + escapeHtml(p.path) + '">Revoke</button>' +
+        '</div>'
+      ).join("");
     }
 
     function updateActiveBanner() {
@@ -1994,9 +2283,12 @@ export class SettingsPanel {
       const target = foundExact || fallback;
       if (!target) {
         banner.style.display = "flex";
-        document.getElementById("active-banner-provider").textContent = activeModelProvider || "unknown";
-        document.getElementById("active-banner-name").textContent = activeModelId;
-        document.getElementById("active-banner-id").textContent = activeModelId;
+        const provEl = document.getElementById("active-banner-provider");
+        if (provEl) provEl.textContent = activeModelProvider || "unknown";
+        const nameEl = document.getElementById("active-banner-name");
+        if (nameEl) nameEl.textContent = activeModelId;
+        const idEl = document.getElementById("active-banner-id");
+        if (idEl) idEl.textContent = activeModelId;
         const ctxEl = document.getElementById("active-banner-ctx");
         if (ctxEl) ctxEl.style.display = "none";
         const prEl = document.getElementById("active-banner-pricing");
@@ -2004,9 +2296,12 @@ export class SettingsPanel {
         return;
       }
       banner.style.display = "flex";
-      document.getElementById("active-banner-provider").textContent = target.provider;
-      document.getElementById("active-banner-name").textContent = target.name || target.id;
-      document.getElementById("active-banner-id").textContent = target.id;
+      const provEl = document.getElementById("active-banner-provider");
+      if (provEl) provEl.textContent = target.provider || "";
+      const nameEl = document.getElementById("active-banner-name");
+      if (nameEl) nameEl.textContent = target.name || target.id;
+      const idEl = document.getElementById("active-banner-id");
+      if (idEl) idEl.textContent = target.id;
       const ctxStr = target.context || formatCtx(target.context_limit);
       const ctxEl = document.getElementById("active-banner-ctx");
       if (ctxEl) {
@@ -2018,6 +2313,7 @@ export class SettingsPanel {
 
     function renderModels() {
       const grid = document.getElementById("models-grid");
+      if (!grid) return;
       updateActiveBanner();
       const filtered = allModels.filter(m => {
         if (activeProvider !== "all" && m.provider !== activeProvider) {
@@ -2042,15 +2338,13 @@ export class SettingsPanel {
       });
 
       if (filtered.length === 0) {
-        grid.innerHTML = \`
-          <div class="empty-state" style="grid-column: 1 / -1;">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
-            <div>No matching models found. Try clearing filters or refreshing catalog.</div>
-          </div>
-        \`;
+        grid.innerHTML = '<div class="empty-state" style="grid-column: 1 / -1;">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+            '<circle cx="11" cy="11" r="8"></circle>' +
+            '<line x1="21" y1="21" x2="16.65" y2="16.65"></line>' +
+          '</svg>' +
+          '<div>No matching models found. Try clearing filters or refreshing catalog.</div>' +
+        '</div>';
         return;
       }
 
@@ -2059,39 +2353,37 @@ export class SettingsPanel {
         const ctxStr = m.context || formatCtx(m.context_limit);
         const pricingStr = m.is_free ? "Free Tier" : (m.pricing || "");
 
-        return \`
-          <div class="model-card \${isActive ? 'active-model' : ''}">
-            <div class="model-card-top">
-              <div class="model-header-row">
-                <div>
-                  <div class="model-name">\${escapeHtml(m.name || m.id)}</div>
-                  <div class="model-id">\${escapeHtml(m.id)}</div>
-                </div>
-                <span class="badge blue">\${escapeHtml(m.provider)}</span>
-              </div>
-              <div class="model-desc">\${escapeHtml(m.desc || "High-performance AI model.")}</div>
-              <div class="model-badges">
-                \${ctxStr ? \`<span class="badge purple">\${escapeHtml(ctxStr)}</span>\` : ''}
-                \${m.is_free ? \`<span class="badge green">Free Tier</span>\` : ''}
-                \${(m.tags || []).includes('coding') ? \`<span class="badge orange">Coding</span>\` : ''}
-                \${(m.tags || []).includes('reasoning') ? \`<span class="badge blue">Reasoning</span>\` : ''}
-              </div>
-            </div>
-
-            <div class="model-card-bottom">
-              <div class="model-pricing \${m.is_free ? 'free' : ''}">\${escapeHtml(pricingStr)}</div>
-              \${isActive
-                ? \`<span class="active-badge"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg> Active</span>\`
-                : \`<button class="select-btn" onclick="selectModel('\${escapeHtml(m.id)}', '\${escapeHtml(m.provider)}')">Select Model</button>\`
-              }
-            </div>
-          </div>
-        \`;
+        return '<div class="model-card ' + (isActive ? 'active-model' : '') + '">' +
+          '<div class="model-card-top">' +
+            '<div class="model-header-row">' +
+              '<div>' +
+                '<div class="model-name">' + escapeHtml(m.name || m.id) + '</div>' +
+                '<div class="model-id">' + escapeHtml(m.id) + '</div>' +
+              '</div>' +
+              '<span class="badge blue">' + escapeHtml(m.provider) + '</span>' +
+            '</div>' +
+            '<div class="model-desc">' + escapeHtml(m.desc || "High-performance AI model.") + '</div>' +
+            '<div class="model-badges">' +
+              (ctxStr ? '<span class="badge purple">' + escapeHtml(ctxStr) + '</span>' : '') +
+              (m.is_free ? '<span class="badge green">Free Tier</span>' : '') +
+              ((m.tags || []).includes('coding') ? '<span class="badge orange">Coding</span>' : '') +
+              ((m.tags || []).includes('reasoning') ? '<span class="badge blue">Reasoning</span>' : '') +
+            '</div>' +
+          '</div>' +
+          '<div class="model-card-bottom">' +
+            '<div class="model-pricing ' + (m.is_free ? 'free' : '') + '">' + escapeHtml(pricingStr) + '</div>' +
+            (isActive
+              ? '<span class="active-badge"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg> Active</span>'
+              : '<button class="select-btn" data-action="select-model" data-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider) + '">Select Model</button>'
+            ) +
+          '</div>' +
+        '</div>';
       }).join("");
     }
 
     function renderProviders() {
       const grid = document.getElementById("keys-grid");
+      if (!grid) return;
       const providerMeta = {
         openrouter: { name: "OpenRouter", desc: "Access 396+ models across Claude, GPT, Gemini, Llama, DeepSeek with unified billing.", portal: "https://openrouter.ai/keys" },
         anthropic: { name: "Anthropic", desc: "Direct access to Claude Opus 4.6, Claude Sonnet 4.6/3.7, and Claude Haiku.", portal: "https://console.anthropic.com/settings/keys" },
@@ -2107,108 +2399,294 @@ export class SettingsPanel {
         const meta = providerMeta[p.id] || { name: p.name || p.id, desc: "AI Provider API", portal: p.portal || "" };
         const hasKey = p.has_key || p.id === "ollama";
 
-        return \`
-          <div class="item-card">
-            <div class="item-card-top">
-              <div class="item-card-title">
-                <span class="status-dot \${hasKey ? 'connected' : ''}"></span>
-                <span>\${escapeHtml(meta.name)}</span>
-              </div>
-              <span class="badge \${hasKey ? 'green' : ''}">\${hasKey ? 'Connected' : 'Missing Key'}</span>
-            </div>
+        return '<div class="item-card">' +
+          '<div class="item-card-top">' +
+            '<div class="item-card-title">' +
+              '<span class="status-dot ' + (hasKey ? 'connected' : '') + '"></span>' +
+              '<span>' + escapeHtml(meta.name) + '</span>' +
+            '</div>' +
+            '<span class="badge ' + (hasKey ? 'green' : '') + '">' + (hasKey ? 'Connected' : 'Missing Key') + '</span>' +
+          '</div>' +
+          '<div class="item-card-desc">' + escapeHtml(meta.desc) + '</div>' +
+          (p.id !== 'ollama'
+            ? '<div class="key-input-row">' +
+                '<input type="password" class="key-input" id="key-input-' + escapeHtml(p.id) + '" placeholder="' + (hasKey ? '•••••••••••••••• (Configured)' : 'Paste API Key here…') + '">' +
+                '<button class="btn" data-action="save-key" data-id="' + escapeHtml(p.id) + '">Save</button>' +
+              '</div>' +
+              (meta.portal ? '<a class="portal-link" data-action="open-portal" data-url="' + escapeHtml(meta.portal) + '">Get API Key &rarr;</a>' : '')
+            : '<div class="item-card-desc" style="color: var(--tag-green-fg); font-weight: 500;">Ready (No key required for local Ollama daemon)</div>'
+          ) +
+        '</div>';
+      }).join("");
+    }
 
-            <div class="item-card-desc">\${escapeHtml(meta.desc)}</div>
+    function renderUsage() {
+      const tokensEl = document.getElementById("stat-usage-tokens");
+      const costEl = document.getElementById("stat-usage-cost");
+      const sessionsEl = document.getElementById("stat-usage-sessions");
+      const avgEl = document.getElementById("stat-usage-avg");
 
-            \${p.id !== 'ollama' ? \`
-              <div class="key-input-row">
-                <input type="password" class="key-input" id="key-input-\${p.id}" placeholder="\${hasKey ? '•••••••••••••••• (Configured)' : 'Paste API Key here…'}">
-                <button class="btn" onclick="saveKey('\${p.id}')">Save</button>
-              </div>
-              \${meta.portal ? \`<a class="portal-link" onclick="openExternalUrl('\${meta.portal}')">Get API Key &rarr;</a>\` : ''}
-            \` : \`
-              <div class="item-card-desc" style="color: var(--tag-green-fg); font-weight: 500;">Ready (No key required for local Ollama daemon)</div>
-            \`}
-          </div>
-        \`;
+      const totalTokens = usageData.total_tokens || 0;
+      const totalCost = usageData.total_cost_usd || 0;
+      const sessions = usageData.sessions || [];
+      const totalSessions = usageData.total_sessions || sessions.length || 0;
+      const avgTokens = totalSessions > 0 ? Math.round(totalTokens / totalSessions) : 0;
+
+      if (tokensEl) tokensEl.textContent = formatTokens(totalTokens);
+      if (costEl) costEl.textContent = '$' + Number(totalCost).toFixed(4);
+      if (sessionsEl) sessionsEl.textContent = totalSessions;
+      if (avgEl) avgEl.textContent = formatTokens(avgTokens);
+
+      renderUsageChart(sessions);
+      renderModelBreakdown();
+      renderProviderBreakdown();
+      renderSessionsTable(sessions);
+    }
+
+    function renderUsageChart(sessions) {
+      const container = document.getElementById("usage-chart-container");
+      if (!container) return;
+
+      const days = [];
+      const now = new Date();
+      const dailyMap = {};
+
+      for (let i = 13; i >= 0; i--) {
+        const d = new Date(now);
+        d.setDate(d.getDate() - i);
+        const iso = d.toISOString().slice(0, 10);
+        days.push({
+          dateIso: iso,
+          label: (d.getMonth() + 1) + '/' + d.getDate(),
+          dayName: d.toLocaleDateString([], { weekday: 'short' }),
+          tokens: 0,
+          cost: 0,
+          count: 0
+        });
+        dailyMap[iso] = days[days.length - 1];
+      }
+
+      if (Array.isArray(sessions)) {
+        sessions.forEach(s => {
+          const sDate = (s.created_at || s.updated_at || "").slice(0, 10);
+          if (dailyMap[sDate]) {
+            dailyMap[sDate].tokens += (s.token_total || s.tokens || 0);
+            dailyMap[sDate].cost += (s.cost_usd || 0);
+            dailyMap[sDate].count += 1;
+          }
+        });
+      }
+
+      const maxTokens = Math.max(...days.map(d => d.tokens), 1000);
+      const chartHeight = 110;
+      const svgWidth = 640;
+      const barWidth = 32;
+      const gap = 12;
+      const leftPad = 20;
+
+      let barsSvg = '';
+      days.forEach((d, idx) => {
+        const x = leftPad + idx * (barWidth + gap);
+        const barH = d.tokens > 0 ? Math.max(6, Math.round((d.tokens / maxTokens) * chartHeight)) : 3;
+        const y = chartHeight - barH + 15;
+        const opacity = d.tokens > 0 ? Math.min(1, 0.4 + (d.tokens / maxTokens) * 0.6) : 0.2;
+        const color = d.tokens > 0 ? 'var(--tag-green-fg, #2ea043)' : 'rgba(255,255,255,0.15)';
+
+        barsSvg += '<g>' +
+          '<rect class="chart-bar" x="' + x + '" y="' + y + '" width="' + barWidth + '" height="' + barH + '" rx="3" ry="3" fill="' + color + '" opacity="' + opacity + '">' +
+            '<title>' + escapeHtml(d.dayName + ' ' + d.label) + ': ' + d.tokens.toLocaleString() + ' tokens ($' + d.cost.toFixed(4) + ') across ' + d.count + ' session(s)</title>' +
+          '</rect>' +
+          '<text class="chart-axis" x="' + (x + barWidth / 2) + '" y="' + (chartHeight + 30) + '">' + escapeHtml(d.label) + '</text>' +
+        '</g>';
+      });
+
+      container.innerHTML = '<svg class="usage-chart-svg" viewBox="0 0 ' + svgWidth + ' 150" preserveAspectRatio="xMidYMid meet">' +
+        '<line x1="' + leftPad + '" y1="' + (chartHeight + 15) + '" x2="' + (svgWidth - 10) + '" y2="' + (chartHeight + 15) + '" stroke="var(--card-border)" stroke-width="1" />' +
+        barsSvg +
+      '</svg>';
+    }
+
+    function renderModelBreakdown() {
+      const container = document.getElementById("usage-models-breakdown");
+      if (!container) return;
+
+      const byModel = usageData.by_model || {};
+      const entries = Object.entries(byModel);
+      if (entries.length === 0) {
+        container.innerHTML = '<div style="color:var(--text-muted); font-size:12px; padding:6px 0;">No model usage recorded yet.</div>';
+        return;
+      }
+
+      entries.sort((a, b) => (b[1].tokens || 0) - (a[1].tokens || 0));
+      const totalTokens = usageData.total_tokens || 1;
+
+      container.innerHTML = entries.map(([modelId, data]) => {
+        const tokens = data.tokens || 0;
+        const cost = data.cost || 0;
+        const pct = Math.min(100, Math.round((tokens / totalTokens) * 100));
+        const provider = data.provider || '';
+
+        return '<div class="usage-item-row">' +
+          '<div class="usage-item-header">' +
+            '<div style="display:flex; align-items:center; gap:6px; min-width:0;">' +
+              '<span style="font-weight:600; font-size:11.5px; word-break:break-all;">' + escapeHtml(modelId) + '</span>' +
+              (provider ? '<span class="badge blue" style="font-size:9.5px;">' + escapeHtml(provider) + '</span>' : '') +
+            '</div>' +
+            '<div style="display:flex; align-items:center; gap:8px; font-size:11.5px; font-weight:600; flex-shrink:0;">' +
+              '<span>' + formatTokens(tokens) + '</span>' +
+              '<span style="color:var(--text-muted); font-weight:normal;">(' + pct + '%)</span>' +
+              '<span style="color:var(--tag-green-fg); font-size:10.5px;">$' + Number(cost).toFixed(4) + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="usage-progress-bar-wrap">' +
+            '<div class="usage-progress-bar-fill" style="width: ' + pct + '%; background: var(--tag-blue-fg, #388bfd);"></div>' +
+          '</div>' +
+        '</div>';
+      }).join("");
+    }
+
+    function renderProviderBreakdown() {
+      const container = document.getElementById("usage-providers-breakdown");
+      if (!container) return;
+
+      const byProvider = usageData.by_provider || {};
+      const entries = Object.entries(byProvider);
+      if (entries.length === 0) {
+        container.innerHTML = '<div style="color:var(--text-muted); font-size:12px; padding:6px 0;">No provider activity recorded yet.</div>';
+        return;
+      }
+
+      entries.sort((a, b) => (b[1].tokens || 0) - (a[1].tokens || 0));
+      const totalTokens = usageData.total_tokens || 1;
+
+      container.innerHTML = entries.map(([provId, data]) => {
+        const tokens = data.tokens || 0;
+        const cost = data.cost || 0;
+        const pct = Math.min(100, Math.round((tokens / totalTokens) * 100));
+
+        return '<div class="usage-item-row">' +
+          '<div class="usage-item-header">' +
+            '<div style="display:flex; align-items:center; gap:6px;">' +
+              '<span style="font-weight:600; font-size:11.5px; text-transform:capitalize;">' + escapeHtml(provId) + '</span>' +
+              '<span class="badge purple" style="font-size:9.5px;">' + (data.sessions || 0) + ' sessions</span>' +
+            '</div>' +
+            '<div style="display:flex; align-items:center; gap:8px; font-size:11.5px; font-weight:600;">' +
+              '<span>' + formatTokens(tokens) + '</span>' +
+              '<span style="color:var(--text-muted); font-weight:normal;">(' + pct + '%)</span>' +
+              '<span style="color:var(--tag-green-fg); font-size:10.5px;">$' + Number(cost).toFixed(4) + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="usage-progress-bar-wrap">' +
+            '<div class="usage-progress-bar-fill" style="width: ' + pct + '%; background: var(--tag-purple-fg, #a371f7);"></div>' +
+          '</div>' +
+        '</div>';
+      }).join("");
+    }
+
+    function renderSessionsTable(sessions) {
+      const tbody = document.getElementById("usage-sessions-body");
+      if (!tbody) return;
+
+      const list = sessions || usageData.sessions || [];
+      if (list.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--text-muted); padding:16px;">No recent session history recorded yet.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = list.slice(0, 25).map(s => {
+        const sName = s.name || s.id || "Untitled Session";
+        const modelStr = (s.model || "default") + (s.provider ? ' (' + s.provider + ')' : "");
+        const tokens = s.token_total || s.tokens || 0;
+        const cost = s.cost_usd || 0;
+        const dStr = s.updated_at || s.created_at || "";
+        const dateFormatted = dStr ? new Date(dStr).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : "N/A";
+
+        return '<tr style="border-bottom: 1px solid rgba(255,255,255,0.03);">' +
+          '<td style="padding:8px 12px; font-weight:500; font-size:12px; word-break:break-all;">' + escapeHtml(sName) + '</td>' +
+          '<td style="padding:8px 12px; font-size:11px; color:var(--text-muted);">' + escapeHtml(modelStr) + '</td>' +
+          '<td style="padding:8px 12px; text-align:right; font-size:12px; font-weight:600; font-family:monospace;">' + Number(tokens).toLocaleString() + '</td>' +
+          '<td style="padding:8px 12px; text-align:right; font-size:11.5px; color:var(--tag-green-fg); font-family:monospace;">$' + Number(cost).toFixed(4) + '</td>' +
+          '<td style="padding:8px 12px; text-align:right; font-size:11px; color:var(--text-muted);">' + escapeHtml(dateFormatted) + '</td>' +
+        '</tr>';
       }).join("");
     }
 
     function renderSkills() {
       const grid = document.getElementById("skills-grid");
+      if (!grid) return;
       if (activeSkillsTab === "installed") {
         if (allSkills.length === 0) {
-          grid.innerHTML = \`
-            <div class="empty-state" style="grid-column: 1 / -1;">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-              <div>No skills installed yet. Switch to "Browse Online Registry" to install instruction packs.</div>
-            </div>
-          \`;
+          grid.innerHTML = '<div class="empty-state" style="grid-column: 1 / -1;">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' +
+            '<div>No skills installed yet. Switch to "Browse Online Registry" to install instruction packs.</div>' +
+          '</div>';
           return;
         }
-        grid.innerHTML = allSkills.map(s => \`
-          <div class="item-card">
-            <div class="item-card-top">
-              <div class="item-card-title">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-                <span>\${escapeHtml(s.name)}</span>
-              </div>
-              <span class="badge purple">\${escapeHtml(s.scope || 'skill')}</span>
-            </div>
-            <div class="item-card-desc">\${escapeHtml(s.description || 'Custom agent workflow skill.')}</div>
-            <div style="font-size: 11px; font-family: monospace; color: var(--text-muted); word-break: break-all;">\${escapeHtml(s.path || '')}</div>
-          </div>
-        \`).join("");
+        grid.innerHTML = allSkills.map(s => 
+          '<div class="item-card">' +
+            '<div class="item-card-top">' +
+              '<div class="item-card-title">' +
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' +
+                '<span>' + escapeHtml(s.name) + '</span>' +
+              '</div>' +
+              '<span class="badge purple">' + escapeHtml(s.scope || 'skill') + '</span>' +
+            '</div>' +
+            '<div class="item-card-desc">' + escapeHtml(s.description || 'Custom agent workflow skill.') + '</div>' +
+            '<div style="font-size: 11px; font-family: monospace; color: var(--text-muted); word-break: break-all;">' + escapeHtml(s.path || '') + '</div>' +
+          '</div>'
+        ).join("");
       } else {
         if (allRemoteSkills.length === 0) {
-          grid.innerHTML = \`
-            <div class="empty-state" style="grid-column: 1 / -1;">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-              <div>Connecting to GitHub registries (Anthropic & Community)...</div>
-            </div>
-          \`;
+          grid.innerHTML = '<div class="empty-state" style="grid-column: 1 / -1;">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' +
+            '<div>Connecting to GitHub registries (Anthropic & Community)...</div>' +
+          '</div>';
           return;
         }
-        grid.innerHTML = allRemoteSkills.map(r => \`
-          <div class="item-card">
-            <div class="item-card-top">
-              <div class="item-card-title">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-                <span>\${escapeHtml(r.name)}</span>
-              </div>
-              <span class="badge blue">\${escapeHtml(r.source_label || r.source_id)}</span>
-            </div>
-            <div class="item-card-desc">\${escapeHtml(r.description || 'Remote instruction pack from ' + r.repo)}</div>
-            <div style="display: flex; justify-content: flex-end; margin-top: 6px;">
-              <button class="btn" style="padding: 3px 8px; font-size: 11px;" onclick="installSkill('\${escapeHtml(r.name)}', '\${escapeHtml(r.source_id)}')">Install Skill</button>
-            </div>
-          </div>
-        \`).join("");
+        grid.innerHTML = allRemoteSkills.map(r => {
+          const isInstalled = allSkills.some(s => (s.name || "").toLowerCase() === (r.name || "").toLowerCase());
+          return '<div class="item-card">' +
+            '<div class="item-card-top">' +
+              '<div class="item-card-title">' +
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' +
+                '<span>' + escapeHtml(r.name) + '</span>' +
+              '</div>' +
+              '<span class="badge blue">' + escapeHtml(r.source_label || r.source_id) + '</span>' +
+            '</div>' +
+            '<div class="item-card-desc">' + escapeHtml(r.description || 'Remote instruction pack from ' + r.repo) + '</div>' +
+            '<div style="display: flex; align-items: center; justify-content: space-between; margin-top: 8px;">' +
+              (isInstalled ? '<span class="badge green" style="font-size:10px; font-weight:600;">✓ Installed</span>' : '<span></span>') +
+              '<button class="btn ' + (isInstalled ? 'btn-secondary' : '') + '" style="padding: 4px 10px; font-size: 11px;" data-action="install-skill" data-skill-name="' + escapeHtml(r.name) + '" data-source-id="' + escapeHtml(r.source_id || 'anthropic') + '">' +
+                (isInstalled ? 'Reinstall' : 'Install Skill') +
+              '</button>' +
+            '</div>' +
+          '</div>';
+        }).join("");
       }
     }
 
     function renderMcp() {
       const grid = document.getElementById("mcp-grid");
+      if (!grid) return;
       if (allMcpServers.length === 0) {
-        grid.innerHTML = \`
-          <div class="empty-state" style="grid-column: 1 / -1;">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M9 9h6v6H9z"></path></svg>
-            <div>No external MCP servers configured. Add servers in your config.toml or mcp_config.json.</div>
-          </div>
-        \`;
+        grid.innerHTML = '<div class="empty-state" style="grid-column: 1 / -1;">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M9 9h6v6H9z"></path></svg>' +
+          '<div>No external MCP servers configured. Add servers in your config.toml or mcp_config.json.</div>' +
+        '</div>';
         return;
       }
-      grid.innerHTML = allMcpServers.map(s => \`
-        <div class="item-card">
-          <div class="item-card-top">
-            <div class="item-card-title">
-              <span class="status-dot connected"></span>
-              <span>\${escapeHtml(s.name)}</span>
-            </div>
-            <span class="badge blue">\${s.tools_count || 0} tools</span>
-          </div>
-          <div class="item-card-desc"><code>\${escapeHtml(s.command)} \${(s.args || []).join(' ')}</code></div>
-        </div>
-      \`).join("");
+      grid.innerHTML = allMcpServers.map(s => 
+        '<div class="item-card">' +
+          '<div class="item-card-top">' +
+            '<div class="item-card-title">' +
+              '<span class="status-dot connected"></span>' +
+              '<span>' + escapeHtml(s.name) + '</span>' +
+            '</div>' +
+            '<span class="badge blue">' + (s.tools_count || 0) + ' tools</span>' +
+          '</div>' +
+          '<div class="item-card-desc"><code>' + escapeHtml(s.command) + ' ' + (s.args || []).map(escapeHtml).join(' ') + '</code></div>' +
+        '</div>'
+      ).join("");
     }
 
     let allCrons = [];
@@ -2235,17 +2713,40 @@ export class SettingsPanel {
       });
     }
 
+    const cronScheduleSelect = document.getElementById("cron-schedule-select");
+    const cronCustomScheduleInput = document.getElementById("cron-custom-schedule");
+    if (cronScheduleSelect) {
+      cronScheduleSelect.addEventListener("change", () => {
+        if (cronCustomScheduleInput) {
+          cronCustomScheduleInput.style.display = cronScheduleSelect.value === "custom" ? "block" : "none";
+          if (cronScheduleSelect.value === "custom") cronCustomScheduleInput.focus();
+        }
+      });
+    }
+
     if (btnSaveCron) {
       btnSaveCron.addEventListener("click", () => {
         const nameInput = document.getElementById("cron-name-input");
         const scheduleSelect = document.getElementById("cron-schedule-select");
+        const customScheduleInput = document.getElementById("cron-custom-schedule");
+        const modelSelect = document.getElementById("cron-model-select");
+        const commandsInput = document.getElementById("cron-commands-input");
         const promptInput = document.getElementById("cron-prompt-input");
+
         const name = (nameInput ? nameInput.value : "").trim();
-        const schedule = scheduleSelect ? scheduleSelect.value : "every 1h";
+        let schedule = scheduleSelect ? scheduleSelect.value : "every 1h";
+        if (schedule === "custom" && customScheduleInput && customScheduleInput.value.trim()) {
+          schedule = customScheduleInput.value.trim();
+        }
         const prompt = (promptInput ? promptInput.value : "").trim();
+        const model = (modelSelect ? modelSelect.value : "") || activeModelId;
+        const allowedCommands = (commandsInput ? commandsInput.value : "").trim();
 
         if (!prompt) {
-          alert("Please enter a prompt or instruction for the cron job.");
+          if (promptInput) {
+            promptInput.focus();
+            promptInput.placeholder = "Please enter a prompt or instruction first...";
+          }
           return;
         }
 
@@ -2255,13 +2756,15 @@ export class SettingsPanel {
             name: name || "Scheduled Job",
             schedule: schedule,
             prompt: prompt,
-            model: activeModelId,
+            model: model,
             provider: activeModelProvider,
+            allowed_commands: allowedCommands,
           }
         });
 
         if (nameInput) nameInput.value = "";
         if (promptInput) promptInput.value = "";
+        if (commandsInput) commandsInput.value = "";
         if (cronCreateForm) cronCreateForm.style.display = "none";
         if (btnToggleAddCron) btnToggleAddCron.textContent = "+ New Cron Job";
       });
@@ -2273,9 +2776,18 @@ export class SettingsPanel {
       });
     }
 
-    window.toggleCron = function(id) {
-      vscode.postMessage({ type: "cron_toggle", id });
-    };
+    const skillsGrid = document.getElementById("skills-grid");
+    if (skillsGrid) {
+      skillsGrid.addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-action='install-skill']");
+        if (!btn) return;
+        const name = btn.dataset.skillName;
+        const sourceId = btn.dataset.sourceId || "anthropic";
+        btn.disabled = true;
+        btn.innerHTML = '<span style="display:inline-block; width:9px; height:9px; border:1.5px solid currentColor; border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite; margin-right:4px;"></span> Installing...';
+        vscode.postMessage({ type: "install_skill", name, sourceId });
+      });
+    }
 
     const cronContainer = document.getElementById("cron-list-container");
     if (cronContainer) {
@@ -2291,8 +2803,17 @@ export class SettingsPanel {
           const prompt = decodeURIComponent(btn.dataset.prompt || "");
           vscode.postMessage({ type: "cron_run_now", id, name, prompt });
         } else if (action === "delete") {
-          if (confirm("Are you sure you want to delete this scheduled cron job?")) {
-            vscode.postMessage({ type: "cron_delete", id });
+          vscode.postMessage({ type: "cron_delete", id });
+        } else if (action === "history") {
+          const runsDiv = document.getElementById("cron-runs-" + id);
+          if (runsDiv) {
+            if (runsDiv.style.display === "block") {
+              runsDiv.style.display = "none";
+            } else {
+              runsDiv.style.display = "block";
+              runsDiv.innerHTML = '<div style="padding:6px; color:var(--text-muted); font-size:11px;">Loading execution history...</div>';
+              vscode.postMessage({ type: "fetch_cron_runs", id: id });
+            }
           }
         }
       });
@@ -2316,6 +2837,9 @@ export class SettingsPanel {
         const statusLabel = isEnabled ? "Active" : "Paused";
         const lastRun = job.last_run ? new Date(job.last_run).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Never run";
         const promptEnc = encodeURIComponent(job.prompt || '');
+        const cmds = job.allowed_commands && job.allowed_commands.length > 0
+          ? (Array.isArray(job.allowed_commands) ? job.allowed_commands.join(", ") : String(job.allowed_commands))
+          : "";
 
         return '<div class="cron-card">' +
           '<div class="cron-card-left">' +
@@ -2323,17 +2847,20 @@ export class SettingsPanel {
               '<span class="cron-card-name">' + escapeHtml(job.name || job.id) + '</span>' +
               '<span class="cron-interval-pill">' + escapeHtml(job.schedule || 'every 1h') + '</span>' +
               '<span class="cron-status-pill ' + statusClass + '">' + statusLabel + '</span>' +
+              (job.model ? ('<span class="badge blue" style="font-size:10px;">' + escapeHtml(job.model) + '</span>') : '') +
             '</div>' +
             '<div class="cron-card-prompt">' + escapeHtml(job.prompt || '') + '</div>' +
+            (cmds ? ('<div style="font-size:11px; color:var(--text-muted); margin-top:4px;"><span style="font-weight:600;">Allowed Commands:</span> <code style="background:rgba(255,255,255,0.06); padding:1px 4px;">' + escapeHtml(cmds) + '</code></div>') : '') +
             '<div class="cron-card-meta">' +
               '<span>Runs: ' + (job.run_count || 0) + '</span>' +
               '<span>Last: ' + escapeHtml(lastRun) + ' (' + escapeHtml(lastStatus) + ')</span>' +
-              (job.model ? ('<span>Model: ' + escapeHtml(job.model) + '</span>') : '') +
             '</div>' +
+            '<div id="cron-runs-' + escapeHtml(job.id) + '" class="cron-runs-container" style="display:none; margin-top:8px; padding-top:8px; border-top:1px solid var(--border);"></div>' +
           '</div>' +
           '<div class="cron-card-actions">' +
             '<button class="btn btn-secondary" data-action="toggle" data-id="' + escapeHtml(job.id) + '">' + (isEnabled ? 'Pause' : 'Enable') + '</button>' +
             '<button class="btn" data-action="run" data-id="' + escapeHtml(job.id) + '" data-name="' + escapeHtml(job.name || '') + '" data-prompt="' + promptEnc + '">Run Now</button>' +
+            '<button class="btn btn-secondary" data-action="history" data-id="' + escapeHtml(job.id) + '">History</button>' +
             '<button class="btn btn-danger" data-action="delete" data-id="' + escapeHtml(job.id) + '">✕</button>' +
           '</div>' +
         '</div>';

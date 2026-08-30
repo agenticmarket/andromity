@@ -7,7 +7,7 @@ import { RpcClient } from "../server/RpcClient.js";
  */
 export async function generateCommitMessage(rpcClient: RpcClient | null): Promise<void> {
   if (!rpcClient) {
-    vscode.window.showErrorMessage("Andromity daemon not connected. Try: Andromity: Restart Python Daemon");
+    vscode.window.showErrorMessage("Andromity engine not connected. Try: Andromity: Restart Server");
     return;
   }
 
@@ -80,7 +80,7 @@ export async function generateCommitMessage(rpcClient: RpcClient | null): Promis
         }
 
         if (!commitMessage || commitMessage.trim().length < 5) {
-          vscode.window.showWarningMessage("Daemon did not return commit message. Try again or check Output > Andromity AI.");
+          vscode.window.showWarningMessage("Daemon did not return commit message. Try again or check Output > Andromity.");
           return;
         }
 

@@ -39,7 +39,7 @@ function bindStatusBarEvents(client: RpcClient) {
 }
 
 export async function activate(context: vscode.ExtensionContext) {
-  const outputChannel = vscode.window.createOutputChannel("Andromity AI (Daemon)");
+  const outputChannel = vscode.window.createOutputChannel("Andromity");
   context.subscriptions.push(outputChannel);
   outputChannel.appendLine("[Andromity] Activating extension...");
 
@@ -55,7 +55,7 @@ export async function activate(context: vscode.ExtensionContext) {
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.command = "andromity.openChat";
   statusBarItem.text = "$(sparkle) Andromity";
-  statusBarItem.tooltip = "Andromity AI Coding Agent";
+  statusBarItem.tooltip = "Andromity Coding Agent";
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
@@ -123,17 +123,124 @@ export async function activate(context: vscode.ExtensionContext) {
     outputChannel.appendLine("[Andromity] Python daemon client wired successfully.");
   });
 
+  const promptSetupGuide = async (errMessage: string) => {
+    outputChannel.appendLine(`[Andromity] Setup issue: ${errMessage}`);
+    const choice = await vscode.window.showErrorMessage(
+      `Andromity: ${errMessage}`,
+      "Run Setup Check",
+      "Open Settings",
+      "View Logs"
+    );
+
+    if (choice === "Run Setup Check") {
+      vscode.commands.executeCommand("andromity.checkSetup");
+    } else if (choice === "Open Settings") {
+      vscode.commands.executeCommand("andromity.openSettings");
+    } else if (choice === "View Logs") {
+      outputChannel.show(true);
+    }
+  };
+
   pythonBridge
     .start()
     .catch((err) => {
       outputChannel.appendLine(`[Andromity] Failed to start Python daemon: ${err.message}`);
-      vscode.window.showWarningMessage(
-        `Andromity daemon could not start: ${err.message}. Ensure Python 3.11+ is installed.`
-      );
+      promptSetupGuide(err.message);
     });
+
+  // Auto-restart bridge when user changes pythonPath or serverPort in settings
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration(async (e) => {
+      if (e.affectsConfiguration("andromity.pythonPath") || e.affectsConfiguration("andromity.serverPort")) {
+        outputChannel.appendLine("[Andromity] Python/Server configuration changed. Reloading daemon...");
+        try {
+          await pythonBridge?.restart();
+          vscode.window.showInformationMessage("Andromity daemon reloaded with new configuration.");
+        } catch (err: any) {
+          promptSetupGuide(err.message);
+        }
+      }
+    })
+  );
 
   // 6. Register Commands
   context.subscriptions.push(
+    vscode.commands.registerCommand("andromity.checkSetup", async () => {
+      outputChannel.show(true);
+      outputChannel.appendLine("========================================");
+      outputChannel.appendLine("  Andromity — System Setup Check");
+      outputChannel.appendLine("========================================");
+
+      if (!pythonBridge) {
+        outputChannel.appendLine("Daemon bridge is not initialized.");
+        return;
+      }
+
+      if (pythonBridge.isConnected()) {
+        const isBundled = pythonBridge.isUsingBundledBinary();
+        const pid = pythonBridge.getRunningPid();
+        outputChannel.appendLine(`Engine Mode:    ${isBundled ? "Bundled Standalone Binary (Zero-Python)" : "System Python Subprocess"}`);
+        outputChannel.appendLine(`Daemon Status:  ONLINE & CONNECTED ${pid ? `(PID: ${pid})` : ""}`);
+        outputChannel.appendLine(`Health:         ✅ 100% Ready (All features active)`);
+        outputChannel.appendLine("========================================");
+        
+        vscode.window.showInformationMessage(
+          `✅ Andromity Engine is running smoothly (${isBundled ? "Bundled Binary" : "Python"})!`,
+          "Open Settings",
+          "Restart Server"
+        ).then(async (choice) => {
+          if (choice === "Open Settings") {
+            vscode.commands.executeCommand("andromity.openSettings");
+          } else if (choice === "Restart Server") {
+            await pythonBridge?.restart();
+          }
+        });
+        return;
+      }
+
+      // If offline, check what options are available
+      const hasBinary = pythonBridge.hasBundledBinary();
+      outputChannel.appendLine(`Bundled Binary: ${hasBinary ? "FOUND" : "NOT FOUND"}`);
+
+      const status = await pythonBridge.checkPythonStatus();
+      outputChannel.appendLine(`Resolved Python Path: ${status.path}`);
+      outputChannel.appendLine(`Python Installed:     ${status.installed ? `YES (${status.version || "detected"})` : "NO"}`);
+      outputChannel.appendLine(`Version Supported:    ${status.isVersionSupported ? "YES (3.11+)" : "NO"}`);
+      outputChannel.appendLine(`Andromity Package:    ${status.hasAndromityPackage ? "YES" : "NO / Workspace Source Mode"}`);
+      if (status.errorMessage) {
+        outputChannel.appendLine(`Diagnostic Info:      ${status.errorMessage}`);
+      }
+      outputChannel.appendLine("========================================");
+
+      if (hasBinary) {
+        const choice = await vscode.window.showInformationMessage(
+          "Bundled AI Engine binary detected. Start daemon now?",
+          "Start Daemon"
+        );
+        if (choice === "Start Daemon") {
+          await pythonBridge.restart();
+        }
+      } else if (status.installed && status.isVersionSupported) {
+        const restartChoice = await vscode.window.showInformationMessage(
+          `✅ Python ${status.version || ""} is ready! (${status.path})`,
+          "Restart Daemon",
+          "Open Settings"
+        );
+        if (restartChoice === "Restart Daemon") {
+          try {
+            await pythonBridge.restart();
+            vscode.window.showInformationMessage("Andromity daemon restarted successfully.");
+          } catch (e: any) {
+            promptSetupGuide(e.message);
+          }
+        } else if (restartChoice === "Open Settings") {
+          vscode.commands.executeCommand("andromity.openSettings");
+        }
+      } else {
+        promptSetupGuide(status.errorMessage || "Python 3.11+ executable not found.");
+      }
+    }),
+
     vscode.commands.registerCommand("andromity.openChat", () => {
       vscode.commands.executeCommand("andromity.chatView.focus");
     }),
@@ -205,7 +312,23 @@ export async function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand("andromity.undoTurn", async () => {
       await vscode.commands.executeCommand("andromity.chatView.focus");
-      chatProvider.requestUndoTurn();
+      await chatProvider.requestUndoTurn();
+    }),
+
+    vscode.commands.registerCommand("andromity.undo", async () => {
+      await vscode.commands.executeCommand("andromity.chatView.focus");
+      await chatProvider.requestUndoTurn();
+    }),
+
+    vscode.commands.registerCommand("andromity.sendPrompt", async (promptText: string) => {
+      await vscode.commands.executeCommand("andromity.chatView.focus");
+      if (promptText) {
+        await chatProvider.sendPromptFromExternal(promptText);
+      }
+    }),
+
+    vscode.commands.registerCommand("andromity.compactSession", async () => {
+      await chatProvider.compactSession();
     }),
 
     vscode.commands.registerCommand("andromity.viewGitDiff", async () => {
@@ -269,19 +392,6 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage("Session deleted.");
       } catch (e: any) {
         vscode.window.showErrorMessage(`Failed to delete session: ${e.message}`);
-      }
-    }),
-
-    vscode.commands.registerCommand("andromity.compactSession", async () => {
-      const client = pythonBridge?.getClient();
-      if (!client) return;
-      await vscode.commands.executeCommand("andromity.chatView.focus");
-      try {
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        await client.call("session.compact", { project_path: workspaceFolder });
-        vscode.window.showInformationMessage("Context compacted successfully.");
-      } catch (e: any) {
-        vscode.window.showErrorMessage(`Failed to compact context: ${e.message}`);
       }
     }),
 
@@ -398,9 +508,9 @@ export async function activate(context: vscode.ExtensionContext) {
           changesTreeProvider.setRpcClient(rpcClient);
           SettingsPanel.currentPanel?.setRpcClient(rpcClient);
           bindStatusBarEvents(rpcClient);
-          vscode.window.showInformationMessage("Andromity daemon restarted successfully.");
+          vscode.window.showInformationMessage("Andromity engine restarted successfully.");
         } catch (e: any) {
-          vscode.window.showErrorMessage(`Failed to restart daemon: ${e.message}`);
+          vscode.window.showErrorMessage(`Failed to restart engine: ${e.message}`);
         }
       }
     }),

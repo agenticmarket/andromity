@@ -20,9 +20,11 @@ def get_domain(url: str) -> Optional[str]:
 
 def _is_private_ip(host: str) -> bool:
     """Return True if host resolves to a private, loopback, link-local, or cloud metadata address."""
-    # Direct IP string parse
+    clean_host = host.strip("[]").strip().lower()
+    
+    # Handle hex/octal or standard IP formats
     try:
-        addr = ipaddress.ip_address(host.strip("[]"))
+        addr = ipaddress.ip_address(clean_host)
         if (
             addr.is_private
             or addr.is_loopback
@@ -38,7 +40,7 @@ def _is_private_ip(host: str) -> bool:
 
     # Resolve all addresses (IPv4 and IPv6) to prevent round-robin / DNS rebinding bypass
     try:
-        infos = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        infos = socket.getaddrinfo(clean_host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
         for info in infos:
             sockaddr = info[4]
             ip_str = sockaddr[0]
@@ -57,8 +59,8 @@ def _is_private_ip(host: str) -> bool:
             except ValueError:
                 return True
     except Exception:
-        # If domain cannot be resolved, block safely
-        return False
+        # If domain cannot be resolved or fails safely, fail-closed (treat as unsafe/private)
+        return True
 
     return False
 
@@ -102,6 +104,9 @@ SENSITIVE_PATTERNS = [
     "password",
     "credentials",
     "token",
+    "/etc/shadow",
+    "/etc/passwd",
+    "/proc/self/environ",
 ]
 
 

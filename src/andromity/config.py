@@ -11,7 +11,50 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib
 
-import tomli_w
+try:
+    import tomli_w
+except ImportError:
+    class _TomliWFallback:
+        @staticmethod
+        def dump(d: dict, f):
+            f.write(_TomliWFallback.dumps(d).encode("utf-8"))
+
+        @staticmethod
+        def dumps(d: dict) -> str:
+            lines = []
+            tables = []
+            array_tables = []
+            for k, v in d.items():
+                if isinstance(v, dict):
+                    tables.append((k, v))
+                elif isinstance(v, list) and v and all(isinstance(i, dict) for i in v):
+                    array_tables.append((k, v))
+                else:
+                    lines.append(f"{k} = {_TomliWFallback._format_val(v)}")
+            for k, v in tables:
+                lines.append(f"\n[{k}]")
+                for sub_k, sub_v in v.items():
+                    lines.append(f"{sub_k} = {_TomliWFallback._format_val(sub_v)}")
+            for k, items in array_tables:
+                for item in items:
+                    lines.append(f"\n[[{k}]]")
+                    for sub_k, sub_v in item.items():
+                        lines.append(f"{sub_k} = {_TomliWFallback._format_val(sub_v)}")
+            return "\n".join(lines) + "\n"
+
+        @staticmethod
+        def _format_val(v) -> str:
+            if isinstance(v, bool):
+                return "true" if v else "false"
+            elif isinstance(v, (int, float)):
+                return str(v)
+            elif isinstance(v, list):
+                return "[" + ", ".join(_TomliWFallback._format_val(i) for i in v) + "]"
+            else:
+                s = str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+                return f'"{s}"'
+
+    tomli_w = _TomliWFallback
 
 
 def get_config_dir() -> Path:

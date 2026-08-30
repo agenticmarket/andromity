@@ -16,12 +16,12 @@ export class AndromityCodeActionProvider implements vscode.CodeActionProvider {
     // If there are diagnostics (errors/warnings) at this location
     if (context.diagnostics.length > 0) {
       const fixAction = new vscode.CodeAction(
-        "Fix with Andromity AI",
+        "Fix with Andromity",
         vscode.CodeActionKind.QuickFix
       );
       fixAction.command = {
         command: "andromity.fixErrors",
-        title: "Fix with Andromity AI",
+        title: "Fix with Andromity",
         arguments: [document.uri, context.diagnostics],
       };
       fixAction.isPreferred = true;
@@ -31,7 +31,7 @@ export class AndromityCodeActionProvider implements vscode.CodeActionProvider {
     // If text is selected, offer Explain and Refactor
     if (!range.isEmpty) {
       const explainAction = new vscode.CodeAction(
-        "Explain with Andromity AI",
+        "Explain with Andromity",
         vscode.CodeActionKind.Refactor
       );
       explainAction.command = {
@@ -41,7 +41,7 @@ export class AndromityCodeActionProvider implements vscode.CodeActionProvider {
       actions.push(explainAction);
 
       const testAction = new vscode.CodeAction(
-        "Generate Unit Tests with Andromity AI",
+        "Generate Unit Tests with Andromity",
         vscode.CodeActionKind.Refactor
       );
       testAction.command = {

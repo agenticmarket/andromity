@@ -54,6 +54,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._rpcClient = client;
     this._diffManager = new DiffManager(client, this._context!);
     this._bindRpcEvents();
+    this._postToWebview({ type: "backend_ready" });
     this._loadInitialConfig(true);
   }
 
@@ -137,10 +138,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /** Wired to the "Andromity: Undo Last Turn & Rollback Diff" command. */
-  public requestUndoTurn() {
-    if (this._view) {
-      this._view.show?.(true);
-      this._view.webview.postMessage({ type: "do_undo_turn" });
+  public async requestUndoTurn() {
+    if (this._diffManager) {
+      await this._diffManager.undoLastTurn(this._currentSessionId);
+      await this._loadSession(this._currentSessionId);
+      vscode.commands.executeCommand("andromity.refreshChanges");
+    } else if (this._rpcClient) {
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const res = await this._rpcClient.call<any>("session.undo", {
+        session_id: this._currentSessionId,
+        project_path: workspaceFolder,
+      });
+      if (res?.success) {
+        vscode.window.showInformationMessage(`Turn undone successfully. (${res.popped_messages || 0} messages removed.)`);
+        await this._loadSession(this._currentSessionId);
+      }
     }
   }
 
@@ -182,7 +194,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           (feedback ? ` User reason: ${feedback}` : "");
       this.sendPromptFromExternal(msg);
       vscode.window.showInformationMessage(
-        approved ? "Plan approved — agent is executing." : "Plan rejected — agent will revise."
+        approved ? "Plan approved â€” agent is executing." : "Plan rejected â€” agent will revise."
       );
     } catch (e: any) {
       vscode.window.showErrorMessage(
@@ -263,35 +275,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this._postToWebview({ type: "tool_result", ...params });
     });
 
-    this._rpcClient.on("agent/toolApprovalRequired", (params: ToolApprovalEvent) => {
+    this._rpcClient.on("agent/toolApprovalRequired", (params: any) => {
       this._postToWebview({ type: "tool_approval_required", ...params });
-      const cfg = vscode.workspace.getConfiguration("andromity");
-      if (cfg.get<boolean>("soundNotifications", true)) {
-        this._postToWebview({ type: "play_sound", kind: "attention" });
-        playNativeDoneSound(this._extensionUri);
-      }
     });
 
-    this._rpcClient.on("agent/askQuestions", (params: ClarifyingQuestionsEvent) => {
+    this._rpcClient.on("agent/askQuestions", (params: any) => {
       this._postToWebview({ type: "ask_questions", ...params });
-      const cfg = vscode.workspace.getConfiguration("andromity");
-      if (cfg.get<boolean>("soundNotifications", true)) {
-        this._postToWebview({ type: "play_sound", kind: "attention" });
-        playNativeDoneSound(this._extensionUri);
-      }
     });
 
     this._rpcClient.on("agent/planApproval", (params: any) => {
-      if (params.plan) {
-        this._currentPlan = params.plan;
-        this._postToWebview({ type: "plan_updated", plan: params.plan });
-      }
-      this._postToWebview({ type: "plan_approval", ...params });
-      const cfg = vscode.workspace.getConfiguration("andromity");
-      if (cfg.get<boolean>("soundNotifications", true)) {
-        this._postToWebview({ type: "play_sound", kind: "attention" });
-        playNativeDoneSound(this._extensionUri);
-      }
+      this._currentPlan = params.plan;
+      this._postToWebview({ type: "plan_approval", plan: params.plan });
     });
 
     this._rpcClient.on("agent/planUpdated", (params: any) => {
@@ -299,6 +293,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this._currentPlan = params.plan;
         this._postToWebview({ type: "plan_updated", plan: params.plan });
       }
+    });
+
+    this._rpcClient.on("session/updated", (params: any) => {
+      this._postToWebview({
+        type: "session_updated",
+        session_id: params.session_id,
+        name: params.name,
+        message_count: params.message_count,
+        context_tokens: params.context_tokens,
+      });
+      vscode.commands.executeCommand("andromity.refreshSessions");
     });
 
     this._rpcClient.on("subagent/spawned", (params: SubAgentEvent) => {
@@ -324,7 +329,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this._postToWebview({ type: "play_sound", kind: "done" });
         playNativeDoneSound(this._extensionUri);
       }
-      // Files may have changed — refresh the Changes view and session stats.
+      // Files may have changed â€” refresh the Changes view and session stats.
       vscode.commands.executeCommand("andromity.refreshChanges");
     });
 
@@ -334,10 +339,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     this._rpcClient.on("agent/error", (params: any) => {
       this._postToWebview({ type: "agent_error", ...params });
-    });
-
-    this._rpcClient.on("session/updated", (params: any) => {
-      this._postToWebview({ type: "session_updated", ...params });
     });
   }
 
@@ -352,12 +353,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     try {
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      const [configData, models, providers, sessions, trustStatus] = await Promise.all([
+      const [configData, models, providers, sessions, trustStatus, skills] = await Promise.all([
         this._rpcClient.call<any>("config.get", { project_path: workspaceFolder }).catch(() => ({})),
         this._rpcClient.call<ModelInfo[]>("config.list_models", {}).catch(() => []),
         this._rpcClient.call<ProviderInfo[]>("config.list_providers", {}).catch(() => []),
         this._rpcClient.call<SessionInfo[]>("session.list", { project_path: workspaceFolder }).catch(() => []),
         this._rpcClient.call<any>("trust.status", { project_path: workspaceFolder }).catch(() => ({ is_trusted: true })),
+        this._rpcClient.call<any[]>("skills.list", { project_path: workspaceFolder }).catch(() => []),
       ]);
 
       this._models = models || [];
@@ -385,12 +387,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         type: "init_state",
         sessionId: this._currentSessionId,
         profile: this._currentProfile,
+        availableProfiles: configData?.available_profiles || ["builder", "coder", "reviewer", "planner"],
+        availableReasoningEfforts: configData?.available_reasoning_efforts || ["low", "medium", "high", "off"],
         model: this._currentModel,
         provider: this._currentProvider,
         mode: this._currentMode,
         reasoningEffort: this._currentReasoning,
         models: this._models,
         providers: this._providers,
+        skills: skills || [],
         sessions: sessions || [],
         isTrusted: trustStatus?.is_trusted !== false,
         workspaceName: workspaceFolder ? path.basename(workspaceFolder) : "Workspace Ready",
@@ -515,8 +520,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             vscode.window.showInformationMessage("Agent is still working on the previous turn. Your message was queued and will send automatically when it finishes.");
             this._postToWebview({ type: "agent_busy", error: msg, queuedPrompt: promptText });
           } else if (msg.includes("RPC timeout")) {
-            // Server actually started but ACK timed out — keep turn alive, wait for streaming notifications
-            vscode.window.showWarningMessage("Agent started but confirmation timed out. Streaming will continue — check the chat for progress. If stuck, use Cancel.");
+            // Server actually started but ACK timed out â€” keep turn alive, wait for streaming notifications
+            vscode.window.showWarningMessage("Agent started but confirmation timed out. Streaming will continue â€” check the chat for progress. If stuck, use Cancel.");
             this._postToWebview({ type: "agent_started", session_id: this._currentSessionId });
           } else {
             vscode.window.showErrorMessage(`Failed to send prompt: ${msg}`);
@@ -533,6 +538,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           "keys",
           () => this.refreshConfig()
         );
+        break;
+      }
+
+      case "open_skills_settings": {
+        SettingsPanel.createOrShow(
+          this._extensionUri,
+          this._rpcClient,
+          "skills",
+          () => this.refreshConfig()
+        );
+        break;
+      }
+
+      case "check_setup": {
+        vscode.commands.executeCommand("andromity.checkSetup");
+        break;
+      }
+
+      case "install_python": {
+        vscode.env.openExternal(vscode.Uri.parse("https://www.python.org/downloads/"));
+        break;
+      }
+
+      case "configure_python_path": {
+        vscode.commands.executeCommand("workbench.action.openSettings", "andromity.pythonPath");
         break;
       }
 
@@ -562,6 +592,47 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         vscode.window.showInformationMessage(`Permission Mode: ${this._currentMode.toUpperCase()}`);
         break;
       }
+
+      case "cycle_profile":
+      case "update_profile": {
+        const profiles = ["builder", "coder", "architect", "reviewer", "tester", "writer"];
+        if (message.value && profiles.includes(message.value.toLowerCase())) {
+          this._currentProfile = message.value.toLowerCase();
+        } else {
+          const nextIdx = (profiles.indexOf(this._currentProfile.toLowerCase()) + 1) % profiles.length;
+          this._currentProfile = profiles[nextIdx];
+        }
+        await this._rpcClient?.call("config.set", {
+          section: "default",
+          key: "profile",
+          value: this._currentProfile,
+        });
+        this._postToWebview({ type: "config_updated", key: "profile", value: this._currentProfile });
+        SettingsPanel.currentPanel?.loadData();
+        vscode.window.showInformationMessage(`Agent Profile: ${this._currentProfile.toUpperCase()}`);
+        break;
+      }
+
+      case "cycle_reasoning":
+      case "update_reasoning": {
+        const efforts = ["high", "medium", "low", "off"];
+        if (message.value && efforts.includes(message.value.toLowerCase())) {
+          this._currentReasoning = message.value.toLowerCase();
+        } else {
+          const nextIdx = (efforts.indexOf(this._currentReasoning.toLowerCase()) + 1) % efforts.length;
+          this._currentReasoning = efforts[nextIdx];
+        }
+        await this._rpcClient?.call("config.set", {
+          section: "default",
+          key: "reasoning_effort",
+          value: this._currentReasoning,
+        });
+        this._postToWebview({ type: "config_updated", key: "reasoningEffort", value: this._currentReasoning });
+        SettingsPanel.currentPanel?.loadData();
+        vscode.window.showInformationMessage(`Reasoning Effort: ${this._currentReasoning.toUpperCase()}`);
+        break;
+      }
+
 
       case "trust_workspace": {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -713,7 +784,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         sessions.forEach(s => {
           items.push({
             label: s.name || s.id,
-            description: s.id === this._currentSessionId ? "★ Current" : (s.message_count ? `${s.message_count} msgs` : ""),
+            description: s.id === this._currentSessionId ? "â˜… Current" : (s.message_count ? `${s.message_count} msgs` : ""),
             sessionId: s.id,
             action: "switch",
           });
@@ -755,18 +826,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (this._diffManager) {
           await this._diffManager.undoLastTurn(this._currentSessionId);
           await this._loadSession(this._currentSessionId);
+          this._postToWebview({ type: "turn_undone" });
           vscode.commands.executeCommand("andromity.refreshChanges");
+        } else if (this._rpcClient) {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          const res = await this._rpcClient.call<any>("session.undo", {
+            session_id: this._currentSessionId,
+            project_path: workspaceFolder,
+          });
+          if (res?.success) {
+            vscode.window.showInformationMessage(`Turn undone successfully. (${res.popped_messages || 0} messages removed.)`);
+            await this._loadSession(this._currentSessionId);
+            this._postToWebview({ type: "turn_undone" });
+          }
         }
         break;
       }
 
       case "compact_session": {
         try {
-          await this._rpcClient.call("session.compact", {
+          const res = await this._rpcClient.call<any>("session.compact", {
             session_id: this._currentSessionId,
           });
           vscode.window.showInformationMessage("Context compacted successfully.");
           await this._loadSession(this._currentSessionId);
+          this._postToWebview({ type: "session_compacted", messageCount: res?.message_count });
         } catch (e: any) {
           vscode.window.showErrorMessage(`Failed to compact context: ${e.message}`);
         }
@@ -798,8 +882,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "select_model":
       case "update_config": {
-        if (message.key) {
+        const key = message.key || (message.modelId ? "model" : undefined);
+        const value = message.value || message.modelId;
+        if (key) {
           const keyMap: Record<string, string> = {
             model: "model",
             provider: "provider",
@@ -807,22 +894,35 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             reasoningEffort: "reasoning_effort",
             mode: "permission_mode",
           };
-          const daemonKey = keyMap[message.key] || message.key;
+          const daemonKey = keyMap[key] || key;
           await this._rpcClient.call("config.set", {
             section: "default",
             key: daemonKey,
-            value: message.value,
+            value: value,
           });
-          switch (message.key) {
-            case "model": this._currentModel = message.value; break;
-            case "provider": this._currentProvider = message.value; break;
-            case "profile": this._currentProfile = message.value; break;
-            case "mode": this._currentMode = message.value; break;
-            case "reasoningEffort": this._currentReasoning = message.value; break;
+          if (key === "model" && message.provider) {
+            this._currentProvider = message.provider;
+            await this._rpcClient.call("config.set", {
+              section: "default",
+              key: "provider",
+              value: message.provider,
+            });
           }
-          this._postToWebview({ type: "config_updated", key: message.key, value: message.value });
+          switch (key) {
+            case "model": this._currentModel = value; break;
+            case "provider": this._currentProvider = value; break;
+            case "profile": this._currentProfile = value; break;
+            case "mode": this._currentMode = value; break;
+            case "reasoningEffort": this._currentReasoning = value; break;
+          }
+          this._postToWebview({ type: "config_updated", key: key, value: value, provider: this._currentProvider });
           SettingsPanel.currentPanel?.loadData();
         }
+        break;
+      }
+
+      case "webview_error": {
+        console.error("[Andromity Webview Error]", message);
         break;
       }
     }
@@ -838,7 +938,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${webview.cspSource}; img-src ${webview.cspSource} https: data:; font-src ${webview.cspSource}; media-src ${webview.cspSource};">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Andromity AI</title>
+  <title>Andromity</title>
   <style>
     :root {
       --bg: var(--vscode-sideBar-background, #18181b);
@@ -870,7 +970,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       overflow: hidden;
     }
 
-    /* ── Top Bar: Minimal, Sleek, Professional ─────────────────────── */
+    /* â”€â”€ Top Bar: Minimal, Sleek, Professional â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .top-bar {
       display: flex;
       align-items: center;
@@ -889,6 +989,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       gap: 6px;
       min-width: 0;
       flex: 1;
+    }
+
+    .top-bar-right {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      flex-shrink: 0;
+    }
+
+    .top-bar-icon-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--muted);
+      border-radius: 4px;
+      width: 24px;
+      height: 24px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 0;
+      transition: all 0.15s ease;
+    }
+
+    .top-bar-icon-btn:hover {
+      color: var(--fg);
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.12);
     }
 
     /* Session Badge */
@@ -1020,7 +1148,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     .mode-badge-btn.mode-yolo:hover { background: rgba(240, 136, 62, 0.22); }
 
-    /* ── Sessions Drawer / Flyout ─────────────────────────────────── */
+    /* â”€â”€ Sessions Drawer / Flyout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .sessions-flyout {
       position: absolute;
       top: 36px;
@@ -1140,10 +1268,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     .session-action-delete:hover {
       color: var(--red);
-      background: rgba(248, 81, 73, 0.15);
     }
 
-    /* ── Scheduled Crons Overlay ───────────────────────────────────── */
+    .sessions-load-more-wrap {
+      padding: 6px 8px;
+      text-align: center;
+      border-top: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.01);
+    }
+    .btn-load-more-sessions {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 10px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      color: var(--fg);
+      font-size: 11px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn-load-more-sessions:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: var(--accent);
+    }
+
+    /* â”€â”€ Scheduled Crons Overlay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .crons-flyout {
       position: absolute;
       top: 36px;
@@ -1225,7 +1376,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       line-height: 1.3;
     }
 
-    /* ── Inline Todo Progress Bar (Live Planner Tracker) ──────────── */
+    /* â”€â”€ Inline Todo Progress Bar (Live Planner Tracker) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .plan-tracker-strip {
       padding: 8px 10px;
       background: rgba(6, 182, 212, 0.05);
@@ -1297,7 +1448,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       white-space: nowrap;
     }
 
-    /* ── Model Quick Switcher Flyout ───────────────────────────────── */
+    /* â”€â”€ Model Quick Switcher Flyout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .model-flyout {
       position: absolute;
       top: 36px;
@@ -1374,7 +1525,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       color: var(--muted);
     }
 
-    /* ── Chat Feed ─────────────────────────────────────────────────── */
+    /* â”€â”€ Chat Feed â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .chat-container {
       flex: 1;
       overflow-y: auto;
@@ -1427,21 +1578,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     .spinning { animation: spin 1.2s linear infinite; }
 
     .zero-title {
-      font-size: 18px;
-      font-weight: 600;
+      font-size: 20px;
+      font-weight: 700;
       color: var(--fg);
-      letter-spacing: -0.2px;
-      margin-bottom: 2px;
+      letter-spacing: -0.4px;
+      margin-bottom: 4px;
     }
 
     .zero-subtitle {
-      font-size: 12.5px;
-      color: var(--muted);
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--fg);
       text-align: center;
-      margin-bottom: 4px;
-      min-height: 18px;
-      max-width: 290px;
-      line-height: 1.4;
+      margin-bottom: 8px;
+      min-height: 22px;
+      max-width: 320px;
+      line-height: 1.45;
+      letter-spacing: -0.2px;
     }
 
     .zero-context-pill {
@@ -1520,7 +1673,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       color: var(--muted);
     }
 
-    /* ── Recent Sessions at Home / Zero State ──────────────────────── */
+    /* â”€â”€ Recent Sessions at Home / Zero State â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .recent-sessions-section {
       width: 100%;
       max-width: 320px;
@@ -1645,7 +1798,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       white-space: nowrap;
     }
 
-    /* ── Status Bar Footer ──────────────────────── */
+    /* â”€â”€ Status Bar Footer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .status-bar {
       display: flex;
       align-items: center;
@@ -1775,17 +1928,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     .message-footer {
-      display: none;
+      display: flex;
       align-items: center;
       gap: 8px;
-      margin-top: 6px;
-      font-size: 12.5px;
+      margin-top: 4px;
+      font-size: 11.5px;
       color: var(--muted);
       padding: 0 2px;
+      min-height: 18px;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.15s ease, visibility 0.15s ease;
+      z-index: 2;
     }
-    .message-wrap:hover .message-footer{
-    display:flex;
-    z-index:2;
+    .message-wrap:hover .message-footer {
+      opacity: 1;
+      visibility: visible;
     }
 
      .msg-copy-btn {
@@ -1807,7 +1965,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       color: var(--fg);
       background: rgba(255, 255, 255, 0.06);
     }
-    /* User bubbles — TUI has no copy, keep footer minimal */
+    /* User bubbles â€” TUI has no copy, keep footer minimal */
     .message-wrap.user .message-footer { justify-content: flex-end; opacity: 0.6; }
     .message-wrap.user .msg-copy-btn { display: none; }
 
@@ -1819,7 +1977,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       font-family: var(--vscode-editor-font-family, monospace);
     }
 
-    /* Thinking bubble — TUI parity: auto-expand while streaming, auto-collapse when done, clickable anytime */
+    /* Thinking bubble â€” TUI parity: auto-expand while streaming, auto-collapse when done, clickable anytime */
     .thinking-card {
       background: transparent;
       border: none;
@@ -1968,6 +2126,88 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       border-radius: 0 4px 4px 0;
       color: var(--muted);
     }
+
+    /* Markdown Tables */
+    .table-scroll-wrapper {
+      width: 100%;
+      overflow-x: auto;
+      margin: 8px 0;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    .md-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11.5px;
+      text-align: left;
+    }
+    .md-table th {
+      background: rgba(255, 255, 255, 0.06);
+      font-weight: 600;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--border);
+      color: #ffffff;
+      white-space: nowrap;
+    }
+    .md-table td {
+      padding: 5px 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      color: var(--fg);
+    }
+    .md-table tr:last-child td {
+      border-bottom: none;
+    }
+    .md-table tr:hover td {
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    /* Markdown Horizontal Rules & Task Lists */
+    .md-hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 10px 0;
+    }
+    .md-task-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin: 3px 0 3px 4px;
+      font-size: 12px;
+    }
+    .md-checkbox {
+      margin: 0;
+      accent-color: var(--accent);
+      cursor: default;
+    }
+    .md-task-text.completed {
+      text-decoration: line-through;
+      opacity: 0.6;
+    }
+    .md-image {
+      max-width: 100%;
+      height: auto;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      margin: 6px 0;
+      display: block;
+    }
+    details {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 6px 10px;
+      margin: 6px 0;
+      font-size: 12px;
+    }
+    summary {
+      font-weight: 600;
+      cursor: pointer;
+      color: var(--fg);
+      user-select: none;
+    }
+    summary:hover {
+      color: var(--accent);
+    }
     .code-block-container {
       margin: 10px 0;
       border: 1px solid var(--border);
@@ -2024,7 +2264,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       line-height: 1.5;
     }
 
-    /* Tool Card — TUI parity: expand while running, collapse when done, toggle on click */
+    /* Tool Card â€” TUI parity: expand while running, collapse when done, toggle on click */
     .tool-card {
       background: var(--card-bg);
       border: 1px solid var(--border);
@@ -2092,7 +2332,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       display: block;
     }
 
-    /* Tool Sequence — TUI parity: group tools under working/worked collapsible */
+    /* Tool Sequence â€” TUI parity: group tools under working/worked collapsible */
     .tool-sequence {
       background: var(--card-bg);
       border: 1px solid var(--border);
@@ -2132,49 +2372,128 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     .tool-sequence .tool-card { margin: 0; border-radius: 4px; }
     .tool-sequence .thinking-card { margin: 0; }
 
-    /* Subagent Card */
+    /* Subagent Card â€” Clean, Elegant, Live In-place Status */
     .subagent-card {
       background: rgba(255, 255, 255, 0.03);
       border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 6px 8px;
-      margin: 4px 0;
-      font-size: 11px;
+      border-radius: 6px;
+      padding: 8px 10px;
+      margin: 6px 0;
+      font-size: 11.5px;
     }
-
     .subagent-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .subagent-header-left {
       display: flex;
       align-items: center;
       gap: 6px;
       font-weight: 600;
     }
-
-    .subagent-role {
+    .subagent-header-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .subagent-icon {
       color: var(--accent);
+    }
+    .subagent-role {
+      color: var(--fg);
       text-transform: capitalize;
     }
-
     .subagent-status {
-      margin-left: auto;
-      font-size: 9px;
-      padding: 1px 4px;
+      font-size: 9.5px;
+      font-weight: 700;
+      padding: 1px 6px;
       border-radius: 3px;
-      background: rgba(255, 255, 255, 0.08);
-      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
     }
-
+    .subagent-status.running {
+      background: rgba(6, 182, 212, 0.15);
+      color: var(--accent);
+    }
     .subagent-status.done {
       background: rgba(63, 185, 80, 0.15);
       color: var(--green);
     }
-
-    .subagent-body {
+    .subagent-status.failed {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--red);
+    }
+    .subagent-chevron {
       color: var(--muted);
+      transition: transform 0.15s;
+    }
+    .subagent-card.collapsed .subagent-chevron {
+      transform: rotate(-90deg);
+    }
+    .subagent-card.collapsed .subagent-body {
+      display: none;
+    }
+    .subagent-body {
+      margin-top: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .subagent-task {
+      color: var(--fg);
+      font-size: 11.5px;
+      line-height: 1.4;
+      background: rgba(255, 255, 255, 0.02);
+      padding: 4px 6px;
+      border-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    .subagent-task-label {
+      font-weight: 600;
+      color: var(--muted);
+      margin-right: 4px;
+    }
+    .subagent-live-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--accent);
+      font-size: 11px;
+      padding: 3px 0;
+    }
+    .subagent-spinner {
+      width: 10px;
+      height: 10px;
+      border: 1.5px solid rgba(6, 182, 212, 0.2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    .subagent-result-box {
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 6px 8px;
+      font-size: 11.5px;
+      color: var(--fg);
       margin-top: 4px;
-      white-space: pre-wrap;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .subagent-result-title {
+      font-size: 10.5px;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 2px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
     }
 
-    /* Interactive Cards — approval / questions */
+    /* Interactive Cards â€” approval / questions */
     .approval-card {
       background: var(--card-bg, #1e1e1e);
       border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
@@ -2184,7 +2503,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       font-size: 12px;
     }
 
-    /* ── Clarifying Questions Carousel ────────────────────────── */
+    /* â”€â”€ Clarifying Questions Carousel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     .questions-card {
       background: var(--card-bg, #1e1e1e);
       border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
@@ -2337,15 +2656,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     .approval-icon {
       width: 26px; height: 26px;
       border-radius: 6px;
-      background: rgba(6, 182, 212, 0.12);
-      border: 1px solid rgba(6, 182, 212, 0.25);
+      background: rgba(210, 153, 34, 0.15);
+      border: 1px solid rgba(210, 153, 34, 0.35);
       display: flex; align-items: center; justify-content: center;
-      color: var(--accent);
+      color: #d29922;
       flex-shrink: 0;
     }
     .approval-kicker {
       font-size: 10px; font-weight: 700; letter-spacing: 0.6px;
-      text-transform: uppercase; color: var(--accent);
+      text-transform: uppercase; color: #d29922;
       margin-bottom: 2px;
     }
     .approval-title { font-size: 12.5px; font-weight: 600; color: var(--fg); }
@@ -2363,9 +2682,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     .approval-tool-pill.status-pill {
       font-size: 9.5px;
       font-weight: 700;
-      background: rgba(6, 182, 212, 0.12);
-      color: var(--accent);
-      border-color: rgba(6, 182, 212, 0.25);
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+    .approval-tool-pill.status-pill.orange {
+      background: rgba(210, 153, 34, 0.15);
+      color: #d29922;
+      border-color: rgba(210, 153, 34, 0.35);
+    }
+    .approval-tool-pill.status-pill.green {
+      background: rgba(63, 185, 80, 0.15);
+      color: var(--green);
+      border-color: rgba(63, 185, 80, 0.35);
+    }
+    .approval-tool-pill.status-pill.blue {
+      background: rgba(56, 139, 253, 0.15);
+      color: #58a6ff;
+      border-color: rgba(56, 139, 253, 0.35);
+    }
+    .approval-tool-pill.status-pill.red {
+      background: rgba(248, 81, 73, 0.15);
+      color: var(--red);
+      border-color: rgba(248, 81, 73, 0.35);
     }
     .approval-path {
       font-family: var(--vscode-editor-font-family, monospace);
@@ -2409,16 +2747,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     .btn-approve {
-      background: #059669;
-      color: #fff;
+      background: var(--vscode-button-background, #0e639c);
+      color: var(--vscode-button-foreground, #ffffff);
     }
     .btn-approve:hover {
-      background: #10b981;
-      box-shadow: 0 2px 10px rgba(16, 185, 129, 0.4);
+      background: var(--vscode-button-hoverBackground, #1177bb);
+      box-shadow: 0 2px 10px rgba(0, 127, 212, 0.4);
     }
     .btn-reject {
-      background: rgba(255,255,255,0.06);
-      color: var(--fg);
+      background: var(--vscode-button-secondaryBackground, rgba(255,255,255,0.06));
+      color: var(--vscode-button-secondaryForeground, var(--fg));
       border-color: var(--border);
     }
     .btn-reject:hover {
@@ -2432,6 +2770,58 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       color: var(--muted); border-radius: 6px; cursor: pointer;
     }
     .btn-ghost:hover { color: var(--fg); background: rgba(255,255,255,0.05); }
+
+    /* Lightbox Modal */
+    .image-lightbox-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.85);
+      z-index: 10000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      backdrop-filter: blur(4px);
+    }
+    .image-lightbox-container {
+      position: relative;
+      max-width: 95vw;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .image-lightbox-img {
+      max-width: 100%;
+      max-height: 85vh;
+      object-fit: contain;
+      border-radius: 6px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+    .image-lightbox-close {
+      position: absolute;
+      top: -12px;
+      right: -12px;
+      background: rgba(30, 30, 30, 0.9);
+      color: #ffffff;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 50%;
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 16px;
+      transition: background 0.15s;
+    }
+    .image-lightbox-close:hover {
+      background: var(--red);
+    }
 
     /* Prompt Queue */
     .queue-container {
@@ -2465,6 +2855,64 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       flex-direction: column;
       gap: 6px;
       flex-shrink: 0;
+      position: relative;
+    }
+
+    /* Slash Command Palette Overlay */
+    .slash-palette {
+      position: absolute;
+      bottom: calc(100% - 4px);
+      left: 10px;
+      right: 10px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+      z-index: 250;
+      max-height: 250px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+    .slash-palette-header {
+      padding: 6px 10px;
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .slash-palette-list {
+      display: flex;
+      flex-direction: column;
+      padding: 3px 0;
+    }
+    .slash-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: background 0.12s;
+    }
+    .slash-item:hover, .slash-item.active {
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .slash-cmd {
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-weight: 600;
+      color: var(--accent);
+    }
+    .slash-desc {
+      color: var(--muted);
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .prompt-box {
@@ -2482,18 +2930,59 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
     }
 
+    .image-attachments-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 2px 0 6px 0;
+    }
+    .image-attachment-chip {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .image-attachment-thumb {
+      width: 42px;
+      height: 42px;
+      object-fit: cover;
+      display: block;
+    }
+    .image-attachment-remove {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      background: rgba(0, 0, 0, 0.75);
+      color: #ffffff;
+      border: none;
+      border-radius: 50%;
+      width: 15px;
+      height: 15px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      cursor: pointer;
+    }
+    .image-attachment-remove:hover {
+      background: var(--red);
+    }
+
     #prompt-input {
       width: 100%;
       background: transparent;
       border: none;
       color: var(--fg);
       font-family: inherit;
-      font-size: 13px;
+      font-size: 13.5px;
       outline: none;
       resize: none;
       min-height: 38px;
       max-height: 160px;
-      line-height: 1.45;
+      line-height: 1.5;
       padding: 2px 2px 6px 2px;
     }
     #prompt-input::placeholder {
@@ -2666,10 +3155,84 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       cursor: pointer;
     }
     .trust-btn-sec:hover { background: rgba(255,255,255,0.06); }
+
+    /* AI Engine Setup Guide Card */
+    .setup-guide-card {
+      margin: 10px 12px;
+      padding: 12px 14px;
+      border-radius: var(--radius);
+      background: rgba(234, 179, 8, 0.08);
+      border: 1px solid rgba(234, 179, 8, 0.3);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      animation: fadeIn 0.2s ease-out;
+    }
+    .setup-guide-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: #eab308;
+    }
+    .setup-guide-icon {
+      width: 16px;
+      height: 16px;
+      color: #eab308;
+      flex-shrink: 0;
+    }
+    .setup-guide-body {
+      font-size: 11.5px;
+      line-height: 1.45;
+      color: var(--fg);
+      opacity: 0.9;
+    }
+    .setup-guide-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .btn-setup-action {
+      padding: 4px 10px;
+      font-size: 11px;
+      font-weight: 500;
+      border-radius: 4px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s ease;
+      border: 1px solid transparent;
+    }
+    .btn-setup-action.primary {
+      background: var(--vscode-button-background, #0e639c);
+      color: var(--vscode-button-foreground, #ffffff);
+    }
+    .btn-setup-action.primary:hover {
+      background: var(--vscode-button-hoverBackground, #1177bb);
+    }
+    .btn-setup-action.secondary {
+      background: var(--vscode-button-secondaryBackground, rgba(255,255,255,0.06));
+      color: var(--vscode-button-secondaryForeground, var(--fg));
+      border-color: var(--border);
+    }
+    .btn-setup-action.secondary:hover {
+      background: rgba(255,255,255,0.12);
+    }
   </style>
 </head>
 <body>
   <audio id="audio-done" preload="auto" src="${doneAudioUri}"></audio>
+
+  <!-- Image Lightbox Modal Overlay -->
+  <div id="image-lightbox-overlay" class="image-lightbox-overlay" style="display:none;">
+    <div class="image-lightbox-container">
+      <button class="image-lightbox-close" id="btn-lightbox-close" title="Close preview">&times;</button>
+      <img id="image-lightbox-img" class="image-lightbox-img" src="" alt="Image Preview">
+    </div>
+  </div>
 
   <!-- Top Bar (Clean Session Header, No Duplicate Buttons) -->
   <div class="top-bar">
@@ -2681,6 +3244,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         <span class="session-badge-text" id="active-session-name">Main Session</span>
         <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+      </button>
+    </div>
+    <div class="top-bar-right">
+      <button class="top-bar-icon-btn" id="btn-top-undo" title="Undo last turn & rollback file changes" data-action="undo-turn">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 7v6h6"></path>
+          <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path>
+        </svg>
+      </button>
+      <button class="top-bar-icon-btn" id="btn-top-compact" title="Compact context window" data-action="compact-session">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="4 14 10 14 10 20"></polyline>
+          <polyline points="20 10 14 10 14 4"></polyline>
+          <line x1="14" y1="10" x2="21" y2="3"></line>
+          <line x1="3" y1="21" x2="10" y2="14"></line>
+        </svg>
+      </button>
+      <button class="top-bar-icon-btn" id="btn-top-new" title="New Session" data-action="new-session">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+      </button>
+      <button class="top-bar-icon-btn" id="btn-top-settings" title="Settings & Hub" data-action="open-settings">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
         </svg>
       </button>
     </div>
@@ -2700,6 +3291,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     </div>
   </div>
 
+  <!-- Scheduled Crons Flyout / Drawer -->
+  <div class="crons-flyout" id="crons-flyout" style="display:none;">
+    <div class="crons-flyout-header">
+      <div class="crons-header-title">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+        <span>Scheduled Cron Jobs</span>
+      </div>
+      <button class="crons-close-btn" id="btn-crons-close" title="Close">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
+    </div>
+    <div class="crons-list" id="crons-list">
+      <div style="padding:14px; text-align:center; color:var(--muted); font-size:11px;">Loading crons...</div>
+    </div>
+  </div>
 
   <!-- Inline Todo Progress Bar (Live Planner Tracker Inside) -->
   <div class="plan-tracker-strip" id="plan-tracker-strip" style="display:none;">
@@ -2747,8 +3353,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     </div>
   </div>
 
+  <!-- AI Engine Setup Guide Card (Shown only if daemon fails to connect) -->
+  <div class="setup-guide-card" id="setup-guide-card" style="display:none;">
+    <div class="setup-guide-header">
+      <svg class="setup-guide-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="8" x2="12" y2="12"></line>
+        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+      </svg>
+      <span>AI Engine Setup Needed</span>
+    </div>
+    <div class="setup-guide-body" id="setup-guide-body">
+      Andromity requires Python 3.11+ to run the autonomous coding daemon.
+    </div>
+    <div class="setup-guide-actions">
+      <button class="btn-setup-action primary" data-action="run-setup-check">Run Setup Check</button>
+      <button class="btn-setup-action secondary" data-action="install-python-web">Install Python â†—</button>
+      <button class="btn-setup-action secondary" data-action="configure-python-path">Configure Path</button>
+    </div>
+  </div>
+
   <!-- Chat Messages Feed -->
-  <div class="chat-container" id="chat-messages">
+  <div class="chat-container" id="chat-messages" role="log" aria-label="Chat messages" aria-live="polite">
     <!-- Clean Onboarding Zero State (No Emojis) -->
     <div class="zero-state" id="zero-state">
       <div class="zero-brand-wrap">
@@ -2782,7 +3408,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       <div class="starter-cards">
         <div class="starter-header">Quick Starters</div>
-        <div class="starter-card" data-action="send-starter" data-prompt="Explain the architecture of this project in detail">
+        <div class="starter-card" data-action="send-starter" data-prompt="Explain the architecture of this project in detail" role="button" tabindex="0" aria-label="Explain architecture">
           <svg class="starter-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
             <polyline points="2 17 12 22 22 17"></polyline>
@@ -2793,7 +3419,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             <span class="starter-desc">Map dependencies and project design</span>
           </div>
         </div>
-        <div class="starter-card" data-action="send-starter" data-prompt="Analyze diagnostics and fix any syntax or type errors in the current file">
+        <div class="starter-card" data-action="send-starter" data-prompt="Analyze diagnostics and fix any syntax or type errors in the current file" role="button" tabindex="0" aria-label="Fix diagnostics & errors">
           <svg class="starter-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
           </svg>
@@ -2802,7 +3428,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             <span class="starter-desc">Inspect active errors and repair code</span>
           </div>
         </div>
-        <div class="starter-card" data-action="send-starter" data-prompt="Write comprehensive unit tests with edge cases for the active code">
+        <div class="starter-card" data-action="send-starter" data-prompt="Write comprehensive unit tests with edge cases for the active code" role="button" tabindex="0" aria-label="Generate unit tests">
           <svg class="starter-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M9 3h6v3H9zM10 6v7.3a4 4 0 1 0 4 0V6"></path>
             <circle cx="12" cy="17" r="1.5" fill="currentColor"></circle>
@@ -2812,7 +3438,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             <span class="starter-desc">Cover edge cases and critical paths</span>
           </div>
         </div>
-        <div class="starter-card" data-action="open-model-hub">
+        <div class="starter-card" data-action="open-model-hub" role="button" tabindex="0" aria-label="Browse model catalog">
           <svg class="starter-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="3"></circle>
             <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
@@ -2833,37 +3459,58 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <div class="queue-container" id="queue-container" style="display:none;"></div>
 
   <!-- Input Box (Modern Card Layout) -->
-  <div class="input-section">
+  <div class="input-section" role="region" aria-label="Chat input">
+    <!-- Floating Slash Command Palette -->
+    <div class="slash-palette" id="slash-palette" style="display:none;" role="listbox" aria-label="Slash commands">
+      <div class="slash-palette-header">Commands (Click or press Enter)</div>
+      <div class="slash-palette-list" id="slash-palette-list"></div>
+    </div>
+
+    <!-- Floating Mention / Skills Palette -->
+    <div class="slash-palette" id="mention-palette" style="display:none;" role="listbox" aria-label="Skills and tools">
+      <div class="slash-palette-header" style="color:#c084fc;">âš¡ Skills & Tools (Click to mention)</div>
+      <div class="slash-palette-list" id="mention-palette-list"></div>
+    </div>
+
     <div class="prompt-box">
-      <textarea id="prompt-input" placeholder="Ask Andromity (Enter to send, Shift+Enter for newline)..." rows="1"></textarea>
+      <div class="image-attachments-container" id="image-attachments-container" style="display:none;"></div>
+      <textarea id="prompt-input" placeholder="Ask Andromity or type / for commands, @ for skills..." rows="1" aria-label="Ask Andromity or type slash for commands, @ for skills"></textarea>
       <div class="prompt-box-footer">
         <div class="prompt-left-controls">
-          <button class="prompt-icon-btn" id="btn-prompt-plus" title="Browse 396+ OpenRouter Models" data-action="open-model-hub">
+          <button class="prompt-icon-btn" id="btn-prompt-plus" title="Browse 396+ OpenRouter Models" data-action="open-model-hub" aria-label="Open model catalog">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="12" y1="5" x2="12" y2="19"></line>
               <line x1="5" y1="12" x2="19" y2="12"></line>
             </svg>
           </button>
-          <button class="prompt-pill-btn" id="btn-prompt-mode" title="Permission Governance Mode (Click to cycle)">
+
+          <button class="prompt-pill-btn" id="btn-prompt-mode" title="Permission Governance Mode (Click to cycle)" aria-label="Permission mode">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
             </svg>
             <span id="prompt-mode-label">${(this._currentMode || 'safe').toUpperCase()}</span>
           </button>
+
         </div>
 
         <div class="prompt-right-controls">
-          <button class="prompt-pill-btn" id="btn-prompt-model" title="Select or search model">
+          <button class="prompt-pill-btn" id="btn-prompt-model" title="Select or search model" aria-label="Select AI model">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
               <circle cx="12" cy="12" r="3"></circle>
             </svg>
             <span id="prompt-model-label">${this._formatModelDisplayName(this._currentModel)}</span>
           </button>
-          <button class="codex-cancel-btn" id="btn-cancel" title="Stop Generation" style="display:none;">
+          <button class="prompt-pill-btn" id="btn-prompt-reasoning" title="Reasoning / Thinking Effort (Click to switch)" aria-label="Reasoning effort">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+            </svg>
+            <span id="prompt-reasoning-label">${(this._currentReasoning || 'medium').toUpperCase()}</span>
+          </button>
+          <button class="codex-cancel-btn" id="btn-cancel" title="Stop Generation" style="display:none;" aria-label="Cancel agent turn">
             <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>
           </button>
-          <button class="codex-send-btn" id="btn-send" title="Send (Enter)">
+          <button class="codex-send-btn" id="btn-send" title="Send (Enter)" aria-label="Send message">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <line x1="12" y1="19" x2="12" y2="5"></line>
               <polyline points="5 12 12 5 19 12"></polyline>
@@ -2883,6 +3530,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         <div class="token-mini-track" id="token-mini-track">
           <div class="token-mini-bar" id="token-mini-bar" style="width: 0%;"></div>
         </div>
+        <button class="prompt-pill-btn" id="btn-prompt-profile" title="Agent Profile Persona (Click to cycle)" aria-label="Agent profile">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+        <circle cx="12" cy="7" r="4"></circle>
+        </svg>
+        <span id="prompt-profile-label">${(this._currentProfile || 'builder').toUpperCase()}</span>
+        </button>
       </div>
     </div>
     <div class="status-bar-right">
@@ -2893,6 +3547,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const sidebarIconUri = "${sidebarIconUri}";
+
+    window.onerror = function(msg, url, lineNo, columnNo, error) {
+      console.error("[Andromity Webview Error]", msg, lineNo, columnNo, error);
+      try {
+        vscode.postMessage({
+          type: "webview_error",
+          message: String(msg),
+          line: lineNo,
+          col: columnNo,
+          stack: error ? error.stack : ""
+        });
+      } catch(e) {}
+    };
+    window.addEventListener("unhandledrejection", function(event) {
+      console.error("[Andromity Webview Unhandled Rejection]", event.reason);
+      try {
+        vscode.postMessage({
+          type: "webview_error",
+          message: "Unhandled promise rejection: " + String(event.reason),
+          stack: event.reason && event.reason.stack ? event.reason.stack : ""
+        });
+      } catch(e) {}
+    });
 
     const chatContainer = document.getElementById('chat-messages');
     const zeroState = document.getElementById('zero-state');
@@ -2923,6 +3600,35 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const recentSessionsSection = document.getElementById('recent-sessions-section');
     const recentSessionsList = document.getElementById('recent-sessions-list');
     let allSessions = [];
+    let sessionDisplayLimit = 10;
+
+    const slashPalette = document.getElementById('slash-palette');
+    const slashPaletteList = document.getElementById('slash-palette-list');
+    let activeSlashIdx = 0;
+    let currentSlashMatches = [];
+
+    const mentionPalette = document.getElementById('mention-palette');
+    const mentionPaletteList = document.getElementById('mention-palette-list');
+    let activeMentionIdx = 0;
+    let currentMentionMatches = [];
+    let currentMentionPrefix = '';
+    let allSkills = [];
+
+    const slashCommands = [
+      { cmd: '/help', desc: 'Show all available commands & shortcuts', action: 'help' },
+      { cmd: '/skills', desc: 'Browse and mention installed agent skills', action: 'skills' },
+      { cmd: '/undo', desc: 'Undo last turn & rollback file modifications', action: 'undo' },
+      { cmd: '/compact', desc: 'Compress conversation context to save tokens', action: 'compact' },
+      { cmd: '/new', desc: 'Start a fresh conversation session', action: 'new' },
+      { cmd: '/clear', desc: 'Clear current chat history view', action: 'clear' },
+      { cmd: '/sessions', desc: 'Open sessions browser', action: 'sessions' },
+      { cmd: '/settings', desc: 'Open Settings, Model Catalog & MCP Hub', action: 'settings' },
+      { cmd: '/model', desc: 'Switch AI model', action: 'model' },
+      { cmd: '/mode', desc: 'Cycle permission mode (safe / trust / full / yolo)', action: 'mode' },
+      { cmd: '/plan', desc: 'Open Implementation Plan editor tab', action: 'plan' },
+      { cmd: '/diff', desc: 'View git diff of current changes', action: 'diff' },
+      { cmd: '/cron', desc: 'Manage scheduled background cron jobs', action: 'cron' },
+    ];
 
     const DEVELOPER_GREETINGS = [
       "What can I do for you?",
@@ -2969,6 +3675,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       } else if (currentModel.includes('gpt-4o') || currentModel.includes('deepseek')) {
         capacity = 128000;
       }
+      const formattedCap = formatTokenCount(capacity);
 
       const pct = Math.min(100, Math.max(0, (tokens / capacity) * 100));
       const miniBar = document.getElementById('token-mini-bar');
@@ -3014,7 +3721,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     let currentMode = ${JSON.stringify(this._currentMode || "safe")};
     let currentProfile = ${JSON.stringify(this._currentProfile || "builder")};
     let currentReasoning = ${JSON.stringify(this._currentReasoning || "medium")};
-    let allModels = [];
+    const DEFAULT_POPULAR_MODELS = [
+      { id: 'anthropic/claude-3.7-sonnet', name: 'Claude 3.7 Sonnet', provider: 'openrouter', pricing: '$3.00/M' },
+      { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', provider: 'openrouter', pricing: '$3.00/M' },
+      { id: 'openai/gpt-4o', name: 'GPT-4o', provider: 'openrouter', pricing: '$2.50/M' },
+      { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini', provider: 'openrouter', pricing: '$0.15/M' },
+      { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'openrouter', pricing: '$1.25/M' },
+      { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'openrouter', pricing: '$0.10/M' },
+      { id: 'deepseek/deepseek-r1', name: 'DeepSeek R1', provider: 'openrouter', pricing: '$0.55/M' },
+      { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3', provider: 'openrouter', pricing: '$0.14/M' },
+      { id: 'qwen/qwen-2.5-coder-32b-instruct', name: 'Qwen 2.5 Coder 32B', provider: 'openrouter', pricing: '$0.07/M' },
+      { id: 'meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B', provider: 'openrouter', pricing: '$0.12/M' }
+    ];
+    let allModels = [...DEFAULT_POPULAR_MODELS];
     let isRunning = false;
     const promptQueue = [];
     let currentTurnStartTime = 0;
@@ -3034,16 +3753,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     let userScrolledUp = false;
 
     function isAtBottom() {
+      if (!chatContainer) return true;
       return chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 90;
     }
     function scrollToBottomIfNeeded() {
-      if (!userScrolledUp) {
+      if (!userScrolledUp && chatContainer) {
         chatContainer.scrollTop = chatContainer.scrollHeight;
       }
     }
-    chatContainer.addEventListener('scroll', () => {
-      userScrolledUp = !isAtBottom();
-    });
+    if (chatContainer) {
+      chatContainer.addEventListener('scroll', () => {
+        userScrolledUp = !isAtBottom();
+      });
+    }
 
     let toolSeqDoneTools = new Set();
     let toolSeqUserToggled = false;
@@ -3067,7 +3789,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       toolSeqUserToggled = false;
       toolSeqFinished = false;
 
-      currentToolSequence.innerHTML = '<div class="tool-seq-header"><svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg><span class="tool-seq-title">0 tools · working… (0s)</span><svg class="tool-seq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg><button class="tool-seq-copy" title="Copy tool log"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button></div><div class="tool-seq-body"></div>';
+      currentToolSequence.innerHTML = '<div class="tool-seq-header"><svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg><span class="tool-seq-title">0 tools Â· workingâ€¦ (0s)</span><svg class="tool-seq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg><button class="tool-seq-copy" title="Copy tool log"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button></div><div class="tool-seq-body"></div>';
       
       const thisSeq = currentToolSequence;
       const hdr = thisSeq.querySelector('.tool-seq-header');
@@ -3111,13 +3833,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const doneCount = toolSeqDoneTools.size;
 
       if (toolSeqFinished) {
-        el.textContent = label + ' · ' + (elapsed < 1 ? 'complete' : 'worked for ' + elapsed + 's');
+        el.textContent = label + ' Â· ' + (elapsed < 1 ? 'complete' : 'worked for ' + elapsed + 's');
       } else if (lastToolRunning && lastToolName) {
-        el.textContent = label + ' · ' + lastToolName + ' working… (' + elapsed + 's)';
+        el.textContent = label + ' Â· ' + lastToolName + ' workingâ€¦ (' + elapsed + 's)';
       } else if (doneCount > 0) {
-        el.textContent = label + ' · ' + doneCount + '/' + toolSeqCount + ' done · working… (' + elapsed + 's)';
+        el.textContent = label + ' Â· ' + doneCount + '/' + toolSeqCount + ' done Â· workingâ€¦ (' + elapsed + 's)';
       } else {
-        el.textContent = label + ' · working… (' + elapsed + 's)';
+        el.textContent = label + ' Â· workingâ€¦ (' + elapsed + 's)';
       }
     }
 
@@ -3137,29 +3859,269 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
-    // Send on click or Enter
-    sendBtn.addEventListener('click', sendCurrentPrompt);
-    promptInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendCurrentPrompt();
+    function showSlashPalette(matches) {
+      if (!slashPalette || !matches || matches.length === 0) {
+        hideSlashPalette();
+        return;
       }
-    });
+      hideMentionPalette();
+      currentSlashMatches = matches;
+      activeSlashIdx = 0;
+      slashPalette.style.display = 'flex';
+      renderSlashPalette();
+    }
 
-    // Auto-resize prompt input & toggle send button brightness
-    promptInput.addEventListener('input', () => {
+    function hideSlashPalette() {
+      if (slashPalette) slashPalette.style.display = 'none';
+      currentSlashMatches = [];
+      activeSlashIdx = 0;
+    }
+
+    function renderSlashPalette() {
+      if (!slashPaletteList) return;
+      slashPaletteList.innerHTML = currentSlashMatches.map((c, idx) => {
+        const isSel = idx === activeSlashIdx;
+        return '<div class="slash-item ' + (isSel ? 'active' : '') + '" data-action="select-slash-cmd" data-cmd="' + escapeHtml(c.cmd) + '" data-idx="' + idx + '" role="option" aria-selected="' + isSel + '">' +
+          '<span class="slash-cmd">' + escapeHtml(c.cmd) + '</span>' +
+          '<span class="slash-desc">' + escapeHtml(c.desc) + '</span>' +
+        '</div>';
+      }).join('');
+    }
+
+    function navigateSlashPalette(direction) {
+      if (!currentSlashMatches || currentSlashMatches.length === 0) return;
+      activeSlashIdx = (activeSlashIdx + direction + currentSlashMatches.length) % currentSlashMatches.length;
+      renderSlashPalette();
+      const activeEl = slashPaletteList.querySelector('.slash-item.active');
+      if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
+    }
+
+    function showMentionPalette(matches, prefix) {
+      if (!mentionPalette || !matches || matches.length === 0) {
+        hideMentionPalette();
+        return;
+      }
+      hideSlashPalette();
+      currentMentionMatches = matches;
+      currentMentionPrefix = prefix || '@';
+      activeMentionIdx = 0;
+      mentionPalette.style.display = 'flex';
+      renderMentionPalette();
+    }
+
+    function hideMentionPalette() {
+      if (mentionPalette) mentionPalette.style.display = 'none';
+      currentMentionMatches = [];
+      activeMentionIdx = 0;
+    }
+
+    function renderMentionPalette() {
+      if (!mentionPaletteList) return;
+      mentionPaletteList.innerHTML = currentMentionMatches.map((s, idx) => {
+        const isSel = idx === activeMentionIdx;
+        const name = s.name || s.id || 'skill';
+        const desc = s.description || 'Agent skill';
+        return '<div class="slash-item ' + (isSel ? 'active' : '') + '" data-action="select-mention-skill" data-skill="' + escapeHtml(name) + '" data-idx="' + idx + '" role="option" aria-selected="' + isSel + '">' +
+          '<span class="slash-cmd" style="color:#c084fc;">@' + escapeHtml(name) + '</span>' +
+          '<span class="slash-desc">' + escapeHtml(desc) + '</span>' +
+        '</div>';
+      }).join('');
+    }
+
+    function navigateMentionPalette(direction) {
+      if (!currentMentionMatches || currentMentionMatches.length === 0) return;
+      activeMentionIdx = (activeMentionIdx + direction + currentMentionMatches.length) % currentMentionMatches.length;
+      renderMentionPalette();
+      const activeEl = mentionPaletteList.querySelector('.slash-item.active');
+      if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
+    }
+
+    function executeMentionSkill(skillObj) {
+      if (!skillObj) return;
+      hideMentionPalette();
+      const skillName = skillObj.name || skillObj.id || '';
+      insertSkillIntoInput(skillName);
+    }
+
+    function insertSkillIntoInput(skillName) {
+      const val = promptInput.value;
+      const cursorPos = promptInput.selectionStart || val.length;
+      const textBefore = val.slice(0, cursorPos);
+      const textAfter = val.slice(cursorPos);
+      
+      const newBefore = textBefore.replace(/@([a-zA-Z0-9_-]*)$/, '@' + skillName + ' ');
+      if (newBefore === textBefore) {
+        // If not typed with @, append to beginning or cursor
+        promptInput.value = val ? val + ' @' + skillName + ' ' : '@' + skillName + ' ';
+      } else {
+        promptInput.value = newBefore + textAfter;
+      }
+      promptInput.focus();
       promptInput.style.height = 'auto';
       promptInput.style.height = Math.min(promptInput.scrollHeight, 160) + 'px';
-      if (promptInput.value.trim().length > 0) {
-        sendBtn.classList.add('has-text');
-      } else {
-        sendBtn.classList.remove('has-text');
-      }
-    });
+      sendBtn.classList.add('has-text');
+    }
 
-    cancelBtn.addEventListener('click', () => {
-      vscode.postMessage({ type: 'cancel_turn' });
-    });
+    function executeSlashCommand(cmdObj) {
+      if (!cmdObj) return;
+      hideSlashPalette();
+      promptInput.value = '';
+      promptInput.style.height = 'auto';
+      sendBtn.classList.remove('has-text');
+
+      switch (cmdObj.action) {
+        case 'help':
+          appendHelpCard();
+          break;
+        case 'skills':
+          appendSkillsCard();
+          break;
+        case 'undo':
+          vscode.postMessage({ type: 'undo_turn' });
+          break;
+        case 'compact':
+          vscode.postMessage({ type: 'compact_session' });
+          break;
+        case 'new':
+          vscode.postMessage({ type: 'new_session' });
+          break;
+        case 'clear':
+          chatContainer.innerHTML = '';
+          hideZeroState();
+          break;
+        case 'sessions':
+          toggleSessionsFlyout();
+          break;
+        case 'settings':
+          vscode.postMessage({ type: 'open_settings' });
+          break;
+        case 'model':
+          toggleModelFlyout();
+          break;
+        case 'mode':
+          vscode.postMessage({ type: 'cycle_mode' });
+          break;
+        case 'plan':
+          vscode.postMessage({ type: 'open_plan_tab' });
+          break;
+        case 'diff':
+          vscode.postMessage({ type: 'open_diff' });
+          break;
+        case 'cron':
+          toggleCronsFlyout();
+          break;
+      }
+    }
+
+    // Send on click or Enter
+    if (sendBtn) {
+      sendBtn.addEventListener('click', sendCurrentPrompt);
+    }
+    if (promptInput) {
+      promptInput.addEventListener('keydown', (e) => {
+        // Mentions navigation
+        if (mentionPalette && mentionPalette.style.display === 'flex' && currentMentionMatches.length > 0) {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            navigateMentionPalette(1);
+            return;
+          }
+          if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            navigateMentionPalette(-1);
+            return;
+          }
+          if (e.key === 'Enter' || e.key === 'Tab') {
+            e.preventDefault();
+            executeMentionSkill(currentMentionMatches[activeMentionIdx]);
+            return;
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            hideMentionPalette();
+            return;
+          }
+        }
+
+        // Slash palette navigation
+        if (slashPalette && slashPalette.style.display === 'flex' && currentSlashMatches.length > 0) {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            navigateSlashPalette(1);
+            return;
+          }
+          if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            navigateSlashPalette(-1);
+            return;
+          }
+          if (e.key === 'Enter' || e.key === 'Tab') {
+            e.preventDefault();
+            executeSlashCommand(currentSlashMatches[activeSlashIdx]);
+            return;
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            hideSlashPalette();
+            return;
+          }
+        }
+
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendCurrentPrompt();
+        }
+      });
+
+      // Auto-resize prompt input, slash command & @ mention detection
+      promptInput.addEventListener('input', () => {
+        promptInput.style.height = 'auto';
+        promptInput.style.height = Math.min(promptInput.scrollHeight, 160) + 'px';
+        const val = promptInput.value;
+        if (sendBtn) {
+          if (val.trim().length > 0) {
+            sendBtn.classList.add('has-text');
+          } else {
+            sendBtn.classList.remove('has-text');
+          }
+        }
+
+        const cursorPos = promptInput.selectionStart || val.length;
+        const textBefore = val.slice(0, cursorPos);
+
+        if (val.startsWith('/')) {
+          hideMentionPalette();
+          const query = val.slice(1).toLowerCase().trim();
+          const matches = slashCommands.filter(c => c.cmd.slice(1).toLowerCase().startsWith(query));
+          showSlashPalette(matches);
+        } else {
+          hideSlashPalette();
+          const atMatch = textBefore.match(/@([a-zA-Z0-9_-]*)$/);
+          if (atMatch) {
+            const query = atMatch[1].toLowerCase();
+            const skillsPool = (allSkills && allSkills.length > 0) ? allSkills : [
+              { name: 'browser', description: 'Browse and interact with web pages' },
+              { name: 'terminal', description: 'Run shell and command-line tasks' },
+              { name: 'editor', description: 'Inspect and edit codebase files' },
+              { name: 'git', description: 'Version control and commit actions' },
+            ];
+            const matches = skillsPool.filter(s => {
+              const name = (s.name || s.id || '').toLowerCase();
+              return name.includes(query);
+            });
+            showMentionPalette(matches, atMatch[0]);
+          } else {
+            hideMentionPalette();
+          }
+        }
+      });
+    }
+
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => {
+        vscode.postMessage({ type: 'cancel_turn' });
+      });
+    }
 
     document.getElementById('btn-session-picker')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -3167,6 +4129,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
 
     sessionsSearch?.addEventListener('input', (e) => {
+      sessionDisplayLimit = 10;
       filterAndRenderSessions(e.target.value);
     });
 
@@ -3184,10 +4147,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
 
     function toggleSessionsFlyout() {
+      if (!sessionsFlyout) return;
       if (sessionsFlyout.style.display === 'none' || !sessionsFlyout.style.display) {
         sessionsFlyout.style.display = 'flex';
-        cronsFlyout.style.display = 'none';
-        modelFlyout.style.display = 'none';
+        if (cronsFlyout) cronsFlyout.style.display = 'none';
+        if (modelFlyout) modelFlyout.style.display = 'none';
         vscode.postMessage({ type: 'fetch_sessions' });
         if (sessionsSearch) {
           sessionsSearch.value = '';
@@ -3199,10 +4163,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     function toggleCronsFlyout() {
+      if (!cronsFlyout) return;
       if (cronsFlyout.style.display === 'none' || !cronsFlyout.style.display) {
         cronsFlyout.style.display = 'flex';
-        sessionsFlyout.style.display = 'none';
-        modelFlyout.style.display = 'none';
+        if (sessionsFlyout) sessionsFlyout.style.display = 'none';
+        if (modelFlyout) modelFlyout.style.display = 'none';
         vscode.postMessage({ type: 'fetch_crons' });
       } else {
         cronsFlyout.style.display = 'none';
@@ -3263,7 +4228,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             '<div class="recent-session-title">' + name + '</div>' +
             '<div class="recent-session-sub">' +
               '<span>' + msgsText + '</span>' +
-              (modelTag ? '<span>· ' + modelTag + '</span>' : '') +
+              (modelTag ? '<span>Â· ' + modelTag + '</span>' : '') +
             '</div>' +
           '</div>' +
           '<div class="recent-session-side">' +
@@ -3275,6 +4240,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     function renderSessionsList(sessions, activeId) {
       allSessions = sessions || [];
+      sessionDisplayLimit = 10;
       filterAndRenderSessions(sessionsSearch ? sessionsSearch.value : '');
       renderHomeRecentSessions(allSessions);
     }
@@ -3289,7 +4255,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
-      sessionsListEl.innerHTML = filtered.map(s => {
+      const visible = filtered.slice(0, sessionDisplayLimit);
+
+      let html = visible.map(s => {
         const isCur = s.id === currentSessionId;
         const name = escapeHtml(s.name || s.id || 'Session');
         const msgs = s.message_count ? (s.message_count + ' msgs') : 'Empty';
@@ -3297,10 +4265,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         return '<div class="session-item ' + (isCur ? 'active' : '') + '">' +
           '<div class="session-item-info" data-action="switch-session" data-session-id="' + s.id + '">' +
-            '<div class="session-item-title">' + (isCur ? '✓ ' : '') + name + '</div>' +
+            '<div class="session-item-title">' + (isCur ? 'âœ“ ' : '') + name + '</div>' +
             '<div class="session-item-meta">' +
               '<span>' + msgs + '</span>' +
-              (cost ? '<span>· ' + cost + '</span>' : '') +
+              (cost ? '<span>Â· ' + cost + '</span>' : '') +
             '</div>' +
           '</div>' +
           '<div class="session-item-actions">' +
@@ -3313,6 +4281,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           '</div>' +
         '</div>';
       }).join('');
+
+      if (filtered.length > sessionDisplayLimit) {
+        const remaining = filtered.length - sessionDisplayLimit;
+        html += '<div class="sessions-load-more-wrap">' +
+          '<button class="btn-load-more-sessions" data-action="load-more-sessions">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
+            '<span>Load More (' + remaining + ' remaining)</span>' +
+          '</button>' +
+        '</div>';
+      }
+
+      sessionsListEl.innerHTML = html;
     }
 
     function renderCronsList(crons) {
@@ -3394,13 +4374,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       vscode.postMessage({ type: 'open_model_hub' });
     });
 
-    flyoutSearch.addEventListener('input', (e) => {
-      renderFlyoutList(e.target.value.toLowerCase().trim());
-    });
+    if (flyoutSearch) {
+      flyoutSearch.addEventListener('input', (e) => {
+        renderFlyoutList(e.target.value.toLowerCase().trim());
+      });
+    }
 
     document.addEventListener('click', (e) => {
       const isPicker = e.target.closest('#btn-model-picker') || e.target.closest('#btn-prompt-model');
-      if (!modelFlyout.contains(e.target) && !isPicker) {
+      if (modelFlyout && !modelFlyout.contains(e.target) && !isPicker) {
         modelFlyout.style.display = 'none';
       }
       const isSessionTrigger = e.target.closest('#btn-session-picker');
@@ -3410,6 +4392,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const isCronsClose = e.target.closest('#btn-crons-close');
       if (cronsFlyout && !cronsFlyout.contains(e.target) && !isCronsClose) {
         cronsFlyout.style.display = 'none';
+      }
+      if (slashPalette && !slashPalette.contains(e.target) && e.target !== promptInput) {
+        hideSlashPalette();
+      }
+      if (mentionPalette && !mentionPalette.contains(e.target) && e.target !== promptInput) {
+        hideMentionPalette();
       }
     });
 
@@ -3441,7 +4429,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const card = argsToggle.closest('.approval-card');
         if (card) {
           card.classList.toggle('show-args');
-          argsToggle.textContent = card.classList.contains('show-args') ? '▾ Hide parameters' : '▸ View parameters';
+          argsToggle.textContent = card.classList.contains('show-args') ? 'â–¾ Hide parameters' : 'â–¸ View parameters';
         }
         return;
       }
@@ -3485,6 +4473,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           break;
         case 'undo-turn':
           vscode.postMessage({ type: 'undo_turn' });
+          break;
+        case 'compact-session':
+          vscode.postMessage({ type: 'compact_session' });
+          break;
+        case 'load-more-sessions':
+          sessionDisplayLimit += 20;
+          filterAndRenderSessions(sessionsSearch ? sessionsSearch.value : '');
+          break;
+        case 'select-slash-cmd':
+          const selCmd = target.getAttribute('data-cmd');
+          const foundCmd = slashCommands.find(c => c.cmd === selCmd);
+          if (foundCmd) executeSlashCommand(foundCmd);
+          break;
+        case 'select-mention-skill': {
+          const selSkill = target.getAttribute('data-skill');
+          const foundSkill = allSkills.find(s => s.name === selSkill);
+          if (foundSkill) executeMentionSkill(foundSkill);
+          break;
+        }
+        case 'insert-skill-mention': {
+          const sName = target.getAttribute('data-skill');
+          if (sName) insertSkillIntoInput(sName);
+          break;
+        }
+        case 'open-skills-settings':
+          vscode.postMessage({ type: 'open_skills_settings' });
           break;
         case 'open-settings':
           vscode.postMessage({ type: 'open_settings' });
@@ -3551,32 +4565,38 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
 
     function toggleModelFlyout() {
+      if (!modelFlyout) return;
       const isVisible = modelFlyout.style.display === 'flex';
       if (isVisible) {
         modelFlyout.style.display = 'none';
       } else {
         modelFlyout.style.display = 'flex';
-        flyoutSearch.value = '';
+        if (flyoutSearch) flyoutSearch.value = '';
         renderFlyoutList('');
-        setTimeout(() => flyoutSearch.focus(), 50);
+        if (flyoutSearch) setTimeout(() => flyoutSearch.focus(), 50);
       }
     }
 
     function renderFlyoutList(query) {
-      const filtered = allModels.filter(m => {
+      if (!flyoutList) return;
+      const modelsPool = (allModels && allModels.length > 0) ? allModels : DEFAULT_POPULAR_MODELS;
+      const filtered = modelsPool.filter(m => {
         if (!query) return true;
         const hay = ((m.name || '') + ' ' + (m.id || '') + ' ' + (m.provider || '')).toLowerCase();
         return hay.includes(query);
-      }).slice(0, 40);
+      }).slice(0, 50);
+
+      if (filtered.length === 0) {
+        flyoutList.innerHTML = '<div style="padding:14px; text-align:center; color:var(--muted); font-size:11.5px;">No matching models found.<br><button class="prompt-pill-btn" data-action="open-model-hub" style="margin-top:8px;">Browse Model Hub</button></div>';
+        return;
+      }
 
       flyoutList.innerHTML = filtered.map(m => {
         const isActive = m.id === currentModel;
-        return \`
-          <div class="flyout-item \${isActive ? 'active' : ''}" data-action="pick-model" data-model-id="\${escapeHtml(m.id)}" data-provider="\${escapeHtml(m.provider)}">
-            <span>\${escapeHtml(m.name || m.id)}</span>
-            <span class="flyout-item-meta">\${escapeHtml(m.provider)} \${m.pricing ? '· ' + escapeHtml(m.pricing) : ''}</span>
-          </div>
-        \`;
+        return '<div class="flyout-item ' + (isActive ? 'active' : '') + '" data-action="pick-model" data-model-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || 'openrouter') + '">' +
+          '<span>' + escapeHtml(m.name || m.id) + '</span>' +
+          '<span class="flyout-item-meta">' + escapeHtml(m.provider || 'openrouter') + (m.pricing ? ' · ' + escapeHtml(m.pricing) : '') + '</span>' +
+        '</div>';
       }).join('');
     }
 
@@ -3612,6 +4632,220 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         .replace(/Gemini/g, 'Gemini');
     }
 
+    let availableProfiles = ['builder', 'coder', 'reviewer', 'planner'];
+    let availableReasoningEfforts = ['low', 'medium', 'high', 'off'];
+    let attachedImages = [];
+
+    function updateProfileBadge() {
+      const lbl = document.getElementById('prompt-profile-label');
+      if (lbl) {
+        lbl.textContent = (currentProfile || 'builder').toUpperCase();
+        if (lbl.parentElement) {
+          lbl.parentElement.title = 'Active Profile: ' + (currentProfile || 'builder').toUpperCase() + ' (Click to cycle Builder, Coder, Reviewer, Planner)';
+        }
+      }
+    }
+
+    function updateReasoningBadge() {
+      const lbl = document.getElementById('prompt-reasoning-label');
+      if (lbl) {
+        const val = currentReasoning || 'medium';
+        const icons = { high: '⚡ High', medium: 'Medium', low: 'Low', off: 'Off' };
+        lbl.textContent = icons[val] || val.toUpperCase();
+        if (lbl.parentElement) {
+          lbl.parentElement.title = 'Reasoning Effort: ' + val.toUpperCase() + ' (Click to cycle High, Medium, Low, Off)';
+        }
+      }
+    }
+
+    function renderImageAttachments() {
+      const container = document.getElementById('image-attachments-container');
+      if (!container) return;
+      if (!attachedImages || attachedImages.length === 0) {
+        container.style.display = 'none';
+        container.innerHTML = '';
+        return;
+      }
+      container.style.display = 'flex';
+      container.innerHTML = attachedImages.map((imgUri, idx) => {
+        return '<div class="image-attachment-chip">' +
+          '<img class="image-attachment-thumb" src="' + imgUri + '" alt="Attachment ' + (idx + 1) + '" />' +
+          '<button class="image-attachment-remove" data-action="remove-image-attachment" data-idx="' + idx + '" title="Remove image">✕</button>' +
+        '</div>';
+      }).join('');
+    }
+
+    function addImageAttachment(dataUri) {
+      if (!dataUri) return;
+      if (attachedImages.length >= 5) {
+        appendSystemNote('Maximum 5 images can be attached per message.');
+        return;
+      }
+      attachedImages.push(dataUri);
+      renderImageAttachments();
+    }
+
+    function removeImageAttachment(idx) {
+      if (idx >= 0 && idx < attachedImages.length) {
+        attachedImages.splice(idx, 1);
+        renderImageAttachments();
+      }
+    }
+
+    function handlePasteImage(e) {
+      const clipboardData = e.clipboardData || window.clipboardData;
+      if (!clipboardData || !clipboardData.items) return;
+      const items = clipboardData.items;
+      let handled = false;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type && items[i].type.indexOf('image') !== -1) {
+          const file = items[i].getAsFile();
+          if (file) {
+            const reader = new FileReader();
+            reader.onload = function(event) {
+              if (event.target && event.target.result) {
+                addImageAttachment(event.target.result);
+              }
+            };
+            reader.readAsDataURL(file);
+            handled = true;
+          }
+        }
+      }
+      if (handled) {
+        e.preventDefault();
+      }
+    }
+
+    promptInput.addEventListener('paste', handlePasteImage);
+    window.addEventListener('paste', (e) => {
+      if (e.target !== promptInput && !e.target.closest('input, textarea')) {
+        handlePasteImage(e);
+      }
+    });
+
+    const promptBoxEl = document.querySelector('.prompt-box');
+    if (promptBoxEl) {
+      promptBoxEl.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        promptBoxEl.style.borderColor = 'var(--accent)';
+      });
+      promptBoxEl.addEventListener('dragleave', () => {
+        promptBoxEl.style.borderColor = '';
+      });
+      promptBoxEl.addEventListener('drop', (e) => {
+        e.preventDefault();
+        promptBoxEl.style.borderColor = '';
+        if (e.dataTransfer && e.dataTransfer.files) {
+          for (let i = 0; i < e.dataTransfer.files.length; i++) {
+            const file = e.dataTransfer.files[i];
+            if (file.type && file.type.indexOf('image') !== -1) {
+              const reader = new FileReader();
+              reader.onload = function(evt) {
+                if (evt.target && evt.target.result) {
+                  addImageAttachment(evt.target.result);
+                }
+              };
+              reader.readAsDataURL(file);
+            }
+          }
+        }
+      });
+    }
+
+    const btnProfileEl = document.getElementById('btn-prompt-profile');
+    if (btnProfileEl) {
+      btnProfileEl.addEventListener('click', () => {
+        const nextIdx = (availableProfiles.indexOf(currentProfile.toLowerCase()) + 1) % availableProfiles.length;
+        currentProfile = availableProfiles[nextIdx];
+        updateProfileBadge();
+        vscode.postMessage({ type: 'update_config', key: 'profile', value: currentProfile });
+      });
+    }
+
+    const btnReasoningEl = document.getElementById('btn-prompt-reasoning');
+    if (btnReasoningEl) {
+      btnReasoningEl.addEventListener('click', () => {
+        const val = (currentReasoning || 'medium').toLowerCase();
+        const nextIdx = (availableReasoningEfforts.indexOf(val) + 1) % availableReasoningEfforts.length;
+        currentReasoning = availableReasoningEfforts[nextIdx];
+        updateReasoningBadge();
+        vscode.postMessage({ type: 'update_config', key: 'reasoningEffort', value: currentReasoning });
+      });
+    }
+
+    function appendHelpCard() {
+      const card = document.createElement('div');
+      card.className = 'help-card';
+      card.style.cssText = 'background:var(--card-bg); border:1px solid var(--border); border-radius:8px; padding:12px; margin:8px 0; font-size:12px; box-shadow: 0 4px 14px rgba(0,0,0,0.3);';
+
+      const commandsHtml = slashCommands.map(function(c) {
+        return '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 8px; border-radius:4px; transition:background 0.12s; cursor:pointer;" data-action="select-slash-cmd" data-cmd="' + escapeHtml(c.cmd) + '">' +
+          '<div style="display:flex; align-items:center; gap:8px; min-width:0;">' +
+            '<code style="background:rgba(6,182,212,0.15); color:var(--accent); padding:2px 6px; border-radius:4px; font-weight:600; font-family:var(--vscode-editor-font-family, monospace); font-size:11.5px;">' + escapeHtml(c.cmd) + '</code>' +
+            '<span style="color:var(--fg); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(c.desc) + '</span>' +
+          '</div>' +
+          '<button class="prompt-pill-btn" style="padding:2px 8px; font-size:10.5px; flex-shrink:0;">Run</button>' +
+        '</div>';
+      }).join('');
+
+      card.innerHTML = 
+        '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid var(--border);">' +
+          '<div style="display:flex; align-items:center; gap:6px; font-weight:600; color:var(--fg); font-size:12.5px;">' +
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>' +
+            '<span>Available Commands & Shortcuts</span>' +
+          '</div>' +
+          '<span style="font-size:10.5px; color:var(--muted);">Click command to run</span>' +
+        '</div>' +
+        '<div style="display:flex; flex-direction:column; gap:2px;">' +
+          commandsHtml +
+        '</div>' +
+        '<div style="margin-top:8px; padding-top:6px; border-top:1px solid var(--border); font-size:11px; color:var(--muted); display:flex; justify-content:space-between;">' +
+          '<span>Tip: Type <code>/</code> for commands, <code>@</code> for skills</span>' +
+          '<span>Paste images with <code>Ctrl+V</code></span>' +
+        '</div>';
+      chatContainer.appendChild(card);
+      scrollToBottomIfNeeded();
+    }
+
+    function appendSkillsCard() {
+      const card = document.createElement('div');
+      card.className = 'skills-card';
+      card.style.cssText = 'background:var(--card-bg); border:1px solid var(--border); border-radius:8px; padding:12px; margin:8px 0; font-size:12px; box-shadow: 0 4px 14px rgba(0,0,0,0.3);';
+
+      const skillsListHtml = allSkills && allSkills.length > 0
+        ? allSkills.map(function(s) {
+          const name = s.name || s.id || 'skill';
+          const desc = s.description || 'Specialized agent skill';
+          return '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 8px; border-radius:4px; transition:background 0.12s; cursor:pointer;" data-action="insert-skill-mention" data-skill="' + escapeHtml(name) + '">' +
+            '<div style="display:flex; align-items:center; gap:8px; min-width:0;">' +
+              '<span style="background:rgba(168,85,247,0.18); color:#c084fc; padding:2px 6px; border-radius:4px; font-weight:600; font-family:var(--vscode-editor-font-family, monospace); font-size:11.5px;">@' + escapeHtml(name) + '</span>' +
+              '<span style="color:var(--fg); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(desc) + '</span>' +
+            '</div>' +
+            '<button class="prompt-pill-btn" style="padding:2px 8px; font-size:10.5px; flex-shrink:0;">Use</button>' +
+          '</div>';
+        }).join('')
+        : '<div style="color:var(--muted); padding:8px 0; text-align:center;">No custom skills found. Open Settings > Skills to manage skills.</div>';
+
+      card.innerHTML = 
+        '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid var(--border);">' +
+          '<div style="display:flex; align-items:center; gap:6px; font-weight:600; color:var(--fg); font-size:12.5px;">' +
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>' +
+            '<span>Agent Skills (' + allSkills.length + ' active)</span>' +
+          '</div>' +
+          '<button class="prompt-pill-btn" data-action="open-skills-settings" style="font-size:10.5px;">Browse Hub</button>' +
+        '</div>' +
+        '<div style="display:flex; flex-direction:column; gap:2px; max-height:220px; overflow-y:auto;">' +
+          skillsListHtml +
+        '</div>' +
+        '<div style="margin-top:8px; padding-top:6px; border-top:1px solid var(--border); font-size:11px; color:var(--muted); display:flex; justify-content:space-between;">' +
+          '<span>Tip: Type <code>@</code> in chat to mention any skill</span>' +
+          '<span>Or click any skill to insert</span>' +
+        '</div>';
+      chatContainer.appendChild(card);
+      scrollToBottomIfNeeded();
+    }
+
     function updateModelBadge() {
       const found = allModels.find(m => m.id === currentModel);
       let name = found ? (found.name || found.id) : formatModelDisplayName(currentModel);
@@ -3625,31 +4859,50 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const promptModelLabel = document.getElementById('prompt-model-label');
       if (promptModelLabel) {
         promptModelLabel.textContent = name;
-        promptModelLabel.parentElement.title = "Active Model: " + currentModel + " (" + currentProvider + ") - Click to switch";
+        if (promptModelLabel.parentElement) {
+          promptModelLabel.parentElement.title = "Active Model: " + currentModel + " (" + currentProvider + ") - Click to switch";
+        }
       }
+      updateProfileBadge();
+      updateReasoningBadge();
     }
     updateModelBadge();
 
     function sendCurrentPrompt() {
       const text = promptInput.value.trim();
-      if (!text) return;
+      const imagesToSend = [...attachedImages];
+      if (!text && imagesToSend.length === 0) return;
       promptInput.value = '';
       promptInput.style.height = 'auto';
       sendBtn.classList.remove('has-text');
+      attachedImages = [];
+      renderImageAttachments();
 
       if (isRunning) {
-        promptQueue.push(text);
+        promptQueue.push({ text: text || 'Please inspect attached image', images: imagesToSend });
         renderQueue();
         return;
       }
-      dispatchPrompt(text, true);
+      dispatchPrompt(text || 'Please inspect attached image', true, imagesToSend);
     }
 
-    function dispatchPrompt(text, attachContext) {
+    function dispatchPrompt(text, attachContext, images) {
       try {
         console.log('[Andromity webview] dispatchPrompt sending:', text.slice(0,120));
         hideZeroState();
-        appendUserMessage(text);
+
+        // Immediate session title derivation from first user prompt (TUI parity)
+        const activeSessName = document.getElementById('active-session-name');
+        if (activeSessName && (activeSessName.textContent === 'Main Session' || activeSessName.textContent === 'new-session' || activeSessName.textContent.startsWith('Session '))) {
+          const firstLine = text.trim().split(String.fromCharCode(10))[0].trim();
+          if (firstLine) {
+            let shortTitle = firstLine.slice(0, 32);
+            if (firstLine.length > 32) shortTitle += 'â€¦';
+            activeSessName.textContent = shortTitle;
+          }
+        }
+
+        appendUserMessage(text, images);
         startAssistantTurn();
         vscode.postMessage({
           type: 'send_prompt',
@@ -3661,6 +4914,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           provider: currentProvider,
           reasoningEffort: currentReasoning,
           attachContext: attachContext,
+          images: images || [],
         });
       } catch (e) {
         console.error('[Andromity webview] dispatchPrompt failed', e);
@@ -3676,7 +4930,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (promptQueue.length === 0) return;
       const next = promptQueue.shift();
       renderQueue();
-      dispatchPrompt(next, true);
+      if (typeof next === 'object' && next !== null) {
+        dispatchPrompt(next.text || '', true, next.images || []);
+      } else {
+        dispatchPrompt(next, true, []);
+      }
     }
 
     function renderQueue() {
@@ -3686,13 +4944,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return;
       }
       queueContainer.style.display = 'flex';
-      queueContainer.innerHTML = promptQueue.map((q, i) => \`
-        <div class="queue-chip">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-          <span class="queue-text">\${escapeHtml(q)}</span>
-          <button class="queue-remove" data-action="remove-queued" data-idx="\${i}">✕</button>
-        </div>
-      \`).join('');
+      queueContainer.innerHTML = promptQueue.map((q, i) => {
+        const text = typeof q === 'object' ? (q.text || 'Image prompt') : q;
+        return '<div class="queue-chip">' +
+          '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
+          '<span class="queue-text">' + escapeHtml(text) + '</span>' +
+          '<button class="queue-remove" data-action="remove-queued" data-idx="' + i + '">✕</button>' +
+        '</div>';
+      }).join('');
     }
 
     window.removeQueued = function(idx) {
@@ -3709,10 +4968,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           out += '<code>' + escapeHtml(parts[i]) + '</code>';
         } else {
           var t = escapeHtml(parts[i]);
+          // Images: ![alt](url)
+          t = t.replace(/!\\\[([^\\\]]*)\\\]\\\(([^)]+)\\\)/g, '<img class="md-image" src="$2" alt="$1" title="$1" loading="lazy" />');
+          // Strikethrough: ~~text~~
+          t = t.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+          // Bold
           t = t.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
           t = t.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+          // Italic
           t = t.replace(/\\*([^*]+)\\*/g, '<em>$1</em>');
-          t = t.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank" style="color:var(--accent); text-decoration:underline;">$1</a>');
+          t = t.replace(/_([^_]+)_/g, '<em>$1</em>');
+          // Links: [text](url)
+          t = t.replace(/\\\[([^\\\]]+)\\\]\\\(([^)]+)\\\)/g, '<a href="$2" target="_blank" style="color:var(--accent); text-decoration:underline;">$1</a>');
           out += t;
         }
       }
@@ -3751,15 +5018,74 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               continue;
             }
 
+            // HTML details and summary
+            if (trimmed.startsWith('<details') || trimmed.startsWith('</details') || trimmed.startsWith('<summary') || trimmed.startsWith('</summary')) {
+              html += trimmed;
+              continue;
+            }
+
+            // Horizontal Rule: --- or *** or ___
+            if (/^(?:---|\\*\\*\\*|___)\\s*$/.test(trimmed)) {
+              html += '<hr class="md-hr">';
+              continue;
+            }
+
+            // GFM Table parsing
+            if (trimmed.startsWith('|') && trimmed.endsWith('|') && l + 1 < rawLines.length && /^\\|(?:\\s*:?-+:?\\s*\\|)+$/.test(rawLines[l+1].trim())) {
+              var tableLines = [trimmed];
+              var sepLine = rawLines[l+1].trim();
+              l++; // skip separator line
+              while (l + 1 < rawLines.length && rawLines[l+1].trim().startsWith('|') && rawLines[l+1].trim().endsWith('|')) {
+                l++;
+                tableLines.push(rawLines[l].trim());
+              }
+              var rawAligns = sepLine.slice(1, -1).split('|');
+              var aligns = [];
+              for (var a = 0; a < rawAligns.length; a++) {
+                var s = rawAligns[a].trim();
+                if (s.startsWith(':') && s.endsWith(':')) aligns.push('center');
+                else if (s.endsWith(':')) aligns.push('right');
+                else aligns.push('left');
+              }
+              var headers = tableLines[0].slice(1, -1).split('|');
+              var tableHtml = '<div class="table-scroll-wrapper"><table class="md-table"><thead><tr>';
+              for (var h = 0; h < headers.length; h++) {
+                var al = aligns[h] || 'left';
+                tableHtml += '<th style="text-align:' + al + ';">' + renderInline(headers[h].trim()) + '</th>';
+              }
+              tableHtml += '</tr></thead><tbody>';
+              for (var r = 1; r < tableLines.length; r++) {
+                var cells = tableLines[r].slice(1, -1).split('|');
+                tableHtml += '<tr>';
+                for (var c = 0; c < headers.length; c++) {
+                  var cellText = (cells[c] || '').trim();
+                  var cal = aligns[c] || 'left';
+                  tableHtml += '<td style="text-align:' + cal + ';">' + renderInline(cellText) + '</td>';
+                }
+                tableHtml += '</tr>';
+              }
+              tableHtml += '</tbody></table></div>';
+              html += tableHtml;
+              continue;
+            }
+
+            // Task list items: - [x] or - [ ] or * [x]
+            var taskMatch = trimmed.match(/^[-*â€¢]\\s+\\\[([ xX])\\\]\\s*(.*)$/);
+            if (taskMatch) {
+              var isChecked = taskMatch[1].toLowerCase() === 'x';
+              html += '<div class="md-task-item"><input type="checkbox" class="md-checkbox" ' + (isChecked ? 'checked' : '') + ' disabled><span class="md-task-text ' + (isChecked ? 'completed' : '') + '">' + renderInline(taskMatch[2]) + '</span></div>';
+              continue;
+            }
+
             if (/^###\\s+/.test(trimmed)) {
               html += '<h5>' + renderInline(trimmed.replace(/^###\\s+/, '')) + '</h5>';
             } else if (/^##\\s+/.test(trimmed)) {
               html += '<h4>' + renderInline(trimmed.replace(/^##\\s+/, '')) + '</h4>';
             } else if (/^#\\s+/.test(trimmed)) {
               html += '<h3>' + renderInline(trimmed.replace(/^#\\s+/, '')) + '</h3>';
-            } else if (/^[-*•]\\s+/.test(trimmed)) {
-              var itemText = trimmed.replace(/^[-*•]\\s+/, '');
-              html += '<div class="md-bullet"><span class="md-dot">•</span><span class="md-text">' + renderInline(itemText) + '</span></div>';
+            } else if (/^[-*â€¢]\\s+/.test(trimmed)) {
+              var itemText = trimmed.replace(/^[-*â€¢]\\s+/, '');
+              html += '<div class="md-bullet"><span class="md-dot">â€¢</span><span class="md-text">' + renderInline(itemText) + '</span></div>';
             } else if (/^\\d+\\.\\s+/.test(trimmed)) {
               var numMatch = trimmed.match(/^(\\d+)\\.\\s+(.*)$/);
               var num = numMatch ? numMatch[1] : '1';
@@ -3820,13 +5146,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
-    function appendUserMessage(text) {
+    function appendUserMessage(text, images) {
       const wrap = document.createElement('div');
       wrap.className = 'message-wrap user';
 
       const msgDiv = document.createElement('div');
       msgDiv.className = 'message user';
-      msgDiv.textContent = text;
+
+      if (images && Array.isArray(images) && images.length > 0) {
+        const imgWrap = document.createElement('div');
+        imgWrap.style.cssText = 'display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px;';
+        images.forEach(uri => {
+          const imgEl = document.createElement('img');
+          imgEl.src = uri;
+          imgEl.style.cssText = 'max-width:220px; max-height:140px; border-radius:6px; object-fit:cover; border:1px solid rgba(255,255,255,0.2); cursor:pointer; transition:transform 0.15s, border-color 0.15s;';
+          imgEl.title = 'Click to preview full size';
+          imgEl.addEventListener('mouseenter', () => { imgEl.style.transform = 'scale(1.02)'; imgEl.style.borderColor = 'var(--vscode-focusBorder, #007fd4)'; });
+          imgEl.addEventListener('mouseleave', () => { imgEl.style.transform = 'scale(1)'; imgEl.style.borderColor = 'rgba(255,255,255,0.2)'; });
+          imgEl.addEventListener('click', () => {
+            openImageLightbox(uri);
+          });
+          imgWrap.appendChild(imgEl);
+        });
+        msgDiv.appendChild(imgWrap);
+      }
+
+      if (text) {
+        const textSpan = document.createElement('div');
+        textSpan.textContent = text;
+        msgDiv.appendChild(textSpan);
+      }
+
       wrap.appendChild(msgDiv);
 
       const footer = document.createElement('div');
@@ -3964,6 +5314,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       removeTurnLoader();
       finishCurrentThinking();
       finishToolSequence();
+
+      if (currentTurnAssistantDiv) {
+        currentTurnAssistantDiv.querySelectorAll('.tool-tag').forEach(tag => {
+          if (tag.textContent === 'RUNNING') {
+            tag.textContent = 'DONE';
+            tag.style.background = 'rgba(63, 185, 80, 0.2)';
+            tag.style.color = 'var(--green)';
+          }
+        });
+        currentTurnAssistantDiv.querySelectorAll('.subagent-status').forEach(tag => {
+          if (tag.textContent === 'RUNNING') {
+            tag.className = 'subagent-status done';
+            tag.textContent = 'DONE';
+          }
+        });
+      }
+
       isRunning = false;
       cancelBtn.style.display = 'none';
       sendBtn.style.display = 'flex';
@@ -3974,7 +5341,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         footer.className = 'message-footer';
         footer.innerHTML = '<span class="turn-duration-badge">' +
           '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:2px;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
-          '<span>' + elapsedSec + 's · ' + formatTime(new Date()) + '</span>' +
+          '<span>' + elapsedSec + 's Â· ' + formatTime(new Date()) + '</span>' +
         '</span>' +
         '<button class="msg-copy-btn" data-action="copy-message" title="Copy response">' +
           '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy' +
@@ -4004,6 +5371,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         case 'init_state':
           currentSessionId = msg.sessionId;
           allModels = msg.models || [];
+          if (msg.skills) {
+            allSkills = msg.skills;
+          }
           if (msg.model) currentModel = msg.model;
           if (msg.provider) currentProvider = msg.provider;
           if (msg.mode) {
@@ -4034,6 +5404,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (msg.currentPlan) {
             updatePlanTracker(msg.currentPlan);
           }
+          if (msg.models && msg.models.length > 0) {
+            allModels = msg.models;
+          }
           updateModelBadge();
           break;
 
@@ -4053,7 +5426,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               const appCard = interactiveSlot.querySelector('.approval-card');
               if (appCard) {
                 interactiveSlot.innerHTML = '';
-                appendSystemNote('Mode switched to ' + msg.value.toUpperCase() + ' — pending tool auto-approved.');
+                appendSystemNote('Mode switched to ' + msg.value.toUpperCase() + ' â€” pending tool auto-approved.');
               }
             }
           } else if (msg.key === 'model') {
@@ -4134,16 +5507,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 if (m.tool_calls && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
-                  const seq = document.createElement('div');
-                  seq.className = 'tool-sequence collapsed';
-                  const cnt = m.tool_calls.length;
-                  seq.innerHTML = '<div class="tool-seq-header"><svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg><span class="tool-seq-title">' + cnt + (cnt===1?' tool':' tools') + ' · worked</span><svg class="tool-seq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg><button class="tool-seq-copy" title="Copy tool log"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button></div><div class="tool-seq-body"></div>';
-                  seq.querySelector('.tool-seq-header').addEventListener('click', (e) => {
-                    if (e.target.closest('.tool-seq-copy')) return;
-                    seq.classList.toggle('collapsed');
-                  });
+                  let seq = currentAssistantWrap._toolSeq;
+                  if (!seq) {
+                    seq = document.createElement('div');
+                    seq.className = 'tool-sequence collapsed';
+                    seq.innerHTML = '<div class="tool-seq-header"><svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg><span class="tool-seq-title">0 tools Â· worked</span><svg class="tool-seq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg><button class="tool-seq-copy" title="Copy tool log"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button></div><div class="tool-seq-body"></div>';
+                    seq.querySelector('.tool-seq-header').addEventListener('click', (e) => {
+                      if (e.target.closest('.tool-seq-copy')) return;
+                      seq.classList.toggle('collapsed');
+                    });
+                    seq.querySelector('.tool-seq-copy').addEventListener('click', () => {
+                      try {
+                        const parts = [];
+                        seq.querySelectorAll('.tool-card').forEach((c, idx) => {
+                          const n = c.querySelector('.tool-title-group span')?.textContent || 'tool';
+                          const args = c.querySelector('.tool-body')?.textContent || '';
+                          parts.push((idx + 1) + '. ' + n + '\\n   Args: ' + args);
+                        });
+                        copyToClipboard(parts.join('\\n\\n') || seq.textContent);
+                      } catch {}
+                    });
+                    currentAssistantWrap.insertBefore(seq, currentAssistantTextEl);
+                    currentAssistantWrap._toolSeq = seq;
+                    currentAssistantWrap._toolCount = 0;
+                  }
                   const body = seq.querySelector('.tool-seq-body');
                   for (const tc of m.tool_calls) {
+                    currentAssistantWrap._toolCount++;
                     const fn = tc.function || {};
                     const tDiv = document.createElement('div');
                     tDiv.className = 'tool-card';
@@ -4160,7 +5550,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                     '<div class="tool-body">' + escapeHtml(fn.arguments || '') + '</div>';
                     body.appendChild(tDiv);
                   }
-                  currentAssistantWrap.insertBefore(seq, currentAssistantTextEl);
+                  const totalCnt = currentAssistantWrap._toolCount;
+                  seq.querySelector('.tool-seq-title').textContent = totalCnt + (totalCnt === 1 ? ' tool' : ' tools') + ' Â· worked';
                 }
 
                 if (m.content) {
@@ -4187,6 +5578,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
           if (msg.session) {
             currentSessionId = msg.session.id || currentSessionId;
+            if (msg.session.model) {
+              currentModel = msg.session.model;
+              if (msg.session.provider) currentProvider = msg.session.provider;
+              updateModelBadge();
+            }
             updateTokenDisplay(msg.session);
           }
           break;
@@ -4199,11 +5595,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           removeTurnLoader();
           finishCurrentThinking();
           if (!currentTurnAssistantDiv) startAssistantTurn();
-
-          // TUI parity (chat.py:1003): intermediate text splits sequence; next tool starts a new bucket
-          if (msg.text && msg.text.trim() && currentToolSequence) {
-            finishToolSequence();
-          }
 
           if (!currentAssistantContent) {
             currentAssistantContent = document.createElement('div');
@@ -4226,7 +5617,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             currentThinkingDiv.className = 'thinking-card expanded';
             currentThinkingDiv.innerHTML = '<div class="thinking-header">' +
               '<div class="thinking-pulse"></div>' +
-              '<span>thinking…</span>' +
+              '<span>thinkingâ€¦</span>' +
               '<svg class="thinking-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
             '</div>';
             currentThinkingContent = document.createElement('div');
@@ -4302,31 +5693,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           const toolArgs = msg.args || {};
           const rawArgs = (()=>{ try{ return JSON.stringify(toolArgs, null, 2); }catch{ return String(toolArgs); } })();
           const previewPath = toolArgs.path || toolArgs.file || toolArgs.file_path || toolArgs.TargetFile || toolArgs.command || "";
-          const shortPath = previewPath ? (previewPath.length>48 ? previewPath.slice(0,22)+"…"+previewPath.slice(-22) : previewPath) : "";
-          interactiveSlot.innerHTML = \`
-            <div class="approval-card">
-              <div class="approval-header">
-                <div class="approval-icon">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-                </div>
-                <div style="flex:1; min-width:0;">
-                  <div class="approval-kicker">Permission Request</div>
-                  <div class="approval-title">Allow <code>\${escapeHtml(msg.tool_name)}</code> to run?</div>
-                </div>
-                <span class="approval-tool-pill status-pill">SAFE</span>
-              </div>
-              <div class="approval-tool-meta">
-                <span class="approval-tool-pill"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg> \${escapeHtml(msg.tool_name)}</span>
-                \${shortPath ? \`<span class="approval-path" title="\${escapeHtml(previewPath)}">\${escapeHtml(shortPath)}</span>\` : ''}
-              </div>
-              <div class="approval-desc">The assistant is requesting permission to execute <strong>\${escapeHtml(msg.tool_name)}</strong>.</div>
-              \${rawArgs && Object.keys(toolArgs).length ? \`<div class="approval-toggle-args"><span>▸ View parameters</span></div><div class="approval-args">\${escapeHtml(rawArgs)}</div>\` : ''}
-              <div class="approval-buttons">
-                <button class="btn-approve" data-action="approve-tool" data-approval-id="\${msg.approval_id}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg> Allow</button>
-                <button class="btn-reject" data-action="reject-tool" data-approval-id="\${msg.approval_id}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg> Deny</button>
-              </div>
-            </div>
-          \`;
+          const shortPath = previewPath ? (previewPath.length>48 ? previewPath.slice(0,22)+"â€¦"+previewPath.slice(-22) : previewPath) : "";
+          const modeCls = currentMode === 'trust' ? 'green' : (currentMode === 'full' ? 'blue' : (currentMode === 'yolo' ? 'red' : 'orange'));
+          const modeTxt = (currentMode || 'safe').toUpperCase();
+          interactiveSlot.innerHTML = 
+            '<div class="approval-card">' +
+              '<div class="approval-header">' +
+                '<div class="approval-icon">' +
+                  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>' +
+                '</div>' +
+                '<div style="flex:1; min-width:0;">' +
+                  '<div class="approval-kicker">Permission Request</div>' +
+                  '<div class="approval-title">Allow <code>' + escapeHtml(msg.tool_name) + '</code> to run?</div>' +
+                '</div>' +
+                '<span class="approval-tool-pill status-pill ' + modeCls + '">' + escapeHtml(modeTxt) + '</span>' +
+              '</div>' +
+              '<div class="approval-tool-meta">' +
+                '<span class="approval-tool-pill"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg> ' + escapeHtml(msg.tool_name) + '</span>' +
+                (shortPath ? ('<span class="approval-path" title="' + escapeHtml(previewPath) + '">' + escapeHtml(shortPath) + '</span>') : '') +
+              '</div>' +
+              '<div class="approval-desc">The assistant is requesting permission to execute <strong>' + escapeHtml(msg.tool_name) + '</strong>.</div>' +
+              (rawArgs && Object.keys(toolArgs).length ? ('<div class="approval-toggle-args"><span>â–¸ View parameters</span></div><div class="approval-args">' + escapeHtml(rawArgs) + '</div>') : '') +
+              '<div class="approval-buttons">' +
+                '<button class="btn-approve" data-action="approve-tool" data-approval-id="' + escapeHtml(msg.approval_id) + '"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg> Allow</button>' +
+                '<button class="btn-reject" data-action="reject-tool" data-approval-id="' + escapeHtml(msg.approval_id) + '"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg> Deny</button>' +
+              '</div>' +
+            '</div>';
           break;
 
         case 'ask_questions': {
@@ -4386,24 +5778,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           let todosHtml = '';
           if (plan.todos && plan.todos.length > 0) {
             todosHtml = '<div style="margin-top:6px; display:flex; flex-direction:column; gap:3px;">' +
-              plan.todos.map(t => '<div style="font-size:11px; color:var(--muted);"><span style="color:var(--accent); font-weight:600;">•</span> ' + escapeHtml(t.description || t.title || t) + '</div>').join('') +
+              plan.todos.map(t => '<div style="font-size:11px; color:var(--muted);"><span style="color:var(--accent); font-weight:600;">â€¢</span> ' + escapeHtml(t.description || t.title || t) + '</div>').join('') +
             '</div>';
           }
-          interactiveSlot.innerHTML = \`
-            <div class="approval-card">
-              <div style="font-weight:600; color:var(--purple); display:flex; align-items:center; gap:6px;">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
-                <span>Plan Review: \${escapeHtml(plan.title || 'Implementation Plan')}</span>
-              </div>
-              \${plan.description ? \`<div style="margin-top:4px; font-size:11.5px; color:var(--fg);">\${escapeHtml(plan.description)}</div>\` : ''}
-              \${todosHtml}
-              <input type="text" id="plan-feedback-input" placeholder="Optional review note or instructions..." style="width:100%; margin-top:8px; padding:5px 8px; font-size:11.5px; background:var(--input-bg); border:1px solid var(--input-border); color:var(--fg); border-radius:4px; outline:none;">
-              <div class="approval-buttons" style="margin-top:8px;">
-                <button class="btn-approve" data-action="approve-plan" style="background:var(--green); color:#fff;">Approve & Execute</button>
-                <button class="btn-reject" data-action="reject-plan" style="background:var(--red); color:#fff;">Reject & Revise</button>
-              </div>
-            </div>
-          \`;
+          interactiveSlot.innerHTML = 
+            '<div class="approval-card">' +
+              '<div style="font-weight:600; color:var(--purple); display:flex; align-items:center; gap:6px;">' +
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>' +
+                '<span>Plan Review: ' + escapeHtml(plan.title || 'Implementation Plan') + '</span>' +
+              '</div>' +
+              (plan.description ? ('<div style="margin-top:4px; font-size:11.5px; color:var(--fg);">' + escapeHtml(plan.description) + '</div>') : '') +
+              todosHtml +
+              '<input type="text" id="plan-feedback-input" placeholder="Optional review note or instructions..." style="width:100%; margin-top:8px; padding:5px 8px; font-size:11.5px; background:var(--input-bg); border:1px solid var(--input-border); color:var(--fg); border-radius:4px; outline:none;">' +
+              '<div class="approval-buttons" style="margin-top:8px;">' +
+                '<button class="btn-approve" data-action="approve-plan" style="background:var(--green); color:#fff;">Approve & Execute</button>' +
+                '<button class="btn-reject" data-action="reject-plan" style="background:var(--red); color:#fff;">Reject & Revise</button>' +
+              '</div>' +
+            '</div>';
           break;
 
         case 'subagent_spawned':
@@ -4421,13 +5812,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (!currentTurnAssistantDiv) startAssistantTurn();
           break;
 
+        case 'session_compacted':
+          appendSystemNote('âš¡ Context compacted: conversation history compressed to save tokens.');
+          break;
+
+        case 'turn_undone':
+          appendSystemNote('â†© Last turn undone: file changes rolled back.');
+          break;
+
+        case 'agent_cancelled':
+          setGenerating(false);
+          appendSystemNote('Turn cancelled by user.');
+          break;
+
         case 'agent_busy':
           if (msg.queuedPrompt) {
             promptQueue.push(msg.queuedPrompt);
             renderQueue();
-            appendSystemNote('Agent busy — your message was queued (will send after this turn).');
+            appendSystemNote('Agent busy â€” your message was queued (will send after this turn).');
           } else {
-            appendSystemNote('Agent is still working — please wait for this turn to finish.');
+            appendSystemNote('Agent is still working â€” please wait for this turn to finish.');
           }
           break;
 
@@ -4451,7 +5855,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         case 'agent_error':
           // If error is just a timeout but stream already started, don't end turn abruptly
           if (msg.error && msg.error.includes('RPC timeout')) {
-            appendSystemNote('Note: ' + msg.error + ' — but agent is still streaming. Watch the footer for progress.');
+            appendSystemNote('Note: ' + msg.error + ' â€” but agent is still streaming. Watch the footer for progress.');
             if (!currentTurnAssistantDiv) startAssistantTurn();
             break;
           }
@@ -4480,6 +5884,66 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         case 'plan_updated':
           updatePlanTracker(msg.plan);
           break;
+
+        case 'backend_ready': {
+          const card = document.getElementById('setup-guide-card');
+          if (card) card.style.display = 'none';
+          break;
+        }
+
+        case 'backend_offline': {
+          const card = document.getElementById('setup-guide-card');
+          if (card) card.style.display = 'flex';
+          if (msg.message) {
+            const body = document.getElementById('setup-guide-body');
+            if (body) body.textContent = msg.message;
+          }
+          break;
+        }
+
+        case 'session_updated':
+          if (msg.name) {
+            const activeSessName = document.getElementById('active-session-name');
+            if (activeSessName && (!msg.session_id || msg.session_id === currentSessionId)) {
+              activeSessName.textContent = msg.name;
+            }
+            const sObj = allSessions.find(s => s.id === (msg.session_id || currentSessionId));
+            if (sObj) {
+              sObj.name = msg.name;
+              if (msg.message_count !== undefined) sObj.message_count = msg.message_count;
+              if (msg.context_tokens !== undefined) sObj.context_tokens = msg.context_tokens;
+              renderHomeRecentSessions(allSessions);
+            }
+          }
+          break;
+
+        case 'external_prompt': {
+          // Sent by extension commands: Explain Code, Ask About Selection, Generate Tests
+          const extPrompt = msg.prompt || '';
+          const extCtx = msg.context || null;
+          if (!extPrompt) break;
+
+          // Focus the chat view and make sure chat is visible
+          hideZeroState();
+
+          // Build user message with context snippet if provided
+          let fullUserMsg = extPrompt;
+          if (extCtx && extCtx.selectedText) {
+            const lang = extCtx.languageId || '';
+            const filePath = extCtx.relativePath || extCtx.filePath || '';
+            const lineInfo = extCtx.selectionRange
+              ? ' (lines ' + extCtx.selectionRange.startLine + '-' + extCtx.selectionRange.endLine + ')'
+              : '';
+            const bt = String.fromCharCode(96); const fence = bt+bt+bt;
+            const nl = String.fromCharCode(10);
+            fullUserMsg = extPrompt + nl + nl + fence + lang + (filePath ? '  // ' + filePath + lineInfo : '') + nl + extCtx.selectedText + nl + fence;
+          }
+
+          // Cleanly send via dispatchPrompt (creates UI bubbles, starts turn loader, and sends send_prompt RPC)
+          if (promptInput) promptInput.value = '';
+          dispatchPrompt(fullUserMsg, false, []);
+          break;
+        }
       }
     });
 
@@ -4507,15 +5971,42 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const card = document.createElement('div');
       card.className = 'subagent-card';
       card.id = 'subagent-' + msg.agent_id;
-      card.innerHTML = \`
-        <div class="subagent-header">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M12 1v6m0 6v6m11-9h-6m-6 0H1"></path></svg>
-          <span class="subagent-role">\${escapeHtml(msg.role || 'sub-agent')}</span>
-          <span class="subagent-status">RUNNING</span>
-        </div>
-        <div class="subagent-body">\${escapeHtml(msg.task || '')}</div>
-      \`;
-      currentTurnAssistantDiv.appendChild(card);
+      const roleStr = escapeHtml(msg.role || 'subagent');
+      const modelStr = msg.model ? ('<span class="badge blue" style="font-size:9.5px; margin-left:4px;">' + escapeHtml(msg.model) + '</span>') : '';
+      
+      card.innerHTML =
+        '<div class="subagent-header">' +
+          '<div class="subagent-header-left">' +
+            '<svg class="subagent-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M12 1v6m0 6v6m11-9h-6m-6 0H1"></path></svg>' +
+            '<span class="subagent-role">' + roleStr + '</span>' +
+            modelStr +
+          '</div>' +
+          '<div class="subagent-header-right">' +
+            '<span class="subagent-status running">RUNNING</span>' +
+            '<svg class="subagent-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
+          '</div>' +
+        '</div>' +
+        '<div class="subagent-body">' +
+          (msg.task ? ('<div class="subagent-task"><span class="subagent-task-label">Task:</span> ' + escapeHtml(msg.task) + '</div>') : '') +
+          '<div class="subagent-live-status">' +
+            '<span class="subagent-spinner"></span>' +
+            '<span class="subagent-live-text">Working on task...</span>' +
+          '</div>' +
+          '<div class="subagent-result-box" style="display:none;"></div>' +
+        '</div>';
+
+      const header = card.querySelector('.subagent-header');
+      if (header) {
+        header.addEventListener('click', () => {
+          card.classList.toggle('collapsed');
+        });
+      }
+
+      if (currentToolSequence) {
+        currentToolSequence.querySelector('.tool-seq-body').appendChild(card);
+      } else if (currentTurnAssistantDiv) {
+        currentTurnAssistantDiv.appendChild(card);
+      }
       scrollToBottomIfNeeded();
     }
 
@@ -4528,20 +6019,35 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (!card) return;
       }
       const statusEl = card.querySelector('.subagent-status');
-      const bodyEl = card.querySelector('.subagent-body');
-      const detail = msg.detail || msg.result || msg.error || (msg.tool_name ? 'Tool: ' + msg.tool_name : '') || (msg.status || '');
+      const liveStatusEl = card.querySelector('.subagent-live-status');
+      const liveTextEl = card.querySelector('.subagent-live-text');
+      const resultBox = card.querySelector('.subagent-result-box');
 
-      if (detail && bodyEl) {
-        bodyEl.textContent += (bodyEl.textContent ? '\\n' : '') + detail;
+      // In-place live step updates (no repeated spammy bullet items)
+      if (msg.detail && msg.detail !== 'running' && liveTextEl) {
+        liveTextEl.textContent = msg.detail;
       }
 
-      if (statusEl) {
-        if (msg.error) {
+      if (msg.error || msg.type === 'subagent_failed') {
+        if (statusEl) {
           statusEl.className = 'subagent-status failed';
           statusEl.textContent = 'FAILED';
-        } else if (msg.result || msg.status === 'completed' || msg.status === 'done') {
+        }
+        if (liveStatusEl) liveStatusEl.style.display = 'none';
+        if (resultBox) {
+          resultBox.style.display = 'block';
+          resultBox.innerHTML = '<span style="color:var(--red); font-weight:500;">Failed:</span> ' + escapeHtml(msg.error || 'Subagent encountered an error.');
+        }
+      } else if (msg.type === 'subagent_done' || msg.result !== undefined || msg.status === 'completed' || msg.status === 'done') {
+        if (statusEl) {
           statusEl.className = 'subagent-status done';
           statusEl.textContent = 'DONE';
+        }
+        if (liveStatusEl) liveStatusEl.style.display = 'none';
+        if (resultBox && (msg.result || msg.output)) {
+          resultBox.style.display = 'block';
+          const resContent = typeof msg.result === 'string' ? msg.result : JSON.stringify(msg.result, null, 2);
+          resultBox.innerHTML = '<div class="subagent-result-title">Result</div>' + renderMarkdown(resContent);
         }
       }
       scrollToBottomIfNeeded();
@@ -4638,6 +6144,69 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
     }
+
+    window.openImageLightbox = function(uri) {
+      const overlay = document.getElementById('image-lightbox-overlay');
+      const img = document.getElementById('image-lightbox-img');
+      if (overlay && img && uri) {
+        img.src = uri;
+        overlay.style.display = 'flex';
+      }
+    };
+
+    window.closeImageLightbox = function() {
+      const overlay = document.getElementById('image-lightbox-overlay');
+      if (overlay) {
+        overlay.style.display = 'none';
+        const img = document.getElementById('image-lightbox-img');
+        if (img) img.src = '';
+      }
+    };
+
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        window.closeImageLightbox();
+      }
+    });
+
+    document.addEventListener('click', function(e) {
+      const closeLb = e.target.closest('#btn-lightbox-close');
+      const overlayLb = e.target === document.getElementById('image-lightbox-overlay');
+      if (closeLb || overlayLb) {
+        window.closeImageLightbox();
+        return;
+      }
+      const rmImg = e.target.closest('[data-action="remove-image-attachment"]');
+      if (rmImg) {
+        const idx = parseInt(rmImg.getAttribute('data-idx') || '0', 10);
+        removeImageAttachment(idx);
+        return;
+      }
+      const setupCheck = e.target.closest('[data-action="run-setup-check"]');
+      if (setupCheck) {
+        vscode.postMessage({ type: 'check_setup' });
+        return;
+      }
+      const setupInstall = e.target.closest('[data-action="install-python-web"]');
+      if (setupInstall) {
+        vscode.postMessage({ type: 'install_python' });
+        return;
+      }
+      const setupConfig = e.target.closest('[data-action="configure-python-path"]');
+      if (setupConfig) {
+        vscode.postMessage({ type: 'configure_python_path' });
+        return;
+      }
+      const slashCmd = e.target.closest('[data-action="select-slash-cmd"]');
+      if (slashCmd) {
+        const cmdName = slashCmd.getAttribute('data-cmd');
+        const found = slashCommands.find(c => c.cmd === cmdName);
+        if (found) {
+          executeSlashCommand(found);
+        }
+        return;
+      }
+    });
 
     setRandomGreeting();
     vscode.postMessage({ type: 'ready' });

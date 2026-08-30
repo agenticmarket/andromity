@@ -11,12 +11,17 @@ interface GitStatusInfo {
 }
 
 export class ChangeTreeItem extends vscode.TreeItem {
+  public readonly filePath: string;
+  public readonly isUntracked: boolean;
+
   constructor(
-    public readonly filePath: string,
-    public readonly isUntracked: boolean,
+    filePath: string,
+    isUntracked: boolean,
     workspaceRoot: string
   ) {
     super(path.basename(filePath), vscode.TreeItemCollapsibleState.None);
+    this.filePath = filePath;
+    this.isUntracked = isUntracked;
 
     this.description = isUntracked
       ? "Untracked"

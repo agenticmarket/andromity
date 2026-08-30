@@ -737,7 +737,6 @@ class AndromityApp(App):
             msg += f" User note: {comment}"
             
         if getattr(self, "_plan_approval_future", None) and not self._plan_approval_future.done():
-            self._send_to_agent(msg)
             self._plan_approval_future.set_result(True)
         else:
             self._send_to_agent(msg)
@@ -754,7 +753,6 @@ class AndromityApp(App):
             msg += f" User reason: {feedback}"
             
         if getattr(self, "_plan_approval_future", None) and not self._plan_approval_future.done():
-            self._process_message(msg)
             self._plan_approval_future.set_result(False)
         else:
             self._process_message(msg)

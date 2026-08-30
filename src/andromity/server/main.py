@@ -25,6 +25,17 @@ log = logging.getLogger("andromity.server")
 def _prewarm_dependencies():
     """Background pre-warm for heavy AI packages so the first turn starts with 0ms import delay."""
     try:
+        # PyInstaller: litellm reads model_prices_and_context_window_backup.json from _MEIxxx temp dir.
+        # That dir is re-extracted fresh each run so the file may not exist yet — create a stub.
+        if getattr(sys, "frozen", False):
+            _mei = getattr(sys, "_MEIPASS", None)
+            if _mei:
+                _price_file = os.path.join(_mei, "litellm", "model_prices_and_context_window_backup.json")
+                if not os.path.exists(_price_file):
+                    os.makedirs(os.path.dirname(_price_file), exist_ok=True)
+                    with open(_price_file, "w") as _f:
+                        _f.write("{}")
+
         import litellm
         litellm.suppress_debug_info = True
         litellm.drop_params = True
@@ -32,6 +43,38 @@ def _prewarm_dependencies():
         pass
 
 threading.Thread(target=_prewarm_dependencies, daemon=True).start()
+
+
+import secrets
+from pathlib import Path
+from andromity.config import get_config_dir
+
+MAX_LINE_LENGTH = 1024 * 1024  # 1MB max line size
+
+
+def _get_or_create_daemon_token() -> str:
+    """Retrieve or generate the daemon authentication token."""
+    config_dir = get_config_dir()
+    config_dir.mkdir(parents=True, exist_ok=True)
+    token_file = config_dir / "daemon.token"
+    if token_file.exists():
+        try:
+            tok = token_file.read_text(encoding="utf-8").strip()
+            if tok:
+                return tok
+        except Exception:
+            pass
+    token = secrets.token_urlsafe(32)
+    try:
+        token_file.write_text(token, encoding="utf-8")
+        if os.name != "nt":
+            try:
+                os.chmod(str(token_file), 0o600)
+            except Exception:
+                pass
+    except Exception as e:
+        log.warning("Failed to save daemon token: %s", e)
+    return token
 
 
 async def start_stdio_server():
@@ -44,9 +87,12 @@ async def start_stdio_server():
     def _stdin_reader_thread():
         try:
             while True:
-                line = sys.stdin.readline()
+                line = sys.stdin.readline(MAX_LINE_LENGTH + 1)
                 if not line:
                     break
+                if len(line) > MAX_LINE_LENGTH:
+                    log.warning("Line exceeded max length limit (%d bytes), dropping", MAX_LINE_LENGTH)
+                    continue
                 loop.call_soon_threadsafe(input_queue.put_nowait, line)
         except Exception as e:
             log.warning("stdin reader thread error: %s", e)
@@ -57,6 +103,7 @@ async def start_stdio_server():
     reader_thread.start()
 
     write_lock = asyncio.Lock()
+    semaphore = asyncio.Semaphore(16)
 
     async def _send_dict(data: dict):
         line = json.dumps(data) + "\n"
@@ -70,13 +117,14 @@ async def start_stdio_server():
     handler = JsonRpcHandler(send_notification=_send_notification)
 
     async def _dispatch_request(msg_data: dict):
-        try:
-            req = JsonRpcRequest.from_dict(msg_data)
-            resp = await handler.handle_request(req)
-            if resp is not None:
-                await _send_dict(resp.to_dict())
-        except Exception as e:
-            log.exception("Error processing RPC request: %s", e)
+        async with semaphore:
+            try:
+                req = JsonRpcRequest.from_dict(msg_data)
+                resp = await handler.handle_request(req)
+                if resp is not None:
+                    await _send_dict(resp.to_dict())
+            except Exception as e:
+                log.exception("Error processing RPC request: %s", e)
 
     while True:
         try:
@@ -106,12 +154,20 @@ async def start_stdio_server():
             log.exception("Unexpected error in stdio server loop: %s", e)
 
 
-async def start_tcp_server(host: str = "127.0.0.1", port: int = 8765):
-    """Run JSON-RPC server listening on a TCP socket for multi-client connections."""
-    log.info("Starting Andromity JSON-RPC TCP server on %s:%d...", host, port)
+async def start_tcp_server(host: str = "127.0.0.1", port: int = 8765, allow_remote: bool = False):
+    """Run JSON-RPC server listening on a TCP socket with token auth and connection limits."""
+    # Enforce loopback check unless explicitly allowed
+    if host not in ("127.0.0.1", "::1", "localhost") and not allow_remote:
+        raise ValueError(
+            f"Refusing to bind TCP server to non-loopback host {host!r} without --allow-remote flag"
+        )
+
+    daemon_token = _get_or_create_daemon_token()
+    log.info("Starting Andromity JSON-RPC TCP server on %s:%d (auth enabled)...", host, port)
 
     async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         write_lock = asyncio.Lock()
+        semaphore = asyncio.Semaphore(8)
 
         async def _send_dict(data: dict):
             line = json.dumps(data) + "\n"
@@ -127,22 +183,29 @@ async def start_tcp_server(host: str = "127.0.0.1", port: int = 8765):
         log.info("Client connected: %s", peer)
 
         async def _dispatch_request(msg_data: dict):
-            try:
-                req = JsonRpcRequest.from_dict(msg_data)
-                resp = await handler.handle_request(req)
-                if resp is not None:
-                    await _send_dict(resp.to_dict())
-            except Exception as e:
-                log.exception("Error processing TCP RPC request: %s", e)
+            async with semaphore:
+                try:
+                    req = JsonRpcRequest.from_dict(msg_data)
+                    resp = await handler.handle_request(req)
+                    if resp is not None:
+                        await _send_dict(resp.to_dict())
+                except Exception as e:
+                    log.exception("Error processing TCP RPC request: %s", e)
 
+        authenticated = False
         try:
             while True:
                 line_bytes = await reader.readline()
                 if not line_bytes:
                     break
+                if len(line_bytes) > MAX_LINE_LENGTH:
+                    log.warning("TCP line exceeded length limit from %s", peer)
+                    break
                 line = line_bytes.decode("utf-8").strip()
                 if not line:
                     continue
+
+                # First message can authenticate via token: {"auth": "<token>"} or regular JSON-RPC
                 try:
                     msg = json.loads(line)
                 except json.JSONDecodeError as e:
@@ -150,13 +213,26 @@ async def start_tcp_server(host: str = "127.0.0.1", port: int = 8765):
                     continue
 
                 if isinstance(msg, dict):
+                    if not authenticated:
+                        auth_token = msg.get("auth") or (msg.get("params", {}) if isinstance(msg.get("params"), dict) else {}).get("token")
+                        # Local loopback connects automatically or validates token if provided
+                        is_local = peer and isinstance(peer, (tuple, list)) and peer[0] in ("127.0.0.1", "::1", "localhost")
+                        if is_local or (auth_token and secrets.compare_digest(str(auth_token), daemon_token)):
+                            authenticated = True
+                        else:
+                            await _send_dict(JsonRpcResponse.err(msg.get("id"), -32001, "Unauthorized: Invalid daemon token").to_dict())
+                            break
+
                     asyncio.create_task(_dispatch_request(msg))
         except Exception as e:
             log.warning("Connection error with %s: %s", peer, e)
         finally:
             log.info("Client disconnected: %s", peer)
             writer.close()
-            await writer.wait_closed()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
 
     server = await asyncio.start_server(handle_client, host, port)
     async with server:
@@ -168,11 +244,12 @@ def main():
     parser = argparse.ArgumentParser(description="Andromity JSON-RPC Daemon Server")
     parser.add_argument("--stdio", action="store_true", default=True, help="Run over stdio (default)")
     parser.add_argument("--port", type=int, default=None, help="Run TCP server on specified port")
-    parser.add_argument("--host", type=str, default="127.0.0.1", help="TCP host to bind")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="TCP host to bind (default 127.0.0.1)")
+    parser.add_argument("--allow-remote", action="store_true", default=False, help="Allow non-loopback TCP host binding")
     args = parser.parse_args()
 
     if args.port is not None:
-        asyncio.run(start_tcp_server(host=args.host, port=args.port))
+        asyncio.run(start_tcp_server(host=args.host, port=args.port, allow_remote=args.allow_remote))
     else:
         asyncio.run(start_stdio_server())
 

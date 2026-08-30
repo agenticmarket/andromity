@@ -1,6 +1,6 @@
 {
   "name": "andromity",
-  "displayName": "Andromity AI",
+  "displayName": "Andromity",
   "description": "Autonomous AI coding agent with trust governance, sub-agents, live plans, and multi-model support.",
   "version": "0.2.3",
   "publisher": "agenticmarket",
@@ -38,7 +38,7 @@
       "activitybar": [
         {
           "id": "andromity-sidebar",
-          "title": "Andromity AI",
+          "title": "Andromity",
           "icon": "media/icon.svg"
         }
       ]
@@ -48,7 +48,7 @@
         {
           "type": "webview",
           "id": "andromity.chatView",
-          "name": "Andromity Chat",
+          "name": "Andromity",
           "visibility": "visible"
         }
       ]
@@ -166,13 +166,13 @@
       },
       {
         "command": "andromity.restartServer",
-        "title": "Andromity: Restart Python Daemon",
+        "title": "Andromity: Restart Server",
         "category": "Andromity",
         "icon": "$(refresh)"
       },
       {
         "command": "andromity.generateCommitMessage",
-        "title": "Generate Commit Message",
+        "title": "Generate Commit Message with Andromity",
         "category": "Andromity",
         "icon": "$(sparkle)"
       },
@@ -201,10 +201,35 @@
         "icon": "$(clock)"
       }
     ],
+    "keybindings": [
+      {
+        "command": "andromity.openChat",
+        "key": "ctrl+alt+c",
+        "mac": "cmd+alt+c"
+      },
+      {
+        "command": "andromity.askAboutSelection",
+        "key": "ctrl+alt+a",
+        "mac": "cmd+alt+a",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "andromity.explainCode",
+        "key": "ctrl+alt+e",
+        "mac": "cmd+alt+e",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "andromity.generateTests",
+        "key": "ctrl+alt+t",
+        "mac": "cmd+alt+t",
+        "when": "editorHasSelection"
+      }
+    ],
     "submenus": [
       {
         "id": "andromity.editorMenu",
-        "label": "Andromity AI"
+        "label": "Andromity"
       }
     ],
     "menus": {
@@ -323,7 +348,7 @@
       ]
     },
     "configuration": {
-      "title": "Andromity AI",
+      "title": "Andromity",
       "properties": {
         "andromity.pythonPath": {
           "type": "string",

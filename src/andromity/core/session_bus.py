@@ -231,8 +231,6 @@ class SessionBus:
             )
 
             mailbox = self._mailboxes.get(to_session_id)
-            if mailbox is not None:
-                await mailbox.put(msg)
 
             self._append_audit("message_sent", {
                 "message_id": msg_id,
@@ -248,7 +246,10 @@ class SessionBus:
                 message_type=message_type,
                 timestamp=msg.created_at,
             ))
-            return True
+
+        if mailbox is not None:
+            await mailbox.put(msg)
+        return True
 
     async def ask_question(
         self,

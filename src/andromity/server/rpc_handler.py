@@ -78,6 +78,7 @@ class JsonRpcHandler:
         self._pending_approvals: Dict[str, asyncio.Future] = {}
         self._pending_questions: Dict[str, asyncio.Future] = {}
         self._pending_plan_approvals: Dict[str, asyncio.Future] = {}
+        self._cron_schedulers: Dict[str, Any] = {}
 
     def notify(self, method: str, params: Dict[str, Any]):
         """Send a JSON-RPC notification to the client."""
@@ -131,36 +132,14 @@ class JsonRpcHandler:
         if session_id in self._active_sessions:
             return self._active_sessions[session_id]
 
-        target_dir = Path(project_path).resolve() if project_path else Path.cwd().resolve()
-        storage_root = get_config_dir()
-        
-        # 1. Try project-specific sessions directory first
-        project_hash = hashlib.sha256(str(target_dir).encode()).hexdigest()[:16]
-        proj_session_file = storage_root / "sessions" / project_hash / f"{session_id}.json"
-        if proj_session_file.exists():
-            try:
-                session = Session.load(proj_session_file)
-                self._active_sessions[session_id] = session
-                return session
-            except Exception as e:
-                log.warning("Failed to load session from %s: %s", proj_session_file, e)
-
-        # 2. Search across any project storage directory in storage_root / sessions
-        sessions_dir = storage_root / "sessions"
-        if sessions_dir.exists():
-            for p_dir in sessions_dir.iterdir():
-                if p_dir.is_dir():
-                    s_file = p_dir / f"{session_id}.json"
-                    if s_file.exists():
-                        try:
-                            session = Session.load(s_file)
-                            self._active_sessions[session_id] = session
-                            return session
-                        except Exception as e:
-                            log.warning("Failed to load session from %s: %s", s_file, e)
+        loaded = Session.load_by_id(session_id, project_path)
+        if loaded:
+            self._active_sessions[session_id] = loaded
+            return loaded
 
         # 3. If not found on disk, create new session with this exact session_id
         short_id = session_id[:8] if session_id else "main"
+        target_dir = Path(project_path).resolve() if project_path else Path.cwd().resolve()
         session = Session(name=f"session-{short_id}", project_path=str(target_dir), session_id=session_id)
         session.save()
         self._active_sessions[session_id] = session
@@ -274,9 +253,25 @@ class JsonRpcHandler:
         model = getattr(session, "model", None) or config.get("default", "model", "claude-sonnet-4-6")
         provider = getattr(session, "provider", None) or config.get("default", "provider", "anthropic")
         agent = Agent(session=session, model=model, provider=provider)
-        async for _ in agent._compact_context():
+        old_count = len(session.messages)
+        async for _ in agent._compact_context(force=True):
             pass
-        return {"success": True, "message_count": len(session.messages)}
+        # Recalculate context tokens
+        total_tokens = sum(len(str(m.get("content", ""))) // 4 for m in session.messages)
+        session.context_tokens = total_tokens
+        session.save()
+        self.notify("session/updated", {
+            "session_id": session.id,
+            "name": session.name,
+            "message_count": len(session.messages),
+            "context_tokens": session.context_tokens,
+        })
+        return {
+            "success": True,
+            "old_count": old_count,
+            "message_count": len(session.messages),
+            "context_tokens": session.context_tokens,
+        }
 
     async def rpc_session_undo(self, params: Dict[str, Any]) -> Dict[str, Any]:
         session_id = params.get("session_id")
@@ -327,8 +322,8 @@ class JsonRpcHandler:
         model = params.get("model") or config.get("default", "model", "claude-sonnet-4-6")
         provider = params.get("provider") or config.get("default", "provider", "anthropic")
         reasoning_effort = params.get("reasoning_effort") or config.get("default", "reasoning_effort", "medium")
-        # Primary source of truth is the requested mode parameter, falling back to config
-        mode = (params.get("mode") or config.get("default", "permission_mode", "safe")).lower()
+        # Primary source of truth is server config permission mode
+        mode = config.get("default", "permission_mode", "safe").lower()
         is_trusted_workspace = config.is_trusted(session.project_path)
         auto_approve = mode in ("full", "yolo")
 
@@ -422,7 +417,7 @@ class JsonRpcHandler:
 
             approval_id = str(uuid.uuid4())
             fut = asyncio.get_running_loop().create_future()
-            self._pending_approvals[approval_id] = fut
+            self._pending_approvals[approval_id] = (session_id, fut)
 
             if config.get("default", "sound_attention", True):
                 try:
@@ -447,7 +442,7 @@ class JsonRpcHandler:
         async def _on_questions(questions: List[Dict[str, Any]]) -> str:
             question_id = str(uuid.uuid4())
             fut = asyncio.get_running_loop().create_future()
-            self._pending_questions[question_id] = fut
+            self._pending_questions[question_id] = (session_id, fut)
 
             if config.get("default", "sound_attention", True):
                 try:
@@ -470,14 +465,26 @@ class JsonRpcHandler:
 
         # Auto-title session from first user prompt if still default
         if session.name in ("new-session", "Main Session") or session.name.startswith("Session ") or session.name.startswith("session-"):
-            first_line = prompt.strip().split("\n")[0].strip()
-            if first_line:
-                short_title = first_line[:32].strip()
-                if len(first_line) > 32:
-                    short_title += "…"
-                session.name = short_title
-                session.save()
-                self.notify("session/updated", {"session_id": session.id, "name": session.name})
+            try:
+                auto_name = Session.auto_name_from_message(prompt)
+                if auto_name:
+                    session.name = auto_name
+                    session.save()
+                    self.notify("session/updated", {"session_id": session.id, "name": session.name})
+            except Exception:
+                first_line = prompt.strip().split("\n")[0].strip()
+                if first_line:
+                    short_title = first_line[:32].strip()
+                    if len(first_line) > 32:
+                        short_title += "…"
+                    session.name = short_title
+                    session.save()
+                    self.notify("session/updated", {"session_id": session.id, "name": session.name})
+            # Trigger background AI LLM-powered title generation (TUI parity)
+            try:
+                asyncio.create_task(self._generate_ai_session_name(session, prompt, provider, model))
+            except Exception:
+                pass
 
         agent = Agent(
             session=session,
@@ -599,6 +606,21 @@ class JsonRpcHandler:
                             "cost_usd": getattr(session, "cost_usd", 0.0),
                         })
 
+                if len(session.messages) <= 3:
+                    try:
+                        first_user_msg = next((m.get("content", "") for m in session.messages if m.get("role") == "user"), "")
+                        if first_user_msg:
+                            clean_words = [w for w in first_user_msg.replace("\n", " ").split(" ") if w.strip()]
+                            if clean_words:
+                                refined = " ".join(clean_words[:6])
+                                if len(clean_words) > 6:
+                                    refined += "…"
+                                session.name = refined
+                                session.save()
+                                self.notify("session/updated", {"session_id": session.id, "name": session.name})
+                    except Exception as title_err:
+                        log.debug("Auto-title refinement error: %s", title_err)
+
                 session.save()
             except asyncio.CancelledError:
                 self.notify("agent/cancelled", {"session_id": session_id})
@@ -608,7 +630,6 @@ class JsonRpcHandler:
                 self.notify("agent/error", {
                     "session_id": session_id,
                     "error": str(e),
-                    "traceback": traceback.format_exc(),
                 })
 
         task = asyncio.create_task(_run_stream())
@@ -626,6 +647,20 @@ class JsonRpcHandler:
         provider = params.get("provider") or config.get("default", "provider", "anthropic")
         # Use litellm directly for speed, fallback to Agent if unavailable
         try:
+            import sys, os
+            # PyInstaller bundled binary: litellm looks for model_prices_and_context_window_backup.json
+            # in the extracted _MEIxxx temp folder which doesn't persist between runs.
+            # Pre-create an empty stub so litellm won't crash with FileNotFoundError.
+            if getattr(sys, "frozen", False):
+                _mei = getattr(sys, "_MEIPASS", None)
+                if _mei:
+                    _litellm_dir = os.path.join(_mei, "litellm")
+                    _price_file = os.path.join(_litellm_dir, "model_prices_and_context_window_backup.json")
+                    if not os.path.exists(_price_file):
+                        os.makedirs(_litellm_dir, exist_ok=True)
+                        with open(_price_file, "w") as _f:
+                            _f.write("{}")
+
             import litellm
             from andromity.core.models import get_context_limit_for_model
 
@@ -669,9 +704,16 @@ class JsonRpcHandler:
 
     async def rpc_agent_approve_tool(self, params: Dict[str, Any]) -> Dict[str, Any]:
         approval_id = params.get("approval_id")
+        session_id = params.get("session_id")
         approved = params.get("approved", True)
         if approval_id in self._pending_approvals:
-            fut = self._pending_approvals[approval_id]
+            item = self._pending_approvals[approval_id]
+            if isinstance(item, tuple):
+                stored_sid, fut = item
+                if session_id and stored_sid and session_id != stored_sid:
+                    log.warning("Tool approval session mismatch: %s != %s", session_id, stored_sid)
+            else:
+                fut = item
             if not fut.done():
                 fut.set_result(approved)
             return {"success": True, "approval_id": approval_id, "approved": approved}
@@ -682,6 +724,7 @@ class JsonRpcHandler:
 
     async def rpc_agent_answer_question(self, params: Dict[str, Any]) -> Dict[str, Any]:
         question_id = params.get("question_id")
+        session_id = params.get("session_id")
         answers = params.get("answers") or params.get("answer") or ""
         if isinstance(answers, (dict, list)):
             answer_str = json.dumps(answers)
@@ -689,7 +732,13 @@ class JsonRpcHandler:
             answer_str = str(answers)
 
         if question_id in self._pending_questions:
-            fut = self._pending_questions[question_id]
+            item = self._pending_questions[question_id]
+            if isinstance(item, tuple):
+                stored_sid, fut = item
+                if session_id and stored_sid and session_id != stored_sid:
+                    log.warning("Question answer session mismatch: %s != %s", session_id, stored_sid)
+            else:
+                fut = item
             if not fut.done():
                 fut.set_result(answer_str)
             return {"success": True, "question_id": question_id}
@@ -707,11 +756,13 @@ class JsonRpcHandler:
                 task.cancel()
                 cancelled = True
 
-        # Resolve any pending futures
-        for aid, fut in list(self._pending_approvals.items()):
+        # Resolve any pending futures for this session or all
+        for aid, item in list(self._pending_approvals.items()):
+            fut = item[1] if isinstance(item, tuple) else item
             if not fut.done():
                 fut.set_result(False)
-        for qid, fut in list(self._pending_questions.items()):
+        for qid, item in list(self._pending_questions.items()):
+            fut = item[1] if isinstance(item, tuple) else item
             if not fut.done():
                 fut.set_result("Cancelled by user")
 
@@ -722,11 +773,14 @@ class JsonRpcHandler:
     async def rpc_config_get(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
         all_cfg = config.to_dict() if hasattr(config, "to_dict") else {}
         user = config.get_user() if hasattr(config, "get_user") else {}
+        from andromity.core.profiles import PROFILES
         return {
             "config": all_cfg,
             "default_provider": config.get("default", "provider", "openrouter"),
             "default_model": config.get("default", "model", "anthropic/claude-3.7-sonnet"),
             "default_profile": config.get("default", "profile", "builder"),
+            "available_profiles": list(PROFILES.keys()),
+            "available_reasoning_efforts": ["low", "medium", "high", "off"],
             "permission_mode": config.get("default", "permission_mode", "safe"),
             "reasoning_effort": config.get("default", "reasoning_effort", "medium"),
             "user_name": user.get("name", ""),
@@ -736,6 +790,16 @@ class JsonRpcHandler:
             "max_file_size_kb": config.get("advanced", "max_file_size_kb", 500),
             "is_trusted": config.is_trusted(params.get("project_path") or str(Path.cwd())) if params else False,
         }
+
+    async def rpc_profiles_list(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        from andromity.core.profiles import PROFILES
+        descs = {
+            "builder": "Full implementation agent with plan generation, full tool suite, and subagents",
+            "coder": "Fast direct coding agent with shell execution and multi-file editing",
+            "reviewer": "Read-only auditor for security, bugs, logic flaws, and performance",
+            "planner": "Architecture and system designer for step-by-step task breakdown",
+        }
+        return [{"id": k, "name": k.capitalize(), "description": descs.get(k, ""), "tools": v.get("tools", [])} for k, v in PROFILES.items()]
 
     async def rpc_config_set(self, params: Dict[str, Any]) -> Dict[str, Any]:
         section = params.get("section", "default")
@@ -837,7 +901,7 @@ class JsonRpcHandler:
     async def rpc_skills_list(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """List installed and discoverable skills."""
         project_path = params.get("project_path") if params else None
-        target_path = Path(project_path).resolve() if project_path else Path.cwd().resolve()
+        target_path = str(Path(project_path).resolve()) if project_path else str(Path.cwd().resolve())
         skills = []
         try:
             from andromity.core.skills import SkillsManager
@@ -856,9 +920,11 @@ class JsonRpcHandler:
     async def rpc_skills_browse(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """Browse remote skills available in public registries (Anthropic & Community)."""
         source_id = params.get("source_id") if params else None
+        project_path = params.get("project_path") if params else None
+        target_path = str(Path(project_path).resolve()) if project_path else str(Path.cwd().resolve())
         try:
             from andromity.core.skills import SkillsManager
-            mgr = SkillsManager()
+            mgr = SkillsManager(target_path)
             remotes = await asyncio.to_thread(mgr.browse, source_id)
             return [
                 {
@@ -880,11 +946,13 @@ class JsonRpcHandler:
         name = params.get("name")
         source_id = params.get("source_id", "anthropic")
         scope = params.get("scope", "user")
+        project_path = params.get("project_path")
+        target_path = str(Path(project_path).resolve()) if project_path else str(Path.cwd().resolve())
         if not name:
             raise ValueError("Skill name is required")
         try:
             from andromity.core.skills import SkillsManager
-            mgr = SkillsManager()
+            mgr = SkillsManager(target_path)
             installed = await asyncio.to_thread(mgr.install, name, source_id, scope)
             return {
                 "success": bool(installed),
@@ -899,7 +967,7 @@ class JsonRpcHandler:
         """List configured MCP servers and their statuses."""
         servers = []
         try:
-            mcp_conf = config.get("mcp_servers", {}) or {}
+            mcp_conf = config.get_root("mcp_servers", {}) or {}
             if isinstance(mcp_conf, dict):
                 for name, s_data in mcp_conf.items():
                     cmd = s_data.get("command", "") if isinstance(s_data, dict) else ""
@@ -953,10 +1021,18 @@ class JsonRpcHandler:
         from andromity import __version__
         from andromity.core.tools import CORE_TOOLS
         tools = [t.get("function", {}).get("name", "") for t in CORE_TOOLS if isinstance(t, dict)]
+
+        exe = sys.executable
+        # Detect if we are running from a PyInstaller bundle (bundled standalone binary)
+        is_bundled = getattr(sys, "frozen", False)
+        engine_mode = "Bundled Standalone Binary" if is_bundled else "System Python"
+
         return {
             "version": __version__,
+            "engine_mode": engine_mode,
+            "is_bundled": is_bundled,
             "python_version": platform.python_version(),
-            "python_executable": sys.executable,
+            "python_executable": exe,
             "os": f"{platform.system()} {platform.release()}",
             "pid": os.getpid(),
             "tools_count": len(tools),
@@ -1024,35 +1100,6 @@ class JsonRpcHandler:
         plan.save()
         return {"success": True, "status": "rejected"}
 
-    # ── Workspace Trust ─────────────────────────────────────────────────────────
-
-    async def rpc_trust_status(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
-        params = params or {}
-        project_path = params.get("project_path") or str(Path.cwd())
-        return {
-            "is_trusted": config.is_trusted(project_path),
-            "project_path": project_path,
-        }
-
-    async def rpc_trust_set(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        params = params or {}
-        project_path = params.get("project_path") or str(Path.cwd())
-        config.set_trusted(project_path)
-        return {
-            "success": True,
-            "is_trusted": True,
-            "project_path": project_path,
-        }
-
-    async def rpc_trust_revoke(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        params = params or {}
-        project_path = params.get("project_path") or str(Path.cwd())
-        config.revoke_trust(project_path)
-        return {
-            "success": True,
-            "is_trusted": False,
-            "project_path": project_path,
-        }
 
     # ── Git & Snapshots ─────────────────────────────────────────────────────────
 
@@ -1121,9 +1168,218 @@ class JsonRpcHandler:
 
     # ── Cron & Scheduled Jobs ───────────────────────────────────────────────────
 
+    def _get_or_create_cron_scheduler(self, project_path: str):
+        if project_path not in self._cron_schedulers:
+            from andromity.core.cron import CronScheduler
+            scheduler = CronScheduler(
+                project_path,
+                on_trigger=lambda job: asyncio.create_task(self._execute_cron_job(project_path, job))
+            )
+            scheduler.start()
+            self._cron_schedulers[project_path] = scheduler
+        return self._cron_schedulers[project_path]
+
+    async def _execute_cron_job(self, project_path: str, job) -> Dict[str, Any]:
+        from andromity.core.cron import CronStore, CronRunStore, CronRun
+        from andromity.core.events import TextDelta, ToolCallStart, ToolResult
+        from datetime import datetime, timezone
+        import time
+
+        run_store = CronRunStore(project_path)
+        store = CronStore(project_path)
+
+        run = CronRun(
+            id=str(uuid.uuid4())[:12],
+            job_id=job.id,
+            job_name=job.name,
+            started_at=datetime.now(timezone.utc).isoformat(),
+            prompt=job.prompt,
+            model=job.model,
+            provider=job.provider,
+            status="running",
+        )
+        run_store.save_run(run)
+        self.notify("cron/run_started", {"job_id": job.id, "run": run.to_dict()})
+
+        # Create dedicated cron session
+        cron_session = Session(
+            session_id=f"cron-{job.id}-{int(time.time())}",
+            name=f"Cron: {job.name}",
+            project_path=project_path,
+        )
+
+        agent = Agent(
+            session=cron_session,
+            profile="builder",
+            auto_approve=(job.mode in ("trust", "yolo", "full")),
+            reasoning_effort="medium",
+            provider=job.provider,
+            model=job.model,
+        )
+
+        accumulated_text = []
+        tools_used = []
+        tool_executions = []
+        start_time = time.time()
+        error_msg = None
+
+        try:
+            timeout = job.timeout_seconds if (hasattr(job, "timeout_seconds") and job.timeout_seconds > 0) else 600
+            async with asyncio.timeout(timeout):
+                async for event in agent.run(job.prompt):
+                    if isinstance(event, TextDelta):
+                        accumulated_text.append(event.text)
+                    elif isinstance(event, ToolCallStart):
+                        tools_used.append(event.tool_name)
+                    elif isinstance(event, ToolResult):
+                        tool_executions.append({
+                            "tool_name": event.tool_name,
+                            "result": str(event.result)[:1000] if event.result else "",
+                            "success": event.success,
+                        })
+        except asyncio.TimeoutError:
+            error_msg = f"Execution timed out after {job.timeout_seconds}s"
+        except Exception as e:
+            error_msg = str(e)
+            log.exception("Cron run error for '%s': %s", job.name, e)
+
+        finished_at = datetime.now(timezone.utc).isoformat()
+        duration_ms = int((time.time() - start_time) * 1000)
+        full_output = "".join(accumulated_text).strip()
+
+        run.finished_at = finished_at
+        run.duration_ms = duration_ms
+        run.output = full_output
+        run.output_preview = (full_output[:300] + "…") if len(full_output) > 300 else (full_output or ("Job completed successfully with no text output." if not error_msg else f"Failed: {error_msg}"))
+        run.tools_used = list(dict.fromkeys(tools_used))
+        run.tool_executions = tool_executions
+        run.status = "success" if not error_msg else ("timeout" if "timed out" in str(error_msg).lower() else "failed")
+        run.error = error_msg
+        run.cost_usd = cron_session.cost_usd if hasattr(cron_session, "cost_usd") else 0.0
+
+        run_store.save_run(run)
+
+        # Update and persist cron status
+        crons = store.load()
+        for c in crons:
+            if c.id == job.id:
+                c.mark_run(success=(error_msg is None), error=error_msg)
+                job = c
+                break
+        store.save(crons)
+
+        # Also update in-memory scheduler crons
+        if project_path in self._cron_schedulers:
+            self._cron_schedulers[project_path]._crons = crons
+
+        self.notify("cron/run_completed", {
+            "job_id": job.id,
+            "run": run.to_dict(),
+            "job": job.to_dict(),
+        })
+
+        return run.to_dict()
+
+    async def _generate_ai_session_name(self, session: Session, prompt: str, provider: str, model: str):
+        try:
+            import sys, os
+            if getattr(sys, "frozen", False):
+                _mei = getattr(sys, "_MEIPASS", None)
+                if _mei:
+                    _price_file = os.path.join(_mei, "litellm", "model_prices_and_context_window_backup.json")
+                    if not os.path.exists(_price_file):
+                        os.makedirs(os.path.dirname(_price_file), exist_ok=True)
+                        with open(_price_file, "w") as _f:
+                            _f.write("{}")
+            import litellm
+            if not provider or not model:
+                provider = config.get("default", "provider", "")
+                model = config.get("default", "model", "")
+            if not provider or not model:
+                return
+
+            provider_cfg = config.get_provider_config(provider)
+            base_url = None
+            api_key = config.get_api_key(provider)
+
+            if provider == "ollama":
+                litellm_model = f"ollama_chat/{model}" if not (model.startswith("ollama/") or model.startswith("ollama_chat/")) else model
+                base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "http://localhost:11434"
+            elif provider == "google":
+                litellm_model = f"gemini/{model}" if not model.startswith("gemini/") else model
+            elif provider == "openrouter":
+                litellm_model = f"openrouter/{model}" if not model.startswith("openrouter/") else model
+            elif provider == "nvidia":
+                litellm_model = f"nvidia_nim/{model}" if not model.startswith("nvidia_nim/") else model
+            else:
+                litellm_model = f"{provider}/{model}" if not model.startswith(f"{provider}/") else model
+                base_url = provider_cfg.get("base_url") if provider_cfg else None
+
+            kwargs = {"model": litellm_model, "stream": False}
+            if api_key:
+                kwargs["api_key"] = api_key
+            if base_url:
+                kwargs["api_base"] = base_url
+
+            messages = [
+                {"role": "system", "content": """You are a title generator. You output ONLY a thread title. Nothing else.
+
+<task>
+Generate a brief title that would help the user find this conversation later.
+
+Follow all rules in <rules>
+Use the <examples> so you know what a good title looks like.
+Your output must be:
+- A single line
+- ≤50 characters
+- No explanations
+</task>
+
+<rules>
+- you MUST use the same language as the user message you are summarizing
+- Title must be grammatically correct and read naturally - no word salad
+- Never include tool names in the title (e.g. "read tool", "bash tool", "edit tool")
+- Focus on the main topic or question the user needs to retrieve
+- Vary your phrasing - avoid repetitive patterns like always starting with "Analyzing"
+- When a file is mentioned, focus on WHAT the user wants to do WITH the file, not just that they shared it
+- Keep exact: technical terms, numbers, filenames, HTTP codes
+- Remove: the, this, my, a, an
+- Never assume tech stack
+- Never use tools
+- NEVER respond to questions, just generate a title for the conversation
+- The title should NEVER include "summarizing" or "generating" when generating a title
+- DO NOT SAY YOU CANNOT GENERATE A TITLE OR COMPLAIN ABOUT THE INPUT
+- Always output something meaningful, even if the input is minimal.
+- If the user message is short or conversational (e.g. "hello", "lol", "what's up", "hey"):
+  → create a title that reflects the user's tone or intent (such as Greeting, Quick check-in, Light chat, Intro message, etc.)
+</rules>
+
+<examples>
+"debug 500 errors in production" → Debugging production 500 errors
+"refactor user service" → Refactoring user service"""},
+                {"role": "user", "content": prompt}
+            ]
+            kwargs["messages"] = messages
+
+            response = await litellm.acompletion(**kwargs)
+            if response.choices:
+                name = response.choices[0].message.content.strip().strip('"').strip("'")
+                if name:
+                    session.name = name
+                    session.save()
+                    self.notify("session/updated", {
+                        "session_id": session.id,
+                        "name": session.name,
+                        "message_count": len(session.messages),
+                        "context_tokens": session.context_tokens,
+                    })
+        except Exception as e:
+            log.debug("Failed to generate AI session name: %s", e)
+
     async def rpc_cron_list(self, params: Dict[str, Any]) -> List[Dict[str, Any]]:
         project_path = params.get("project_path") or str(Path.cwd().resolve())
         try:
+            scheduler = self._get_or_create_cron_scheduler(project_path)
             from andromity.core.cron import CronStore
             store = CronStore(project_path)
             return [job.to_dict() if hasattr(job, "to_dict") else job for job in store.load()]
@@ -1144,6 +1400,9 @@ class JsonRpcHandler:
             model = params.get("model") or config.get("default", "model", "claude-sonnet-4-6")
             mode = params.get("mode") or "trust"
             interval = parse_interval_seconds(schedule)
+            allowed_commands = params.get("allowed_commands") or []
+            if isinstance(allowed_commands, str):
+                allowed_commands = [c.strip() for c in allowed_commands.split(",") if c.strip()]
             job = CronJob(
                 id=str(uuid.uuid4())[:8],
                 name=name,
@@ -1153,9 +1412,12 @@ class JsonRpcHandler:
                 provider=provider,
                 model=model,
                 mode=mode,
+                allowed_commands=allowed_commands,
             )
             crons.append(job)
             store.save(crons)
+            scheduler = self._get_or_create_cron_scheduler(project_path)
+            scheduler._crons = crons
             return {"success": True, "job": job.to_dict()}
         except Exception as e:
             log.error("Cron create error: %s", e)
@@ -1172,6 +1434,8 @@ class JsonRpcHandler:
                 if c.id == job_id:
                     c.enabled = not c.enabled
                     store.save(crons)
+                    if project_path in self._cron_schedulers:
+                        self._cron_schedulers[project_path]._crons = crons
                     return {"success": True, "enabled": c.enabled}
             return {"success": False, "error": "Job not found"}
         except Exception as e:
@@ -1186,9 +1450,44 @@ class JsonRpcHandler:
             job_id = params.get("job_id") or params.get("id")
             crons = [c for c in crons if c.id != job_id]
             store.save(crons)
+            if project_path in self._cron_schedulers:
+                self._cron_schedulers[project_path]._crons = crons
             return {"success": True}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    async def rpc_cron_run_now(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        project_path = params.get("project_path") or str(Path.cwd().resolve())
+        try:
+            from andromity.core.cron import CronStore
+            store = CronStore(project_path)
+            crons = store.load()
+            job_id = params.get("job_id") or params.get("id")
+            cron = next((c for c in crons if c.id == job_id), None)
+            if not cron:
+                return {"success": False, "error": "Job not found"}
+            
+            # Execute actual AI agent turn in background or synchronous wait
+            run_dict = await self._execute_cron_job(project_path, cron)
+            return {"success": True, "job": cron.to_dict(), "run": run_dict}
+        except Exception as e:
+            log.error("Cron run_now error: %s", e)
+            return {"success": False, "error": str(e)}
+
+    async def rpc_cron_runs(self, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        project_path = params.get("project_path") or str(Path.cwd().resolve())
+        try:
+            from andromity.core.cron import CronRunStore
+            run_store = CronRunStore(project_path)
+            job_id = params.get("job_id") or params.get("id")
+            if job_id:
+                runs = run_store.list_runs(job_id, limit=20)
+            else:
+                runs = []
+            return [r.to_dict() if hasattr(r, "to_dict") else r for r in runs]
+        except Exception as e:
+            log.warning("Cron runs error: %s", e)
+            return []
 
     # ── MCP & Skills ────────────────────────────────────────────────────────────
 

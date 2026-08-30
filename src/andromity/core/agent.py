@@ -123,20 +123,16 @@ class Agent:
         except Exception:
             return True
 
-    async def _compact_context(self) -> AsyncGenerator[StreamEvent, None]:
+    async def _compact_context(self, force: bool = False) -> AsyncGenerator[StreamEvent, None]:
         limit = self.ctx_limit
         msg_count = len(self.session.messages)
 
         # ── Decide whether compaction is needed ──────────────────────────
-        # Two independent triggers:
-        #   1. Token-based (primary): context_tokens > 80% of model's
-        #      context window — scales naturally with model capability.
-        #   2. Message-count safety ceiling: > 1000 messages — prevents
-        #      multi-MB JSON session files from freezing the UI, even when
-        #      token estimates are unavailable or inaccurate.
         compact_reason = ""
 
-        if limit > 0:
+        if force:
+            compact_reason = "manual compaction requested"
+        elif limit > 0:
             current_tokens = getattr(self.session, "context_tokens", 0)
             if current_tokens <= 0:
                 current_tokens = sum(len(str(m.get("content", ""))) // 4 for m in self.session.messages)
@@ -153,8 +149,12 @@ class Agent:
 
         old_count = len(self.session.messages)
         non_system = [m for m in self.session.messages if m.get("role") != "system"]
-        keep_turns = non_system[-6:] if len(non_system) > 6 else []
-        to_compact = non_system[:-6] if len(non_system) > 6 else non_system
+        if force and len(non_system) > 2 and len(non_system) <= 6:
+            keep_turns = non_system[-2:]
+            to_compact = non_system[:-2]
+        else:
+            keep_turns = non_system[-6:] if len(non_system) > 6 else []
+            to_compact = non_system[:-6] if len(non_system) > 6 else non_system
 
         if not to_compact:
             return

@@ -11,11 +11,41 @@ from typing import List, Dict, Any, Optional
 from andromity.config import get_config_dir
 
 
+import re
+
+
+def _validate_session_id(session_id: str) -> str:
+    """Validate and sanitize session_id to prevent directory traversal."""
+    if not session_id or not isinstance(session_id, str):
+        raise ValueError("session_id must be a non-empty string")
+    clean_id = session_id.strip()
+    # Allow alphanumeric characters, hyphens, and underscores (1 to 64 chars)
+    if not re.fullmatch(r"[a-zA-Z0-9_\-]{1,64}", clean_id):
+        raise ValueError(f"Invalid session_id format: {session_id!r}")
+    return clean_id
+
+
+def normalize_project_path(project_path: Optional[str] = None) -> str:
+    """Normalize project path across operating systems and casing (Windows drive letters)."""
+    p = Path(project_path or Path.cwd()).resolve()
+    s = str(p)
+    if os.name == "nt" and len(s) >= 2 and s[1] == ":":
+        s = s[0].upper() + s[1:]
+    return s
+
+
 class Session:
-    def __init__(self, name: str = "new-session", project_path: Optional[str] = None, session_id: Optional[str] = None):
-        self.id = session_id or str(uuid.uuid4())
+    def __init__(
+        self,
+        name: str = "new-session",
+        project_path: Optional[str] = None,
+        session_id: Optional[str] = None,
+        id: Optional[str] = None,
+    ):
+        actual_id = session_id or id
+        self.id = _validate_session_id(actual_id) if actual_id else str(uuid.uuid4())
         self.name = name
-        self.project_path = project_path or str(Path.cwd())
+        self.project_path = normalize_project_path(project_path)
         self.project_hash = hashlib.sha256(self.project_path.encode()).hexdigest()[:16]
         self.parent_session = None
         self.branch_point = None
@@ -38,8 +68,12 @@ class Session:
         from andromity.config import config
         self.provider = config.get("default", "provider", "")
         self.model = config.get("default", "model", "")
-        self.storage_dir = get_config_dir() / "sessions" / self.project_hash
+        sessions_root = get_config_dir() / "sessions"
+        sessions_root.mkdir(parents=True, exist_ok=True)
+        sessions_root = sessions_root.resolve()
+        self.storage_dir = sessions_root / self.project_hash
         self.storage_dir.mkdir(parents=True, exist_ok=True)
+        self.storage_dir = self.storage_dir.resolve()
         self.file_path = self.storage_dir / f"{self.id}.json"
         self._save_timer: Optional[threading.Timer] = None
         self._save_lock = threading.RLock()
@@ -306,44 +340,82 @@ class Session:
         return session
 
     @classmethod
-    def list_sessions(cls, project_path: Optional[str] = None, limit: int = 50) -> List["Session"]:
-        pp = project_path or str(Path.cwd())
-        project_hash = hashlib.sha256(pp.encode()).hexdigest()[:16]
-        sessions_dir = get_config_dir() / "sessions" / project_hash
-        if not sessions_dir.exists():
+    def list_sessions(cls, project_path: Optional[str] = None, limit: int = 100) -> List["Session"]:
+        norm_path = normalize_project_path(project_path)
+        primary_hash = hashlib.sha256(norm_path.encode()).hexdigest()[:16]
+
+        hashes_to_check = {primary_hash}
+        if project_path:
+            raw_s = str(project_path)
+            hashes_to_check.add(hashlib.sha256(raw_s.encode()).hexdigest()[:16])
+            hashes_to_check.add(hashlib.sha256(raw_s.lower().encode()).hexdigest()[:16])
+            hashes_to_check.add(hashlib.sha256(Path(project_path).resolve().as_posix().encode()).hexdigest()[:16])
+
+        sessions_root = get_config_dir() / "sessions"
+        if not sessions_root.exists():
             return []
-            
-        # Get all files and sort by modification time (newest first)
-        session_files = list(sessions_dir.glob("*.json"))
+
+        session_files = []
+        seen_ids = set()
+
+        for h in hashes_to_check:
+            p_dir = sessions_root / h
+            if p_dir.exists() and p_dir.is_dir():
+                for f in p_dir.glob("*.json"):
+                    stem = f.stem
+                    if stem not in seen_ids:
+                        seen_ids.add(stem)
+                        session_files.append(f)
+
+        # Sort by modification time (newest first)
         session_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-        
+
         sessions = []
         for f in session_files[:limit]:
             try:
                 sessions.append(cls.load(f))
             except Exception:
                 continue
-                
+
         sessions.sort(key=lambda s: getattr(s, "updated_at", s.created_at), reverse=True)
         return sessions
 
     @classmethod
     def load_by_id(cls, session_id: str, project_path: Optional[str] = None) -> Optional["Session"]:
-        pp = project_path or str(Path.cwd())
-        project_hash = hashlib.sha256(pp.encode()).hexdigest()[:16]
-        session_file = get_config_dir() / "sessions" / project_hash / f"{session_id}.json"
-        if session_file.exists():
-            try:
-                return cls.load(session_file)
-            except Exception:
-                pass
+        try:
+            valid_id = _validate_session_id(session_id)
+        except ValueError:
+            return None
+
+        norm_path = normalize_project_path(project_path)
+        primary_hash = hashlib.sha256(norm_path.encode()).hexdigest()[:16]
+
+        hashes_to_check = [primary_hash]
+        if project_path:
+            raw_s = str(project_path)
+            for h in [
+                hashlib.sha256(raw_s.encode()).hexdigest()[:16],
+                hashlib.sha256(raw_s.lower().encode()).hexdigest()[:16],
+                hashlib.sha256(Path(project_path).resolve().as_posix().encode()).hexdigest()[:16],
+            ]:
+                if h not in hashes_to_check:
+                    hashes_to_check.append(h)
+
+        sessions_dir = (get_config_dir() / "sessions").resolve()
+        for h in hashes_to_check:
+            candidate = (sessions_dir / h / f"{valid_id}.json").resolve()
+            if candidate.is_relative_to(sessions_dir) and candidate.exists():
+                try:
+                    return cls.load(candidate)
+                except Exception:
+                    pass
+
         # Fallback: scan all project subdirectories under sessions
-        sessions_dir = get_config_dir() / "sessions"
         if sessions_dir.exists():
             for p_dir in sessions_dir.iterdir():
                 if p_dir.is_dir():
-                    candidate = p_dir / f"{session_id}.json"
-                    if candidate.exists():
+                    candidate = (p_dir / f"{valid_id}.json").resolve()
+                    if candidate.is_relative_to(sessions_dir) and candidate.exists():
                         try:
                             return cls.load(candidate)
                         except Exception:

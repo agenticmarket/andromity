@@ -109,3 +109,23 @@ testProvider(
     return panelProto._getHtmlForWebview.call(mockThis);
   }
 );
+
+// 3. PlanEditorPanel
+testProvider(
+  'PlanEditorPanel',
+  '../dist-test/src/panels/PlanEditorPanel.js',
+  (mod) => {
+    const panelProto = mod.PlanEditorPanel.prototype;
+    const mockThis = {
+      _extensionUri: { fsPath: 'd:/saas/agent/vscode-extension' },
+      _panel: {
+        webview: {
+          cspSource: 'vscode-webview:',
+          asWebviewUri: (u) => 'vscode-resource://' + (u.fsPath || u)
+        }
+      },
+      _currentPlan: { title: 'Test Plan', todos: [{ id: '1', description: 'Step 1' }] }
+    };
+    return panelProto._getHtmlForWebview.call(mockThis, mockThis._panel.webview);
+  }
+);
