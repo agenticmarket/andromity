@@ -194,7 +194,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           (feedback ? ` User reason: ${feedback}` : "");
       this.sendPromptFromExternal(msg);
       vscode.window.showInformationMessage(
-        approved ? "Plan approved â€” agent is executing." : "Plan rejected â€” agent will revise."
+        approved ? "Plan approved -- agent is executing." : "Plan rejected -- agent will revise."
       );
     } catch (e: any) {
       vscode.window.showErrorMessage(
@@ -329,7 +329,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this._postToWebview({ type: "play_sound", kind: "done" });
         playNativeDoneSound(this._extensionUri);
       }
-      // Files may have changed â€” refresh the Changes view and session stats.
+      // Files may have changed -- refresh the Changes view and session stats.
       vscode.commands.executeCommand("andromity.refreshChanges");
     });
 
@@ -520,8 +520,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             vscode.window.showInformationMessage("Agent is still working on the previous turn. Your message was queued and will send automatically when it finishes.");
             this._postToWebview({ type: "agent_busy", error: msg, queuedPrompt: promptText });
           } else if (msg.includes("RPC timeout")) {
-            // Server actually started but ACK timed out â€” keep turn alive, wait for streaming notifications
-            vscode.window.showWarningMessage("Agent started but confirmation timed out. Streaming will continue â€” check the chat for progress. If stuck, use Cancel.");
+            // Server actually started but ACK timed out -- keep turn alive, wait for streaming notifications
+            vscode.window.showWarningMessage("Agent started but confirmation timed out. Streaming will continue -- check the chat for progress. If stuck, use Cancel.");
             this._postToWebview({ type: "agent_started", session_id: this._currentSessionId });
           } else {
             vscode.window.showErrorMessage(`Failed to send prompt: ${msg}`);
@@ -784,7 +784,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         sessions.forEach(s => {
           items.push({
             label: s.name || s.id,
-            description: s.id === this._currentSessionId ? "â˜… Current" : (s.message_count ? `${s.message_count} msgs` : ""),
+            description: s.id === this._currentSessionId ? "... Current" : (s.message_count ? `${s.message_count} msgs` : ""),
             sessionId: s.id,
             action: "switch",
           });
@@ -970,7 +970,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       overflow: hidden;
     }
 
-    /* â”€â”€ Top Bar: Minimal, Sleek, Professional â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* ”--€ Top Bar: Minimal, Sleek, Professional ”--------------------------------------------€ */
     .top-bar {
       display: flex;
       align-items: center;
@@ -1148,7 +1148,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     .mode-badge-btn.mode-yolo:hover { background: rgba(240, 136, 62, 0.22); }
 
-    /* â”€â”€ Sessions Drawer / Flyout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* ”--€ Sessions Drawer / Flyout ”--------------------------------------------------------------------€ */
     .sessions-flyout {
       position: absolute;
       top: 36px;
@@ -1294,7 +1294,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       border-color: var(--accent);
     }
 
-    /* â”€â”€ Scheduled Crons Overlay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* ”--€ Scheduled Crons Overlay ”------------------------------------------------------------------------€ */
     .crons-flyout {
       position: absolute;
       top: 36px;
@@ -1376,7 +1376,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       line-height: 1.3;
     }
 
-    /* â”€â”€ Inline Todo Progress Bar (Live Planner Tracker) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* ”--€ Inline Todo Progress Bar (Live Planner Tracker) ”----------------------€ */
     .plan-tracker-strip {
       padding: 8px 10px;
       background: rgba(6, 182, 212, 0.05);
@@ -1448,7 +1448,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       white-space: nowrap;
     }
 
-    /* â”€â”€ Model Quick Switcher Flyout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* ”--€ Model Quick Switcher Flyout ”----------------------------------------------------------------€ */
     .model-flyout {
       position: absolute;
       top: 36px;
@@ -1525,7 +1525,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       color: var(--muted);
     }
 
-    /* â”€â”€ Chat Feed â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* ”--€ Chat Feed ”----------------------------------------------------------------------------------------------------€ */
     .chat-container {
       flex: 1;
       overflow-y: auto;
@@ -1673,7 +1673,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       color: var(--muted);
     }
 
-    /* â”€â”€ Recent Sessions at Home / Zero State â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* ”--€ Recent Sessions at Home / Zero State ”----------------------------------------------€ */
     .recent-sessions-section {
       width: 100%;
       max-width: 320px;
@@ -1798,7 +1798,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       white-space: nowrap;
     }
 
-    /* â”€â”€ Status Bar Footer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* ”--€ Status Bar Footer ”----------------------------------------------€ */
     .status-bar {
       display: flex;
       align-items: center;
@@ -1965,7 +1965,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       color: var(--fg);
       background: rgba(255, 255, 255, 0.06);
     }
-    /* User bubbles â€” TUI has no copy, keep footer minimal */
+    /* User bubbles -- TUI has no copy, keep footer minimal */
     .message-wrap.user .message-footer { justify-content: flex-end; opacity: 0.6; }
     .message-wrap.user .msg-copy-btn { display: none; }
 
@@ -1977,7 +1977,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       font-family: var(--vscode-editor-font-family, monospace);
     }
 
-    /* Thinking bubble â€” TUI parity: auto-expand while streaming, auto-collapse when done, clickable anytime */
+    /* Thinking bubble -- TUI parity: auto-expand while streaming, auto-collapse when done, clickable anytime */
     .thinking-card {
       background: transparent;
       border: none;
@@ -2264,7 +2264,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       line-height: 1.5;
     }
 
-    /* Tool Card â€” TUI parity: expand while running, collapse when done, toggle on click */
+    /* Tool Card -- TUI parity: expand while running, collapse when done, toggle on click */
     .tool-card {
       background: var(--card-bg);
       border: 1px solid var(--border);
@@ -2332,7 +2332,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       display: block;
     }
 
-    /* Tool Sequence â€” TUI parity: group tools under working/worked collapsible */
+    /* Tool Sequence -- TUI parity: group tools under working/worked collapsible */
     .tool-sequence {
       background: var(--card-bg);
       border: 1px solid var(--border);
@@ -2372,7 +2372,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     .tool-sequence .tool-card { margin: 0; border-radius: 4px; }
     .tool-sequence .thinking-card { margin: 0; }
 
-    /* Subagent Card â€” Clean, Elegant, Live In-place Status */
+    /* Subagent Card -- Clean, Elegant, Live In-place Status */
     .subagent-card {
       background: rgba(255, 255, 255, 0.03);
       border: 1px solid var(--border);
@@ -2493,7 +2493,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       letter-spacing: 0.3px;
     }
 
-    /* Interactive Cards â€” approval / questions */
+    /* Interactive Cards -- approval / questions */
     .approval-card {
       background: var(--card-bg, #1e1e1e);
       border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
@@ -2503,7 +2503,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       font-size: 12px;
     }
 
-    /* â”€â”€ Clarifying Questions Carousel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    /* ”--€ Clarifying Questions Carousel ”--------------------------------------------------€ */
     .questions-card {
       background: var(--card-bg, #1e1e1e);
       border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
@@ -3391,7 +3391,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     </div>
     <div class="setup-guide-actions">
       <button class="btn-setup-action primary" data-action="run-setup-check">Run Setup Check</button>
-      <button class="btn-setup-action secondary" data-action="install-python-web">Install Python â†—</button>
+      <button class="btn-setup-action secondary" data-action="install-python-web">Install Python &#x2197;</button>
       <button class="btn-setup-action secondary" data-action="configure-python-path">Configure Path</button>
     </div>
   </div>
@@ -3491,7 +3491,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     <!-- Floating Mention / Skills Palette -->
     <div class="slash-palette" id="mention-palette" style="display:none;" role="listbox" aria-label="Skills and tools">
-      <div class="slash-palette-header" style="color:#c084fc;">âš¡ Skills & Tools (Click to mention)</div>
+      <div class="slash-palette-header" style="color:#c084fc;">&#x26A1; Skills & Tools (Click to mention)</div>
       <div class="slash-palette-list" id="mention-palette-list"></div>
     </div>
 
@@ -3812,7 +3812,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       toolSeqUserToggled = false;
       toolSeqFinished = false;
 
-      currentToolSequence.innerHTML = '<div class="tool-seq-header"><svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg><span class="tool-seq-title">0 tools Â· workingâ€¦ (0s)</span><svg class="tool-seq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg><button class="tool-seq-copy" title="Copy tool log"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button></div><div class="tool-seq-body"></div>';
+      currentToolSequence.innerHTML = '<div class="tool-seq-header"><svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg><span class="tool-seq-title">0 tools &middot; working... (0s)</span><svg class="tool-seq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg><button class="tool-seq-copy" title="Copy tool log"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button></div><div class="tool-seq-body"></div>';
       
       const thisSeq = currentToolSequence;
       const hdr = thisSeq.querySelector('.tool-seq-header');
@@ -3856,13 +3856,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const doneCount = toolSeqDoneTools.size;
 
       if (toolSeqFinished) {
-        el.textContent = label + ' Â· ' + (elapsed < 1 ? 'complete' : 'worked for ' + elapsed + 's');
+        el.textContent = label + ' &middot; ' + (elapsed < 1 ? 'complete' : 'worked for ' + elapsed + 's');
       } else if (lastToolRunning && lastToolName) {
-        el.textContent = label + ' Â· ' + lastToolName + ' workingâ€¦ (' + elapsed + 's)';
+        el.textContent = label + ' &middot; ' + lastToolName + ' working... (' + elapsed + 's)';
       } else if (doneCount > 0) {
-        el.textContent = label + ' Â· ' + doneCount + '/' + toolSeqCount + ' done Â· workingâ€¦ (' + elapsed + 's)';
+        el.textContent = label + ' &middot; ' + doneCount + '/' + toolSeqCount + ' done &middot; working... (' + elapsed + 's)';
       } else {
-        el.textContent = label + ' Â· workingâ€¦ (' + elapsed + 's)';
+        el.textContent = label + ' &middot; working... (' + elapsed + 's)';
       }
     }
 
@@ -4251,7 +4251,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             '<div class="recent-session-title">' + name + '</div>' +
             '<div class="recent-session-sub">' +
               '<span>' + msgsText + '</span>' +
-              (modelTag ? '<span>Â· ' + modelTag + '</span>' : '') +
+              (modelTag ? '<span>&middot; ' + modelTag + '</span>' : '') +
             '</div>' +
           '</div>' +
           '<div class="recent-session-side">' +
@@ -4288,10 +4288,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         return '<div class="session-item ' + (isCur ? 'active' : '') + '">' +
           '<div class="session-item-info" data-action="switch-session" data-session-id="' + s.id + '">' +
-            '<div class="session-item-title">' + (isCur ? 'âœ“ ' : '') + name + '</div>' +
+            '<div class="session-item-title">' + (isCur ? '&#x2605; ' : '') + name + '</div>' +
             '<div class="session-item-meta">' +
               '<span>' + msgs + '</span>' +
-              (cost ? '<span>Â· ' + cost + '</span>' : '') +
+              (cost ? '<span>&middot; ' + cost + '</span>' : '') +
             '</div>' +
           '</div>' +
           '<div class="session-item-actions">' +
@@ -4452,7 +4452,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const card = argsToggle.closest('.approval-card');
         if (card) {
           card.classList.toggle('show-args');
-          argsToggle.textContent = card.classList.contains('show-args') ? 'â–¾ Hide parameters' : 'â–¸ View parameters';
+          argsToggle.textContent = card.classList.contains('show-args') ? '&#x25BE; Hide parameters' : '&#x25B8; View parameters';
         }
         return;
       }
@@ -4618,7 +4618,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const isActive = m.id === currentModel;
         return '<div class="flyout-item ' + (isActive ? 'active' : '') + '" data-action="pick-model" data-model-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || 'openrouter') + '">' +
           '<span>' + escapeHtml(m.name || m.id) + '</span>' +
-          '<span class="flyout-item-meta">' + escapeHtml(m.provider || 'openrouter') + (m.pricing ? ' · ' + escapeHtml(m.pricing) : '') + '</span>' +
+          '<span class="flyout-item-meta">' + escapeHtml(m.provider || 'openrouter') + (m.pricing ? ' &middot; ' + escapeHtml(m.pricing) : '') + '</span>' +
         '</div>';
       }).join('');
     }
@@ -4673,7 +4673,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const lbl = document.getElementById('prompt-reasoning-label');
       if (lbl) {
         const val = currentReasoning || 'medium';
-        const icons = { high: '⚡ High', medium: 'Medium', low: 'Low', off: 'Off' };
+        const icons = { high: '&#x26A1; High', medium: 'Medium', low: 'Low', off: 'Off' };
         lbl.textContent = icons[val] || val.toUpperCase();
         if (lbl.parentElement) {
           lbl.parentElement.title = 'Reasoning Effort: ' + val.toUpperCase() + ' (Click to cycle High, Medium, Low, Off)';
@@ -4693,7 +4693,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       container.innerHTML = attachedImages.map((imgUri, idx) => {
         return '<div class="image-attachment-chip">' +
           '<img class="image-attachment-thumb" src="' + imgUri + '" alt="Attachment ' + (idx + 1) + '" />' +
-          '<button class="image-attachment-remove" data-action="remove-image-attachment" data-idx="' + idx + '" title="Remove image">✕</button>' +
+          '<button class="image-attachment-remove" data-action="remove-image-attachment" data-idx="' + idx + '" title="Remove image">&#x2715;</button>' +
         '</div>';
       }).join('');
     }
@@ -4920,7 +4920,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           const firstLine = text.trim().split(String.fromCharCode(10))[0].trim();
           if (firstLine) {
             let shortTitle = firstLine.slice(0, 32);
-            if (firstLine.length > 32) shortTitle += 'â€¦';
+            if (firstLine.length > 32) shortTitle += '...';
             activeSessName.textContent = shortTitle;
           }
         }
@@ -4972,7 +4972,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return '<div class="queue-chip">' +
           '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
           '<span class="queue-text">' + escapeHtml(text) + '</span>' +
-          '<button class="queue-remove" data-action="remove-queued" data-idx="' + i + '">✕</button>' +
+          '<button class="queue-remove" data-action="remove-queued" data-idx="' + i + '">&#x2715;</button>' +
         '</div>';
       }).join('');
     }
@@ -5093,7 +5093,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             }
 
             // Task list items: - [x] or - [ ] or * [x]
-            var taskMatch = trimmed.match(/^[-*â€¢]\\s+\\\[([ xX])\\\]\\s*(.*)$/);
+            var taskMatch = trimmed.match(/^[-*\u2022]\\s+\\\[([ xX])\\\]\\s*(.*)$/);
             if (taskMatch) {
               var isChecked = taskMatch[1].toLowerCase() === 'x';
               html += '<div class="md-task-item"><input type="checkbox" class="md-checkbox" ' + (isChecked ? 'checked' : '') + ' disabled><span class="md-task-text ' + (isChecked ? 'completed' : '') + '">' + renderInline(taskMatch[2]) + '</span></div>';
@@ -5106,9 +5106,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               html += '<h4>' + renderInline(trimmed.replace(/^##\\s+/, '')) + '</h4>';
             } else if (/^#\\s+/.test(trimmed)) {
               html += '<h3>' + renderInline(trimmed.replace(/^#\\s+/, '')) + '</h3>';
-            } else if (/^[-*â€¢]\\s+/.test(trimmed)) {
-              var itemText = trimmed.replace(/^[-*â€¢]\\s+/, '');
-              html += '<div class="md-bullet"><span class="md-dot">â€¢</span><span class="md-text">' + renderInline(itemText) + '</span></div>';
+            } else if (/^[-*\u2022]\\s+/.test(trimmed)) {
+              var itemText = trimmed.replace(/^[-*\u2022]\\s+/, '');
+              html += '<div class="md-bullet"><span class="md-dot">\u2022</span><span class="md-text">' + renderInline(itemText) + '</span></div>';
             } else if (/^\\d+\\.\\s+/.test(trimmed)) {
               var numMatch = trimmed.match(/^(\\d+)\\.\\s+(.*)$/);
               var num = numMatch ? numMatch[1] : '1';
@@ -5364,7 +5364,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         footer.className = 'message-footer';
         footer.innerHTML = '<span class="turn-duration-badge">' +
           '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:2px;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
-          '<span>' + elapsedSec + 's Â· ' + formatTime(new Date()) + '</span>' +
+          '<span>' + elapsedSec + 's &middot; ' + formatTime(new Date()) + '</span>' +
         '</span>' +
         '<button class="msg-copy-btn" data-action="copy-message" title="Copy response">' +
           '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy' +
@@ -5449,7 +5449,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               const appCard = interactiveSlot.querySelector('.approval-card');
               if (appCard) {
                 interactiveSlot.innerHTML = '';
-                appendSystemNote('Mode switched to ' + msg.value.toUpperCase() + ' â€” pending tool auto-approved.');
+                appendSystemNote('Mode switched to ' + msg.value.toUpperCase() + ' -- pending tool auto-approved.');
               }
             }
           } else if (msg.key === 'model') {
@@ -5534,7 +5534,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                   if (!seq) {
                     seq = document.createElement('div');
                     seq.className = 'tool-sequence collapsed';
-                    seq.innerHTML = '<div class="tool-seq-header"><svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg><span class="tool-seq-title">0 tools Â· worked</span><svg class="tool-seq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg><button class="tool-seq-copy" title="Copy tool log"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button></div><div class="tool-seq-body"></div>';
+                    seq.innerHTML = '<div class="tool-seq-header"><svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg><span class="tool-seq-title">0 tools &middot; worked</span><svg class="tool-seq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg><button class="tool-seq-copy" title="Copy tool log"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button></div><div class="tool-seq-body"></div>';
                     seq.querySelector('.tool-seq-header').addEventListener('click', (e) => {
                       if (e.target.closest('.tool-seq-copy')) return;
                       seq.classList.toggle('collapsed');
@@ -5574,7 +5574,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                     body.appendChild(tDiv);
                   }
                   const totalCnt = currentAssistantWrap._toolCount;
-                  seq.querySelector('.tool-seq-title').textContent = totalCnt + (totalCnt === 1 ? ' tool' : ' tools') + ' Â· worked';
+                  seq.querySelector('.tool-seq-title').textContent = totalCnt + (totalCnt === 1 ? ' tool' : ' tools') + ' &middot; worked';
                 }
 
                 if (m.content) {
@@ -5640,7 +5640,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             currentThinkingDiv.className = 'thinking-card expanded';
             currentThinkingDiv.innerHTML = '<div class="thinking-header">' +
               '<div class="thinking-pulse"></div>' +
-              '<span>thinkingâ€¦</span>' +
+              '<span>thinking...</span>' +
               '<svg class="thinking-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
             '</div>';
             currentThinkingContent = document.createElement('div');
@@ -5716,7 +5716,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           const toolArgs = msg.args || {};
           const rawArgs = (()=>{ try{ return JSON.stringify(toolArgs, null, 2); }catch{ return String(toolArgs); } })();
           const previewPath = toolArgs.path || toolArgs.file || toolArgs.file_path || toolArgs.TargetFile || toolArgs.command || "";
-          const shortPath = previewPath ? (previewPath.length>48 ? previewPath.slice(0,22)+"â€¦"+previewPath.slice(-22) : previewPath) : "";
+          const shortPath = previewPath ? (previewPath.length>48 ? previewPath.slice(0,22)+"..."+previewPath.slice(-22) : previewPath) : "";
           const modeCls = currentMode === 'trust' ? 'green' : (currentMode === 'full' ? 'blue' : (currentMode === 'yolo' ? 'red' : 'orange'));
           const modeTxt = (currentMode || 'safe').toUpperCase();
           interactiveSlot.innerHTML = 
@@ -5736,7 +5736,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 (shortPath ? ('<span class="approval-path" title="' + escapeHtml(previewPath) + '">' + escapeHtml(shortPath) + '</span>') : '') +
               '</div>' +
               '<div class="approval-desc">The assistant is requesting permission to execute <strong>' + escapeHtml(msg.tool_name) + '</strong>.</div>' +
-              (rawArgs && Object.keys(toolArgs).length ? ('<div class="approval-toggle-args"><span>â–¸ View parameters</span></div><div class="approval-args">' + escapeHtml(rawArgs) + '</div>') : '') +
+              (rawArgs && Object.keys(toolArgs).length ? ('<div class="approval-toggle-args"><span>&#x25B8; View parameters</span></div><div class="approval-args">' + escapeHtml(rawArgs) + '</div>') : '') +
               '<div class="approval-buttons">' +
                 '<button class="btn-approve" data-action="approve-tool" data-approval-id="' + escapeHtml(msg.approval_id) + '"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg> Allow</button>' +
                 '<button class="btn-reject" data-action="reject-tool" data-approval-id="' + escapeHtml(msg.approval_id) + '"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg> Deny</button>' +
@@ -5801,7 +5801,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           let todosHtml = '';
           if (plan.todos && plan.todos.length > 0) {
             todosHtml = '<div style="margin-top:6px; display:flex; flex-direction:column; gap:3px;">' +
-              plan.todos.map(t => '<div style="font-size:11px; color:var(--muted);"><span style="color:var(--accent); font-weight:600;">â€¢</span> ' + escapeHtml(t.description || t.title || t) + '</div>').join('') +
+              plan.todos.map(t => '<div style="font-size:11px; color:var(--muted);"><span style="color:var(--accent); font-weight:600;">\u2022</span> ' + escapeHtml(t.description || t.title || t) + '</div>').join('') +
             '</div>';
           }
           interactiveSlot.innerHTML = 
@@ -5836,11 +5836,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           break;
 
         case 'session_compacted':
-          appendSystemNote('âš¡ Context compacted: conversation history compressed to save tokens.');
+          appendSystemNote('&#x26A1; Context compacted: conversation history compressed to save tokens.');
           break;
 
         case 'turn_undone':
-          appendSystemNote('â†© Last turn undone: file changes rolled back.');
+          appendSystemNote('Last turn undone: file changes rolled back.');
           break;
 
         case 'agent_cancelled':
@@ -5852,9 +5852,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (msg.queuedPrompt) {
             promptQueue.push(msg.queuedPrompt);
             renderQueue();
-            appendSystemNote('Agent busy â€” your message was queued (will send after this turn).');
+            appendSystemNote('Agent busy -- your message was queued (will send after this turn).');
           } else {
-            appendSystemNote('Agent is still working â€” please wait for this turn to finish.');
+            appendSystemNote('Agent is still working -- please wait for this turn to finish.');
           }
           break;
 
@@ -5878,7 +5878,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         case 'agent_error':
           // If error is just a timeout but stream already started, don't end turn abruptly
           if (msg.error && msg.error.includes('RPC timeout')) {
-            appendSystemNote('Note: ' + msg.error + ' â€” but agent is still streaming. Watch the footer for progress.');
+            appendSystemNote('Note: ' + msg.error + ' -- but agent is still streaming. Watch the footer for progress.');
             if (!currentTurnAssistantDiv) startAssistantTurn();
             break;
           }
