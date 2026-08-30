@@ -396,6 +396,8 @@ ToolSequence Collapsible { border: none; padding: 0; background: transparent; }
         elif not self._last_tool_done and self._last_tool:
             # A specific tool is actively executing
             status = f"[$primary]{escape(self._last_tool)}[/$primary] working… ({elapsed}s)"
+        elif self._last_tool_done and self._count > 0:
+            status = f"working… ({elapsed}s)"
         else:
             # Turn/block is still active (thinking, between tools, or preparing next step)
             status = f"working… ({elapsed}s)"
@@ -1178,15 +1180,42 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
         pass
 
     def show_subagent_progress(self, event: Any):
-        """Forward SubAgentProgress event to the active spawn_subagent ToolIndicator."""
+        """Forward SubAgentProgress event to the matching spawn_subagent ToolIndicator."""
         try:
+            target_tool_id = getattr(event, "tool_id", None)
+            target_agent_id = getattr(event, "agent_id", None)
             indicators = list(self.query(ToolIndicator))
+
+            # 1. Exact match by parent turn's tool_id
+            if target_tool_id:
+                for ind in indicators:
+                    if ind.tool_id == target_tool_id:
+                        ind.append_subagent_activity(event)
+                        return
+
+            # 2. Match by previously assigned agent_id on this indicator
+            if target_agent_id:
+                for ind in indicators:
+                    if getattr(ind, "_assigned_agent_id", None) == target_agent_id:
+                        ind.append_subagent_activity(event)
+                        return
+
+            # 3. Associate agent_id with the first running spawn_subagent indicator without an assigned agent_id
+            if target_agent_id:
+                for ind in indicators:
+                    if ind.tool_name == "spawn_subagent" and not ind._done and not getattr(ind, "_assigned_agent_id", None):
+                        ind._assigned_agent_id = target_agent_id
+                        ind.append_subagent_activity(event)
+                        return
+
+            # 4. Fallback: forward to any running spawn_subagent indicator
             for ind in reversed(indicators):
                 if ind.tool_name == "spawn_subagent" and not ind._done:
                     ind.append_subagent_activity(event)
                     return
         except Exception:
             pass
+
 
 
     async def clear(self):

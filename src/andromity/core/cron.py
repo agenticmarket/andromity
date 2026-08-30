@@ -29,6 +29,13 @@ def parse_interval_seconds(schedule: str) -> int:
     return seconds
 
 
+def _parse_iso_utc(ts: str) -> datetime:
+    dt = datetime.fromisoformat(ts)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 # ── Data model ─────────────────────────────────────────────────────────────
 
 @dataclass
@@ -36,16 +43,18 @@ class CronJob:
     id: str
     name: str
     prompt: str
-    schedule: str          # e.g. "every 30m"
-    interval_seconds: int
-    provider: str
-    model: str
-    mode: str              # "safe" | "trust" | "yolo"
-    allowed_commands: List[str]
-    on_failure: str        # "notify" | "disable" | "retry"
-    enabled: bool = True
+    schedule: str = "every 1h"          # e.g. "every 30m"
+    interval_seconds: int = 3600
+    provider: str = "anthropic"
+    model: str = "claude-sonnet-4-6"
+    mode: str = "trust"              # "safe" | "trust" | "yolo"
+    allowed_commands: List[str] = field(default_factory=list)
+    on_failure: str = "retry"        # "notify" | "disable" | "retry"
     retry_delay_seconds: int = 0
     timeout_seconds: int = 600  # max wall-clock time per run; 0 = unlimited
+    enabled: bool = True
+    project_path: Optional[str] = None
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     last_run: Optional[str] = None
     last_status: str = "never"   # "never" | "success" | "failed" | "timeout" | "interrupted"
     last_error: Optional[str] = None
@@ -58,7 +67,7 @@ class CronJob:
             return False
         if not self.last_run:
             return True
-        last = datetime.fromisoformat(self.last_run)
+        last = _parse_iso_utc(self.last_run)
         elapsed = (datetime.now(timezone.utc) - last).total_seconds()
         required_interval = self.retry_delay_seconds if (self.retry_count > 0 and self.retry_delay_seconds > 0) else self.interval_seconds
         return elapsed >= required_interval
@@ -99,7 +108,7 @@ class CronJob:
         """Human-readable time until next run."""
         if not self.last_run:
             return "now"
-        last = datetime.fromisoformat(self.last_run)
+        last = _parse_iso_utc(self.last_run)
         elapsed = (datetime.now(timezone.utc) - last).total_seconds()
         interval = self.retry_delay_seconds if (self.retry_count > 0 and self.retry_delay_seconds > 0) else self.interval_seconds
         remaining = max(0, interval - elapsed)

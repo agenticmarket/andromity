@@ -19,15 +19,48 @@ def get_domain(url: str) -> Optional[str]:
 
 
 def _is_private_ip(host: str) -> bool:
-    """Return True if host resolves to a private, loopback, or link-local address."""
+    """Return True if host resolves to a private, loopback, link-local, or cloud metadata address."""
+    # Direct IP string parse
     try:
-        addr = ipaddress.ip_address(host)
+        addr = ipaddress.ip_address(host.strip("[]"))
+        if (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_multicast
+            or addr.is_unspecified
+            or addr.is_reserved
+            or str(addr) in ("169.254.169.254", "0.0.0.0", "::", "::1")
+        ):
+            return True
     except ValueError:
-        try:
-            addr = ipaddress.ip_address(socket.gethostbyname(host))
-        except Exception:
-            return False
-    return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast
+        pass
+
+    # Resolve all addresses (IPv4 and IPv6) to prevent round-robin / DNS rebinding bypass
+    try:
+        infos = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        for info in infos:
+            sockaddr = info[4]
+            ip_str = sockaddr[0]
+            try:
+                addr = ipaddress.ip_address(ip_str)
+                if (
+                    addr.is_private
+                    or addr.is_loopback
+                    or addr.is_link_local
+                    or addr.is_multicast
+                    or addr.is_unspecified
+                    or addr.is_reserved
+                    or str(addr) in ("169.254.169.254", "0.0.0.0", "::", "::1")
+                ):
+                    return True
+            except ValueError:
+                return True
+    except Exception:
+        # If domain cannot be resolved, block safely
+        return False
+
+    return False
 
 
 def is_domain_allowed(url: str, allowed_domains: Optional[List[str]] = None) -> bool:

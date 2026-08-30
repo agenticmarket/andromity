@@ -53,7 +53,7 @@ async def test_parallel_tools_run_concurrently(session):
     running = 0
     max_running = 0
 
-    async def fake_execute(name, args):
+    async def fake_execute(name, args, **kwargs):
         nonlocal running, max_running
         running += 1
         max_running = max(max_running, running)
@@ -78,7 +78,7 @@ async def test_parallel_tools_run_concurrently(session):
 async def test_parallel_tools_preserve_result_order(session):
     """Session tool messages must be recorded in the original tool-call order,
     even when the fast call finishes first."""
-    async def fake_execute(name, args):
+    async def fake_execute(name, args, **kwargs):
         # b.txt finishes first, but must still be recorded AFTER a.txt
         await asyncio.sleep(0.05 if args["path"] == "b.txt" else 0.15)
         return f"result for {args['path']}"
@@ -101,7 +101,7 @@ async def test_parallel_tools_with_rejection(session):
     one executes, and both messages stay in original order."""
     executed = []
 
-    async def fake_execute(name, args):
+    async def fake_execute(name, args, **kwargs):
         executed.append(args["path"])
         return f"result for {args['path']}"
 
@@ -127,7 +127,7 @@ async def test_parallel_tools_with_rejection(session):
 @pytest.mark.asyncio
 async def test_single_tool_still_works(session):
     """A lone tool call behaves exactly as before (no gather edge cases)."""
-    async def fake_execute(name, args):
+    async def fake_execute(name, args, **kwargs):
         return f"result for {args['path']}"
 
     agent = Agent(session, profile="builder", auto_approve=True)

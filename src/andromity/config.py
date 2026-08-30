@@ -69,8 +69,12 @@ class ConfigManager:
         if config_data is not None:
             self._config_cache = config_data
 
-    def get(self, section: str, key: str, default: Any = None) -> Any:
-        return self._config_cache.get(section, {}).get(key, default)
+    def get(self, section: str, key: str, default: Any = None, fallback: Any = None) -> Any:
+        eff_default = default if fallback is None else fallback
+        sec = self._config_cache.get(section, {})
+        if not isinstance(sec, dict):
+            return eff_default
+        return sec.get(key, eff_default)
 
     def set(self, section: str, key: str, value: Any):
         if section not in self._config_cache:
@@ -332,6 +336,9 @@ class ConfigManager:
         return "p" + hashlib.sha256(resolved.encode()).hexdigest()[:15]
 
     def is_trusted(self, path: str) -> bool:
+        mode = self._config_cache.get("default", {}).get("permission_mode", "safe")
+        if mode in ("full", "yolo"):
+            return True
         key = self._trust_key(path)
         return key in self._config_cache.get("trusted_projects", {})
 

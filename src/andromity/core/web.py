@@ -67,6 +67,16 @@ def fetch_url(url: str, max_chars: int = 10000) -> str:
     if _is_private_ip(host):
         return f"Error: Fetching private/internal addresses is not allowed: {url}"
 
+    class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            from andromity.core.security import get_domain, _is_private_ip
+            target_host = get_domain(newurl)
+            if not target_host or _is_private_ip(target_host):
+                raise urllib.error.HTTPError(
+                    newurl, code, f"Redirect to private/internal host '{target_host}' blocked for security.", headers, fp
+                )
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+
     try:
         req = urllib.request.Request(
             url,
@@ -75,6 +85,7 @@ def fetch_url(url: str, max_chars: int = 10000) -> str:
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             }
         )
+        urllib.request.install_opener(urllib.request.build_opener(_SafeRedirectHandler()))
         with urllib.request.urlopen(req, timeout=15) as response:
             content_type = response.headers.get_content_type()
             raw_bytes = response.read(max_chars * 4)  # Read enough bytes

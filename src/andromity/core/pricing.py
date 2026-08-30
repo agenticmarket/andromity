@@ -59,9 +59,15 @@ def _pricing_cache_lookup(provider: str, model: str) -> dict | None:
     cache_path = _get_pricing_cache_path()
     if not cache_path.exists() and (provider == "openrouter" or "/" in model):
         try:
+            import threading
             from andromity.core.models import fetch_live_models_sync
             from andromity.config import config
-            fetch_live_models_sync("openrouter", api_key=config.get_api_key("openrouter"))
+            threading.Thread(
+                target=fetch_live_models_sync,
+                args=("openrouter",),
+                kwargs={"api_key": config.get_api_key("openrouter")},
+                daemon=True,
+            ).start()
         except Exception:
             pass
 

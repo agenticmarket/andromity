@@ -305,22 +305,63 @@ async def refresh_access_token(
 
 # ── Token Persistence ─────────────────────────────────────────────────────────
 
+def _encrypt_bytes(raw: bytes) -> bytes:
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            class DATA_BLOB(ctypes.Structure):
+                _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+            in_blob = DATA_BLOB(len(raw), ctypes.cast(raw, ctypes.POINTER(ctypes.c_char)))
+            out_blob = DATA_BLOB()
+            if ctypes.windll.crypt32.CryptProtectData(ctypes.byref(in_blob), "andromity_token", None, None, None, 0, ctypes.byref(out_blob)):
+                encrypted = ctypes.string_at(out_blob.pbData, out_blob.cbData)
+                ctypes.windll.kernel32.LocalFree(out_blob.pbData)
+                return b"DPAPI:" + encrypted
+        except Exception as e:
+            log.debug("DPAPI encryption fallback: %s", e)
+    return raw
+
+
+def _decrypt_bytes(enc: bytes) -> bytes:
+    if os.name == "nt" and enc.startswith(b"DPAPI:"):
+        try:
+            import ctypes
+            from ctypes import wintypes
+            class DATA_BLOB(ctypes.Structure):
+                _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+            raw_enc = enc[6:]
+            in_blob = DATA_BLOB(len(raw_enc), ctypes.cast(raw_enc, ctypes.POINTER(ctypes.c_char)))
+            out_blob = DATA_BLOB()
+            if ctypes.windll.crypt32.CryptUnprotectData(ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob)):
+                decrypted = ctypes.string_at(out_blob.pbData, out_blob.cbData)
+                ctypes.windll.kernel32.LocalFree(out_blob.pbData)
+                return decrypted
+        except Exception as e:
+            log.debug("DPAPI decryption failed: %s", e)
+    return enc
+
+
 def _load_store() -> dict:
     if not TOKEN_FILE.is_file():
         return {}
     try:
-        return json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
+        raw_bytes = TOKEN_FILE.read_bytes()
+        decrypted = _decrypt_bytes(raw_bytes)
+        return json.loads(decrypted.decode("utf-8"))
     except Exception:
         return {}
 
 
 def _save_store(store: dict) -> None:
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TOKEN_FILE.write_text(json.dumps(store, indent=2), encoding="utf-8")
+    serialized = json.dumps(store, indent=2).encode("utf-8")
+    encrypted = _encrypt_bytes(serialized)
+    TOKEN_FILE.write_bytes(encrypted)
     try:                               # chmod 600 — owner r/w only
         TOKEN_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)
     except Exception:
-        pass  # Windows: no-op, acceptable
+        pass
 
 
 def store_token(server_name: str, token_resp: dict, client_id: str, token_endpoint: str) -> None:

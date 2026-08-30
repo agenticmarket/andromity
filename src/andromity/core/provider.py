@@ -21,6 +21,10 @@ async def stream_completion(
     # it until the first actual AI call rather than paying the cost at startup.
     import litellm
     from litellm import acompletion
+    litellm.drop_params = True
+    litellm.suppress_debug_info = True
+
+
 
     if provider_name is None:
         provider_name = config.get("default", "provider", "anthropic")
@@ -47,7 +51,8 @@ async def stream_completion(
         litellm_model = f"{provider_cfg.get('type')}/{model}"
         base_url = provider_cfg.get("base_url")
     elif provider_name == "openrouter":
-        litellm_model = f"openrouter/{model}" if not model.startswith("openrouter/") else model
+        clean_model = model.lstrip("~") if model else model
+        litellm_model = f"openrouter/{clean_model}" if not clean_model.startswith("openrouter/") else clean_model
         base_url = provider_cfg.get("base_url") if provider_cfg else None
     else:
         litellm_model = f"{provider_name}/{model}" if not model.startswith(f"{provider_name}/") else model
@@ -59,7 +64,8 @@ async def stream_completion(
         "model": litellm_model,
         "messages": messages,
         "stream": True,
-        "stream_options": {"include_usage": True}
+        "stream_options": {"include_usage": True},
+        "timeout": 90,
     }
     if tools:
         kwargs["tools"] = tools
@@ -80,6 +86,10 @@ async def stream_completion(
             "X-OpenRouter-Title": "Andromity",
             "X-OpenRouter-Categories": "cli-agent",
         }
+        # Enable provider fallbacks so overloaded endpoints do not stall in queue
+        kwargs.setdefault("extra_body", {})
+        kwargs["extra_body"].setdefault("provider", {})
+        kwargs["extra_body"]["provider"]["allow_fallbacks"] = True
 
     log.info("stream_completion start: provider=%s model=%s litellm_model=%s",
              provider_name, model, litellm_model)

@@ -59,6 +59,7 @@ class SubAgent:
         timeout: Optional[float] = None,
         depth: int = 1,
         agent_id: Optional[str] = None,
+        tool_id: Optional[str] = None,
         progress_callback: Optional[Any] = None,
         context_snapshot: Optional[Any] = None,
     ):
@@ -67,6 +68,7 @@ class SubAgent:
         self.task = task
         self.project_path = project_path
         self.depth = depth
+        self.tool_id = tool_id
         self.progress_callback = progress_callback
         self.context_snapshot = context_snapshot
         self.created_at = time.time()
@@ -87,11 +89,9 @@ class SubAgent:
         self.timeout = timeout if timeout is not None else SubAgentConfigManager.get_default_timeout()
         self.max_tokens_budget = SubAgentConfigManager.get_result_max_tokens()
 
-        # Resolve toolset (scoped to role tools, preventing infinite subagent forks unless authorized)
+        # Resolve toolset (scoped to role tools, preventing infinite subagent forks)
         tool_names = set(tools_override or self.role_cfg.tools)
-        # Never allow subagents to spawn further subagents if depth exceeds limit
-        if self.depth >= SubAgentConfigManager.get_max_depth():
-            tool_names.discard("spawn_subagent")
+        tool_names.discard("spawn_subagent")  # Hard-block nested subagent spawning
 
         self.allowed_tools = [
             t for t in CORE_TOOLS
@@ -147,6 +147,7 @@ class SubAgent:
                 role=self.role,
                 status=self.status,
                 event_type=event_type,
+                tool_id=self.tool_id,
                 delta_text=delta_text,
                 tool_name=tool_name,
                 tool_args=tool_args,
@@ -158,6 +159,7 @@ class SubAgent:
             else:
                 self.progress_callback(evt)
         except Exception:
+
             pass
 
     async def execute(self) -> SubAgentResult:

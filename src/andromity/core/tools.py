@@ -18,10 +18,12 @@ from andromity.core.git_ops import create_pre_edit_snapshot, get_repo
 
 log = get_logger("tools")
 
+import contextvars
+
 _PLAN_CALLBACKS: List[Callable] = []  # list of callables(plan) to notify on plan write/update
 _TODO_CALLBACKS: List[Callable] = []  # list of callables() to notify on todo changes
 _SUBAGENT_PROGRESS_CALLBACKS: List[Callable] = []  # list of callables(StreamEvent) for subagent activity
-_current_session = None  # set by agent before tool execution
+_current_session_var: contextvars.ContextVar[Any] = contextvars.ContextVar("current_session", default=None)
 _mcp_manager = None  # global MCPClientManager instance
 
 # ── Background process registry ────────────────────────────────────────────────
@@ -48,11 +50,14 @@ def unregister_subagent_progress_callback(cb: Callable):
         _SUBAGENT_PROGRESS_CALLBACKS.remove(cb)
 
 
-
 def register_session(session):
-    """Register the active session so plan tools can store plan in it."""
-    global _current_session
-    _current_session = session
+    """Register the active session in contextvars so tool executions are thread-safe and isolated."""
+    _current_session_var.set(session)
+
+
+def get_current_session():
+    """Retrieve the active session for the current execution context."""
+    return _current_session_var.get()
 
 
 def register_mcp_manager(manager):
@@ -78,21 +83,24 @@ def _notify_todo():
 
 
 def _get_project_root() -> Path:
-    if _current_session and getattr(_current_session, "project_path", None):
-        return Path(_current_session.project_path).resolve()
+    session = _current_session_var.get()
+    if session and getattr(session, "project_path", None):
+        return Path(session.project_path).resolve()
     return Path.cwd().resolve()
 
 
-def _assert_safe_path(p: Path) -> None:
-    """Raise PermissionError if path escapes the project directory."""
+def _assert_safe_path(p: Path) -> Path:
+    """Raise PermissionError if path escapes the project directory. Returns resolved path."""
     root = _get_project_root()
+    resolved = p.resolve()
     try:
-        p.resolve().relative_to(root)
+        resolved.relative_to(root)
     except ValueError:
         raise PermissionError(
             f"Access denied: '{p}' is outside the project directory ({root}). "
             "Andromity can only access files within the active project directory."
         )
+    return resolved
 
 
 def _is_trusted() -> bool:
@@ -780,8 +788,9 @@ def write_plan(title: str, description: str = "", plan_md: str = "", steps: list
     )
     plan.save()
 
-    if _current_session:
-        _current_session.save_plan(plan.to_dict())
+    cur_session = _current_session_var.get()
+    if cur_session:
+        cur_session.save_plan(plan.to_dict())
 
     # Steps become todos — single source of truth
     todo_list = TodoList(project_path=project_root)
@@ -915,16 +924,18 @@ async def spawn_subagent_async(
     timeout: Optional[float] = None,
     wait: bool = True,
     context_snapshot: Optional[Any] = None,
+    tool_id: Optional[str] = None,
 ) -> str:
     from andromity.core.subagent_orchestrator import SubAgentOrchestrator
-    parent_id = _current_session.id if _current_session else "root"
-    proj_path = getattr(_current_session, "project_path", None) if _current_session else None
+    cur_sess = _current_session_var.get()
+    parent_id = cur_sess.id if cur_sess else "root"
+    proj_path = getattr(cur_sess, "project_path", None) if cur_sess else None
     
-    orchestrator = getattr(_current_session, "_orchestrator", None) if _current_session else None
+    orchestrator = getattr(cur_sess, "_orchestrator", None) if cur_sess else None
     if not orchestrator:
         orchestrator = SubAgentOrchestrator(parent_session_id=parent_id, project_path=proj_path)
-        if _current_session:
-            _current_session._orchestrator = orchestrator
+        if cur_sess:
+            cur_sess._orchestrator = orchestrator
 
     def _on_subagent_progress(evt):
         for cb in list(_SUBAGENT_PROGRESS_CALLBACKS):
@@ -941,12 +952,14 @@ async def spawn_subagent_async(
         tools_override=tools,
         timeout=timeout,
         wait=wait,
+        tool_id=tool_id,
         progress_callback=_on_subagent_progress,
         context_snapshot=context_snapshot,
     )
-    if _current_session and hasattr(res, "tokens_used") and res.tokens_used:
+    cur_sess = _current_session_var.get()
+    if cur_sess and hasattr(res, "tokens_used") and res.tokens_used:
         try:
-            _current_session.update_usage(res.tokens_used)
+            cur_sess.update_usage(res.tokens_used)
         except Exception:
             pass
 
@@ -957,7 +970,8 @@ async def spawn_subagent_async(
 async def session_send_message_async(to_session: str, content: str) -> str:
     from andromity.core.session_bus import SessionBus
     bus = SessionBus.get_instance()
-    sender_id = _current_session.id if _current_session else "anonymous"
+    cur_sess = _current_session_var.get()
+    sender_id = cur_sess.id if cur_sess else "anonymous"
     success = await bus.send_message(
         from_session_id=sender_id,
         to_target=to_session,
@@ -971,7 +985,8 @@ async def session_send_message_async(to_session: str, content: str) -> str:
 async def session_ask_question_async(to_session: str, question: str, timeout: float = 60.0) -> str:
     from andromity.core.session_bus import SessionBus
     bus = SessionBus.get_instance()
-    sender_id = _current_session.id if _current_session else "anonymous"
+    cur_sess = _current_session_var.get()
+    sender_id = cur_sess.id if cur_sess else "anonymous"
     return await bus.ask_question(
         from_session_id=sender_id,
         to_target=to_session,
@@ -983,7 +998,8 @@ async def session_ask_question_async(to_session: str, question: str, timeout: fl
 async def session_broadcast_async(content: str) -> str:
     from andromity.core.session_bus import SessionBus
     bus = SessionBus.get_instance()
-    sender_id = _current_session.id if _current_session else "anonymous"
+    cur_sess = _current_session_var.get()
+    sender_id = cur_sess.id if cur_sess else "anonymous"
     count = await bus.broadcast(from_session_id=sender_id, content=content)
     return f"Broadcast message delivered to {count} active session(s)."
 
@@ -991,7 +1007,8 @@ async def session_broadcast_async(content: str) -> str:
 def session_list() -> str:
     from andromity.core.session_bus import SessionBus
     bus = SessionBus.get_instance()
-    proj = getattr(_current_session, "project_path", None) if _current_session else None
+    cur_sess = _current_session_var.get()
+    proj = getattr(cur_sess, "project_path", None) if cur_sess else None
     sessions = bus.list_sessions(project_path=proj)
     if not sessions:
         return "No other active sessions found."
@@ -1003,8 +1020,9 @@ def session_list() -> str:
 
 def shared_state_set(key: str, value: Any) -> str:
     from andromity.core.shared_state import SharedStateBoard
-    proj = getattr(_current_session, "project_path", None) if _current_session else None
-    author = _current_session.name if _current_session else "anonymous"
+    cur_sess = _current_session_var.get()
+    proj = getattr(cur_sess, "project_path", None) if cur_sess else None
+    author = cur_sess.name if cur_sess else "anonymous"
     board = SharedStateBoard.get_instance(project_path=proj)
     board.set(key, value, author_session=author)
     return f"Shared state updated: '{key}' = {json.dumps(value) if not isinstance(value, str) else value}"
@@ -1012,7 +1030,8 @@ def shared_state_set(key: str, value: Any) -> str:
 
 def shared_state_get(key: str) -> str:
     from andromity.core.shared_state import SharedStateBoard
-    proj = getattr(_current_session, "project_path", None) if _current_session else None
+    cur_sess = _current_session_var.get()
+    proj = getattr(cur_sess, "project_path", None) if cur_sess else None
     board = SharedStateBoard.get_instance(project_path=proj)
     val = board.get(key)
     if val is None:
@@ -1032,8 +1051,9 @@ def write_handoff_tool(
     notes: str = "",
 ) -> str:
     from andromity.core.handoff import write_handoff
-    proj = getattr(_current_session, "project_path", None) if _current_session else None
-    author = _current_session.name if _current_session else "anonymous"
+    cur_sess = _current_session_var.get()
+    proj = getattr(cur_sess, "project_path", None) if cur_sess else None
+    author = cur_sess.name if cur_sess else "anonymous"
     res = write_handoff(
         phase=phase,
         from_session=author,
@@ -1049,7 +1069,8 @@ def write_handoff_tool(
 
 def read_handoff_tool(phase: str = "") -> str:
     from andromity.core.handoff import read_handoff, list_handoffs
-    proj = getattr(_current_session, "project_path", None) if _current_session else None
+    cur_sess = _current_session_var.get()
+    proj = getattr(cur_sess, "project_path", None) if cur_sess else None
     if not phase or phase == "list":
         docs = list_handoffs(project_path=proj)
         if not docs:
@@ -1605,6 +1626,21 @@ class ToolRegistry:
 # ── Tool Dispatcher ───────────────────────────────────────────────────────────
 
 
+def _run_coro_sync(coro):
+    """Run an async coroutine from a synchronous tool execution context safely."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(asyncio.run, coro).result()
+    else:
+        return asyncio.run(coro)
+
+
 def execute_tool(name: str, args: Dict[str, Any]) -> str:
     """Execute any tool (Core, Web, Coordination, or MCP) with logging and error handling."""
     log.debug("TOOL CALL: %s(%s)", name, {k: (str(v)[:80] + '...' if isinstance(v, str) and len(v) > 80 else v) for k, v in args.items()})
@@ -1645,17 +1681,13 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
 
     # 2. Sub-Agent and Session Coordination Tools
     elif name == "spawn_subagent":
-        import asyncio
-        return asyncio.run(spawn_subagent_async(**args))
+        return _run_coro_sync(spawn_subagent_async(**args))
     elif name == "session_send_message":
-        import asyncio
-        return asyncio.run(session_send_message_async(**args))
+        return _run_coro_sync(session_send_message_async(**args))
     elif name == "session_ask_question":
-        import asyncio
-        return asyncio.run(session_ask_question_async(**args))
+        return _run_coro_sync(session_ask_question_async(**args))
     elif name == "session_broadcast":
-        import asyncio
-        return asyncio.run(session_broadcast_async(**args))
+        return _run_coro_sync(session_broadcast_async(**args))
     elif name == "session_list":
         return session_list()
     elif name == "shared_state_set":
@@ -1691,7 +1723,7 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
     return f"Error: Unknown tool '{name}'"
 
 
-async def execute_tool_async(name: str, args: Dict[str, Any]) -> str:
+async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[str] = None) -> str:
     """Asynchronous tool execution (natively awaits MCP tools and async coordination tools, dispatches core tools)."""
     if name.startswith("mcp__"):
         if _mcp_manager:
@@ -1700,7 +1732,7 @@ async def execute_tool_async(name: str, args: Dict[str, Any]) -> str:
 
     # Sub-agent and session coordination async tools
     if name == "spawn_subagent":
-        return await spawn_subagent_async(**args)
+        return await spawn_subagent_async(tool_id=tool_id, **args)
     elif name == "session_send_message":
         return await session_send_message_async(**args)
     elif name == "session_ask_question":

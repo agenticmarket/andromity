@@ -1,4 +1,5 @@
 import json
+import sys
 from typing import AsyncGenerator, Dict, Any, Optional, Callable
 
 from andromity.core.provider import stream_completion
@@ -59,7 +60,7 @@ class Agent:
         deferred_catalog = ToolRegistry.get_instance().get_deferred_prompt_catalog()
         if deferred_catalog:
             sys_prompt += "\n\n" + deferred_catalog
-        # Let the agent know which skills are installed and available on request.
+
         try:
             from andromity.core.skills import SkillsManager
             skills_block = SkillsManager(self.session.project_path).prompt_block()
@@ -162,16 +163,23 @@ class Agent:
 
         lines = []
         for m in to_compact:
-            role = m.get("role", "unknown")
-            content = m.get("content", "")
+            if not m or not isinstance(m, dict):
+                continue
+            role = m.get("role", "unknown") or "unknown"
+            content = m.get("content", "") or ""
             if content:
-                lines.append(f"{role.upper()}: {content[:300]}")
-            for tc in m.get("tool_calls", []):
-                fn = tc.get("function", {})
-                lines.append(f"TOOL CALL: {fn.get('name')}({fn.get('arguments', '')[:100]})")
-        transcript_snippet = "\n".join(lines)
+                lines.append(f"{role.upper()}: {str(content)[:300]}")
+            for tc in (m.get("tool_calls") or []):
+                if not tc or not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function") or {}
+                if isinstance(fn, dict):
+                    fn_name = fn.get("name") or "unknown"
+                    fn_args = str(fn.get("arguments") or "")[:100]
+                    lines.append(f"TOOL CALL: {fn_name}({fn_args})")
+        transcript_snippet = "\n".join(lines)[:20000]
 
-        system_msg = self.session.messages[0] if (self.session.messages and self.session.messages[0].get("role") == "system") else None
+        system_msg = self.session.messages[0] if (self.session.messages and isinstance(self.session.messages[0], dict) and self.session.messages[0].get("role") == "system") else None
         summary_prompt = [
             {"role": "system", "content": "You are a concise summarizer. Produce a dense summary of the conversation so far, preserving key facts, user goals, and current progress."},
             {"role": "user", "content": f"Summarize this conversation snippet concisely for context preservation:\n\n{transcript_snippet}"}
@@ -214,7 +222,6 @@ class Agent:
         self.session.context_tokens = 0
         self.session.save()
         yield TextDelta(text=f"*Context compacted successfully ({old_count} → {len(new_messages)} messages).*\n\n")
-        yield Done()
 
     async def run(self, user_input: str, images: list = None, image_uris: list = None) -> AsyncGenerator[StreamEvent, None]:
         """Run one user turn.
@@ -267,7 +274,10 @@ class Agent:
                 self._messages_for_api(),
                 **stream_kwargs,
             ):
-                yield event
+                if isinstance(event, Done):
+                    last_usage = event.usage
+                else:
+                    yield event
                 if isinstance(event, TextDelta):
                     assistant_content += event.text
                 elif isinstance(event, ThinkingDelta):
@@ -286,8 +296,28 @@ class Agent:
                             "function": {"name": current_tool_name, "arguments": current_tool_args_str},
                         })
                         current_tool_id = None
-                elif isinstance(event, Done):
-                    last_usage = event.usage
+
+            if not tool_calls_to_execute and ("<atem:invoke" in assistant_content or "<atem:function_calls>" in assistant_content):
+                import re, uuid
+                matches = re.finditer(r'<atem:invoke\s+name="([^"]+)">([\s\S]*?)</atem:invoke>', assistant_content)
+                for m in matches:
+                    fn_name = m.group(1)
+                    body = m.group(2)
+                    args = {}
+                    for param_match in re.finditer(r'<atem:parameter\s+name="([^"]+)">([\s\S]*?)</atem:parameter>', body):
+                        p_name = param_match.group(1)
+                        p_val = param_match.group(2).strip()
+                        args[p_name] = p_val
+                    call_id = f"call_{uuid.uuid4().hex[:8]}"
+                    tool_calls_to_execute.append({
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": fn_name, "arguments": json.dumps(args)},
+                    })
+                # Strip out the atem XML tags so raw XML does not leak into the chat
+                assistant_content = re.sub(r'<atem:function_calls>[\s\S]*?</atem:function_calls>', '', assistant_content).strip()
+                assistant_content = re.sub(r'<atem:invoke[\s\S]*?</atem:invoke>', '', assistant_content).strip()
+                assistant_content = re.sub(r'</?atem:[^>]+>', '', assistant_content).strip()
 
             current_p = self.provider or config.get('default', 'provider', 'ollama')
             current_m = self.model or config.get('default', 'model', '')
@@ -334,24 +364,27 @@ class Agent:
                         "Try rephrasing your message or switch model with **Ctrl+L**.\n"
                     )
                 yield TextDelta(text=warning)
+                yield Done(usage=last_usage)
                 break
 
             self._empty_retried = False
 
             if not tool_calls_to_execute:
+                yield Done(usage=last_usage)
                 break
 
             # ── ask_questions: user answers in an inline panel; the answers become the
             # tool result. Pauses the loop exactly like plan review, but via an
             # async callback so no future juggling is needed downstream.
             ask_calls = [tc for tc in tool_calls_to_execute
-                         if tc.get("function", {}).get("name") in ("ask_questions", "ask_question")]
+                         if isinstance(tc, dict) and ((tc.get("function") or {}).get("name") in ("ask_questions", "ask_question"))]
             other_calls = [tc for tc in tool_calls_to_execute if tc not in ask_calls]
 
             for tc in ask_calls:
-                tool_name = tc.get("function", {}).get("name", "ask_questions")
+                fn_dict = tc.get("function") or {} if isinstance(tc, dict) else {}
+                tool_name = fn_dict.get("name", "ask_questions")
                 try:
-                    qargs = json.loads(tc["function"].get("arguments") or "{}")
+                    qargs = json.loads(fn_dict.get("arguments") or "{}")
                 except json.JSONDecodeError:
                     qargs = {}
                 questions = qargs.get("questions") or qargs.get("question") or qargs or []
@@ -421,10 +454,11 @@ class Agent:
                         return tool_call["id"], f"[DRY RUN] Would execute {tool_name}({json.dumps(args, indent=2)})"
                     try:
                         from andromity.core.tools import execute_tool_async
-                        result = await execute_tool_async(tool_name, args)
+                        result = await execute_tool_async(tool_name, args, tool_id=tool_call.get("id"))
                     except Exception as e:
                         result = f"Error executing {tool_name}: {e}"
                     return tool_call["id"], str(result)
+
 
                 progress_queue: asyncio.Queue = asyncio.Queue()
 

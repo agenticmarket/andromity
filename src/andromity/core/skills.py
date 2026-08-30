@@ -132,10 +132,11 @@ class RemoteSkill:
 class SkillsManager:
     """Installs, lists, and removes skills; feeds the agent its prompt block."""
 
-    def __init__(self, project_path: str, fetch: Callable[[str], str] = _default_fetch,
+    def __init__(self, project_path: Optional[str] = None, fetch: Callable[[str], str] = _default_fetch,
                  user_dir: Optional[Path] = None):
-        self._project_path = Path(project_path)
+        self._project_path = Path(project_path) if project_path else Path.cwd()
         self._user_dir = Path(user_dir) if user_dir else get_config_dir() / "skills"
+        self._user_dir_override = bool(user_dir)
         self._project_dir = self._project_path / ".andromity" / "skills"
         self._fetch = fetch
         self._trees: Dict[str, dict] = {}
@@ -144,21 +145,36 @@ class SkillsManager:
 
     def installed(self) -> List[SkillInfo]:
         found: Dict[str, SkillInfo] = {}
-        for scope, base in (("user", self._user_dir), ("project", self._project_dir)):
+        roots = [
+            ("project", self._project_path / ".agents" / "skills"),
+            ("project", self._project_path / ".andromity" / "skills"),
+            ("project", self._project_path / "skills"),
+            ("user", self._user_dir),
+        ]
+        # Add IDE-specific paths if active config dir is ~/.gemini or ~/.andromity (not a test temp dir)
+        if not self._user_dir_override and not any(part.startswith("pytest-") or "temp" in part.lower() or "tmp" in part.lower() for part in self._user_dir.parts):
+            gemini_skills = Path.home() / ".gemini" / "config" / "skills"
+            if gemini_skills.is_dir() and gemini_skills.resolve() != self._user_dir.resolve():
+                roots.append(("user", gemini_skills))
+            builtin_skills = Path.home() / ".gemini" / "antigravity-ide" / "builtin" / "skills"
+            if builtin_skills.is_dir() and builtin_skills.resolve() != self._user_dir.resolve():
+                roots.append(("builtin", builtin_skills))
+        for scope, base in roots:
             if not base.is_dir():
                 continue
             for d in sorted(base.iterdir()):
                 skill_md = d / "SKILL.md"
                 if not (d.is_dir() and skill_md.exists()):
                     continue
-                info = parse_frontmatter(skill_md.read_text(encoding="utf-8", errors="replace"))
-                found[d.name] = SkillInfo(
-                    name=d.name,
-                    description=info.get("description", ""),
-                    source="",
-                    scope=scope,
-                    path=str(d),
-                )
+                if d.name not in found:
+                    info = parse_frontmatter(skill_md.read_text(encoding="utf-8", errors="replace"))
+                    found[d.name] = SkillInfo(
+                        name=d.name,
+                        description=info.get("description", ""),
+                        source="",
+                        scope=scope,
+                        path=str(d),
+                    )
         return sorted(found.values(), key=lambda s: s.name)
 
     def installed_names(self) -> set:
@@ -169,10 +185,15 @@ class SkillsManager:
         skills = self.installed()
         if not skills:
             return ""
-        lines = "\n".join(
-            f"- {s.name} (file: {Path(s.path) / 'SKILL.md'}): {s.description or 'no description'}"
-            for s in skills
-        )
+        
+        safe_lines = []
+        for s in skills:
+            # Strip newlines and sanitize prompt escape tags
+            desc = (s.description or "no description").replace("\n", " ").replace("\r", "").strip()
+            desc = re.sub(r"[<>]", "", desc)[:200]
+            safe_lines.append(f"- {s.name} (file: {Path(s.path) / 'SKILL.md'}): {desc}")
+
+        lines = "\n".join(safe_lines)
         return (
             "## Installed Skills\n"
             f"{lines}\n\n"
@@ -247,6 +268,8 @@ class SkillsManager:
 
     def install(self, name: str, source_id: str, scope: str = "user") -> Optional[SkillInfo]:
         """One-click install: copy the skill's files from its registry into place."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         src = next((s for s in REGISTRY_SOURCES if s["id"] == source_id), None)
         if src is None:
             return None
@@ -275,19 +298,28 @@ class SkillsManager:
         target = (self._user_dir if scope == "user" else self._project_dir) / name
         target.mkdir(parents=True, exist_ok=True)
         target_resolved = target.resolve()
-        for f in files:
+
+        # Fetch all files in parallel for speed
+        def _fetch_file(f: str) -> tuple:
             rel = f[len(skill_dir) + 1:]
             if not rel:
-                continue
+                return (None, None)
             out = target / rel
             try:
                 if not out.resolve().is_relative_to(target_resolved):
-                    raise ValueError(f"Path traversal detected in skill tree entry: {f!r}")
+                    return (None, None)
             except ValueError:
-                continue
+                return (None, None)
             content = self._fetch(RAW_URL.format(repo=src["repo"], branch=src["branch"], path=f))
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(content, encoding="utf-8")
+            return (out, content)
+
+        with ThreadPoolExecutor(max_workers=min(len(files), 8)) as pool:
+            futures = {pool.submit(_fetch_file, f): f for f in files}
+            for future in as_completed(futures):
+                out, content = future.result()
+                if out is not None and content is not None:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_text(content, encoding="utf-8")
 
         info = parse_frontmatter((target / "SKILL.md").read_text(encoding="utf-8", errors="replace"))
         return SkillInfo(name=name, description=info.get("description", ""), source=source_id, scope=scope, path=str(target))

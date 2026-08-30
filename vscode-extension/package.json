@@ -1,0 +1,391 @@
+{
+  "name": "andromity",
+  "displayName": "Andromity AI",
+  "description": "Autonomous AI coding agent with trust governance, sub-agents, live plans, and multi-model support.",
+  "version": "0.2.3",
+  "publisher": "agenticmarket",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/agenticmarket/andromity"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Programming Languages",
+    "Snippets",
+    "Formatters"
+  ],
+  "keywords": [
+    "ai",
+    "coding agent",
+    "copilot",
+    "claude",
+    "gemini",
+    "gpt",
+    "ollama",
+    "deepseek",
+    "mcp",
+    "autonomous"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "andromity-sidebar",
+          "title": "Andromity AI",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "andromity-sidebar": [
+        {
+          "type": "webview",
+          "id": "andromity.chatView",
+          "name": "Andromity Chat",
+          "visibility": "visible"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "andromity.openChat",
+        "title": "Andromity: Open Chat",
+        "category": "Andromity",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "andromity.newSession",
+        "title": "Andromity: New Session",
+        "category": "Andromity",
+        "icon": "$(add)"
+      },
+      {
+        "command": "andromity.askAboutSelection",
+        "title": "Andromity: Ask About Selection",
+        "category": "Andromity",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "andromity.explainCode",
+        "title": "Andromity: Explain Code",
+        "category": "Andromity",
+        "icon": "$(info)"
+      },
+      {
+        "command": "andromity.fixErrors",
+        "title": "Andromity: Fix Diagnostics & Errors",
+        "category": "Andromity",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "andromity.generateTests",
+        "title": "Andromity: Generate Unit Tests",
+        "category": "Andromity",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "andromity.undoTurn",
+        "title": "Andromity: Undo Last Turn & Rollback Diff",
+        "category": "Andromity",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "andromity.compactSession",
+        "title": "Andromity: Compact Session Context",
+        "category": "Andromity",
+        "icon": "$(fold-up)"
+      },
+      {
+        "command": "andromity.viewGitDiff",
+        "title": "Andromity: View File Diffs (Changed Files)",
+        "category": "Andromity",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "andromity.openFileDiff",
+        "title": "Andromity: Open File Diff",
+        "category": "Andromity"
+      },
+      {
+        "command": "andromity.refreshSessions",
+        "title": "Andromity: Refresh Sessions",
+        "category": "Andromity",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "andromity.refreshCrons",
+        "title": "Andromity: Refresh Crons",
+        "category": "Andromity",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "andromity.refreshChanges",
+        "title": "Andromity: Refresh Changes",
+        "category": "Andromity",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "andromity.deleteSession",
+        "title": "Andromity: Delete Session",
+        "category": "Andromity",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "andromity.switchModel",
+        "title": "Andromity: Switch AI Model",
+        "category": "Andromity"
+      },
+      {
+        "command": "andromity.switchProfile",
+        "title": "Andromity: Switch Agent Profile",
+        "category": "Andromity"
+      },
+      {
+        "command": "andromity.switchMode",
+        "title": "Andromity: Switch Permission Mode (SAFE/TRUST/FULL/YOLO)",
+        "category": "Andromity"
+      },
+      {
+        "command": "andromity.openModelHub",
+        "title": "Andromity: Open Model Hub (396+ Models)",
+        "category": "Andromity",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "andromity.openSettings",
+        "title": "Andromity: Settings & API Keys",
+        "category": "Andromity",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "andromity.restartServer",
+        "title": "Andromity: Restart Python Daemon",
+        "category": "Andromity",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "andromity.generateCommitMessage",
+        "title": "Generate Commit Message",
+        "category": "Andromity",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "andromity.explainTerminalSelection",
+        "title": "Andromity: Explain Terminal Selection",
+        "category": "Andromity",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "andromity.showSessions",
+        "title": "Andromity: Show Sessions History",
+        "category": "Andromity",
+        "icon": "$(history)"
+      },
+      {
+        "command": "andromity.openPlanTab",
+        "title": "Andromity: View Implementation Plan",
+        "category": "Andromity",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "andromity.openCrons",
+        "title": "Andromity: Scheduled Crons",
+        "category": "Andromity",
+        "icon": "$(clock)"
+      }
+    ],
+    "submenus": [
+      {
+        "id": "andromity.editorMenu",
+        "label": "Andromity AI"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "submenu": "andromity.editorMenu",
+          "group": "andromity@1"
+        }
+      ],
+      "andromity.editorMenu": [
+        {
+          "command": "andromity.askAboutSelection",
+          "group": "1_actions@1",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "andromity.explainCode",
+          "group": "1_actions@2",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "andromity.fixErrors",
+          "group": "1_actions@3"
+        },
+        {
+          "command": "andromity.generateTests",
+          "group": "1_actions@4",
+          "when": "editorHasSelection"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "andromity.generateCommitMessage",
+          "group": "navigation@1",
+          "when": "scmProvider == git"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "andromity.openChat",
+          "group": "navigation@1",
+          "when": "!editorReadonly"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "andromity.explainCode",
+          "group": "andromity@1"
+        },
+        {
+          "command": "andromity.generateTests",
+          "group": "andromity@2"
+        }
+      ],
+      "scm/resourceState/context": [
+        {
+          "command": "andromity.openFileDiff",
+          "group": "andromity@1"
+        }
+      ],
+      "terminal/context": [
+        {
+          "command": "andromity.explainTerminalSelection",
+          "group": "andromity@1",
+          "when": "terminalVisible"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "andromity.newSession",
+          "when": "view == andromity.chatView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "andromity.viewGitDiff",
+          "when": "view == andromity.chatView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "andromity.showSessions",
+          "when": "view == andromity.chatView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "andromity.openSettings",
+          "when": "view == andromity.chatView",
+          "group": "navigation@4"
+        },
+        {
+          "command": "andromity.compactSession",
+          "when": "view == andromity.chatView",
+          "group": "1_more@1"
+        },
+        {
+          "command": "andromity.restartServer",
+          "when": "view == andromity.chatView",
+          "group": "1_more@2"
+        },
+        {
+          "command": "andromity.openCrons",
+          "when": "view == andromity.chatView",
+          "group": "1_more@3"
+        },
+        {
+          "command": "andromity.undoTurn",
+          "when": "view == andromity.chatView",
+          "group": "1_more@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "andromity.deleteSession",
+          "when": "view == andromity.sessionsView && viewItem == sessionItem",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Andromity AI",
+      "properties": {
+        "andromity.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to Python executable with Andromity installed (auto-detected if empty)."
+        },
+        "andromity.defaultProvider": {
+          "type": "string",
+          "default": "anthropic",
+          "enum": ["anthropic", "openai", "google", "groq", "openrouter", "ollama", "nvidia"],
+          "description": "Default AI provider."
+        },
+        "andromity.defaultModel": {
+          "type": "string",
+          "default": "claude-sonnet-4-6",
+          "description": "Default model ID."
+        },
+        "andromity.defaultProfile": {
+          "type": "string",
+          "default": "builder",
+          "enum": ["builder", "coder", "reviewer", "planner"],
+          "description": "Default Agent Profile: Builder (plans & implements), Coder (direct act), Reviewer (audit), Planner (plans only)."
+        },
+        "andromity.permissionMode": {
+          "type": "string",
+          "default": "safe",
+          "enum": ["safe", "trust", "full", "yolo"],
+          "description": "Trust Permission Mode: SAFE (review all), TRUST (auto file/shell in trusted dirs), FULL (auto-run with logs), YOLO (silent autonomous)."
+        },
+        "andromity.reasoningEffort": {
+          "type": "string",
+          "default": "medium",
+          "enum": ["off", "low", "medium", "high"],
+          "description": "Reasoning/Thinking effort for thinking models."
+        },
+        "andromity.soundNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Play sound notifications on turn finish or approval required."
+        },
+        "andromity.serverPort": {
+          "type": "number",
+          "default": 0,
+          "description": "TCP port to connect to an external Andromity daemon (0 for embedded stdio process)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "build": "node esbuild.js",
+    "package": "vsce package",
+    "test": "node --test dist-test/**/*.test.js",
+    "test:build": "tsc -p ./tsconfig.test.json && node --test dist-test/**/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.24.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.3"
+  }
+}

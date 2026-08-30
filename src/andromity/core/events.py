@@ -67,11 +67,13 @@ class SubAgentProgress(StreamEvent):
     role: str = ""
     status: str = "running"
     event_type: str = "progress"  # "tool_call" | "tool_result" | "text" | "thinking"
+    tool_id: Optional[str] = None  # Parent turn tool call ID for exact UI widget routing
     delta_text: Optional[str] = None
     tool_name: Optional[str] = None
     tool_args: Optional[str] = None
     tool_result: Optional[str] = None
     detail: Optional[str] = None
+
 
 
 

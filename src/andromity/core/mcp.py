@@ -206,8 +206,9 @@ class MCPStdioSession:
             return await asyncio.wait_for(future, timeout=timeout)
         except Exception as e:
             log.warning("MCP request %d (%s) failed: %s", req_id, method, e)
-            self._pending_requests.pop(req_id, None)
             return None
+        finally:
+            self._pending_requests.pop(req_id, None)
 
     async def send_notification(self, method: str, params: Dict[str, Any]):
         """Send JSON-RPC notification (no response expected)."""
@@ -547,7 +548,7 @@ class MCPClientManager:
             for name, srv_conf in servers.items()
         ], return_exceptions=True)
 
-    async def start_server(self, name: str, srv_conf: Optional[dict] = None):
+    async def start_server(self, name: str, srv_conf: Optional[dict] = None, trusted: bool = False):
         """Start a single configured MCP server."""
         from andromity.core.oauth import ensure_fresh_token
 
@@ -626,6 +627,18 @@ class MCPClientManager:
         if not command:
             return
 
+        from andromity.config import config
+        is_user_home = Path(self.project_path).resolve() == Path.home().resolve()
+        if not is_user_home and not trusted and not config.is_trusted(self.project_path) and not srv_conf.get("trusted"):
+            cmd_str = f"{command} {' '.join(str(a) for a in args)}".strip()
+            self._set_status(
+                name, status="needs_trust", tools=0,
+                error="Untrusted folder",
+                command=cmd_str,
+                error_detail=f"MCP stdio server '{name}' was blocked because this project folder is not trusted. Mark as trusted to enable local command execution."
+            )
+            return
+
         session = MCPStdioSession(
             name=name, command=command, args=args,
             env=env, cwd=self.project_path,
@@ -644,11 +657,12 @@ class MCPClientManager:
 
     async def restart(self, name: str) -> bool:
         """Stop (if running) and start a single server. Returns True if running."""
+        srv_conf = self.load_config().get("mcpServers", {}).get(name, {})
         if name in self.sessions:
             await self.sessions[name].stop()
             del self.sessions[name]
         self.server_status.pop(name, None)
-        await self.start_server(name)
+        await self.start_server(name, srv_conf, trusted=True)
         return self.server_status.get(name, {}).get("status") == "running"
 
     def check_liveness(self) -> List[str]:

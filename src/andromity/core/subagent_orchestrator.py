@@ -31,6 +31,7 @@ class SubAgentOrchestrator:
         timeout: Optional[float] = None,
         wait: bool = True,
         depth: int = 1,
+        tool_id: Optional[str] = None,
         progress_callback: Optional[Any] = None,
         context_snapshot: Optional[Any] = None,
     ) -> SubAgentResult:
@@ -45,6 +46,7 @@ class SubAgentOrchestrator:
             tools_override=tools_override,
             timeout=timeout,
             depth=depth,
+            tool_id=tool_id,
             progress_callback=progress_callback,
             context_snapshot=context_snapshot,
         )

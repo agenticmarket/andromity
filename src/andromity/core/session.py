@@ -12,8 +12,8 @@ from andromity.config import get_config_dir
 
 
 class Session:
-    def __init__(self, name: str = "new-session", project_path: Optional[str] = None):
-        self.id = str(uuid.uuid4())
+    def __init__(self, name: str = "new-session", project_path: Optional[str] = None, session_id: Optional[str] = None):
+        self.id = session_id or str(uuid.uuid4())
         self.name = name
         self.project_path = project_path or str(Path.cwd())
         self.project_hash = hashlib.sha256(self.project_path.encode()).hexdigest()[:16]
@@ -238,6 +238,11 @@ class Session:
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=indent, separators=separators)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
             os.replace(str(tmp_path), str(self.file_path))
         except OSError:
             # Fallback: direct write if os.replace fails (e.g. cross-device)
@@ -247,6 +252,11 @@ class Session:
                 pass
             with open(self.file_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=indent, separators=separators)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
 
     def rename(self, name: str):
         """Rename this session and persist."""
@@ -262,8 +272,9 @@ class Session:
         return cleaned or "New Session"
 
     @classmethod
-    def load(cls, file_path: Path) -> "Session":
-        with open(file_path, "r", encoding="utf-8") as f:
+    def load(cls, file_path: Any) -> "Session":
+        fp = Path(file_path)
+        with open(fp, "r", encoding="utf-8") as f:
             data = json.load(f)
         session = cls.__new__(cls)
         session.id = data["id"]
@@ -287,15 +298,15 @@ class Session:
         session.model = data.get("model", "")
         session.plan = data.get("plan")
         session.compacted_history = data.get("compacted_history", [])
-        session.storage_dir = file_path.parent
-        session.file_path = file_path
+        session.storage_dir = fp.parent
+        session.file_path = fp
         session._save_timer = None
-        session._save_lock = threading.Lock()
+        session._save_lock = threading.RLock()
         session._dirty = False
         return session
 
     @classmethod
-    def list_sessions(cls, project_path: Optional[str] = None, limit: int = 20) -> List["Session"]:
+    def list_sessions(cls, project_path: Optional[str] = None, limit: int = 50) -> List["Session"]:
         pp = project_path or str(Path.cwd())
         project_hash = hashlib.sha256(pp.encode()).hexdigest()[:16]
         sessions_dir = get_config_dir() / "sessions" / project_hash
@@ -303,7 +314,6 @@ class Session:
             return []
             
         # Get all files and sort by modification time (newest first)
-        # This avoids parsing hundreds of JSON files just to find the top 20.
         session_files = list(sessions_dir.glob("*.json"))
         session_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
         
@@ -314,7 +324,6 @@ class Session:
             except Exception:
                 continue
                 
-        # Final sort in case JSON updated_at differs slightly from mtime
         sessions.sort(key=lambda s: getattr(s, "updated_at", s.created_at), reverse=True)
         return sessions
 
@@ -328,4 +337,19 @@ class Session:
                 return cls.load(session_file)
             except Exception:
                 pass
+        # Fallback: scan all project subdirectories under sessions
+        sessions_dir = get_config_dir() / "sessions"
+        if sessions_dir.exists():
+            for p_dir in sessions_dir.iterdir():
+                if p_dir.is_dir():
+                    candidate = p_dir / f"{session_id}.json"
+                    if candidate.exists():
+                        try:
+                            return cls.load(candidate)
+                        except Exception:
+                            pass
         return None
+
+
+def get_all_sessions(project_path: Optional[str] = None) -> List[Session]:
+    return Session.list_sessions(project_path, limit=100)

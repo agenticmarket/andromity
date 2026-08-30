@@ -139,7 +139,7 @@ def grep_search(
             if file_pattern:
                 cmd.extend(["--glob", file_pattern])
 
-            cmd.extend([query, str(search_path)])
+            cmd.extend(["-e", query, "--", str(search_path)])
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, errors="replace")
             if result.returncode == 0 and result.stdout.strip():
                 lines = result.stdout.strip().splitlines()
@@ -155,7 +155,7 @@ def grep_search(
             cmd = ["git", "grep", "-n", "-I"]
             if not case_sensitive:
                 cmd.append("-i")
-            cmd.extend([query, "--"])
+            cmd.extend(["-e", query, "--"])
             if file_pattern:
                 cmd.append(file_pattern)
             else:

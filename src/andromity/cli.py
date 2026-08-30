@@ -104,6 +104,19 @@ def uninstall_context_menu_cmd():
         click.secho(f"✗ {msg}", fg="red")
 
 
+@main.command(name="server")
+@click.option("--stdio", is_flag=True, default=True, help="Run JSON-RPC server over stdio (default)")
+@click.option("--port", type=int, default=None, help="Run TCP server on specified port")
+@click.option("--host", type=str, default="127.0.0.1", help="TCP host to bind")
+def server_cmd(stdio, port, host):
+    """Launch the JSON-RPC daemon server for VS Code extension, desktop apps, and external clients."""
+    from andromity.server.main import start_stdio_server, start_tcp_server
+    if port is not None:
+        asyncio.run(start_tcp_server(host=host, port=port))
+    else:
+        asyncio.run(start_stdio_server())
+
+
 
 async def _run_async(prompt, yes, dry_run, profile):
     from pathlib import Path

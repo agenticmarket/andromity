@@ -14,11 +14,14 @@ def _get_git_branch() -> str:
     if _git_branch_cache is not None:
         return _git_branch_cache
     try:
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         result = subprocess.run(
-            ["git", "branch", "--show-current"],
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True,
             text=True,
             timeout=1,
+            stdin=subprocess.DEVNULL,
+            creationflags=flags,
         )
         if result.returncode == 0 and result.stdout.strip():
             _git_branch_cache = result.stdout.strip()
