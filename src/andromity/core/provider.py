@@ -10,6 +10,35 @@ from andromity.core.events import (
 log = get_logger("provider")
 
 
+def _ensure_litellm_stub():
+    """Ensure litellm price file exists in frozen PyInstaller environments so import never throws FileNotFoundError."""
+    try:
+        import sys, os
+        candidates = []
+        if getattr(sys, "frozen", False):
+            mei = getattr(sys, "_MEIPASS", None)
+            if mei:
+                candidates.append(os.path.join(mei, "litellm"))
+        temp_dir = os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp"
+        if os.path.exists(temp_dir):
+            for entry in os.listdir(temp_dir):
+                if entry.startswith("_MEI"):
+                    candidates.append(os.path.join(temp_dir, entry, "litellm"))
+        for d in candidates:
+            try:
+                target = os.path.join(d, "model_prices_and_context_window_backup.json")
+                if not os.path.exists(target):
+                    os.makedirs(d, exist_ok=True)
+                    with open(target, "w", encoding="utf-8") as f:
+                        f.write("{}")
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+_ensure_litellm_stub()
+
+
 async def stream_completion(
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]] = None,
@@ -19,6 +48,7 @@ async def stream_completion(
 ) -> AsyncGenerator[StreamEvent, None]:
     # Lazy-import litellm — it has a heavy import chain (~2-4s), so we defer
     # it until the first actual AI call rather than paying the cost at startup.
+    _ensure_litellm_stub()
     import litellm
     from litellm import acompletion
     litellm.drop_params = True

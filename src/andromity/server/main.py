@@ -22,20 +22,36 @@ logging.basicConfig(
 log = logging.getLogger("andromity.server")
 
 
+def _ensure_litellm_stub():
+    try:
+        candidates = []
+        if getattr(sys, "frozen", False):
+            mei = getattr(sys, "_MEIPASS", None)
+            if mei:
+                candidates.append(os.path.join(mei, "litellm"))
+        temp_dir = os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp"
+        if os.path.exists(temp_dir):
+            for entry in os.listdir(temp_dir):
+                if entry.startswith("_MEI"):
+                    candidates.append(os.path.join(temp_dir, entry, "litellm"))
+        for d in candidates:
+            try:
+                target = os.path.join(d, "model_prices_and_context_window_backup.json")
+                if not os.path.exists(target):
+                    os.makedirs(d, exist_ok=True)
+                    with open(target, "w", encoding="utf-8") as f:
+                        f.write("{}")
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+_ensure_litellm_stub()
+
 def _prewarm_dependencies():
     """Background pre-warm for heavy AI packages so the first turn starts with 0ms import delay."""
     try:
-        # PyInstaller: litellm reads model_prices_and_context_window_backup.json from _MEIxxx temp dir.
-        # That dir is re-extracted fresh each run so the file may not exist yet — create a stub.
-        if getattr(sys, "frozen", False):
-            _mei = getattr(sys, "_MEIPASS", None)
-            if _mei:
-                _price_file = os.path.join(_mei, "litellm", "model_prices_and_context_window_backup.json")
-                if not os.path.exists(_price_file):
-                    os.makedirs(os.path.dirname(_price_file), exist_ok=True)
-                    with open(_price_file, "w") as _f:
-                        _f.write("{}")
-
+        _ensure_litellm_stub()
         import litellm
         litellm.suppress_debug_info = True
         litellm.drop_params = True

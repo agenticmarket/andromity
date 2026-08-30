@@ -15,14 +15,18 @@ andromity_datas, andromity_binaries, andromity_hiddenimports = collect_all('andr
 # Also collect textual's data files (CSS, fonts, etc.)
 textual_datas, textual_binaries, textual_hiddenimports = collect_all('textual')
 
+# Collect litellm's data files (model pricing json, token tables, etc.)
+litellm_datas, litellm_binaries, litellm_hiddenimports = collect_all('litellm')
+
 a = Analysis(
     ['src/andromity/server/__main__.py'],  # entry point
     pathex=['src'],
-    binaries=andromity_binaries + textual_binaries,
-    datas=andromity_datas + textual_datas,
+    binaries=andromity_binaries + textual_binaries + litellm_binaries,
+    datas=andromity_datas + textual_datas + litellm_datas,
     hiddenimports=(
         andromity_hiddenimports +
         textual_hiddenimports +
+        litellm_hiddenimports +
         collect_submodules('andromity') +
         collect_submodules('litellm') +
         ['litellm.llms', 'litellm.utils', 'httpx', 'pydantic', 'rich', 'asyncio']
@@ -30,7 +34,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['tkinter', 'unittest', 'test', 'distutils', 'lib2to3'],
+    excludes=['tkinter', 'unittest', 'test', 'lib2to3'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
