@@ -18,18 +18,24 @@ textual_datas, textual_binaries, textual_hiddenimports = collect_all('textual')
 # Collect litellm's data files (model pricing json, token tables, etc.)
 litellm_datas, litellm_binaries, litellm_hiddenimports = collect_all('litellm')
 
+# Collect tiktoken dynamically loaded extensions
+tiktoken_datas, tiktoken_binaries, tiktoken_hiddenimports = collect_all('tiktoken')
+tiktoken_ext_datas, tiktoken_ext_binaries, tiktoken_ext_hiddenimports = collect_all('tiktoken_ext')
+
 a = Analysis(
     ['src/andromity/server/__main__.py'],  # entry point
     pathex=['src'],
-    binaries=andromity_binaries + textual_binaries + litellm_binaries,
-    datas=andromity_datas + textual_datas + litellm_datas,
+    binaries=andromity_binaries + textual_binaries + litellm_binaries + tiktoken_binaries + tiktoken_ext_binaries,
+    datas=andromity_datas + textual_datas + litellm_datas + tiktoken_datas + tiktoken_ext_datas,
     hiddenimports=(
         andromity_hiddenimports +
         textual_hiddenimports +
         litellm_hiddenimports +
+        tiktoken_hiddenimports +
+        tiktoken_ext_hiddenimports +
         collect_submodules('andromity') +
         collect_submodules('litellm') +
-        ['litellm.llms', 'litellm.utils', 'httpx', 'pydantic', 'rich', 'asyncio']
+        ['litellm.llms', 'litellm.utils', 'litellm.litellm_core_utils.tokenizers', 'httpx', 'pydantic', 'rich', 'asyncio']
     ),
     hookspath=[],
     hooksconfig={},
