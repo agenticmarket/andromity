@@ -225,7 +225,7 @@ export class PythonBridge {
 
         const client = new RpcClient((msg) => {
           socket.write(msg);
-        });
+        }, { log: (m) => this._outputChannel.appendLine(m) });
 
         socket.on("data", (data) => {
           client.handleIncomingMessage(data.toString("utf-8"));
@@ -545,7 +545,7 @@ export class PythonBridge {
       if (proc.stdin && !proc.stdin.destroyed) {
         proc.stdin.write(msg);
       }
-    });
+    }, { log: (m) => this._outputChannel.appendLine(m) });
 
     let stderrBuffer = "";
 

@@ -13,10 +13,14 @@ export class RpcClient extends EventEmitter {
   >();
   private _sendRaw: (msg: string) => void;
   private _buffer = "";
+  private _log: (msg: string) => void;
 
-  constructor(sendRaw: (msg: string) => void) {
+  constructor(sendRaw: (msg: string) => void, options?: { log?: (msg: string) => void }) {
     super();
     this._sendRaw = sendRaw;
+    // Route parse problems to the extension's output channel (visible to users)
+    // instead of only the hidden DevTools console.
+    this._log = options?.log ?? ((msg: string) => console.error(msg));
   }
 
   public handleIncomingMessage(raw: string): void {
@@ -29,14 +33,48 @@ export class RpcClient extends EventEmitter {
 
       try {
         const msg = JSON.parse(line);
-        if (this._isResponse(msg)) {
-          this._handleResponse(msg);
-        } else if (this._isNotification(msg)) {
-          this._handleNotification(msg);
-        }
+        this._dispatchMessage(msg);
       } catch (e) {
-        console.error("[Andromity RPC] Failed to parse message:", line, e);
+        // Frozen binaries / chatty libraries sometimes print to stdout WITHOUT
+        // a trailing newline, which concatenates garbage onto the next JSON-RPC
+        // line. Salvage the embedded JSON object so notifications (especially
+        // agent/done) are not silently dropped — otherwise the UI shows
+        // "working..." forever even though the turn finished daemon-side.
+        const salvaged = this._salvageJson(line);
+        if (salvaged) {
+          this._log(
+            `[Andromity RPC] Salvaged JSON from corrupted line (non-JSON prefix/suffix from the daemon): ${line.slice(0, 200)}`
+          );
+          this._dispatchMessage(salvaged);
+        } else {
+          this._log(
+            `[Andromity RPC] Failed to parse message (dropped, ${line.length} chars): ${line.slice(0, 500)}`
+          );
+        }
       }
+    }
+  }
+
+  /** Find the first '{' that starts a plausible JSON-RPC object and try to parse from there. */
+  private _salvageJson(line: string): any | null {
+    const start = line.indexOf("{");
+    if (start <= 0) return null;
+    try {
+      const parsed = JSON.parse(line.slice(start));
+      if (typeof parsed === "object" && parsed !== null) {
+        return parsed;
+      }
+    } catch {
+      // fall through
+    }
+    return null;
+  }
+
+  private _dispatchMessage(msg: any): void {
+    if (this._isResponse(msg)) {
+      this._handleResponse(msg);
+    } else if (this._isNotification(msg)) {
+      this._handleNotification(msg);
     }
   }
 

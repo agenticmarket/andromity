@@ -144,6 +144,42 @@ describe("RpcClient Unit Tests", () => {
     assert.ok(done);
   });
 
+  it("should salvage notifications from lines corrupted by non-JSON daemon output", async () => {
+    const logs: string[] = [];
+    const client = new RpcClient(() => {}, { log: (m) => logs.push(m) });
+    let done = false;
+    client.on("agent/done", () => {
+      done = true;
+    });
+
+    // Simulate a frozen-binary library printing to stdout without a newline,
+    // so the garbage lands on the SAME line as the next JSON-RPC notification.
+    client.handleIncomingMessage(
+      "some library warning without newline" +
+        JSON.stringify({ jsonrpc: "2.0", method: "agent/done", params: {} }) +
+        "\n"
+    );
+    await new Promise((r) => setTimeout(r, 10));
+
+    assert.ok(done, "agent/done should have been salvaged and delivered");
+    assert.ok(
+      logs.some((l) => l.includes("Salvaged JSON")),
+      "salvage should be logged to the provided sink"
+    );
+  });
+
+  it("should log (not throw) on fully garbage lines", () => {
+    const logs: string[] = [];
+    const client = new RpcClient(() => {}, { log: (m) => logs.push(m) });
+
+    client.handleIncomingMessage("total garbage\r\n\x00\x01\x02\n");
+
+    assert.ok(
+      logs.some((l) => l.includes("Failed to parse message")),
+      "garbage should be logged to the provided sink"
+    );
+  });
+
   it("should assemble fragmented large JSON messages correctly across multiple chunks", async () => {
     let sentMessage = "";
     const client = new RpcClient((msg) => {
