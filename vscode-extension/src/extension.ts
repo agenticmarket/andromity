@@ -56,10 +56,12 @@ export async function activate(context: vscode.ExtensionContext) {
   });
 
   // 2. Initialize Status Bar Item
+  // Daemon loads in the background, so start in "warming up" state and flip to
+  // the idle logo only once the engine signals onClientReady.
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.command = "andromity.openChat";
-  statusBarItem.text = "$(andromity-logo) Andromity";
-  statusBarItem.tooltip = "Andromity Coding Agent";
+  statusBarItem.text = "$(sync~spin) Andromity";
+  statusBarItem.tooltip = "Andromity Coding Agent — starting engine...";
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
@@ -101,6 +103,10 @@ export async function activate(context: vscode.ExtensionContext) {
     SettingsPanel.currentPanel?.setRpcClient(rpcClient);
     PlanEditorPanel.currentPanel?.setRpcClient(rpcClient);
     bindStatusBarEvents(rpcClient);
+
+    // Engine is warm — leave the spinner only if an agent turn is already running.
+    statusBarItem.text = "$(andromity-logo) Andromity";
+    statusBarItem.tooltip = "Andromity Coding Agent";
 
     rpcClient.on("agent/planApproval", (params: any) => {
       if (params?.plan) {
@@ -150,8 +156,17 @@ export async function activate(context: vscode.ExtensionContext) {
     .start()
     .catch((err) => {
       outputChannel.appendLine(`[Andromity] Failed to start Python daemon: ${err.message}`);
+      statusBarItem.text = "$(alert) Andromity";
+      statusBarItem.tooltip = "Andromity engine failed to start — click for setup check";
       promptSetupGuide(err.message);
     });
+
+  // Daemon dropped (crash / restart / TCP close) — show warm-up spinner again
+  // until the reconnecting daemon signals onClientReady.
+  pythonBridge.onClientDisconnected(() => {
+    statusBarItem.text = "$(sync~spin) Andromity";
+    statusBarItem.tooltip = "Andromity Coding Agent — reconnecting engine...";
+  });
 
   // Auto-restart bridge when user changes pythonPath or serverPort in settings
   context.subscriptions.push(

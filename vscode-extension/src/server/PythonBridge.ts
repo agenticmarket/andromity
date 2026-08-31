@@ -23,6 +23,7 @@ export class PythonBridge {
   private _reconnectAttempts = 0;
   private _maxReconnectAttempts = 5;
   private _clientCallbacks: ((client: RpcClient) => void)[] = [];
+  private _disconnectedCallbacks: (() => void)[] = [];
   private _lastPythonStatus: PythonStatus | null = null;
   private _packageInstallAttempted = false;
   private _lastExitWasPackageError = false;
@@ -83,6 +84,22 @@ export class PythonBridge {
         callback(this._client);
       } catch (e) {
         console.error("[Andromity] Error in immediate onClientReady callback:", e);
+      }
+    }
+  }
+
+  /** Fired whenever the daemon goes away (crash / restart / dispose) so the UI
+   *  can show a "warming up" state until onClientReady fires again. */
+  public onClientDisconnected(callback: () => void) {
+    this._disconnectedCallbacks.push(callback);
+  }
+
+  private _notifyDisconnected() {
+    for (const cb of this._disconnectedCallbacks) {
+      try {
+        cb();
+      } catch (e) {
+        console.error("[Andromity] Error in onClientDisconnected callback:", e);
       }
     }
   }
@@ -222,6 +239,7 @@ export class PythonBridge {
           this._outputChannel.appendLine(`[Andromity] TCP connection closed.`);
           client.close("Andromity TCP connection closed.");
           this._client = null;
+          this._notifyDisconnected();
         });
 
         this._client = client;
@@ -562,6 +580,7 @@ export class PythonBridge {
 
       this._process = null;
       this._client = null;
+      this._notifyDisconnected();
 
       const isPackageError =
         code === 1 &&
@@ -648,6 +667,8 @@ export class PythonBridge {
     this.dispose();
     this._isDisposed = false;
     this._reconnectAttempts = 0;
+    // Surface the gap until the fresh daemon signals onClientReady.
+    this._notifyDisconnected();
     return this.start();
   }
 
