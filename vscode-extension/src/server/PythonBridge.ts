@@ -548,7 +548,18 @@ export class PythonBridge {
 
     proc.on("exit", (code, signal) => {
       this._outputChannel.appendLine(`[Daemon Exit] Process exited with code ${code} (signal: ${signal})`);
+
+      // Always reject pending RPCs on the client bound to this process.
       client.close(`Daemon exited with code ${code}`);
+
+      // Stale exit event: this process was already replaced (restart()/dispose()
+      // spawned a new daemon or cleared the handle). Do NOT clobber the current
+      // _process/_client — doing so would null out the freshly-spawned daemon
+      // and schedule a duplicate reconnect. Pending requests were rejected above.
+      if (this._process !== proc) {
+        return;
+      }
+
       this._process = null;
       this._client = null;
 
@@ -642,6 +653,15 @@ export class PythonBridge {
 
   public dispose(): void {
     this._isDisposed = true;
+    // Reject pending RPCs immediately instead of waiting for the async
+    // 'exit' event (or the per-call timeout) to fire.
+    if (this._client) {
+      try {
+        this._client.close("Andromity daemon disposed");
+      } catch (e) {
+        // ignore
+      }
+    }
     if (this._process) {
       try {
         this._process.kill();
