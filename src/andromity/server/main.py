@@ -21,6 +21,14 @@ logging.basicConfig(
 )
 log = logging.getLogger("andromity.server")
 
+# LiteLLM attaches its own colored handler to its "LiteLLM" logger AND that
+# logger propagates to the root handler above — every litellm record was
+# written twice to the daemon log. Keep litellm's own handler only and raise
+# its level so per-request INFO spam stops.
+_LITELLM_LOGGER = logging.getLogger("LiteLLM")
+_LITELLM_LOGGER.propagate = False
+_LITELLM_LOGGER.setLevel(logging.WARNING)
+
 
 def _ensure_litellm_stub():
     try:
