@@ -11,6 +11,54 @@ from andromity.core.events import (
 log = get_logger("provider")
 
 
+class ProviderStalledError(Exception):
+    """Raised by the first-token watchdog when a provider sends no chunk at all
+    within the watchdog window (upstream queued/overloaded; keep-alive comments
+    defeat the client read timeout, so nothing else aborts the request)."""
+
+    def __init__(self, timeout: float):
+        super().__init__(f"no first token within {timeout:.0f}s")
+        self.timeout = timeout
+
+
+def _format_stall_text(provider_name: str, model: str, timeout: float) -> str:
+    return (
+        f"\n**[Provider stalled]** {provider_name}/{model} sent nothing within {timeout:.0f}s "
+        "(upstream queued or overloaded).\n"
+        "• Try again — queued requests usually clear quickly.\n"
+        "• Or switch model with /model.\n"
+    )
+
+
+def _is_local_base_url(base_url: Optional[str]) -> bool:
+    if not base_url:
+        return False
+    b = base_url.lower()
+    return "localhost" in b or "127.0.0.1" in b or "[::1]" in b
+
+
+async def _first_token_guard(stream: Any, timeout: float):
+    """Pass stream chunks through unchanged, but raise ProviderStalledError if
+    the very first chunk does not arrive within `timeout` seconds. Once the
+    first chunk is through, the client's own read timeout covers the rest."""
+    aiter = stream.__aiter__()
+    try:
+        first = await asyncio.wait_for(aiter.__anext__(), timeout=timeout)
+    except asyncio.TimeoutError:
+        try:
+            aclose = getattr(stream, "aclose", None)
+            if aclose:
+                await aclose()
+        except Exception:
+            pass
+        raise ProviderStalledError(timeout)
+    except StopAsyncIteration:
+        return
+    yield first
+    async for chunk in aiter:
+        yield chunk
+
+
 def _ensure_litellm_stub():
     """Ensure litellm price file exists in frozen PyInstaller environments so import never throws FileNotFoundError."""
     try:
@@ -46,6 +94,7 @@ async def stream_completion(
     provider_name: Optional[str] = None,
     model: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
+    first_token_timeout: Optional[float] = None,
 ) -> AsyncGenerator[StreamEvent, None]:
     # Lazy-import litellm — it has a heavy import chain (~2-4s), so we defer
     # it until the first actual AI call rather than paying the cost at startup.
@@ -149,6 +198,20 @@ async def stream_completion(
         yield Done()
         return
 
+    # ── First-token watchdog (see _first_token_guard) ────────────────────────
+    # Cloud gateways (e.g. OpenRouter) send SSE keep-alive comments while an
+    # upstream is queued/overloaded; those bytes reset the client read timeout,
+    # so `timeout=90` never fires and the stream can stay silent forever. Abort
+    # unless the first chunk arrives in time. Local Ollama servers may take
+    # minutes to cold-load a model, so they get a generous window.
+    if first_token_timeout is None:
+        first_token_timeout = (
+            600.0 if (provider_name == "ollama" or _is_local_base_url(base_url)) else 60.0
+        )
+    log.info("stream_completion first-token watchdog: %.0fs (provider=%s model=%s)",
+             first_token_timeout, provider_name, model)
+    response_stream = _first_token_guard(response_stream, first_token_timeout)
+
     # Map tool_call index → tool_id for interleaved parallel tool call streams
     open_tools: dict[int, str] = {}
     usage = None
@@ -232,6 +295,11 @@ async def stream_completion(
             except Exception:
                 pass
         raise
+    except ProviderStalledError as e:
+        log.error("Provider stalled: %s (provider=%s model=%s)", e, provider_name, model)
+        yield TextDelta(text=_format_stall_text(provider_name, model, e.timeout))
+        yield Done(usage=usage)
+        return
     except litellm.RateLimitError as e:
         yield _handle_rate_limit(e)
     except Exception as e:
