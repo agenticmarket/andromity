@@ -108,8 +108,27 @@ export class RpcClient extends EventEmitter {
     }
   }
 
+  /** EventEmitter-reserved method names must never be re-emitted directly:
+   *  emitting "error" with no listener throws an unhandled exception (crashing
+   *  the extension host), and emitting "newListener"/"removeListener" corrupts
+   *  the emitter's own listener bookkeeping. They are still forwarded to "*"
+   *  listeners so nothing observably disappears. */
+  private _isReservedEventName(method: string): boolean {
+    return (
+      method === "error" ||
+      method === "newListener" ||
+      method === "removeListener"
+    );
+  }
+
   private _handleNotification(notif: JsonRpcNotification): void {
-    this.emit(notif.method, notif.params);
+    if (this._isReservedEventName(notif.method)) {
+      console.warn(
+        `[Andromity RPC] Ignoring reserved notification method: ${notif.method}`
+      );
+    } else {
+      this.emit(notif.method, notif.params);
+    }
     this.emit("*", notif.method, notif.params);
   }
 

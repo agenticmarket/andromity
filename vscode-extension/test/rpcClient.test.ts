@@ -79,6 +79,71 @@ describe("RpcClient Unit Tests", () => {
     assert.equal(receivedDelta, "Hello, World!");
   });
 
+  it("should not throw when the daemon sends a reserved 'error' notification", async () => {
+    const client = new RpcClient(() => {});
+    const starEvents: string[] = [];
+    client.on("*", (method) => starEvents.push(method));
+
+    // Before the fix this crashed the extension host with
+    // "Unhandled 'error' event" since no 'error' listener exists.
+    client.handleIncomingMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "error",
+        params: { message: "boom" },
+      }) + "\n"
+    );
+
+    client.handleIncomingMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "newListener",
+        params: {},
+      }) + "\n"
+    );
+
+    client.handleIncomingMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "removeListener",
+        params: {},
+      }) + "\n"
+    );
+
+    // Reserved methods are suppressed from direct emission...
+    client.handleIncomingMessage(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "agent/done",
+        params: {},
+      }) + "\n"
+    );
+    await new Promise((r) => setTimeout(r, 10));
+
+    assert.ok(starEvents.includes("error"));
+    assert.ok(starEvents.includes("newListener"));
+    assert.ok(starEvents.includes("removeListener"));
+    assert.ok(starEvents.includes("agent/done"));
+  });
+
+  it("should still deliver normal notifications after reserved ones were received", async () => {
+    const client = new RpcClient(() => {});
+    let done = false;
+    client.on("agent/done", () => {
+      done = true;
+    });
+
+    client.handleIncomingMessage(
+      JSON.stringify({ jsonrpc: "2.0", method: "error", params: {} }) + "\n"
+    );
+    client.handleIncomingMessage(
+      JSON.stringify({ jsonrpc: "2.0", method: "agent/done", params: {} }) + "\n"
+    );
+    await new Promise((r) => setTimeout(r, 10));
+
+    assert.ok(done);
+  });
+
   it("should assemble fragmented large JSON messages correctly across multiple chunks", async () => {
     let sentMessage = "";
     const client = new RpcClient((msg) => {
