@@ -35,6 +35,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** workspaceState key persisting the session the user had active last. */
   private static readonly LAST_ACTIVE_SESSION_KEY = "andromity.lastActiveSessionId";
 
+  /** Session id created for the current reload cycle in "fresh" startup mode.
+   *  Guards against creating duplicate empty sessions when _loadInitialConfig
+   *  fires more than once per window load. Cleared on explicit session switch. */
+  private _freshSessionId: string | undefined;
+
   private _boundClient: RpcClient | null = null;
   private _rpcDisposables: Array<() => void> = [];
 
@@ -151,6 +156,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public setCurrentSessionId(sessionId: string) {
     this._currentSessionId = sessionId;
+    // Explicit switch abandons whatever fresh startup session this cycle made.
+    if (sessionId !== this._freshSessionId) {
+      this._freshSessionId = undefined;
+    }
     this._persistLastActiveSession(sessionId);
     if (this._view) {
       this._view.webview.postMessage({ type: "session_switched", sessionId });
@@ -463,13 +472,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           .get<string>("startupSession", "last");
 
         if (startupMode === "fresh") {
-          // "fresh" mode: always start a new empty conversation on load;
-          // previous sessions remain accessible in the history drawer.
-          const newSess = await this._rpcClient.call<SessionInfo>("session.create", {
-            name: `Session ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
-            project_path: workspaceFolder,
-          }).catch(() => ({ id: "main-session" } as SessionInfo));
-          this._currentSessionId = newSess.id;
+          // "fresh" mode: start on an empty conversation; previous sessions
+          // remain accessible in the history drawer.
+          // _loadInitialConfig(true) fires multiple times per window load
+          // (bridge connect, panel resolve, webview "ready") — reuse the
+          // session this cycle already created so each reload produces
+          // exactly ONE fresh session instead of one per call. Reuse is
+          // abandoned if that session got messages or was switched away from.
+          const listed = (sessions || []).find(
+            (s: any) => s.id === this._currentSessionId
+          );
+          const stillEmpty = !listed || !((listed.message_count ?? 0) > 0);
+          const canReuse =
+            !!this._currentSessionId &&
+            this._currentSessionId === this._freshSessionId &&
+            stillEmpty;
+          if (!canReuse) {
+            const newSess = await this._rpcClient.call<SessionInfo>("session.create", {
+              name: `Session ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+              project_path: workspaceFolder,
+            }).catch(() => ({ id: "main-session" } as SessionInfo));
+            this._currentSessionId = newSess.id;
+            this._freshSessionId = newSess.id;
+          }
           this._persistLastActiveSession();
         } else if (sessions && sessions.length > 0) {
           // "last" mode (default): restore exactly the session the user had

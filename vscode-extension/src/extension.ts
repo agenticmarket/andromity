@@ -18,6 +18,15 @@ let currentPlan: any = null;
 
 let lastBoundStatusBarClient: RpcClient | null = null;
 
+/** Status bar state for a failed start/restart — must be set from every
+ *  failure path, otherwise the warm-up spinner spins forever. */
+function markEngineStartFailed() {
+  if (statusBarItem) {
+    statusBarItem.text = "$(alert) Andromity";
+    statusBarItem.tooltip = "Andromity engine failed to start — run 'Andromity: System Setup Check'";
+  }
+}
+
 /** Reflects daemon turn state in the status bar (idle / running / approval needed). */
 function bindStatusBarEvents(client: RpcClient) {
   if (lastBoundStatusBarClient === client) return;
@@ -104,7 +113,9 @@ export async function activate(context: vscode.ExtensionContext) {
     PlanEditorPanel.currentPanel?.setRpcClient(rpcClient);
     bindStatusBarEvents(rpcClient);
 
-    // Engine is warm — leave the spinner only if an agent turn is already running.
+    // Engine is warm — show the idle logo. (If a turn is already streaming
+    // after a reconnect, the agent/textDelta|toolStart listeners in
+    // bindStatusBarEvents flip it back to the spinner on the next event.)
     statusBarItem.text = "$(andromity-logo) Andromity";
     statusBarItem.tooltip = "Andromity Coding Agent";
 
@@ -156,8 +167,7 @@ export async function activate(context: vscode.ExtensionContext) {
     .start()
     .catch((err) => {
       outputChannel.appendLine(`[Andromity] Failed to start Python daemon: ${err.message}`);
-      statusBarItem.text = "$(alert) Andromity";
-      statusBarItem.tooltip = "Andromity engine failed to start — click for setup check";
+      markEngineStartFailed();
       promptSetupGuide(err.message);
     });
 
@@ -177,6 +187,7 @@ export async function activate(context: vscode.ExtensionContext) {
           await pythonBridge?.restart();
           vscode.window.showInformationMessage("Andromity daemon reloaded with new configuration.");
         } catch (err: any) {
+          markEngineStartFailed();
           promptSetupGuide(err.message);
         }
       }
@@ -212,7 +223,12 @@ export async function activate(context: vscode.ExtensionContext) {
           if (choice === "Open Settings") {
             vscode.commands.executeCommand("andromity.openSettings");
           } else if (choice === "Restart Server") {
-            await pythonBridge?.restart();
+            try {
+              await pythonBridge?.restart();
+            } catch (e: any) {
+              markEngineStartFailed();
+              vscode.window.showErrorMessage(`Failed to restart engine: ${e.message}`);
+            }
           }
         });
         return;
@@ -238,7 +254,12 @@ export async function activate(context: vscode.ExtensionContext) {
           "Start Daemon"
         );
         if (choice === "Start Daemon") {
-          await pythonBridge.restart();
+          try {
+            await pythonBridge.restart();
+          } catch (e: any) {
+            markEngineStartFailed();
+            vscode.window.showErrorMessage(`Failed to start daemon: ${e.message}`);
+          }
         }
       } else if (status.installed && status.isVersionSupported) {
         const restartChoice = await vscode.window.showInformationMessage(
@@ -251,6 +272,7 @@ export async function activate(context: vscode.ExtensionContext) {
             await pythonBridge.restart();
             vscode.window.showInformationMessage("Andromity daemon restarted successfully.");
           } catch (e: any) {
+            markEngineStartFailed();
             promptSetupGuide(e.message);
           }
         } else if (restartChoice === "Open Settings") {
@@ -526,6 +548,7 @@ export async function activate(context: vscode.ExtensionContext) {
           await pythonBridge.restart();
           vscode.window.showInformationMessage("Andromity engine restarted successfully.");
         } catch (e: any) {
+          markEngineStartFailed();
           vscode.window.showErrorMessage(`Failed to restart engine: ${e.message}`);
         }
       }
