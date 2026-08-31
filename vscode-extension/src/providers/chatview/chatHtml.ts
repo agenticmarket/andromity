@@ -47,9 +47,12 @@ export function getChatViewHtml(webview: vscode.Webview, extensionUri: vscode.Ur
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${webview.cspSource}; img-src ${webview.cspSource} https: data:; font-src ${webview.cspSource}; media-src ${webview.cspSource};">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline' https://fonts.googleapis.com; script-src 'nonce-${nonce}' ${webview.cspSource}; img-src ${webview.cspSource} https: data:; font-src ${webview.cspSource} https://fonts.gstatic.com data:; media-src ${webview.cspSource};">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Andromity</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..700;1,14..32,300..700&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap" rel="stylesheet">
   <style>
 ${styles}
   </style>
@@ -196,6 +199,27 @@ ${styles}
     </div>
   </div>
 
+  <!-- Compaction Indicator Banner -->
+  <div class="compaction-banner" id="compaction-banner" style="display:none;" role="status" aria-live="polite">
+    <div class="compaction-banner-inner">
+      <div class="compaction-icon-wrap">
+        <svg class="compaction-spin-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+          <polyline points="4 14 10 14 10 20"></polyline>
+          <polyline points="20 10 14 10 14 4"></polyline>
+          <line x1="14" y1="10" x2="21" y2="3"></line>
+          <line x1="3" y1="21" x2="10" y2="14"></line>
+        </svg>
+      </div>
+      <div class="compaction-info">
+        <div class="compaction-title" id="compaction-title">Compacting Conversation Context...</div>
+        <div class="compaction-detail" id="compaction-detail">Summarizing message history into dense semantic memory</div>
+      </div>
+    </div>
+    <div class="compaction-progress-track">
+      <div class="compaction-progress-bar"></div>
+    </div>
+  </div>
+
   <!-- Chat Messages Feed -->
   <div class="chat-container" id="chat-messages" role="log" aria-label="Chat messages" aria-live="polite">
     <!-- Clean Minimalist Zero State (Inspiration Matched) -->
@@ -290,12 +314,6 @@ ${styles}
       <textarea id="prompt-input" autofocus placeholder="Ask Andromity or type / for commands, @ for skills..." rows="1" aria-label="Ask Andromity or type slash for commands, @ for skills"></textarea>
       <div class="prompt-box-footer">
         <div class="prompt-left-controls">
-          <button class="prompt-icon-btn" id="btn-prompt-plus" title="Browse 396+ OpenRouter Models" data-action="open-model-hub" aria-label="Open model catalog">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="12" y1="5" x2="12" y2="19"></line>
-              <line x1="5" y1="12" x2="19" y2="12"></line>
-            </svg>
-          </button>
 
           <button class="prompt-pill-btn" id="btn-prompt-mode" title="Permission Governance Mode (Click to cycle)" aria-label="Permission mode">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

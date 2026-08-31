@@ -65,6 +65,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // 3. Register Providers
   const chatProvider = new ChatViewProvider(context.extensionUri, context);
+  chatProvider.setPythonBridge(pythonBridge);
   const planProvider = new PlanViewProvider(context.extensionUri);
   const sessionTreeProvider = new SessionTreeProvider();
   const cronTreeProvider = new CronTreeProvider();

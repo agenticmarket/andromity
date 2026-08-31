@@ -551,6 +551,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           vscode.postMessage({ type: 'undo_turn' });
           break;
         case 'compact':
+          showCompactionBanner('Compacting conversation context to reduce token usage...');
           vscode.postMessage({ type: 'compact_session' });
           break;
         case 'new':
@@ -802,23 +803,24 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         return;
       }
 
-      // Prioritize sessions with messages, or named sessions
-      const nonEmpty = sessions.filter(s => (s.message_count && s.message_count > 0) || (s.name && s.name !== 'Main Session'));
-      const candidates = nonEmpty.length > 0 ? nonEmpty : sessions;
-      const recent = candidates.slice(0, 3);
+      // Only show past sessions that have actual messages (message_count > 0) and are NOT the current active session
+      const pastSessionsWithHistory = sessions.filter(s => 
+        s.id !== currentSessionId && 
+        s.message_count && 
+        s.message_count > 0
+      );
 
-      if (recent.length === 0) {
+      if (pastSessionsWithHistory.length === 0) {
         recentSessionsSection.style.display = 'none';
         return;
       }
 
       recentSessionsSection.style.display = 'flex';
+      const recent = pastSessionsWithHistory.slice(0, 3);
       recentSessionsList.innerHTML = recent.map(s => {
         const name = escapeHtml(s.name || s.id || 'Untitled Session');
         const dateStr = formatDateBadge(s.updated_at || s.created_at);
-        const hasCost = typeof s.cost_usd === 'number' && s.cost_usd > 0;
-        const badgeText = hasCost ? ('$' + s.cost_usd.toFixed(2)) : (s.message_count ? (s.message_count + ' msgs') : '$0.00');
-        const msgsText = s.message_count ? (s.message_count + ' msgs') : 'Empty';
+        const msgsText = s.message_count + (s.message_count === 1 ? ' msg' : ' msgs');
         const modelTag = s.model ? escapeHtml(s.model.split('/').pop().replace(/-/g, ' ')) : '';
 
         return '<div class="recent-session-card" data-action="switch-session" data-session-id="' + s.id + '">' +
@@ -1101,6 +1103,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           vscode.postMessage({ type: 'undo_turn' });
           break;
         case 'compact-session':
+          showCompactionBanner('Compacting conversation context to reduce token usage...');
           vscode.postMessage({ type: 'compact_session' });
           break;
         case 'load-more-sessions':
@@ -1159,11 +1162,31 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           copyMessageText(target);
           break;
         case 'approve-tool':
-          approveTool(target.getAttribute('data-approval-id'));
+        case 'approve-tool-once':
+          window.approveTool(target.getAttribute('data-approval-id'), 'once', target.getAttribute('data-tool'));
+          break;
+        case 'approve-tool-session':
+          window.approveTool(target.getAttribute('data-approval-id'), 'session', target.getAttribute('data-tool'));
+          break;
+        case 'approve-tool-always':
+          window.approveTool(target.getAttribute('data-approval-id'), 'always', target.getAttribute('data-tool'));
           break;
         case 'reject-tool':
-          rejectTool(target.getAttribute('data-approval-id'));
+          window.rejectTool(target.getAttribute('data-approval-id'));
           break;
+        case 'toggle-perm-params': {
+          const card = target.closest('.permission-card');
+          if (card) {
+            const body = card.querySelector('.permission-params-body');
+            const chev = card.querySelector('.params-chevron');
+            if (body) {
+              const isHidden = body.style.display === 'none';
+              body.style.display = isHidden ? 'block' : 'none';
+              if (chev) chev.innerHTML = isHidden ? '&#x25BE;' : '&#x25B8;';
+            }
+          }
+          break;
+        }
         case 'approve-plan':
           approvePlan();
           break;
@@ -1919,17 +1942,145 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     };
 
+    let lastSoundPlayedAt = 0;
     function playTone(kind) {
+      const now = Date.now();
+      if (now - lastSoundPlayedAt < 1200) {
+        return; // Prevent duplicate sound triggers in quick succession
+      }
+      lastSoundPlayedAt = now;
       try {
         const audio = document.getElementById('audio-done');
         if (audio) {
           audio.currentTime = 0;
           audio.play().catch(function() {});
-          return;
         }
       } catch (e) {
         console.warn('Audio play failed:', e);
       }
+    }
+
+    let compactionBannerTimer = null;
+    let compactionSafetyTimeout = null;
+
+    function showCompactionBanner(reason) {
+      const banner = document.getElementById('compaction-banner');
+      const topCompactBtn = document.getElementById('btn-top-compact');
+      if (topCompactBtn) {
+        topCompactBtn.classList.add('compacting');
+        topCompactBtn.title = 'Compacting context window in progress...';
+      }
+      if (compactionBannerTimer) {
+        clearTimeout(compactionBannerTimer);
+        compactionBannerTimer = null;
+      }
+      if (compactionSafetyTimeout) {
+        clearTimeout(compactionSafetyTimeout);
+        compactionSafetyTimeout = null;
+      }
+      if (banner) {
+        banner.className = 'compaction-banner';
+        banner.style.display = 'flex';
+        const titleEl = document.getElementById('compaction-title');
+        const detailEl = document.getElementById('compaction-detail');
+        if (titleEl) titleEl.textContent = 'Compacting Conversation Context...';
+        if (detailEl) detailEl.textContent = reason || 'Summarizing message history into dense semantic memory';
+      }
+      // Also append an inline working card in the chat messages stream if not already present
+      let inlineCard = document.getElementById('inline-compaction-note');
+      if (!inlineCard && chatContainer) {
+        inlineCard = document.createElement('div');
+        inlineCard.id = 'inline-compaction-note';
+        inlineCard.className = 'inline-compaction-card';
+        inlineCard.innerHTML = '<svg class="compaction-spin-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>' +
+          '<span><strong>Context compaction in progress:</strong> ' + escapeHtml(reason || 'Summarizing history to free token window...') + '</span>';
+        chatContainer.appendChild(inlineCard);
+        scrollToBottomIfNeeded();
+      }
+
+      // Safety timeout: if daemon does not reply within 18 seconds, dismiss spinner
+      compactionSafetyTimeout = setTimeout(() => {
+        hideCompactionBannerWithSuccess({ error: 'Compaction timed out' });
+      }, 18000);
+    }
+
+    function hideCompactionBannerWithSuccess(msg) {
+      if (compactionSafetyTimeout) {
+        clearTimeout(compactionSafetyTimeout);
+        compactionSafetyTimeout = null;
+      }
+      if (compactionBannerTimer) {
+        clearTimeout(compactionBannerTimer);
+        compactionBannerTimer = null;
+      }
+
+      const banner = document.getElementById('compaction-banner');
+      const topCompactBtn = document.getElementById('btn-top-compact');
+      if (topCompactBtn) {
+        topCompactBtn.classList.remove('compacting');
+        topCompactBtn.title = 'Compact context window';
+      }
+      // Remove inline spinner card
+      const inlineCard = document.getElementById('inline-compaction-note');
+      if (inlineCard) {
+        inlineCard.remove();
+      }
+
+      if (msg && msg.error) {
+        if (banner) {
+          banner.className = 'compaction-banner';
+          const titleEl = document.getElementById('compaction-title');
+          const detailEl = document.getElementById('compaction-detail');
+          if (titleEl) titleEl.textContent = 'Compaction Skipped';
+          if (detailEl) detailEl.textContent = msg.error;
+          compactionBannerTimer = setTimeout(() => {
+            banner.style.display = 'none';
+          }, 3000);
+        }
+        appendSystemNote('Notice: ' + msg.error);
+        return;
+      }
+
+      if (msg && msg.skipped) {
+        const skippedReason = msg.reason || 'Conversation is already short — no compaction needed.';
+        if (banner) {
+          banner.className = 'compaction-banner success';
+          const titleEl = document.getElementById('compaction-title');
+          const detailEl = document.getElementById('compaction-detail');
+          if (titleEl) titleEl.textContent = '✓ Context Already Clean';
+          if (detailEl) detailEl.textContent = skippedReason;
+          compactionBannerTimer = setTimeout(() => {
+            banner.style.display = 'none';
+            banner.className = 'compaction-banner';
+          }, 2500);
+        }
+        appendSystemNote(skippedReason);
+        return;
+      }
+
+      const oldCount = msg && msg.old_count !== undefined ? msg.old_count : (msg && msg.oldCount);
+      const newCount = msg && msg.message_count !== undefined ? msg.message_count : (msg && msg.messageCount);
+      let summaryText = 'Context compacted: conversation history compressed to save tokens.';
+      if (oldCount && newCount && oldCount > newCount) {
+        summaryText = 'Context compacted: ' + oldCount + ' messages compressed to ' + newCount + ' messages.';
+      } else if (newCount) {
+        summaryText = 'Context is already compact (' + newCount + ' messages).';
+      }
+
+      if (banner) {
+        banner.className = 'compaction-banner success';
+        const titleEl = document.getElementById('compaction-title');
+        const detailEl = document.getElementById('compaction-detail');
+        if (titleEl) titleEl.textContent = '✓ Compaction Complete';
+        if (detailEl) detailEl.textContent = summaryText;
+
+        compactionBannerTimer = setTimeout(() => {
+          banner.style.display = 'none';
+          banner.className = 'compaction-banner';
+        }, 3000);
+      }
+
+      appendSystemNote(summaryText);
     }
 
     function updateModeBadge(mode) {
@@ -2459,35 +2610,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break; }
 
         case 'tool_approval_required':
-          const toolArgs = msg.args || {};
-          const rawArgs = (()=>{ try{ return JSON.stringify(toolArgs, null, 2); }catch{ return String(toolArgs); } })();
-          const previewPath = toolArgs.path || toolArgs.file || toolArgs.file_path || toolArgs.TargetFile || toolArgs.command || "";
-          const shortPath = previewPath ? (previewPath.length>48 ? previewPath.slice(0,22)+"..."+previewPath.slice(-22) : previewPath) : "";
-          const modeCls = currentMode === 'trust' ? 'green' : (currentMode === 'full' ? 'blue' : (currentMode === 'yolo' ? 'red' : 'orange'));
-          const modeTxt = (currentMode || 'safe').toUpperCase();
-          interactiveSlot.innerHTML = 
-            '<div class="approval-card">' +
-              '<div class="approval-header">' +
-                '<div class="approval-icon">' +
-                  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>' +
-                '</div>' +
-                '<div style="flex:1; min-width:0;">' +
-                  '<div class="approval-kicker">Permission Request</div>' +
-                  '<div class="approval-title">Allow <code>' + escapeHtml(msg.tool_name) + '</code> to run?</div>' +
-                '</div>' +
-                '<span class="approval-tool-pill status-pill ' + modeCls + '">' + escapeHtml(modeTxt) + '</span>' +
-              '</div>' +
-              '<div class="approval-tool-meta">' +
-                '<span class="approval-tool-pill"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg> ' + escapeHtml(msg.tool_name) + '</span>' +
-                (shortPath ? ('<span class="approval-path" title="' + escapeHtml(previewPath) + '">' + escapeHtml(shortPath) + '</span>') : '') +
-              '</div>' +
-              '<div class="approval-desc">The assistant is requesting permission to execute <strong>' + escapeHtml(msg.tool_name) + '</strong>.</div>' +
-              (rawArgs && Object.keys(toolArgs).length ? ('<div class="approval-toggle-args"><span>&#x25B8; View parameters</span></div><div class="approval-args">' + escapeHtml(rawArgs) + '</div>') : '') +
-              '<div class="approval-buttons">' +
-                '<button class="btn-approve" data-action="approve-tool" data-approval-id="' + escapeHtml(msg.approval_id) + '"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg> Allow</button>' +
-                '<button class="btn-reject" data-action="reject-tool" data-approval-id="' + escapeHtml(msg.approval_id) + '"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg> Deny</button>' +
-              '</div>' +
-            '</div>';
+          interactiveSlot.innerHTML = renderPermissionCard(msg);
+          scrollToBottomIfNeeded();
           break;
 
         case 'ask_questions': {
@@ -2581,8 +2705,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (!currentTurnAssistantDiv) startAssistantTurn();
           break;
 
+        case 'session_compacting':
+          showCompactionBanner(msg.reason || 'Compacting conversation context to reduce token usage...');
+          break;
+
         case 'session_compacted':
-          appendSystemNote('Context compacted: conversation history compressed to save tokens.');
+          hideCompactionBannerWithSuccess(msg);
           break;
 
         case 'turn_undone':
@@ -2847,13 +2975,194 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       scrollToBottomIfNeeded();
     }
 
-    window.approveTool = function(approvalId) {
+    let activePendingApprovalId = null;
+    let activePendingToolName = '';
+
+    function renderPermissionCard(msg) {
+      const toolName = msg.tool_name || 'tool';
+      const approvalId = msg.approval_id || '';
+      activePendingApprovalId = approvalId;
+      activePendingToolName = toolName;
+      const toolArgs = msg.args || {};
+
+      let actionTitle = 'Running action';
+      let iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
+      let iconClass = 'command';
+      let codeDisplay = '';
+      let subPath = '';
+
+      const lowerTool = toolName.toLowerCase();
+      if (lowerTool === 'shell_exec' || lowerTool === 'run_command' || lowerTool === 'bash' || lowerTool === 'exec' || lowerTool === 'cmd') {
+        actionTitle = 'Running command';
+        iconClass = 'command';
+        iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>';
+        const cmd = toolArgs.command || toolArgs.cmd || toolArgs.CommandLine || '';
+        const shellName = (navigator.platform && navigator.platform.indexOf('Win') > -1) ? 'powershell' : 'bash';
+        codeDisplay = (shellName + ': ' + cmd).trim();
+        subPath = toolArgs.cwd || toolArgs.Cwd || (zeroWorkspaceLabel ? zeroWorkspaceLabel.textContent : '') || '';
+      } else if (lowerTool === 'edit_file' || lowerTool === 'write_to_file' || lowerTool === 'replace_file_content' || lowerTool === 'multi_replace_file_content' || lowerTool === 'create_file') {
+        actionTitle = 'Edit file';
+        iconClass = 'file';
+        iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>';
+        const filePath = toolArgs.path || toolArgs.file || toolArgs.TargetFile || '';
+        codeDisplay = 'file: ' + filePath;
+        if (toolArgs.Instruction || toolArgs.Description) {
+          codeDisplay += '\\n' + (toolArgs.Instruction || toolArgs.Description);
+        }
+        subPath = filePath;
+      } else if (lowerTool === 'read_file' || lowerTool === 'view_file') {
+        actionTitle = 'Read file';
+        iconClass = 'file';
+        iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+        const filePath = toolArgs.path || toolArgs.file || toolArgs.AbsolutePath || '';
+        codeDisplay = 'read: ' + filePath;
+        subPath = filePath;
+      } else if (lowerTool === 'web_search' || lowerTool === 'search_web') {
+        actionTitle = 'Web search';
+        iconClass = 'web';
+        iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>';
+        codeDisplay = 'query: "' + (toolArgs.query || toolArgs.q || '') + '"';
+        subPath = 'domain: ' + (toolArgs.domain || 'web');
+      } else if (lowerTool === 'fetch_url' || lowerTool === 'read_url_content') {
+        actionTitle = 'Fetch URL';
+        iconClass = 'web';
+        iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>';
+        codeDisplay = 'url: ' + (toolArgs.url || toolArgs.Url || '');
+        subPath = toolArgs.url || '';
+      } else {
+        actionTitle = 'Execute ' + toolName;
+        iconClass = 'command';
+        try {
+          codeDisplay = JSON.stringify(toolArgs, null, 2);
+        } catch {
+          codeDisplay = String(toolArgs);
+        }
+        subPath = 'tool: ' + toolName;
+      }
+
+      if (!subPath) {
+        subPath = (zeroWorkspaceLabel ? zeroWorkspaceLabel.textContent : '') || 'workspace';
+      }
+      if (subPath.length > 48) {
+        subPath = subPath.slice(0, 22) + '...' + subPath.slice(-22);
+      }
+
+      let rawParams = '';
+      try {
+        if (Object.keys(toolArgs).length > 1 || (lowerTool !== 'shell_exec' && lowerTool !== 'run_command')) {
+          rawParams = JSON.stringify(toolArgs, null, 2);
+        }
+      } catch {}
+
+      return '<div class="permission-card" id="permission-card-' + escapeHtml(approvalId) + '">' +
+        '<div class="permission-header">' +
+          '<div class="permission-title-row">' +
+            '<div class="permission-icon-title">' +
+              '<span class="permission-icon-box ' + iconClass + '">' + iconSvg + '</span>' +
+              '<span class="permission-title">' + escapeHtml(actionTitle) + '</span>' +
+            '</div>' +
+            '<button class="permission-close-btn" data-action="reject-tool" data-approval-id="' + escapeHtml(approvalId) + '" title="Deny (Esc)">' +
+              '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>' +
+            '</button>' +
+          '</div>' +
+          '<div class="permission-code-box">' + escapeHtml(codeDisplay) + '</div>' +
+          (rawParams ? (
+            '<div class="permission-params-toggle" data-action="toggle-perm-params">' +
+              '<span class="params-chevron">&#x25B8;</span> ' +
+              '<span>View full parameters</span>' +
+            '</div>' +
+            '<div class="permission-params-body" style="display:none;">' +
+              '<pre style="margin:0; font-family:var(--font-mono);">' + escapeHtml(rawParams) + '</pre>' +
+            '</div>'
+          ) : '') +
+        '</div>' +
+
+        '<div class="permission-options-group">' +
+          '<div class="permission-option-row" data-action="approve-tool-once" data-approval-id="' + escapeHtml(approvalId) + '" data-tool="' + escapeHtml(toolName) + '" tabindex="0" role="button">' +
+            '<div class="option-row-main">' +
+              '<div class="option-row-title">Allow once</div>' +
+            '</div>' +
+            '<div class="option-row-badge">' +
+              '<kbd class="perm-kbd">Ctrl</kbd> <kbd class="perm-kbd">Y</kbd>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="permission-option-row" data-action="approve-tool-session" data-approval-id="' + escapeHtml(approvalId) + '" data-tool="' + escapeHtml(toolName) + '" tabindex="0" role="button">' +
+            '<div class="option-row-main">' +
+              '<div class="option-row-title">Allow for remainder of this session</div>' +
+              '<div class="option-row-sub">path: ' + escapeHtml(subPath) + '</div>' +
+            '</div>' +
+            '<div class="option-row-badge">' +
+              '<kbd class="perm-kbd">Ctrl</kbd> <kbd class="perm-kbd">Alt</kbd> <kbd class="perm-kbd">Y</kbd>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="permission-option-row" data-action="approve-tool-always" data-approval-id="' + escapeHtml(approvalId) + '" data-tool="' + escapeHtml(toolName) + '" tabindex="0" role="button">' +
+            '<div class="option-row-main">' +
+              '<div class="option-row-title">Always allow</div>' +
+              '<div class="option-row-sub">path: ' + escapeHtml(subPath) + '</div>' +
+            '</div>' +
+            '<div class="option-row-badge">' +
+              '<kbd class="perm-kbd">Ctrl</kbd> <kbd class="perm-kbd">Shift</kbd> <kbd class="perm-kbd">Y</kbd>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="permission-option-row option-deny" data-action="reject-tool" data-approval-id="' + escapeHtml(approvalId) + '" tabindex="0" role="button">' +
+            '<div class="option-row-main">' +
+              '<div class="option-row-title deny-text">Deny</div>' +
+            '</div>' +
+            '<div class="option-row-badge">' +
+              '<kbd class="perm-kbd">Ctrl</kbd> <kbd class="perm-kbd">Alt</kbd> <kbd class="perm-kbd">N</kbd>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (!activePendingApprovalId) return;
+      const isInput = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
+
+      // 1. Allow Once: Ctrl+Y, or Enter (when not inside input)
+      if ((e.ctrlKey && (e.key === 'y' || e.key === 'Y') && !e.altKey && !e.shiftKey) || (!isInput && e.key === 'Enter')) {
+        e.preventDefault();
+        window.approveTool(activePendingApprovalId, 'once', activePendingToolName);
+        return;
+      }
+
+      // 2. Allow for remainder of session: Ctrl+Alt+Y or Alt+Y
+      if ((e.ctrlKey && e.altKey && (e.key === 'y' || e.key === 'Y')) || (e.altKey && (e.key === 'y' || e.key === 'Y'))) {
+        e.preventDefault();
+        window.approveTool(activePendingApprovalId, 'session', activePendingToolName);
+        return;
+      }
+
+      // 3. Always allow: Ctrl+Shift+Y
+      if (e.ctrlKey && e.shiftKey && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        window.approveTool(activePendingApprovalId, 'always', activePendingToolName);
+        return;
+      }
+
+      // 4. Deny: Escape or Ctrl+Alt+N or Ctrl+N
+      if (e.key === 'Escape' || (e.ctrlKey && e.altKey && (e.key === 'n' || e.key === 'N')) || (e.ctrlKey && (e.key === 'n' || e.key === 'N'))) {
+        e.preventDefault();
+        window.rejectTool(activePendingApprovalId);
+        return;
+      }
+    });
+
+    window.approveTool = function(approvalId, scope, toolName) {
       interactiveSlot.innerHTML = '';
-      vscode.postMessage({ type: 'approve_tool', approvalId });
+      activePendingApprovalId = null;
+      activePendingToolName = '';
+      vscode.postMessage({ type: 'approve_tool', approvalId, scope: scope || 'once', toolName });
     };
 
     window.rejectTool = function(approvalId) {
       interactiveSlot.innerHTML = '';
+      activePendingApprovalId = null;
+      activePendingToolName = '';
       vscode.postMessage({ type: 'reject_tool', approvalId });
     };
 

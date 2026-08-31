@@ -4,6 +4,7 @@ import * as vscode from "vscode";
 import { DiffManager } from "../integrations/DiffManager.js";
 import { EditorBridge } from "../integrations/EditorBridge.js";
 import { SettingsPanel } from "../panels/SettingsPanel.js";
+import { PythonBridge } from "../server/PythonBridge.js";
 import { RpcClient } from "../server/RpcClient.js";
 import {
   ClarifyingQuestionsEvent,
@@ -15,26 +16,11 @@ import {
 } from "../server/types.js";
 import { getChatViewHtml } from "./chatview/chatHtml.js";
 
-function playNativeDoneSound(extensionUri: vscode.Uri) {
-  try {
-    const soundPath = path.join(extensionUri.fsPath, "media", "done.wav");
-    if (process.platform === "win32") {
-      const escaped = soundPath.replace(/'/g, "''");
-      exec(`powershell -NoProfile -NonInteractive -Command "(New-Object Media.SoundPlayer '${escaped}').PlaySync()"`, { windowsHide: true });
-    } else if (process.platform === "darwin") {
-      exec(`afplay "${soundPath}"`);
-    } else {
-      exec(`aplay -q "${soundPath}"`);
-    }
-  } catch (e) {
-    // ignore
-  }
-}
-
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "andromity.chatView";
   private _view?: vscode.WebviewView;
   private _rpcClient: RpcClient | null = null;
+  private _pythonBridge: PythonBridge | null = null;
   private _diffManager: DiffManager | null = null;
   private _currentSessionId: string = "";
   private _currentProfile: string = "builder";
@@ -53,6 +39,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private readonly _extensionUri: vscode.Uri,
     private readonly _context?: vscode.ExtensionContext
   ) {}
+
+  public setPythonBridge(bridge: PythonBridge) {
+    this._pythonBridge = bridge;
+  }
 
   public setRpcClient(client: RpcClient) {
     if (this._boundClient === client && this._rpcClient === client) {
@@ -231,15 +221,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public async compactSession(): Promise<void> {
     if (!this._rpcClient) return;
     try {
-      const res = await this._rpcClient.call<{ success: boolean; message_count: number }>("session.compact", {
-        session_id: this._currentSessionId,
+      this._postToWebview({
+        type: "session_compacting",
+        reason: "Compacting conversation context to save tokens...",
       });
-      if (res?.success) {
+      const res = await this._rpcClient.call<{ success: boolean; message_count: number; old_count?: number; skipped?: boolean; reason?: string; error?: string }>("session.compact", {
+        session_id: this._currentSessionId,
+      }, 35000);
+      if (res?.skipped) {
+        this._postToWebview({
+          type: "session_compacted",
+          skipped: true,
+          reason: res.reason,
+          old_count: res.old_count,
+          message_count: res.message_count,
+        });
+        vscode.window.showInformationMessage(res.reason || "Conversation is already compact.");
+      } else if (res?.error) {
+        vscode.window.showWarningMessage(`Compaction notice: ${res.error}`);
+        this._postToWebview({
+          type: "session_compacted",
+          error: res.error,
+        });
+      } else if (res?.success) {
         vscode.window.showInformationMessage(`Session compacted (${res.message_count} messages retained).`);
         await this._loadSession(this._currentSessionId);
+        this._postToWebview({
+          type: "session_compacted",
+          old_count: res.old_count,
+          message_count: res.message_count,
+        });
       }
     } catch (e: any) {
       vscode.window.showErrorMessage(`Failed to compact session: ${e.message}`);
+      this._postToWebview({
+        type: "session_compacted",
+        error: e.message,
+      });
     }
   }
 
@@ -368,7 +386,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const cfg = vscode.workspace.getConfiguration("andromity");
       if (cfg.get<boolean>("soundNotifications", true)) {
         this._postToWebview({ type: "play_sound", kind: "done" });
-        playNativeDoneSound(this._extensionUri);
       }
       // Files may have changed -- refresh the Changes view and session stats.
       vscode.commands.executeCommand("andromity.refreshChanges");
@@ -380,6 +397,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     bind("agent/error", (params: any) => {
       this._postToWebview({ type: "agent_error", ...params });
+    });
+
+    bind("session/compacting", (params: any) => {
+      this._postToWebview({ type: "session_compacting", ...params });
+    });
+
+    bind("session/compacted", (params: any) => {
+      this._postToWebview({ type: "session_compacted", ...params });
     });
   }
 
@@ -413,7 +438,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       if (loadSession) {
         if (sessions && sessions.length > 0) {
-          this._currentSessionId = sessions[0].id;
+          const sessionWithMsgs = sessions.find((s: any) => s.message_count && s.message_count > 0);
+          this._currentSessionId = (sessionWithMsgs || sessions[0]).id;
           await this._loadSession(this._currentSessionId);
         } else {
           const newSess = await this._rpcClient.call<SessionInfo>("session.create", {
@@ -480,7 +506,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private async _handleWebviewMessage(message: any) {
     if (message.type === "ready" || message.type === "webview_ready") {
+      if (!this._rpcClient && this._pythonBridge) {
+        const client = await this._pythonBridge.waitForClient(3000);
+        if (client) {
+          this.setRpcClient(client);
+        }
+      }
       if (this._rpcClient) {
+        this._postToWebview({ type: "backend_ready" });
         await this._loadInitialConfig(true);
       }
       return;
@@ -515,8 +548,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    if (!this._rpcClient && this._pythonBridge) {
+      const client = await this._pythonBridge.waitForClient(3000);
+      if (client) {
+        this.setRpcClient(client);
+      }
+    }
+
     if (!this._rpcClient) {
-      vscode.window.showErrorMessage("Andromity daemon is not connected.");
+      vscode.window.showErrorMessage(
+        "Andromity daemon is not connected.",
+        "Restart Server",
+        "Run Setup Check"
+      ).then((choice) => {
+        if (choice === "Restart Server") {
+          vscode.commands.executeCommand("andromity.restartServer");
+        } else if (choice === "Run Setup Check") {
+          vscode.commands.executeCommand("andromity.checkSetup");
+        }
+      });
       return;
     }
 
@@ -688,7 +738,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await this._rpcClient.call("agent.approve_tool", {
           approval_id: message.approvalId,
           approved: true,
+          scope: message.scope || "once",
         });
+        if (message.scope === "session") {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          await this._rpcClient.call("config.set", { section: "default", key: "permission_mode", value: "trust" }).catch(() => {});
+          this._currentMode = "trust";
+          this._postToWebview({ type: "config_updated", key: "mode", value: "trust" });
+        } else if (message.scope === "always") {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          await this._rpcClient.call("trust.set", { project_path: workspaceFolder }).catch(() => {});
+          await this._rpcClient.call("config.set", { section: "default", key: "permission_mode", value: "trust" }).catch(() => {});
+          this._currentMode = "trust";
+          this._postToWebview({ type: "trust_updated", isTrusted: true });
+          this._postToWebview({ type: "config_updated", key: "mode", value: "trust" });
+        }
         break;
       }
 
@@ -732,6 +796,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "new_session": {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (this._currentSessionId && this._rpcClient) {
+          const currentSess = await this._rpcClient.call<any>("session.get", {
+            session_id: this._currentSessionId,
+            project_path: workspaceFolder,
+          }).catch(() => null);
+          if (currentSess && (!currentSess.messages || currentSess.messages.length === 0)) {
+            // Already on an empty fresh session; reuse it cleanly
+            this.setCurrentSessionId(this._currentSessionId);
+            await this.fetchAndPostSessions();
+            break;
+          }
+        }
+
         const res = await this._rpcClient.call<SessionInfo>("session.create", {
           name: message.name || `Session ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
           project_path: workspaceFolder,
@@ -892,14 +969,44 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "compact_session": {
         try {
+          this._postToWebview({
+            type: "session_compacting",
+            reason: "Compacting conversation context to reduce tokens...",
+          });
           const res = await this._rpcClient.call<any>("session.compact", {
             session_id: this._currentSessionId,
-          });
-          vscode.window.showInformationMessage("Context compacted successfully.");
-          await this._loadSession(this._currentSessionId);
-          this._postToWebview({ type: "session_compacted", messageCount: res?.message_count });
+          }, 35000);
+          if (res?.skipped) {
+            this._postToWebview({
+              type: "session_compacted",
+              skipped: true,
+              reason: res.reason,
+              old_count: res.old_count,
+              message_count: res.message_count,
+            });
+            vscode.window.showInformationMessage(res.reason || "Conversation is already compact.");
+          } else if (res?.error) {
+            vscode.window.showWarningMessage(`Compaction notice: ${res.error}`);
+            this._postToWebview({
+              type: "session_compacted",
+              error: res.error,
+            });
+          } else {
+            vscode.window.showInformationMessage("Context compacted successfully.");
+            await this._loadSession(this._currentSessionId);
+            this._postToWebview({
+              type: "session_compacted",
+              old_count: res?.old_count,
+              message_count: res?.message_count,
+              context_tokens: res?.context_tokens,
+            });
+          }
         } catch (e: any) {
           vscode.window.showErrorMessage(`Failed to compact context: ${e.message}`);
+          this._postToWebview({
+            type: "session_compacted",
+            error: e.message,
+          });
         }
         break;
       }

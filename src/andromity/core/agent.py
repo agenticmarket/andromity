@@ -202,6 +202,7 @@ class Agent:
             to_compact = non_system[:-6] if len(non_system) > 6 else non_system
 
         if not to_compact:
+            yield TextDelta(text="*[Context compaction skipped — not enough history to compact]*\n\n")
             return
 
         yield TextDelta(text=f"\n*[Context compacting — {compact_reason}]*\n\n")
@@ -237,12 +238,17 @@ class Agent:
         if self.model:
             compaction_kwargs["model"] = self.model
 
-        async for event in stream_completion(summary_prompt, **compaction_kwargs):
-            if isinstance(event, TextDelta):
-                summary_text += event.text
+        try:
+            async for event in stream_completion(summary_prompt, **compaction_kwargs):
+                if isinstance(event, TextDelta):
+                    summary_text += event.text
+        except Exception as e:
+            logger.warning("Compaction summary stream failed: %s", e)
+            yield TextDelta(text=f"*[Context compaction failed: {e}]*\n\n")
+            return
 
         if not summary_text.strip():
-            yield TextDelta(text="*[Context compaction skipped — summary generation failed]*\n\n")
+            yield TextDelta(text="*[Context compaction skipped — summary generation returned empty]*\n\n")
             return
 
         preserved_history = [m for m in self.session.messages if m.get("role") != "system"]

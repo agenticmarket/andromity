@@ -302,12 +302,65 @@ class JsonRpcHandler:
     async def rpc_session_compact(self, params: Dict[str, Any]) -> Dict[str, Any]:
         session_id = params.get("session_id")
         session = self._get_or_load_session(session_id, params.get("project_path"))
+        if not session:
+            return {"success": False, "error": f"Session {session_id} not found"}
+
+        non_system = [m for m in session.messages if m.get("role") != "system"]
+        old_count = len(session.messages)
+
+        # If nothing to compact (fewer than 3 user/assistant turns)
+        if len(non_system) < 3:
+            self.notify("session/compacted", {
+                "session_id": session.id,
+                "old_count": old_count,
+                "message_count": old_count,
+                "context_tokens": getattr(session, "context_tokens", 0),
+                "skipped": True,
+                "reason": "Conversation is already compact — not enough history to summarize.",
+            })
+            return {
+                "success": True,
+                "skipped": True,
+                "reason": "Conversation is already compact — not enough history to summarize.",
+                "old_count": old_count,
+                "message_count": old_count,
+                "context_tokens": getattr(session, "context_tokens", 0),
+            }
+
+        self.notify("session/compacting", {
+            "session_id": session.id,
+            "reason": f"Compacting {len(non_system)} messages to reduce token usage...",
+        })
+
         model = getattr(session, "model", None) or config.get("default", "model", "claude-sonnet-4-6")
         provider = getattr(session, "provider", None) or config.get("default", "provider", "anthropic")
         agent = Agent(session=session, model=model, provider=provider)
-        old_count = len(session.messages)
-        async for _ in agent._compact_context(force=True):
-            pass
+
+        compact_error = None
+        try:
+            async for event in agent._compact_context(force=True):
+                if hasattr(event, "text") and ("skipped" in event.text or "failed" in event.text):
+                    compact_error = event.text.strip("* \n[]")
+        except Exception as e:
+            log.exception("Compaction failed: %s", e)
+            compact_error = str(e)
+
+        if compact_error:
+            self.notify("session/compacted", {
+                "session_id": session.id,
+                "error": compact_error,
+                "old_count": old_count,
+                "message_count": len(session.messages),
+                "context_tokens": getattr(session, "context_tokens", 0),
+            })
+            return {
+                "success": False,
+                "error": compact_error,
+                "old_count": old_count,
+                "message_count": len(session.messages),
+                "context_tokens": getattr(session, "context_tokens", 0),
+            }
+
         # Recalculate context tokens (use same estimator as agent: include thinking + tool_calls)
         try:
             from andromity.core.agent import _estimate_tokens as _est
@@ -319,6 +372,12 @@ class JsonRpcHandler:
         self.notify("session/updated", {
             "session_id": session.id,
             "name": session.name,
+            "message_count": len(session.messages),
+            "context_tokens": session.context_tokens,
+        })
+        self.notify("session/compacted", {
+            "session_id": session.id,
+            "old_count": old_count,
             "message_count": len(session.messages),
             "context_tokens": session.context_tokens,
         })
@@ -475,13 +534,6 @@ class JsonRpcHandler:
             fut = asyncio.get_running_loop().create_future()
             self._pending_approvals[approval_id] = (session_id, fut)
 
-            if config.get("default", "sound_attention", True):
-                try:
-                    from andromity.core.audio import play_sound
-                    play_sound("done.wav")
-                except Exception:
-                    pass
-
             self.notify("agent/toolApprovalRequired", {
                 "session_id": session_id,
                 "approval_id": approval_id,
@@ -499,13 +551,6 @@ class JsonRpcHandler:
             question_id = str(uuid.uuid4())
             fut = asyncio.get_running_loop().create_future()
             self._pending_questions[question_id] = (session_id, fut)
-
-            if config.get("default", "sound_attention", True):
-                try:
-                    from andromity.core.audio import play_sound
-                    play_sound("done.wav")
-                except Exception:
-                    pass
 
             self.notify("agent/askQuestions", {
                 "session_id": session_id,
@@ -566,6 +611,11 @@ class JsonRpcHandler:
                 image_uris = params.get("image_uris")
                 async for event in agent.run(prompt, images=images, image_uris=image_uris):
                     if isinstance(event, TextDelta):
+                        if "[Context compacting" in event.text:
+                            self.notify("session/compacting", {
+                                "session_id": session_id,
+                                "reason": "Auto-compacting: context limit reached",
+                            })
                         self.notify("agent/textDelta", {"session_id": session_id, "text": event.text})
                     elif isinstance(event, ThinkingDelta):
                         self.notify("agent/thinkingDelta", {"session_id": session_id, "text": event.text})
@@ -657,12 +707,6 @@ class JsonRpcHandler:
                             "error": event.error,
                         })
                     elif isinstance(event, Done):
-                        if config.get("default", "sound_done", True):
-                            try:
-                                from andromity.core.audio import play_sound
-                                play_sound("done.wav")
-                            except Exception:
-                                pass
                         self.notify("agent/done", {
                             "session_id": session_id,
                             "usage": event.usage,

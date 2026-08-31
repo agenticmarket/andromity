@@ -580,7 +580,12 @@ export class SettingsPanel {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Andromity Hub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..700;1,14..32,300..700&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap" rel="stylesheet">
   <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..700;1,14..32,300..700&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap');
+
     :root {
       --bg: var(--vscode-editor-background, #1e1e1e);
       --card-bg: var(--vscode-sideBar-background, #252526);
@@ -604,7 +609,10 @@ export class SettingsPanel {
       --tag-purple-fg: #bc8cff;
       --tag-orange-bg: rgba(210, 153, 34, 0.15);
       --tag-orange-fg: #d29922;
-      --font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+      --font-ui: 'Inter', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      --font-mono: 'JetBrains Mono', 'Geist Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', Consolas, 'Courier New', monospace;
+      --font-family: var(--font-ui);
+      --font: var(--font-ui);
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -794,7 +802,8 @@ export class SettingsPanel {
       background: rgba(0, 0, 0, 0.2);
       padding: 8px 10px;
       border: 1px solid rgba(255, 255, 255, 0.05);
-      font-family: monospace;
+      font-family: var(--font-mono);
+      font-feature-settings: "calt", "zero";
       white-space: pre-wrap;
       word-break: break-word;
     }
@@ -819,6 +828,11 @@ export class SettingsPanel {
       background-color: var(--bg);
       color: var(--text);
       font-family: var(--font-family);
+      font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01", "ss02";
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: optimizeLegibility;
+      letter-spacing: -0.011em;
       font-size: 13px;
       line-height: 1.5;
       display: flex;
@@ -1094,7 +1108,8 @@ export class SettingsPanel {
       padding: 5px 8px;
       border-radius: 4px;
       font-size: 12px;
-      font-family: monospace;
+      font-family: var(--font-mono);
+      font-feature-settings: "calt", "zero";
       outline: none;
     }
 
@@ -1149,7 +1164,8 @@ export class SettingsPanel {
 
     .model-id {
       font-size: 11px;
-      font-family: monospace;
+      font-family: var(--font-mono);
+      font-feature-settings: "calt", "zero";
       color: var(--text-muted);
       word-break: break-all;
     }
@@ -1298,7 +1314,8 @@ export class SettingsPanel {
       padding: 6px 8px;
       border-radius: 4px;
       font-size: 12px;
-      font-family: monospace;
+      font-family: var(--font-mono);
+      font-feature-settings: "calt", "zero";
       outline: none;
     }
 
@@ -1351,7 +1368,9 @@ export class SettingsPanel {
     .chart-wrapper {
       position: relative;
       width: 100%;
-      min-height: 180px;
+      min-height: 190px;
+      overflow: visible !important;
+      z-index: 100;
     }
 
     .usage-chart-svg {
@@ -1417,25 +1436,25 @@ export class SettingsPanel {
       top: 0;
       left: 0;
       pointer-events: none;
-      background: rgba(18, 18, 22, 0.96);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(18, 18, 24, 0.98);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.18);
       border-radius: 9px;
       padding: 10px 14px;
       font-size: 12px;
-      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.7), 0 2px 6px rgba(0, 0, 0, 0.3);
-      z-index: 1000;
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.85), 0 4px 12px rgba(0, 0, 0, 0.5);
+      z-index: 99999 !important;
       opacity: 0;
-      transform: translate(-50%, -100%) translateY(-8px);
+      transform: translate(-50%, -100%) translateY(-10px);
       transition: opacity 0.15s ease, transform 0.15s cubic-bezier(0.16, 1, 0.3, 1);
       white-space: nowrap;
-      min-width: 175px;
+      min-width: 180px;
     }
 
     .chart-tooltip.visible {
       opacity: 1;
-      transform: translate(-50%, -100%) translateY(-12px);
+      transform: translate(-50%, -100%) translateY(-14px);
     }
 
     .chart-tooltip-header {
@@ -1591,7 +1610,8 @@ export class SettingsPanel {
     }
 
     .diag-table td:last-child {
-      font-family: monospace;
+      font-family: var(--font-mono);
+      font-feature-settings: "calt", "zero";
       color: var(--text);
     }
 
@@ -1903,12 +1923,12 @@ export class SettingsPanel {
       </div>
 
       <!-- GitHub-Style Daily Activity Chart -->
-      <div class="settings-card" style="margin-top: 14px;">
+      <div class="settings-card" style="margin-top: 14px; position: relative; z-index: 30; overflow: visible;">
         <div class="setting-label" style="display:flex; justify-content:space-between; align-items:center;">
           <span>Daily Token Activity (GitHub Style)</span>
           <span style="font-size:11px; font-weight:normal; color:var(--text-muted);">Last 14 Days</span>
         </div>
-        <div id="usage-chart-container" style="margin-top: 12px; overflow-x: auto;"></div>
+        <div id="usage-chart-container" style="margin-top: 12px; overflow: visible;"></div>
       </div>
 
       <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-top: 14px;">
@@ -2983,8 +3003,11 @@ export class SettingsPanel {
 
             const wrapRect = wrapper.getBoundingClientRect();
             const grpRect = grp.getBoundingClientRect();
-            const posX = (grpRect.left + grpRect.width / 2) - wrapRect.left;
-            const posY = grpRect.top - wrapRect.top + 30;
+            let posX = (grpRect.left + grpRect.width / 2) - wrapRect.left;
+            let posY = grpRect.top - wrapRect.top + 20;
+
+            // Clamping so tooltip never clips off the left or right sides of the card
+            posX = Math.max(95, Math.min(wrapRect.width - 95, posX));
 
             tooltip.style.left = posX + 'px';
             tooltip.style.top = posY + 'px';
@@ -3141,8 +3164,8 @@ export class SettingsPanel {
         return '<tr style="border-bottom: 1px solid rgba(255,255,255,0.03);">' +
           '<td style="padding:8px 12px; font-weight:500; font-size:12px; word-break:break-all;">' + escapeHtml(sName) + '</td>' +
           '<td style="padding:8px 12px; font-size:11px; color:var(--text-muted);">' + escapeHtml(modelStr) + '</td>' +
-          '<td style="padding:8px 12px; text-align:right; font-size:12px; font-weight:600; font-family:monospace;">' + Number(tokens).toLocaleString() + '</td>' +
-          '<td style="padding:8px 12px; text-align:right; font-size:11.5px; color:var(--tag-green-fg); font-family:monospace;">$' + Number(cost).toFixed(4) + '</td>' +
+          '<td style="padding:8px 12px; text-align:right; font-size:12px; font-weight:600; font-family:var(--font-mono);">' + Number(tokens).toLocaleString() + '</td>' +
+          '<td style="padding:8px 12px; text-align:right; font-size:11.5px; color:var(--tag-green-fg); font-family:var(--font-mono);">' + Number(cost).toFixed(4) + '</td>' +
           '<td style="padding:8px 12px; text-align:right; font-size:11px; color:var(--text-muted);">' + escapeHtml(dateFormatted) + '</td>' +
         '</tr>';
       }).join("");
@@ -3169,7 +3192,7 @@ export class SettingsPanel {
               '<span class="badge purple">' + escapeHtml(s.scope || 'skill') + '</span>' +
             '</div>' +
             '<div class="item-card-desc">' + escapeHtml(s.description || 'Custom agent workflow skill.') + '</div>' +
-            '<div style="font-size: 11px; font-family: monospace; color: var(--text-muted); word-break: break-all;">' + escapeHtml(s.path || '') + '</div>' +
+            '<div style="font-size: 11px; font-family: var(--font-mono); color: var(--text-muted); word-break: break-all;">' + escapeHtml(s.path || '') + '</div>' +
           '</div>'
         ).join("");
       } else {

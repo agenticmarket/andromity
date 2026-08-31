@@ -103,14 +103,15 @@ export class PythonBridge {
 
   public async checkPythonStatus(): Promise<PythonStatus> {
     const pythonPath = await this._resolvePythonPath();
-    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+    const projectRoot = this._findProjectRoot();
+    const cwd = projectRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
       PYTHONUNBUFFERED: "1",
       PYTHONIOENCODING: "utf-8",
     };
 
-    const srcDir = path.join(cwd, "src");
+    const srcDir = projectRoot ? path.join(projectRoot, "src") : path.join(cwd, "src");
     if (fs.existsSync(srcDir)) {
       env.PYTHONPATH = env.PYTHONPATH ? `${srcDir}${path.delimiter}${env.PYTHONPATH}` : srcDir;
     }
@@ -296,34 +297,51 @@ export class PythonBridge {
   }
 
   /**
-   * Find the andromity project root (the folder containing pyproject.toml).
-   * Walks up from this extension's directory so it works both in the workspace
-   * and when installed from a .vsix (where the extension lives inside VS Code).
+   * Find the andromity project root (the folder containing pyproject.toml or src/andromity).
+   * Walks up from this extension's directory, open workspace folders, and process.cwd().
    */
   private _findProjectRoot(): string | null {
-    // 1. Walk up from __dirname (extension/out/) looking for pyproject.toml
-    let dir = path.dirname(__dirname); // extension root
-    for (let i = 0; i < 5; i++) {
-      if (fs.existsSync(path.join(dir, "pyproject.toml"))) {
+    const isProjectRoot = (dir: string) => {
+      try {
+        return (
+          fs.existsSync(path.join(dir, "pyproject.toml")) ||
+          fs.existsSync(path.join(dir, "src", "andromity", "__init__.py"))
+        );
+      } catch {
+        return false;
+      }
+    };
+
+    // 1. Walk up from __dirname
+    let dir = __dirname;
+    for (let i = 0; i < 6; i++) {
+      if (isProjectRoot(dir)) {
         return dir;
       }
       const parent = path.dirname(dir);
-      if (parent === dir) { break; } // reached filesystem root
+      if (parent === dir) { break; }
       dir = parent;
     }
 
-    // 2. Check open workspace folders
+    // 2. Check open workspace folders and their parents
     for (const wf of vscode.workspace.workspaceFolders ?? []) {
       const p = wf.uri.fsPath;
-      if (fs.existsSync(path.join(p, "pyproject.toml"))) {
+      if (isProjectRoot(p)) {
         return p;
       }
-      // Also check parent of workspace folder
       const parent = path.dirname(p);
-      if (fs.existsSync(path.join(parent, "pyproject.toml"))) {
+      if (isProjectRoot(parent)) {
         return parent;
       }
     }
+
+    // 3. Check process.cwd() and its parent
+    try {
+      const cwd = process.cwd();
+      if (isProjectRoot(cwd)) return cwd;
+      const cwdParent = path.dirname(cwd);
+      if (isProjectRoot(cwdParent)) return cwdParent;
+    } catch {}
 
     return null;
   }
@@ -479,12 +497,12 @@ export class PythonBridge {
       PYTHONIOENCODING: "utf-8",
     };
 
-    const daemonSrcDir = path.join(cwd, "src");
+    const daemonSrcDir = projectRoot ? path.join(projectRoot, "src") : path.join(cwd, "src");
     if (fs.existsSync(daemonSrcDir)) {
       env.PYTHONPATH = env.PYTHONPATH ? `${daemonSrcDir}${path.delimiter}${env.PYTHONPATH}` : daemonSrcDir;
     }
 
-    return this._spawnDaemon(pythonPath, args, cwd, env);
+    return this._spawnDaemon(pythonPath, args, projectRoot || cwd, env);
   }
 
   /** Shared daemon spawn logic used by both binary and Python paths. */
@@ -650,21 +668,47 @@ export class PythonBridge {
       return configuredPath;
     }
 
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (workspaceFolders && workspaceFolders.length > 0) {
-      const root = workspaceFolders[0].uri.fsPath;
-      const isWin = process.platform === "win32";
+    const isWin = process.platform === "win32";
+    const searchDirs: string[] = [];
 
+    const projectRoot = this._findProjectRoot();
+    if (projectRoot) {
+      searchDirs.push(projectRoot);
+    }
+
+    for (const wf of vscode.workspace.workspaceFolders ?? []) {
+      searchDirs.push(wf.uri.fsPath);
+      searchDirs.push(path.dirname(wf.uri.fsPath));
+    }
+
+    try {
+      searchDirs.push(process.cwd());
+      searchDirs.push(path.dirname(process.cwd()));
+    } catch {}
+
+    let curr = __dirname;
+    for (let i = 0; i < 5; i++) {
+      searchDirs.push(curr);
+      const parent = path.dirname(curr);
+      if (parent === curr) break;
+      curr = parent;
+    }
+
+    const uniqueDirs = Array.from(new Set(searchDirs.filter(Boolean)));
+
+    for (const dir of uniqueDirs) {
       const candidatePaths = isWin
         ? [
-            path.join(root, ".venv", "Scripts", "python.exe"),
-            path.join(root, "venv", "Scripts", "python.exe"),
-            path.join(root, ".eval-venv", "Scripts", "python.exe"),
+            path.join(dir, ".venv", "Scripts", "python.exe"),
+            path.join(dir, "venv", "Scripts", "python.exe"),
+            path.join(dir, ".eval-venv", "Scripts", "python.exe"),
+            path.join(dir, "env", "Scripts", "python.exe"),
           ]
         : [
-            path.join(root, ".venv", "bin", "python"),
-            path.join(root, "venv", "bin", "python"),
-            path.join(root, ".eval-venv", "bin", "python"),
+            path.join(dir, ".venv", "bin", "python"),
+            path.join(dir, "venv", "bin", "python"),
+            path.join(dir, ".eval-venv", "bin", "python"),
+            path.join(dir, "env", "bin", "python"),
           ];
 
       for (const p of candidatePaths) {

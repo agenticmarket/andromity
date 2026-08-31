@@ -68,7 +68,7 @@
     "commands": [
       {
         "command": "andromity.openChat",
-        "title": "Andromity: Open Chat",
+        "title": "Open Chat",
         "category": "Andromity",
         "icon": {
           "light": "media/sidebar-icon.svg",
@@ -77,99 +77,55 @@
       },
       {
         "command": "andromity.newSession",
-        "title": "Andromity: New Session",
+        "title": "New Session",
         "category": "Andromity",
         "icon": "$(add)"
       },
       {
         "command": "andromity.askAboutSelection",
-        "title": "Andromity: Ask About Selection",
+        "title": "Ask About Selection",
         "category": "Andromity",
         "icon": "$(comment-discussion)"
       },
       {
         "command": "andromity.explainCode",
-        "title": "Andromity: Explain Code",
+        "title": "Explain Code",
         "category": "Andromity",
         "icon": "$(info)"
       },
       {
         "command": "andromity.fixErrors",
-        "title": "Andromity: Fix Diagnostics & Errors",
+        "title": "Fix Diagnostics & Errors",
         "category": "Andromity",
         "icon": "$(tools)"
       },
       {
         "command": "andromity.generateTests",
-        "title": "Andromity: Generate Unit Tests",
+        "title": "Generate Unit Tests",
         "category": "Andromity",
         "icon": "$(beaker)"
       },
       {
         "command": "andromity.undoTurn",
-        "title": "Andromity: Undo Last Turn & Rollback Diff",
+        "title": "Undo Last Turn & Rollback Diff",
         "category": "Andromity",
         "icon": "$(discard)"
       },
       {
-        "command": "andromity.compactSession",
-        "title": "Andromity: Compact Session Context",
-        "category": "Andromity",
-        "icon": "$(fold-up)"
-      },
-      {
         "command": "andromity.viewGitDiff",
-        "title": "Andromity: View File Diffs (Changed Files)",
+        "title": "View File Diffs (Changed Files)",
         "category": "Andromity",
         "icon": "$(diff)"
       },
       {
-        "command": "andromity.openFileDiff",
-        "title": "Andromity: Open File Diff",
-        "category": "Andromity"
-      },
-      {
-        "command": "andromity.refreshSessions",
-        "title": "Andromity: Refresh Sessions",
+        "command": "andromity.showSessions",
+        "title": "Show Sessions History",
         "category": "Andromity",
-        "icon": "$(refresh)"
+        "icon": "$(history)"
       },
       {
-        "command": "andromity.refreshCrons",
-        "title": "Andromity: Refresh Crons",
-        "category": "Andromity",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "andromity.refreshChanges",
-        "title": "Andromity: Refresh Changes",
-        "category": "Andromity",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "andromity.deleteSession",
-        "title": "Andromity: Delete Session",
-        "category": "Andromity",
-        "icon": "$(trash)"
-      },
-      {
-        "command": "andromity.switchModel",
-        "title": "Andromity: Switch AI Model",
-        "category": "Andromity"
-      },
-      {
-        "command": "andromity.switchProfile",
-        "title": "Andromity: Switch Agent Profile",
-        "category": "Andromity"
-      },
-      {
-        "command": "andromity.switchMode",
-        "title": "Andromity: Switch Permission Mode (SAFE/TRUST/FULL/YOLO)",
-        "category": "Andromity"
-      },
-      {
-        "command": "andromity.openModelHub",
-        "title": "Andromity: Open Model Hub (396+ Models)",
+        "command": "andromity.generateCommitMessage",
+        "title": "Generate Commit Message",
         "category": "Andromity",
         "icon": {
           "light": "media/sidebar-icon.svg",
@@ -178,48 +134,38 @@
       },
       {
         "command": "andromity.openSettings",
-        "title": "Andromity: Settings & API Keys",
+        "title": "Settings & API Keys",
         "category": "Andromity",
         "icon": "$(gear)"
       },
       {
+        "command": "andromity.checkSetup",
+        "title": "System Setup Check",
+        "category": "Andromity",
+        "icon": "$(check)"
+      },
+      {
         "command": "andromity.restartServer",
-        "title": "Andromity: Restart Server",
+        "title": "Restart Engine / Server",
         "category": "Andromity",
         "icon": "$(refresh)"
       },
       {
-        "command": "andromity.generateCommitMessage",
-        "title": "Generate Commit Message with Andromity",
+        "command": "andromity.compactSession",
+        "title": "Compact Session Context",
         "category": "Andromity",
-        "icon": {
-          "light": "media/sidebar-icon.svg",
-          "dark": "media/sidebar-icon.svg"
-        }
+        "icon": "$(fold-up)"
       },
       {
-        "command": "andromity.explainTerminalSelection",
-        "title": "Andromity: Explain Terminal Selection",
-        "category": "Andromity",
-        "icon": "$(terminal)"
+        "command": "andromity.openFileDiff",
+        "title": "Open File Diff",
+        "category": "Andromity"
       },
       {
-        "command": "andromity.showSessions",
-        "title": "Andromity: Show Sessions History",
+        "command": "andromity.deleteSession",
+        "title": "Delete Session",
         "category": "Andromity",
-        "icon": "$(history)"
-      },
-      {
-        "command": "andromity.openPlanTab",
-        "title": "Andromity: View Implementation Plan",
-        "category": "Andromity",
-        "icon": "$(checklist)"
-      },
-      {
-        "command": "andromity.openCrons",
-        "title": "Andromity: Scheduled Crons",
-        "category": "Andromity",
-        "icon": "$(clock)"
+        "icon": "$(trash)"
       }
     ],
     "keybindings": [
@@ -254,6 +200,16 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "andromity.openFileDiff",
+          "when": "false"
+        },
+        {
+          "command": "andromity.deleteSession",
+          "when": "false"
+        }
+      ],
       "editor/context": [
         {
           "submenu": "andromity.editorMenu",
@@ -311,13 +267,6 @@
           "group": "andromity@1"
         }
       ],
-      "terminal/context": [
-        {
-          "command": "andromity.explainTerminalSelection",
-          "group": "andromity@1",
-          "when": "terminalVisible"
-        }
-      ],
       "view/title": [
         {
           "command": "andromity.newSession",
@@ -340,7 +289,7 @@
           "group": "navigation@4"
         },
         {
-          "command": "andromity.compactSession",
+          "command": "andromity.checkSetup",
           "when": "view == andromity.chatView",
           "group": "1_more@1"
         },
@@ -350,7 +299,7 @@
           "group": "1_more@2"
         },
         {
-          "command": "andromity.openCrons",
+          "command": "andromity.compactSession",
           "when": "view == andromity.chatView",
           "group": "1_more@3"
         },
