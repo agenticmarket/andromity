@@ -433,6 +433,11 @@
           "default": true,
           "description": "Play sound notifications on turn finish or approval required."
         },
+        "andromity.telemetry": {
+          "type": "boolean",
+          "default": true,
+          "description": "Send anonymous launch and performance telemetry to edge worker."
+        },
         "andromity.serverPort": {
           "type": "number",
           "default": 0,

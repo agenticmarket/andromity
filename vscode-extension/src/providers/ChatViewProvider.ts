@@ -304,15 +304,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     bind("agent/toolApprovalRequired", (params: any) => {
       this._postToWebview({ type: "tool_approval_required", ...params });
+      const cfg = vscode.workspace.getConfiguration("andromity");
+      if (cfg.get<boolean>("soundNotifications", true)) {
+        this._postToWebview({ type: "play_sound", kind: "attention" });
+      }
     });
 
     bind("agent/askQuestions", (params: any) => {
       this._postToWebview({ type: "ask_questions", ...params });
+      const cfg = vscode.workspace.getConfiguration("andromity");
+      if (cfg.get<boolean>("soundNotifications", true)) {
+        this._postToWebview({ type: "play_sound", kind: "attention" });
+      }
     });
 
     bind("agent/planApproval", (params: any) => {
       this._currentPlan = params.plan;
       this._postToWebview({ type: "plan_approval", plan: params.plan });
+      const cfg = vscode.workspace.getConfiguration("andromity");
+      if (cfg.get<boolean>("soundNotifications", true)) {
+        this._postToWebview({ type: "play_sound", kind: "attention" });
+      }
     });
 
     bind("agent/planUpdated", (params: any) => {

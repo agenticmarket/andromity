@@ -864,6 +864,9 @@ class JsonRpcHandler:
             "max_subagents": config.get("subagents", "max_parallel", 3),
             "auto_compact": config.get("advanced", "auto_compact", True),
             "max_file_size_kb": config.get("advanced", "max_file_size_kb", 500),
+            "sound_done": config.get("default", "sound_done", True),
+            "sound_attention": config.get("default", "sound_attention", True),
+            "telemetry": config.get("default", "telemetry", True),
             "is_trusted": config.is_trusted(params.get("project_path") or str(Path.cwd())) if params else False,
         }
 

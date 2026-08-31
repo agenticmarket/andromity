@@ -128,7 +128,8 @@ export class SettingsPanel {
         trustData: trustData || { is_trusted: true, trusted_projects: [] },
         crons: crons || [],
         currentWorkspace: workspaceFolder || "",
-        soundNotifications: vscodeConfig.get<boolean>("soundNotifications", true),
+        soundNotifications: vscodeConfig.get<boolean>("soundNotifications", true) && configData?.sound_done !== false,
+        telemetry: vscodeConfig.get<boolean>("telemetry", true) && configData?.telemetry !== false,
       });
 
       // Background-fetch remote skills registry from GitHub without blocking initial UI
@@ -303,6 +304,43 @@ export class SettingsPanel {
       case "toggle_sound": {
         const config = vscode.workspace.getConfiguration("andromity");
         await config.update("soundNotifications", message.value, vscode.ConfigurationTarget.Global);
+        try {
+          await this._rpcClient?.call("config.set", {
+            section: "default",
+            key: "sound_done",
+            value: message.value,
+          });
+          await this._rpcClient?.call("config.set", {
+            section: "default",
+            key: "sound_attention",
+            value: message.value,
+          });
+        } catch (e) {}
+        this._panel.webview.postMessage({
+          type: "setting_updated",
+          key: "soundNotifications",
+          value: message.value,
+        });
+        this._onConfigChangeCallback?.();
+        break;
+      }
+
+      case "toggle_telemetry": {
+        const config = vscode.workspace.getConfiguration("andromity");
+        await config.update("telemetry", message.value, vscode.ConfigurationTarget.Global);
+        try {
+          await this._rpcClient?.call("config.set", {
+            section: "default",
+            key: "telemetry",
+            value: message.value,
+          });
+        } catch (e) {}
+        this._panel.webview.postMessage({
+          type: "setting_updated",
+          key: "telemetry",
+          value: message.value,
+        });
+        this._onConfigChangeCallback?.();
         break;
       }
 
@@ -1309,6 +1347,172 @@ export class SettingsPanel {
       color: var(--text-muted);
     }
 
+    /* ─── Interactive Usage Analytics Chart & Tooltip ───────────────────────── */
+    .chart-wrapper {
+      position: relative;
+      width: 100%;
+      min-height: 180px;
+    }
+
+    .usage-chart-svg {
+      width: 100%;
+      height: auto;
+      display: block;
+      overflow: visible;
+    }
+
+    .chart-grid-line {
+      stroke: rgba(255, 255, 255, 0.06);
+      stroke-dasharray: 4 4;
+      stroke-width: 1;
+    }
+
+    .chart-grid-label {
+      font-size: 10px;
+      fill: var(--text-muted, #71717a);
+      font-family: var(--font, sans-serif);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .chart-col-bg {
+      fill: transparent;
+      transition: fill 0.15s ease;
+      cursor: pointer;
+    }
+
+    .chart-col-group:hover .chart-col-bg,
+    .chart-col-group.active .chart-col-bg {
+      fill: rgba(255, 255, 255, 0.05);
+    }
+
+    .chart-bar {
+      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      cursor: pointer;
+    }
+
+    .chart-col-group:hover .chart-bar,
+    .chart-col-group.active .chart-bar {
+      filter: drop-shadow(0 0 10px rgba(9, 249, 148, 0.6));
+      opacity: 1 !important;
+    }
+
+    .chart-axis-label {
+      font-size: 10.5px;
+      fill: var(--text-muted, #888888);
+      font-family: var(--font, sans-serif);
+      text-anchor: middle;
+      font-weight: 500;
+      transition: fill 0.15s ease;
+    }
+
+    .chart-col-group:hover .chart-axis-label,
+    .chart-col-group.active .chart-axis-label {
+      fill: var(--text, #ffffff);
+      font-weight: 600;
+    }
+
+    /* Floating Interactive Tooltip */
+    .chart-tooltip {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+      background: rgba(18, 18, 22, 0.96);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 9px;
+      padding: 10px 14px;
+      font-size: 12px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.7), 0 2px 6px rgba(0, 0, 0, 0.3);
+      z-index: 1000;
+      opacity: 0;
+      transform: translate(-50%, -100%) translateY(-8px);
+      transition: opacity 0.15s ease, transform 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+      white-space: nowrap;
+      min-width: 175px;
+    }
+
+    .chart-tooltip.visible {
+      opacity: 1;
+      transform: translate(-50%, -100%) translateY(-12px);
+    }
+
+    .chart-tooltip-header {
+      font-weight: 600;
+      color: #f4f4f5;
+      font-size: 12px;
+      margin-bottom: 6px;
+      padding-bottom: 5px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .chart-tooltip-body {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .chart-tooltip-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 11.5px;
+    }
+
+    .chart-tooltip-row .label {
+      color: #a1a1aa;
+    }
+
+    .chart-tooltip-row .val {
+      font-weight: 600;
+      color: #f4f4f5;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .chart-tooltip-row .val.green {
+      color: #09F994;
+    }
+
+    /* Usage Breakdown Rows */
+    .usage-item-row {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 6px;
+      padding: 10px 12px;
+      transition: all 0.15s ease;
+    }
+
+    .usage-item-row:hover {
+      background: rgba(255, 255, 255, 0.04);
+      border-color: rgba(9, 249, 148, 0.25);
+    }
+
+    .usage-item-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .usage-progress-bar-wrap {
+      width: 100%;
+      height: 5px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .usage-progress-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
     /* General Settings List */
     .settings-list {
       display: flex;
@@ -1759,7 +1963,7 @@ export class SettingsPanel {
           <div class="setting-desc" id="trust-current-status-desc">Status of the currently active workspace directory.</div>
           <div style="display: flex; gap: 10px; align-items: center; margin-top: 6px;">
             <span class="badge green" id="trust-status-badge">Trusted Workspace</span>
-            <button class="btn btn-danger" id="btn-toggle-current-trust">Revoke Trust</button>
+            <button class="btn btn-danger" id="btn-toggle-current-trust" data-action="toggle-current-trust">Revoke Trust</button>
           </div>
         </div>
 
@@ -1880,6 +2084,16 @@ export class SettingsPanel {
             </div>
           </label>
         </div>
+
+        <div class="settings-card">
+          <label class="checkbox-row">
+            <input type="checkbox" id="setting-telemetry">
+            <div>
+              <div class="setting-label">Anonymous Telemetry</div>
+              <div class="setting-desc">Anonymous ping on first launch to count users and edge performance. No code, keys, or file paths are ever transmitted.</div>
+            </div>
+          </label>
+        </div>
       </div>
     </div>
 
@@ -1971,6 +2185,8 @@ export class SettingsPanel {
     let activeProvider = "all";
     let activeSkillsTab = "installed";
     let searchQuery = "";
+    let usageData = {};
+    let currentUsageRange = "all";
 
     // Tabs Navigation
     const tabButtons = document.querySelectorAll(".nav-tab");
@@ -2058,6 +2274,7 @@ export class SettingsPanel {
     const selectMaxSubagents = document.getElementById("setting-max-subagents");
     const checkAutoCompact = document.getElementById("setting-auto-compact");
     const checkSound = document.getElementById("setting-sound");
+    const checkTelemetry = document.getElementById("setting-telemetry");
 
     selectProfile.addEventListener("change", () => {
       vscode.postMessage({ type: "update_setting", key: "profile", value: selectProfile.value });
@@ -2083,6 +2300,11 @@ export class SettingsPanel {
     checkSound.addEventListener("change", () => {
       vscode.postMessage({ type: "toggle_sound", value: checkSound.checked });
     });
+    if (checkTelemetry) {
+      checkTelemetry.addEventListener("change", () => {
+        vscode.postMessage({ type: "toggle_telemetry", value: checkTelemetry.checked });
+      });
+    }
 
     // Delegated actions
     document.addEventListener("click", (e) => {
@@ -2098,6 +2320,17 @@ export class SettingsPanel {
         openExternalUrl(btn.dataset.url);
       } else if (action === "revoke-trust") {
         revokeTrustPath(btn.dataset.path);
+      } else if (action === "toggle-current-trust") {
+        const isTrusted = trustInfo.is_trusted;
+        const targetPath = currentWorkspacePath || (trustInfo && trustInfo.project_path) || "";
+        if (!targetPath) return;
+        btn.disabled = true;
+        btn.innerHTML = '<span style="display:inline-block; width:9px; height:9px; border:1.5px solid currentColor; border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite; margin-right:4px;"></span> Updating...';
+        if (isTrusted) {
+          vscode.postMessage({ type: "revoke_trust", path: targetPath });
+        } else {
+          vscode.postMessage({ type: "trust_folder", path: targetPath });
+        }
       } else if (action === "restart-daemon") {
         vscode.postMessage({ command: "restartDaemon" });
       } else if (action === "run-setup-check") {
@@ -2137,8 +2370,9 @@ export class SettingsPanel {
         if (!chip) return;
         usageRangeChips.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
         chip.classList.add("active");
-        const range = chip.dataset.usageRange || "all";
-        vscode.postMessage({ type: "fetch_usage", timeRange: range });
+        currentUsageRange = chip.dataset.usageRange || "all";
+        renderUsage();
+        vscode.postMessage({ type: "fetch_usage", timeRange: currentUsageRange });
       });
     }
 
@@ -2180,6 +2414,7 @@ export class SettingsPanel {
           if (currentConfig.max_subagents && selectMaxSubagents) selectMaxSubagents.value = String(currentConfig.max_subagents);
           if (checkAutoCompact) checkAutoCompact.checked = currentConfig.auto_compact !== false;
           if (checkSound) checkSound.checked = msg.soundNotifications !== false;
+          if (checkTelemetry) checkTelemetry.checked = msg.telemetry !== false;
 
           const sys = msg.systemInfo || {};
           if (sys.version) setEl("diag-version", "v" + sys.version);
@@ -2386,13 +2621,23 @@ export class SettingsPanel {
       const btn = document.getElementById("btn-toggle-current-trust");
       const desc = document.getElementById("trust-current-status-desc");
 
+      if (btn) btn.disabled = false;
+
       if (isTrusted) {
         if (badge) { badge.className = "badge green"; badge.textContent = "Trusted Workspace"; }
-        if (btn) { btn.className = "btn btn-danger"; btn.textContent = "Revoke Trust"; }
+        if (btn) {
+          btn.className = "btn btn-danger";
+          btn.textContent = "Revoke Trust";
+          btn.setAttribute("data-action", "toggle-current-trust");
+        }
         if (desc) desc.textContent = "Folder: " + (currentWorkspacePath || "Current Project") + " (Write and shell execution fully enabled)";
       } else {
         if (badge) { badge.className = "badge orange"; badge.textContent = "Untrusted / Restricted"; }
-        if (btn) { btn.className = "btn"; btn.textContent = "Trust Folder"; }
+        if (btn) {
+          btn.className = "btn";
+          btn.textContent = "Trust Workspace";
+          btn.setAttribute("data-action", "toggle-current-trust");
+        }
         if (desc) desc.textContent = "Folder: " + (currentWorkspacePath || "Current Project") + " (Restricted Mode — file writes and shell commands require confirmation)";
       }
 
@@ -2561,105 +2806,244 @@ export class SettingsPanel {
       }).join("");
     }
 
+    function getFilteredSessions(sessions, range) {
+      if (!Array.isArray(sessions)) return [];
+      if (range === "all") return sessions;
+      const now = Date.now();
+      const dayMs = 24 * 60 * 60 * 1000;
+      let limitMs = 30 * dayMs;
+      if (range === "month") limitMs = 30 * dayMs;
+      else if (range === "week") limitMs = 7 * dayMs;
+      else if (range === "today") limitMs = 1 * dayMs;
+
+      return sessions.filter(s => {
+        const d = new Date(s.updated_at || s.created_at || 0).getTime();
+        return (now - d) <= limitMs;
+      });
+    }
+
     function renderUsage() {
+      const allSessionsList = usageData.sessions || [];
+      const filteredSessions = getFilteredSessions(allSessionsList, currentUsageRange);
+
+      const totalTokens = filteredSessions.reduce((acc, s) => acc + (s.token_total || s.tokens || 0), 0) || (currentUsageRange === "all" ? (usageData.total_tokens || 0) : 0);
+      const totalCost = filteredSessions.reduce((acc, s) => acc + (s.cost_usd || 0), 0) || (currentUsageRange === "all" ? (usageData.total_cost_usd || 0) : 0);
+      const totalSessions = filteredSessions.length || (currentUsageRange === "all" ? (usageData.total_sessions || 0) : 0);
+      const avgTokens = totalSessions > 0 ? Math.round(totalTokens / totalSessions) : 0;
+
       const tokensEl = document.getElementById("stat-usage-tokens");
       const costEl = document.getElementById("stat-usage-cost");
       const sessionsEl = document.getElementById("stat-usage-sessions");
       const avgEl = document.getElementById("stat-usage-avg");
-
-      const totalTokens = usageData.total_tokens || 0;
-      const totalCost = usageData.total_cost_usd || 0;
-      const sessions = usageData.sessions || [];
-      const totalSessions = usageData.total_sessions || sessions.length || 0;
-      const avgTokens = totalSessions > 0 ? Math.round(totalTokens / totalSessions) : 0;
 
       if (tokensEl) tokensEl.textContent = formatTokens(totalTokens);
       if (costEl) costEl.textContent = '$' + Number(totalCost).toFixed(4);
       if (sessionsEl) sessionsEl.textContent = totalSessions;
       if (avgEl) avgEl.textContent = formatTokens(avgTokens);
 
-      renderUsageChart(sessions);
-      renderModelBreakdown();
-      renderProviderBreakdown();
-      renderSessionsTable(sessions);
+      renderUsageChart(filteredSessions, currentUsageRange);
+      renderModelBreakdown(filteredSessions);
+      renderProviderBreakdown(filteredSessions);
+      renderSessionsTable(filteredSessions);
     }
 
-    function renderUsageChart(sessions) {
+    function renderUsageChart(sessions, range) {
       const container = document.getElementById("usage-chart-container");
       if (!container) return;
 
-      const days = [];
+      const slots = [];
       const now = new Date();
-      const dailyMap = {};
+      const numSlots = range === "today" ? 12 : (range === "week" ? 7 : (range === "month" ? 14 : 14));
 
-      for (let i = 13; i >= 0; i--) {
-        const d = new Date(now);
-        d.setDate(d.getDate() - i);
-        const iso = d.toISOString().slice(0, 10);
-        days.push({
-          dateIso: iso,
-          label: (d.getMonth() + 1) + '/' + d.getDate(),
-          dayName: d.toLocaleDateString([], { weekday: 'short' }),
-          tokens: 0,
-          cost: 0,
-          count: 0
-        });
-        dailyMap[iso] = days[days.length - 1];
+      if (range === "today") {
+        for (let i = 0; i < 12; i++) {
+          const slotHour = i * 2;
+          const label = String(slotHour).padStart(2, '0') + ':00';
+          slots.push({
+            idx: i,
+            label: label,
+            fullDate: 'Today, ' + label,
+            tokens: 0,
+            cost: 0,
+            count: 0
+          });
+        }
+        if (Array.isArray(sessions)) {
+          sessions.forEach(s => {
+            const d = new Date(s.created_at || s.updated_at || 0);
+            if (d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()) {
+              const hour = d.getHours();
+              const slotIdx = Math.min(11, Math.floor(hour / 2));
+              slots[slotIdx].tokens += (s.token_total || s.tokens || 0);
+              slots[slotIdx].cost += (s.cost_usd || 0);
+              slots[slotIdx].count += 1;
+            }
+          });
+        }
+      } else {
+        const dailyMap = {};
+        for (let i = numSlots - 1; i >= 0; i--) {
+          const d = new Date(now);
+          d.setDate(d.getDate() - i);
+          const iso = d.toISOString().slice(0, 10);
+          const fullDate = d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+          const label = (d.getMonth() + 1) + '/' + d.getDate();
+          const slot = {
+            idx: numSlots - 1 - i,
+            dateIso: iso,
+            label: label,
+            fullDate: fullDate,
+            dayName: d.toLocaleDateString([], { weekday: 'short' }),
+            tokens: 0,
+            cost: 0,
+            count: 0
+          };
+          slots.push(slot);
+          dailyMap[iso] = slot;
+        }
+
+        if (Array.isArray(sessions)) {
+          sessions.forEach(s => {
+            const sDate = (s.created_at || s.updated_at || "").slice(0, 10);
+            if (dailyMap[sDate]) {
+              dailyMap[sDate].tokens += (s.token_total || s.tokens || 0);
+              dailyMap[sDate].cost += (s.cost_usd || 0);
+              dailyMap[sDate].count += 1;
+            }
+          });
+        }
       }
 
-      if (Array.isArray(sessions)) {
-        sessions.forEach(s => {
-          const sDate = (s.created_at || s.updated_at || "").slice(0, 10);
-          if (dailyMap[sDate]) {
-            dailyMap[sDate].tokens += (s.token_total || s.tokens || 0);
-            dailyMap[sDate].cost += (s.cost_usd || 0);
-            dailyMap[sDate].count += 1;
-          }
-        });
-      }
+      const totalTokensInChart = slots.reduce((acc, s) => acc + s.tokens, 0);
+      slots.forEach(s => {
+        s.pct = totalTokensInChart > 0 ? Math.round((s.tokens / totalTokensInChart) * 100) : 0;
+      });
 
-      const maxTokens = Math.max(...days.map(d => d.tokens), 1000);
+      const maxTokens = Math.max(...slots.map(d => d.tokens), 1000);
       const chartHeight = 110;
       const svgWidth = 640;
-      const barWidth = 32;
-      const gap = 12;
-      const leftPad = 20;
+      const leftPad = 48;
+      const rightPad = 16;
+      const availableWidth = svgWidth - leftPad - rightPad;
+      const barWidth = Math.max(16, Math.min(36, Math.floor((availableWidth / numSlots) * 0.65)));
+      const colStep = availableWidth / numSlots;
 
-      let barsSvg = '';
-      days.forEach((d, idx) => {
-        const x = leftPad + idx * (barWidth + gap);
-        const barH = d.tokens > 0 ? Math.max(6, Math.round((d.tokens / maxTokens) * chartHeight)) : 3;
+      // 3 dashed gridlines (Max, 50%, 0)
+      let gridSvg = '';
+      [1, 0.5, 0].forEach(ratio => {
+        const y = chartHeight * (1 - ratio) + 15;
+        const valLabel = ratio === 0 ? '0' : formatTokens(Math.round(maxTokens * ratio));
+        gridSvg += '<line class="chart-grid-line" x1="' + leftPad + '" y1="' + y + '" x2="' + (svgWidth - rightPad) + '" y2="' + y + '" />' +
+          '<text class="chart-grid-label" x="' + (leftPad - 8) + '" y="' + (y + 3.5) + '" text-anchor="end">' + valLabel + '</text>';
+      });
+
+      let colsSvg = '';
+      slots.forEach((d, idx) => {
+        const centerX = leftPad + idx * colStep + (colStep / 2);
+        const x = centerX - (barWidth / 2);
+        const colBgX = leftPad + idx * colStep;
+        const barH = d.tokens > 0 ? Math.max(8, Math.round((d.tokens / maxTokens) * chartHeight)) : 3;
         const y = chartHeight - barH + 15;
-        const opacity = d.tokens > 0 ? Math.min(1, 0.4 + (d.tokens / maxTokens) * 0.6) : 0.2;
-        const color = d.tokens > 0 ? 'var(--tag-green-fg, #2ea043)' : 'rgba(255,255,255,0.15)';
+        const opacity = d.tokens > 0 ? Math.min(1, 0.55 + (d.tokens / maxTokens) * 0.45) : 0.2;
 
-        barsSvg += '<g>' +
-          '<rect class="chart-bar" x="' + x + '" y="' + y + '" width="' + barWidth + '" height="' + barH + '" rx="3" ry="3" fill="' + color + '" opacity="' + opacity + '">' +
-            '<title>' + escapeHtml(d.dayName + ' ' + d.label) + ': ' + d.tokens.toLocaleString() + ' tokens ($' + d.cost.toFixed(4) + ') across ' + d.count + ' session(s)</title>' +
-          '</rect>' +
-          '<text class="chart-axis" x="' + (x + barWidth / 2) + '" y="' + (chartHeight + 30) + '">' + escapeHtml(d.label) + '</text>' +
+        colsSvg += '<g class="chart-col-group" data-slot-idx="' + idx + '">' +
+          '<rect class="chart-col-bg" x="' + colBgX + '" y="10" width="' + colStep + '" height="' + (chartHeight + 10) + '" rx="4" />' +
+          '<rect class="chart-bar" x="' + x + '" y="' + y + '" width="' + barWidth + '" height="' + barH + '" rx="4" ry="4" fill="url(#usageBarGrad)" opacity="' + opacity + '" />' +
+          '<text class="chart-axis-label" x="' + centerX + '" y="' + (chartHeight + 32) + '">' + escapeHtml(d.label) + '</text>' +
         '</g>';
       });
 
-      container.innerHTML = '<svg class="usage-chart-svg" viewBox="0 0 ' + svgWidth + ' 150" preserveAspectRatio="xMidYMid meet">' +
-        '<line x1="' + leftPad + '" y1="' + (chartHeight + 15) + '" x2="' + (svgWidth - 10) + '" y2="' + (chartHeight + 15) + '" stroke="var(--card-border)" stroke-width="1" />' +
-        barsSvg +
-      '</svg>';
+      container.innerHTML = '<div class="chart-wrapper">' +
+        '<svg class="usage-chart-svg" viewBox="0 0 ' + svgWidth + ' 160" preserveAspectRatio="xMidYMid meet">' +
+          '<defs>' +
+            '<linearGradient id="usageBarGrad" x1="0" y1="0" x2="0" y2="1">' +
+              '<stop offset="0%" stop-color="#09F994" />' +
+              '<stop offset="100%" stop-color="#06b6d4" />' +
+            '</linearGradient>' +
+          '</defs>' +
+          gridSvg +
+          colsSvg +
+        '</svg>' +
+        '<div class="chart-tooltip" id="chart-tooltip"></div>' +
+      '</div>';
+
+      const wrapper = container.querySelector(".chart-wrapper");
+      const tooltip = container.querySelector("#chart-tooltip");
+      const colGroups = container.querySelectorAll(".chart-col-group");
+
+      if (wrapper && tooltip && colGroups.length > 0) {
+        colGroups.forEach(grp => {
+          grp.addEventListener("mouseenter", () => {
+            const idx = parseInt(grp.getAttribute("data-slot-idx") || "0", 10);
+            const slot = slots[idx];
+            if (!slot) return;
+
+            colGroups.forEach(g => g.classList.remove("active"));
+            grp.classList.add("active");
+
+            const wrapRect = wrapper.getBoundingClientRect();
+            const grpRect = grp.getBoundingClientRect();
+            const posX = (grpRect.left + grpRect.width / 2) - wrapRect.left;
+            const posY = grpRect.top - wrapRect.top + 30;
+
+            tooltip.style.left = posX + 'px';
+            tooltip.style.top = posY + 'px';
+
+            tooltip.innerHTML = 
+              '<div class="chart-tooltip-header">' +
+                '<span>' + escapeHtml(slot.fullDate) + '</span>' +
+                (slot.pct > 0 ? ('<span style="color:#09F994; font-size:10px; font-weight:700;">' + slot.pct + '%</span>') : '') +
+              '</div>' +
+              '<div class="chart-tooltip-body">' +
+                '<div class="chart-tooltip-row">' +
+                  '<span class="label">Tokens</span>' +
+                  '<span class="val green">' + Number(slot.tokens).toLocaleString() + ' tok</span>' +
+                '</div>' +
+                '<div class="chart-tooltip-row">' +
+                  '<span class="label">Est. Cost</span>' +
+                  '<span class="val">$' + Number(slot.cost).toFixed(4) + ' USD</span>' +
+                '</div>' +
+                '<div class="chart-tooltip-row">' +
+                  '<span class="label">Sessions</span>' +
+                  '<span class="val">' + slot.count + ' session' + (slot.count === 1 ? '' : 's') + '</span>' +
+                '</div>' +
+              '</div>';
+
+            tooltip.classList.add("visible");
+          });
+        });
+
+        wrapper.addEventListener("mouseleave", () => {
+          colGroups.forEach(g => g.classList.remove("active"));
+          tooltip.classList.remove("visible");
+        });
+      }
     }
 
-    function renderModelBreakdown() {
+    function renderModelBreakdown(filteredSessions) {
       const container = document.getElementById("usage-models-breakdown");
       if (!container) return;
 
-      const byModel = usageData.by_model || {};
-      const entries = Object.entries(byModel);
+      const modelMap = {};
+      if (Array.isArray(filteredSessions) && filteredSessions.length > 0) {
+        filteredSessions.forEach(s => {
+          const m = s.model || 'default';
+          if (!modelMap[m]) modelMap[m] = { tokens: 0, cost: 0, provider: s.provider || '' };
+          modelMap[m].tokens += (s.token_total || s.tokens || 0);
+          modelMap[m].cost += (s.cost_usd || 0);
+        });
+      } else if (currentUsageRange === "all" && usageData.by_model) {
+        Object.assign(modelMap, usageData.by_model);
+      }
+
+      const entries = Object.entries(modelMap);
       if (entries.length === 0) {
-        container.innerHTML = '<div style="color:var(--text-muted); font-size:12px; padding:6px 0;">No model usage recorded yet.</div>';
+        container.innerHTML = '<div style="color:var(--text-muted); font-size:12px; padding:6px 0;">No model usage recorded in this timeframe.</div>';
         return;
       }
 
       entries.sort((a, b) => (b[1].tokens || 0) - (a[1].tokens || 0));
-      const totalTokens = usageData.total_tokens || 1;
+      const totalTokens = entries.reduce((acc, [, data]) => acc + (data.tokens || 0), 0) || 1;
 
       container.innerHTML = entries.map(([modelId, data]) => {
         const tokens = data.tokens || 0;
@@ -2667,7 +3051,7 @@ export class SettingsPanel {
         const pct = Math.min(100, Math.round((tokens / totalTokens) * 100));
         const provider = data.provider || '';
 
-        return '<div class="usage-item-row">' +
+        return '<div class="usage-item-row" title="' + escapeHtml(modelId) + ': ' + Number(tokens).toLocaleString() + ' tokens ($' + Number(cost).toFixed(4) + ')">' +
           '<div class="usage-item-header">' +
             '<div style="display:flex; align-items:center; gap:6px; min-width:0;">' +
               '<span style="font-weight:600; font-size:11.5px; word-break:break-all;">' + escapeHtml(modelId) + '</span>' +
@@ -2680,32 +3064,44 @@ export class SettingsPanel {
             '</div>' +
           '</div>' +
           '<div class="usage-progress-bar-wrap">' +
-            '<div class="usage-progress-bar-fill" style="width: ' + pct + '%; background: var(--tag-blue-fg, #388bfd);"></div>' +
+            '<div class="usage-progress-bar-fill" style="width: ' + pct + '%; background: linear-gradient(90deg, #388bfd, #06b6d4);"></div>' +
           '</div>' +
         '</div>';
       }).join("");
     }
 
-    function renderProviderBreakdown() {
+    function renderProviderBreakdown(filteredSessions) {
       const container = document.getElementById("usage-providers-breakdown");
       if (!container) return;
 
-      const byProvider = usageData.by_provider || {};
-      const entries = Object.entries(byProvider);
+      const provMap = {};
+      if (Array.isArray(filteredSessions) && filteredSessions.length > 0) {
+        filteredSessions.forEach(s => {
+          const p = s.provider || (s.model && s.model.includes('/') ? s.model.split('/')[0] : 'openrouter');
+          if (!provMap[p]) provMap[p] = { tokens: 0, cost: 0, sessions: 0 };
+          provMap[p].tokens += (s.token_total || s.tokens || 0);
+          provMap[p].cost += (s.cost_usd || 0);
+          provMap[p].sessions += 1;
+        });
+      } else if (currentUsageRange === "all" && usageData.by_provider) {
+        Object.assign(provMap, usageData.by_provider);
+      }
+
+      const entries = Object.entries(provMap);
       if (entries.length === 0) {
-        container.innerHTML = '<div style="color:var(--text-muted); font-size:12px; padding:6px 0;">No provider activity recorded yet.</div>';
+        container.innerHTML = '<div style="color:var(--text-muted); font-size:12px; padding:6px 0;">No provider activity recorded in this timeframe.</div>';
         return;
       }
 
       entries.sort((a, b) => (b[1].tokens || 0) - (a[1].tokens || 0));
-      const totalTokens = usageData.total_tokens || 1;
+      const totalTokens = entries.reduce((acc, [, data]) => acc + (data.tokens || 0), 0) || 1;
 
       container.innerHTML = entries.map(([provId, data]) => {
         const tokens = data.tokens || 0;
         const cost = data.cost || 0;
         const pct = Math.min(100, Math.round((tokens / totalTokens) * 100));
 
-        return '<div class="usage-item-row">' +
+        return '<div class="usage-item-row" title="' + escapeHtml(provId) + ': ' + Number(tokens).toLocaleString() + ' tokens ($' + Number(cost).toFixed(4) + ')">' +
           '<div class="usage-item-header">' +
             '<div style="display:flex; align-items:center; gap:6px;">' +
               '<span style="font-weight:600; font-size:11.5px; text-transform:capitalize;">' + escapeHtml(provId) + '</span>' +
@@ -2718,7 +3114,7 @@ export class SettingsPanel {
             '</div>' +
           '</div>' +
           '<div class="usage-progress-bar-wrap">' +
-            '<div class="usage-progress-bar-fill" style="width: ' + pct + '%; background: var(--tag-purple-fg, #a371f7);"></div>' +
+            '<div class="usage-progress-bar-fill" style="width: ' + pct + '%; background: linear-gradient(90deg, #a371f7, #c084fc);"></div>' +
           '</div>' +
         '</div>';
       }).join("");

@@ -597,206 +597,134 @@ export function getChatStyles(): string {
       gap: 12px;
     }
 
-    /* Zero state greeting */
+    /* ─── Zero State: Minimalist & Left-Aligned (Inspiration-Matched) ─────────────────────────── */
     .zero-state {
-      margin: auto 0;
-      padding: 16px 8px;
-      text-align: center;
+      margin: 0;
+      padding: 32px 18px 20px;
       display: flex;
       flex-direction: column;
-      align-items: center;
-      gap: 14px;
+      align-items: flex-start;
+      text-align: left;
+      gap: 24px;
+      width: 100%;
+      box-sizing: border-box;
+      animation: fadeInZero 0.2s ease-out;
     }
 
-    .zero-icon.brand-glow {
+    @keyframes fadeInZero {
+      from { opacity: 0; transform: translateY(3px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .zero-hero {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 16px;
+      width: 100%;
+    }
+
+    .zero-brand-logo {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+    }
+
+    .zero-logo-img {
       width: 32px;
       height: 32px;
-    }
-
-    .andromity-turn-loader {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 12px;
-      font-size: 11px;
-      font-weight: 500;
-      color: var(--fg);
-      // background: rgba(6, 182, 212, 0.08);
-      // border: 1px solid rgba(6, 182, 212, 0.25);
-      border-radius: 6px;
-      margin: 4px 0 8px;
-      width: fit-content;
-    }
-
-    .andromity-turn-loader svg,
-    .andromity-turn-loader img {
-      width: 14px;
-      height: 14px;
       object-fit: contain;
-      flex-shrink: 0;
+      display: block;
+      filter: drop-shadow(0 2px 10px rgba(9, 249, 148, 0.25));
+      transition: transform 0.2s ease;
     }
 
-    @keyframes spin { 100% { transform: rotate(360deg); } }
-    .spinning { animation: spin 1.2s linear infinite; }
-
-    .zero-title {
-      font-size: 20px;
-      font-weight: 700;
-      color: var(--fg);
-      letter-spacing: -0.4px;
-      margin-bottom: 4px;
+    .zero-logo-img:hover {
+      transform: scale(1.06);
     }
 
-    .zero-subtitle {
-      font-size: 15px;
-      font-weight: 500;
-      color: var(--fg);
-      text-align: center;
-      margin-bottom: 8px;
-      min-height: 22px;
-      max-width: 320px;
-      line-height: 1.45;
-      letter-spacing: -0.2px;
-    }
-
-    .zero-context-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 3px 10px;
-      font-size: 11px;
-      color: var(--muted);
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      margin-top: 2px;
-    }
-
-    .starter-cards {
+    .zero-statement-wrap {
       display: flex;
       flex-direction: column;
       gap: 6px;
       width: 100%;
-      max-width: 320px;
-      margin-top: 8px;
     }
 
-    .starter-card {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 9px 12px;
-      background: rgba(255, 255, 255, 0.025);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      cursor: pointer;
-      text-align: left;
-      color: var(--fg);
-      transition: all 0.15s ease;
-    }
-
-    .starter-card:hover {
-      background: rgba(255, 255, 255, 0.06);
-      border-color: rgba(6, 182, 212, 0.4);
-      transform: translateY(-1px);
-    }
-
-    .starter-icon {
-      width: 15px;
-      height: 15px;
-      color: var(--accent);
-      flex-shrink: 0;
-    }
-
-    .starter-info {
-      display: flex;
-      flex-direction: column;
-      gap: 1px;
-      text-align: left;
-    }
-
-    .starter-header {
-      font-size: 11.5px;
+    .zero-statement-main {
+      font-size: 26px;
       font-weight: 600;
-      color: var(--muted);
-      letter-spacing: 0.6px;
-      text-transform: uppercase;
-      margin-bottom: 2px;
+      line-height: 1.25;
+      color: #f4f4f5;
+      letter-spacing: -0.6px;
+      margin: 0;
+      font-family: var(--font);
     }
 
-    .starter-name {
+    .zero-statement-sub {
       font-size: 13px;
-      font-weight: 500;
-      color: var(--fg);
+      font-weight: 400;
+      color: var(--muted, #888888);
+      line-height: 1.4;
+      margin: 0;
+      letter-spacing: -0.1px;
     }
 
-    .starter-desc {
-      font-size: 11px;
-      color: var(--muted);
-    }
-
-    /* ”--€ Recent Sessions at Home / Zero State ”----------------------------------------------€ */
+    /* ─── Recent Sessions Section ────────────────────────────────────────── */
     .recent-sessions-section {
       width: 100%;
-      max-width: 320px;
-      margin-top: 8px;
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 10px;
+      margin-top: 6px;
     }
 
     .recent-sessions-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      width: 100%;
       padding: 0 2px;
-      margin-bottom: 2px;
     }
 
-    .recent-header-left {
+    .recent-header-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted, #71717a);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+    }
+
+    .recent-header-actions {
       display: flex;
       align-items: center;
       gap: 6px;
-      font-size: 11.5px;
-      font-weight: 600;
-      color: var(--muted);
-      letter-spacing: 0.6px;
-      text-transform: uppercase;
     }
 
-    .recent-header-left svg {
-      width: 13px;
-      height: 13px;
-      color: var(--muted);
-    }
-
-    .recent-view-all-btn {
+    .recent-header-btn {
       display: inline-flex;
       align-items: center;
-      gap: 3px;
-      background: transparent;
-      border: none;
-      color: var(--muted);
-      font-size: 11.5px;
+      gap: 4px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--fg, #e4e4e7);
+      font-size: 11px;
+      font-weight: 500;
       cursor: pointer;
-      padding: 2px 4px;
-      border-radius: 4px;
-      transition: color 0.12s;
+      padding: 3px 8px;
+      border-radius: 5px;
+      transition: all 0.15s ease;
     }
 
-    .recent-view-all-btn:hover {
-      color: var(--fg);
-    }
-
-    .recent-view-all-btn svg {
-      width: 11px;
-      height: 11px;
+    .recent-header-btn:hover {
+      background: rgba(255, 255, 255, 0.09);
+      border-color: rgba(255, 255, 255, 0.18);
     }
 
     .recent-sessions-list {
       display: flex;
       flex-direction: column;
       gap: 6px;
+      width: 100%;
     }
 
     .recent-session-card {
@@ -806,17 +734,17 @@ export function getChatStyles(): string {
       gap: 12px;
       padding: 9px 12px;
       background: rgba(255, 255, 255, 0.025);
-      border: 1px solid var(--border);
-      border-radius: 6px;
+      border: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+      border-radius: 7px;
       cursor: pointer;
       text-align: left;
-      transition: all 0.15s ease;
+      transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
     .recent-session-card:hover {
-      background: rgba(255, 255, 255, 0.06);
-      border-color: rgba(6, 182, 212, 0.35);
-      transform: translateY(-1px);
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(9, 249, 148, 0.4);
+      transform: translateX(2px);
     }
 
     .recent-session-main {
@@ -824,24 +752,26 @@ export function getChatStyles(): string {
       min-width: 0;
       display: flex;
       flex-direction: column;
-      gap: 3px;
+      gap: 2px;
     }
 
     .recent-session-title {
       font-size: 12.5px;
       font-weight: 500;
-      color: var(--fg);
+      color: var(--fg, #e4e4e7);
       line-height: 1.35;
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
+      white-space: nowrap;
       overflow: hidden;
-      word-break: break-word;
+      text-overflow: ellipsis;
+    }
+
+    .recent-session-card:hover .recent-session-title {
+      color: #ffffff;
     }
 
     .recent-session-sub {
       font-size: 11px;
-      color: var(--muted);
+      color: var(--muted, #71717a);
       display: flex;
       align-items: center;
       gap: 6px;
@@ -855,13 +785,56 @@ export function getChatStyles(): string {
     }
 
     .recent-session-date {
-      font-size: 11.5px;
-      color: var(--muted);
+      font-size: 11px;
+      color: var(--muted, #71717a);
       white-space: nowrap;
     }
 
+    /* ─── Minimal Starter Prompt Chips ────────────────────────────────────── */
+    .minimal-starters-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      width: 100%;
+      margin-top: 4px;
+    }
+
+    .starter-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255, 255, 255, 0.025);
+      border: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+      border-radius: 6px;
+      padding: 6px 10px;
+      color: var(--muted, #a1a1aa);
+      font-size: 11.5px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      font-family: var(--font);
+    }
+
+    .starter-chip svg {
+      color: var(--muted, #71717a);
+      flex-shrink: 0;
+      transition: color 0.15s ease;
+    }
+
+    .starter-chip:hover {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.14);
+      color: var(--fg, #f4f4f5);
+    }
+
+    .starter-chip:hover svg {
+      color: #09F994;
+    }
+
     /* ”--€ Status Bar Footer ”----------------------------------------------€ */
+    /* ─── Status Bar Footer ─────────────────────────────────────────────── */
     .status-bar {
+      position: relative;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -872,20 +845,47 @@ export function getChatStyles(): string {
       color: var(--muted);
       flex-shrink: 0;
       height: 25px;
+      z-index: 10000;
+      overflow: visible;
+    }
+
+    .status-bar-left {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      flex: 1 1 auto;
+      overflow: visible;
+      z-index: 10001;
+    }
+
+    .status-bar-right {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      flex-shrink: 0;
+      overflow: visible;
+      z-index: 10001;
     }
 
     .token-capacity-widget {
+      position: relative;
       display: flex;
       align-items: center;
       gap: 6px;
-      cursor: help;
-      padding: 2px 4px;
+      cursor: pointer;
+      padding: 2px 6px;
       border-radius: 4px;
       transition: background 0.15s;
+      z-index: 10002;
+      overflow: visible;
     }
 
     .token-capacity-widget:hover {
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.08);
       color: var(--fg);
     }
 
@@ -909,6 +909,139 @@ export function getChatStyles(): string {
       background: linear-gradient(90deg, #06b6d4, #10b981);
       border-radius: 2px;
       transition: width 0.3s ease;
+    }
+
+    /* ─── Rich Context Window Hover Popover ─────────────────────────────────── */
+    .context-popover {
+      position: absolute;
+      bottom: calc(100% + 10px);
+      left: 0;
+      width: 250px;
+      background: #151518;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 12px;
+      padding: 13px 15px;
+      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.85), 0 4px 12px rgba(0, 0, 0, 0.5);
+      z-index: 99999999;
+      opacity: 0;
+      visibility: hidden;
+      transform: translateY(6px);
+      transition: opacity 0.18s cubic-bezier(0.16, 1, 0.3, 1), transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.18s;
+      pointer-events: none;
+      font-family: var(--font);
+    }
+
+    .token-capacity-widget:hover .context-popover,
+    .token-capacity-widget:focus .context-popover,
+    .token-capacity-widget:focus-within .context-popover,
+    .token-capacity-widget.active .context-popover {
+      opacity: 1;
+      visibility: visible;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+
+    .context-popover-top {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .context-ring-wrap {
+      position: relative;
+      width: 36px;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .context-ring-svg {
+      width: 36px;
+      height: 36px;
+    }
+
+    .context-ring-text {
+      position: absolute;
+      font-size: 10px;
+      font-weight: 700;
+      color: #f4f4f5;
+      text-align: center;
+      letter-spacing: -0.2px;
+    }
+
+    .context-popover-header-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .context-popover-title {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: #f4f4f5;
+      letter-spacing: -0.2px;
+      line-height: 1.2;
+    }
+
+    .context-popover-subtitle {
+      font-size: 11.5px;
+      font-weight: 500;
+      color: #a1a1aa;
+      letter-spacing: -0.1px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .context-popover-divider {
+      height: 1px;
+      background: rgba(255, 255, 255, 0.08);
+      margin: 11px 0 9px;
+    }
+
+    .context-popover-rows {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .context-popover-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+    }
+
+    .context-row-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #a1a1aa;
+      font-weight: 400;
+    }
+
+    .context-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      display: inline-block;
+      flex-shrink: 0;
+    }
+
+    .dot-used {
+      background: #e4e4e7;
+    }
+
+    .dot-avail {
+      background: #3f3f46;
+    }
+
+    .context-row-val {
+      font-weight: 600;
+      color: #f4f4f5;
+      font-variant-numeric: tabular-nums;
+      font-size: 12px;
     }
 
     /* Messages */
@@ -1973,56 +2106,98 @@ export function getChatStyles(): string {
     }
     .btn-ghost:hover { color: var(--fg); background: rgba(255,255,255,0.05); }
 
-    /* Lightbox Modal */
+    /* ─── Image Lightbox Modal Overlay ─────────────────────────────────────── */
     .image-lightbox-overlay {
       position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: rgba(0, 0, 0, 0.85);
-      z-index: 10000;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 16px;
-      backdrop-filter: blur(4px);
-    }
-    .image-lightbox-container {
-      position: relative;
-      max-width: 95vw;
-      max-height: 90vh;
+      inset: 0;
+      background: rgba(8, 8, 10, 0.88);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      z-index: 1000000;
       display: flex;
       flex-direction: column;
       align-items: center;
+      justify-content: center;
+      padding: 18px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     }
+
+    .image-lightbox-overlay.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .image-lightbox-header {
+      position: absolute;
+      top: 16px;
+      left: 20px;
+      right: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      z-index: 1000002;
+      pointer-events: auto;
+    }
+
+    .image-lightbox-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #f4f4f5;
+      background: rgba(20, 20, 24, 0.85);
+      padding: 5px 12px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      letter-spacing: -0.1px;
+    }
+
+    .image-lightbox-close {
+      background: rgba(20, 20, 24, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      color: #f4f4f5;
+      border-radius: 50%;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      cursor: pointer;
+      transition: background 0.15s ease, transform 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+      line-height: 1;
+    }
+
+    .image-lightbox-close:hover {
+      background: rgba(239, 68, 68, 0.25);
+      border-color: #ef4444;
+      color: #ef4444;
+      transform: scale(1.1);
+    }
+
+    .image-lightbox-container {
+      position: relative;
+      max-width: 92vw;
+      max-height: 85vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transform: scale(0.95);
+      transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+      cursor: zoom-out;
+    }
+
+    .image-lightbox-overlay.open .image-lightbox-container {
+      transform: scale(1);
+    }
+
     .image-lightbox-img {
       max-width: 100%;
       max-height: 85vh;
       object-fit: contain;
-      border-radius: 6px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8);
-      border: 1px solid rgba(255, 255, 255, 0.15);
-    }
-    .image-lightbox-close {
-      position: absolute;
-      top: -12px;
-      right: -12px;
-      background: rgba(30, 30, 30, 0.9);
-      color: #ffffff;
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      border-radius: 50%;
-      width: 28px;
-      height: 28px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      font-size: 16px;
-      transition: background 0.15s;
-    }
-    .image-lightbox-close:hover {
-      background: var(--red);
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.9), 0 4px 16px rgba(0, 0, 0, 0.5);
     }
 
     /* Prompt Queue */
@@ -2077,6 +2252,9 @@ export function getChatStyles(): string {
       flex-direction: column;
     }
     .slash-palette-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
       padding: 6px 10px;
       font-size: 10px;
       font-weight: 600;
@@ -2085,6 +2263,36 @@ export function getChatStyles(): string {
       letter-spacing: 0.5px;
       border-bottom: 1px solid var(--border);
       background: rgba(255, 255, 255, 0.02);
+    }
+    .palette-close-btn {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0 4px;
+      border-radius: 3px;
+      transition: all 0.12s ease;
+    }
+    .palette-close-btn:hover {
+      color: var(--fg);
+      background: rgba(255, 255, 255, 0.1);
+    }
+    .skills-card-close-btn {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      transition: all 0.12s ease;
+    }
+    .skills-card-close-btn:hover {
+      color: var(--fg);
+      background: rgba(255, 255, 255, 0.08);
     }
     .slash-palette-list {
       display: flex;
@@ -2132,46 +2340,71 @@ export function getChatStyles(): string {
       box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
     }
 
+    /* ─── Image Attachment Chips in Input Area ──────────────────────────────── */
     .image-attachments-container {
       display: flex;
       flex-wrap: wrap;
-      gap: 6px;
-      padding: 2px 0 6px 0;
+      gap: 8px;
+      padding: 4px 0 8px 0;
     }
+
     .image-attachment-chip {
       position: relative;
       display: inline-flex;
       align-items: center;
       background: rgba(255, 255, 255, 0.06);
-      border: 1px solid var(--border);
-      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
       overflow: hidden;
+      cursor: zoom-in;
+      transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
     }
+
+    .image-attachment-chip:hover {
+      transform: translateY(-1px);
+      border-color: rgba(9, 249, 148, 0.5);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    }
+
     .image-attachment-thumb {
-      width: 42px;
-      height: 42px;
+      width: 46px;
+      height: 46px;
       object-fit: cover;
       display: block;
+      transition: opacity 0.15s ease;
     }
+
+    .image-attachment-chip:hover .image-attachment-thumb {
+      opacity: 0.9;
+    }
+
     .image-attachment-remove {
       position: absolute;
-      top: 2px;
-      right: 2px;
-      background: rgba(0, 0, 0, 0.75);
+      top: 3px;
+      right: 3px;
+      background: rgba(0, 0, 0, 0.85);
       color: #ffffff;
-      border: none;
+      border: 1px solid rgba(255, 255, 255, 0.2);
       border-radius: 50%;
-      width: 15px;
-      height: 15px;
+      width: 17px;
+      height: 17px;
       display: flex;
       align-items: center;
       justify-content: center;
       font-size: 10px;
+      line-height: 1;
       cursor: pointer;
+      transition: background 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+      z-index: 3;
     }
+
     .image-attachment-remove:hover {
-      background: var(--red);
+      background: #ef4444;
+      border-color: #ef4444;
+      transform: scale(1.12);
     }
+
+
 
     #prompt-input {
       width: 100%;
@@ -2338,27 +2571,24 @@ export function getChatStyles(): string {
       gap: 8px;
     }
     .status-bar-left {
+      position: relative;
       display: flex;
       align-items: center;
       gap: 8px;
       min-width: 0;
       flex: 1 1 auto;
-      overflow: hidden;
+      overflow: visible;
     }
     .status-bar-right {
+      position: relative;
       display: flex;
       align-items: center;
       gap: 8px;
       min-width: 0;
       flex-shrink: 0;
+      overflow: visible;
     }
     #prompt-profile-label { max-width: 90px; overflow: hidden; text-overflow: ellipsis; }
-    .token-capacity-widget {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      cursor: pointer;
-    }
     .status-bar .prompt-pill-btn {
       padding: 1px 6px;
       font-size: 10px;

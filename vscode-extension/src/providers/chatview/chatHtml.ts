@@ -59,9 +59,12 @@ ${styles}
 
 
   <!-- Image Lightbox Modal Overlay -->
-  <div id="image-lightbox-overlay" class="image-lightbox-overlay" style="display:none;">
+  <div id="image-lightbox-overlay" class="image-lightbox-overlay" style="display:none;" role="dialog" aria-modal="true" aria-label="Image preview">
+    <div class="image-lightbox-header">
+      <span class="image-lightbox-title" id="image-lightbox-title">Image Preview</span>
+      <button class="image-lightbox-close" id="btn-lightbox-close" title="Close (Esc)">&times;</button>
+    </div>
     <div class="image-lightbox-container">
-      <button class="image-lightbox-close" id="btn-lightbox-close" title="Close preview">&times;</button>
       <img id="image-lightbox-img" class="image-lightbox-img" src="" alt="Image Preview">
     </div>
   </div>
@@ -92,18 +95,6 @@ ${styles}
           <polyline points="20 10 14 10 14 4"></polyline>
           <line x1="14" y1="10" x2="21" y2="3"></line>
           <line x1="3" y1="21" x2="10" y2="14"></line>
-        </svg>
-      </button>
-      <button class="top-bar-icon-btn" id="btn-top-new" title="New Session" data-action="new-session">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="12" y1="5" x2="12" y2="19"></line>
-          <line x1="5" y1="12" x2="19" y2="12"></line>
-        </svg>
-      </button>
-      <button class="top-bar-icon-btn" id="btn-top-settings" title="Settings & Hub" data-action="open-settings">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
         </svg>
       </button>
     </div>
@@ -207,101 +198,90 @@ ${styles}
 
   <!-- Chat Messages Feed -->
   <div class="chat-container" id="chat-messages" role="log" aria-label="Chat messages" aria-live="polite">
-    <!-- Clean Onboarding Zero State (No Emojis) -->
+    <!-- Clean Minimalist Zero State (Inspiration Matched) -->
     <div class="zero-state" id="zero-state">
-      <div class="zero-brand-wrap">
-        <img class="zero-icon" src="${sidebarIconUri}" width="38" height="38" alt="Andromity" />
+      <div class="zero-hero">
+        <div class="zero-brand-logo" aria-hidden="true">
+          <img class="zero-logo-img" src="${sidebarIconUri}" width="32" height="32" alt="Andromity" />
+        </div>
+        <div class="zero-statement-wrap">
+          <h1 class="zero-statement-main" id="zero-statement-main">Make it work.<br>Make it right.</h1>
+          <p class="zero-statement-sub" id="zero-statement-sub">Precision in every iteration.</p>
+        </div>
       </div>
-      <div class="zero-title">Andromity</div>
-      <div class="zero-subtitle" id="zero-greeting">What can I do for you?</div>
-
 
       <!-- Recent Sessions Section — skeleton until init_state -->
       <div class="recent-sessions-section" id="recent-sessions-section" style="display:flex;">
         <div class="recent-sessions-header">
           <div class="recent-header-left">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-            </svg>
-            <span>RECENT</span>
+            <span class="recent-header-label">Recent Sessions</span>
           </div>
-          <button class="recent-view-all-btn" data-action="view-all-sessions" title="View all sessions in drawer">
-            <span>View All</span>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="9 18 15 12 9 6"></polyline>
-            </svg>
-          </button>
+          <div class="recent-header-actions">
+            <button class="recent-header-btn" data-action="view-all-sessions" title="View all sessions in drawer">
+              <span>All</span>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+            </button>
+          </div>
         </div>
         <div class="recent-sessions-list" id="recent-sessions-list" aria-busy="true">
-          <div class="recent-session-card skeleton skeleton-card" style="height:48px;"></div>
-          <div class="recent-session-card skeleton skeleton-card" style="height:48px;"></div>
-          <div class="recent-session-card skeleton skeleton-card" style="height:48px; opacity:0.6;"></div>
+          <div class="recent-session-card skeleton skeleton-card" style="height:44px;"></div>
+          <div class="recent-session-card skeleton skeleton-card" style="height:44px;"></div>
+          <div class="recent-session-card skeleton skeleton-card" style="height:44px; opacity:0.6;"></div>
         </div>
       </div>
 
-      <div class="starter-cards">
-        <div class="starter-header">Quick Starters</div>
-        <div class="starter-card" data-action="send-starter" data-prompt="Explain the architecture of this project in detail" role="button" tabindex="0" aria-label="Explain architecture">
-          <svg class="starter-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <div class="minimal-starters-row">
+        <button class="starter-chip" data-action="send-starter" data-prompt="Explain the architecture of this project in detail" role="button" tabindex="0" aria-label="Explain architecture">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
             <polyline points="2 17 12 22 22 17"></polyline>
             <polyline points="2 12 12 17 22 12"></polyline>
           </svg>
-          <div class="starter-info">
-            <span class="starter-name">Explain Architecture</span>
-            <span class="starter-desc">Map dependencies and project design</span>
-          </div>
-        </div>
-        <div class="starter-card" data-action="send-starter" data-prompt="Analyze diagnostics and fix any syntax or type errors in the current file" role="button" tabindex="0" aria-label="Fix diagnostics & errors">
-          <svg class="starter-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <span>Architecture</span>
+        </button>
+        <button class="starter-chip" data-action="send-starter" data-prompt="Analyze diagnostics and fix any syntax or type errors in the current file" role="button" tabindex="0" aria-label="Fix diagnostics & errors">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
           </svg>
-          <div class="starter-info">
-            <span class="starter-name">Fix Diagnostics & Errors</span>
-            <span class="starter-desc">Inspect active errors and repair code</span>
-          </div>
-        </div>
-        <div class="starter-card" data-action="send-starter" data-prompt="Write comprehensive unit tests with edge cases for the active code" role="button" tabindex="0" aria-label="Generate unit tests">
-          <svg class="starter-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <span>Fix Errors</span>
+        </button>
+        <button class="starter-chip" data-action="send-starter" data-prompt="Write comprehensive unit tests with edge cases for the active code" role="button" tabindex="0" aria-label="Generate unit tests">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M9 3h6v3H9zM10 6v7.3a4 4 0 1 0 4 0V6"></path>
             <circle cx="12" cy="17" r="1.5" fill="currentColor"></circle>
           </svg>
-          <div class="starter-info">
-            <span class="starter-name">Generate Unit Tests</span>
-            <span class="starter-desc">Cover edge cases and critical paths</span>
-          </div>
-        </div>
-        <div class="starter-card" data-action="open-model-hub" role="button" tabindex="0" aria-label="Browse model catalog">
-          <svg class="starter-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <span>Unit Tests</span>
+        </button>
+        <button class="starter-chip" data-action="open-model-hub" role="button" tabindex="0" aria-label="Browse model catalog">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="3"></circle>
             <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
           </svg>
-          <div class="starter-info">
-            <span class="starter-name">Model Catalog</span>
-            <span class="starter-desc">Browse 396+ OpenRouter models</span>
-          </div>
-        </div>
+          <span>396+ Models</span>
+        </button>
       </div>
     </div>
   </div>
 
-  <!-- Interactive Modals Slot -->
   <div id="interactive-slot" style="padding: 0 10px;"></div>
 
-  <!-- Prompt Queue (messages waiting while agent runs) -->
   <div class="queue-container" id="queue-container" style="display:none;"></div>
 
-  <!-- Input Box (Modern Card Layout) -->
   <div class="input-section" role="region" aria-label="Chat input">
     <!-- Floating Slash Command Palette -->
     <div class="slash-palette" id="slash-palette" style="display:none;" role="listbox" aria-label="Slash commands">
-      <div class="slash-palette-header">Commands (Click or press Enter)</div>
+      <div class="slash-palette-header">
+        <span>Commands (Click or press Enter)</span>
+        <button class="palette-close-btn" id="btn-slash-close" title="Close (Esc)">&times;</button>
+      </div>
       <div class="slash-palette-list" id="slash-palette-list"></div>
     </div>
 
-    <!-- Floating Mention / Skills Palette -->
     <div class="slash-palette" id="mention-palette" style="display:none;" role="listbox" aria-label="Skills and tools">
-      <div class="slash-palette-header" style="color:#c084fc;">&#x26A1; Skills & Tools (Click to mention)</div>
+      <div class="slash-palette-header" style="color:#c084fc;">
+        <span>Skills & Tools (Click to mention)</span>
+        <button class="palette-close-btn" id="btn-mention-close" title="Close (Esc)">&times;</button>
+      </div>
       <div class="slash-palette-list" id="mention-palette-list"></div>
     </div>
 
@@ -364,11 +344,47 @@ ${styles}
         </svg>
         <span id="prompt-profile-label" class="skeleton skeleton-text" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
       </button>
-      <div class="token-capacity-widget" id="token-capacity-widget" title="Token Usage & Model Capacity">
+      <div class="token-capacity-widget" id="token-capacity-widget" tabindex="0" role="button" aria-label="Token Usage & Model Capacity">
         <svg class="token-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
         <span id="token-label" class="skeleton skeleton-text" style="min-width:56px;" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
         <div class="token-mini-track" id="token-mini-track">
           <div class="token-mini-bar" id="token-mini-bar" style="width: 0%;"></div>
+        </div>
+
+        <!-- Rich Context Window Popover Card -->
+        <div class="context-popover" id="context-popover">
+          <div class="context-popover-top">
+            <div class="context-ring-wrap">
+              <svg class="context-ring-svg" width="36" height="36" viewBox="0 0 36 36">
+                <circle class="context-ring-bg" cx="18" cy="18" r="14" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="3.5"></circle>
+                <circle class="context-ring-fill" id="context-ring-fill" cx="18" cy="18" r="14" fill="none" stroke="#e4e4e7" stroke-width="3.5" stroke-dasharray="87.96" stroke-dashoffset="87.96" stroke-linecap="round" transform="rotate(-90 18 18)"></circle>
+              </svg>
+              <span class="context-ring-text" id="context-popover-pct">0%</span>
+            </div>
+            <div class="context-popover-header-info">
+              <div class="context-popover-title">Context window</div>
+              <div class="context-popover-subtitle" id="context-popover-ratio">0 / 200,000</div>
+            </div>
+          </div>
+
+          <div class="context-popover-divider"></div>
+
+          <div class="context-popover-rows">
+            <div class="context-popover-row">
+              <div class="context-row-label">
+                <span class="context-dot dot-used"></span>
+                <span>Used tokens</span>
+              </div>
+              <span class="context-row-val" id="context-popover-used">0</span>
+            </div>
+            <div class="context-popover-row">
+              <div class="context-row-label">
+                <span class="context-dot dot-avail"></span>
+                <span>Available</span>
+              </div>
+              <span class="context-row-val" id="context-popover-avail">200,000</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>

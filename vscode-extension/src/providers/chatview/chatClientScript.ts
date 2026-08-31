@@ -88,24 +88,28 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       { cmd: '/cron', desc: 'Manage scheduled background cron jobs', action: 'cron' },
     ];
 
-    const DEVELOPER_GREETINGS = [
-      "What can I do for you?",
-      "What can I build for you today?",
-      "Are we ready? Let's write some code.",
-      "Ready to code. What's on your mind?",
-      "Let's inspect, build, and optimize.",
-      "How can I help you accelerate your project?",
-      "Ready when you are. What are we coding?",
-      "Diagnostics, features, or tests? I'm on it.",
-      "Ready to dive into the codebase.",
-      "Let's turn your ideas into working code."
+    const DEVELOPER_STATEMENTS = [
+      { main: "Make it work.<br>Make it right.", sub: "First functional, then optimal." },
+      { main: "Think twice.<br>Code once.", sub: "Clarity precedes execution." },
+      { main: "First solve the problem.<br>Then write the code.", sub: "Understand deeply before building." },
+      { main: "Ship fast.<br>Break nothing.", sub: "Precision in every iteration." },
+      { main: "Simplicity is prerequisite<br>for reliability.", sub: "Keep architectures clean & focused." },
+      { main: "Leave the code<br>better than you found it.", sub: "Continuous craftsmanship." },
+      { main: "Talk is cheap.<br>Show me the code.", sub: "Let working software speak." },
+      { main: "Stay curious.<br>Build fearlessly.", sub: "What are we engineering today?" },
+      { main: "Less code.<br>Fewer bugs.", sub: "Elegance through minimalism." },
+      { main: "Design is how it works,<br>not just how it looks.", sub: "Form follows function." },
+      { main: "Premature optimization<br>is the root of all evil.", sub: "Measure before you tune." },
+      { main: "Code is read more<br>than it is written.", sub: "Optimize for readability." }
     ];
 
-    function setRandomGreeting() {
-      const el = document.getElementById('zero-greeting');
-      if (el) {
-        const randomIdx = Math.floor(Math.random() * DEVELOPER_GREETINGS.length);
-        el.textContent = DEVELOPER_GREETINGS[randomIdx];
+    function setRandomStatement() {
+      const mainEl = document.getElementById('zero-statement-main');
+      const subEl = document.getElementById('zero-statement-sub');
+      if (mainEl && subEl) {
+        const item = DEVELOPER_STATEMENTS[Math.floor(Math.random() * DEVELOPER_STATEMENTS.length)];
+        mainEl.innerHTML = item.main;
+        subEl.textContent = item.sub;
       }
     }
 
@@ -217,14 +221,55 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         costLabel.textContent = cost > 0 ? ('$' + cost.toFixed(4) + ' USD') : '$0.0000 USD';
       }
 
+      // Update Rich Context Popover Card
+      const popoverPct = document.getElementById('context-popover-pct');
+      if (popoverPct) {
+        popoverPct.textContent = Math.round(pct) + '%';
+      }
+
+      const ringFill = document.getElementById('context-ring-fill');
+      if (ringFill) {
+        const circum = 87.96;
+        const offset = circum * (1 - Math.min(100, Math.max(0, pct)) / 100);
+        ringFill.style.strokeDashoffset = offset.toFixed(2);
+        if (pct > 85) ringFill.style.stroke = '#ef4444';
+        else if (pct > 65) ringFill.style.stroke = '#f59e0b';
+        else ringFill.style.stroke = '#e4e4e7';
+      }
+
+      const popoverRatio = document.getElementById('context-popover-ratio');
+      if (popoverRatio) {
+        popoverRatio.textContent = Number(contextTok).toLocaleString() + ' / ' + Number(capacity).toLocaleString();
+      }
+
+      const popoverUsed = document.getElementById('context-popover-used');
+      if (popoverUsed) {
+        popoverUsed.textContent = Number(contextTok).toLocaleString();
+      }
+
+      const popoverAvail = document.getElementById('context-popover-avail');
+      if (popoverAvail) {
+        popoverAvail.textContent = Number(Math.max(0, capacity - contextTok)).toLocaleString();
+      }
+
       const widget = document.getElementById('token-capacity-widget');
       if (widget) {
-        const totalLabel = totalTok > 0 ? ('Session total billed: ' + Number(totalTok).toLocaleString() + ' tok  |  ') : '';
-        widget.title = [
-          'Context window: ' + Number(contextTok).toLocaleString() + ' / ' + Number(capacity).toLocaleString() + ' (' + capStr + ' limit, ' + pct.toFixed(1) + '% used)',
-          totalLabel + 'Estimated Cost: $' + cost.toFixed(4) + ' USD'
-        ].join('\\n');
+        widget.removeAttribute('title');
       }
+    }
+
+    // Context Window Popover click toggle support
+    const tokenWidgetEl = document.getElementById('token-capacity-widget');
+    if (tokenWidgetEl) {
+      tokenWidgetEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        tokenWidgetEl.classList.toggle('active');
+      });
+      document.addEventListener('click', (e) => {
+        if (!tokenWidgetEl.contains(e.target)) {
+          tokenWidgetEl.classList.remove('active');
+        }
+      });
     }
 
     function hideZeroState() {
@@ -236,7 +281,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           chatContainer.appendChild(zeroState);
         }
         zeroState.style.display = 'flex';
-        setRandomGreeting();
+        setRandomStatement();
       }
     }
 
@@ -687,6 +732,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       cronsFlyout.style.display = 'none';
     });
 
+    document.getElementById('btn-slash-close')?.addEventListener('click', () => {
+      hideSlashPalette();
+    });
+
+    document.getElementById('btn-mention-close')?.addEventListener('click', () => {
+      hideMentionPalette();
+    });
+
     document.getElementById('btn-tracker-open')?.addEventListener('click', () => {
       vscode.postMessage({ type: 'open_plan_tab' });
     });
@@ -1073,6 +1126,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'open-skills-settings':
           vscode.postMessage({ type: 'open_skills_settings' });
           break;
+        case 'close-skills-card': {
+          const card = target.closest('.skills-card');
+          if (card) {
+            card.remove();
+          }
+          break;
+        }
         case 'open-settings':
           vscode.postMessage({ type: 'open_settings' });
           break;
@@ -1241,7 +1301,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
       container.style.display = 'flex';
       container.innerHTML = attachedImages.map((imgUri, idx) => {
-        return '<div class="image-attachment-chip">' +
+        const title = 'Attachment ' + (idx + 1) + (attachedImages.length > 1 ? (' of ' + attachedImages.length) : '');
+        return '<div class="image-attachment-chip" data-action="preview-image" data-src="' + escapeHtml(imgUri) + '" data-title="' + escapeHtml(title) + '" title="Click to preview image">' +
           '<img class="image-attachment-thumb" src="' + imgUri + '" alt="Attachment ' + (idx + 1) + '" />' +
           '<button class="image-attachment-remove" data-action="remove-image-attachment" data-idx="' + idx + '" title="Remove image">&#x2715;</button>' +
         '</div>';
@@ -1406,7 +1467,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>' +
             '<span>Agent Skills (' + allSkills.length + ' active)</span>' +
           '</div>' +
-          '<button class="prompt-pill-btn" data-action="open-skills-settings" style="font-size:10.5px;">Browse Hub</button>' +
+          '<div style="display:flex; align-items:center; gap:6px;">' +
+            '<button class="prompt-pill-btn" data-action="open-skills-settings" style="font-size:10.5px;">Browse Hub</button>' +
+            '<button class="skills-card-close-btn" data-action="close-skills-card" title="Close skills panel">&times;</button>' +
+          '</div>' +
         '</div>' +
         '<div style="display:flex; flex-direction:column; gap:2px; max-height:220px; overflow-y:auto;">' +
           skillsListHtml +
@@ -2518,7 +2582,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
 
         case 'session_compacted':
-          appendSystemNote('&#x26A1; Context compacted: conversation history compressed to save tokens.');
+          appendSystemNote('Context compacted: conversation history compressed to save tokens.');
           break;
 
         case 'turn_undone':
@@ -2875,21 +2939,30 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         .replace(/'/g, '&#39;');
     }
 
-    window.openImageLightbox = function(uri) {
+    window.openImageLightbox = function(uri, title) {
       const overlay = document.getElementById('image-lightbox-overlay');
       const img = document.getElementById('image-lightbox-img');
+      const titleEl = document.getElementById('image-lightbox-title');
       if (overlay && img && uri) {
         img.src = uri;
+        if (titleEl) titleEl.textContent = title || 'Image Preview';
         overlay.style.display = 'flex';
+        void overlay.offsetWidth;
+        overlay.classList.add('open');
       }
     };
 
     window.closeImageLightbox = function() {
       const overlay = document.getElementById('image-lightbox-overlay');
       if (overlay) {
-        overlay.style.display = 'none';
-        const img = document.getElementById('image-lightbox-img');
-        if (img) img.src = '';
+        overlay.classList.remove('open');
+        setTimeout(function() {
+          if (!overlay.classList.contains('open')) {
+            overlay.style.display = 'none';
+            const img = document.getElementById('image-lightbox-img');
+            if (img) img.src = '';
+          }
+        }, 200);
       }
     };
 
@@ -2901,7 +2974,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     document.addEventListener('click', function(e) {
       const closeLb = e.target.closest('#btn-lightbox-close');
-      const overlayLb = e.target === document.getElementById('image-lightbox-overlay');
+      const overlayLb = e.target === document.getElementById('image-lightbox-overlay') || (e.target.classList && e.target.classList.contains('image-lightbox-container'));
       if (closeLb || overlayLb) {
         window.closeImageLightbox();
         return;
@@ -2910,6 +2983,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (rmImg) {
         const idx = parseInt(rmImg.getAttribute('data-idx') || '0', 10);
         removeImageAttachment(idx);
+        return;
+      }
+      const previewImg = e.target.closest('[data-action="preview-image"]');
+      if (previewImg && !e.target.closest('[data-action="remove-image-attachment"]')) {
+        const src = previewImg.getAttribute('data-src') || (previewImg.querySelector('img') ? previewImg.querySelector('img').src : '');
+        const title = previewImg.getAttribute('data-title') || 'Image Preview';
+        if (src) {
+          window.openImageLightbox(src, title);
+        }
+        return;
+      }
+      const chatImg = e.target.closest('.message img, .assistant-text img, .user-text img');
+      if (chatImg && chatImg.src && !chatImg.closest('button') && !chatImg.classList.contains('avatar-img') && !chatImg.classList.contains('token-icon')) {
+        window.openImageLightbox(chatImg.src, chatImg.alt || 'Image Preview');
         return;
       }
       const setupCheck = e.target.closest('[data-action="run-setup-check"]');
@@ -2972,7 +3059,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       scheduleFocus();
     };
 
-    setRandomGreeting();
+    setRandomStatement();
     vscode.postMessage({ type: 'ready' });
     vscode.postMessage({ type: 'webview_ready' });
     // Also request host to transfer focus into webview (required on first show)
