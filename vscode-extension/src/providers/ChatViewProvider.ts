@@ -51,7 +51,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._disposeRpcEvents();
     this._rpcClient = client;
     this._boundClient = client;
-    this._diffManager = new DiffManager(client, this._context!);
+    // Reuse the DiffManager across reconnects — constructing a new one for
+    // every connection registers another TextDocumentContentProvider for the
+    // same scheme and leaks the old one.
+    if (!this._diffManager) {
+      this._diffManager = new DiffManager(client, this._context!);
+    } else {
+      this._diffManager.setRpcClient(client);
+    }
     this._bindRpcEvents();
     this._postToWebview({ type: "backend_ready" });
     this._loadInitialConfig(true);

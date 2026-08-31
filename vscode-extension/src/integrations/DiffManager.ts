@@ -9,7 +9,12 @@ export const HEAD_SCHEME = "andromity-head";
  * Used as the "left" side of vscode.diff editors (GitLens-style).
  */
 export class GitRefContentProvider implements vscode.TextDocumentContentProvider {
-  constructor(private readonly _rpcClient: RpcClient) {}
+  constructor(private _rpcClient: RpcClient) {}
+
+  /** Swap the daemon client without re-registering the provider (reconnect-safe). */
+  public setRpcClient(rpcClient: RpcClient): void {
+    this._rpcClient = rpcClient;
+  }
 
   provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
     // uri: andromity-head:/abs/path/to/file?ref=HEAD#projectPath
@@ -37,15 +42,24 @@ interface GitStatusInfo {
 
 export class DiffManager {
   private _rpcClient: RpcClient;
+  private _provider: GitRefContentProvider;
   private _providerRegistration: vscode.Disposable;
 
   constructor(rpcClient: RpcClient, context: vscode.ExtensionContext) {
     this._rpcClient = rpcClient;
+    this._provider = new GitRefContentProvider(rpcClient);
     this._providerRegistration = vscode.workspace.registerTextDocumentContentProvider(
       HEAD_SCHEME,
-      new GitRefContentProvider(rpcClient)
+      this._provider
     );
     context.subscriptions.push(this._providerRegistration);
+  }
+
+  /** Update to a freshly connected daemon client without registering a new
+   *  content provider (each registration leaks — old ones are never disposed). */
+  public setRpcClient(rpcClient: RpcClient): void {
+    this._rpcClient = rpcClient;
+    this._provider.setRpcClient(rpcClient);
   }
 
   private _workspaceFolder(): vscode.WorkspaceFolder | undefined {
