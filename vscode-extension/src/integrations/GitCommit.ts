@@ -60,7 +60,8 @@ export async function generateCommitMessage(rpcClient: RpcClient | null): Promis
           return;
         }
 
-        const prompt = `Write a concise conventional commit message (type(scope): subject) for the following git diff. Return ONLY the commit message, no explanation, no quotes, max 72 chars subject, body optional bullet points if needed:\n\n${diff.slice(0, 6000)}`;
+        const prompt = 
+        `Write a concise conventional commit message for git (type(scope): subject) for the following git diff. Return ONLY the commit message human readable explanation if needed imp things and major things included and what files are changed and in which directory, no quotes, max 300 chars subject, body optional bullet points if needed:\n\n${diff.slice(0, 6000)}`;
 
         // Use daemon quickPrompt (single LLM call) — added in rpc_handler.py: rpc_agent_quickPrompt
         let commitMessage = "";

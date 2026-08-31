@@ -33,13 +33,25 @@
     "autonomous"
   ],
   "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
+    "icons": {
+      "andromity-logo": {
+        "description": "Andromity Logo",
+        "default": {
+          "fontPath": "media/andromity-font.woff",
+          "fontCharacter": "\\E001"
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {
           "id": "andromity-sidebar",
           "title": "Andromity",
-          "icon": "media/icon.svg"
+          "icon": "media/sidebar-icon.svg"
         }
       ]
     },
@@ -58,7 +70,10 @@
         "command": "andromity.openChat",
         "title": "Andromity: Open Chat",
         "category": "Andromity",
-        "icon": "$(sparkle)"
+        "icon": {
+          "light": "media/sidebar-icon.svg",
+          "dark": "media/sidebar-icon.svg"
+        }
       },
       {
         "command": "andromity.newSession",
@@ -156,7 +171,10 @@
         "command": "andromity.openModelHub",
         "title": "Andromity: Open Model Hub (396+ Models)",
         "category": "Andromity",
-        "icon": "$(sparkle)"
+        "icon": {
+          "light": "media/sidebar-icon.svg",
+          "dark": "media/sidebar-icon.svg"
+        }
       },
       {
         "command": "andromity.openSettings",
@@ -174,7 +192,10 @@
         "command": "andromity.generateCommitMessage",
         "title": "Generate Commit Message with Andromity",
         "category": "Andromity",
-        "icon": "$(sparkle)"
+        "icon": {
+          "light": "media/sidebar-icon.svg",
+          "dark": "media/sidebar-icon.svg"
+        }
       },
       {
         "command": "andromity.explainTerminalSelection",
@@ -358,7 +379,15 @@
         "andromity.defaultProvider": {
           "type": "string",
           "default": "anthropic",
-          "enum": ["anthropic", "openai", "google", "groq", "openrouter", "ollama", "nvidia"],
+          "enum": [
+            "anthropic",
+            "openai",
+            "google",
+            "groq",
+            "openrouter",
+            "ollama",
+            "nvidia"
+          ],
           "description": "Default AI provider."
         },
         "andromity.defaultModel": {
@@ -369,19 +398,34 @@
         "andromity.defaultProfile": {
           "type": "string",
           "default": "builder",
-          "enum": ["builder", "coder", "reviewer", "planner"],
+          "enum": [
+            "builder",
+            "coder",
+            "reviewer",
+            "planner"
+          ],
           "description": "Default Agent Profile: Builder (plans & implements), Coder (direct act), Reviewer (audit), Planner (plans only)."
         },
         "andromity.permissionMode": {
           "type": "string",
           "default": "safe",
-          "enum": ["safe", "trust", "full", "yolo"],
+          "enum": [
+            "safe",
+            "trust",
+            "full",
+            "yolo"
+          ],
           "description": "Trust Permission Mode: SAFE (review all), TRUST (auto file/shell in trusted dirs), FULL (auto-run with logs), YOLO (silent autonomous)."
         },
         "andromity.reasoningEffort": {
           "type": "string",
           "default": "medium",
-          "enum": ["off", "low", "medium", "high"],
+          "enum": [
+            "off",
+            "low",
+            "medium",
+            "high"
+          ],
           "description": "Reasoning/Thinking effort for thinking models."
         },
         "andromity.soundNotifications": {
@@ -411,6 +455,12 @@
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^2.24.0",
     "esbuild": "^0.20.0",
+    "svg2ttf": "^6.1.0",
+    "svgicons2svgfont": "^16.0.0",
+    "ttf2woff": "^3.0.0",
     "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "marked": "^18.0.11"
   }
 }

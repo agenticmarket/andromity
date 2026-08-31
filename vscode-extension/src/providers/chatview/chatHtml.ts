@@ -38,7 +38,8 @@ export function getNonce(): string {
 export function getChatViewHtml(webview: vscode.Webview, extensionUri: vscode.Uri, state: ChatViewState): string {
   const nonce = getNonce();
   const doneAudioUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "done.wav"));
-  const sidebarIconUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "sidebar-icon.png"));
+  const sidebarIconUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "sidebar-icon.svg"));
+  const markedScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "marked.min.js"));
   const styles = getChatStyles();
   const clientScript = getChatClientScript(sidebarIconUri.toString(), state);
 
@@ -53,7 +54,7 @@ export function getChatViewHtml(webview: vscode.Webview, extensionUri: vscode.Ur
 ${styles}
   </style>
 </head>
-<body>
+<body class="loading">
   <audio id="audio-done" preload="auto" src="${doneAudioUri}"></audio>
 
 
@@ -72,7 +73,7 @@ ${styles}
         <svg class="session-badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
         </svg>
-        <span class="session-badge-text" id="active-session-name">Main Session</span>
+        <span class="session-badge-text skeleton skeleton-session" id="active-session-name" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
         <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="6 9 12 15 18 9"></polyline>
         </svg>
@@ -213,13 +214,10 @@ ${styles}
       </div>
       <div class="zero-title">Andromity</div>
       <div class="zero-subtitle" id="zero-greeting">What can I do for you?</div>
-      <div class="zero-context-pill">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
-        <span id="zero-workspace-label">Workspace Ready</span>
-      </div>
 
-      <!-- Recent Sessions Section (rendered dynamically when past sessions exist) -->
-      <div class="recent-sessions-section" id="recent-sessions-section" style="display:none;">
+
+      <!-- Recent Sessions Section — skeleton until init_state -->
+      <div class="recent-sessions-section" id="recent-sessions-section" style="display:flex;">
         <div class="recent-sessions-header">
           <div class="recent-header-left">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -234,7 +232,11 @@ ${styles}
             </svg>
           </button>
         </div>
-        <div class="recent-sessions-list" id="recent-sessions-list"></div>
+        <div class="recent-sessions-list" id="recent-sessions-list" aria-busy="true">
+          <div class="recent-session-card skeleton skeleton-card" style="height:48px;"></div>
+          <div class="recent-session-card skeleton skeleton-card" style="height:48px;"></div>
+          <div class="recent-session-card skeleton skeleton-card" style="height:48px; opacity:0.6;"></div>
+        </div>
       </div>
 
       <div class="starter-cards">
@@ -305,7 +307,7 @@ ${styles}
 
     <div class="prompt-box">
       <div class="image-attachments-container" id="image-attachments-container" style="display:none;"></div>
-      <textarea id="prompt-input" placeholder="Ask Andromity or type / for commands, @ for skills..." rows="1" aria-label="Ask Andromity or type slash for commands, @ for skills"></textarea>
+      <textarea id="prompt-input" autofocus placeholder="Ask Andromity or type / for commands, @ for skills..." rows="1" aria-label="Ask Andromity or type slash for commands, @ for skills"></textarea>
       <div class="prompt-box-footer">
         <div class="prompt-left-controls">
           <button class="prompt-icon-btn" id="btn-prompt-plus" title="Browse 396+ OpenRouter Models" data-action="open-model-hub" aria-label="Open model catalog">
@@ -319,7 +321,7 @@ ${styles}
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
             </svg>
-            <span id="prompt-mode-label">${(state.currentMode || 'safe').toUpperCase()}</span>
+            <span id="prompt-mode-label" class="skeleton skeleton-text" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
           </button>
 
         </div>
@@ -330,13 +332,13 @@ ${styles}
               <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
               <circle cx="12" cy="12" r="3"></circle>
             </svg>
-            <span id="prompt-model-label">${formatModelDisplayName(state.currentModel, state.models)}</span>
+            <span id="prompt-model-label" class="skeleton skeleton-text" style="min-width:92px;" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
           </button>
           <button class="prompt-pill-btn" id="btn-prompt-reasoning" title="Reasoning / Thinking Effort (Click to switch)" aria-label="Reasoning effort">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
             </svg>
-            <span id="prompt-reasoning-label">${(state.currentReasoning || 'medium').toUpperCase()}</span>
+            <span id="prompt-reasoning-label" class="skeleton skeleton-text" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
           </button>
           <button class="codex-cancel-btn" id="btn-cancel" title="Stop Generation" style="display:none;" aria-label="Cancel agent turn">
             <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>
@@ -360,22 +362,23 @@ ${styles}
           <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
           <circle cx="12" cy="7" r="4"></circle>
         </svg>
-        <span id="prompt-profile-label">${(state.currentProfile || 'builder').toUpperCase()}</span>
+        <span id="prompt-profile-label" class="skeleton skeleton-text" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
       </button>
       <div class="token-capacity-widget" id="token-capacity-widget" title="Token Usage & Model Capacity">
         <svg class="token-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-        <span id="token-label">0 tokens</span>
+        <span id="token-label" class="skeleton skeleton-text" style="min-width:56px;" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
         <div class="token-mini-track" id="token-mini-track">
           <div class="token-mini-bar" id="token-mini-bar" style="width: 0%;"></div>
         </div>
       </div>
     </div>
     <div class="status-bar-right">
-      <span id="cost-label">$0.0000 USD</span>
+      <span id="cost-label" class="skeleton skeleton-text" style="min-width:64px;" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
     </div>
   </div>
 
 
+  <script nonce="${nonce}" src="${markedScriptUri}"></script>
   <script nonce="${nonce}">
 ${clientScript}
   </script>

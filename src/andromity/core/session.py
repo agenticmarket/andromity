@@ -322,6 +322,15 @@ class Session:
         session.messages = data["messages"]
         session.token_total = data.get("token_total", 0)
         session.context_tokens = data.get("context_tokens", 0)
+        if session.context_tokens == 0 and session.messages:
+            try:
+                from andromity.core.agent import _estimate_tokens
+                session.context_tokens = _estimate_tokens(session.messages)
+            except Exception:
+                session.context_tokens = sum(
+                    len(str(m.get("content", ""))) // 4 + len(str(m.get("thinking", ""))) // 4
+                    for m in session.messages
+                )
         session.cost_usd = data.get("cost_usd", 0.0)
         session.usage_breakdown = data.get("usage_breakdown", {
             "prompt_tokens": 0, "completion_tokens": 0,

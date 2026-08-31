@@ -16,8 +16,12 @@ let pythonBridge: PythonBridge | null = null;
 let statusBarItem: vscode.StatusBarItem;
 let currentPlan: any = null;
 
+let lastBoundStatusBarClient: RpcClient | null = null;
+
 /** Reflects daemon turn state in the status bar (idle / running / approval needed). */
 function bindStatusBarEvents(client: RpcClient) {
+  if (lastBoundStatusBarClient === client) return;
+  lastBoundStatusBarClient = client;
   client.on("agent/textDelta", () => {
     statusBarItem.text = "$(sync~spin) Andromity";
   });
@@ -31,7 +35,7 @@ function bindStatusBarEvents(client: RpcClient) {
     statusBarItem.text = "$(question) Andromity";
   });
   const idle = () => {
-    statusBarItem.text = "$(sparkle) Andromity";
+    statusBarItem.text = "$(andromity-logo) Andromity";
   };
   client.on("agent/done", idle);
   client.on("agent/cancelled", idle);
@@ -54,7 +58,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // 2. Initialize Status Bar Item
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.command = "andromity.openChat";
-  statusBarItem.text = "$(sparkle) Andromity";
+  statusBarItem.text = "$(andromity-logo) Andromity";
   statusBarItem.tooltip = "Andromity Coding Agent";
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
@@ -340,8 +344,11 @@ export async function activate(context: vscode.ExtensionContext) {
       chatProvider.toggleSessionsDrawer();
     }),
 
-    vscode.commands.registerCommand("andromity.openPlanTab", (plan?: any) => {
-      const planToShow = plan || currentPlan || chatProvider.getCurrentPlan();
+    vscode.commands.registerCommand("andromity.openPlanTab", async (plan?: any) => {
+      let planToShow = plan || currentPlan || chatProvider.getCurrentPlan();
+      if (!planToShow) {
+        planToShow = await loadPlanFromWorkspace();
+      }
       PlanEditorPanel.createOrShow(
         context.extensionUri,
         planToShow,
@@ -500,14 +507,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("andromity.restartServer", async () => {
       if (pythonBridge) {
         try {
-          const rpcClient = await pythonBridge.restart();
-          chatProvider.setRpcClient(rpcClient);
-          planProvider.setRpcClient(rpcClient);
-          sessionTreeProvider.setRpcClient(rpcClient);
-          cronTreeProvider.setRpcClient(rpcClient);
-          changesTreeProvider.setRpcClient(rpcClient);
-          SettingsPanel.currentPanel?.setRpcClient(rpcClient);
-          bindStatusBarEvents(rpcClient);
+          await pythonBridge.restart();
           vscode.window.showInformationMessage("Andromity engine restarted successfully.");
         } catch (e: any) {
           vscode.window.showErrorMessage(`Failed to restart engine: ${e.message}`);
@@ -516,7 +516,11 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("andromity.generateCommitMessage", async () => {
-      await generateCommitMessage(pythonBridge?.getClient() || null);
+      let client = pythonBridge?.getClient() || null;
+      if (!client && pythonBridge) {
+        client = await pythonBridge.waitForClient(5000);
+      }
+      await generateCommitMessage(client);
     }),
 
     vscode.commands.registerCommand("andromity.explainTerminalSelection", async () => {
@@ -532,9 +536,51 @@ export async function activate(context: vscode.ExtensionContext) {
   );
 }
 
+async function loadPlanFromWorkspace(): Promise<any | null> {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) return null;
+  const rootUri = folders[0].uri;
+
+  // 1. Try .andromity/plan.json
+  try {
+    const jsonUri = vscode.Uri.joinPath(rootUri, ".andromity", "plan.json");
+    const bytes = await vscode.workspace.fs.readFile(jsonUri);
+    const text = new TextDecoder().decode(bytes);
+    const parsed = JSON.parse(text);
+    if (parsed) {
+      try {
+        const todoUri = vscode.Uri.joinPath(rootUri, ".andromity", "todo.json");
+        const todoBytes = await vscode.workspace.fs.readFile(todoUri);
+        const todoParsed = JSON.parse(new TextDecoder().decode(todoBytes));
+        if (todoParsed && Array.isArray(todoParsed.items)) {
+          parsed.steps = todoParsed.items;
+        }
+      } catch {}
+      return parsed;
+    }
+  } catch {}
+
+  // 2. Try .andromity/PLAN.md
+  try {
+    const mdUri = vscode.Uri.joinPath(rootUri, ".andromity", "PLAN.md");
+    const bytes = await vscode.workspace.fs.readFile(mdUri);
+    const text = new TextDecoder().decode(bytes);
+    if (text) {
+      return {
+        title: "Implementation Plan",
+        body: text,
+        status: "approved",
+      };
+    }
+  } catch {}
+
+  return null;
+}
+
 export function deactivate() {
   if (pythonBridge) {
     pythonBridge.dispose();
     pythonBridge = null;
   }
 }
+

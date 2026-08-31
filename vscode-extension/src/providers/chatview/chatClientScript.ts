@@ -33,6 +33,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const promptInput = document.getElementById('prompt-input');
     const sendBtn = document.getElementById('btn-send');
     const cancelBtn = document.getElementById('btn-cancel');
+    const CANCEL_BTN_STOP_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>';
     const interactiveSlot = document.getElementById('interactive-slot');
     const activeModelName = document.getElementById('active-model-name');
     const activeModeLabel = document.getElementById('active-mode-label');
@@ -108,43 +109,109 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     }
 
-    function formatTokenCount(tokens) {
-      if (!tokens || tokens === 0) return '0 tokens';
-      if (tokens < 1000) return tokens + ' tokens';
-      if (tokens < 1000000) {
-        const k = (tokens / 1000).toFixed(tokens < 10000 ? 1 : 0);
-        return k + 'k tokens';
+    function formatTokCompact(n) {
+      if (!n || n <= 0) return '0';
+      if (n >= 1000000) {
+        var val = n / 1000000;
+        return (val % 1 !== 0 && val < 10) ? val.toFixed(1) + 'M' : Math.round(val) + 'M';
+      } else if (n >= 1000) {
+        var val = n / 1000;
+        return (val % 1 !== 0 && val < 10) ? val.toFixed(1) + 'K' : Math.round(val) + 'K';
       }
-      const m = (tokens / 1000000).toFixed(1);
-      return m + 'M tokens';
+      return String(n);
+    }
+
+    function formatTokenCount(tokens) {
+      return formatTokCompact(tokens) + ' tokens';
+    }
+
+    function parseContextToTokens(ctx) {
+      if (!ctx) return 0;
+      if (typeof ctx === 'number') return ctx;
+      const s = String(ctx).trim();
+      if (/^\\d+$/.test(s)) return parseInt(s, 10);
+      const m = s.match(/^([\\d.]+)\\s*([KMG])?$/i);
+      if (!m) return 0;
+      const num = parseFloat(m[1]);
+      const suf = (m[2] || '').toUpperCase();
+      const mult = suf === 'K' ? 1000 : suf === 'M' ? 1000000 : suf === 'G' ? 1000000000 : 1;
+      if (suf === 'K' && [4,8,16,32,64,128,200].includes(Math.round(num))) {
+        const map = {4:4096,8:8192,16:16384,32:32768,64:65536,128:131072,200:200000};
+        if (map[Math.round(num)] && s.toUpperCase().endsWith('K')) return map[Math.round(num)];
+      }
+      if (suf === 'M' && Math.round(num) === 1) return 1048576;
+      return Math.round(num * mult);
     }
 
     function updateTokenDisplay(sessionOrUsage) {
-      const tokens = (sessionOrUsage && (sessionOrUsage.context_tokens || sessionOrUsage.token_total || (sessionOrUsage.usage && sessionOrUsage.usage.total_tokens))) || 0;
-      const cost = (sessionOrUsage && (typeof sessionOrUsage.cost_usd === 'number' ? sessionOrUsage.cost_usd : 0)) || 0;
+      // TUI parity:
+      // Status bar displays the latest request input size (self.session.context_tokens)
+      // formatted as: "{tok_str}/{ctx_k} tok" (e.g. "7.2K/1.3M tok" or "5.3K/1.3M tok").
+      // Cumulative billed usage (token_total) is displayed in the hover tooltip.
+      let contextTok = 0;
+      let totalTok = 0;
+      let cost = 0;
 
-      let capacity = 200000;
-      const matched = allModels.find(m => m.id === currentModel);
-      if (matched && matched.context_limit) {
-        capacity = matched.context_limit;
-      } else if (currentModel.includes('gemini')) {
-        capacity = 1000000;
-      } else if (currentModel.includes('gpt-4o') || currentModel.includes('deepseek')) {
-        capacity = 128000;
+      if (sessionOrUsage) {
+        if (typeof sessionOrUsage.context_tokens === 'number') {
+          contextTok = sessionOrUsage.context_tokens;
+        } else if (sessionOrUsage.usage && typeof sessionOrUsage.usage.prompt_tokens === 'number') {
+          contextTok = sessionOrUsage.usage.prompt_tokens;
+        }
+        if (typeof sessionOrUsage.token_total === 'number') {
+          totalTok = sessionOrUsage.token_total;
+        } else if (sessionOrUsage.usage && typeof sessionOrUsage.usage.total_tokens === 'number') {
+          totalTok = sessionOrUsage.usage.total_tokens;
+        }
+        if (typeof sessionOrUsage.cost_usd === 'number') {
+          cost = sessionOrUsage.cost_usd;
+        }
       }
-      const formattedCap = formatTokenCount(capacity);
 
-      const pct = Math.min(100, Math.max(0, (tokens / capacity) * 100));
+      let capacity = 0;
+      // Match active model context limit
+      let matched = null;
+      if (currentModel) {
+        const cur = String(currentModel);
+        matched = allModels.find(m => m.id === cur)
+          || allModels.find(m => cur.endsWith('/' + m.id) || cur.endsWith(m.id))
+          || allModels.find(m => m.id && (m.id.endsWith('/' + cur.split('/').pop()) || m.id.split('/').pop() === cur.split('/').pop()));
+      }
+      if (matched) {
+        if (matched.context_limit) {
+          capacity = matched.context_limit;
+        } else if (matched.context) {
+          capacity = parseContextToTokens(matched.context);
+        }
+      }
+      if (!capacity) {
+        // Fallbacks by known family — keep in sync with src/andromity/core/models.py MODEL_CATALOG
+        const cm = String(currentModel).toLowerCase();
+        if (cm.includes('gemini') || cm.includes('claude-opus') || cm.includes('claude-sonnet') || cm.includes('gpt-4.1') || cm.includes('deepseek-v4') || cm.includes('deepseek')) {
+          capacity = 1310720; // 1.3M / 1M for deepseek, gemini, claude
+        } else if (cm.includes('claude-haiku') || cm.includes('o3') || cm.includes('o4')) {
+          capacity = 200000;
+        } else if (cm.includes('llama') || cm.includes('qwen') || cm.includes('gpt-4o') || cm.includes('gpt-5')) {
+          capacity = 131072; // 128K
+        } else {
+          capacity = 131072;
+        }
+      }
+
+      const tokStr = formatTokCompact(contextTok);
+      const capStr = formatTokCompact(capacity);
+      const pct = capacity > 0 ? Math.min(100, Math.max(0, (contextTok / capacity) * 100)) : 0;
+
       const miniBar = document.getElementById('token-mini-bar');
       if (miniBar) {
         miniBar.style.width = pct.toFixed(1) + '%';
-        if (pct > 80) miniBar.style.background = '#ef4444';
-        else if (pct > 60) miniBar.style.background = '#f59e0b';
+        if (pct > 85) miniBar.style.background = '#ef4444';
+        else if (pct > 65) miniBar.style.background = '#f59e0b';
         else miniBar.style.background = 'linear-gradient(90deg, #06b6d4, #10b981)';
       }
 
       if (tokenLabel) {
-        tokenLabel.textContent = formatTokenCount(tokens);
+        tokenLabel.textContent = capacity > 0 ? (tokStr + '/' + capStr + ' tok') : (tokStr + ' tok');
       }
       if (costLabel) {
         costLabel.textContent = cost > 0 ? ('$' + cost.toFixed(4) + ' USD') : '$0.0000 USD';
@@ -152,9 +219,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       const widget = document.getElementById('token-capacity-widget');
       if (widget) {
+        const totalLabel = totalTok > 0 ? ('Session total billed: ' + Number(totalTok).toLocaleString() + ' tok  |  ') : '';
         widget.title = [
-          'Session Tokens: ' + Number(tokens).toLocaleString() + ' / ' + Number(capacity).toLocaleString() + ' (' + formattedCap + ' limit, ' + pct.toFixed(1) + '% context used)',
-          'Estimated Cost: $' + cost.toFixed(4) + ' USD'
+          'Context window: ' + Number(contextTok).toLocaleString() + ' / ' + Number(capacity).toLocaleString() + ' (' + capStr + ' limit, ' + pct.toFixed(1) + '% used)',
+          totalLabel + 'Estimated Cost: $' + cost.toFixed(4) + ' USD'
         ].join('\\n');
       }
     }
@@ -207,6 +275,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let toolSeqTimer = null;
     let lastToolName = "";
     let lastToolRunning = false;
+    let planToolCalledInTurn = false;  // set true when write_plan / update_plan_step fires in the current turn
     let userScrolledUp = false;
 
     function isAtBottom() {
@@ -246,7 +315,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       toolSeqUserToggled = false;
       toolSeqFinished = false;
 
-      currentToolSequence.innerHTML = '<div class="tool-seq-header"><svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg><span class="tool-seq-title">0 tools &middot; working... (0s)</span><svg class="tool-seq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg><button class="tool-seq-copy" title="Copy tool log"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button></div><div class="tool-seq-body"></div>';
+      currentToolSequence.innerHTML = '<div class="tool-seq-header"><svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg><span class="tool-seq-title">0 tools · working... (0s)</span><svg class="tool-seq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg><button class="tool-seq-copy" title="Copy tool log"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button></div><div class="tool-seq-body"></div>';
       
       const thisSeq = currentToolSequence;
       const hdr = thisSeq.querySelector('.tool-seq-header');
@@ -290,13 +359,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const doneCount = toolSeqDoneTools.size;
 
       if (toolSeqFinished) {
-        el.textContent = label + ' &middot; ' + (elapsed < 1 ? 'complete' : 'worked for ' + elapsed + 's');
+        el.textContent = label + ' · ' + (elapsed < 1 ? 'complete' : 'worked for ' + elapsed + 's');
       } else if (lastToolRunning && lastToolName) {
-        el.textContent = label + ' &middot; ' + lastToolName + ' working... (' + elapsed + 's)';
+        el.textContent = label + ' · ' + lastToolName + ' working... (' + elapsed + 's)';
       } else if (doneCount > 0) {
-        el.textContent = label + ' &middot; ' + doneCount + '/' + toolSeqCount + ' done &middot; working... (' + elapsed + 's)';
+        el.textContent = label + ' · ' + doneCount + '/' + toolSeqCount + ' done · working... (' + elapsed + 's)';
       } else {
-        el.textContent = label + ' &middot; working... (' + elapsed + 's)';
+        el.textContent = label + ' · working... (' + elapsed + 's)';
       }
     }
 
@@ -574,9 +643,28 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       });
     }
 
+    let cancelFallbackTimer = null;
     if (cancelBtn) {
       cancelBtn.addEventListener('click', () => {
+        // Optimistic UI: immediate feedback so user knows click registered even if daemon is slow
+        cancelBtn.disabled = true;
+        cancelBtn.style.opacity = '0.6';
+        cancelBtn.innerHTML = '<span style="font-size:10px;">Cancelling...</span>';
+        appendSystemNote('Cancelling turn...');
         vscode.postMessage({ type: 'cancel_turn' });
+        // Fallback: if daemon does not reply with agent_cancelled / agent_done within 4s, force-reset UI so it never stays stuck
+        if (cancelFallbackTimer) clearTimeout(cancelFallbackTimer);
+        cancelFallbackTimer = setTimeout(() => {
+          if (isRunning) {
+            console.warn('[Andromity] Cancel fallback: forcing endAssistantTurn after timeout');
+            endAssistantTurn();
+            interactiveSlot.innerHTML = '';
+            appendSystemNote('Cancel timed out — UI force-reset. If daemon still streaming, next message will queue.');
+          }
+          cancelBtn.disabled = false;
+          cancelBtn.style.opacity = '';
+          cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
+        }, 4000);
       });
     }
 
@@ -685,7 +773,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             '<div class="recent-session-title">' + name + '</div>' +
             '<div class="recent-session-sub">' +
               '<span>' + msgsText + '</span>' +
-              (modelTag ? '<span>&middot; ' + modelTag + '</span>' : '') +
+              (modelTag ? '<span>· ' + modelTag + '</span>' : '') +
             '</div>' +
           '</div>' +
           '<div class="recent-session-side">' +
@@ -725,7 +813,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             '<div class="session-item-title">' + (isCur ? '&#x2605; ' : '') + name + '</div>' +
             '<div class="session-item-meta">' +
               '<span>' + msgs + '</span>' +
-              (cost ? '<span>&middot; ' + cost + '</span>' : '') +
+              (cost ? '<span>· ' + cost + '</span>' : '') +
             '</div>' +
           '</div>' +
           '<div class="session-item-actions">' +
@@ -810,6 +898,34 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (trackerCount) trackerCount.textContent = completed + '/' + steps.length + ' (' + pct + '%)';
       if (trackerProgressBar) trackerProgressBar.style.width = pct + '%';
       if (trackerStepTitle) trackerStepTitle.textContent = activeStep ? ('Current: ' + activeStep) : (completed === steps.length ? 'All steps completed' : '');
+    }
+
+    function renderPlanPill(plan) {
+      // Only render the pill inside the current active turn's div
+      if (!plan || !plan.title) return;
+      const targetDiv = currentTurnAssistantDiv;
+      if (!targetDiv) return;  // don't show in historical turns
+
+      let existingPill = targetDiv.querySelector('.plan-ready-pill');
+      if (!existingPill) {
+        existingPill = document.createElement('div');
+        existingPill.className = 'plan-ready-pill';
+        // Always append after everything (including the footer) so it sits at the very bottom
+        targetDiv.appendChild(existingPill);
+      }
+      const steps = plan.steps || plan.todos || [];
+      const doneCount = steps.filter(s => (s.status || '').toLowerCase() === 'done').length;
+      const progressText = steps.length > 0 ? (' (' + doneCount + '/' + steps.length + ' done)') : '';
+      existingPill.innerHTML =
+        '<div class="pill-icon">' +
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>' +
+        '</div>' +
+        '<span class="pill-title" title="' + escapeHtml(plan.title) + '">Plan: ' + escapeHtml(plan.title) + progressText + '</span>' +
+        '<button class="pill-btn" data-action="open-plan-tab">' +
+          '<span>Open Plan</span>' +
+          '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
+        '</button>';
+      scrollToBottomIfNeeded();
     }
 
     document.getElementById('btn-prompt-mode')?.addEventListener('click', () => {
@@ -1052,7 +1168,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const isActive = m.id === currentModel;
         return '<div class="flyout-item ' + (isActive ? 'active' : '') + '" data-action="pick-model" data-model-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || 'openrouter') + '">' +
           '<span>' + escapeHtml(m.name || m.id) + '</span>' +
-          '<span class="flyout-item-meta">' + escapeHtml(m.provider || 'openrouter') + (m.pricing ? ' &middot; ' + escapeHtml(m.pricing) : '') + '</span>' +
+          '<span class="flyout-item-meta">' + escapeHtml(m.provider || 'openrouter') + (m.pricing ? ' · ' + escapeHtml(m.pricing) : '') + '</span>' +
         '</div>';
       }).join('');
     }
@@ -1107,7 +1223,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const lbl = document.getElementById('prompt-reasoning-label');
       if (lbl) {
         const val = currentReasoning || 'medium';
-        const icons = { high: '&#x26A1; High', medium: 'Medium', low: 'Low', off: 'Off' };
+        const icons = { high: 'High', medium: 'Medium', low: 'Low', off: 'Off' };
         lbl.textContent = icons[val] || val.toUpperCase();
         if (lbl.parentElement) {
           lbl.parentElement.title = 'Reasoning Effort: ' + val.toUpperCase() + ' (Click to cycle High, Medium, Low, Off)';
@@ -1416,35 +1532,112 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       renderQueue();
     };
 
+    try {
+      if (typeof marked !== 'undefined') {
+        const markedRenderer = {
+          code(token) {
+            const text = token && typeof token === 'object' ? (token.text || '') : String(token || '');
+            const lang = token && typeof token === 'object' ? (token.lang || 'code') : 'code';
+            const language = (lang || 'code').trim();
+            const enc = encodeURIComponent(text);
+            return '<div class="code-block-container">' +
+              '<div class="code-block-header">' +
+                '<span class="code-lang-tag">' + escapeHtml(language.toUpperCase()) + '</span>' +
+                '<div class="code-block-actions">' +
+                  '<button class="code-btn" data-code="' + enc + '" data-action="copy-code"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button>' +
+                  '<button class="code-btn" data-code="' + enc + '" data-action="apply-code"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg> Insert</button>' +
+                '</div>' +
+              '</div>' +
+              '<pre class="code-block-pre"><code>' + escapeHtml(text) + '</code></pre>' +
+            '</div>';
+          },
+          table(token) {
+            let headerHtml = '';
+            let bodyHtml = '';
+            const self = this;
+            if (token && token.header) {
+              headerHtml = '<thead><tr>' + token.header.map(cell => {
+                const align = cell.align ? ' style="text-align:' + cell.align + ';"' : '';
+                const content = cell.tokens && self.parser ? self.parser.parseInline(cell.tokens) : (cell.text || '');
+                return '<th' + align + '>' + content + '</th>';
+              }).join('') + '</tr></thead>';
+            }
+            if (token && token.rows) {
+              bodyHtml = '<tbody>' + token.rows.map(row => {
+                return '<tr>' + row.map(cell => {
+                  const align = cell.align ? ' style="text-align:' + cell.align + ';"' : '';
+                  const content = cell.tokens && self.parser ? self.parser.parseInline(cell.tokens) : (cell.text || '');
+                  return '<td' + align + '>' + content + '</td>';
+                }).join('') + '</tr>';
+              }).join('') + '</tbody>';
+            }
+            return '<div class="table-scroll-wrapper"><table class="md-table">' + headerHtml + bodyHtml + '</table></div>';
+          },
+          link(token) {
+            const href = token && typeof token === 'object' ? (token.href || '#') : String(token || '#');
+            const title = token && typeof token === 'object' ? token.title : '';
+            const text = token && typeof token === 'object' ? (token.text || href) : href;
+            return '<a href="' + escapeHtml(href) + '" target="_blank" style="color:var(--accent); text-decoration:underline;"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + text + '</a>';
+          },
+          image(token) {
+            const href = token && typeof token === 'object' ? (token.href || '') : String(token || '');
+            const title = token && typeof token === 'object' ? token.title : '';
+            const text = token && typeof token === 'object' ? token.text : '';
+            return '<img class="md-image" src="' + escapeHtml(href) + '" alt="' + escapeHtml(text || '') + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + ' loading="lazy" />';
+          }
+        };
+        marked.use({ renderer: markedRenderer, gfm: true, breaks: true });
+      }
+    } catch (e) {
+      console.warn('[Andromity] marked configuration note:', e);
+    }
+
     function renderInline(str) {
       if (!str) return '';
-      var parts = str.split(String.fromCharCode(96));
-      var out = '';
-      for (var i = 0; i < parts.length; i++) {
-        if (i % 2 === 1) {
-          out += '<code>' + escapeHtml(parts[i]) + '</code>';
-        } else {
-          var t = escapeHtml(parts[i]);
-          // Images: ![alt](url)
-          t = t.replace(/!\\\[([^\\\]]*)\\\]\\\(([^)]+)\\\)/g, '<img class="md-image" src="$2" alt="$1" title="$1" loading="lazy" />');
-          // Strikethrough: ~~text~~
-          t = t.replace(/~~([^~]+)~~/g, '<del>$1</del>');
-          // Bold
-          t = t.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
-          t = t.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-          // Italic
-          t = t.replace(/\\*([^*]+)\\*/g, '<em>$1</em>');
-          t = t.replace(/_([^_]+)_/g, '<em>$1</em>');
-          // Links: [text](url)
-          t = t.replace(/\\\[([^\\\]]+)\\\]\\\(([^)]+)\\\)/g, '<a href="$2" target="_blank" style="color:var(--accent); text-decoration:underline;">$1</a>');
-          out += t;
-        }
+      var codeSpans = [];
+      // 1. Protect inline code spans with tokens so code inside backticks does not break bold/italic
+      var t = str.replace(/\`([^\`]+)\`/g, function(_, code) {
+        codeSpans.push(code);
+        return String.fromCharCode(1) + 'CODE_' + (codeSpans.length - 1) + String.fromCharCode(1);
+      });
+      t = escapeHtml(t);
+
+      // 2. Images & links
+      t = t.replace(/!\\[([^\\]]*)\\]\\(([^)]+)\\)/g, '<img class="md-image" src="$2" alt="$1" title="$1" loading="lazy" />');
+      t = t.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank" style="color:var(--accent); text-decoration:underline;">$1</a>');
+
+      // 3. Strikethrough
+      t = t.replace(/~~(.*?)~~/g, '<del>$1</del>');
+
+      // 4. Bold + Italic
+      t = t.replace(/\\*\\*\\*(.*?)\\*\\*\\*/g, '<strong><em>$1</em></strong>');
+      t = t.replace(/___([^_]+)___/g, '<strong><em>$1</em></strong>');
+
+      // 5. Bold
+      t = t.replace(/\\*\\*(.*?)\\*\\*/g, '<strong>$1</strong>');
+      t = t.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+
+      // 6. Italic
+      t = t.replace(/\\*([^\\*\\n]+)\\*/g, '<em>$1</em>');
+      t = t.replace(/(?:^|(?<=[\\s(\\[{\\'"]))_([^_]+)_(?=[\\s.,;:!?)}\\"\\']|$)/g, '<em>$1</em>');
+
+      // 7. Restore inline code
+      for (var i = 0; i < codeSpans.length; i++) {
+        var token = String.fromCharCode(1) + 'CODE_' + i + String.fromCharCode(1);
+        t = t.split(token).join('<code>' + escapeHtml(codeSpans[i]) + '</code>');
       }
-      return out;
+      return t;
     }
 
     function renderMarkdown(md) {
       if (!md) return '';
+      if (typeof marked !== 'undefined' && marked.parse) {
+        try {
+          return marked.parse(md);
+        } catch (e) {
+          console.warn('[Andromity] marked.parse failed, falling back:', e);
+        }
+      }
       var codeParts = md.split(String.fromCharCode(96, 96, 96));
       var html = '';
 
@@ -1487,16 +1680,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               continue;
             }
 
-            // GFM Table parsing
-            if (trimmed.startsWith('|') && trimmed.endsWith('|') && l + 1 < rawLines.length && /^\\|(?:\\s*:?-+:?\\s*\\|)+$/.test(rawLines[l+1].trim())) {
+            // GFM Table parsing (with or without boundary pipes)
+            var isTableSep = function(str) { return /^\\s*\\|?(?:\\s*:?-+:?\\s*\\|?)+\\s*$/.test(str) && str.indexOf('-') !== -1; };
+            if (trimmed.indexOf('|') !== -1 && l + 1 < rawLines.length && isTableSep(rawLines[l+1].trim())) {
               var tableLines = [trimmed];
               var sepLine = rawLines[l+1].trim();
-              l++; // skip separator line
-              while (l + 1 < rawLines.length && rawLines[l+1].trim().startsWith('|') && rawLines[l+1].trim().endsWith('|')) {
+              l++;
+              while (l + 1 < rawLines.length && rawLines[l+1].trim().indexOf('|') !== -1 && !rawLines[l+1].trim().startsWith(String.fromCharCode(96, 96, 96))) {
                 l++;
                 tableLines.push(rawLines[l].trim());
               }
-              var rawAligns = sepLine.slice(1, -1).split('|');
+              var rawAligns = sepLine.replace(/^\|/, '').replace(/\|$/, '').split('|');
               var aligns = [];
               for (var a = 0; a < rawAligns.length; a++) {
                 var s = rawAligns[a].trim();
@@ -1504,17 +1698,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 else if (s.endsWith(':')) aligns.push('right');
                 else aligns.push('left');
               }
-              var headers = tableLines[0].slice(1, -1).split('|');
+              var rawHeaders = tableLines[0].replace(/^\|/, '').replace(/\|$/, '').split('|');
               var tableHtml = '<div class="table-scroll-wrapper"><table class="md-table"><thead><tr>';
-              for (var h = 0; h < headers.length; h++) {
+              for (var h = 0; h < rawHeaders.length; h++) {
                 var al = aligns[h] || 'left';
-                tableHtml += '<th style="text-align:' + al + ';">' + renderInline(headers[h].trim()) + '</th>';
+                tableHtml += '<th style="text-align:' + al + ';">' + renderInline(rawHeaders[h].trim()) + '</th>';
               }
               tableHtml += '</tr></thead><tbody>';
               for (var r = 1; r < tableLines.length; r++) {
-                var cells = tableLines[r].slice(1, -1).split('|');
+                var cells = tableLines[r].replace(/^\|/, '').replace(/\|$/, '').split('|');
                 tableHtml += '<tr>';
-                for (var c = 0; c < headers.length; c++) {
+                for (var c = 0; c < rawHeaders.length; c++) {
                   var cellText = (cells[c] || '').trim();
                   var cal = aligns[c] || 'left';
                   tableHtml += '<td style="text-align:' + cal + ';">' + renderInline(cellText) + '</td>';
@@ -1527,7 +1721,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             }
 
             // Task list items: - [x] or - [ ] or * [x]
-            var taskMatch = trimmed.match(/^[-*\u2022]\\s+\\\[([ xX])\\\]\\s*(.*)$/);
+            var taskMatch = trimmed.match(/^[-*\\u2022]\\s+\\[([ xX])\\]\\s*(.*)$/);
             if (taskMatch) {
               var isChecked = taskMatch[1].toLowerCase() === 'x';
               html += '<div class="md-task-item"><input type="checkbox" class="md-checkbox" ' + (isChecked ? 'checked' : '') + ' disabled><span class="md-task-text ' + (isChecked ? 'completed' : '') + '">' + renderInline(taskMatch[2]) + '</span></div>';
@@ -1540,9 +1734,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               html += '<h4>' + renderInline(trimmed.replace(/^##\\s+/, '')) + '</h4>';
             } else if (/^#\\s+/.test(trimmed)) {
               html += '<h3>' + renderInline(trimmed.replace(/^#\\s+/, '')) + '</h3>';
-            } else if (/^[-*\u2022]\\s+/.test(trimmed)) {
-              var itemText = trimmed.replace(/^[-*\u2022]\\s+/, '');
-              html += '<div class="md-bullet"><span class="md-dot">\u2022</span><span class="md-text">' + renderInline(itemText) + '</span></div>';
+            } else if (/^[-*+•]\\s+/.test(trimmed)) {
+              var itemText = trimmed.replace(/^[-*+•]\\s+/, '');
+              html += '<div class="md-bullet"><span class="md-dot">•</span><span class="md-text">' + renderInline(itemText) + '</span></div>';
             } else if (/^\\d+\\.\\s+/.test(trimmed)) {
               var numMatch = trimmed.match(/^(\\d+)\\.\\s+(.*)$/);
               var num = numMatch ? numMatch[1] : '1';
@@ -1719,11 +1913,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function startAssistantTurn() {
       isRunning = true;
       userScrolledUp = false; // new turn always shows latest
+      cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
+      cancelBtn.disabled = false;
+      cancelBtn.style.opacity = '';
       cancelBtn.style.display = 'flex';
       sendBtn.style.display = 'none';
       accumulatedAssistantText = '';
       currentTurnStartTime = Date.now();
       currentToolSequence = null; toolSeqCount = 0; lastToolName = ""; lastToolRunning = false;
+      planToolCalledInTurn = false;  // reset plan tool flag for the new turn
       if (toolSeqTimer) { clearInterval(toolSeqTimer); toolSeqTimer = null; }
 
       const wrap = document.createElement('div');
@@ -1789,6 +1987,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
 
       isRunning = false;
+      cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
+      cancelBtn.disabled = false;
+      cancelBtn.style.opacity = '';
       cancelBtn.style.display = 'none';
       sendBtn.style.display = 'flex';
 
@@ -1798,7 +1999,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         footer.className = 'message-footer';
         footer.innerHTML = '<span class="turn-duration-badge">' +
           '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:2px;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
-          '<span>' + elapsedSec + 's &middot; ' + formatTime(new Date()) + '</span>' +
+          '<span>' + elapsedSec + 's · ' + formatTime(new Date()) + '</span>' +
         '</span>' +
         '<button class="msg-copy-btn" data-action="copy-message" title="Copy response">' +
           '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy' +
@@ -1822,10 +2023,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       trustBanner.style.display = 'none';
     });
 
+    function clearSkeletonState() {
+      try {
+        document.body.classList.remove('loading');
+        document.querySelectorAll('.skeleton').forEach(el => el.classList.remove('skeleton'));
+        document.querySelectorAll('[aria-busy="true"]').forEach(el => el.removeAttribute('aria-busy'));
+      } catch {}
+    }
+
     window.addEventListener('message', event => {
       const msg = event.data;
       switch (msg.type) {
         case 'init_state':
+          clearSkeletonState();
           currentSessionId = msg.sessionId;
           allModels = msg.models || [];
           if (msg.skills) {
@@ -1956,11 +2166,33 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   chatContainer.appendChild(currentAssistantWrap);
                 }
 
-                if (m.thinking) {
-                  const thinkEl = document.createElement('div');
-                  thinkEl.className = 'thinking-card';
-                  thinkEl.innerHTML = '<div class="thinking-header"><div class="thinking-pulse" style="opacity:0.4; animation:none;"></div><span>thought</span><svg class="thinking-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg></div><div class="thinking-content">' + escapeHtml(m.thinking) + '</div>';
-                  currentAssistantWrap.insertBefore(thinkEl, currentAssistantTextEl);
+                // --- Grouping logic: thinking -> content (flush) -> tools, mirrors TUI load_history ---
+                const _thinking = m.thinking || '';
+                if (_thinking.trim()) {
+                  let _tSeq = currentAssistantWrap._toolSeq;
+                  if (_tSeq) {
+                    const thinkInner = document.createElement('div');
+                    thinkInner.className = 'thinking-card';
+                    thinkInner.innerHTML = '<div class="thinking-header"><div class="thinking-pulse" style="opacity:0.4; animation:none;"></div><span>thought</span><svg class="thinking-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg></div><div class="thinking-content">' + escapeHtml(_thinking) + '</div>';
+                    _tSeq.querySelector('.tool-seq-body').appendChild(thinkInner);
+                  } else {
+                    const thinkEl = document.createElement('div');
+                    thinkEl.className = 'thinking-card';
+                    thinkEl.innerHTML = '<div class="thinking-header"><div class="thinking-pulse" style="opacity:0.4; animation:none;"></div><span>thought</span><svg class="thinking-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg></div><div class="thinking-content">' + escapeHtml(_thinking) + '</div>';
+                    currentAssistantWrap.insertBefore(thinkEl, currentAssistantTextEl);
+                  }
+                }
+
+                // Content with flush: sequential tools before text stay in prior block, text breaks grouping
+                const _content = m.content || '';
+                if (_content.trim()) {
+                  if (currentAssistantWrap._toolSeq) {
+                    const _oldSeq = currentAssistantWrap._toolSeq;
+                    _oldSeq.classList.add('collapsed');
+                    currentAssistantWrap._toolSeq = null;
+                    currentAssistantWrap._toolCount = 0;
+                  }
+                  currentAssistantTextEl.innerHTML += renderMarkdown(_content);
                 }
 
                 if (m.tool_calls && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
@@ -1968,7 +2200,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   if (!seq) {
                     seq = document.createElement('div');
                     seq.className = 'tool-sequence collapsed';
-                    seq.innerHTML = '<div class="tool-seq-header"><svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg><span class="tool-seq-title">0 tools &middot; worked</span><svg class="tool-seq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg><button class="tool-seq-copy" title="Copy tool log"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button></div><div class="tool-seq-body"></div>';
+                    seq.innerHTML = '<div class="tool-seq-header"><svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg><span class="tool-seq-title">0 tools · worked</span><svg class="tool-seq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg><button class="tool-seq-copy" title="Copy tool log"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button></div><div class="tool-seq-body"></div>';
                     seq.querySelector('.tool-seq-header').addEventListener('click', (e) => {
                       if (e.target.closest('.tool-seq-copy')) return;
                       seq.classList.toggle('collapsed');
@@ -1984,7 +2216,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                         copyToClipboard(parts.join('\\n\\n') || seq.textContent);
                       } catch {}
                     });
-                    currentAssistantWrap.insertBefore(seq, currentAssistantTextEl);
+                    const _hasText = currentAssistantTextEl && currentAssistantTextEl.innerHTML.trim().length > 0;
+                    if (_hasText) {
+                      currentAssistantWrap.appendChild(seq);
+                    } else {
+                      currentAssistantWrap.insertBefore(seq, currentAssistantTextEl);
+                    }
                     currentAssistantWrap._toolSeq = seq;
                     currentAssistantWrap._toolCount = 0;
                   }
@@ -2008,11 +2245,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     body.appendChild(tDiv);
                   }
                   const totalCnt = currentAssistantWrap._toolCount;
-                  seq.querySelector('.tool-seq-title').textContent = totalCnt + (totalCnt === 1 ? ' tool' : ' tools') + ' &middot; worked';
-                }
-
-                if (m.content) {
-                  currentAssistantTextEl.innerHTML += renderMarkdown(m.content);
+                  seq.querySelector('.tool-seq-title').textContent = totalCnt + (totalCnt === 1 ? ' tool' : ' tools') + ' · worked';
                 }
 
                 // Check if next message is NOT an assistant message (or is last message) -> append ONE footer
@@ -2048,9 +2281,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           playTone(msg.kind);
           break;
 
-        case 'text_delta':
+        case 'text_delta': {
+          const _tdText = msg.text || '';
+          const _isMeaningful = _tdText.trim().length > 0;
           removeTurnLoader();
           finishCurrentThinking();
+          if (_isMeaningful && currentToolSequence) finishToolSequence();
+          if (!_isMeaningful) {
+            // whitespace-only deltas: preserve grouping, do not break tool block
+            if (currentAssistantContent) {
+              currentAssistantContent._blockText = (currentAssistantContent._blockText || '') + _tdText;
+              accumulatedAssistantText += _tdText;
+            }
+            break;
+          }
           if (!currentTurnAssistantDiv) startAssistantTurn();
 
           if (!currentAssistantContent) {
@@ -2059,11 +2303,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             currentTurnAssistantDiv.appendChild(currentAssistantContent);
             currentAssistantContent._blockText = '';
           }
-          currentAssistantContent._blockText = (currentAssistantContent._blockText || '') + msg.text;
-          accumulatedAssistantText += msg.text;
+          currentAssistantContent._blockText = (currentAssistantContent._blockText || '') + _tdText;
+          accumulatedAssistantText += _tdText;
           currentAssistantContent.innerHTML = renderMarkdown(currentAssistantContent._blockText);
           scrollToBottomIfNeeded();
-          break;
+          break; }
 
         case 'thinking_delta':
           removeTurnLoader();
@@ -2103,6 +2347,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           toolSeqCount++;
           lastToolName = msg.tool_name || 'tool';
           lastToolRunning = true;
+          // Track if this turn uses plan tools
+          if (msg.tool_name === 'write_plan' || msg.tool_name === 'update_plan_step') {
+            planToolCalledInTurn = true;
+          }
           updateToolSeqHeader();
           const toolDiv = document.createElement('div');
           toolDiv.className = 'tool-card expanded';
@@ -2277,11 +2525,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           appendSystemNote('Last turn undone: file changes rolled back.');
           break;
 
-        case 'agent_cancelled':
-          setGenerating(false);
-          appendSystemNote('Turn cancelled by user.');
-          break;
-
         case 'agent_busy':
           if (msg.queuedPrompt) {
             promptQueue.push(msg.queuedPrompt);
@@ -2293,23 +2536,43 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
 
         case 'agent_done':
+          if (cancelFallbackTimer) { clearTimeout(cancelFallbackTimer); cancelFallbackTimer = null; }
+          cancelBtn.disabled = false;
+          cancelBtn.style.opacity = '';
+          cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
           endAssistantTurn();
           interactiveSlot.innerHTML = '';
           updateTokenDisplay({
             token_total: msg.token_total,
+            context_tokens: msg.context_tokens,
             cost_usd: msg.cost_usd,
           });
           flushQueue();
           break;
 
         case 'agent_cancelled':
+          if (cancelFallbackTimer) { clearTimeout(cancelFallbackTimer); cancelFallbackTimer = null; }
+          cancelBtn.disabled = false;
+          cancelBtn.style.opacity = '';
+          cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
           endAssistantTurn();
           interactiveSlot.innerHTML = '';
           appendSystemNote('Turn cancelled by user.');
+          if (msg.token_total !== undefined || msg.context_tokens !== undefined) {
+            updateTokenDisplay({
+              token_total: msg.token_total,
+              context_tokens: msg.context_tokens,
+              cost_usd: msg.cost_usd,
+            });
+          }
           flushQueue();
           break;
 
         case 'agent_error':
+          if (cancelFallbackTimer) { clearTimeout(cancelFallbackTimer); cancelFallbackTimer = null; }
+          cancelBtn.disabled = false;
+          cancelBtn.style.opacity = '';
+          cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
           // If error is just a timeout but stream already started, don't end turn abruptly
           if (msg.error && msg.error.includes('RPC timeout')) {
             appendSystemNote('Note: ' + msg.error + ' -- but agent is still streaming. Watch the footer for progress.');
@@ -2340,6 +2603,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         case 'plan_updated':
           updatePlanTracker(msg.plan);
+          // Only show the pill in the chat if a plan tool was explicitly called
+          // this turn (not on session restore / disk load which fires outside a turn)
+          if (msg.plan && msg.plan.title && planToolCalledInTurn) {
+            renderPlanPill(msg.plan);
+          }
           break;
 
         case 'backend_ready': {
@@ -2370,6 +2638,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               if (msg.message_count !== undefined) sObj.message_count = msg.message_count;
               if (msg.context_tokens !== undefined) sObj.context_tokens = msg.context_tokens;
               renderHomeRecentSessions(allSessions);
+            }
+          }
+          if (msg.context_tokens !== undefined || msg.token_total !== undefined) {
+            if (!msg.session_id || msg.session_id === currentSessionId) {
+              updateTokenDisplay(msg);
             }
           }
           break;
@@ -2665,9 +2938,44 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     });
 
+    function focusPrompt() {
+      // VS Code webview ignores native autofocus attr; must focus via JS after visible
+      try {
+        if (promptInput && document.hasFocus && !document.hasFocus()) {
+          // still try — webview host may delegate focus later
+        }
+        if (promptInput) {
+          promptInput.focus({ preventScroll: true });
+          // Move cursor to end if already has value
+          const len = promptInput.value.length;
+          try { promptInput.setSelectionRange(len, len); } catch {}
+        }
+      } catch {}
+    }
+
+    // Initial focus after DOM ready + after VS Code reveals the view
+    // Use rAF + timeout because webview may still be hidden during first paint
+    function scheduleFocus() {
+      requestAnimationFrame(() => setTimeout(focusPrompt, 50));
+      setTimeout(focusPrompt, 300);
+    }
+    scheduleFocus();
+    document.addEventListener('DOMContentLoaded', scheduleFocus);
+    window.addEventListener('focus', focusPrompt);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') scheduleFocus();
+    });
+    // Refocus after every turn ends / errors / cancels so user can type immediately
+    const _origEndAssistantTurn = endAssistantTurn;
+    endAssistantTurn = function() {
+      _origEndAssistantTurn();
+      scheduleFocus();
+    };
+
     setRandomGreeting();
     vscode.postMessage({ type: 'ready' });
     vscode.postMessage({ type: 'webview_ready' });
-  </script>
+    // Also request host to transfer focus into webview (required on first show)
+    setTimeout(() => focusPrompt(), 100);
 `;
 }

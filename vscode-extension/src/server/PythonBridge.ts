@@ -594,6 +594,27 @@ export class PythonBridge {
     return this._client;
   }
 
+  public async waitForClient(timeoutMs: number = 5000): Promise<RpcClient | null> {
+    if (this._client) return this._client;
+    return new Promise((resolve) => {
+      let resolved = false;
+      const timer = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          resolve(this._client);
+        }
+      }, timeoutMs);
+
+      this.onClientReady((client) => {
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timer);
+          resolve(client);
+        }
+      });
+    });
+  }
+
   public async restart(): Promise<RpcClient> {
     this.dispose();
     this._isDisposed = false;

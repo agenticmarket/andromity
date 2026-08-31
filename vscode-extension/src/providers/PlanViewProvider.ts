@@ -50,11 +50,16 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.options = { enableScripts: true, localResourceRoots: [this._extensionUri] };
     webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
-    webviewView.webview.onDidReceiveMessage((message) => {
+    webviewView.webview.onDidReceiveMessage(async (message) => {
       switch (message.type) {
         case "webview_ready":
           if (this._currentPlan) {
             this.updatePlan(this._currentPlan);
+          } else {
+            const loaded = await this._loadPlanFromDisk();
+            if (loaded) {
+              this.updatePlan(loaded);
+            }
           }
           break;
         case "approve_plan":
@@ -68,7 +73,50 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
 
     if (this._currentPlan) {
       this.updatePlan(this._currentPlan);
+    } else {
+      this._loadPlanFromDisk().then(p => { if (p) this.updatePlan(p); });
     }
+  }
+
+  private async _loadPlanFromDisk(): Promise<any | null> {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) return null;
+    const rootUri = folders[0].uri;
+
+    // 1. Try .andromity/plan.json
+    try {
+      const jsonUri = vscode.Uri.joinPath(rootUri, ".andromity", "plan.json");
+      const bytes = await vscode.workspace.fs.readFile(jsonUri);
+      const text = new TextDecoder().decode(bytes);
+      const parsed = JSON.parse(text);
+      if (parsed) {
+        try {
+          const todoUri = vscode.Uri.joinPath(rootUri, ".andromity", "todo.json");
+          const todoBytes = await vscode.workspace.fs.readFile(todoUri);
+          const todoParsed = JSON.parse(new TextDecoder().decode(todoBytes));
+          if (todoParsed && Array.isArray(todoParsed.items)) {
+            parsed.steps = todoParsed.items;
+          }
+        } catch {}
+        return parsed;
+      }
+    } catch {}
+
+    // 2. Try .andromity/PLAN.md
+    try {
+      const mdUri = vscode.Uri.joinPath(rootUri, ".andromity", "PLAN.md");
+      const bytes = await vscode.workspace.fs.readFile(mdUri);
+      const text = new TextDecoder().decode(bytes);
+      if (text) {
+        return {
+          title: "Implementation Plan",
+          body: text,
+          status: "approved"
+        };
+      }
+    } catch {}
+
+    return null;
   }
 
   private _getHtmlForWebview(webview: vscode.Webview): string {
@@ -399,7 +447,7 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
           t = t.replace(/__([^_]+)__/g, '<strong>$1</strong>');
           t = t.replace(/\*([^*]+)\*/g, '<em>$1</em>');
           t = t.replace(/_([^_]+)_/g, '<em>$1</em>');
-          t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent); text-decoration:underline;">$1</a>');
+          t = t.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank" style="color:var(--accent); text-decoration:underline;">$1</a>');
           out += t;
         }
       }
@@ -416,7 +464,7 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
         if (i % 2 === 1) {
           var lines = codeParts[i].split(nl);
           var code = lines.slice(1).join(nl);
-          html += '<pre style="background:rgba(0,0,0,0.3); padding:8px 10px; border-radius:4px; border:1px solid var(--border); overflow-x:auto; margin:6px 0;"><code style="background:transparent; padding:0; color:#79c0ff; font-family:var(--vscode-editor-font-family, monospace); font-size:11px;">' + escapeHtml(code.trim()) + '</code></pre>';
+          html += '<pre style="background:rgba(0,0,0,0.3); padding:8px 10px; border-radius:4px; border:1px solid var(--border); overflow-x:auto; margin:6px 0;"><code style="background:transparent; padding:0; color:#e4e4e7; font-family:var(--vscode-editor-font-family, monospace); font-size:11px;">' + escapeHtml(code.trim()) + '</code></pre>';
         } else {
           var rawLines = codeParts[i].split(nl);
           for (var l = 0; l < rawLines.length; l++) {
@@ -428,29 +476,29 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
               continue;
             }
 
-            if (/^(?:---|---|\*\*\*|___)\s*$/.test(trimmed)) {
+            if (/^(?:---|\\*\\*\\*|___)\\s*$/.test(trimmed)) {
               html += '<hr style="border:none; border-top:1px solid var(--border); margin:8px 0;">';
               continue;
             }
 
-            if (/^####\s+/.test(trimmed)) {
-              html += '<h4 style="font-size:11px; font-weight:600; color:var(--pending-fg); text-transform:uppercase; margin:8px 0 2px;">' + renderInline(trimmed.replace(/^####\s+/, '')) + '</h4>';
-            } else if (/^###\s+/.test(trimmed)) {
-              html += '<h3 style="font-size:12px; font-weight:600; margin:10px 0 4px; color:var(--fg);">' + renderInline(trimmed.replace(/^###\s+/, '')) + '</h3>';
-            } else if (/^##\s+/.test(trimmed)) {
-              html += '<h2 style="font-size:13px; font-weight:600; margin:12px 0 4px; border-bottom:1px solid var(--border); padding-bottom:2px; color:var(--fg);">' + renderInline(trimmed.replace(/^##\s+/, '')) + '</h2>';
-            } else if (/^#\s+/.test(trimmed)) {
-              html += '<h1 style="font-size:14px; font-weight:700; margin:14px 0 6px; border-bottom:1px solid var(--border); padding-bottom:4px; color:var(--fg);">' + renderInline(trimmed.replace(/^#\s+/, '')) + '</h1>';
-            } else if (/^[-*•]\s+/.test(trimmed)) {
-              var itemText = trimmed.replace(/^[-*•]\s+/, '');
+            if (/^####\\s+/.test(trimmed)) {
+              html += '<h4 style="font-size:11px; font-weight:600; color:var(--pending-fg); text-transform:uppercase; margin:8px 0 2px;">' + renderInline(trimmed.replace(/^####\\s+/, '')) + '</h4>';
+            } else if (/^###\\s+/.test(trimmed)) {
+              html += '<h3 style="font-size:12px; font-weight:600; margin:10px 0 4px; color:var(--fg);">' + renderInline(trimmed.replace(/^###\\s+/, '')) + '</h3>';
+            } else if (/^##\\s+/.test(trimmed)) {
+              html += '<h2 style="font-size:13px; font-weight:600; margin:12px 0 4px; border-bottom:1px solid var(--border); padding-bottom:2px; color:var(--fg);">' + renderInline(trimmed.replace(/^##\\s+/, '')) + '</h2>';
+            } else if (/^#\\s+/.test(trimmed)) {
+              html += '<h1 style="font-size:14px; font-weight:700; margin:14px 0 6px; border-bottom:1px solid var(--border); padding-bottom:4px; color:var(--fg);">' + renderInline(trimmed.replace(/^#\\s+/, '')) + '</h1>';
+            } else if (/^[-*•]\\s+/.test(trimmed)) {
+              var itemText = trimmed.replace(/^[-*•]\\s+/, '');
               html += '<div style="display:flex; align-items:flex-start; gap:6px; margin:2px 0 2px 4px;"><span style="color:var(--accent); font-size:12px; line-height:1.2;">•</span><span style="flex:1;">' + renderInline(itemText) + '</span></div>';
-            } else if (/^\d+\.\s+/.test(trimmed)) {
-              var numMatch = trimmed.match(/^(\d+)\.\s+(.*)$/);
+            } else if (/^\\d+\\.\\s+/.test(trimmed)) {
+              var numMatch = trimmed.match(/^(\\d+)\\.\\s+(.*)$/);
               var num = numMatch ? numMatch[1] : '1';
               var numText = numMatch ? numMatch[2] : trimmed;
               html += '<div style="display:flex; align-items:flex-start; gap:6px; margin:2px 0 2px 4px;"><span style="color:var(--accent); font-weight:600; min-width:12px;">' + num + '.</span><span style="flex:1;">' + renderInline(numText) + '</span></div>';
-            } else if (/^>\s+/.test(trimmed)) {
-              var quoteText = trimmed.replace(/^>\s+/, '');
+            } else if (/^>\\s+/.test(trimmed)) {
+              var quoteText = trimmed.replace(/^>\\s+/, '');
               html += '<div style="border-left:2px solid var(--accent); padding:4px 8px; margin:6px 0; background:rgba(6,182,212,0.06); border-radius:0 4px 4px 0; color:var(--pending-fg);">' + renderInline(quoteText) + '</div>';
             } else {
               html += '<div style="margin:2px 0; line-height:1.5;">' + renderInline(line) + '</div>';

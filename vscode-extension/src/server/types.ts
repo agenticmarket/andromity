@@ -30,6 +30,7 @@ export interface SessionInfo {
   created_at?: string;
   message_count?: number;
   token_total?: number;
+  context_tokens?: number;
   cost_usd?: number;
   provider?: string;
   model?: string;

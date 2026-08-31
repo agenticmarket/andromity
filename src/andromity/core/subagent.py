@@ -154,7 +154,8 @@ class SubAgent:
                 tool_result=tool_result,
                 detail=detail,
             )
-            if asyncio.iscoroutinefunction(self.progress_callback):
+            import inspect
+            if inspect.iscoroutinefunction(self.progress_callback):
                 asyncio.create_task(self.progress_callback(evt))
             else:
                 self.progress_callback(evt)

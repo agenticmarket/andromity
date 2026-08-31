@@ -90,8 +90,8 @@ export function getChatStyles(): string {
       padding: 4px 10px;
       color: var(--fg);
       cursor: pointer;
-      font-size: 11.5px;
-      font-weight: 500;
+      font-size: 12.5px;
+      font-weight: 700;
       width: 100%;
       white-space: nowrap;
       overflow: hidden;
@@ -109,6 +109,8 @@ export function getChatStyles(): string {
       flex-shrink: 0;
     }
     .session-badge-text {
+      flex: 1;
+      min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -1109,6 +1111,21 @@ export function getChatStyles(): string {
       color: var(--fg);
       word-break: break-word;
     }
+    .assistant-text p {
+      margin: 4px 0 6px;
+      line-height: 1.55;
+    }
+    .assistant-text p:last-child {
+      margin-bottom: 0;
+    }
+    .assistant-text ul, .assistant-text ol {
+      margin: 4px 0 6px 18px;
+      padding: 0;
+    }
+    .assistant-text li {
+      margin: 2px 0;
+      line-height: 1.5;
+    }
     .assistant-text strong {
       font-weight: 600;
       color: #ffffff;
@@ -1117,34 +1134,69 @@ export function getChatStyles(): string {
       font-style: italic;
       color: var(--fg);
     }
-    .assistant-text code {
+    .assistant-text del {
+      text-decoration: line-through;
+      opacity: 0.6;
+    }
+    .assistant-text :not(pre) > code,
+    .assistant-text p code,
+    .assistant-text li code,
+    .assistant-text td code,
+    .assistant-text th code,
+    .assistant-text blockquote code {
       font-family: var(--vscode-editor-font-family, "Consolas", "Courier New", monospace);
       font-size: 12px;
-      background: rgba(255, 255, 255, 0.09);
+      background: rgba(255, 255, 255, 0.08);
       color: #79c0ff;
-      padding: 1px 5px;
+      padding: 1.5px 5.5px;
       border-radius: 4px;
       border: 1px solid rgba(255, 255, 255, 0.08);
+      word-break: break-word;
     }
-    .assistant-text h3 {
-      font-size: 15px;
+    .assistant-text h1 {
+      font-size: 17px;
+      font-weight: 700;
+      margin: 14px 0 6px;
+      color: #ffffff;
+    }
+    .assistant-text h2 {
+      font-size: 15.5px;
       font-weight: 600;
       margin: 12px 0 6px;
+      color: #ffffff;
+    }
+    .assistant-text h3 {
+      font-size: 14.5px;
+      font-weight: 600;
+      margin: 10px 0 5px;
       color: #ffffff;
     }
     .assistant-text h4 {
       font-size: 13.5px;
       font-weight: 600;
-      margin: 10px 0 4px;
+      margin: 8px 0 4px;
       color: #ffffff;
     }
-    .assistant-text h5 {
+    .assistant-text h5, .assistant-text h6 {
       font-size: 12px;
       font-weight: 600;
       margin: 8px 0 3px;
       color: var(--muted);
       text-transform: uppercase;
       letter-spacing: 0.5px;
+    }
+    .assistant-text blockquote {
+      border-left: 3px solid var(--accent);
+      padding: 4px 10px;
+      margin: 6px 0;
+      background: rgba(0, 127, 212, 0.08);
+      border-radius: 0 4px 4px 0;
+      color: var(--muted);
+    }
+    .assistant-text hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 10px 0;
     }
     .md-spacer {
       height: 8px;
@@ -1187,38 +1239,61 @@ export function getChatStyles(): string {
       color: var(--muted);
     }
 
-    /* Markdown Tables */
+    /* Markdown Tables & Universal Table Styling */
     .table-scroll-wrapper {
       width: 100%;
       overflow-x: auto;
-      margin: 8px 0;
-      border-radius: 4px;
+      margin: 10px 0;
+      border-radius: 6px;
       border: 1px solid var(--border);
+      background: rgba(0, 0, 0, 0.15);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
     }
-    .md-table {
+    .assistant-text table,
+    .md-table,
+    table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 11.5px;
+      font-size: 12px;
       text-align: left;
+      border-spacing: 0;
+      margin: 0;
     }
-    .md-table th {
+    .assistant-text thead,
+    .md-table thead,
+    thead {
       background: rgba(255, 255, 255, 0.06);
+    }
+    .assistant-text th,
+    .md-table th,
+    th {
       font-weight: 600;
-      padding: 6px 10px;
+      padding: 7px 12px;
       border-bottom: 1px solid var(--border);
       color: #ffffff;
       white-space: nowrap;
+      font-size: 11.5px;
+      letter-spacing: 0.2px;
     }
-    .md-table td {
-      padding: 5px 10px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    .assistant-text td,
+    .md-table td,
+    td {
+      padding: 6px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
       color: var(--fg);
+      line-height: 1.45;
     }
+    .assistant-text tr:nth-child(even) td,
+    .md-table tr:nth-child(even) td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .assistant-text tr:hover td,
+    .md-table tr:hover td {
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .assistant-text tr:last-child td,
     .md-table tr:last-child td {
       border-bottom: none;
-    }
-    .md-table tr:hover td {
-      background: rgba(255, 255, 255, 0.03);
     }
 
     /* Markdown Horizontal Rules & Task Lists */
@@ -1319,9 +1394,76 @@ export function getChatStyles(): string {
       margin: 0;
       padding: 10px 12px;
       overflow-x: auto;
+      background: rgba(0, 0, 0, 0.35);
+      border: none;
       font-family: var(--vscode-editor-font-family, "Consolas", "Courier New", monospace);
       font-size: 12px;
-      line-height: 1.5;
+      line-height: 1.55;
+    }
+    .code-block-pre code {
+      background: transparent !important;
+      color: var(--vscode-editor-foreground, #e4e4e7) !important;
+      padding: 0 !important;
+      border: none !important;
+      border-radius: 0 !important;
+      font-family: inherit;
+      font-size: inherit;
+      white-space: pre;
+      display: block;
+    }
+
+    /* Plan Ready Pill (shown in chat when a plan is created/updated) */
+    .plan-ready-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 10px 0 2px;
+      padding: 7px 12px;
+      background: rgba(6, 182, 212, 0.08);
+      border: 1px solid rgba(6, 182, 212, 0.28);
+      border-radius: 8px;
+      font-size: 11.5px;
+      color: var(--fg);
+      width: 100%;
+      box-sizing: border-box;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+      transition: all 0.15s ease;
+    }
+    .plan-ready-pill:hover {
+      background: rgba(6, 182, 212, 0.14);
+      border-color: rgba(6, 182, 212, 0.45);
+    }
+    .plan-ready-pill .pill-icon {
+      color: var(--accent);
+      display: inline-flex;
+      align-items: center;
+    }
+    .plan-ready-pill .pill-title {
+      flex: 1;
+      min-width: 0;
+      font-weight: 500;
+      color: #38bdf8;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .plan-ready-pill .pill-btn {
+      background: rgba(6, 182, 212, 0.2);
+      color: #ffffff;
+      border: 1px solid rgba(6, 182, 212, 0.4);
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 10.5px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s ease;
+    }
+    .plan-ready-pill .pill-btn:hover {
+      background: #06b6d4;
+      color: #000000;
     }
 
     /* Tool Card -- TUI parity: expand while running, collapse when done, toggle on click */
@@ -2059,10 +2201,21 @@ export function getChatStyles(): string {
       user-select: none;
     }
 
-    .prompt-left-controls, .prompt-right-controls {
+    .prompt-left-controls {
       display: flex;
       align-items: center;
       gap: 6px;
+      flex-shrink: 0;
+      min-width: 0;
+    }
+    .prompt-right-controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 1 1 auto;
+      min-width: 0;
+      justify-content: flex-end;
+      overflow: hidden;
     }
 
     /* Icon button (+ button) */
@@ -2084,7 +2237,7 @@ export function getChatStyles(): string {
       background: rgba(255, 255, 255, 0.08);
     }
 
-    /* Pill buttons (Mode pill, Model pill, Context pill) */
+    /* Pill buttons (Mode pill, Model pill, Context pill) — fixed flex to avoid layout shift when reasoning label changes */
     .prompt-pill-btn {
       background: rgba(255, 255, 255, 0.04);
       border: 1px solid rgba(255, 255, 255, 0.08);
@@ -2097,8 +2250,21 @@ export function getChatStyles(): string {
       gap: 4px;
       cursor: pointer;
       white-space: nowrap;
+      flex-shrink: 0;
+      min-width: 0;
+      max-width: 100%;
       transition: all 0.15s;
     }
+    .prompt-pill-btn span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+    #btn-prompt-model { max-width: 150px; }
+    #btn-prompt-reasoning { min-width: 52px; justify-content: center; }
+    #btn-prompt-reasoning #prompt-reasoning-label { min-width: 28px; text-align: center; }
+    #prompt-model-label { max-width: 118px; overflow: hidden; text-overflow: ellipsis; }
     .prompt-pill-btn:hover {
       color: var(--fg);
       border-color: rgba(255, 255, 255, 0.15);
@@ -2171,12 +2337,22 @@ export function getChatStyles(): string {
       flex-shrink: 0;
       gap: 8px;
     }
-    .status-bar-left, .status-bar-right {
+    .status-bar-left {
       display: flex;
       align-items: center;
       gap: 8px;
       min-width: 0;
+      flex: 1 1 auto;
+      overflow: hidden;
     }
+    .status-bar-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      flex-shrink: 0;
+    }
+    #prompt-profile-label { max-width: 90px; overflow: hidden; text-overflow: ellipsis; }
     .token-capacity-widget {
       display: inline-flex;
       align-items: center;
@@ -2304,6 +2480,24 @@ export function getChatStyles(): string {
     .btn-setup-action.secondary:hover {
       background: rgba(255,255,255,0.12);
     }
+
+    /* Skeleton loading — shown until init_state arrives (no flash of wrong model/mode) */
+    .skeleton {
+      background: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.08) 37%, rgba(255,255,255,0.04) 63%);
+      background-size: 400% 100%;
+      animation: skeleton-shimmer 1.4s ease infinite;
+      border-radius: 4px;
+      color: transparent !important;
+      pointer-events: none;
+      user-select: none;
+    }
+    .skeleton-text { height: 11px; min-width: 64px; display:inline-block; }
+    .skeleton-pill { height: 16px; min-width: 72px; border-radius: 12px; display:inline-flex; }
+    .skeleton-session { height: 13px; width: 110px; border-radius: 4px; }
+    .skeleton-card { height: 42px; border-radius: 6px; margin: 6px 0; }
+    @keyframes skeleton-shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
+    /* While loading, hide zero-state recent header to avoid flicker */
+    body.loading .recent-sessions-section { opacity: 0.6; pointer-events: none; }
   </style>
 `;
 }

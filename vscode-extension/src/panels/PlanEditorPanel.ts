@@ -77,6 +77,11 @@ export class PlanEditorPanel {
           case "webview_ready":
             if (this._currentPlan) {
               this.updatePlan(this._currentPlan);
+            } else {
+              const loaded = await this._loadPlanFromDisk();
+              if (loaded) {
+                this.updatePlan(loaded);
+              }
             }
             break;
           case "proceed_plan":
@@ -132,8 +137,50 @@ export class PlanEditorPanel {
     }
   }
 
+  private async _loadPlanFromDisk(): Promise<any | null> {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) return null;
+    const rootUri = folders[0].uri;
+
+    // 1. Try .andromity/plan.json
+    try {
+      const jsonUri = vscode.Uri.joinPath(rootUri, ".andromity", "plan.json");
+      const bytes = await vscode.workspace.fs.readFile(jsonUri);
+      const text = new TextDecoder().decode(bytes);
+      const parsed = JSON.parse(text);
+      if (parsed) {
+        try {
+          const todoUri = vscode.Uri.joinPath(rootUri, ".andromity", "todo.json");
+          const todoBytes = await vscode.workspace.fs.readFile(todoUri);
+          const todoParsed = JSON.parse(new TextDecoder().decode(todoBytes));
+          if (todoParsed && Array.isArray(todoParsed.items)) {
+            parsed.steps = todoParsed.items;
+          }
+        } catch {}
+        return parsed;
+      }
+    } catch {}
+
+    // 2. Try .andromity/PLAN.md
+    try {
+      const mdUri = vscode.Uri.joinPath(rootUri, ".andromity", "PLAN.md");
+      const bytes = await vscode.workspace.fs.readFile(mdUri);
+      const text = new TextDecoder().decode(bytes);
+      if (text) {
+        return {
+          title: "Implementation Plan",
+          body: text,
+          status: "approved"
+        };
+      }
+    } catch {}
+
+    return null;
+  }
+
   private _getHtmlForWebview(webview: vscode.Webview): string {
     const nonce = getNonce();
+    const markedUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, "media", "marked.min.js"));
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -141,6 +188,7 @@ export class PlanEditorPanel {
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${webview.cspSource}; img-src ${webview.cspSource} https: data:; font-src ${webview.cspSource};">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Implementation Plan</title>
+  <script nonce="${nonce}" src="${markedUri}"></script>
   <style>
     :root {
       --bg: var(--vscode-editor-background);
@@ -637,21 +685,61 @@ export class PlanEditorPanel {
           out += '<code>' + escapeHtml(parts[i]) + '</code>';
         } else {
           var t = escapeHtml(parts[i]);
-          t = t.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img class="md-image" src="$2" alt="$1" title="$1" loading="lazy" style="max-width:100%; border-radius:6px; margin:8px 0;" />');
+          t = t.replace(/!\\[([^\\]]*)\\]\\(([^)]+)\\)/g, '<img class="md-image" src="$2" alt="$1" title="$1" loading="lazy" style="max-width:100%; border-radius:6px; margin:8px 0;" />');
           t = t.replace(/~~([^~]+)~~/g, '<del>$1</del>');
-          t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+          t = t.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
           t = t.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-          t = t.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+          t = t.replace(/\\*([^*]+)\\*/g, '<em>$1</em>');
           t = t.replace(/_([^_]+)_/g, '<em>$1</em>');
-          t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent); text-decoration:underline;">$1</a>');
+          t = t.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank" style="color:var(--accent); text-decoration:underline;">$1</a>');
           out += t;
         }
       }
       return out;
     }
 
+    try {
+      if (typeof marked !== 'undefined') {
+        const markedRenderer = {
+          code(token) {
+            const text = token && typeof token === 'object' ? (token.text || '') : String(token || '');
+            return '<pre style="background:rgba(0,0,0,0.3); padding:12px; border-radius:6px; border:1px solid var(--border); overflow-x:auto; margin:10px 0;"><code style="background:transparent; padding:0; color:#e4e4e7; font-family:var(--vscode-editor-font-family, monospace); font-size:12px;">' + escapeHtml(text) + '</code></pre>';
+          },
+          table(token) {
+            let headerHtml = '';
+            let bodyHtml = '';
+            const self = this;
+            if (token && token.header) {
+              headerHtml = '<thead><tr>' + token.header.map(cell => {
+                const align = cell.align ? ' style="text-align:' + cell.align + ';"' : '';
+                const content = cell.tokens && self.parser ? self.parser.parseInline(cell.tokens) : (cell.text || '');
+                return '<th style="padding:8px 12px; background:rgba(255,255,255,0.06); border-bottom:1px solid var(--border); font-weight:600;' + (cell.align ? ' text-align:' + cell.align + ';' : '') + '">' + content + '</th>';
+              }).join('') + '</tr></thead>';
+            }
+            if (token && token.rows) {
+              bodyHtml = '<tbody>' + token.rows.map(row => {
+                return '<tr>' + row.map(cell => {
+                  const content = cell.tokens && self.parser ? self.parser.parseInline(cell.tokens) : (cell.text || '');
+                  return '<td style="padding:6px 12px; border-bottom:1px solid rgba(255,255,255,0.04);' + (cell.align ? ' text-align:' + cell.align + ';' : '') + '">' + content + '</td>';
+                }).join('') + '</tr>';
+              }).join('') + '</tbody>';
+            }
+            return '<div style="overflow-x:auto; margin:10px 0; border:1px solid var(--border); border-radius:6px;"><table style="width:100%; border-collapse:collapse; font-size:12px;">' + headerHtml + bodyHtml + '</table></div>';
+          }
+        };
+        marked.use({ renderer: markedRenderer, gfm: true, breaks: true });
+      }
+    } catch (e) {}
+
     function renderMarkdown(md) {
       if (!md) return '';
+      if (typeof marked !== 'undefined' && marked.parse) {
+        try {
+          return marked.parse(md);
+        } catch (e) {
+          console.warn('[PlanEditorPanel] marked.parse failed:', e);
+        }
+      }
       var codeParts = md.split(String.fromCharCode(96, 96, 96));
       var html = '';
 
@@ -661,7 +749,7 @@ export class PlanEditorPanel {
           var lines = codeParts[i].split(nl);
           var lang = lines[0].trim() || '';
           var code = lines.slice(1).join(nl);
-          html += '<pre style="background:rgba(0,0,0,0.3); padding:12px; border-radius:6px; border:1px solid var(--border); overflow-x:auto; margin:10px 0;"><code style="background:transparent; padding:0; color:#79c0ff; font-family:var(--vscode-editor-font-family, monospace); font-size:12px;">' + escapeHtml(code.trim()) + '</code></pre>';
+          html += '<pre style="background:rgba(0,0,0,0.3); padding:12px; border-radius:6px; border:1px solid var(--border); overflow-x:auto; margin:10px 0;"><code style="background:transparent; padding:0; color:#e4e4e7; font-family:var(--vscode-editor-font-family, monospace); font-size:12px;">' + escapeHtml(code.trim()) + '</code></pre>';
         } else {
           var rawLines = codeParts[i].split(nl);
           for (var l = 0; l < rawLines.length; l++) {
@@ -673,35 +761,36 @@ export class PlanEditorPanel {
               continue;
             }
 
-            if (/^(?:---|---|\*\*\*|___)\s*$/.test(trimmed)) {
+            if (/^(?:---|\\*\\*\\*|___)\\s*$/.test(trimmed)) {
               html += '<hr style="border:none; border-top:1px solid var(--border); margin:12px 0;">';
               continue;
             }
 
-            // GFM Table
-            if (trimmed.startsWith('|') && trimmed.endsWith('|') && l + 1 < rawLines.length && /^\|(?:\s*:?-+:?\s*\|)+$/.test(rawLines[l+1].trim())) {
+            // GFM Table (with or without edge pipes)
+            var isTableSep = function(str) { return /^\\s*\\|?(?:\\s*:?-+:?\\s*\\|?)+\\s*$/.test(str) && str.indexOf('-') !== -1; };
+            if (trimmed.indexOf('|') !== -1 && l + 1 < rawLines.length && isTableSep(rawLines[l+1].trim())) {
               var tableLines = [trimmed];
               var sepLine = rawLines[l+1].trim();
               l++;
-              while (l + 1 < rawLines.length && rawLines[l+1].trim().startsWith('|') && rawLines[l+1].trim().endsWith('|')) {
+              while (l + 1 < rawLines.length && rawLines[l+1].trim().indexOf('|') !== -1 && !rawLines[l+1].trim().startsWith(String.fromCharCode(96, 96, 96))) {
                 l++;
                 tableLines.push(rawLines[l].trim());
               }
-              var rawAligns = sepLine.slice(1, -1).split('|');
+              var rawAligns = sepLine.replace(/^\|/, '').replace(/\|$/, '').split('|');
               var aligns = rawAligns.map(function(s) {
                 var st = s.trim();
                 if (st.startsWith(':') && st.endsWith(':')) return 'center';
                 if (st.endsWith(':')) return 'right';
                 return 'left';
               });
-              var headers = tableLines[0].slice(1, -1).split('|');
+              var headers = tableLines[0].replace(/^\|/, '').replace(/\|$/, '').split('|');
               var tableHtml = '<div style="overflow-x:auto; margin:10px 0; border:1px solid var(--border); border-radius:6px;"><table style="width:100%; border-collapse:collapse; font-size:12px;"><thead><tr>';
               for (var h = 0; h < headers.length; h++) {
                 tableHtml += '<th style="text-align:' + (aligns[h] || 'left') + '; padding:8px 12px; background:rgba(255,255,255,0.06); border-bottom:1px solid var(--border); font-weight:600;">' + renderInline(headers[h].trim()) + '</th>';
               }
               tableHtml += '</tr></thead><tbody>';
               for (var r = 1; r < tableLines.length; r++) {
-                var cells = tableLines[r].slice(1, -1).split('|');
+                var cells = tableLines[r].replace(/^\|/, '').replace(/\|$/, '').split('|');
                 tableHtml += '<tr>';
                 for (var c = 0; c < headers.length; c++) {
                   tableHtml += '<td style="text-align:' + (aligns[c] || 'left') + '; padding:6px 12px; border-bottom:1px solid rgba(255,255,255,0.04);">' + renderInline((cells[c] || '').trim()) + '</td>';
@@ -714,31 +803,31 @@ export class PlanEditorPanel {
             }
 
             // Task list item
-            var taskMatch = trimmed.match(/^[-*•]\s+\[([ xX])\]\s*(.*)$/);
+            var taskMatch = trimmed.match(/^[-*•]\\s+\\[([ xX])\\]\\s*(.*)$/);
             if (taskMatch) {
               var isChecked = taskMatch[1].toLowerCase() === 'x';
               html += '<div style="display:flex; align-items:center; gap:8px; margin:4px 0 4px 4px;"><input type="checkbox" ' + (isChecked ? 'checked' : '') + ' disabled style="accent-color:var(--accent);"><span style="' + (isChecked ? 'text-decoration:line-through; opacity:0.6;' : '') + '">' + renderInline(taskMatch[2]) + '</span></div>';
               continue;
             }
 
-            if (/^####\s+/.test(trimmed)) {
-              html += '<h4 style="font-size:12.5px; font-weight:600; color:var(--pending-fg); text-transform:uppercase; letter-spacing:0.5px; margin:12px 0 4px;">' + renderInline(trimmed.replace(/^####\s+/, '')) + '</h4>';
-            } else if (/^###\s+/.test(trimmed)) {
-              html += '<h3 style="font-size:14px; font-weight:600; margin:14px 0 6px; color:var(--fg);">' + renderInline(trimmed.replace(/^###\s+/, '')) + '</h3>';
-            } else if (/^##\s+/.test(trimmed)) {
-              html += '<h2 style="font-size:15.5px; font-weight:600; margin:18px 0 6px; border-bottom:1px solid var(--border); padding-bottom:4px; color:var(--fg);">' + renderInline(trimmed.replace(/^##\s+/, '')) + '</h2>';
-            } else if (/^#\s+/.test(trimmed)) {
-              html += '<h1 style="font-size:18px; font-weight:700; margin:20px 0 8px; border-bottom:1px solid var(--border); padding-bottom:6px; color:var(--fg);">' + renderInline(trimmed.replace(/^#\s+/, '')) + '</h1>';
-            } else if (/^[-*•]\s+/.test(trimmed)) {
-              var itemText = trimmed.replace(/^[-*•]\s+/, '');
+            if (/^####\\s+/.test(trimmed)) {
+              html += '<h4 style="font-size:12.5px; font-weight:600; color:var(--pending-fg); text-transform:uppercase; letter-spacing:0.5px; margin:12px 0 4px;">' + renderInline(trimmed.replace(/^####\\s+/, '')) + '</h4>';
+            } else if (/^###\\s+/.test(trimmed)) {
+              html += '<h3 style="font-size:14px; font-weight:600; margin:14px 0 6px; color:var(--fg);">' + renderInline(trimmed.replace(/^###\\s+/, '')) + '</h3>';
+            } else if (/^##\\s+/.test(trimmed)) {
+              html += '<h2 style="font-size:15.5px; font-weight:600; margin:18px 0 6px; border-bottom:1px solid var(--border); padding-bottom:4px; color:var(--fg);">' + renderInline(trimmed.replace(/^##\\s+/, '')) + '</h2>';
+            } else if (/^#\\s+/.test(trimmed)) {
+              html += '<h1 style="font-size:18px; font-weight:700; margin:20px 0 8px; border-bottom:1px solid var(--border); padding-bottom:6px; color:var(--fg);">' + renderInline(trimmed.replace(/^#\\s+/, '')) + '</h1>';
+            } else if (/^[-*•]\\s+/.test(trimmed)) {
+              var itemText = trimmed.replace(/^[-*•]\\s+/, '');
               html += '<div style="display:flex; align-items:flex-start; gap:8px; margin:3px 0 3px 6px;"><span style="color:var(--accent); font-size:14px; line-height:1.2;">•</span><span style="flex:1;">' + renderInline(itemText) + '</span></div>';
-            } else if (/^\d+\.\s+/.test(trimmed)) {
-              var numMatch = trimmed.match(/^(\d+)\.\s+(.*)$/);
+            } else if (/^\\d+\\.\\s+/.test(trimmed)) {
+              var numMatch = trimmed.match(/^(\\d+)\\.\\s+(.*)$/);
               var num = numMatch ? numMatch[1] : '1';
               var numText = numMatch ? numMatch[2] : trimmed;
               html += '<div style="display:flex; align-items:flex-start; gap:8px; margin:3px 0 3px 6px;"><span style="color:var(--accent); font-weight:600; min-width:14px;">' + num + '.</span><span style="flex:1;">' + renderInline(numText) + '</span></div>';
-            } else if (/^>\s+/.test(trimmed)) {
-              var quoteText = trimmed.replace(/^>\s+/, '');
+            } else if (/^>\\s+/.test(trimmed)) {
+              var quoteText = trimmed.replace(/^>\\s+/, '');
               html += '<div style="border-left:3px solid var(--accent); padding:6px 12px; margin:8px 0; background:rgba(6,182,212,0.06); border-radius:0 4px 4px 0; color:var(--pending-fg);">' + renderInline(quoteText) + '</div>';
             } else {
               html += '<div style="margin:3px 0; line-height:1.6;">' + renderInline(line) + '</div>';

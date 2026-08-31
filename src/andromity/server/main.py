@@ -131,6 +131,11 @@ async def start_stdio_server():
         await _send_dict(notif.to_dict())
 
     handler = JsonRpcHandler(send_notification=_send_notification)
+    # Start MCP manager in background (non-blocking) so mcp.list reports live status immediately
+    try:
+        asyncio.create_task(handler._ensure_mcp_started())
+    except Exception as e:
+        log.debug("MCP background start failed: %s", e)
 
     async def _dispatch_request(msg_data: dict):
         async with semaphore:
@@ -195,6 +200,10 @@ async def start_tcp_server(host: str = "127.0.0.1", port: int = 8765, allow_remo
             await _send_dict(notif.to_dict())
 
         handler = JsonRpcHandler(send_notification=_send_notification)
+        try:
+            asyncio.create_task(handler._ensure_mcp_started())
+        except Exception:
+            pass
         peer = writer.get_extra_info("peername")
         log.info("Client connected: %s", peer)
 

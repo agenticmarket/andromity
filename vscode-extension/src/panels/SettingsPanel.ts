@@ -105,8 +105,8 @@ export class SettingsPanel {
         this._rpcClient.call<ModelInfo[]>("config.list_models", {}, 15000).catch(() => []),
         this._rpcClient.call<ProviderInfo[]>("config.list_providers", {}, 15000).catch(() => []),
         this._rpcClient.call<any[]>("skills.list", { project_path: workspaceFolder }, 15000).catch(() => []),
-        this._rpcClient.call<any[]>("mcp.list", {}, 15000).catch(() => []),
-        this._rpcClient.call<any>("usage.get", {}, 15000).catch(() => ({})),
+        this._rpcClient.call<any[]>("mcp.list", { project_path: workspaceFolder }, 15000).catch(() => []),
+        this._rpcClient.call<any>("usage.get", { project_path: workspaceFolder, time_range: "all" }, 15000).catch(() => ({})),
         this._rpcClient.call<any>("system.info", {}, 15000).catch(() => ({})),
         this._rpcClient.call<any>("trust.status", { project_path: workspaceFolder }, 15000).catch(() => ({ is_trusted: true, trusted_projects: [] })),
         this._rpcClient.call<any[]>("cron.list", { project_path: workspaceFolder }, 15000).catch(() => []),
@@ -430,6 +430,90 @@ export class SettingsPanel {
           });
         } catch (e: any) {
           vscode.window.showErrorMessage(`Failed to fetch cron history: ${e.message}`);
+        }
+        break;
+      }
+
+      case "mcp_restart": {
+        try {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          const name = message.name || message.server_name;
+          if (!name) throw new Error("Server name missing");
+          vscode.window.showInformationMessage(`Restarting MCP server '${name}'...`);
+          const res = await this._rpcClient.call<any>("mcp.restart", { name, project_path: workspaceFolder }, 30000);
+          if (res && res.success !== false) {
+            vscode.window.showInformationMessage(`MCP '${name}' restarted (${res.status || 'running'}).`);
+          } else {
+            vscode.window.showWarningMessage(`MCP '${name}' restart returned: ${res?.error || 'unknown'}`);
+          }
+          const mcpServers = await this._rpcClient.call<any[]>("mcp.list", { project_path: workspaceFolder }, 10000).catch(() => []);
+          this._panel.webview.postMessage({ type: "mcp_refreshed", mcpServers: mcpServers || [] });
+        } catch (e: any) {
+          vscode.window.showErrorMessage(`Failed to restart MCP server: ${e.message}`);
+          this._panel.webview.postMessage({ type: "mcp_refresh_failed" });
+        }
+        break;
+      }
+
+      case "mcp_toggle":
+      case "mcp_enable":
+      case "mcp_disable": {
+        try {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          const name = message.name || message.server_name;
+          if (!name) throw new Error("Server name missing");
+          // Determine desired disabled state: message.disabled true => disable, false => enable
+          // For explicit enable/disable messages, infer from type
+          let shouldDisable: boolean;
+          if (message.type === "mcp_enable") shouldDisable = false;
+          else if (message.type === "mcp_disable") shouldDisable = true;
+          else shouldDisable = !!message.disabled;
+          const method = shouldDisable ? "mcp.disable" : "mcp.enable";
+          const res = await this._rpcClient.call<any>(method, { name, project_path: workspaceFolder }, 30000);
+          if (res && res.success !== false) {
+            vscode.window.showInformationMessage(`MCP '${name}' ${shouldDisable ? 'disabled' : 'enabled'} (${res.status || ''}).`);
+          } else {
+            vscode.window.showWarningMessage(`MCP toggle failed: ${res?.error || 'unknown'}`);
+          }
+          const mcpServers = await this._rpcClient.call<any[]>("mcp.list", { project_path: workspaceFolder }, 10000).catch(() => []);
+          this._panel.webview.postMessage({ type: "mcp_refreshed", mcpServers: mcpServers || [] });
+        } catch (e: any) {
+          vscode.window.showErrorMessage(`Failed to toggle MCP server: ${e.message}`);
+          this._panel.webview.postMessage({ type: "mcp_refresh_failed" });
+        }
+        break;
+      }
+
+      case "mcp_auth":
+      case "mcp_authenticate": {
+        try {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          const name = message.name || message.server_name;
+          if (!name) throw new Error("Server name missing");
+          vscode.window.showInformationMessage(`Starting OAuth authentication for '${name}' in browser...`);
+          const res = await this._rpcClient.call<any>("mcp.authenticate", { name, project_path: workspaceFolder }, 130000);
+          if (res && res.success !== false) {
+            vscode.window.showInformationMessage(`MCP '${name}' authenticated successfully!`);
+          } else {
+            vscode.window.showWarningMessage(`MCP auth failed: ${res?.error || 'Unknown error'}`);
+          }
+          const mcpServers = await this._rpcClient.call<any[]>("mcp.list", { project_path: workspaceFolder }, 10000).catch(() => []);
+          this._panel.webview.postMessage({ type: "mcp_refreshed", mcpServers: mcpServers || [] });
+        } catch (e: any) {
+          vscode.window.showErrorMessage(`OAuth auth error: ${e.message}`);
+          this._panel.webview.postMessage({ type: "mcp_refresh_failed" });
+        }
+        break;
+      }
+
+      case "refresh_mcp":
+      case "fetch_mcp": {
+        try {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          const mcpServers = await this._rpcClient.call<any[]>("mcp.list", { project_path: workspaceFolder }, 10000).catch(() => []);
+          this._panel.webview.postMessage({ type: "mcp_refreshed", mcpServers: mcpServers || [] });
+        } catch (e: any) {
+          this._panel.webview.postMessage({ type: "mcp_refresh_failed" });
         }
         break;
       }
@@ -1570,6 +1654,12 @@ export class SettingsPanel {
           <h2 class="section-title">Model Context Protocol (MCP)</h2>
           <p class="section-desc">External database connectors, tool servers, and enterprise context integrations.</p>
         </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button class="btn btn-secondary" id="btn-refresh-mcp">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+            <span>Refresh</span>
+          </button>
+        </div>
       </div>
       <div class="cards-grid" id="mcp-grid"></div>
     </div>
@@ -1851,6 +1941,22 @@ export class SettingsPanel {
   <script>
     const vscode = acquireVsCodeApi();
 
+    window.onerror = function(msg, url, lineNo, columnNo, error) {
+      console.error("[Andromity Settings Error]", msg, lineNo, columnNo, error);
+      try {
+        vscode.postMessage({
+          type: "webview_error",
+          message: String(msg),
+          line: lineNo,
+          col: columnNo,
+          stack: error ? error.stack : ""
+        });
+      } catch(e) {}
+    };
+    window.addEventListener("unhandledrejection", function(event) {
+      console.error("[Andromity Settings Unhandled Rejection]", event.reason);
+    });
+
     let allModels = [];
     let allProviders = [];
     let allSkills = [];
@@ -2008,6 +2114,19 @@ export class SettingsPanel {
         vscode.postMessage({ type: "install_skill", name, sourceId });
       } else if (action === "history") {
         vscode.postMessage({ type: "cron_run_history", id: btn.dataset.id });
+      } else if (action === "mcp_restart") {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinning-loader"></span> Restarting...';
+        vscode.postMessage({ type: "mcp_restart", name: btn.dataset.name });
+      } else if (action === "mcp_toggle") {
+        const disabled = btn.dataset.disabled === "true";
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinning-loader"></span> Working...';
+        vscode.postMessage({ type: "mcp_toggle", name: btn.dataset.name, disabled });
+      } else if (action === "mcp_auth") {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinning-loader"></span> Authenticating in browser...';
+        vscode.postMessage({ type: "mcp_auth", name: btn.dataset.name });
       }
     });
 
@@ -2139,6 +2258,15 @@ export class SettingsPanel {
           renderProviders();
           break;
         }
+        case "mcp_refreshed": {
+          allMcpServers = msg.mcpServers || [];
+          renderMcp();
+          break;
+        }
+        case "mcp_refresh_failed": {
+          renderMcp();
+          break;
+        }
         case "remote_skills_loaded": {
           allRemoteSkills = msg.remoteSkills || [];
           const remoteNumEl = document.getElementById("remote-skills-num");
@@ -2185,6 +2313,19 @@ export class SettingsPanel {
                 }).join('');
             }
           }
+          break;
+        }
+        case "mcp_refreshed": {
+          allMcpServers = msg.mcpServers || [];
+          renderMcp();
+          // reset refresh button if present
+          const btn = document.getElementById("btn-refresh-mcp");
+          if (btn) { btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg><span>Refresh</span>'; }
+          break;
+        }
+        case "mcp_refresh_failed": {
+          const btn2 = document.getElementById("btn-refresh-mcp");
+          if (btn2) { btn2.disabled = false; }
           break;
         }
       }
@@ -2671,22 +2812,65 @@ export class SettingsPanel {
       if (allMcpServers.length === 0) {
         grid.innerHTML = '<div class="empty-state" style="grid-column: 1 / -1;">' +
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M9 9h6v6H9z"></path></svg>' +
-          '<div>No external MCP servers configured. Add servers in your config.toml or mcp_config.json.</div>' +
+          '<div>No MCP servers configured. Add servers to <code>.andromity/mcp.json</code> or <code>.vscode/mcp.json</code>.</div>' +
         '</div>';
         return;
       }
-      grid.innerHTML = allMcpServers.map(s => 
-        '<div class="item-card">' +
+
+      grid.innerHTML = allMcpServers.map(s => {
+        const status = (s.status || 'unknown').toLowerCase();
+        const isRunning = status === 'running';
+        const isError   = status === 'error';
+        const isAuth    = status === 'needs_auth';
+        const isDisabled = s.disabled || status === 'disabled';
+
+        // Status dot colour
+        const dotClass  = isRunning  ? 'connected'
+                        : isDisabled ? ''
+                        : '';            // error/auth/unknown → no extra class (red below)
+        const dotStyle  = isError    ? 'background:#f85149;'
+                        : isAuth     ? 'background:#d29922;'
+                        : isDisabled ? 'background:rgba(255,255,255,0.2);'
+                        : '';
+
+        // Status badge
+        const badgeColor = isRunning  ? 'green'
+                         : isError    ? ''
+                         : isAuth     ? 'orange'
+                         : isDisabled ? ''
+                         : '';
+        const badgeStyle = isError   ? 'background:rgba(248,81,73,0.15); color:#f85149; border:1px solid rgba(248,81,73,0.3);'
+                         : isDisabled ? 'background:rgba(255,255,255,0.06); color:var(--text-muted);'
+                         : '';
+        const badgeLabel = isRunning  ? (s.tools_count > 0 ? s.tools_count + ' tools' : 'running')
+                         : isError    ? 'error'
+                         : isAuth     ? 'needs auth'
+                         : isDisabled ? 'disabled'
+                         : 'not started';
+
+        const cmdStr = s.command ? escapeHtml(s.command) + (s.args && s.args.length ? ' ' + s.args.map(escapeHtml).join(' ') : '') : '<span style="color:var(--text-muted)">no command</span>';
+
+        return '<div class="item-card">' +
           '<div class="item-card-top">' +
             '<div class="item-card-title">' +
-              '<span class="status-dot connected"></span>' +
+              '<span class="status-dot ' + dotClass + '" style="' + dotStyle + '"></span>' +
               '<span>' + escapeHtml(s.name) + '</span>' +
             '</div>' +
-            '<span class="badge blue">' + (s.tools_count || 0) + ' tools</span>' +
+            '<span class="badge ' + badgeColor + '" style="' + badgeStyle + '">' + escapeHtml(badgeLabel) + '</span>' +
           '</div>' +
-          '<div class="item-card-desc"><code>' + escapeHtml(s.command) + ' ' + (s.args || []).map(escapeHtml).join(' ') + '</code></div>' +
-        '</div>'
-      ).join("");
+          '<div class="item-card-desc"><code>' + cmdStr + '</code></div>' +
+          (isError && s.error ? '<div style="font-size:11px; color:#f85149; margin-top:6px; padding:5px 8px; background:rgba(248,81,73,0.08); border:1px solid rgba(248,81,73,0.2);">' + escapeHtml(s.error) + '</div>' : '') +
+          (isError && s.error_detail ? '<div style="font-size:10.5px; color:var(--text-muted); margin-top:4px; padding:5px 8px; background:rgba(255,255,255,0.03); border:1px solid var(--card-border); max-height:80px; overflow:auto; white-space:pre-wrap; word-break:break-word;">' + escapeHtml(s.error_detail) + '</div>' : '') +
+          (isAuth ? '<div style="margin-top:8px;"><button class="btn" style="font-size:11px; padding:4px 10px;" data-action="mcp_auth" data-name="' + escapeHtml(s.name) + '">🔑 Connect / Authenticate</button></div>' : '') +
+          '<div style="display:flex; gap:6px; margin-top:10px; flex-wrap:wrap;">' +
+            '<button class="btn btn-secondary" style="padding:4px 8px; font-size:11px;" data-action="mcp_restart" data-name="' + escapeHtml(s.name) + '"' + (isDisabled ? ' disabled title="Enable first to restart"' : '') + '>↺ Restart</button>' +
+            (isDisabled
+              ? '<button class="btn" style="padding:4px 8px; font-size:11px;" data-action="mcp_toggle" data-name="' + escapeHtml(s.name) + '" data-disabled="false">▶ Enable</button>'
+              : '<button class="btn btn-secondary" style="padding:4px 8px; font-size:11px;" data-action="mcp_toggle" data-name="' + escapeHtml(s.name) + '" data-disabled="true">⏸ Disable</button>'
+            ) +
+          '</div>' +
+        '</div>';
+      }).join("");
     }
 
     let allCrons = [];
@@ -2816,6 +3000,41 @@ export class SettingsPanel {
             }
           }
         }
+      });
+    }
+
+    // ── MCP Server Controls (Restart / Enable-Disable / Refresh) ──
+    const mcpGrid = document.getElementById("mcp-grid");
+    if (mcpGrid) {
+      mcpGrid.addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-action]");
+        if (!btn) return;
+        const action = btn.dataset.action;
+        const name = btn.dataset.name;
+        if (action === "mcp_restart") {
+          btn.disabled = true;
+          const orig = btn.textContent;
+          btn.textContent = "↺ Restarting...";
+          vscode.postMessage({ type: "mcp_restart", name });
+          setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 4000);
+        } else if (action === "mcp_toggle") {
+          const disabled = btn.dataset.disabled === "true";
+          btn.disabled = true;
+          const orig = btn.textContent;
+          btn.textContent = disabled ? "⏸ Disabling..." : "▶ Enabling...";
+          vscode.postMessage({ type: "mcp_toggle", name, disabled });
+          setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 4000);
+        }
+      });
+    }
+    const btnRefreshMcp = document.getElementById("btn-refresh-mcp");
+    if (btnRefreshMcp) {
+      btnRefreshMcp.addEventListener("click", () => {
+        btnRefreshMcp.disabled = true;
+        const origHtml = btnRefreshMcp.innerHTML;
+        btnRefreshMcp.textContent = "Refreshing...";
+        vscode.postMessage({ type: "refresh_mcp" });
+        setTimeout(() => { btnRefreshMcp.disabled = false; btnRefreshMcp.innerHTML = origHtml; }, 2500);
       });
     }
 

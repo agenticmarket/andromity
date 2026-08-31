@@ -7,9 +7,54 @@ from andromity.core.session import Session
 from andromity.core.profiles import get_system_prompt, filter_tools_for_profile
 from andromity.core.tools import CORE_TOOLS, ToolRegistry, execute_tool, register_session
 from andromity.core.events import (
-    StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired
+    StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired, PlanUpdated
 )
 from andromity.config import config
+
+
+def _estimate_tokens(messages: list) -> int:
+    """Estimate token count for messages including thinking and tool calls.
+
+    Old code only counted ``content`` → severely undercounts when
+    reasoning_effort=high/xhigh/max stores huge ``thinking`` blocks
+    or when many tool calls are in history (tool args bloat).
+    We count content + thinking + tool_calls args + tool result content.
+    Uses len//4 heuristic (same as elsewhere) but covers all fields.
+    """
+    total = 0
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        # content: str or list[content_parts] (vision)
+        c = m.get("content")
+        if isinstance(c, str):
+            total += len(c) // 4
+        elif isinstance(c, list):
+            for part in c:
+                if isinstance(part, dict):
+                    total += len(str(part.get("text", ""))) // 4
+                    # image_url parts are not text → ignore token-wise
+                else:
+                    total += len(str(part)) // 4
+        elif c is not None:
+            total += len(str(c)) // 4
+        # thinking / reasoning stored separately by agent.run
+        for key in ("thinking", "reasoning", "reasoning_content"):
+            v = m.get(key)
+            if isinstance(v, str) and v:
+                total += len(v) // 4
+        # tool_calls (assistant side)
+        for tc in (m.get("tool_calls") or []):
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") or {}
+            if isinstance(fn, dict):
+                total += len(str(fn.get("name", ""))) // 4
+                total += len(str(fn.get("arguments", ""))) // 4
+        # tool result name + tool_call_id are tiny, counted for completeness
+        if m.get("tool_call_id"):
+            total += 2  # rough
+    return total
 
 
 class Agent:
@@ -135,7 +180,7 @@ class Agent:
         elif limit > 0:
             current_tokens = getattr(self.session, "context_tokens", 0)
             if current_tokens <= 0:
-                current_tokens = sum(len(str(m.get("content", ""))) // 4 for m in self.session.messages)
+                current_tokens = _estimate_tokens(self.session.messages)
             if current_tokens > limit * 0.80:
                 limit_k = f"{limit / 1000:.0f}K" if limit < 1_000_000 else f"{limit / 1_000_000:.1f}M"
                 pct = min(current_tokens / limit * 100, 100.0)
@@ -325,8 +370,8 @@ class Agent:
             if last_usage:
                 self.session.update_usage(last_usage, model=model_id)
             else:
-                prompt_tokens = sum(len(str(msg.get("content", ""))) // 4 for msg in self.session.messages)
-                completion_tokens = len(assistant_content) // 4
+                prompt_tokens = _estimate_tokens(self.session.messages)
+                completion_tokens = len(assistant_content) // 4 + len(assistant_thinking) // 4
                 self.session.update_usage({
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
@@ -352,7 +397,7 @@ class Agent:
                 provider = config.get("default", "provider", "")
                 model = config.get("default", "model", "")
                 limit = self.ctx_limit or get_context_limit_for_model(provider, model)
-                current_tokens = sum(len(str(m.get("content", ""))) // 4 for m in self.session.messages)
+                current_tokens = _estimate_tokens(self.session.messages)
                 if limit > 0 and current_tokens > limit * 0.9:
                     warning = (
                         f"\n**[No response from model]** Context full ({current_tokens:,}/{limit:,} tokens). "
@@ -427,8 +472,8 @@ class Agent:
                     args = {}
 
                 if not self.auto_approve and self.on_tool_approval:
-                    import asyncio
-                    is_approved = await self.on_tool_approval(tool_name, args) if asyncio.iscoroutinefunction(self.on_tool_approval) else self.on_tool_approval(tool_name, args)
+                    import inspect
+                    is_approved = await self.on_tool_approval(tool_name, args) if inspect.iscoroutinefunction(self.on_tool_approval) else self.on_tool_approval(tool_name, args)
                     if not is_approved:
                         rejection = (
                             f"TOOL REJECTED BY USER: '{tool_name}' was explicitly declined.\n"
@@ -513,12 +558,14 @@ class Agent:
                         tool_call_id=tool_call["id"],
                     )
 
-            # ── Phase 4: plan approvals (pauses the agent loop until answered)
+            # ── Phase 4: plan updates and approvals
             for tool_call, tool_name, args in prepared:
-                if tool_name == "write_plan":
+                if tool_name in ("write_plan", "update_plan_step"):
                     plan = self.session.load_plan_obj()
-                    if plan and plan.status == "pending":
-                        yield PlanApprovalRequired(plan=plan)
+                    if plan:
+                        yield PlanUpdated(plan=plan)
+                        if tool_name == "write_plan" and plan.status == "pending":
+                            yield PlanApprovalRequired(plan=plan)
 
     async def spawn_subagent(
         self,

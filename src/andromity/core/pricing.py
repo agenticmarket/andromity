@@ -107,6 +107,12 @@ def calculate_cost(usage: dict[str, Any], provider: str, model: str) -> CostResu
     prompt = int(usage.get("prompt_tokens", 0) or 0)
     completion = int(usage.get("completion_tokens", 0) or 0)
     cached = int(usage.get("cached_tokens", 0) or 0)
+    reasoning = int(usage.get("reasoning_tokens", 0) or 0)
+    # Reasoning tokens are billed as output (OpenAI o-series, DeepSeek-R1, etc.)
+    # Some providers report them separately; add to completion if not already included.
+    # If provider already includes reasoning in completion_tokens, double-count is still
+    # closer than ignoring 5-10k reasoning tokens entirely when reasoning_effort=high.
+    effective_completion = completion + reasoning
 
     try:
         import litellm
@@ -115,7 +121,7 @@ def calculate_cost(usage: dict[str, Any], provider: str, model: str) -> CostResu
                 kwargs = {
                     "model": candidate,
                     "prompt_tokens": prompt,
-                    "completion_tokens": completion,
+                    "completion_tokens": effective_completion,
                 }
                 if cached:
                     kwargs["cache_read_input_tokens"] = cached
@@ -127,7 +133,7 @@ def calculate_cost(usage: dict[str, Any], provider: str, model: str) -> CostResu
                     result = litellm.cost_per_token(
                         model=candidate,
                         prompt_tokens=prompt,
-                        completion_tokens=completion,
+                        completion_tokens=effective_completion,
                     )
                 if result is not None:
                     source = "litellm_estimate" if usage.get("usage_source") == "estimate" else "litellm"
@@ -145,9 +151,9 @@ def calculate_cost(usage: dict[str, Any], provider: str, model: str) -> CostResu
         k_rate = float(cached_rates.get("cached", 0) or p_rate)
         if p_rate > 0 or c_rate > 0:
             if cached and cached > 0:
-                cost = max(0, prompt - cached) * p_rate + cached * k_rate + completion * c_rate
+                cost = max(0, prompt - cached) * p_rate + cached * k_rate + effective_completion * c_rate
             else:
-                cost = prompt * p_rate + completion * c_rate
+                cost = prompt * p_rate + effective_completion * c_rate
             source = "openrouter_api" if provider == "openrouter" else "api_pricing"
             return CostResult(cost, source)
 
@@ -157,6 +163,8 @@ def calculate_cost(usage: dict[str, Any], provider: str, model: str) -> CostResu
         # Cached pricing varies by provider. Do not invent a discount; the
         # catalog fallback is explicitly marked as an estimate.
         source = "catalog_estimate"
+        # Use effective_completion so reasoning is priced
+        completion = effective_completion
         if usage.get("usage_source") == "estimate":
             source = "usage_and_catalog_estimate"
         return CostResult((prompt * input_rate + completion * output_rate) / 1_000_000, source)

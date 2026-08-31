@@ -46,17 +46,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _providers: ProviderInfo[] = [];
   private _currentPlan: any = null;
 
+  private _boundClient: RpcClient | null = null;
+  private _rpcDisposables: Array<() => void> = [];
+
   constructor(
     private readonly _extensionUri: vscode.Uri,
     private readonly _context?: vscode.ExtensionContext
   ) {}
 
   public setRpcClient(client: RpcClient) {
+    if (this._boundClient === client && this._rpcClient === client) {
+      return;
+    }
+    this._disposeRpcEvents();
     this._rpcClient = client;
+    this._boundClient = client;
     this._diffManager = new DiffManager(client, this._context!);
     this._bindRpcEvents();
     this._postToWebview({ type: "backend_ready" });
     this._loadInitialConfig(true);
+  }
+
+  private _disposeRpcEvents() {
+    for (const dispose of this._rpcDisposables) {
+      try {
+        dispose();
+      } catch (e) {
+        // ignore
+      }
+    }
+    this._rpcDisposables = [];
+    this._boundClient = null;
   }
 
   public toggleSessionsDrawer() {
@@ -247,83 +267,91 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private _bindRpcEvents() {
     if (!this._rpcClient) return;
+    const client = this._rpcClient;
 
-    this._rpcClient.on("agent/started", (params: any) => {
+    const bind = (event: string, handler: (...args: any[]) => void) => {
+      client.on(event, handler);
+      this._rpcDisposables.push(() => client.off(event, handler));
+    };
+
+    bind("agent/started", (params: any) => {
       this._postToWebview({ type: "agent_started", ...params });
     });
 
-    this._rpcClient.on("agent/textDelta", (params: any) => {
+    bind("agent/textDelta", (params: any) => {
       this._postToWebview({ type: "text_delta", ...params });
     });
 
-    this._rpcClient.on("agent/thinkingDelta", (params: any) => {
+    bind("agent/thinkingDelta", (params: any) => {
       this._postToWebview({ type: "thinking_delta", ...params });
     });
 
-    this._rpcClient.on("agent/toolStart", (params: any) => {
+    bind("agent/toolStart", (params: any) => {
       this._postToWebview({ type: "tool_start", ...params });
     });
 
-    this._rpcClient.on("agent/toolDelta", (params: any) => {
+    bind("agent/toolDelta", (params: any) => {
       this._postToWebview({ type: "tool_delta", ...params });
     });
 
-    this._rpcClient.on("agent/toolEnd", (params: any) => {
+    bind("agent/toolEnd", (params: any) => {
       this._postToWebview({ type: "tool_end", ...params });
     });
 
-    this._rpcClient.on("agent/toolResult", (params: any) => {
+    bind("agent/toolResult", (params: any) => {
       this._postToWebview({ type: "tool_result", ...params });
     });
 
-    this._rpcClient.on("agent/toolApprovalRequired", (params: any) => {
+    bind("agent/toolApprovalRequired", (params: any) => {
       this._postToWebview({ type: "tool_approval_required", ...params });
     });
 
-    this._rpcClient.on("agent/askQuestions", (params: any) => {
+    bind("agent/askQuestions", (params: any) => {
       this._postToWebview({ type: "ask_questions", ...params });
     });
 
-    this._rpcClient.on("agent/planApproval", (params: any) => {
+    bind("agent/planApproval", (params: any) => {
       this._currentPlan = params.plan;
       this._postToWebview({ type: "plan_approval", plan: params.plan });
     });
 
-    this._rpcClient.on("agent/planUpdated", (params: any) => {
+    bind("agent/planUpdated", (params: any) => {
       if (params.plan) {
         this._currentPlan = params.plan;
         this._postToWebview({ type: "plan_updated", plan: params.plan });
       }
     });
 
-    this._rpcClient.on("session/updated", (params: any) => {
+    bind("session/updated", (params: any) => {
       this._postToWebview({
         type: "session_updated",
         session_id: params.session_id,
         name: params.name,
         message_count: params.message_count,
         context_tokens: params.context_tokens,
+        token_total: params.token_total,
+        cost_usd: params.cost_usd,
       });
       vscode.commands.executeCommand("andromity.refreshSessions");
     });
 
-    this._rpcClient.on("subagent/spawned", (params: SubAgentEvent) => {
+    bind("subagent/spawned", (params: SubAgentEvent) => {
       this._postToWebview({ type: "subagent_spawned", ...params });
     });
 
-    this._rpcClient.on("subagent/progress", (params: SubAgentEvent) => {
+    bind("subagent/progress", (params: SubAgentEvent) => {
       this._postToWebview({ type: "subagent_progress", ...params });
     });
 
-    this._rpcClient.on("subagent/done", (params: SubAgentEvent) => {
+    bind("subagent/done", (params: SubAgentEvent) => {
       this._postToWebview({ type: "subagent_done", ...params });
     });
 
-    this._rpcClient.on("subagent/failed", (params: SubAgentEvent) => {
+    bind("subagent/failed", (params: SubAgentEvent) => {
       this._postToWebview({ type: "subagent_failed", ...params });
     });
 
-    this._rpcClient.on("agent/done", (params: any) => {
+    bind("agent/done", (params: any) => {
       this._postToWebview({ type: "agent_done", ...params });
       const cfg = vscode.workspace.getConfiguration("andromity");
       if (cfg.get<boolean>("soundNotifications", true)) {
@@ -334,11 +362,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       vscode.commands.executeCommand("andromity.refreshChanges");
     });
 
-    this._rpcClient.on("agent/cancelled", (params: any) => {
+    bind("agent/cancelled", (params: any) => {
       this._postToWebview({ type: "agent_cancelled", ...params });
     });
 
-    this._rpcClient.on("agent/error", (params: any) => {
+    bind("agent/error", (params: any) => {
       this._postToWebview({ type: "agent_error", ...params });
     });
   }
@@ -678,9 +706,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "cancel_turn": {
-        await this._rpcClient.call("agent.cancel", {
-          session_id: this._currentSessionId,
-        });
+        try {
+          await this._rpcClient.call("agent.cancel", {
+            session_id: this._currentSessionId,
+          });
+        } catch (e: any) {
+          console.warn("[Andromity] cancel_turn RPC failed:", e?.message || e);
+          // Still notify webview so fallback can trigger even if daemon is slow/dead
+          this._postToWebview({ type: "agent_cancelled", session_id: this._currentSessionId });
+        }
         break;
       }
 

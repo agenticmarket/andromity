@@ -2293,9 +2293,13 @@ Your output must be:
             # ── 2. Trim session messages & recalculate context tokens ─────────
             if msg_count <= len(self.session.messages):
                 self.session.messages = self.session.messages[:msg_count]
-                self.session.context_tokens = sum(
-                    len(str(msg.get("content", ""))) // 4 for msg in self.session.messages
-                )
+                try:
+                    from andromity.core.agent import _estimate_tokens as _est2
+                    self.session.context_tokens = _est2(self.session.messages)
+                except Exception:
+                    self.session.context_tokens = sum(
+                        len(str(msg.get("content", ""))) // 4 + len(str(msg.get("thinking", ""))) // 4 for msg in self.session.messages
+                    )
                 self.session.save()
 
             # ── 3. Clean visual chat panel rollback (await before system msg) ─

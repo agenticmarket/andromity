@@ -24,6 +24,7 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import secrets
 import socket
 import stat
@@ -42,23 +43,105 @@ CLIENT_VERSION     = "1.0.0"
 CALLBACK_TIMEOUT_S = 120
 TOKEN_FILE         = Path.home() / ".andromity" / "tokens.json"
 
-_SUCCESS_HTML = b"""\
-<!DOCTYPE html><html><head><meta charset="utf-8">
-<title>Andromity \xe2\x80\x94 Auth Complete</title>
-<style>
-  body{font-family:system-ui,sans-serif;background:#0e0e10;color:#e0e0e0;
-       display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
-  .box{text-align:center;padding:2rem 3rem;border:1px solid #333;border-radius:12px;background:#18181b}
-  .check{font-size:3rem;margin-bottom:1rem}
-  h1{margin:0 0 .5rem;font-size:1.5rem}
-  p{color:#888;margin:0}
-</style></head><body>
-<div class="box">
-  <div class="check">\xe2\x9c\x85</div>
-  <h1>Authentication Successful</h1>
-  <p>You can close this tab and return to Andromity.</p>
-</div></body></html>
-"""
+_SUCCESS_HTML = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Andromity — Authentication Complete</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+
+      font-family:
+        Inter, ui-sans-serif, system-ui, -apple-system,
+        BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+      background: #0b0b0d;
+      color: #ededed;
+    }
+
+    .card {
+      width: min(380px, calc(100% - 40px));
+      padding: 32px;
+
+      text-align: center;
+
+      background: #111114;
+      border: 1px solid #27272a;
+      border-radius: 14px;
+
+      box-shadow:
+        0 20px 60px rgba(0, 0, 0, 0.35);
+    }
+
+    .icon {
+      width: 44px;
+      height: 44px;
+      margin: 0 auto 20px;
+
+      display: grid;
+      place-items: center;
+
+      border-radius: 50%;
+      background: #1a2a20;
+      color: #62d992;
+
+      font-size: 21px;
+      font-weight: 600;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    p {
+      margin: 0;
+
+      color: #85858b;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .brand {
+      margin-top: 24px;
+
+      color: #4f4f55;
+      font-size: 12px;
+      letter-spacing: 0.02em;
+    }
+  </style>
+</head>
+
+<body>
+  <main class="card">
+    <div class="icon">✓</div>
+
+    <h1>Authentication successful</h1>
+
+    <p>
+      You're signed in to Andromity.<br>
+      You can close this tab and return to the application.
+    </p>
+
+    <div class="brand">ANDROMITY</div>
+  </main>
+</body>
+</html>
+""".encode("utf-8")
 
 def _error_html(reason: str) -> bytes:
     return (

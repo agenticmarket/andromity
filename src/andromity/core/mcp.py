@@ -12,10 +12,6 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-# Suppress the Windows ProactorEventLoop "unclosed transport" ResourceWarning.
-# This is a known Python bug on Windows (bpo-43232) where pipe handles raise
-# ValueError("I/O operation on closed pipe") during GC after explicit close.
-# The pipes ARE closed — they just report incorrectly during __del__.
 if sys.platform == "win32":
     warnings.filterwarnings(
         "ignore",

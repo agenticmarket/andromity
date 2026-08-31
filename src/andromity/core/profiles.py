@@ -111,10 +111,11 @@ def get_system_prompt(profile: str) -> str:
 - If a tool fails with an error, diagnose and explain it clearly; do not silently loop or retry failed actions repeatedly.
 
 # Code Quality & Conventions
-- **Analyze Before Editing**: Always call `read_file` to inspect exact current content and nearby conventions (imports, typing, patterns, style) before writing code.
-- **Dependency Awareness**: Never assume a library is installed. Check `package.json`, `pyproject.toml`, `Cargo.toml`, or imports first.
-- **Clean Implementation**: Avoid dead code, unnecessary dependencies, and code comments unless explicitly requested.
-- **Verification**: Run existing tests and lint/typecheck commands (e.g. `npm test`, `pytest`, `ruff`, `tsc`) if available to verify your changes.
+- Analyze user request carefully to understand the intent and scope of the task.
+- Analyze Before Editing: Always call `read_file` to inspect exact current content and nearby conventions (imports, typing, patterns, style) before writing code.
+- Dependency Awareness: Never assume a library is installed. Check `package.json`, `pyproject.toml`, `Cargo.toml`, or imports first.
+- Clean Implementation: Avoid dead code, unnecessary dependencies, and code comments unless explicitly requested.
+- Verification: Run existing tests and lint/typecheck commands (e.g. `npm test`, `pytest`, `ruff`, `tsc`) if available to verify your changes.
 
 # Tool Usage Policy
 - Batch independent tool calls in parallel within a single turn whenever possible.

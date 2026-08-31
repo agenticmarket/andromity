@@ -50,6 +50,12 @@ class PlanApprovalRequired(StreamEvent):
     plan: Any
 
 
+@dataclass
+class PlanUpdated(StreamEvent):
+    plan: Any
+
+
+
 # ── Sub-Agent Orchestration Events ───────────────────────────────────────────
 
 @dataclass

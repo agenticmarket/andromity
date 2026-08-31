@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import AsyncGenerator, List, Dict, Any, Optional
 
@@ -214,6 +215,23 @@ async def stream_completion(
                 from andromity.core.usage import normalize_usage
                 usage = normalize_usage(chunk.usage)
 
+    except asyncio.CancelledError:
+        log.info("stream_completion cancelled by user — closing provider stream")
+        try:
+            # Attempt graceful close of litellm stream (closes httpx / aiohttp)
+            if hasattr(response_stream, 'aclose'):
+                await response_stream.aclose()
+            elif hasattr(response_stream, 'close'):
+                response_stream.close()
+        except Exception:
+            pass
+        # Clean up any open tool spans before exit
+        for tid in list(open_tools.values()):
+            try:
+                yield ToolCallEnd(tool_id=tid)
+            except Exception:
+                pass
+        raise
     except litellm.RateLimitError as e:
         yield _handle_rate_limit(e)
     except Exception as e:
@@ -224,6 +242,10 @@ async def stream_completion(
         else:
             log.error("Mid-stream error (%s): %s", type(e).__name__, e, exc_info=True)
             yield TextDelta(text=_format_error_text(e))
+    finally:
+        # Always ensure Done is emitted even on cancel? No — caller handles CancelledError
+        # Only emit Done on normal/error paths; CancelledError already re-raised above.
+        pass
 
     yield Done(usage=usage)
 
