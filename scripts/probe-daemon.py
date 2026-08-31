@@ -124,7 +124,7 @@ class Probe:
         threading.Thread(target=self.pump, args=(proc.stdout, "stdout", self.handle_stdout_line), daemon=True).start()
         threading.Thread(
             target=self.pump, args=(proc.stderr, "stderr",
-                                    lambda raw: print(f"[{self.ts()}] [STDERR] {raw.rstrip()}", flush=True)),
+                                    lambda raw: print(f"[{self.ts()}] [STDERR] {raw.rstrip()}".encode("ascii", errors="replace").decode("ascii"), flush=True)),
             daemon=True,
         ).start()
 
@@ -155,9 +155,17 @@ class Probe:
             return 2
 
         self.note("--- sending prompt (turn starts now) ---")
-        send({"jsonrpc": "2.0", "id": 2, "method": "agent.prompt",
-              "params": {"session_id": self.session_id, "prompt": args.prompt,
-                         "project_path": project}})
+        prompt_params = {
+            "session_id": self.session_id,
+            "prompt": args.prompt,
+            "project_path": project,
+            "permission_mode": "full",
+        }
+        if args.provider:
+            prompt_params["provider"] = args.provider
+        if args.model:
+            prompt_params["model"] = args.model
+        send({"jsonrpc": "2.0", "id": 2, "method": "agent.prompt", "params": prompt_params})
 
         ended = self.turn_ended.wait(timeout=args.timeout)
         if ended:
@@ -187,6 +195,8 @@ def main():
     p.add_argument("--engine", choices=["binary", "python"], default="binary")
     p.add_argument("--exe", default=None)
     p.add_argument("--prompt", default="check python version")
+    p.add_argument("--provider", default=None)
+    p.add_argument("--model", default=None)
     p.add_argument("--project", default=os.getcwd())
     p.add_argument("--timeout", type=float, default=150)
     args = p.parse_args()

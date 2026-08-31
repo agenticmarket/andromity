@@ -263,7 +263,7 @@ ${styles}
           </svg>
           <span>Architecture</span>
         </button>
-        <button class="starter-chip" data-action="send-starter" data-prompt="Analyze diagnostics and fix any syntax or type errors in the current file" role="button" tabindex="0" aria-label="Fix diagnostics & errors">
+        <button class="starter-chip" data-action="send-starter" data-prompt="Analyze diagnostics and fix any syntax or type errors or security issue in the current project" role="button" tabindex="0" aria-label="Fix diagnostics & errors">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
           </svg>

@@ -73,8 +73,8 @@ class MCPStdioSession:
     async def start(self) -> bool:
         """Spawn server process, start JSON-RPC listener, and complete initialize handshake."""
         try:
-            merged_env = dict(os.environ)
-            merged_env.update(self.env)
+            from andromity.core.tools import get_clean_subprocess_env
+            merged_env = get_clean_subprocess_env(self.env)
 
             full_cmd = [self.command] + self.args
             log.info("Starting MCP server '%s': %s", self.name, " ".join(full_cmd))

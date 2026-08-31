@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
@@ -420,11 +421,47 @@ def edit_file_multi(path: str, edits: list) -> str:
 
 # ── Directory & Shell Operations ──────────────────────────────────────────────
 
+def get_clean_subprocess_env(extra_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Build a clean environment dictionary for subprocesses spawned from PyInstaller.
+
+    Prevents PyInstaller's internal PYTHONHOME/PYTHONPATH/_MEIPASS from poisoning
+    child python processes, pip, pytest, git hooks, and virtual environments.
+    """
+    env = os.environ.copy()
+
+    # 1. Restore original variables if PyInstaller preserved them
+    for var in ("PYTHONHOME", "PYTHONPATH", "PATH", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
+        orig = f"{var}_ORIG"
+        if orig in env:
+            env[var] = env[orig]
+            env.pop(orig, None)
+        elif getattr(sys, "frozen", False) and var in ("PYTHONHOME", "PYTHONPATH"):
+            # When frozen, remove PYTHONHOME/PYTHONPATH completely so child python
+            # uses its own installation directory.
+            env.pop(var, None)
+
+    # 2. Strip PyInstaller internal keys
+    for key in ("_MEIPASS2", "_PYI_APPLICATION_HOME_DIR", "_PYI_ARCHIVE_FILE", "_PYI_SPLASH_IPC"):
+        env.pop(key, None)
+
+    # 3. Clean _MEIPASS from PATH if PATH_ORIG was not set
+    if getattr(sys, "frozen", False):
+        mei = getattr(sys, "_MEIPASS", None)
+        if mei and "PATH" in env:
+            paths = env["PATH"].split(os.pathsep)
+            cleaned_paths = [p for p in paths if p and os.path.abspath(p) != os.path.abspath(mei)]
+            env["PATH"] = os.pathsep.join(cleaned_paths)
+
+    if extra_env:
+        env.update(extra_env)
+    return env
+
+
 def _shell_invocation(shell: str, command: str) -> list[str]:
     """Build the argv that tells this shell to run `command`.
 
     Different shells need different flags:
-      - powershell / pwsh     ->  -Command
+      - powershell / pwsh     ->  -NoProfile -NonInteractive -Command
       - cmd (Windows)         ->  /d /c   (cmd has no -c; /d skips AutoRun)
       - bash / sh / zsh / …  ->  -c
     Handles both bare names and full paths (e.g. C:\\Windows\\System32\\cmd.exe).
@@ -450,13 +487,19 @@ def shell_exec(command: str, timeout: int = 120) -> str:
             cwd = str(_get_project_root())
         except Exception:
             cwd = os.getcwd()
+        clean_env = get_clean_subprocess_env()
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         result = subprocess.run(
-            cmd, capture_output=True, text=True, errors="replace",
-            timeout=timeout, cwd=cwd,
-            close_fds=True,  # CRITICAL for frozen builds: without this the child
-            # inherits the PyInstaller bootloader's pipe handles, so the output
-            # pipe never reaches EOF and subprocess.run hangs forever (seen with
-            # even 'python --version' in the bundled andromity-server.exe).
+            cmd,
+            stdin=subprocess.DEVNULL,  # Prevent inheriting daemon stdio stream
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=timeout,
+            cwd=cwd,
+            env=clean_env,             # Prevent PYTHONHOME/PYTHONPATH poisoning
+            close_fds=True,            # Prevent handle inheritance
+            creationflags=flags,
         )
         output = result.stdout
         if result.stderr:
@@ -498,11 +541,20 @@ def shell_bg(command: str, process_id: str = "") -> str:
 
     try:
         cmd = _shell_invocation(shell, command)
+        clean_env = get_clean_subprocess_env()
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, errors="replace", cwd=cwd,
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+            cwd=cwd,
+            env=clean_env,
             bufsize=1,
-            close_fds=True,  # see shell_exec: prevents bootloader handle-inheritance hang in frozen builds
+            close_fds=True,
+            creationflags=flags,
         )
     except Exception as e:
         return f"Error starting background process: {e}"
