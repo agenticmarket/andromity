@@ -140,7 +140,7 @@ def grep_search(
                 cmd.extend(["--glob", file_pattern])
 
             cmd.extend(["-e", query, "--", str(search_path)])
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, errors="replace")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, errors="replace", close_fds=True)
             if result.returncode == 0 and result.stdout.strip():
                 lines = result.stdout.strip().splitlines()
                 return _format_grep_output(lines, search_path, max_results)
@@ -160,7 +160,7 @@ def grep_search(
                 cmd.append(file_pattern)
             else:
                 cmd.append(".")
-            result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(search_path), timeout=10, errors="replace")
+            result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(search_path), timeout=10, errors="replace", close_fds=True)
             if result.returncode == 0 and result.stdout.strip():
                 raw_lines = result.stdout.strip().splitlines()
                 filtered = []
@@ -189,6 +189,7 @@ def _is_git_worktree(path: Path) -> bool:
             text=True,
             cwd=str(path),
             timeout=2,
+            close_fds=True,  # frozen-build safety: see core/tools.py shell_exec
         )
         return res.returncode == 0 and res.stdout.strip() == "true"
     except Exception:

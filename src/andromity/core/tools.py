@@ -453,6 +453,10 @@ def shell_exec(command: str, timeout: int = 120) -> str:
         result = subprocess.run(
             cmd, capture_output=True, text=True, errors="replace",
             timeout=timeout, cwd=cwd,
+            close_fds=True,  # CRITICAL for frozen builds: without this the child
+            # inherits the PyInstaller bootloader's pipe handles, so the output
+            # pipe never reaches EOF and subprocess.run hangs forever (seen with
+            # even 'python --version' in the bundled andromity-server.exe).
         )
         output = result.stdout
         if result.stderr:
@@ -498,6 +502,7 @@ def shell_bg(command: str, process_id: str = "") -> str:
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, errors="replace", cwd=cwd,
             bufsize=1,
+            close_fds=True,  # see shell_exec: prevents bootloader handle-inheritance hang in frozen builds
         )
     except Exception as e:
         return f"Error starting background process: {e}"

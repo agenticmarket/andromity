@@ -22,6 +22,7 @@ def _get_git_branch() -> str:
             timeout=1,
             stdin=subprocess.DEVNULL,
             creationflags=flags,
+            close_fds=True,  # frozen-build safety: see core/tools.py shell_exec
         )
         if result.returncode == 0 and result.stdout.strip():
             _git_branch_cache = result.stdout.strip()
