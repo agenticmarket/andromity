@@ -344,6 +344,16 @@
           "default": "claude-sonnet-4-6",
           "description": "Default model ID."
         },
+        "andromity.startupSession": {
+          "type": "string",
+          "default": "last",
+          "enum": ["last", "fresh"],
+          "enumDescriptions": [
+            "Resume the session that was active when the panel/window was last closed.",
+            "Always start a new empty session on load (previous sessions remain in history)."
+          ],
+          "description": "Which chat session to open when the Andromity panel loads (applies on window reload or panel reopen)."
+        },
         "andromity.defaultProfile": {
           "type": "string",
           "default": "builder",

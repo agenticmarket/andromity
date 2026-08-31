@@ -32,6 +32,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _providers: ProviderInfo[] = [];
   private _currentPlan: any = null;
 
+  /** workspaceState key persisting the session the user had active last. */
+  private static readonly LAST_ACTIVE_SESSION_KEY = "andromity.lastActiveSessionId";
+
   private _boundClient: RpcClient | null = null;
   private _rpcDisposables: Array<() => void> = [];
 
@@ -136,8 +139,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /** Remember which session the user had active (survives window reloads). */
+  private _persistLastActiveSession(sessionId: string = this._currentSessionId) {
+    if (sessionId && this._context) {
+      void this._context.workspaceState.update(
+        ChatViewProvider.LAST_ACTIVE_SESSION_KEY,
+        sessionId
+      );
+    }
+  }
+
   public setCurrentSessionId(sessionId: string) {
     this._currentSessionId = sessionId;
+    this._persistLastActiveSession(sessionId);
     if (this._view) {
       this._view.webview.postMessage({ type: "session_switched", sessionId });
       this._loadSession(sessionId);
@@ -444,9 +458,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this._currentMode = configData?.permission_mode || "safe";
 
       if (loadSession) {
-        if (sessions && sessions.length > 0) {
-          const sessionWithMsgs = sessions.find((s: any) => s.message_count && s.message_count > 0);
-          this._currentSessionId = (sessionWithMsgs || sessions[0]).id;
+        const startupMode = vscode.workspace
+          .getConfiguration("andromity")
+          .get<string>("startupSession", "last");
+
+        if (startupMode === "fresh") {
+          // "fresh" mode: always start a new empty conversation on load;
+          // previous sessions remain accessible in the history drawer.
+          const newSess = await this._rpcClient.call<SessionInfo>("session.create", {
+            name: `Session ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+            project_path: workspaceFolder,
+          }).catch(() => ({ id: "main-session" } as SessionInfo));
+          this._currentSessionId = newSess.id;
+          this._persistLastActiveSession();
+        } else if (sessions && sessions.length > 0) {
+          // "last" mode (default): restore exactly the session the user had
+          // active when the window was last closed. Fall back to the previous
+          // heuristic (newest session with messages) when nothing is stored
+          // or the stored session no longer exists (e.g. deleted).
+          const storedId = this._context?.workspaceState.get<string>(
+            ChatViewProvider.LAST_ACTIVE_SESSION_KEY
+          );
+          const storedSession = storedId
+            ? sessions.find((s: any) => s.id === storedId)
+            : undefined;
+          const target =
+            storedSession ||
+            sessions.find((s: any) => s.message_count && s.message_count > 0) ||
+            sessions[0];
+          this._currentSessionId = target.id;
+          this._persistLastActiveSession();
           await this._loadSession(this._currentSessionId);
         } else {
           const newSess = await this._rpcClient.call<SessionInfo>("session.create", {
@@ -454,6 +495,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             project_path: workspaceFolder,
           }).catch(() => ({ id: "main-session" } as SessionInfo));
           this._currentSessionId = newSess.id;
+          this._persistLastActiveSession();
         }
       }
 
@@ -598,6 +640,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               project_path: workspaceFolder,
             }).catch(() => ({ id: "main-session" } as SessionInfo));
             this._currentSessionId = newSess.id;
+            this._persistLastActiveSession();
           }
 
           const cleanModel = (message.model || this._currentModel || "").replace(/^~+/, "");
