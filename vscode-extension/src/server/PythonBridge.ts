@@ -430,11 +430,11 @@ export class PythonBridge {
         PYTHONIOENCODING: "utf-8",
       };
       const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
-      const client = this._spawnDaemon(bundledBin, ["--stdio"], cwd, env);
-      this._client = client;
-      this._reconnectAttempts = 0;
-      this._notifyClientReady(client);
-      return client;
+      // NOTE: _spawnDaemon already calls _notifyClientReady — do NOT call it
+      // again here. The duplicate made every client-ready callback fire twice,
+      // logging "wired successfully" twice and double-registering unguarded
+      // rpcClient event handlers (e.g. agent/planApproval) in extension.ts.
+      return this._spawnDaemon(bundledBin, ["--stdio"], cwd, env);
     }
 
     this._isUsingBundledBinary = false;
