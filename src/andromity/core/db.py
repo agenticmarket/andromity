@@ -88,7 +88,9 @@ def init_schema() -> None:
                 token_total INTEGER NOT NULL DEFAULT 0, context_tokens INTEGER NOT NULL DEFAULT 0,
                 cost_usd REAL NOT NULL DEFAULT 0.0, cost_source TEXT NOT NULL DEFAULT 'unpriced',
                 usage_breakdown TEXT NOT NULL DEFAULT '{}', plan TEXT, compacted_history TEXT NOT NULL DEFAULT '[]',
-                parent_session TEXT, branch_point TEXT, sync_dirty INTEGER NOT NULL DEFAULT 1,
+                parent_session TEXT, branch_point TEXT,
+                allowed_commands TEXT NOT NULL DEFAULT '[]', allowed_domains TEXT NOT NULL DEFAULT '[]',
+                sync_dirty INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_hash, updated_at DESC);
@@ -139,6 +141,14 @@ def init_schema() -> None:
             INSERT OR IGNORE INTO schema_version(version) VALUES (1);
             """
         conn.executescript(schema_sql)
+
+        # Migration helper for older databases: ensure new columns exist
+        for col_name in ("allowed_commands", "allowed_domains"):
+            try:
+                conn.execute(f"ALTER TABLE sessions ADD COLUMN {col_name} TEXT NOT NULL DEFAULT '[]';")
+            except sqlite3.OperationalError:
+                pass  # column already exists
+
         _SCHEMA_INITIALIZED = True
 
 

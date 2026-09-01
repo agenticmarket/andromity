@@ -556,6 +556,25 @@ export class PythonBridge {
     env: Record<string, string>,
     totalStartTime?: number
   ): RpcClient {
+    // Ensure any previously running daemon process is cleanly terminated before spawning a new one
+    if (this._process) {
+      try {
+        const oldPid = this._process.pid;
+        if (process.platform === "win32" && oldPid) {
+          try {
+            cp.execSync(`taskkill /F /T /PID ${oldPid}`, { stdio: "ignore" });
+          } catch {
+            this._process.kill();
+          }
+        } else {
+          this._process.kill();
+        }
+      } catch {
+        // ignore
+      }
+      this._process = null;
+    }
+
     const spawnStartTime = Date.now();
     const overallStartTime = totalStartTime ?? spawnStartTime;
     const proc = cp.spawn(execPath, args, {
@@ -724,7 +743,16 @@ export class PythonBridge {
     }
     if (this._process) {
       try {
-        this._process.kill();
+        const pid = this._process.pid;
+        if (process.platform === "win32" && pid) {
+          try {
+            cp.execSync(`taskkill /F /T /PID ${pid}`, { stdio: "ignore" });
+          } catch {
+            this._process.kill();
+          }
+        } else {
+          this._process.kill();
+        }
       } catch (e) {
         // ignore
       }

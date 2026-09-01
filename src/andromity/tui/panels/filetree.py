@@ -206,8 +206,9 @@ FileTreePanel { height: 1fr; }
 }
 """
 
-    def __init__(self, **kwargs):
+    def __init__(self, project_path: Optional[Path] = None, **kwargs):
         super().__init__(**kwargs)
+        self._override_project_path = project_path
         self._loaded_paths: set[str] = set()
         self._search_timer = None
         self._last_query = ""
@@ -216,6 +217,8 @@ FileTreePanel { height: 1fr; }
 
     @property
     def project_path(self) -> Path:
+        if self._override_project_path is not None:
+            return Path(self._override_project_path)
         return Path(getattr(self.app, "_project_path", Path.cwd()))
 
     def compose(self) -> ComposeResult:

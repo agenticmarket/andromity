@@ -584,7 +584,9 @@ class AndromityApp(App):
                 if _SHELL_META.search(command):
                     needs_approval = True
                 else:
-                    allowed = config.get("default", "allowed_commands", [])
+                    global_allowed = config.get("default", "allowed_commands", []) or []
+                    session_allowed = getattr(self.session, "allowed_commands", []) if hasattr(self, "session") else []
+                    allowed = set(global_allowed) | set(session_allowed)
                     if not allowed:
                         needs_approval = True
                     else:
@@ -610,7 +612,9 @@ class AndromityApp(App):
             elif mode == "trust":
                 from andromity.core.security import is_domain_allowed
                 url = str(args.get("url", ""))
-                allowed_domains = config.get("default", "allowed_domains", [])
+                global_domains = config.get("default", "allowed_domains", []) or []
+                session_domains = getattr(self.session, "allowed_domains", []) if hasattr(self, "session") else []
+                allowed_domains = list(global_domains) + list(session_domains)
                 if not is_domain_allowed(url, allowed_domains):
                     needs_approval = True
         elif tool_name.startswith("mcp__"):
@@ -2195,6 +2199,8 @@ Your output must be:
                         existing = [existing]
                     if domain not in existing:
                         config.set("default", "allowed_domains", existing + [domain])
+                    if hasattr(self, "session") and self.session:
+                        self.session.allow_domain(domain)
         except Exception:
             pass
         self._resolve_tool_approval(True)

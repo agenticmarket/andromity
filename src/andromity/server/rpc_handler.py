@@ -494,7 +494,9 @@ class JsonRpcHandler:
                     if _SHELL_META.search(command):
                         needs_approval = True
                     else:
-                        allowed = config.get("default", "allowed_commands", [])
+                        global_allowed = config.get("default", "allowed_commands", []) or []
+                        session_allowed = getattr(session, "allowed_commands", []) or []
+                        allowed = set(global_allowed) | set(session_allowed)
                         if not allowed:
                             needs_approval = True
                         else:
@@ -523,7 +525,9 @@ class JsonRpcHandler:
                 elif mode == "trust":
                     from andromity.core.security import is_domain_allowed
                     url = str(args.get("url", ""))
-                    allowed_domains = config.get("default", "allowed_domains", [])
+                    global_domains = config.get("default", "allowed_domains", []) or []
+                    session_domains = getattr(session, "allowed_domains", []) or []
+                    allowed_domains = list(global_domains) + list(session_domains)
                     if not is_domain_allowed(url, allowed_domains):
                         needs_approval = True
 
@@ -540,7 +544,7 @@ class JsonRpcHandler:
 
             approval_id = str(uuid.uuid4())
             fut = asyncio.get_running_loop().create_future()
-            self._pending_approvals[approval_id] = (session_id, fut)
+            self._pending_approvals[approval_id] = (session_id, fut, tool_name, args)
 
             self.notify("agent/toolApprovalRequired", {
                 "session_id": session_id,
@@ -838,17 +842,70 @@ class JsonRpcHandler:
         approval_id = params.get("approval_id")
         session_id = params.get("session_id")
         approved = params.get("approved", True)
+        scope = params.get("scope", "once")  # "once" | "session" | "always" | "project"
+        tool_name = params.get("tool_name")
+        args = params.get("args") or {}
+
         if approval_id in self._pending_approvals:
             item = self._pending_approvals[approval_id]
             if isinstance(item, tuple):
-                stored_sid, fut = item
+                stored_sid, fut = item[0], item[1]
+                if not tool_name and len(item) > 2:
+                    tool_name = item[2]
+                if not args and len(item) > 3:
+                    args = item[3]
                 if session_id and stored_sid and session_id != stored_sid:
                     log.warning("Tool approval session mismatch: %s != %s", session_id, stored_sid)
+                session_id = session_id or stored_sid
             else:
                 fut = item
+
+            # If user approved with session or permanent scope, update session and config allowlists
+            if approved and session_id:
+                session = self._active_sessions.get(session_id)
+                if session is None:
+                    try:
+                        session = Session.load_by_id(session_id)
+                    except Exception:
+                        pass
+
+                if tool_name in ("shell_exec", "shell_bg"):
+                    cmd = str(args.get("command", "")).strip()
+                    if cmd:
+                        try:
+                            import shlex
+                            prefix = shlex.split(cmd)[0]
+                        except Exception:
+                            prefix = cmd
+                        if scope == "session" and session:
+                            session.allow_command(prefix)
+                            session.allow_command(cmd)
+                        elif scope in ("always", "project"):
+                            existing = config.get("default", "allowed_commands", []) or []
+                            if prefix not in existing:
+                                config.set("default", "allowed_commands", list(existing) + [prefix])
+                            if session:
+                                session.allow_command(prefix)
+                                session.allow_command(cmd)
+
+                elif tool_name == "fetch_url":
+                    url = str(args.get("url", "")).strip()
+                    if url:
+                        from andromity.core.security import get_domain
+                        domain = get_domain(url)
+                        if domain:
+                            if scope == "session" and session:
+                                session.allow_domain(domain)
+                            elif scope in ("always", "project"):
+                                existing = config.get("default", "allowed_domains", []) or []
+                                if domain not in existing:
+                                    config.set("default", "allowed_domains", list(existing) + [domain])
+                                if session:
+                                    session.allow_domain(domain)
+
             if not fut.done():
                 fut.set_result(approved)
-            return {"success": True, "approval_id": approval_id, "approved": approved}
+            return {"success": True, "approval_id": approval_id, "approved": approved, "scope": scope}
         return {"success": False, "error": "Approval ID not found or already resolved"}
 
     async def rpc_agent_reject_tool(self, params: Dict[str, Any]) -> Dict[str, Any]:

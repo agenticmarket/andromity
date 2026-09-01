@@ -300,3 +300,33 @@ def ensure_gitignore_entry(project_path: str, pattern: str) -> None:
             f.write(f"{sep}{pattern}\n")
     except Exception:
         pass
+
+
+def ensure_clean_project_andromity(project_path: str) -> None:
+    """Ensure .andromity/ is gitignored in the project root and create an internal
+    .andromity/.gitignore to prevent transient logs and cron outputs from polluting Git."""
+    try:
+        p = Path(project_path).resolve()
+        if not p.is_dir():
+            return
+        # 1. Ensure project root .gitignore ignores .andromity/
+        ensure_gitignore_entry(str(p), ".andromity/")
+
+        # 2. If .andromity exists, ensure internal .gitignore ignores temporary runtime artifacts
+        andromity_dir = p / ".andromity"
+        if andromity_dir.exists() and andromity_dir.is_dir():
+            internal_gi = andromity_dir / ".gitignore"
+            if not internal_gi.exists():
+                internal_gi.write_text(
+                    "# Ignore transient session and cron runtime logs\n"
+                    "cron_runs/\n"
+                    "handoffs/\n"
+                    "*.tmp\n"
+                    "*.lock\n"
+                    "*.log\n"
+                    "__pycache__/\n",
+                    encoding="utf-8"
+                )
+    except Exception:
+        pass
+

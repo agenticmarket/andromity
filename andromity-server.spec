@@ -29,6 +29,31 @@ referencing_datas, referencing_binaries, referencing_hiddenimports = collect_all
 rpds_datas, rpds_binaries, rpds_hiddenimports = collect_all('rpds')
 pydantic_core_datas, pydantic_core_binaries, pydantic_core_hidden = collect_all('pydantic_core')
 
+import importlib.util
+def collect_native_binaries(pkg_name):
+    try:
+        spec = importlib.util.find_spec(pkg_name)
+        if spec and spec.submodule_search_locations:
+            pkg_path = list(spec.submodule_search_locations)[0]
+            collected = []
+            for root, _, files in os.walk(pkg_path):
+                rel_dir = os.path.relpath(root, os.path.dirname(pkg_path))
+                for f in files:
+                    if f.endswith(('.pyd', '.so', '.dylib', '.dll')):
+                        collected.append((os.path.join(root, f), rel_dir))
+            return collected
+    except Exception:
+        pass
+    return []
+
+extra_native_binaries = (
+    collect_native_binaries('rpds') +
+    collect_native_binaries('fastuuid') +
+    collect_native_binaries('tiktoken') +
+    collect_native_binaries('tiktoken_ext') +
+    collect_native_binaries('pydantic_core')
+)
+
 mcp_datas = collect_data_files('mcp')
 mcp_hiddenimports = (
     collect_submodules('mcp.server') +
@@ -40,7 +65,7 @@ mcp_hiddenimports = (
 a = Analysis(
     ['src/andromity/server/__main__.py'],  # entry point
     pathex=['src'],
-    binaries=andromity_binaries + textual_binaries + litellm_binaries + tiktoken_binaries + tiktoken_ext_binaries + fastuuid_binaries + jsonschema_specs_binaries + referencing_binaries + rpds_binaries + pydantic_core_binaries,
+    binaries=andromity_binaries + textual_binaries + litellm_binaries + tiktoken_binaries + tiktoken_ext_binaries + fastuuid_binaries + jsonschema_specs_binaries + referencing_binaries + rpds_binaries + pydantic_core_binaries + extra_native_binaries,
     datas=andromity_datas + textual_datas + litellm_datas + tiktoken_datas + tiktoken_ext_datas + fastuuid_datas + jsonschema_specs_datas + mcp_datas + referencing_datas + rpds_datas + pydantic_core_datas + [('src/andromity/core/schema.sql', 'andromity/core')],
     hiddenimports=(
         andromity_hiddenimports +

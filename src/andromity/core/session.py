@@ -65,6 +65,8 @@ class Session:
         self.cost_source = "unpriced"
         self.plan: Optional[Dict[str, Any]] = None  # session-scoped plan
         self.compacted_history: List[Dict[str, Any]] = []  # old messages preserved for chat UI after compaction
+        self.allowed_commands: List[str] = []
+        self.allowed_domains: List[str] = []
         from andromity.config import config
         self.provider = config.get("default", "provider", "")
         self.model = config.get("default", "model", "")
@@ -78,6 +80,49 @@ class Session:
         self._save_timer: Optional[threading.Timer] = None
         self._save_lock = threading.RLock()
         self._dirty = False
+
+        # Ensure project folder has clean gitignore rules for .andromity
+        try:
+            from andromity.core.git_ops import ensure_clean_project_andromity
+            ensure_clean_project_andromity(self.project_path)
+        except Exception:
+            pass
+
+    def allow_command(self, cmd: str) -> None:
+        """Allow a command prefix or exact command for this session."""
+        cmd = cmd.strip()
+        if cmd and cmd not in self.allowed_commands:
+            self.allowed_commands.append(cmd)
+            self._dirty = True
+            self.save()
+
+    def allow_domain(self, domain: str) -> None:
+        """Allow a web domain for this session."""
+        domain = domain.strip().lower()
+        if domain and domain not in self.allowed_domains:
+            self.allowed_domains.append(domain)
+            self._dirty = True
+            self.save()
+
+    def is_command_allowed(self, command: str) -> bool:
+        """Check if a shell command is allowed in this session."""
+        import shlex
+        cmd = command.strip()
+        if not cmd:
+            return True
+        try:
+            cmd_token = shlex.split(cmd)[0] if cmd else ""
+        except ValueError:
+            cmd_token = ""
+        for prefix in self.allowed_commands:
+            if cmd == prefix or cmd.startswith(prefix + " ") or cmd_token == prefix:
+                return True
+        return False
+
+    def is_domain_allowed(self, url_or_domain: str) -> bool:
+        """Check if a URL or domain is allowed in this session."""
+        from andromity.core.security import is_domain_allowed
+        return is_domain_allowed(url_or_domain, self.allowed_domains)
 
     def set_status(self, status: str):
         """Update live lifecycle status of this session."""
@@ -178,6 +223,8 @@ class Session:
             "model": getattr(self, "model", ""),
             "plan": copy.deepcopy(self.plan) if snapshot and self.plan else self.plan,
             "compacted_history": self.compacted_history if not snapshot else copy.deepcopy(self.compacted_history),
+            "allowed_commands": list(getattr(self, "allowed_commands", [])),
+            "allowed_domains": list(getattr(self, "allowed_domains", [])),
         }
 
     def compact_messages(self, new_summary: str, keep_last_n: int = 10) -> int:
@@ -244,8 +291,9 @@ class Session:
                         provider, model, token_total, context_tokens,
                         cost_usd, cost_source, usage_breakdown, plan,
                         compacted_history, parent_session, branch_point,
+                        allowed_commands, allowed_domains,
                         sync_dirty, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         project_hash = excluded.project_hash,
                         project_path = excluded.project_path,
@@ -262,6 +310,8 @@ class Session:
                         compacted_history = excluded.compacted_history,
                         parent_session = excluded.parent_session,
                         branch_point = excluded.branch_point,
+                        allowed_commands = excluded.allowed_commands,
+                        allowed_domains = excluded.allowed_domains,
                         sync_dirty = 1,
                         updated_at = excluded.updated_at
                 """, (
@@ -270,6 +320,7 @@ class Session:
                     self.token_total, self.context_tokens, self.cost_usd, self.cost_source,
                     j(self.usage_breakdown), j(self.plan) if self.plan else None,
                     j(self.compacted_history), self.parent_session, self.branch_point,
+                    j(getattr(self, "allowed_commands", [])), j(getattr(self, "allowed_domains", [])),
                     self.created_at, self.updated_at
                 ))
 
@@ -399,6 +450,8 @@ class Session:
         })
         session.plan = uj(row["plan"], None) if row["plan"] else None
         session.compacted_history = uj(row["compacted_history"], []) if "compacted_history" in keys else []
+        session.allowed_commands = uj(row["allowed_commands"], []) if "allowed_commands" in keys and row["allowed_commands"] else []
+        session.allowed_domains = uj(row["allowed_domains"], []) if "allowed_domains" in keys and row["allowed_domains"] else []
 
         # Load messages
         msg_rows = c.execute(
@@ -467,6 +520,8 @@ class Session:
         session.model = data.get("model", "")
         session.plan = data.get("plan")
         session.compacted_history = data.get("compacted_history", [])
+        session.allowed_commands = data.get("allowed_commands", [])
+        session.allowed_domains = data.get("allowed_domains", [])
         session.storage_dir = fp.parent
         session.file_path = fp
         session._save_timer = None
