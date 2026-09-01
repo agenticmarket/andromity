@@ -5,6 +5,18 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { RpcClient } from "./RpcClient.js";
 
+export function formatTimestamp(date: Date = new Date()): string {
+  const pad = (n: number, z = 2) => String(n).padStart(z, "0");
+  const year = date.getFullYear();
+  const month = pad(date.getMonth() + 1);
+  const day = pad(date.getDate());
+  const hours = pad(date.getHours());
+  const mins = pad(date.getMinutes());
+  const secs = pad(date.getSeconds());
+  const ms = pad(date.getMilliseconds(), 3);
+  return `${year}-${month}-${day} ${hours}:${mins}:${secs}.${ms}`;
+}
+
 export interface PythonStatus {
   installed: boolean;
   path: string;
@@ -27,6 +39,10 @@ export class PythonBridge {
   private _lastPythonStatus: PythonStatus | null = null;
   private _packageInstallAttempted = false;
   private _lastExitWasPackageError = false;
+
+  private _log(msg: string): void {
+    this._outputChannel.appendLine(`[${formatTimestamp()}] ${msg}`);
+  }
 
   /**
    * Look for a platform-specific pre-built binary bundled inside the extension,
@@ -63,12 +79,17 @@ export class PythonBridge {
     for (const base of searchDirs) {
       const candidate = path.join(base, "bin", `${platform}-${arch}`, exeName);
       if (fs.existsSync(candidate)) {
-        this._outputChannel.appendLine(`[Andromity] ✓ Bundled binary found: ${candidate}`);
+        this._log(`[Andromity] ✓ Bundled binary found: ${candidate}`);
         return candidate;
+      }
+      const candidateSubdir = path.join(base, "bin", `${platform}-${arch}`, "andromity-server", exeName);
+      if (fs.existsSync(candidateSubdir)) {
+        this._log(`[Andromity] ✓ Bundled binary found: ${candidateSubdir}`);
+        return candidateSubdir;
       }
     }
 
-    this._outputChannel.appendLine(`[Andromity] No bundled binary found for ${platform}-${arch} — falling back to Python.`);
+    this._log(`[Andromity] No bundled binary found for ${platform}-${arch} — falling back to Python.`);
     return null;
   }
 
@@ -216,27 +237,27 @@ export class PythonBridge {
   }
 
   private async _connectTcp(port: number, host = "127.0.0.1"): Promise<RpcClient> {
-    this._outputChannel.appendLine(`[Andromity] Connecting to TCP server on ${host}:${port}...`);
+    this._log(`[Andromity] Connecting to TCP server on ${host}:${port}...`);
 
     return new Promise((resolve, reject) => {
       const socket = net.createConnection({ host, port }, () => {
-        this._outputChannel.appendLine(`[Andromity] Connected to TCP server.`);
+        this._log(`[Andromity] Connected to TCP server.`);
         this._socket = socket;
 
         const client = new RpcClient((msg) => {
           socket.write(msg);
-        }, { log: (m) => this._outputChannel.appendLine(m) });
+        }, { log: (m) => this._log(m) });
 
         socket.on("data", (data) => {
           client.handleIncomingMessage(data.toString("utf-8"));
         });
 
         socket.on("error", (err) => {
-          this._outputChannel.appendLine(`[Andromity TCP Error] ${err.message}`);
+          this._log(`[Andromity TCP Error] ${err.message}`);
         });
 
         socket.on("close", () => {
-          this._outputChannel.appendLine(`[Andromity] TCP connection closed.`);
+          this._log(`[Andromity] TCP connection closed.`);
           client.close("Andromity TCP connection closed.");
           this._client = null;
           this._notifyDisconnected();
@@ -248,7 +269,7 @@ export class PythonBridge {
       });
 
       socket.on("error", (err) => {
-        this._outputChannel.appendLine(`[Andromity TCP Connection Failed] ${err.message}`);
+        this._log(`[Andromity TCP Connection Failed] ${err.message}`);
         reject(err);
       });
     });
@@ -256,7 +277,7 @@ export class PythonBridge {
 
   /** Install the andromity package into the given Python environment. */
   private async _installPackage(pythonPath: string, cwd: string, srcDir: string | null): Promise<boolean> {
-    this._outputChannel.appendLine(`[Andromity] Auto-installing 'andromity' package...`);
+    this._log(`[Andromity] Auto-installing 'andromity' package...`);
 
     return vscode.window.withProgress(
       {
@@ -282,7 +303,7 @@ export class PythonBridge {
 
         const source = hasPyproject ? "workspace" : "PyPI";
         progress.report({ message: `Installing from ${source}...` });
-        this._outputChannel.appendLine(`[Andromity] pip install (${source}) cwd=${cwd}`);
+        this._log(`[Andromity] pip install (${source}) cwd=${cwd}`);
 
         const result = await new Promise<{ code: number; stderr: string }>((resolve) => {
           const proc = cp.spawn(pythonPath, pipArgs, {
@@ -300,7 +321,7 @@ export class PythonBridge {
 
         if (result.code === 0) {
           progress.report({ message: "Verifying..." });
-          this._outputChannel.appendLine(`[Andromity] Installation finished.`);
+          this._log(`[Andromity] Installation finished.`);
           return true;
         }
 
@@ -308,7 +329,7 @@ export class PythonBridge {
           .split("\n")
           .filter((l) => !l.includes("WARNING") && !l.includes("not on PATH") && l.trim())
           .join("\n");
-        this._outputChannel.appendLine(`[Andromity] pip failed (exit ${result.code}): ${errSummary}`);
+        this._log(`[Andromity] pip failed (exit ${result.code}): ${errSummary}`);
         return false;
       }
     );
@@ -419,22 +440,26 @@ export class PythonBridge {
   }
 
   private async _startSubprocess(): Promise<RpcClient> {
+    const startAttemptTime = Date.now();
     // ── Fast path: bundled binary (like kilo.exe) ────────────────────────────
     const bundledBin = this._findBundledBinary();
     if (bundledBin) {
       this._isUsingBundledBinary = true;
-      this._outputChannel.appendLine(`[Andromity] Starting via bundled binary: ${bundledBin}`);
+      if (process.platform !== "win32") {
+        try {
+          fs.chmodSync(bundledBin, 0o755);
+        } catch {
+          // Ignore if permission change is not permitted or already set
+        }
+      }
+      this._log(`[Andromity] Starting via bundled binary: ${bundledBin}`);
       const env: Record<string, string> = {
         ...(process.env as Record<string, string>),
         PYTHONUNBUFFERED: "1",
         PYTHONIOENCODING: "utf-8",
       };
       const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
-      // NOTE: _spawnDaemon already calls _notifyClientReady — do NOT call it
-      // again here. The duplicate made every client-ready callback fire twice,
-      // logging "wired successfully" twice and double-registering unguarded
-      // rpcClient event handlers (e.g. agent/planApproval) in extension.ts.
-      return this._spawnDaemon(bundledBin, ["--stdio"], cwd, env);
+      return this._spawnDaemon(bundledBin, ["--stdio"], cwd, env, startAttemptTime);
     }
 
     this._isUsingBundledBinary = false;
@@ -448,16 +473,16 @@ export class PythonBridge {
       ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
       ?? process.cwd();
 
-    this._outputChannel.appendLine(`[Andromity] Project root: ${cwd} (pyproject.toml: ${projectRoot ? "found" : "not found"})`);
+    this._log(`[Andromity] Project root: ${cwd} (pyproject.toml: ${projectRoot ? "found" : "not found"})`);
 
 
     if (!status.installed) {
-      this._outputChannel.appendLine(`[Andromity] Python not found at: ${status.path}`);
+      this._log(`[Andromity] Python not found at: ${status.path}`);
       throw new Error(`Python executable not found at "${status.path}". Install Python 3.11+ or set 'andromity.pythonPath'.`);
     }
 
     if (!status.isVersionSupported) {
-      this._outputChannel.appendLine(`[Andromity] Python ${status.version} too old (need 3.11+).`);
+      this._log(`[Andromity] Python ${status.version} too old (need 3.11+).`);
       throw new Error(`Python ${status.version} at "${status.path}" is too old. Andromity requires Python 3.11+.`);
     }
 
@@ -471,12 +496,12 @@ export class PythonBridge {
       // Step 1: Can we import directly via PYTHONPATH (workspace dev mode)?
       const wsCheck = await this._verifyPackage(pythonPath, hasSrc ? srcDir! : undefined);
       if (wsCheck.ok) {
-        this._outputChannel.appendLine(`[Andromity] ✓ Package importable via workspace src/. No pip install needed.`);
+        this._log(`[Andromity] ✓ Package importable via workspace src/. No pip install needed.`);
       } else {
-        this._outputChannel.appendLine(`[Andromity] Workspace check: ${wsCheck.error || "not found"}`);
+        this._log(`[Andromity] Workspace check: ${wsCheck.error || "not found"}`);
 
         if (this._packageInstallAttempted) {
-          this._outputChannel.appendLine(`[Andromity] Install already tried. Stopping.`);
+          this._log(`[Andromity] Install already tried. Stopping.`);
           throw new Error(
             `Could not start Andromity. Run in terminal:\n  ${pythonPath} -m pip install andromity`
           );
@@ -493,19 +518,19 @@ export class PythonBridge {
         // Step 3: Re-verify with same python + PYTHONPATH
         const postCheck = await this._verifyPackage(pythonPath, hasSrc ? srcDir! : undefined);
         if (!postCheck.ok) {
-          this._outputChannel.appendLine(`[Andromity] Still not importable: ${postCheck.error}`);
+          this._log(`[Andromity] Still not importable: ${postCheck.error}`);
           throw new Error(
             `Installed but not importable (${postCheck.error}).\nRun:\n  ${pythonPath} -m pip install andromity`
           );
         }
 
         this._packageInstallAttempted = false;
-        this._outputChannel.appendLine(`[Andromity] ✓ Package verified. Starting daemon...`);
+        this._log(`[Andromity] ✓ Package verified. Starting daemon...`);
         vscode.window.showInformationMessage("Andromity Engine installed successfully!");
       }
     }
 
-    this._outputChannel.appendLine(`[Andromity] Launching daemon (Python ${status.version || ""}): ${pythonPath}`);
+    this._log(`[Andromity] Launching daemon (Python ${status.version || ""}): ${pythonPath}`);
 
     const args = ["-m", "andromity.server", "--stdio"];
 
@@ -520,7 +545,7 @@ export class PythonBridge {
       env.PYTHONPATH = env.PYTHONPATH ? `${daemonSrcDir}${path.delimiter}${env.PYTHONPATH}` : daemonSrcDir;
     }
 
-    return this._spawnDaemon(pythonPath, args, projectRoot || cwd, env);
+    return this._spawnDaemon(pythonPath, args, projectRoot || cwd, env, startAttemptTime);
   }
 
   /** Shared daemon spawn logic used by both binary and Python paths. */
@@ -528,9 +553,11 @@ export class PythonBridge {
     execPath: string,
     args: string[],
     cwd: string,
-    env: Record<string, string>
+    env: Record<string, string>,
+    totalStartTime?: number
   ): RpcClient {
-    const startTime = Date.now();
+    const spawnStartTime = Date.now();
+    const overallStartTime = totalStartTime ?? spawnStartTime;
     const proc = cp.spawn(execPath, args, {
       cwd,
       env,
@@ -539,33 +566,45 @@ export class PythonBridge {
 
     this._process = proc;
     this._lastExitWasPackageError = false;
-    this._outputChannel.appendLine(`[Andromity] Daemon process spawned (PID: ${proc.pid}, launch time: ${Date.now() - startTime}ms)`);
+    const spawnDuration = Date.now() - spawnStartTime;
+    this._log(`[Andromity] Daemon process spawned (PID: ${proc.pid}, launch time: ${spawnDuration}ms)`);
 
     const client = new RpcClient((msg) => {
       if (proc.stdin && !proc.stdin.destroyed) {
         proc.stdin.write(msg);
       }
-    }, { log: (m) => this._outputChannel.appendLine(m) });
+    }, { log: (m) => this._log(m) });
 
     let stderrBuffer = "";
+    let hasReceivedFirstOutput = false;
+
+    const onFirstDaemonOutput = (source: "stdout" | "stderr") => {
+      if (!hasReceivedFirstOutput) {
+        hasReceivedFirstOutput = true;
+        const readyDuration = Date.now() - overallStartTime;
+        this._log(`[Andromity] Daemon engine ready / first response received (via ${source}, total startup time: ${readyDuration}ms)`);
+      }
+    };
 
     proc.stdout.on("data", (data) => {
+      onFirstDaemonOutput("stdout");
       client.handleIncomingMessage(data.toString("utf-8"));
     });
 
     proc.stderr.on("data", (data) => {
+      onFirstDaemonOutput("stderr");
       const text = data.toString("utf-8");
       stderrBuffer += text;
       this._outputChannel.append(`[Daemon Log] ${text}`);
     });
 
     proc.on("error", (err) => {
-      this._outputChannel.appendLine(`[Daemon Error] ${err.message}`);
+      this._log(`[Daemon Error] ${err.message}`);
       client.close(`Daemon process error: ${err.message}`);
     });
 
     proc.on("exit", (code, signal) => {
-      this._outputChannel.appendLine(`[Daemon Exit] Process exited with code ${code} (signal: ${signal})`);
+      this._log(`[Daemon Exit] Process exited with code ${code} (signal: ${signal})`);
 
       // Always reject pending RPCs on the client bound to this process.
       client.close(`Daemon exited with code ${code}`);
@@ -589,7 +628,7 @@ export class PythonBridge {
 
       if (isPackageError) {
         this._lastExitWasPackageError = true;
-        this._outputChannel.appendLine(
+        this._log(
           `[Andromity] Daemon failed because 'andromity' package is missing. Triggering auto-install...`
         );
         // Reset install flag so we try again (e.g. venv was deleted)
@@ -597,7 +636,7 @@ export class PythonBridge {
         // Don't count as a reconnect attempt — do a fresh install-then-start
         if (!this._isDisposed) {
           setTimeout(() => this._startSubprocess().catch((err) => {
-            this._outputChannel.appendLine(`[Andromity] Auto-install recovery failed: ${err.message}`);
+            this._log(`[Andromity] Auto-install recovery failed: ${err.message}`);
             vscode.window.showErrorMessage(
               `Andromity could not install the AI engine automatically.`,
               "Run Setup Check"
@@ -615,12 +654,12 @@ export class PythonBridge {
       if (!this._isDisposed && this._reconnectAttempts < this._maxReconnectAttempts) {
         this._reconnectAttempts++;
         const delay = Math.min(1000 * Math.pow(2, this._reconnectAttempts), 10000);
-        this._outputChannel.appendLine(
+        this._log(
           `[Andromity] Restarting daemon in ${delay}ms (attempt ${this._reconnectAttempts}/${this._maxReconnectAttempts})...`
         );
         setTimeout(() => this._startSubprocess(), delay);
       } else if (!this._isDisposed && this._reconnectAttempts >= this._maxReconnectAttempts) {
-        this._outputChannel.appendLine(`[Andromity] Max reconnect attempts reached. Stopping auto-restart.`);
+        this._log(`[Andromity] Max reconnect attempts reached. Stopping auto-restart.`);
         vscode.window.showErrorMessage(
           `Andromity daemon crashed repeatedly and stopped restarting. Check the 'Andromity' output channel for details.`,
           "View Logs",

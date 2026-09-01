@@ -52,10 +52,8 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='andromity-server',
     debug=False,
     bootloader_ignore_signals=False,
@@ -70,4 +68,15 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name='andromity-server',
 )

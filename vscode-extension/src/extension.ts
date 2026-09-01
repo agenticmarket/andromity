@@ -9,7 +9,7 @@ import { PlanViewProvider } from "./providers/PlanViewProvider.js";
 import { SessionTreeProvider } from "./providers/SessionTreeProvider.js";
 import { SettingsPanel } from "./panels/SettingsPanel.js";
 import { PlanEditorPanel } from "./panels/PlanEditorPanel.js";
-import { PythonBridge } from "./server/PythonBridge.js";
+import { PythonBridge, formatTimestamp } from "./server/PythonBridge.js";
 import { RpcClient } from "./server/RpcClient.js";
 
 let pythonBridge: PythonBridge | null = null;
@@ -54,7 +54,10 @@ function bindStatusBarEvents(client: RpcClient) {
 export async function activate(context: vscode.ExtensionContext) {
   const outputChannel = vscode.window.createOutputChannel("Andromity");
   context.subscriptions.push(outputChannel);
-  outputChannel.appendLine("[Andromity] Activating extension...");
+  const log = (msg: string) => {
+    outputChannel.appendLine(`[${formatTimestamp()}] ${msg}`);
+  };
+  log("[Andromity] Activating extension...");
 
   // 1. Initialize Python Bridge Daemon
   pythonBridge = new PythonBridge(outputChannel);
@@ -142,11 +145,11 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     });
 
-    outputChannel.appendLine("[Andromity] Python daemon client wired successfully.");
+    log("[Andromity] Python daemon client wired successfully.");
   });
 
   const promptSetupGuide = async (errMessage: string) => {
-    outputChannel.appendLine(`[Andromity] Setup issue: ${errMessage}`);
+    log(`[Andromity] Setup issue: ${errMessage}`);
     const choice = await vscode.window.showErrorMessage(
       `Andromity: ${errMessage}`,
       "Run Setup Check",
@@ -166,7 +169,7 @@ export async function activate(context: vscode.ExtensionContext) {
   pythonBridge
     .start()
     .catch((err) => {
-      outputChannel.appendLine(`[Andromity] Failed to start Python daemon: ${err.message}`);
+      log(`[Andromity] Failed to start Python daemon: ${err.message}`);
       markEngineStartFailed();
       promptSetupGuide(err.message);
     });
@@ -182,7 +185,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration(async (e) => {
       if (e.affectsConfiguration("andromity.pythonPath") || e.affectsConfiguration("andromity.serverPort")) {
-        outputChannel.appendLine("[Andromity] Python/Server configuration changed. Reloading daemon...");
+        log("[Andromity] Python/Server configuration changed. Reloading daemon...");
         try {
           await pythonBridge?.restart();
           vscode.window.showInformationMessage("Andromity daemon reloaded with new configuration.");

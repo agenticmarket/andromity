@@ -30,6 +30,7 @@ demo.html
 solo-developer-playbook.md
 vscode-extension/node_modules
 vscode-extension/dist-test/
+vscode-extension/bin/
 .pyinstaller-build/
 dist-server/
 build/

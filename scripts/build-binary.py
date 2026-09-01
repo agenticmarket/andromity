@@ -55,17 +55,30 @@ if sys.platform == "win32":
     import time
     time.sleep(0.5)
 
-for item in os.listdir(temp_dist):
-    src_fp = os.path.join(temp_dist, item)
+# If PyInstaller created a subdirectory named 'andromity-server', copy its contents
+src_root = os.path.join(temp_dist, "andromity-server")
+if not os.path.exists(src_root):
+    src_root = temp_dist
+
+for item in os.listdir(src_root):
+    src_fp = os.path.join(src_root, item)
     dst_fp = os.path.join(out_dir, item)
     try:
-        if os.path.exists(dst_fp):
+        if os.path.isdir(dst_fp):
+            shutil.rmtree(dst_fp, ignore_errors=True)
+        elif os.path.exists(dst_fp):
             os.remove(dst_fp)
     except Exception:
         pass
-    shutil.copy2(src_fp, dst_fp)
+    if os.path.isdir(src_fp):
+        shutil.copytree(src_fp, dst_fp, dirs_exist_ok=True)
+    else:
+        shutil.copy2(src_fp, dst_fp)
 
-print(f"\n[OK] Binary built and deployed at: {out_dir}")
+print(f"\n[OK] Onedir binary bundle built and deployed at: {out_dir}")
 for f in os.listdir(out_dir):
     fp = os.path.join(out_dir, f)
-    print(f"  {f}  ({os.path.getsize(fp) // (1024*1024)} MB)")
+    if os.path.isdir(fp):
+        print(f"  {f}/ (dir)")
+    else:
+        print(f"  {f}  ({os.path.getsize(fp) // 1024} KB)")
