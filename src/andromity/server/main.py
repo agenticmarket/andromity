@@ -138,6 +138,12 @@ async def start_stdio_server():
     async def _send_notification(notif: JsonRpcNotification):
         await _send_dict(notif.to_dict())
 
+    from andromity.core.db import init_schema
+    try:
+        init_schema()
+    except Exception as e:
+        log.warning("Database schema initialization failed: %s", e)
+
     handler = JsonRpcHandler(send_notification=_send_notification)
     # Start MCP manager in background (non-blocking) so mcp.list reports live status immediately
     try:

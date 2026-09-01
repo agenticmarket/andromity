@@ -262,6 +262,12 @@ class AndromityApp(App):
 
     def on_mount(self):
         try:
+            from andromity.core.db import init_schema
+            init_schema()
+        except Exception:
+            pass
+
+        try:
             from andromity.telemetry import send_session_start
             send_session_start()
         except Exception:

@@ -529,20 +529,23 @@ class MCPClientManager:
           - If a cached OAuth token exists → convert to mcp-remote with Bearer header
           - Otherwise → mark as needs_auth so the settings UI shows Connect button
         """
-        from andromity.core.oauth import load_token, ensure_fresh_token
-        from andromity.config import config as app_config
+        if not hasattr(self, "_start_lock") or self._start_lock is None:
+            self._start_lock = asyncio.Lock()
+        async with self._start_lock:
+            from andromity.core.oauth import load_token, ensure_fresh_token
+            from andromity.config import config as app_config
 
-        mcp_config = self.load_config()
-        servers    = mcp_config.get("mcpServers", {})
-        self.server_status.clear()
-        for name in servers.keys():
-            self._set_status(name, status="initializing", tools=0, error=None, command="")
+            mcp_config = self.load_config()
+            servers    = mcp_config.get("mcpServers", {})
+            self.server_status.clear()
+            for name in servers.keys():
+                self._set_status(name, status="initializing", tools=0, error=None, command="")
 
-        # Start all servers concurrently
-        await asyncio.gather(*[
-            self.start_server(name, srv_conf)
-            for name, srv_conf in servers.items()
-        ], return_exceptions=True)
+            # Start all servers concurrently
+            await asyncio.gather(*[
+                self.start_server(name, srv_conf)
+                for name, srv_conf in servers.items()
+            ], return_exceptions=True)
 
     async def start_server(self, name: str, srv_conf: Optional[dict] = None, trusted: bool = False):
         """Start a single configured MCP server."""

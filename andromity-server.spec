@@ -5,7 +5,7 @@
 
 import sys
 import os
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_submodules, collect_data_files
 
 block_cipher = None
 
@@ -22,20 +22,43 @@ litellm_datas, litellm_binaries, litellm_hiddenimports = collect_all('litellm')
 tiktoken_datas, tiktoken_binaries, tiktoken_hiddenimports = collect_all('tiktoken')
 tiktoken_ext_datas, tiktoken_ext_binaries, tiktoken_ext_hiddenimports = collect_all('tiktoken_ext')
 
+# Collect fastuuid, jsonschema_specifications, mcp, referencing, rpds, pydantic_core
+fastuuid_datas, fastuuid_binaries, fastuuid_hiddenimports = collect_all('fastuuid')
+jsonschema_specs_datas, jsonschema_specs_binaries, jsonschema_specs_hidden = collect_all('jsonschema_specifications')
+referencing_datas, referencing_binaries, referencing_hiddenimports = collect_all('referencing')
+rpds_datas, rpds_binaries, rpds_hiddenimports = collect_all('rpds')
+pydantic_core_datas, pydantic_core_binaries, pydantic_core_hidden = collect_all('pydantic_core')
+
+mcp_datas = collect_data_files('mcp')
+mcp_hiddenimports = (
+    collect_submodules('mcp.server') +
+    collect_submodules('mcp.client') +
+    collect_submodules('mcp.types') +
+    collect_submodules('mcp.shared')
+)
+
 a = Analysis(
     ['src/andromity/server/__main__.py'],  # entry point
     pathex=['src'],
-    binaries=andromity_binaries + textual_binaries + litellm_binaries + tiktoken_binaries + tiktoken_ext_binaries,
-    datas=andromity_datas + textual_datas + litellm_datas + tiktoken_datas + tiktoken_ext_datas,
+    binaries=andromity_binaries + textual_binaries + litellm_binaries + tiktoken_binaries + tiktoken_ext_binaries + fastuuid_binaries + jsonschema_specs_binaries + referencing_binaries + rpds_binaries + pydantic_core_binaries,
+    datas=andromity_datas + textual_datas + litellm_datas + tiktoken_datas + tiktoken_ext_datas + fastuuid_datas + jsonschema_specs_datas + mcp_datas + referencing_datas + rpds_datas + pydantic_core_datas + [('src/andromity/core/schema.sql', 'andromity/core')],
     hiddenimports=(
         andromity_hiddenimports +
         textual_hiddenimports +
         litellm_hiddenimports +
         tiktoken_hiddenimports +
         tiktoken_ext_hiddenimports +
+        fastuuid_hiddenimports +
+        jsonschema_specs_hidden +
+        mcp_hiddenimports +
+        referencing_hiddenimports +
+        rpds_hiddenimports +
+        pydantic_core_hidden +
         collect_submodules('andromity') +
         collect_submodules('litellm') +
-        ['litellm.llms', 'litellm.utils', 'litellm.litellm_core_utils.tokenizers', 'httpx', 'pydantic', 'rich', 'asyncio']
+        collect_submodules('fastuuid') +
+        collect_submodules('rpds') +
+        ['rpds.rpds', 'tiktoken._tiktoken', 'fastuuid.fastuuid', '_overlapped', '_asyncio', '_sqlite3', 'sqlite3', 'litellm.llms', 'litellm.utils', 'litellm.litellm_core_utils.tokenizers', 'httpx', 'pydantic', 'rich', 'asyncio']
     ),
     hookspath=[],
     hooksconfig={},

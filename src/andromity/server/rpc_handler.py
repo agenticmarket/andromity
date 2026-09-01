@@ -162,14 +162,18 @@ class JsonRpcHandler:
 
     async def _ensure_mcp_started(self, project_path: Optional[str] = None):
         """Ensure the MCP manager has called start_all() once."""
-        mgr = self._get_mcp_manager(project_path)
-        if not self._mcp_started:
-            try:
-                await mgr.start_all()
-            except Exception as e:
-                log.warning("MCP start_all failed: %s", e)
-            self._mcp_started = True
-        return mgr
+        if not hasattr(self, "_mcp_start_lock") or self._mcp_start_lock is None:
+            self._mcp_start_lock = asyncio.Lock()
+        async with self._mcp_start_lock:
+            mgr = self._get_mcp_manager(project_path)
+            if not self._mcp_started:
+                try:
+                    await mgr.start_all()
+                except Exception as e:
+                    log.warning("MCP start_all failed: %s", e)
+                finally:
+                    self._mcp_started = True
+            return mgr
 
     # ── Session Methods ─────────────────────────────────────────────────────────
 
@@ -207,6 +211,7 @@ class JsonRpcHandler:
                 sessions.append({
                     "id": s.id,
                     "name": s.name,
+                    "status": getattr(s, "status", "idle"),
                     "project_path": s.project_path,
                     "updated_at": getattr(s, "updated_at", None),
                     "created_at": getattr(s, "created_at", None),
@@ -223,6 +228,7 @@ class JsonRpcHandler:
                 sessions.append({
                     "id": s.id,
                     "name": s.name,
+                    "status": getattr(s, "status", "idle"),
                     "project_path": s.project_path,
                     "message_count": len(s.messages),
                     "token_total": getattr(s, "token_total", 0),
@@ -241,6 +247,7 @@ class JsonRpcHandler:
         return {
             "id": session.id,
             "name": session.name,
+            "status": getattr(session, "status", "idle"),
             "project_path": session.project_path,
             "created_at": session.created_at,
         }
@@ -252,6 +259,7 @@ class JsonRpcHandler:
         return {
             "id": session.id,
             "name": session.name,
+            "status": getattr(session, "status", "idle"),
             "project_path": session.project_path,
             "messages": session.messages,
             "token_total": getattr(session, "token_total", 0),
@@ -607,6 +615,7 @@ class JsonRpcHandler:
                     log.debug("Pre-edit snapshot skipped: %s", snap_err)
 
                 self.notify("agent/started", {"session_id": session_id})
+                session.set_status("running")
                 images = params.get("images")
                 image_uris = params.get("image_uris")
                 async for event in agent.run(prompt, images=images, image_uris=image_uris):
@@ -736,8 +745,10 @@ class JsonRpcHandler:
                     except Exception as title_err:
                         log.debug("Auto-title refinement error: %s", title_err)
 
+                session.set_status("idle")
                 session.save()
             except asyncio.CancelledError:
+                session.set_status("cancelled")
                 self.notify("agent/cancelled", {
                     "session_id": session_id,
                     "token_total": getattr(session, "token_total", 0),
@@ -746,6 +757,7 @@ class JsonRpcHandler:
                 })
                 log.info("Agent execution cancelled for session %s", session_id)
             except Exception as e:
+                session.set_status("error")
                 log.exception("Agent execution failed for session %s: %s", session_id, e)
                 self.notify("agent/error", {
                     "session_id": session_id,

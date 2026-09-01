@@ -47,33 +47,43 @@ subprocess.check_call([
 ], cwd=ROOT)
 
 # Copy to target out_dir with graceful process termination
-if sys.platform == "win32":
-    try:
-        subprocess.run(["taskkill", "/F", "/IM", "andromity-server.exe"], capture_output=True)
-    except Exception:
-        pass
-    import time
-    time.sleep(0.5)
+def robust_copy(src_root, out_dir):
+    for attempt in range(5):
+        if sys.platform == "win32":
+            try:
+                subprocess.run(["taskkill", "/F", "/IM", "andromity-server.exe"], capture_output=True)
+            except Exception:
+                pass
+            import time
+            time.sleep(0.5)
+        try:
+            for item in os.listdir(src_root):
+                src_fp = os.path.join(src_root, item)
+                dst_fp = os.path.join(out_dir, item)
+                if os.path.isdir(dst_fp):
+                    shutil.rmtree(dst_fp, ignore_errors=True)
+                elif os.path.exists(dst_fp):
+                    try:
+                        os.remove(dst_fp)
+                    except Exception:
+                        pass
+                if os.path.isdir(src_fp):
+                    shutil.copytree(src_fp, dst_fp, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(src_fp, dst_fp)
+            return
+        except Exception as e:
+            if attempt == 4:
+                raise
+            import time
+            time.sleep(1.0)
 
 # If PyInstaller created a subdirectory named 'andromity-server', copy its contents
 src_root = os.path.join(temp_dist, "andromity-server")
 if not os.path.exists(src_root):
     src_root = temp_dist
 
-for item in os.listdir(src_root):
-    src_fp = os.path.join(src_root, item)
-    dst_fp = os.path.join(out_dir, item)
-    try:
-        if os.path.isdir(dst_fp):
-            shutil.rmtree(dst_fp, ignore_errors=True)
-        elif os.path.exists(dst_fp):
-            os.remove(dst_fp)
-    except Exception:
-        pass
-    if os.path.isdir(src_fp):
-        shutil.copytree(src_fp, dst_fp, dirs_exist_ok=True)
-    else:
-        shutil.copy2(src_fp, dst_fp)
+robust_copy(src_root, out_dir)
 
 print(f"\n[OK] Onedir binary bundle built and deployed at: {out_dir}")
 for f in os.listdir(out_dir):

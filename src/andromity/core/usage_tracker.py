@@ -33,7 +33,9 @@ class UsageTracker:
 
     def get_summary(self, time_range: TimeRange = "all",
                     project_path: str | None = None) -> UsageSummary:
-        sessions = self._load_sessions(project_path)
+        sessions = self._load_sessions_from_db(project_path)
+        if not sessions:
+            sessions = self._load_sessions(project_path)
         cutoff = self._cutoff(time_range)
         summary = UsageSummary()
 
@@ -74,6 +76,51 @@ class UsageTracker:
         if time_range == "month":
             return (now - timedelta(days=30)).isoformat()
         return None  # all time
+
+    def _load_sessions_from_db(self, project_path: str | None) -> list[SessionStat]:
+        try:
+            from andromity.core.db import get_conn, init_schema
+            init_schema()
+            conn = get_conn()
+            if project_path:
+                from andromity.core.session import normalize_project_path
+                import hashlib
+                norm = normalize_project_path(project_path)
+                p_hash = hashlib.sha256(norm.encode()).hexdigest()[:16]
+                rows = conn.execute("""
+                    SELECT id, name, provider, model, token_total, cost_usd, created_at, updated_at, project_path
+                    FROM sessions
+                    WHERE project_hash = ?
+                """, (p_hash,)).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT id, name, provider, model, token_total, cost_usd, created_at, updated_at, project_path
+                    FROM sessions
+                """).fetchall()
+
+            if rows:
+                stats = []
+                for r in rows:
+                    provider = (r["provider"] or "").strip() or "unknown"
+                    model = (r["model"] or "").strip() or "unknown"
+                    cost_usd = float(r["cost_usd"] or 0.0)
+                    if ":free" in model.lower() or provider.lower() in ("ollama", "local"):
+                        cost_usd = 0.0
+                    stats.append(SessionStat(
+                        session_id=r["id"],
+                        name=r["name"] or "Unnamed",
+                        provider=provider,
+                        model=model,
+                        tokens=int(r["token_total"] or 0),
+                        cost_usd=cost_usd,
+                        created_at=r["created_at"] or "",
+                        updated_at=r["updated_at"] or "",
+                        project_path=r["project_path"] or "",
+                    ))
+                return stats
+        except Exception:
+            pass
+        return []
 
     def _load_sessions(self, project_path: str | None) -> list[SessionStat]:
         sessions_root = get_config_dir() / "sessions"

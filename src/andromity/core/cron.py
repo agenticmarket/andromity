@@ -126,20 +126,90 @@ class CronJob:
 
 class CronStore:
     def __init__(self, project_path: str):
+        self._project_path = str(Path(project_path).resolve())
         self._path = Path(project_path) / ".andromity" / "crons.json"
         self._path.parent.mkdir(parents=True, exist_ok=True)
 
     def load(self) -> List[CronJob]:
+        from andromity.core.db import get_conn, init_schema, uj
+        init_schema()
+        conn = get_conn()
+        rows = conn.execute(
+            "SELECT * FROM cron_jobs WHERE project_path = ? ORDER BY created_at ASC",
+            (self._project_path,)
+        ).fetchall()
+        if rows:
+            jobs = []
+            for r in rows:
+                keys = r.keys() if hasattr(r, "keys") else []
+                jobs.append(CronJob(
+                    id=r["id"],
+                    project_path=r["project_path"],
+                    name=r["name"],
+                    prompt=r["prompt"],
+                    schedule=r["schedule"],
+                    interval_seconds=r["interval_seconds"],
+                    provider=r["provider"],
+                    model=r["model"],
+                    mode=r["mode"],
+                    allowed_commands=uj(r["allowed_commands"], []),
+                    on_failure=r["on_failure"],
+                    retry_delay_seconds=r["retry_delay_seconds"],
+                    timeout_seconds=r["timeout_seconds"],
+                    enabled=bool(r["enabled"]),
+                    last_run=r["last_run"],
+                    last_status=r["last_status"],
+                    last_error=r["last_error"],
+                    run_count=r["run_count"],
+                    fail_count=r["fail_count"],
+                    retry_count=r["retry_count"],
+                    created_at=r["created_at"],
+                ))
+            return jobs
+
+        # Fallback to JSON
         if not self._path.exists():
             return []
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
-            return [CronJob.from_dict(c) for c in data.get("crons", [])]
+            crons = [CronJob.from_dict(c) for c in data.get("crons", [])]
+            if crons:
+                self.save(crons)  # Migrate to SQLite
+            return crons
         except Exception:
             return []
 
     def save(self, crons: List[CronJob]):
         import os
+        from andromity.core.db import get_conn, init_schema, j, transaction
+        init_schema()
+        conn = get_conn()
+        try:
+            with transaction(conn):
+                conn.execute("DELETE FROM cron_jobs WHERE project_path = ?", (self._project_path,))
+                for c in crons:
+                    c.project_path = self._project_path
+                    conn.execute("""
+                        INSERT OR REPLACE INTO cron_jobs (
+                            id, project_path, name, prompt, schedule,
+                            interval_seconds, provider, model, mode,
+                            allowed_commands, on_failure, retry_delay_seconds,
+                            timeout_seconds, enabled, last_run, last_status,
+                            last_error, run_count, fail_count, retry_count,
+                            created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        c.id, self._project_path, c.name, c.prompt, c.schedule,
+                        c.interval_seconds, c.provider, c.model, c.mode,
+                        j(c.allowed_commands), c.on_failure, c.retry_delay_seconds,
+                        c.timeout_seconds, 1 if c.enabled else 0, c.last_run,
+                        c.last_status, c.last_error, c.run_count, c.fail_count,
+                        c.retry_count, c.created_at
+                    ))
+        except Exception as e:
+            log.warning("Failed to save crons to SQLite: %s", e)
+
+        # Also write JSON snapshot
         tmp_path = self._path.with_suffix(".json.tmp")
         try:
             tmp_path.write_text(
@@ -148,7 +218,7 @@ class CronStore:
             )
             os.replace(tmp_path, self._path)
         except Exception as e:
-            log.error("Failed to save crons: %s", e)
+            log.error("Failed to save crons JSON: %s", e)
             if tmp_path.exists():
                 tmp_path.unlink()
 
@@ -188,9 +258,10 @@ class CronRun:
 
 
 class CronRunStore:
-    """Persists cron run history to .andromity/cron_runs/<job_id>/<run_id>.json"""
+    """Persists cron run history to SQLite and .andromity/cron_runs/<job_id>/<run_id>.json"""
 
     def __init__(self, project_path: str):
+        self._project_path = str(Path(project_path).resolve())
         self._base = Path(project_path) / ".andromity" / "cron_runs"
         self._base.mkdir(parents=True, exist_ok=True)
 
@@ -202,6 +273,30 @@ class CronRunStore:
     def sanitize_stale_runs(self, active_run_ids: Optional[set] = None):
         """Mark any runs still in 'running' state as 'interrupted' if not currently active."""
         active = active_run_ids or set()
+        from andromity.core.db import get_conn, init_schema
+        init_schema()
+        conn = get_conn()
+        try:
+            if active:
+                placeholders = ",".join("?" * len(active))
+                conn.execute(f"""
+                    UPDATE cron_runs
+                    SET status = 'interrupted',
+                        error = coalesce(error, 'Execution interrupted (app closed or restarted)'),
+                        finished_at = coalesce(finished_at, started_at)
+                    WHERE status = 'running' AND id NOT IN ({placeholders})
+                """, list(active))
+            else:
+                conn.execute("""
+                    UPDATE cron_runs
+                    SET status = 'interrupted',
+                        error = coalesce(error, 'Execution interrupted (app closed or restarted)'),
+                        finished_at = coalesce(finished_at, started_at)
+                    WHERE status = 'running'
+                """)
+        except Exception:
+            pass
+
         if not self._base.exists():
             return
         for f in self._base.glob("*/*.json"):
@@ -218,30 +313,131 @@ class CronRunStore:
     def save_run(self, run: CronRun):
         if not run.output_preview and run.output:
             run.output_preview = run.output[:500]
-        path = self._job_dir(run.job_id) / f"{run.id}.json"
-        path.write_text(json.dumps(run.to_dict(), indent=2), encoding="utf-8")
+
+        from andromity.core.db import get_conn, init_schema, j
+        init_schema()
+        conn = get_conn()
+        try:
+            conn.execute("""
+                INSERT OR REPLACE INTO cron_runs (
+                    id, job_id, job_name, started_at, finished_at,
+                    duration_ms, status, prompt, model, provider,
+                    session_id, output, output_preview, tools_used,
+                    files_modified, tool_executions, error, error_traceback,
+                    cost_usd
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                run.id, run.job_id, run.job_name, run.started_at, run.finished_at,
+                run.duration_ms, run.status, run.prompt, run.model, run.provider,
+                run.session_id, run.output, run.output_preview,
+                j(run.tools_used), j(run.files_modified), j(run.tool_executions),
+                run.error, run.error_traceback, run.cost_usd
+            ))
+        except Exception as e:
+            log.warning("Failed to save cron run to SQLite: %s", e)
+
+        # JSON snapshot
+        try:
+            path = self._job_dir(run.job_id) / f"{run.id}.json"
+            path.write_text(json.dumps(run.to_dict(), indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
     def list_runs(self, job_id: str, limit: int = 50) -> List[CronRun]:
+        from andromity.core.db import get_conn, init_schema, uj
+        init_schema()
+        conn = get_conn()
+        rows = conn.execute("""
+            SELECT * FROM cron_runs 
+            WHERE job_id = ? 
+            ORDER BY started_at DESC 
+            LIMIT ?
+        """, (job_id, limit)).fetchall()
+        if rows:
+            runs = []
+            for r in rows:
+                runs.append(CronRun(
+                    id=r["id"],
+                    job_id=r["job_id"],
+                    job_name=r["job_name"],
+                    started_at=r["started_at"],
+                    finished_at=r["finished_at"],
+                    duration_ms=r["duration_ms"],
+                    status=r["status"],
+                    prompt=r["prompt"],
+                    model=r["model"],
+                    provider=r["provider"],
+                    session_id=r["session_id"],
+                    output=r["output"],
+                    output_preview=r["output_preview"],
+                    tool_executions=uj(r["tool_executions"], []),
+                    tools_used=uj(r["tools_used"], []),
+                    files_modified=uj(r["files_modified"], []),
+                    error=r["error"],
+                    error_traceback=r["error_traceback"],
+                    cost_usd=r["cost_usd"],
+                ))
+            return runs
+
+        # Fallback to JSON
         job_dir = self._job_dir(job_id)
         runs = []
         for f in job_dir.glob("*.json"):
             try:
-                runs.append(CronRun.from_dict(json.loads(f.read_text(encoding="utf-8"))))
+                run_obj = CronRun.from_dict(json.loads(f.read_text(encoding="utf-8")))
+                self.save_run(run_obj)  # Auto-migrate
+                runs.append(run_obj)
             except Exception:
                 continue
         runs.sort(key=lambda r: r.started_at, reverse=True)
         return runs[:limit]
 
     def get_run(self, job_id: str, run_id: str) -> Optional[CronRun]:
+        from andromity.core.db import get_conn, init_schema, uj
+        init_schema()
+        conn = get_conn()
+        r = conn.execute("SELECT * FROM cron_runs WHERE id = ?", (run_id,)).fetchone()
+        if r:
+            return CronRun(
+                id=r["id"],
+                job_id=r["job_id"],
+                job_name=r["job_name"],
+                started_at=r["started_at"],
+                finished_at=r["finished_at"],
+                duration_ms=r["duration_ms"],
+                status=r["status"],
+                prompt=r["prompt"],
+                model=r["model"],
+                provider=r["provider"],
+                session_id=r["session_id"],
+                output=r["output"],
+                output_preview=r["output_preview"],
+                tool_executions=uj(r["tool_executions"], []),
+                tools_used=uj(r["tools_used"], []),
+                files_modified=uj(r["files_modified"], []),
+                error=r["error"],
+                error_traceback=r["error_traceback"],
+                cost_usd=r["cost_usd"],
+            )
         path = self._job_dir(job_id) / f"{run_id}.json"
         if path.exists():
             try:
-                return CronRun.from_dict(json.loads(path.read_text(encoding="utf-8")))
+                run = CronRun.from_dict(json.loads(path.read_text(encoding="utf-8")))
+                self.save_run(run)
+                return run
             except Exception:
                 pass
         return None
 
     def delete_run(self, job_id: str, run_id: str) -> bool:
+        from andromity.core.db import get_conn, init_schema
+        init_schema()
+        conn = get_conn()
+        try:
+            conn.execute("DELETE FROM cron_runs WHERE id = ?", (run_id,))
+        except Exception:
+            pass
+
         path = self._job_dir(job_id) / f"{run_id}.json"
         if path.exists():
             try:
@@ -249,7 +445,7 @@ class CronRunStore:
                 return True
             except Exception:
                 pass
-        return False
+        return True
 
 
 # ── Scheduler ──────────────────────────────────────────────────────────────

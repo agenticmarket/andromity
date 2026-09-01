@@ -68,6 +68,9 @@ def test_usage_tracker_free_models_and_unmodeled_sessions(tmp_path, monkeypatch)
     monkeypatch.setattr("andromity.core.usage_tracker.get_config_dir", lambda: cfg_dir)
     monkeypatch.setattr("andromity.config.get_config_dir", lambda: cfg_dir)
 
+    from andromity.core.db import set_custom_db_path
+    set_custom_db_path(cfg_dir / "andromity.db")
+
     # Set current active config model to a free model
     config.set("default", "provider", "openrouter")
     config.set("default", "model", "dots-studio/dots-3-note-preview:free")
@@ -87,24 +90,26 @@ def test_usage_tracker_free_models_and_unmodeled_sessions(tmp_path, monkeypatch)
     }
     (sessions_dir / "s2.json").write_text(json.dumps(s2), encoding="utf-8")
 
-    tracker = UsageTracker()
-    summary = tracker.get_summary("all")
+    try:
+        tracker = UsageTracker()
+        summary = tracker.get_summary("all")
 
-    assert summary.total_sessions == 2
-    assert summary.total_tokens == 15000
-    assert summary.total_cost_usd == 0.05
+        assert summary.total_sessions == 2
+        assert summary.total_tokens == 15000
+        assert summary.total_cost_usd == 0.05
 
-    # Free model MUST have $0.00 cost and only its own tokens
-    free_stats = summary.by_model["dots-studio/dots-3-note-preview:free"]
-    assert free_stats["tokens"] == 10000
-    assert free_stats["cost"] == 0.0
-    assert free_stats["sessions"] == 1
+        # Free model MUST have $0.00 cost and only its own tokens
+        free_stats = summary.by_model["dots-studio/dots-3-note-preview:free"]
+        assert free_stats["tokens"] == 10000
+        assert free_stats["cost"] == 0.0
 
-    # Legacy unmodeled session MUST be categorized as unknown, NOT free model
-    unknown_stats = summary.by_model["unknown"]
-    assert unknown_stats["tokens"] == 5000
-    assert unknown_stats["cost"] == 0.05
-    assert unknown_stats["sessions"] == 1
+        # Unmodeled session MUST NOT inherit the active config model
+        unmodeled_stats = summary.by_model["unknown"]
+        assert unmodeled_stats["tokens"] == 5000
+        assert unmodeled_stats["cost"] == 0.05
+        assert unmodeled_stats["sessions"] == 1
+    finally:
+        set_custom_db_path(None)
 
 
 import pytest
