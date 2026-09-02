@@ -11,4 +11,11 @@ node_modules/**
 *.vsix
 .git/**
 .gitignore
+dist/integrations/**
+dist/panels/**
+dist/providers/**
+dist/server/**
+dist/test-check.js
+dist/*.map
+
 

@@ -19,6 +19,7 @@ src/andromity/core/agent.py
 src/andromity/core/audio.py
 src/andromity/core/context_menu.py
 src/andromity/core/cron.py
+src/andromity/core/db.py
 src/andromity/core/debug_log.py
 src/andromity/core/events.py
 src/andromity/core/export.py
@@ -78,13 +79,16 @@ src/andromity/tui/panels/diff.py
 src/andromity/tui/panels/filetree.py
 src/andromity/tui/panels/plan.py
 tests/test_agent.py
+tests/test_audit_remediation.py
 tests/test_command_palette.py
 tests/test_config.py
 tests/test_context_menu.py
 tests/test_cron.py
+tests/test_db.py
 tests/test_diff_panel.py
 tests/test_events.py
 tests/test_export.py
+tests/test_extra_coverage.py
 tests/test_filetree.py
 tests/test_git.py
 tests/test_handoff.py
@@ -92,6 +96,7 @@ tests/test_help_screen.py
 tests/test_images.py
 tests/test_lore.py
 tests/test_mcp.py
+tests/test_migration_compat.py
 tests/test_modal_esc.py
 tests/test_model_picker_key.py
 tests/test_models.py
@@ -106,7 +111,9 @@ tests/test_resize.py
 tests/test_search.py
 tests/test_server_rpc.py
 tests/test_session.py
+tests/test_session_allowlist.py
 tests/test_session_bus.py
+tests/test_session_status.py
 tests/test_settings_mcp.py
 tests/test_shared_state.py
 tests/test_skill_mentions.py
@@ -115,6 +122,7 @@ tests/test_status_bar.py
 tests/test_subagent.py
 tests/test_subagent_config.py
 tests/test_subagent_orchestrator.py
+tests/test_subagent_permissions_and_filtering.py
 tests/test_subagent_tools.py
 tests/test_todo.py
 tests/test_tools.py

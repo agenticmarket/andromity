@@ -1,7 +1,7 @@
 {
-  "name": "andromity",
-  "displayName": "Andromity",
-  "description": "Autonomous AI coding agent with trust governance, sub-agents, live plans, and multi-model support.",
+  "name": "andromity-agent",
+  "displayName": "Andromity AI Coding Agent for VS Code",
+  "description": "Autonomous AI coding agent with subagents, live plans & diffs. BYOK support for Claude 3.7, GPT-4o, DeepSeek R1, Gemini & free local Ollama. MCP & Multi-Agent ready.",
   "version": "0.2.3",
   "publisher": "agenticmarket",
   "license": "MIT",
@@ -17,11 +17,11 @@
     "AI",
     "Chat",
     "Programming Languages",
-    "Snippets",
-    "Formatters"
+    "Testing",
+    "Snippets"
   ],
   "keywords": [
-    "ai",
+    "ai agent",
     "coding agent",
     "copilot",
     "claude",
@@ -30,7 +30,17 @@
     "ollama",
     "deepseek",
     "mcp",
-    "autonomous"
+    "byok",
+    "multi agent",
+    "subagents",
+    "local ai",
+    "cursor",
+    "model context protocol",
+    "task planner",
+    "groq",
+    "openrouter",
+    "pair programming",
+    "unit tests"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -166,6 +176,12 @@
         "title": "Delete Session",
         "category": "Andromity",
         "icon": "$(trash)"
+      },
+      {
+        "command": "andromity.welcome",
+        "title": "Welcome / Getting Started",
+        "category": "Andromity",
+        "icon": "$(rocket)"
       }
     ],
     "keybindings": [
@@ -307,6 +323,11 @@
           "command": "andromity.undoTurn",
           "when": "view == andromity.chatView",
           "group": "1_more@4"
+        },
+        {
+          "command": "andromity.welcome",
+          "when": "view == andromity.chatView",
+          "group": "1_more@5"
         }
       ],
       "view/item/context": [
@@ -403,7 +424,50 @@
           "description": "TCP port to connect to an external Andromity daemon (0 for embedded stdio process)."
         }
       }
-    }
+    },
+    "walkthroughs": [
+      {
+        "id": "andromity.welcome",
+        "title": "Get started with Andromity",
+        "description": "Learn how to use Andromity to write, plan, and automate your code.",
+        "featuredImage": "media/icon.png",
+        "steps": [
+          {
+            "id": "andromity.welcome.partner",
+            "title": "Your AI coding partner",
+            "description": "Andromity helps you write, plan, and automate code right in VS Code.",
+            "media": {
+              "markdown": "walkthroughs/partner.md"
+            },
+            "completionEvents": [
+              "onCommand:andromity.openChat"
+            ]
+          },
+          {
+            "id": "andromity.welcome.planning",
+            "title": "Plan before you code",
+            "description": "Formulate interactive plans and inspect components before modifying code.",
+            "media": {
+              "markdown": "walkthroughs/planning.md"
+            },
+            "completionEvents": [
+              "onCommand:andromity.newSession"
+            ]
+          },
+          {
+            "id": "andromity.welcome.trusted",
+            "title": "Trust & Workspace Governance",
+            "description": "Manage folder permissions, review auto-approved directories, and choose your permission mode.",
+            "media": {
+              "markdown": "walkthroughs/trusted.md"
+            },
+            "completionEvents": [
+              "onCommand:andromity.openSettings"
+            ]
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run build",

@@ -106,9 +106,25 @@ class ConfigManager:
         self.save(default_config)
 
     def save(self, config_data: Optional[Dict[str, Any]] = None):
+        import os
         data_to_save = config_data if config_data is not None else self._config_cache
-        with open(self.config_path, "wb") as f:
-            tomli_w.dump(data_to_save, f)
+        tmp_path = self.config_path.with_suffix(".tmp")
+        try:
+            with open(tmp_path, "wb") as f:
+                tomli_w.dump(data_to_save, f)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
+            os.replace(str(tmp_path), str(self.config_path))
+        except Exception:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except Exception:
+                    pass
+            raise
         if config_data is not None:
             self._config_cache = config_data
 

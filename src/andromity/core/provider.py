@@ -37,10 +37,9 @@ def _is_local_base_url(base_url: Optional[str]) -> bool:
     return "localhost" in b or "127.0.0.1" in b or "[::1]" in b
 
 
-async def _first_token_guard(stream: Any, timeout: float):
-    """Pass stream chunks through unchanged, but raise ProviderStalledError if
-    the very first chunk does not arrive within `timeout` seconds. Once the
-    first chunk is through, the client's own read timeout covers the rest."""
+async def _first_token_guard(stream: Any, timeout: float, idle_chunk_timeout: float = 60.0):
+    """Pass stream chunks through unchanged, raising ProviderStalledError if the first chunk
+    or any subsequent chunk stalls for longer than timeout / idle_chunk_timeout seconds."""
     aiter = stream.__aiter__()
     try:
         first = await asyncio.wait_for(aiter.__anext__(), timeout=timeout)
@@ -55,7 +54,19 @@ async def _first_token_guard(stream: Any, timeout: float):
     except StopAsyncIteration:
         return
     yield first
-    async for chunk in aiter:
+    while True:
+        try:
+            chunk = await asyncio.wait_for(aiter.__anext__(), timeout=idle_chunk_timeout)
+        except asyncio.TimeoutError:
+            try:
+                aclose = getattr(stream, "aclose", None)
+                if aclose:
+                    await aclose()
+            except Exception:
+                pass
+            raise ProviderStalledError(idle_chunk_timeout)
+        except StopAsyncIteration:
+            break
         yield chunk
 
 

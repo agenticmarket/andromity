@@ -474,6 +474,53 @@ class MCPClientManager:
         self.sessions: Dict[str, MCPStdioSession] = {}
         self.server_status: Dict[str, dict] = {}
 
+    def _persist_status(self, name: str, entry: dict) -> None:
+        """Persist one server_status entry to SQLite. Never raises."""
+        try:
+            from andromity.core.db import get_conn, init_schema
+            init_schema()
+            conn = get_conn()
+            conn.execute("""
+                INSERT INTO mcp_server_status(name, project_path, status, tools_count, error, error_detail, updated_at, started_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(name, project_path) DO UPDATE SET
+                    status=excluded.status,
+                    tools_count=excluded.tools_count,
+                    error=excluded.error,
+                    error_detail=excluded.error_detail,
+                    updated_at=excluded.updated_at,
+                    started_at=excluded.started_at
+            """, (
+                name, self.project_path, entry.get("status","unknown"),
+                int(entry.get("tools") or 0),
+                entry.get("error"), entry.get("error_detail"),
+                entry.get("updated_at"), entry.get("started_at"),
+            ))
+        except Exception as e:
+            log.debug("mcp persist failed for %s: %s", name, e)
+
+    def _load_status_from_db(self) -> None:
+        """Hydrate server_status from SQLite for this project_path. Never raises."""
+        try:
+            from andromity.core.db import get_conn, init_schema
+            init_schema()
+            conn = get_conn()
+            rows = conn.execute(
+                "SELECT name, status, tools_count, error, error_detail, updated_at, started_at FROM mcp_server_status WHERE project_path=?",
+                (self.project_path,)
+            ).fetchall()
+            for r in rows:
+                self.server_status[r["name"]] = {
+                    "status": r["status"],
+                    "tools": r["tools_count"],
+                    "error": r["error"],
+                    "error_detail": r["error_detail"],
+                    "updated_at": r["updated_at"],
+                    "started_at": r["started_at"],
+                }
+        except Exception as e:
+            log.debug("mcp load failed: %s", e)
+
     def _set_status(self, name: str, status: str = None, tools: int = None,
                     error: str = None, command: str = None,
                     error_detail: str = None) -> None:
@@ -481,6 +528,7 @@ class MCPClientManager:
 
         Status entries carry: status, tools, error, command, error_detail,
         started_at (ISO), updated_at (ISO).
+        Also persists to SQLite (mcp_server_status table) for restart visibility.
         """
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         entry = dict(self.server_status.get(name, {}))
@@ -490,6 +538,11 @@ class MCPClientManager:
             entry["tools"] = tools
         if error is not None:
             entry["error"] = error
+        elif status is not None:
+            # clear previous error when status changes to non-error
+            if status in ("running","initializing","stopped","disabled"):
+                entry["error"] = None
+                entry["error_detail"] = None
         if command is not None:
             entry["command"] = command
         if error_detail is not None:
@@ -497,9 +550,10 @@ class MCPClientManager:
         entry["updated_at"] = now
         if entry.get("status") == "running" and not entry.get("started_at"):
             entry["started_at"] = now
-        elif entry.get("status") in ("error", "stopped", "disabled", "needs_auth"):
+        elif entry.get("status") in ("error", "stopped", "disabled", "needs_auth", "needs_trust"):
             entry["started_at"] = None
         self.server_status[name] = entry
+        self._persist_status(name, entry)
 
     def load_config(self) -> Dict[str, Any]:
         """Load MCP server definitions from project or global config."""
@@ -537,7 +591,18 @@ class MCPClientManager:
 
             mcp_config = self.load_config()
             servers    = mcp_config.get("mcpServers", {})
+            # Hydrate persisted status first, then clear stale entries for removed servers
             self.server_status.clear()
+            self._load_status_from_db()
+            # Remove persisted entries for servers no longer in config
+            for stale in list(self.server_status.keys()):
+                if stale not in servers:
+                    self.server_status.pop(stale, None)
+                    try:
+                        from andromity.core.db import get_conn, init_schema
+                        init_schema(); get_conn().execute("DELETE FROM mcp_server_status WHERE name=? AND project_path=?", (stale, self.project_path))
+                    except Exception:
+                        pass
             for name in servers.keys():
                 self._set_status(name, status="initializing", tools=0, error=None, command="")
 
@@ -761,6 +826,11 @@ class MCPClientManager:
             except Exception as e:
                 log.warning("Error stopping MCP server %s: %s", name, e)
         self.server_status.pop(name, None)
+        try:
+            from andromity.core.db import get_conn, init_schema
+            init_schema(); get_conn().execute("DELETE FROM mcp_server_status WHERE name=? AND project_path=?", (name, self.project_path))
+        except Exception:
+            pass
 
     async def stop_all(self):
         """Stop all running MCP servers concurrently."""
@@ -769,3 +839,8 @@ class MCPClientManager:
         ], return_exceptions=True)
         self.sessions.clear()
         self.server_status.clear()
+        try:
+            from andromity.core.db import get_conn, init_schema
+            init_schema(); get_conn().execute("DELETE FROM mcp_server_status WHERE project_path=?", (self.project_path,))
+        except Exception:
+            pass

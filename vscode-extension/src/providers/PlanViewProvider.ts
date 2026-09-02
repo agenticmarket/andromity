@@ -90,14 +90,36 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
       const text = new TextDecoder().decode(bytes);
       const parsed = JSON.parse(text);
       if (parsed) {
-        try {
-          const todoUri = vscode.Uri.joinPath(rootUri, ".andromity", "todo.json");
-          const todoBytes = await vscode.workspace.fs.readFile(todoUri);
-          const todoParsed = JSON.parse(new TextDecoder().decode(todoBytes));
-          if (todoParsed && Array.isArray(todoParsed.items)) {
-            parsed.steps = todoParsed.items;
-          }
-        } catch {}
+        if (!parsed.steps || parsed.steps.length === 0) {
+          try {
+            const todosUri = vscode.Uri.joinPath(rootUri, ".andromity", "todos.md");
+            const mdBytes = await vscode.workspace.fs.readFile(todosUri);
+            const mdText = new TextDecoder().decode(mdBytes);
+            const lines = mdText.split("\n");
+            const steps: any[] = [];
+            for (const line of lines) {
+              const m = line.match(/^-\s+(\[[ x/!\-]\])\s+(t\d+)\.\s+(.+)/);
+              if (m) {
+                const statusMap: Record<string, string> = {
+                  "[ ]": "pending",
+                  "[x]": "done",
+                  "[/]": "active",
+                  "[!]": "failed",
+                  "[-]": "skipped",
+                };
+                steps.push({
+                  id: m[2],
+                  title: m[3].trim(),
+                  status: statusMap[m[1]] || "pending",
+                });
+              }
+            }
+            if (steps.length > 0) {
+              parsed.steps = steps;
+              parsed.todos = steps;
+            }
+          } catch {}
+        }
         return parsed;
       }
     } catch {}
@@ -455,9 +477,9 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
         } else {
           var t = escapeHtml(parts[i]);
           t = t.replace(/~~([^~]+)~~/g, '<del>$1</del>');
-          t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+          t = t.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
           t = t.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-          t = t.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+          t = t.replace(/\\*([^*]+)\\*/g, '<em>$1</em>');
           t = t.replace(/_([^_]+)_/g, '<em>$1</em>');
           t = t.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank" style="color:var(--accent); text-decoration:underline;">$1</a>');
           out += t;

@@ -201,18 +201,20 @@ class JsonRpcHandler:
 
     async def rpc_session_list(self, params: Dict[str, Any]) -> List[Dict[str, Any]]:
         project_path = params.get("project_path")
+        include_subagents = bool(params.get("include_subagents", False))
         target_path = Path(project_path).resolve() if project_path else Path.cwd().resolve()
 
         sessions = []
         try:
             from andromity.core.session import Session, get_all_sessions
-            raw_sessions = get_all_sessions(str(target_path))
+            raw_sessions = get_all_sessions(str(target_path), include_subagents=include_subagents)
             for s in raw_sessions:
                 sessions.append({
                     "id": s.id,
                     "name": s.name,
                     "status": getattr(s, "status", "idle"),
                     "project_path": s.project_path,
+                    "parent_session": getattr(s, "parent_session", None),
                     "updated_at": getattr(s, "updated_at", None),
                     "created_at": getattr(s, "created_at", None),
                     "message_count": len(s.messages),
@@ -225,11 +227,14 @@ class JsonRpcHandler:
         except Exception as e:
             log.warning("Session list from disk failed: %s", e)
             for sid, s in self._active_sessions.items():
+                if not include_subagents and getattr(s, "parent_session", None):
+                    continue
                 sessions.append({
                     "id": s.id,
                     "name": s.name,
                     "status": getattr(s, "status", "idle"),
                     "project_path": s.project_path,
+                    "parent_session": getattr(s, "parent_session", None),
                     "message_count": len(s.messages),
                     "token_total": getattr(s, "token_total", 0),
                     "context_tokens": getattr(s, "context_tokens", 0),
@@ -274,27 +279,45 @@ class JsonRpcHandler:
         session_id = params.get("session_id")
         if not session_id:
             raise ValueError("session_id is required")
-        if session_id in self._active_sessions:
-            sess = self._active_sessions.pop(session_id)
+        from andromity.core.session import _validate_session_id
+        try:
+            valid_id = _validate_session_id(session_id)
+        except ValueError:
+            raise ValueError(f"Invalid session_id: {session_id!r}")
+
+        # 1. Delete from SQLite
+        from andromity.core.db import get_conn, init_schema
+        try:
+            init_schema()
+            conn = get_conn()
+            conn.execute("DELETE FROM sessions WHERE id = ?", (valid_id,))
+        except Exception as e:
+            log.warning("Failed to delete session %s from SQLite: %s", valid_id, e)
+
+        # 2. Delete JSON snapshot from disk
+        if valid_id in self._active_sessions:
+            sess = self._active_sessions.pop(valid_id)
             try:
                 if hasattr(sess, "file_path") and Path(sess.file_path).exists():
-                    Path(sess.file_path).unlink()
+                    p = Path(sess.file_path).resolve()
+                    sessions_dir = (get_config_dir() / "sessions").resolve()
+                    if p.is_relative_to(sessions_dir):
+                        p.unlink()
             except Exception:
                 pass
         else:
-            # Try removing file from disk across project session directories
             storage_root = get_config_dir()
-            sessions_dir = storage_root / "sessions"
+            sessions_dir = (storage_root / "sessions").resolve()
             if sessions_dir.exists():
                 for p_dir in sessions_dir.iterdir():
                     if p_dir.is_dir():
-                        s_file = p_dir / f"{session_id}.json"
-                        if s_file.exists():
+                        s_file = (p_dir / f"{valid_id}.json").resolve()
+                        if s_file.is_relative_to(sessions_dir) and s_file.exists():
                             try:
                                 s_file.unlink()
                             except Exception:
                                 pass
-        return {"success": True, "session_id": session_id}
+        return {"success": True, "session_id": valid_id}
 
     async def rpc_session_rename(self, params: Dict[str, Any]) -> Dict[str, Any]:
         session_id = params.get("session_id")
@@ -661,13 +684,15 @@ class JsonRpcHandler:
                             if plan_obj:
                                 self.notify("agent/planUpdated", {
                                     "session_id": session_id,
-                                    "plan": plan_obj.to_dict(),
+                                    "plan": getattr(plan_obj, "to_enriched_dict", plan_obj.to_dict)(),
                                 })
                         except Exception:
                             pass
                     elif isinstance(event, PlanApprovalRequired):
                         plan_payload = event.plan
-                        if hasattr(plan_payload, "to_dict"):
+                        if hasattr(plan_payload, "to_enriched_dict"):
+                            plan_payload = plan_payload.to_enriched_dict()
+                        elif hasattr(plan_payload, "to_dict"):
                             plan_payload = plan_payload.to_dict()
                         self.notify("agent/planApproval", {
                             "session_id": session_id,
@@ -675,7 +700,9 @@ class JsonRpcHandler:
                         })
                     elif isinstance(event, PlanUpdated):
                         plan_payload = event.plan
-                        if hasattr(plan_payload, "to_dict"):
+                        if hasattr(plan_payload, "to_enriched_dict"):
+                            plan_payload = plan_payload.to_enriched_dict()
+                        elif hasattr(plan_payload, "to_dict"):
                             plan_payload = plan_payload.to_dict()
                         self.notify("agent/planUpdated", {
                             "session_id": session_id,
@@ -691,17 +718,34 @@ class JsonRpcHandler:
                             "task": event.task,
                         })
                     elif isinstance(event, SubAgentProgress):
+                        if event.event_type == "spawned":
+                            # Tool-path spawns only emit SubAgentProgress(type="spawned")
+                            # (run_stream, which emits SubAgentSpawned, is never used by
+                            # orchestrator.spawn). Surface it through the spawned channel
+                            # too so webview card creation gets model/provider/task.
+                            self.notify("subagent/spawned", {
+                                "session_id": session_id,
+                                "agent_id": event.agent_id,
+                                "role": event.role,
+                                "model": event.model,
+                                "provider": event.provider,
+                                "task": event.task,
+                            })
                         self.notify("subagent/progress", {
                             "session_id": session_id,
                             "agent_id": event.agent_id,
                             "role": event.role,
                             "status": event.status,
                             "event_type": event.event_type,
+                            "tool_id": event.tool_id,
                             "delta_text": event.delta_text,
                             "tool_name": event.tool_name,
                             "tool_args": event.tool_args,
                             "tool_result": event.tool_result,
                             "detail": event.detail,
+                            "model": event.model,
+                            "provider": event.provider,
+                            "task": event.task,
                         })
                     elif isinstance(event, SubAgentDone):
                         self.notify("subagent/done", {

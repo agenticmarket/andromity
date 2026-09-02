@@ -28,9 +28,19 @@ _current_session_var: contextvars.ContextVar[Any] = contextvars.ContextVar("curr
 _mcp_manager = None  # global MCPClientManager instance
 
 # ── Background process registry ────────────────────────────────────────────────
-# Maps process_id → {"proc": Popen, "buf": deque, "cmd": str, "started": float}
-_bg_processes: Dict[str, Any] = {}
+# Scoped by project_path to prevent cross-project leak.
+# Maps (project_key, process_id) → {"proc": Popen, "buf": deque, "cmd": str, "started": float}
+_bg_processes: Dict[tuple, Any] = {}
 _bg_lock = threading.Lock()
+
+def _bg_project_key() -> str:
+    try:
+        return str(_get_project_root().resolve())
+    except Exception:
+        return "__global__"
+
+def _bg_full_key(pid: str) -> tuple:
+    return (_bg_project_key(), pid)
 
 
 def register_plan_callback(cb: Callable):
@@ -201,8 +211,29 @@ def read_file(
     if not p.is_file():
         return f"Error: File '{path}' does not exist."
     try:
+        # Guard against OOM on huge files — check size before reading entire file.
+        try:
+            max_kb = int(config.get("advanced", "max_file_size_kb", 500) or 500)
+        except Exception:
+            max_kb = 500
+        max_bytes = max_kb * 1024
+        try:
+            fsize = p.stat().st_size
+            if fsize > max_bytes:
+                return (
+                    f"Error: File '{path}' is too large ({fsize} bytes, limit {max_kb} KB). "
+                    f"Use start_line/end_line to read a slice, or symbols_only=True for outline. "
+                    f"Increase limit via Settings → Advanced → max_file_size_kb."
+                )
+        except OSError:
+            pass
         with open(p, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
+            content = f.read(max_bytes + 1)
+            if len(content) > max_bytes:
+                return (
+                    f"Error: File '{path}' exceeds {max_kb} KB read limit. "
+                    f"Use start_line/end_line to read a slice, or symbols_only=True for outline."
+                )
 
         if symbols_only:
             return extract_code_symbols(path, content)
@@ -470,7 +501,7 @@ def _shell_invocation(shell: str, command: str) -> list[str]:
     if name.endswith(".exe"):
         name = name[:-4]
     if name in ("powershell", "pwsh"):
-        return [shell, "-Command", command]
+        return [shell, "-NoProfile", "-NonInteractive", "-Command", command]
     if name == "cmd":
         return [shell, "/d", "/c", command]
     return [shell, "-c", command]
@@ -528,10 +559,13 @@ def shell_bg(command: str, process_id: str = "") -> str:
     import uuid
     _cmd_tokens = command.split()
     pid = process_id.strip() or (_cmd_tokens[0].split("/")[-1][:20] if _cmd_tokens else "bg")
-    # Make unique if already taken
+    proj_key = _bg_project_key()
+    full_key = (proj_key, pid)
+    # Make unique if already taken (per-project)
     with _bg_lock:
-        if pid in _bg_processes:
+        if full_key in _bg_processes:
             pid = f"{pid}-{uuid.uuid4().hex[:4]}"
+            full_key = (proj_key, pid)
 
     shell = get_shell()
     try:
@@ -575,11 +609,12 @@ def shell_bg(command: str, process_id: str = "") -> str:
     t.start()
 
     with _bg_lock:
-        _bg_processes[pid] = {
+        _bg_processes[full_key] = {
             "proc": proc,
             "buf": buf,
             "cmd": command,
             "started": _time.time(),
+            "project": proj_key,
         }
 
     return (
@@ -591,11 +626,18 @@ def shell_bg(command: str, process_id: str = "") -> str:
 
 def shell_read(process_id: str, lines: int = 50) -> str:
     """Read the latest output lines from a background process started with shell_bg."""
+    proj_key = _bg_project_key()
     with _bg_lock:
-        entry = _bg_processes.get(process_id)
+        entry = _bg_processes.get((proj_key, process_id))
+        # Fallback scan for legacy unscoped entries or cross-project debug
+        if entry is None:
+            for (pk, pid), e in _bg_processes.items():
+                if pid == process_id and pk == proj_key:
+                    entry = e
+                    break
+        scoped_ids = [pid for (pk, pid) in _bg_processes.keys() if pk == proj_key]
     if not entry:
-        ids = list(_bg_processes.keys())
-        hint = f" Running ids: {ids}" if ids else " No background processes are running."
+        hint = f" Running ids (this project): {scoped_ids}" if scoped_ids else " No background processes are running."
         return f"Error: No background process with id '{process_id}'.{hint}"
 
     proc = entry["proc"]
@@ -616,8 +658,18 @@ def shell_read(process_id: str, lines: int = 50) -> str:
 
 def shell_kill(process_id: str) -> str:
     """Kill a background process started with shell_bg."""
+    proj_key = _bg_project_key()
     with _bg_lock:
-        entry = _bg_processes.pop(process_id, None)
+        entry = _bg_processes.pop((proj_key, process_id), None)
+        if entry is None:
+            # legacy fallback: try bare pid
+            for k in list(_bg_processes.keys()):
+                if k[1] == process_id and k[0] == proj_key:
+                    entry = _bg_processes.pop(k, None)
+                    break
+                if k == process_id:  # bare string legacy
+                    entry = _bg_processes.pop(k, None)
+                    break
     if not entry:
         return f"Error: No background process with id '{process_id}'."
     proc = entry["proc"]
@@ -634,17 +686,27 @@ def shell_kill(process_id: str) -> str:
 
 def shell_list() -> str:
     """List all background processes currently running (started with shell_bg)."""
+    proj_key = _bg_project_key()
     with _bg_lock:
         entries = dict(_bg_processes)
     if not entries:
         return "No background processes are running."
     lines = []
-    for pid, entry in entries.items():
+    for key, entry in entries.items():
+        # Support both (proj,pid) tuple and legacy bare pid keys
+        if isinstance(key, tuple):
+            pk, pid = key
+            if pk != proj_key:
+                continue
+        else:
+            pid = key
         proc = entry["proc"]
         alive = proc.poll() is None
         status = "running" if alive else f"exited ({proc.returncode})"
         elapsed = int(_time.time() - entry['started'])
         lines.append(f"  '{pid}' | {status} | {elapsed}s | {entry['cmd']}")
+    if not lines:
+        return f"No background processes for current project ({proj_key})."
     return "Background processes:\n" + "\n".join(lines)
 
 
@@ -830,7 +892,15 @@ def write_plan(title: str, description: str = "", plan_md: str = "", steps: list
 
     project_root = str(_get_project_root())
 
-    # Save plan metadata (title / description / questions / status only — no steps)
+    # Steps become todos — single source of truth
+    todo_list = TodoList(project_path=project_root)
+    todo_list.items = [
+        TodoItem(id=f"t{i + 1}", title=text, status=status)
+        for i, (text, status) in enumerate(step_items)
+    ]
+    todo_list.save()
+
+    # Save plan metadata with steps
     from andromity.config import config
     mode = config.get("default", "permission_mode", "safe")
     auto_approve = mode in ("yolo", "full")
@@ -847,15 +917,7 @@ def write_plan(title: str, description: str = "", plan_md: str = "", steps: list
 
     cur_session = _current_session_var.get()
     if cur_session:
-        cur_session.save_plan(plan.to_dict())
-
-    # Steps become todos — single source of truth
-    todo_list = TodoList(project_path=project_root)
-    todo_list.items = [
-        TodoItem(id=f"t{i + 1}", title=text, status=status)
-        for i, (text, status) in enumerate(step_items)
-    ]
-    todo_list.save()
+        cur_session.save_plan(plan.to_enriched_dict())
 
     _sync_plan_md(plan, todo_list)
     _notify_plan(plan)
@@ -915,6 +977,18 @@ def update_plan_step(step_index: int, status: str) -> str:
 
     _sync_plan_md(todo_list=todo_list)
     _notify_todo()
+
+    # Also update session plan and notify plan listeners with live step statuses
+    try:
+        from andromity.core.planner import Plan
+        plan = Plan.load(project_path)
+        if plan:
+            cur_session = _current_session_var.get()
+            if cur_session:
+                cur_session.save_plan(plan.to_enriched_dict())
+            _notify_plan(plan)
+    except Exception:
+        pass
 
     if item:
         return f"Updated Step {step_index} ({item.title}) to '{status}'."
@@ -990,7 +1064,8 @@ async def spawn_subagent_async(
     
     orchestrator = getattr(cur_sess, "_orchestrator", None) if cur_sess else None
     if not orchestrator:
-        orchestrator = SubAgentOrchestrator(parent_session_id=parent_id, project_path=proj_path)
+        perm_mode = getattr(cur_sess, "permission_mode", None) if cur_sess else None
+        orchestrator = SubAgentOrchestrator(parent_session_id=parent_id, project_path=proj_path, permission_mode=perm_mode)
         if cur_sess:
             cur_sess._orchestrator = orchestrator
 
@@ -1066,12 +1141,15 @@ def session_list() -> str:
     bus = SessionBus.get_instance()
     cur_sess = _current_session_var.get()
     proj = getattr(cur_sess, "project_path", None) if cur_sess else None
+    cur_id = getattr(cur_sess, "id", None) if cur_sess else None
     sessions = bus.list_sessions(project_path=proj)
     if not sessions:
-        return "No other active sessions found."
-    lines = ["Active Sessions:"]
+        return "No active sessions found."
+    lines = ["Active Sessions on SessionBus:"]
     for s in sessions:
-        lines.append(f"- **{s['name']}** (id: `{s['session_id'][:8]}...`, path: `{s['project_path']}`, registered: {s['registered_at']})")
+        is_cur = (s["session_id"] == cur_id)
+        tag = " (current active session)" if is_cur else ""
+        lines.append(f"- **{s['name']}**{tag} (id: `{s['session_id'][:8]}...`, path: `{s['project_path']}`, registered: {s['registered_at']})")
     return "\n".join(lines)
 
 

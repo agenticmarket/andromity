@@ -14,6 +14,14 @@ from andromity.server.protocol import (
 )
 from andromity.server.rpc_handler import JsonRpcHandler
 
+try:
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(line_buffering=True, write_through=True)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True, write_through=True)
+except Exception:
+    pass
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -254,12 +262,15 @@ async def start_tcp_server(host: str = "127.0.0.1", port: int = 8765, allow_remo
                 if isinstance(msg, dict):
                     if not authenticated:
                         auth_token = msg.get("auth") or (msg.get("params", {}) if isinstance(msg.get("params"), dict) else {}).get("token")
-                        # Local loopback connects automatically or validates token if provided
-                        is_local = peer and isinstance(peer, (tuple, list)) and peer[0] in ("127.0.0.1", "::1", "localhost")
-                        if is_local or (auth_token and secrets.compare_digest(str(auth_token), daemon_token)):
+                        if auth_token and secrets.compare_digest(str(auth_token), daemon_token):
                             authenticated = True
+                            # If this was purely an auth handshake frame, respond and don't forward to RPC handler
+                            if "auth" in msg and "method" not in msg:
+                                await _send_dict({"jsonrpc": "2.0", "id": msg.get("id"), "result": {"authenticated": True}})
+                                continue
                         else:
-                            await _send_dict(JsonRpcResponse.err(msg.get("id"), -32001, "Unauthorized: Invalid daemon token").to_dict())
+                            req_id = msg.get("id")
+                            await _send_dict(JsonRpcResponse.err(req_id, -32001, "Unauthorized: Invalid or missing daemon token").to_dict())
                             break
 
                     asyncio.create_task(_dispatch_request(msg))

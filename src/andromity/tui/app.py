@@ -335,7 +335,18 @@ class AndromityApp(App):
                     pass
 
         self.run_worker(_init_mcp(), exclusive=False, group="mcp-init")
-        # Do NOT auto-load stale plan from disk — plans are session-scoped
+        # Restore active plan from session if one exists
+        if hasattr(self, "session") and self.session:
+            try:
+                plan = self.session.load_plan_obj()
+                if plan:
+                    self.query_one(PlanPanel).load_plan(plan)
+                    from andromity.core.todo import TodoList
+                    todo_list = TodoList.load(getattr(plan, "project_path", self._project_path))
+                    done, total = todo_list.progress()
+                    self.query_one(StatusBar).update_todo_progress(done, total)
+            except Exception:
+                pass
         # Check trust FIRST before showing welcome
         if not config.is_trusted(self._project_path):
             def _on_trust(trusted: bool | None) -> None:

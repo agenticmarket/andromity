@@ -53,12 +53,28 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const trackerTitle = document.getElementById('tracker-title');
     const trackerCount = document.getElementById('tracker-count');
     const trackerProgressBar = document.getElementById('tracker-progress-bar');
-    const trackerStepTitle = document.getElementById('tracker-step-title');
+    const trackerTodosList = document.getElementById('tracker-todos-list');
     const zeroWorkspaceLabel = document.getElementById('zero-workspace-label');
     const recentSessionsSection = document.getElementById('recent-sessions-section');
     const recentSessionsList = document.getElementById('recent-sessions-list');
     let allSessions = [];
+    let allProviders = [];
     let sessionDisplayLimit = 10;
+
+    const onboardingSection = document.getElementById('onboarding-guide-section');
+    const readyHeroSection = document.getElementById('ready-hero-section');
+    const onboardingProvidersGrid = document.getElementById('onboarding-providers-grid');
+    const onboardingKeyForm = document.getElementById('onboarding-key-form');
+    const onboardingOllamaForm = document.getElementById('onboarding-ollama-form');
+    const onboardingKeyInput = document.getElementById('onboarding-key-input');
+    const onboardingKeyLabel = document.getElementById('onboarding-key-label');
+    const onboardingPortalLink = document.getElementById('onboarding-portal-link');
+    const btnOnboardingSave = document.getElementById('btn-onboarding-save');
+    const btnOnboardingOllamaSave = document.getElementById('btn-onboarding-ollama-save');
+    const btnToggleKeyVis = document.getElementById('btn-toggle-key-vis');
+
+    let selectedOnboardingProvider = 'anthropic';
+    let selectedOnboardingModel = 'claude-sonnet-4-6';
 
     const slashPalette = document.getElementById('slash-palette');
     const slashPaletteList = document.getElementById('slash-palette-list');
@@ -281,6 +297,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           chatContainer.appendChild(zeroState);
         }
         zeroState.style.display = 'flex';
+        updateOnboardingVisibility();
         setRandomStatement();
       }
     }
@@ -341,6 +358,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let toolSeqDoneTools = new Set();
     let toolSeqUserToggled = false;
     let toolSeqFinished = false;
+    // Per-agent counter so a subagent calling the same tool multiple times renders
+    // one item per invocation instead of collapsing into a single line.
+    const subToolSeqCounts = {};
 
     function ensureToolSequence() {
       if (currentToolSequence && !toolSeqFinished) return currentToolSequence;
@@ -741,8 +761,109 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       hideMentionPalette();
     });
 
-    document.getElementById('btn-tracker-open')?.addEventListener('click', () => {
+    document.getElementById('btn-tracker-open')?.addEventListener('click', (e) => {
+      e.stopPropagation();
       vscode.postMessage({ type: 'open_plan_tab' });
+    });
+
+    document.getElementById('tracker-header-row')?.addEventListener('click', (e) => {
+      if (e.target && (e.target.closest('#btn-tracker-open') || e.target.closest('#btn-tracker-close'))) {
+        return;
+      }
+      planTrackerStrip?.classList.toggle('collapsed');
+    });
+
+    document.getElementById('btn-tracker-close')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (planTrackerStrip) planTrackerStrip.style.display = 'none';
+    });
+
+    function updateOnboardingVisibility() {
+      if (!onboardingSection || !readyHeroSection) return;
+      const isChatActive = isRunning || (chatContainer && chatContainer.querySelectorAll('.message').length > 0);
+      if (isChatActive) {
+        onboardingSection.style.display = 'none';
+        readyHeroSection.style.display = 'none';
+        return;
+      }
+      const hasAnyKey = (allProviders || []).some(p => p.has_key && p.id !== 'ollama');
+      const isOllamaActive = currentProvider === 'ollama';
+      if (!hasAnyKey && !isOllamaActive) {
+        onboardingSection.style.display = 'flex';
+        readyHeroSection.style.display = 'none';
+      } else {
+        onboardingSection.style.display = 'none';
+        readyHeroSection.style.display = 'flex';
+      }
+    }
+
+    onboardingProvidersGrid?.querySelectorAll('.onboarding-provider-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        onboardingProvidersGrid.querySelectorAll('.onboarding-provider-chip').forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        selectedOnboardingProvider = chip.dataset.provider || 'anthropic';
+        selectedOnboardingModel = chip.dataset.model || '';
+        const name = chip.dataset.name || 'AI Provider';
+        const portal = chip.dataset.portal || '';
+
+        if (onboardingKeyLabel) onboardingKeyLabel.textContent = '2. Paste ' + name + ' API Key';
+        if (onboardingKeyInput) onboardingKeyInput.placeholder = 'Paste your ' + name + ' API key...';
+        if (onboardingPortalLink) {
+          onboardingPortalLink.dataset.url = portal;
+          const textSpan = onboardingPortalLink.querySelector('span');
+          if (textSpan) textSpan.textContent = 'Get ' + (chip.querySelector('.provider-chip-name')?.textContent || name) + ' API Key';
+        }
+
+        if (selectedOnboardingProvider === 'ollama') {
+          if (onboardingKeyForm) onboardingKeyForm.style.display = 'none';
+          if (onboardingOllamaForm) onboardingOllamaForm.style.display = 'flex';
+        } else {
+          if (onboardingKeyForm) onboardingKeyForm.style.display = 'flex';
+          if (onboardingOllamaForm) onboardingOllamaForm.style.display = 'none';
+          if (onboardingKeyInput) setTimeout(() => onboardingKeyInput.focus(), 50);
+        }
+      });
+    });
+
+    btnToggleKeyVis?.addEventListener('click', () => {
+      if (!onboardingKeyInput) return;
+      onboardingKeyInput.type = onboardingKeyInput.type === 'password' ? 'text' : 'password';
+    });
+
+    btnOnboardingSave?.addEventListener('click', () => {
+      if (!onboardingKeyInput) return;
+      const keyVal = onboardingKeyInput.value.trim();
+      if (!keyVal) {
+        onboardingKeyInput.style.borderColor = '#ef4444';
+        onboardingKeyInput.focus();
+        setTimeout(() => { onboardingKeyInput.style.borderColor = ''; }, 2000);
+        return;
+      }
+      btnOnboardingSave.disabled = true;
+      btnOnboardingSave.innerHTML = '<span>Connecting...</span>';
+      vscode.postMessage({
+        type: 'set_api_key',
+        provider: selectedOnboardingProvider,
+        apiKey: keyVal,
+        modelId: selectedOnboardingModel,
+      });
+    });
+
+    onboardingKeyInput?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        btnOnboardingSave?.click();
+      }
+    });
+
+    btnOnboardingOllamaSave?.addEventListener('click', () => {
+      btnOnboardingOllamaSave.disabled = true;
+      btnOnboardingOllamaSave.innerHTML = '<span>Activating Ollama...</span>';
+      vscode.postMessage({
+        type: 'set_api_key',
+        provider: 'ollama',
+        apiKey: '',
+        modelId: 'llama3.2:latest',
+      });
     });
 
     function toggleSessionsFlyout() {
@@ -838,20 +959,52 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }).join('');
     }
 
+    let activeSessionFilter = 'main';
+
+    document.querySelectorAll('.sessions-filter-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.sessions-filter-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        activeSessionFilter = tab.dataset.filter || 'main';
+        sessionDisplayLimit = 10;
+        filterAndRenderSessions(sessionsSearch ? sessionsSearch.value : '');
+      });
+    });
+
     function renderSessionsList(sessions, activeId) {
       allSessions = sessions || [];
       sessionDisplayLimit = 10;
+      
+      const mainCount = allSessions.filter(s => !s.parent_session).length;
+      const subagentCount = allSessions.filter(s => !!s.parent_session).length;
+      const countMainEl = document.getElementById('count-main-sessions');
+      const countSubEl = document.getElementById('count-subagent-sessions');
+      if (countMainEl) countMainEl.textContent = String(mainCount);
+      if (countSubEl) countSubEl.textContent = String(subagentCount);
+
       filterAndRenderSessions(sessionsSearch ? sessionsSearch.value : '');
-      renderHomeRecentSessions(allSessions);
+      renderHomeRecentSessions(allSessions.filter(s => !s.parent_session));
     }
 
     function filterAndRenderSessions(query) {
       if (!sessionsListEl) return;
       const q = (query || '').toLowerCase().trim();
-      const filtered = allSessions.filter(s => (s.name || s.id || '').toLowerCase().includes(q));
+      
+      // Filter by dual-list category (main sessions vs background/subagents)
+      const categorized = allSessions.filter(s => {
+        if (activeSessionFilter === 'subagents') {
+          return !!s.parent_session;
+        }
+        return !s.parent_session;
+      });
+
+      const filtered = categorized.filter(s => (s.name || s.id || '').toLowerCase().includes(q));
 
       if (filtered.length === 0) {
-        sessionsListEl.innerHTML = '<div style="padding:14px; text-align:center; color:var(--muted); font-size:11px;">No matching sessions</div>';
+        const emptyMsg = activeSessionFilter === 'subagents' 
+          ? 'No background or subagent tasks found'
+          : 'No matching sessions';
+        sessionsListEl.innerHTML = '<div style="padding:16px 14px; text-align:center; color:var(--muted); font-size:11px;">' + emptyMsg + '</div>';
         return;
       }
 
@@ -862,13 +1015,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const name = escapeHtml(s.name || s.id || 'Session');
         const msgs = s.message_count ? (s.message_count + ' msgs') : 'Empty';
         const cost = s.cost_usd ? ('$' + s.cost_usd.toFixed(3)) : '';
+        const statusBadge = (s.status && s.status !== 'idle') ? '<span class="session-badge-status session-status-' + escapeHtml(s.status) + '">' + escapeHtml(s.status) + '</span>' : '';
+        const subagentTag = s.parent_session ? '<span class="session-badge-status" style="background:rgba(99,102,241,0.15);color:#818cf8;">Subagent</span>' : '';
 
         return '<div class="session-item ' + (isCur ? 'active' : '') + '">' +
           '<div class="session-item-info" data-action="switch-session" data-session-id="' + s.id + '">' +
-            '<div class="session-item-title">' + (isCur ? '&#x2605; ' : '') + name + '</div>' +
+            '<div class="session-item-title">' + (isCur ? '&#x2605; ' : '') + name + (statusBadge ? ' ' + statusBadge : '') + (subagentTag ? ' ' + subagentTag : '') + '</div>' +
             '<div class="session-item-meta">' +
               '<span>' + msgs + '</span>' +
               (cost ? '<span>· ' + cost + '</span>' : '') +
+              (s.parent_session ? '<span>· Parent: ' + escapeHtml(s.parent_session.slice(0, 8)) + '</span>' : '') +
             '</div>' +
           '</div>' +
           '<div class="session-item-actions">' +
@@ -915,44 +1071,60 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function updatePlanTracker(plan) {
       if (!planTrackerStrip) return;
-      if (!plan || !plan.title) {
+      if (!plan || (!plan.title && (!plan.steps || plan.steps.length === 0) && (!plan.todos || plan.todos.length === 0))) {
         planTrackerStrip.style.display = 'none';
         return;
       }
       const steps = plan.steps || plan.todos || [];
-      if (steps.length === 0) {
+      if (steps.length === 0 && !plan.title) {
         planTrackerStrip.style.display = 'none';
         return;
       }
       planTrackerStrip.style.display = 'flex';
-      if (trackerTitle) trackerTitle.textContent = plan.title || 'Plan Tracker';
+      if (trackerTitle) trackerTitle.textContent = plan.title || 'Plan Tasks';
 
       let completed = 0;
-      let activeStep = '';
-      steps.forEach((s, idx) => {
+      let activeIdx = -1;
+      const stepItemsHtml = steps.map((s, idx) => {
         const sStatus = (typeof s === 'string' ? 'pending' : (s.status || 'pending')).toLowerCase();
         const sText = typeof s === 'string' ? s : (s.title || s.description || ('Step ' + (idx + 1)));
-        if (sStatus === 'done' || sStatus === 'completed') {
-          completed++;
-        } else if (!activeStep && (sStatus === 'active' || sStatus === 'in_progress' || sStatus === 'running')) {
-          activeStep = sText;
-        }
-      });
+        const isDone = (sStatus === 'done' || sStatus === 'completed');
+        const isActive = (sStatus === 'active' || sStatus === 'in_progress' || sStatus === 'running');
+        const isFailed = (sStatus === 'failed' || sStatus === 'error');
 
-      if (!activeStep && completed < steps.length) {
-        for (let i = 0; i < steps.length; i++) {
-          const st = (typeof steps[i] === 'string' ? 'pending' : (steps[i].status || 'pending')).toLowerCase();
-          if (st !== 'done' && st !== 'completed') {
-            activeStep = typeof steps[i] === 'string' ? steps[i] : (steps[i].title || steps[i].description || ('Step ' + (i + 1)));
-            break;
-          }
+        if (isDone) completed++;
+        if (isActive && activeIdx === -1) activeIdx = idx;
+
+        let bulletContent = '' + (idx + 1);
+        let bulletClass = '';
+        if (isDone) {
+          bulletContent = '&#x2713;';
+          bulletClass = 'is-done';
+        } else if (isActive) {
+          bulletContent = '&#x27F3;';
+          bulletClass = 'is-active';
+        } else if (isFailed) {
+          bulletContent = '&#x2715;';
+          bulletClass = 'is-failed';
         }
+
+        return '<div class="tracker-todo-item ' + bulletClass + '">' +
+          '<span class="tracker-todo-bullet">' + bulletContent + '</span>' +
+          '<span class="tracker-todo-text">' + escapeHtml(sText) + '</span>' +
+        '</div>';
+      }).join('');
+
+      const totalSteps = steps.length;
+      const pct = totalSteps > 0 ? Math.round((completed / totalSteps) * 100) : 0;
+      if (trackerCount) {
+        trackerCount.textContent = totalSteps > 0 ? (completed + '/' + totalSteps + ' done') : 'in progress';
       }
-
-      const pct = Math.round((completed / steps.length) * 100);
-      if (trackerCount) trackerCount.textContent = completed + '/' + steps.length + ' (' + pct + '%)';
-      if (trackerProgressBar) trackerProgressBar.style.width = pct + '%';
-      if (trackerStepTitle) trackerStepTitle.textContent = activeStep ? ('Current: ' + activeStep) : (completed === steps.length ? 'All steps completed' : '');
+      if (trackerProgressBar) {
+        trackerProgressBar.style.width = pct + '%';
+      }
+      if (trackerTodosList) {
+        trackerTodosList.innerHTML = stepItemsHtml || '<div style="color:var(--muted);font-size:11px;padding:2px 0;">No steps listed.</div>';
+      }
     }
 
     function renderPlanPill(plan) {
@@ -970,13 +1142,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
       const steps = plan.steps || plan.todos || [];
       const doneCount = steps.filter(s => (s.status || '').toLowerCase() === 'done').length;
-      const progressText = steps.length > 0 ? (' (' + doneCount + '/' + steps.length + ' done)') : '';
+      const progressHtml = steps.length > 0 ? ('<span class="pill-progress">(' + doneCount + '/' + steps.length + ' done)</span>') : '';
       existingPill.innerHTML =
-        '<div class="pill-icon">' +
-          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>' +
-        '</div>' +
-        '<span class="pill-title" title="' + escapeHtml(plan.title) + '">Plan: ' + escapeHtml(plan.title) + progressText + '</span>' +
-        '<button class="pill-btn" data-action="open-plan-tab">' +
+        '<span class="pill-icon">' +
+          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>' +
+        '</span>' +
+        '<span class="pill-title" title="' + escapeHtml(plan.title) + '">Plan: ' + escapeHtml(plan.title) + progressHtml + '</span>' +
+        '<button class="pill-btn" data-action="open-plan-tab" title="Open full plan tab">' +
           '<span>Open Plan</span>' +
           '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
         '</button>';
@@ -1137,8 +1309,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         }
         case 'open-settings':
+        case 'open-full-settings':
           vscode.postMessage({ type: 'open_settings' });
           break;
+        case 'open-portal': {
+          const portalUrl = target.getAttribute('data-url') || target.closest('[data-url]')?.getAttribute('data-url');
+          if (portalUrl) {
+            vscode.postMessage({ type: 'open_external_url', url: portalUrl });
+          }
+          break;
+        }
         case 'send-starter':
           promptInput.value = target.getAttribute('data-prompt') || '';
           sendCurrentPrompt();
@@ -1705,8 +1885,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       t = t.replace(/__([^_]+)__/g, '<strong>$1</strong>');
 
       // 6. Italic
-      t = t.replace(/\\*([^\\*\\n]+)\\*/g, '<em>$1</em>');
-      t = t.replace(/(?:^|(?<=[\\s(\\[{\\'"]))_([^_]+)_(?=[\\s.,;:!?)}\\"\\']|$)/g, '<em>$1</em>');
+      t = t.replace(/\\*([^*\\n]+)\\*/g, '<em>$1</em>');
+      t = t.replace(/(?:^|(?<=[\\s(\\[{\\'"]))_([^_]+)_(?=[\\s.,;:!?)}\\'"]|$)/g, '<em>$1</em>');
 
       // 7. Restore inline code
       for (var i = 0; i < codeSpans.length; i++) {
@@ -1777,7 +1957,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 l++;
                 tableLines.push(rawLines[l].trim());
               }
-              var rawAligns = sepLine.replace(/^\|/, '').replace(/\|$/, '').split('|');
+              var rawAligns = sepLine.replace(/^\\|/, '').replace(/\\|$/, '').split('|');
               var aligns = [];
               for (var a = 0; a < rawAligns.length; a++) {
                 var s = rawAligns[a].trim();
@@ -1785,7 +1965,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 else if (s.endsWith(':')) aligns.push('right');
                 else aligns.push('left');
               }
-              var rawHeaders = tableLines[0].replace(/^\|/, '').replace(/\|$/, '').split('|');
+              var rawHeaders = tableLines[0].replace(/^\\|/, '').replace(/\\|$/, '').split('|');
               var tableHtml = '<div class="table-scroll-wrapper"><table class="md-table"><thead><tr>';
               for (var h = 0; h < rawHeaders.length; h++) {
                 var al = aligns[h] || 'left';
@@ -1793,7 +1973,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               }
               tableHtml += '</tr></thead><tbody>';
               for (var r = 1; r < tableLines.length; r++) {
-                var cells = tableLines[r].replace(/^\|/, '').replace(/\|$/, '').split('|');
+                var cells = tableLines[r].replace(/^\\|/, '').replace(/\\|$/, '').split('|');
                 tableHtml += '<tr>';
                 for (var c = 0; c < rawHeaders.length; c++) {
                   var cellText = (cells[c] || '').trim();
@@ -2289,7 +2469,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.models && msg.models.length > 0) {
             allModels = msg.models;
           }
+          if (msg.providers) {
+            allProviders = msg.providers;
+          }
           updateModelBadge();
+          updateOnboardingVisibility();
           break;
 
         case 'trust_updated':
@@ -2489,6 +2673,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               updateModelBadge();
             }
             updateTokenDisplay(msg.session);
+            if (msg.session && msg.session.plan) {
+              updatePlanTracker(msg.session.plan);
+            }
           }
           break;
 
@@ -2607,6 +2794,24 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           lastToolRunning = false;
           updateToolSeqHeader();
+          // Tool-path spawns never emit subagent/done (orchestrator.spawn doesn't
+          // use run_stream). The tool result IS the SubAgentResult JSON — use it as
+          // the backstop to flip the matching subagent card to DONE/FAILED.
+          if (msg.result) {
+            try {
+              const parsed = JSON.parse(msg.result);
+              if (parsed && parsed.agent_id && parsed.status) {
+                const finished = parsed.status === 'completed';
+                updateSubagentCard({
+                  type: finished ? 'subagent_done' : 'subagent_failed',
+                  agent_id: parsed.agent_id,
+                  status: parsed.status,
+                  result: parsed.summary || parsed.error || '',
+                  error: parsed.error || undefined,
+                });
+              }
+            } catch (e) { /* not a JSON subagent result */ }
+          }
           break; }
 
         case 'tool_approval_required':
@@ -2667,27 +2872,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
 
         case 'plan_approval':
-          const plan = msg.plan || {};
-          let todosHtml = '';
-          if (plan.todos && plan.todos.length > 0) {
-            todosHtml = '<div style="margin-top:6px; display:flex; flex-direction:column; gap:3px;">' +
-              plan.todos.map(t => '<div style="font-size:11px; color:var(--muted);"><span style="color:var(--accent); font-weight:600;">\u2022</span> ' + escapeHtml(t.description || t.title || t) + '</div>').join('') +
-            '</div>';
-          }
-          interactiveSlot.innerHTML = 
-            '<div class="approval-card">' +
-              '<div style="font-weight:600; color:var(--purple); display:flex; align-items:center; gap:6px;">' +
-                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>' +
-                '<span>Plan Review: ' + escapeHtml(plan.title || 'Implementation Plan') + '</span>' +
-              '</div>' +
-              (plan.description ? ('<div style="margin-top:4px; font-size:11.5px; color:var(--fg);">' + escapeHtml(plan.description) + '</div>') : '') +
-              todosHtml +
-              '<input type="text" id="plan-feedback-input" placeholder="Optional review note or instructions..." style="width:100%; margin-top:8px; padding:5px 8px; font-size:11.5px; background:var(--input-bg); border:1px solid var(--input-border); color:var(--fg); border-radius:4px; outline:none;">' +
-              '<div class="approval-buttons" style="margin-top:8px;">' +
-                '<button class="btn-approve" data-action="approve-plan" style="background:var(--green); color:#fff;">Approve & Execute</button>' +
-                '<button class="btn-reject" data-action="reject-plan" style="background:var(--red); color:#fff;">Reject & Revise</button>' +
-              '</div>' +
-            '</div>';
+          interactiveSlot.innerHTML = renderPlanApprovalCard(msg);
+          scrollToBottomIfNeeded();
           break;
 
         case 'subagent_spawned':
@@ -2696,6 +2882,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
 
         case 'subagent_progress':
+          // Tool-path spawns arrive as subagent_progress with event_type 'spawned'
+          // (they never emit subagent_spawned). Lazily create the card here too so a
+          // genuinely parallel set of spawns renders one card per agent_id.
+          if (msg.event_type === 'spawned') {
+            if (!currentTurnAssistantDiv) startAssistantTurn();
+            appendSubagentCard(msg);
+          }
+          updateSubagentCard(msg);
+          break;
+
         case 'subagent_done':
         case 'subagent_failed':
           updateSubagentCard(msg);
@@ -2734,6 +2930,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
           endAssistantTurn();
           interactiveSlot.innerHTML = '';
+          activePendingApprovalId = null;
+          activePendingToolName = '';
+          activePendingPlan = false;
           updateTokenDisplay({
             token_total: msg.token_total,
             context_tokens: msg.context_tokens,
@@ -2749,6 +2948,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
           endAssistantTurn();
           interactiveSlot.innerHTML = '';
+          activePendingApprovalId = null;
+          activePendingToolName = '';
+          activePendingPlan = false;
           appendSystemNote('Turn cancelled by user.');
           if (msg.token_total !== undefined || msg.context_tokens !== undefined) {
             updateTokenDisplay({
@@ -2801,6 +3003,37 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             renderPlanPill(msg.plan);
           }
           break;
+
+        case 'key_configured_success': {
+          if (btnOnboardingSave) {
+            btnOnboardingSave.disabled = false;
+            btnOnboardingSave.innerHTML = '<span>Connected! ✓</span>';
+          }
+          if (btnOnboardingOllamaSave) {
+            btnOnboardingOllamaSave.disabled = false;
+            btnOnboardingOllamaSave.innerHTML = '<span>Activated! ✓</span>';
+          }
+          if (msg.provider) currentProvider = msg.provider;
+          if (msg.model) currentModel = msg.model;
+          updateModelBadge();
+          setTimeout(() => {
+            updateOnboardingVisibility();
+            if (chatInput) chatInput.focus();
+          }, 350);
+          break;
+        }
+
+        case 'key_configure_failed': {
+          if (btnOnboardingSave) {
+            btnOnboardingSave.disabled = false;
+            btnOnboardingSave.innerHTML = '<span>Connect & Start Coding</span>';
+          }
+          if (btnOnboardingOllamaSave) {
+            btnOnboardingOllamaSave.disabled = false;
+            btnOnboardingOllamaSave.innerHTML = '<span>Activate Local Ollama</span>';
+          }
+          break;
+        }
 
         case 'backend_ready': {
           const card = document.getElementById('setup-guide-card');
@@ -2890,6 +3123,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function appendSubagentCard(msg) {
+      if (!msg || !msg.agent_id) return;
+      if (document.getElementById('subagent-' + msg.agent_id)) return;
+
       const card = document.createElement('div');
       card.className = 'subagent-card';
       card.id = 'subagent-' + msg.agent_id;
@@ -2912,8 +3148,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           (msg.task ? ('<div class="subagent-task"><span class="subagent-task-label">Task:</span> ' + escapeHtml(msg.task) + '</div>') : '') +
           '<div class="subagent-live-status">' +
             '<span class="subagent-spinner"></span>' +
-            '<span class="subagent-live-text">Working on task...</span>' +
+            '<span class="subagent-live-text">' + escapeHtml(msg.detail || 'Working on task...') + '</span>' +
           '</div>' +
+          '<div class="subagent-tools-container"></div>' +
           '<div class="subagent-result-box" style="display:none;"></div>' +
         '</div>';
 
@@ -2933,6 +3170,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function updateSubagentCard(msg) {
+      if (!msg || !msg.agent_id) return;
       let card = document.getElementById('subagent-' + msg.agent_id);
       if (!card) {
         if (!currentTurnAssistantDiv) return;
@@ -2943,22 +3181,78 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const statusEl = card.querySelector('.subagent-status');
       const liveStatusEl = card.querySelector('.subagent-live-status');
       const liveTextEl = card.querySelector('.subagent-live-text');
+      const toolsContainer = card.querySelector('.subagent-tools-container');
       const resultBox = card.querySelector('.subagent-result-box');
 
-      // In-place live step updates (no repeated spammy bullet items)
+      // Live step updates
       if (msg.detail && msg.detail !== 'running' && liveTextEl) {
         liveTextEl.textContent = msg.detail;
       }
 
-      if (msg.error || msg.type === 'subagent_failed') {
+      // Record inspectable tool action
+      if (msg.tool_name && toolsContainer) {
+        const tNameKey = msg.tool_name.replace(/[^a-zA-Z0-9_]/g, '_');
+        if (!subToolSeqCounts[msg.agent_id]) subToolSeqCounts[msg.agent_id] = {};
+        const seqCount = subToolSeqCounts[msg.agent_id][tNameKey] || 0;
+        subToolSeqCounts[msg.agent_id][tNameKey] = seqCount + 1;
+        const itemKey = 'subtool-' + msg.agent_id + '-' + tNameKey + (seqCount > 0 ? '-' + seqCount : '');
+        let toolItem = card.querySelector('#' + itemKey);
+        const actDesc = msg.detail || msg.tool_name;
+        
+        let argsContent = '';
+        if (msg.tool_args) {
+          try {
+            const parsed = typeof msg.tool_args === 'string' ? JSON.parse(msg.tool_args) : msg.tool_args;
+            argsContent = JSON.stringify(parsed, null, 2);
+          } catch(e) {
+            argsContent = String(msg.tool_args);
+          }
+        }
+        const resultText = msg.tool_result ? ('\\n\\n[Output]:\\n' + String(msg.tool_result)) : '';
+
+        if (!toolItem) {
+          toolItem = document.createElement('div');
+          toolItem.className = 'subagent-tool-item';
+          toolItem.id = itemKey;
+          toolItem.innerHTML =
+            '<div class="subagent-tool-item-header">' +
+              '<span class="subagent-tool-name">' +
+                '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>' +
+                escapeHtml(msg.tool_name) +
+              '</span>' +
+              '<span class="subagent-tool-desc">' + escapeHtml(actDesc) + '</span>' +
+            '</div>' +
+            '<div class="subagent-tool-item-body">' + escapeHtml(argsContent + resultText) + '</div>';
+
+          const itemHeader = toolItem.querySelector('.subagent-tool-item-header');
+          if (itemHeader) {
+            itemHeader.addEventListener('click', (e) => {
+              e.stopPropagation();
+              toolItem.classList.toggle('expanded');
+            });
+          }
+          toolsContainer.appendChild(toolItem);
+        } else {
+          const descEl = toolItem.querySelector('.subagent-tool-desc');
+          if (descEl) descEl.textContent = actDesc;
+          const bodyEl = toolItem.querySelector('.subagent-tool-item-body');
+          if (bodyEl && (argsContent || resultText)) {
+            bodyEl.textContent = argsContent + resultText;
+          }
+        }
+      }
+
+      const TERMINAL_FAILED = ['failed', 'timeout', 'killed', 'error', 'cancelled'];
+      if (msg.error || msg.type === 'subagent_failed' || TERMINAL_FAILED.includes(msg.status)) {
         if (statusEl) {
           statusEl.className = 'subagent-status failed';
-          statusEl.textContent = 'FAILED';
+          statusEl.textContent = msg.status === 'failed' ? 'FAILED' : (msg.status || 'FAILED').toUpperCase();
         }
         if (liveStatusEl) liveStatusEl.style.display = 'none';
-        if (resultBox) {
+        if (resultBox && (msg.error || msg.detail || (msg.result && typeof msg.result === 'string'))) {
           resultBox.style.display = 'block';
-          resultBox.innerHTML = '<span style="color:var(--red); font-weight:500;">Failed:</span> ' + escapeHtml(msg.error || 'Subagent encountered an error.');
+          const failMsg = msg.error || msg.detail || (typeof msg.result === 'string' ? msg.result : '');
+          resultBox.innerHTML = '<span style="color:var(--red); font-weight:500;">' + escapeHtml((msg.status || 'failed').toUpperCase()) + ':</span> ' + escapeHtml(failMsg);
         }
       } else if (msg.type === 'subagent_done' || msg.result !== undefined || msg.status === 'completed' || msg.status === 'done') {
         if (statusEl) {
@@ -2966,9 +3260,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           statusEl.textContent = 'DONE';
         }
         if (liveStatusEl) liveStatusEl.style.display = 'none';
-        if (resultBox && (msg.result || msg.output)) {
+        if (resultBox && (msg.result || msg.output || (msg.status === 'completed' && msg.detail))) {
           resultBox.style.display = 'block';
-          const resContent = typeof msg.result === 'string' ? msg.result : JSON.stringify(msg.result, null, 2);
+          const resContent = typeof msg.result === 'string' ? msg.result : (msg.output || msg.detail || JSON.stringify(msg.result, null, 2));
           resultBox.innerHTML = '<div class="subagent-result-title">Result</div>' + renderMarkdown(resContent);
         }
       }
@@ -2977,8 +3271,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     let activePendingApprovalId = null;
     let activePendingToolName = '';
+    let activePendingPlan = false;
 
     function renderPermissionCard(msg) {
+      activePendingPlan = false;
       const toolName = msg.tool_name || 'tool';
       const approvalId = msg.approval_id || '';
       activePendingApprovalId = approvalId;
@@ -3119,12 +3415,132 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       '</div>';
     }
 
+    function renderPlanApprovalCard(msg) {
+      activePendingPlan = true;
+      activePendingApprovalId = null;
+      activePendingToolName = '';
+      const plan = msg.plan || {};
+      const title = plan.title || 'Implementation Plan';
+      const desc = plan.description || '';
+      const steps = plan.steps || plan.todos || [];
+      const planMd = plan.plan_md || plan.body || '';
+
+      let stepsHtml = '';
+      if (steps.length > 0) {
+        stepsHtml = '<div class="plan-steps-preview">' +
+          steps.map(function(s, idx) {
+            const txt = typeof s === 'string' ? s : (s.title || s.description || s.text || '');
+            const isDone = (s.status || '').toLowerCase() === 'done';
+            return '<div class="plan-step-item' + (isDone ? ' is-done' : '') + '">' +
+              '<span class="plan-step-bullet">' + (isDone ? '✓' : (idx + 1)) + '</span>' +
+              '<span class="plan-step-txt">' + escapeHtml(txt) + '</span>' +
+            '</div>';
+          }).join('') +
+        '</div>';
+      }
+
+      let fullPlanToggle = '';
+      if (planMd && planMd.trim()) {
+        fullPlanToggle =
+          '<div class="permission-params-toggle" data-action="toggle-perm-params">' +
+            '<span class="params-chevron">&#x25B8;</span> ' +
+            '<span>View full plan markdown</span>' +
+          '</div>' +
+          '<div class="permission-params-body" style="display:none;">' +
+            '<pre style="margin:0; font-family:var(--font-mono); white-space:pre-wrap; word-break:break-word;">' + escapeHtml(planMd) + '</pre>' +
+          '</div>';
+      }
+
+      return '<div class="permission-card plan-approval-card" id="plan-approval-card">' +
+        '<div class="permission-header">' +
+          '<div class="permission-title-row">' +
+            '<div class="permission-icon-title">' +
+              '<span class="permission-icon-box plan">' +
+                '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>' +
+              '</span>' +
+              '<span class="permission-title">Plan Review: ' + escapeHtml(title) + '</span>' +
+            '</div>' +
+            '<button class="permission-close-btn" data-action="reject-plan" title="Deny / Reject (Esc)">' +
+              '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>' +
+            '</button>' +
+          '</div>' +
+          (desc ? ('<div class="plan-desc-text">' + escapeHtml(desc) + '</div>') : '') +
+          (stepsHtml ? ('<div class="permission-code-box plan-code-box">' + stepsHtml + '</div>') : '') +
+          fullPlanToggle +
+          '<div class="plan-feedback-wrapper">' +
+            '<input type="text" id="plan-feedback-input" class="plan-feedback-field" placeholder="Optional review note or instruction..." autocomplete="off">' +
+          '</div>' +
+        '</div>' +
+
+        '<div class="permission-options-group">' +
+          '<div class="permission-option-row" data-action="approve-plan" tabindex="0" role="button">' +
+            '<div class="option-row-main">' +
+              '<div class="option-row-title">Approve & Execute</div>' +
+              '<div class="option-row-sub">Proceed with planned implementation</div>' +
+            '</div>' +
+            '<div class="option-row-badge">' +
+              '<kbd class="perm-kbd">Ctrl</kbd> <kbd class="perm-kbd">Y</kbd>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="permission-option-row" data-action="open-plan-tab" tabindex="0" role="button">' +
+            '<div class="option-row-main">' +
+              '<div class="option-row-title">View full plan in editor tab</div>' +
+              '<div class="option-row-sub">Open interactive side-by-side plan viewer</div>' +
+            '</div>' +
+            '<div class="option-row-badge">' +
+              '<kbd class="perm-kbd">/plan</kbd>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="permission-option-row option-deny" data-action="reject-plan" tabindex="0" role="button">' +
+            '<div class="option-row-main">' +
+              '<div class="option-row-title deny-text">Reject & Revise</div>' +
+              '<div class="option-row-sub">Send review feedback to agent</div>' +
+            '</div>' +
+            '<div class="option-row-badge">' +
+              '<kbd class="perm-kbd">Esc</kbd>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
     document.addEventListener('keydown', (e) => {
-      if (!activePendingApprovalId) return;
       const isInput = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
 
+      // ── Plan Approval Keyboard Handling ──
+      if (activePendingPlan) {
+        if (isInput && e.target.id === 'plan-feedback-input') {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            window.approvePlan();
+            return;
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            window.rejectPlan();
+            return;
+          }
+        } else if (!isInput) {
+          if (e.key === 'Enter' || (e.ctrlKey && (e.key === 'y' || e.key === 'Y'))) {
+            e.preventDefault();
+            window.approvePlan();
+            return;
+          }
+          if (e.key === 'Escape' || (e.ctrlKey && (e.key === 'n' || e.key === 'N'))) {
+            e.preventDefault();
+            window.rejectPlan();
+            return;
+          }
+        }
+      }
+
+      if (!activePendingApprovalId) return;
+      const isToolInput = isInput;
+
       // 1. Allow Once: Ctrl+Y, or Enter (when not inside input)
-      if ((e.ctrlKey && (e.key === 'y' || e.key === 'Y') && !e.altKey && !e.shiftKey) || (!isInput && e.key === 'Enter')) {
+      if ((e.ctrlKey && (e.key === 'y' || e.key === 'Y') && !e.altKey && !e.shiftKey) || (!isToolInput && e.key === 'Enter')) {
         e.preventDefault();
         window.approveTool(activePendingApprovalId, 'once', activePendingToolName);
         return;
@@ -3167,6 +3583,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     };
 
     window.approvePlan = function() {
+      activePendingPlan = false;
       const feedbackInput = document.getElementById('plan-feedback-input');
       const feedback = feedbackInput ? feedbackInput.value.trim() : '';
       interactiveSlot.innerHTML = '';
@@ -3174,6 +3591,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     };
 
     window.rejectPlan = function() {
+      activePendingPlan = false;
       const feedbackInput = document.getElementById('plan-feedback-input');
       const feedback = feedbackInput ? feedbackInput.value.trim() : '';
       interactiveSlot.innerHTML = '';

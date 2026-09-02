@@ -9,7 +9,10 @@ from andromity.core.tools import CORE_TOOLS, ToolRegistry, execute_tool, registe
 from andromity.core.events import (
     StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired, PlanUpdated
 )
+from andromity.core.debug_log import get_logger
 from andromity.config import config
+
+log = get_logger("agent")
 
 
 def _estimate_tokens(messages: list) -> int:
@@ -86,7 +89,8 @@ class Agent:
 
         self.orchestrator = SubAgentOrchestrator(
             parent_session_id=self.session.id,
-            project_path=self.session.project_path
+            project_path=self.session.project_path,
+            permission_mode=getattr(self.session, "permission_mode", None) or config.get("default", "permission_mode", "safe"),
         )
         self.session._orchestrator = self.orchestrator
 
@@ -243,7 +247,7 @@ class Agent:
                 if isinstance(event, TextDelta):
                     summary_text += event.text
         except Exception as e:
-            logger.warning("Compaction summary stream failed: %s", e)
+            log.warning("Compaction summary stream failed: %s", e)
             yield TextDelta(text=f"*[Context compaction failed: {e}]*\n\n")
             return
 
@@ -305,9 +309,7 @@ class Agent:
             yield event
 
         while True:
-            current_tool_id = None
-            current_tool_name = None
-            current_tool_args_str = ""
+            pending_tool_calls: Dict[str, Dict[str, str]] = {}
             tool_calls_to_execute = []
             assistant_content = ""
             assistant_thinking = ""
@@ -334,19 +336,28 @@ class Agent:
                 elif isinstance(event, ThinkingDelta):
                     assistant_thinking += event.text
                 elif isinstance(event, ToolCallStart):
-                    current_tool_id = event.tool_id
-                    current_tool_name = event.tool_name
-                    current_tool_args_str = ""
+                    pending_tool_calls[event.tool_id] = {
+                        "name": event.tool_name,
+                        "args": "",
+                    }
                 elif isinstance(event, ToolCallDelta):
-                    if event.tool_id == current_tool_id:
-                        current_tool_args_str += event.args_json_chunk
+                    if event.tool_id in pending_tool_calls:
+                        pending_tool_calls[event.tool_id]["args"] += event.args_json_chunk
                 elif isinstance(event, ToolCallEnd):
-                    if current_tool_id == event.tool_id:
+                    if event.tool_id in pending_tool_calls:
+                        call_info = pending_tool_calls.pop(event.tool_id)
                         tool_calls_to_execute.append({
-                            "id": current_tool_id, "type": "function",
-                            "function": {"name": current_tool_name, "arguments": current_tool_args_str},
+                            "id": event.tool_id, "type": "function",
+                            "function": {"name": call_info["name"], "arguments": call_info["args"]},
                         })
-                        current_tool_id = None
+
+            # Flush any unclosed tool calls in case provider ended stream before ToolCallEnd
+            for tid, call_info in list(pending_tool_calls.items()):
+                tool_calls_to_execute.append({
+                    "id": tid, "type": "function",
+                    "function": {"name": call_info["name"], "arguments": call_info["args"]},
+                })
+            pending_tool_calls.clear()
 
             if not tool_calls_to_execute and ("<atem:invoke" in assistant_content or "<atem:function_calls>" in assistant_content):
                 import re, uuid
@@ -568,6 +579,9 @@ class Agent:
             for tool_call, tool_name, args in prepared:
                 if tool_name in ("write_plan", "update_plan_step"):
                     plan = self.session.load_plan_obj()
+                    if not plan and getattr(self.session, "project_path", None):
+                        from andromity.core.planner import Plan
+                        plan = Plan.load(self.session.project_path)
                     if plan:
                         yield PlanUpdated(plan=plan)
                         if tool_name == "write_plan" and plan.status == "pending":

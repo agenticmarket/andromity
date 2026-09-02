@@ -1,55 +1,51 @@
 const fs = require('fs');
 const vm = require('vm');
+const Module = require('module');
 
-const ext = fs.readFileSync('dist/extension.js', 'utf8');
-
-// Find _getHtmlForWebview implementation
-// In dist/extension.js, look for _getHtmlForWebview
-const funcMatch = ext.match(/_getHtmlForWebview\(webview\)\s*\{([\s\S]*?)\n  \}/);
-if (!funcMatch) {
-  console.error("Could not find _getHtmlForWebview");
-  process.exit(1);
-}
-
-// Execute _getHtmlForWebview in a mock context
-const mockThis = {
-  _extensionUri: { fsPath: 'd:/saas/agent/vscode-extension' },
-  _currentSessionId: 'sess-1',
-  _currentModel: 'anthropic/claude-3.7-sonnet',
-  _currentProvider: 'openrouter',
-  _currentMode: 'safe',
-  _currentProfile: 'builder',
-  _currentReasoning: 'medium',
-  _formatModelDisplayName: (m) => m,
+// Mock vscode module
+const origRequire = Module.prototype.require;
+const mockVscode = {
+  Uri: {
+    joinPath: (...args) => ({ fsPath: args.map(a => typeof a === 'object' ? (a.fsPath || a.path) : a).join('/') }),
+    file: (p) => ({ fsPath: p })
+  },
+  window: {},
+  workspace: {},
+  commands: {},
+  EventEmitter: class { event() {} fire() {} }
 };
+Module.prototype.require = function(reqPath) {
+  if (reqPath === 'vscode') return mockVscode;
+  return origRequire.apply(this, arguments);
+};
+
+const mod = require('../dist/providers/ChatViewProvider.js');
+const provider = new mod.ChatViewProvider({ fsPath: 'd:/saas/agent/vscode-extension' }, null);
 const mockWebview = {
   cspSource: 'vscode-webview:',
-  asWebviewUri: (u) => 'vscode-resource://' + u,
+  asWebviewUri: (u) => 'vscode-resource://' + (u.fsPath || u)
 };
-const mockVscode = {
-  Uri: { joinPath: (...p) => p.join('/') }
-};
-
-// Create a function body
-const fn = new Function('vscode', 'vscode6', 'webview', `
-  function getNonce() { return "test-nonce-1234"; }
-  ${funcMatch[1]}
-`);
-
-const html = fn.call(mockThis, mockVscode, mockVscode, mockWebview);
+const html = provider._getHtmlForWebview(mockWebview);
 console.log("HTML generated, length:", html.length);
 
-// Extract <script>...</script>
-const scriptMatch = html.match(/<script nonce="[^"]*">([\s\S]*?)<\/script>/);
-if (!scriptMatch) {
+// Extract non-empty <script>...</script>
+const scriptMatches = [...html.matchAll(/<script(?:\s+[^>]*)?>([\s\S]*?)<\/script>/gi)]
+  .map(m => m[1])
+  .filter(s => s.trim().length > 0);
+
+if (scriptMatches.length === 0) {
   console.error("No script match in HTML");
   process.exit(1);
 }
 
-const scriptCode = scriptMatch[1];
-try {
-  new vm.Script(scriptCode);
-  console.log("SUCCESS: Script parsed with 0 syntax errors!");
-} catch (e) {
-  console.error("SYNTAX ERROR IN WEBVIEW SCRIPT:", e);
+for (let i = 0; i < scriptMatches.length; i++) {
+  const scriptCode = scriptMatches[i];
+  try {
+    new vm.Script(scriptCode);
+    console.log(`Script #${i + 1}: SUCCESS parsed with 0 syntax errors! (length: ${scriptCode.length})`);
+  } catch (e) {
+    console.error(`SYNTAX ERROR IN WEBVIEW SCRIPT #${i + 1}:`, e);
+    process.exit(1);
+  }
 }
+

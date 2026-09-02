@@ -788,21 +788,21 @@ export class PlanEditorPanel {
                 l++;
                 tableLines.push(rawLines[l].trim());
               }
-              var rawAligns = sepLine.replace(/^\|/, '').replace(/\|$/, '').split('|');
+              var rawAligns = sepLine.replace(/^\\|/, '').replace(/\\|$/, '').split('|');
               var aligns = rawAligns.map(function(s) {
                 var st = s.trim();
                 if (st.startsWith(':') && st.endsWith(':')) return 'center';
                 if (st.endsWith(':')) return 'right';
                 return 'left';
               });
-              var headers = tableLines[0].replace(/^\|/, '').replace(/\|$/, '').split('|');
+              var headers = tableLines[0].replace(/^\\|/, '').replace(/\\|$/, '').split('|');
               var tableHtml = '<div style="overflow-x:auto; margin:10px 0; border:1px solid var(--border); border-radius:6px;"><table style="width:100%; border-collapse:collapse; font-size:12px;"><thead><tr>';
               for (var h = 0; h < headers.length; h++) {
                 tableHtml += '<th style="text-align:' + (aligns[h] || 'left') + '; padding:8px 12px; background:rgba(255,255,255,0.06); border-bottom:1px solid var(--border); font-weight:600;">' + renderInline(headers[h].trim()) + '</th>';
               }
               tableHtml += '</tr></thead><tbody>';
               for (var r = 1; r < tableLines.length; r++) {
-                var cells = tableLines[r].replace(/^\|/, '').replace(/\|$/, '').split('|');
+                var cells = tableLines[r].replace(/^\\|/, '').replace(/\\|$/, '').split('|');
                 tableHtml += '<tr>';
                 for (var c = 0; c < headers.length; c++) {
                   tableHtml += '<td style="text-align:' + (aligns[c] || 'left') + '; padding:6px 12px; border-bottom:1px solid rgba(255,255,255,0.04);">' + renderInline((cells[c] || '').trim()) + '</td>';

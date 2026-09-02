@@ -11,6 +11,9 @@ import sqlite3
 import re
 
 from andromity.config import get_config_dir
+from andromity.core.debug_log import get_logger
+
+log = get_logger("session")
 
 
 def _validate_session_id(session_id: str) -> str:
@@ -125,17 +128,17 @@ class Session:
         return is_domain_allowed(url_or_domain, self.allowed_domains)
 
     def set_status(self, status: str):
-        """Update live lifecycle status of this session."""
+        """Update live lifecycle status of this session in DB and JSON."""
         self.status = status
+        self.updated_at = datetime.now(timezone.utc).isoformat()
         self._save_to_db()
+        self._mark_dirty(delay=0.05)
 
     def _mark_dirty(self, delay: float = 1.5):
         """Schedule a debounced write to avoid synchronous disk thrashing on rapid appends."""
-        with getattr(self, "_save_lock", None) or threading.RLock():
-            if not hasattr(self, "_save_lock"):
-                self._save_lock = threading.RLock()
+        with self._save_lock:
             self._dirty = True
-            if getattr(self, "_save_timer", None) is not None:
+            if self._save_timer is not None:
                 try:
                     self._save_timer.cancel()
                 except Exception:
@@ -146,24 +149,22 @@ class Session:
             t.start()
 
     def _flush_save(self):
-        with getattr(self, "_save_lock", None) or threading.RLock():
-            if getattr(self, "_dirty", False):
+        with self._save_lock:
+            if self._dirty:
                 self._dirty = False
                 self._save_timer = None
-                # Snapshot under lock, then serialize+write outside the lock
-                # so the main thread (and Textual event loop) are never blocked.
                 self._save_snapshot()
 
     def flush(self):
         """Immediately write any pending debounced save to disk."""
-        with getattr(self, "_save_lock", None) or threading.RLock():
-            if getattr(self, "_save_timer", None) is not None:
+        with self._save_lock:
+            if self._save_timer is not None:
                 try:
                     self._save_timer.cancel()
                 except Exception:
                     pass
                 self._save_timer = None
-            if getattr(self, "_dirty", False):
+            if self._dirty:
                 self._dirty = False
                 self.save()
 
@@ -182,8 +183,10 @@ class Session:
             msg["name"] = name
         if tool_call_id is not None:
             msg["tool_call_id"] = tool_call_id
-        self.messages.append(msg)
-        if not self.file_path.exists():
+        with self._save_lock:
+            self.messages.append(msg)
+            need_save = not self.file_path.exists()
+        if need_save:
             self.save()
         else:
             self._mark_dirty()
@@ -191,21 +194,22 @@ class Session:
     def update_usage(self, usage: Dict[str, int], model: str = ""):
         from andromity.core.pricing import calculate_cost
         from andromity.core.usage import normalize_usage
-        usage = normalize_usage(usage, usage.get("usage_source", "provider"))
-        self.token_total += usage.get("total_tokens", 0)
-        self.context_tokens = usage.get("prompt_tokens", 0)
-        for key in self.usage_breakdown:
-            self.usage_breakdown[key] += usage.get(key, 0)
-        if model and "/" in model:
-            provider, mdl = model.split("/", 1)
-            self.provider = provider
-            self.model = mdl
-        provider = self.provider
-        mdl = self.model
-        result = calculate_cost(usage, provider, mdl)
-        self.cost_usd += result.usd
-        self.cost_source = result.source if self.cost_source in ("unpriced", result.source) else "mixed"
-        self._mark_dirty()
+        with self._save_lock:
+            usage = normalize_usage(usage, usage.get("usage_source", "provider"))
+            self.token_total += usage.get("total_tokens", 0)
+            self.context_tokens = usage.get("prompt_tokens", 0)
+            for key in self.usage_breakdown:
+                self.usage_breakdown[key] += usage.get(key, 0)
+            if model and "/" in model:
+                provider, mdl = model.split("/", 1)
+                self.provider = provider
+                self.model = mdl
+            provider = self.provider
+            mdl = self.model
+            result = calculate_cost(usage, provider, mdl)
+            self.cost_usd += result.usd
+            self.cost_source = result.source if self.cost_source in ("unpriced", result.source) else "mixed"
+            self._mark_dirty()
 
     def to_dict(self, snapshot: bool = False) -> Dict[str, Any]:
         """Return a serializable dict of the session."""
@@ -231,32 +235,33 @@ class Session:
         """Replace older messages with a summary to free up context.
         Returns the number of messages removed.
         """
-        if len(self.messages) <= keep_last_n + 1:
-            return 0
+        with self._save_lock:
+            if len(self.messages) <= keep_last_n + 1:
+                return 0
+                
+            system_msg = self.messages[0]
+            compacted_away = self.messages[1:-keep_last_n]
+            recent_msgs = self.messages[-keep_last_n:]
             
-        system_msg = self.messages[0]
-        compacted_away = self.messages[1:-keep_last_n]
-        recent_msgs = self.messages[-keep_last_n:]
-        
-        # Preserve compacted messages for chat UI history replay
-        if not hasattr(self, "compacted_history") or self.compacted_history is None:
-            self.compacted_history = []
-        self.compacted_history.extend(compacted_away)
+            # Preserve compacted messages for chat UI history replay
+            if not hasattr(self, "compacted_history") or self.compacted_history is None:
+                self.compacted_history = []
+            self.compacted_history.extend(compacted_away)
 
-        summary_msg = {
-            "role": "user",
-            "content": f"[Conversation summary of earlier turns]:\n{new_summary}"
-        }
-        ack_msg = {
-            "role": "assistant",
-            "content": "Understood. I have the context of our earlier discussion and will continue from here."
-        }
-        
-        removed_count = len(compacted_away)
-        self.messages = [system_msg, summary_msg, ack_msg] + recent_msgs
-        self.context_tokens = 0  # Force recalculation of the next prompt size
-        self.save()
-        return removed_count
+            summary_msg = {
+                "role": "user",
+                "content": f"[Conversation summary of earlier turns]:\n{new_summary}"
+            }
+            ack_msg = {
+                "role": "assistant",
+                "content": "Understood. I have the context of our earlier discussion and will continue from here."
+            }
+            
+            removed_count = len(compacted_away)
+            self.messages = [system_msg, summary_msg, ack_msg] + recent_msgs
+            self.context_tokens = 0  # Force recalculation of the next prompt size
+            self.save()
+            return removed_count
 
     # ── Plan helpers (session-scoped) ────────────────────────────────────────
 
@@ -357,8 +362,8 @@ class Session:
                             thinking, name, tool_call_id, ts
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, rows_to_insert)
-        except Exception:
-            pass
+        except Exception as e:
+            log.exception("Failed to persist session %s to SQLite: %s", getattr(self, "id", "unknown"), e)
 
     def _save_snapshot(self):
         """Snapshot state under lock, then persist to DB and JSON."""
@@ -369,7 +374,7 @@ class Session:
 
     def save(self):
         """Immediate, synchronous save."""
-        with getattr(self, "_save_lock", None) or threading.Lock():
+        with self._save_lock:
             if getattr(self, "_save_timer", None) is not None:
                 try:
                     self._save_timer.cancel()
@@ -377,16 +382,20 @@ class Session:
                     pass
                 self._save_timer = None
             self._dirty = False
-        self.updated_at = datetime.now(timezone.utc).isoformat()
-        self._save_to_db()
-        data = self.to_dict(snapshot=True)
-        self._write_json(data)
+            self.updated_at = datetime.now(timezone.utc).isoformat()
+            self._save_to_db()
+            data = self.to_dict(snapshot=True)
+            self._write_json(data)
 
     def _write_json(self, data: Dict[str, Any]):
         """Atomic write: serialize to a temp file, then os.replace()."""
         num_msgs = len(data.get("messages", []))
         indent = 2 if num_msgs <= 50 else None
         separators = None if indent else (",", ":")
+        try:
+            self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
         tmp_path = self.file_path.with_suffix(".tmp")
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
@@ -530,7 +539,7 @@ class Session:
         return session
 
     @classmethod
-    def list_sessions(cls, project_path: Optional[str] = None, limit: int = 100) -> List["Session"]:
+    def list_sessions(cls, project_path: Optional[str] = None, limit: int = 100, include_subagents: bool = False) -> List["Session"]:
         from andromity.core.db import get_conn, init_schema
         init_schema()
         conn = get_conn()
@@ -547,45 +556,42 @@ class Session:
 
         # 1. Query SQLite
         placeholders = ",".join("?" * len(hashes_to_check))
+        subagent_clause = "" if include_subagents else " AND (parent_session IS NULL OR parent_session = '')"
         rows = conn.execute(f"""
             SELECT * FROM sessions 
-            WHERE project_hash IN ({placeholders})
+            WHERE project_hash IN ({placeholders}){subagent_clause}
             ORDER BY updated_at DESC
             LIMIT ?
         """, list(hashes_to_check) + [limit]).fetchall()
 
-        if rows:
-            return [cls._from_db_row(r, conn) for r in rows]
+        db_sessions = [cls._from_db_row(r, conn) for r in rows] if rows else []
+        known_ids = {s.id for s in db_sessions}
 
-        # 2. Fallback & Auto-Migration from JSON files (for existing installs)
+        # 2. Also check for any unmigrated JSON session files
         sessions_root = get_config_dir() / "sessions"
-        if not sessions_root.exists():
-            return []
+        if sessions_root.exists():
+            unmigrated_files = []
+            for h in hashes_to_check:
+                p_dir = sessions_root / h
+                if p_dir.exists() and p_dir.is_dir():
+                    for f in p_dir.glob("*.json"):
+                        stem = f.stem
+                        if stem not in known_ids:
+                            known_ids.add(stem)
+                            unmigrated_files.append(f)
 
-        session_files = []
-        seen_ids = set()
+            for f in unmigrated_files:
+                try:
+                    s = cls.load(f)
+                    s._save_to_db()  # Auto-migrate to SQLite
+                    if not include_subagents and s.parent_session:
+                        continue
+                    db_sessions.append(s)
+                except Exception:
+                    continue
 
-        for h in hashes_to_check:
-            p_dir = sessions_root / h
-            if p_dir.exists() and p_dir.is_dir():
-                for f in p_dir.glob("*.json"):
-                    stem = f.stem
-                    if stem not in seen_ids:
-                        seen_ids.add(stem)
-                        session_files.append(f)
-
-        session_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-        sessions = []
-        for f in session_files[:limit]:
-            try:
-                s = cls.load(f)
-                s._save_to_db()  # Auto-migrate to SQLite
-                sessions.append(s)
-            except Exception:
-                continue
-
-        sessions.sort(key=lambda s: getattr(s, "updated_at", s.created_at), reverse=True)
-        return sessions
+        db_sessions.sort(key=lambda s: getattr(s, "updated_at", s.created_at), reverse=True)
+        return db_sessions[:limit]
 
     @classmethod
     def load_by_id(cls, session_id: str, project_path: Optional[str] = None) -> Optional["Session"]:
@@ -598,17 +604,11 @@ class Session:
         init_schema()
         conn = get_conn()
 
-        # 1. Check SQLite
-        row = conn.execute("SELECT * FROM sessions WHERE id = ?", (valid_id,)).fetchone()
-        if row:
-            return cls._from_db_row(row, conn)
-
-        # 2. Check JSON fallback (existing/old session files)
-        norm_path = normalize_project_path(project_path)
-        primary_hash = hashlib.sha256(norm_path.encode()).hexdigest()[:16]
-
-        hashes_to_check = [primary_hash]
+        hashes_to_check = []
         if project_path:
+            norm_path = normalize_project_path(project_path)
+            primary_hash = hashlib.sha256(norm_path.encode()).hexdigest()[:16]
+            hashes_to_check = [primary_hash]
             raw_s = str(project_path)
             for h in [
                 hashlib.sha256(raw_s.encode()).hexdigest()[:16],
@@ -618,18 +618,35 @@ class Session:
                 if h not in hashes_to_check:
                     hashes_to_check.append(h)
 
-        sessions_dir = (get_config_dir() / "sessions").resolve()
-        for h in hashes_to_check:
-            candidate = (sessions_dir / h / f"{valid_id}.json").resolve()
-            if candidate.is_relative_to(sessions_dir) and candidate.exists():
-                try:
-                    s = cls.load(candidate)
-                    s._save_to_db()  # Auto-migrate to SQLite
-                    return s
-                except Exception:
-                    pass
+        # 1. Check SQLite
+        if hashes_to_check:
+            placeholders = ",".join("?" * len(hashes_to_check))
+            row = conn.execute(
+                f"SELECT * FROM sessions WHERE id = ? AND project_hash IN ({placeholders})",
+                [valid_id] + hashes_to_check
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT * FROM sessions WHERE id = ?", (valid_id,)).fetchone()
 
-        # Fallback: scan all project subdirectories under sessions
+        if row:
+            return cls._from_db_row(row, conn)
+
+        # 2. Check JSON fallback
+        sessions_dir = (get_config_dir() / "sessions").resolve()
+        if hashes_to_check:
+            for h in hashes_to_check:
+                candidate = (sessions_dir / h / f"{valid_id}.json").resolve()
+                if candidate.is_relative_to(sessions_dir) and candidate.exists():
+                    try:
+                        s = cls.load(candidate)
+                        s._save_to_db()  # Auto-migrate to SQLite
+                        return s
+                    except Exception:
+                        pass
+            # If project_path was explicitly provided, do NOT fall back to other projects (IDOR guard)
+            return None
+
+        # If no project_path provided, scan all project subdirectories under sessions
         if sessions_dir.exists():
             for p_dir in sessions_dir.iterdir():
                 if p_dir.is_dir():
@@ -644,5 +661,5 @@ class Session:
         return None
 
 
-def get_all_sessions(project_path: Optional[str] = None) -> List[Session]:
-    return Session.list_sessions(project_path, limit=100)
+def get_all_sessions(project_path: Optional[str] = None, include_subagents: bool = False) -> List[Session]:
+    return Session.list_sessions(project_path, limit=100, include_subagents=include_subagents)

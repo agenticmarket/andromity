@@ -35,3 +35,4 @@ vscode-extension/bin/
 dist-server/
 build/
 sqlite_migration_plan.md
+*.vsix

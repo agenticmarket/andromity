@@ -71,6 +71,31 @@ class Plan:
             "project_path": self.project_path,
         }
 
+    def to_enriched_dict(self) -> dict:
+        d = self.to_dict()
+        from andromity.core.todo import TodoList
+        todos = []
+        p_path = self.project_path
+        if not p_path:
+            try:
+                from andromity.core.tools import _get_project_root
+                p_path = str(_get_project_root())
+            except Exception:
+                p_path = str(Path.cwd())
+        if p_path:
+            try:
+                tlist = TodoList.load(p_path)
+                if tlist and tlist.items:
+                    todos = [
+                        {"id": item.id, "title": item.title, "status": item.status}
+                        for item in tlist.items
+                    ]
+            except Exception:
+                todos = []
+        d["steps"] = todos
+        d["todos"] = todos
+        return d
+
     @classmethod
     def from_dict(cls, data: dict, project_path: str = "") -> "Plan":
         return cls(
@@ -79,5 +104,5 @@ class Plan:
             body=data.get("body", ""),
             status=data.get("status", "pending"),
             questions=data.get("questions", []),
-            project_path=project_path,
+            project_path=project_path or data.get("project_path", ""),
         )

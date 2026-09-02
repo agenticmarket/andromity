@@ -25,7 +25,9 @@ export interface JsonRpcNotification<T = any> {
 export interface SessionInfo {
   id: string;
   name: string;
+  status?: string;
   project_path: string;
+  parent_session?: string;
   updated_at?: string;
   created_at?: string;
   message_count?: number;
@@ -78,6 +80,7 @@ export interface SubAgentEvent {
   model?: string;
   provider?: string;
   task?: string;
+  tool_id?: string;
   status?: string;
   event_type?: string;
   delta_text?: string;

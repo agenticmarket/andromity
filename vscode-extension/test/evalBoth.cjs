@@ -129,3 +129,19 @@ testProvider(
     return panelProto._getHtmlForWebview.call(mockThis, mockThis._panel.webview);
   }
 );
+
+// 4. PlanViewProvider
+testProvider(
+  'PlanViewProvider',
+  '../dist-test/src/providers/PlanViewProvider.js',
+  (mod) => {
+    const provider = new mod.PlanViewProvider(
+      { fsPath: 'd:/saas/agent/vscode-extension' }
+    );
+    const mockWebview = {
+      cspSource: 'vscode-webview:',
+      asWebviewUri: (u) => 'vscode-resource://' + (u.fsPath || u)
+    };
+    return provider._getHtmlForWebview(mockWebview);
+  }
+);

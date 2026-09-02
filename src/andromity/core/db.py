@@ -154,32 +154,49 @@ def init_schema() -> None:
 
 @contextmanager
 def transaction(conn: Optional[sqlite3.Connection] = None) -> Generator[sqlite3.Connection, None, None]:
-    """Execute operations inside an explicit BEGIN IMMEDIATE / COMMIT transaction block."""
+    """Execute operations inside an explicit BEGIN IMMEDIATE / COMMIT transaction block.
+    
+    Supports re-entrancy: if the connection is already in an active transaction,
+    yields the connection without opening or closing nested transactions.
+    """
     connection = conn or get_conn()
+    if connection.in_transaction:
+        # Already inside a transaction; act as a pass-through
+        yield connection
+        return
+
     connection.execute("BEGIN IMMEDIATE;")
     try:
         yield connection
         connection.execute("COMMIT;")
     except Exception:
-        connection.execute("ROLLBACK;")
+        try:
+            connection.execute("ROLLBACK;")
+        except Exception:
+            pass
         raise
 
 
-def j(value: Any) -> str:
-    """Serialize value to compact JSON string."""
+def j(value: Any, default: Optional[str] = None) -> Optional[str]:
+    """Serialize value to compact JSON string.
+    
+    If value is None and default is provided, returns default.
+    If value is None and default is None, returns None.
+    """
     if value is None:
-        return ""
+        return default
     try:
         return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
     except Exception:
-        return "{}"
+        return default if default is not None else "{}"
 
 
 def uj(text: Optional[str], default: Any = None) -> Any:
     """Deserialize JSON string with fallback default."""
-    if not text:
+    if not text or text in ("null", ""):
         return default if default is not None else {}
     try:
-        return json.loads(text)
+        val = json.loads(text)
+        return val if val is not None else (default if default is not None else {})
     except Exception:
         return default if default is not None else {}

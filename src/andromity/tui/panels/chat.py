@@ -1186,7 +1186,8 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
             target_agent_id = getattr(event, "agent_id", None)
             indicators = list(self.query(ToolIndicator))
 
-            # 1. Exact match by parent turn's tool_id
+            # 1. Exact match by parent turn's tool_id (each concurrent spawn has a
+            # unique tool_id, so this is unambiguous).
             if target_tool_id:
                 for ind in indicators:
                     if ind.tool_id == target_tool_id:
@@ -1200,7 +1201,8 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
                         ind.append_subagent_activity(event)
                         return
 
-            # 3. Associate agent_id with the first running spawn_subagent indicator without an assigned agent_id
+            # 3. Associate agent_id with the first running spawn_subagent indicator
+            # without an assigned agent_id.
             if target_agent_id:
                 for ind in indicators:
                     if ind.tool_name == "spawn_subagent" and not ind._done and not getattr(ind, "_assigned_agent_id", None):
@@ -1208,11 +1210,17 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
                         ind.append_subagent_activity(event)
                         return
 
-            # 4. Fallback: forward to any running spawn_subagent indicator
-            for ind in reversed(indicators):
-                if ind.tool_name == "spawn_subagent" and not ind._done:
-                    ind.append_subagent_activity(event)
-                    return
+            # 4. Fallback: forward to any running spawn_subagent indicator that
+            # isn't already bound to a different agent (prevents event stealing
+            # when multiple spawn_subagent calls run in parallel).
+            if target_agent_id:
+                for ind in reversed(indicators):
+                    if ind.tool_name == "spawn_subagent" and not ind._done:
+                        assigned = getattr(ind, "_assigned_agent_id", None)
+                        if assigned and assigned != target_agent_id:
+                            continue
+                        ind.append_subagent_activity(event)
+                        return
         except Exception:
             pass
 

@@ -117,6 +117,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       const sessions = await this._rpcClient.call<SessionInfo[]>("session.list", {
         project_path: workspaceFolder,
+        include_subagents: true,
       }).catch(() => []) || [];
       this._postToWebview({
         type: "sessions_data",
@@ -524,6 +525,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       }
 
+      if (!this._currentPlan) {
+        this._currentPlan = await this._loadPlanFromWorkspace();
+      }
+
       this._postToWebview({
         type: "init_state",
         sessionId: this._currentSessionId,
@@ -545,6 +550,63 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } catch (e: any) {
       console.error("[Andromity Chat] Initial config load failed:", e);
     }
+  }
+
+  private async _loadPlanFromWorkspace(): Promise<any | null> {
+    try {
+      const folders = vscode.workspace.workspaceFolders;
+      if (!folders || folders.length === 0) return null;
+      const rootUri = folders[0].uri;
+
+      let planObj: any = null;
+      try {
+        const jsonUri = vscode.Uri.joinPath(rootUri, ".andromity", "plan.json");
+        const bytes = await vscode.workspace.fs.readFile(jsonUri);
+        planObj = JSON.parse(new TextDecoder().decode(bytes));
+      } catch {}
+
+      // Try reading todos.md if steps missing
+      let steps: any[] = planObj?.steps || planObj?.todos || [];
+      if (steps.length === 0) {
+        try {
+          const todosUri = vscode.Uri.joinPath(rootUri, ".andromity", "todos.md");
+          const mdBytes = await vscode.workspace.fs.readFile(todosUri);
+          const mdText = new TextDecoder().decode(mdBytes);
+          const lines = mdText.split("\n");
+          for (const line of lines) {
+            const m = line.match(/^-\s+(\[[ x/!\-]\])\s+(t\d+)\.\s+(.+)/);
+            if (m) {
+              const statusMap: Record<string, string> = {
+                "[ ]": "pending",
+                "[x]": "done",
+                "[/]": "active",
+                "[!]": "failed",
+                "[-]": "skipped",
+              };
+              steps.push({
+                id: m[2],
+                title: m[3].trim(),
+                status: statusMap[m[1]] || "pending",
+              });
+            }
+          }
+        } catch {}
+      }
+
+      if (planObj) {
+        planObj.steps = steps;
+        planObj.todos = steps;
+        return planObj;
+      } else if (steps.length > 0) {
+        return {
+          title: "Current Tasks",
+          status: "approved",
+          steps,
+          todos: steps,
+        };
+      }
+    } catch {}
+    return null;
   }
 
   private _formatModelDisplayName(id?: string): string {
@@ -569,6 +631,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         session_id: sessionId,
         project_path: workspaceFolder,
       });
+      if (sessionData && sessionData.plan) {
+        this._currentPlan = sessionData.plan;
+      } else if (!this._currentPlan) {
+        this._currentPlan = await this._loadPlanFromWorkspace();
+      }
+      if (this._currentPlan) {
+        this._postToWebview({
+          type: "plan_updated",
+          plan: this._currentPlan,
+        });
+      }
       this._postToWebview({
         type: "session_loaded",
         session: sessionData,
@@ -704,6 +777,68 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           "keys",
           () => this.refreshConfig()
         );
+        break;
+      }
+
+      case "open_external_url": {
+        if (message.url && typeof message.url === "string") {
+          vscode.env.openExternal(vscode.Uri.parse(message.url));
+        }
+        break;
+      }
+
+      case "set_api_key": {
+        try {
+          const provider = message.provider;
+          const apiKey = message.apiKey || "";
+          const modelId = message.modelId;
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+          if (provider && apiKey) {
+            await this._rpcClient.call("config.set_api_key", {
+              provider,
+              api_key: apiKey,
+            });
+          }
+
+          if (provider) {
+            await this._rpcClient.call("config.set", {
+              section: "default",
+              key: "provider",
+              value: provider,
+            });
+            this._currentProvider = provider;
+          }
+
+          if (modelId) {
+            await this._rpcClient.call("config.set", {
+              section: "default",
+              key: "model",
+              value: modelId,
+            });
+            this._currentModel = modelId;
+          }
+
+          const providers = await this._rpcClient.call<ProviderInfo[]>("config.list_providers", {}).catch(() => []);
+          this._providers = providers || [];
+
+          vscode.window.showInformationMessage(
+            `Connected to ${provider || "AI Provider"}! You're ready to code.`
+          );
+
+          await this._loadInitialConfig(false);
+          this._postToWebview({
+            type: "key_configured_success",
+            provider,
+            model: this._currentModel,
+          });
+        } catch (err: any) {
+          vscode.window.showErrorMessage(`Failed to configure provider: ${err.message}`);
+          this._postToWebview({
+            type: "key_configure_failed",
+            error: err.message,
+          });
+        }
         break;
       }
 

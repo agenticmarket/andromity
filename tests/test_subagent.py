@@ -135,7 +135,7 @@ async def test_subagent_progress_callback():
         await agent.execute()
 
     assert len(progress_events) > 0
-    assert any("Started subagent" in (e.detail or "") for e in progress_events)
+    assert any("Working on task" in (e.detail or "") or "Started subagent" in (e.detail or "") for e in progress_events)
     # Verify context snapshot was attached to system prompt
     assert "RELEVANT CONTEXT SNAPSHOT" in agent.session.messages[0]["content"]
     assert "pytest" in agent.session.messages[0]["content"]

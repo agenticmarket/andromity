@@ -1,25 +1,24 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/agenticmarket/andromity/main/andromity.png" alt="Andromity" width="80" height="80" />
 
-  # Meet Andromity
+  # Andromity – Autonomous AI Coding Agent for VS Code
 
-  **Autonomous AI coding agent right inside VS Code.**
-  Trust-gated. Multi-model. Built for developers who ship.
+  **The only AI coding agent with trust governance, subagents, live plans, native diffs & one-click rollback.**
 
-  [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/agenticmarket.andromity?label=VS%20Marketplace&logo=visualstudiocode&color=blueviolet)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity)
-  [![Installs](https://img.shields.io/visual-studio-marketplace/i/agenticmarket.andromity?color=brightgreen)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity)
+  [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/agenticmarket.andromity-agent?label=VS%20Marketplace&logo=visualstudiocode&color=blueviolet)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![Installs](https://img.shields.io/visual-studio-marketplace/i/agenticmarket.andromity-agent?color=brightgreen)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![Rating](https://img.shields.io/visual-studio-marketplace/stars/agenticmarket.andromity-agent?color=gold)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent&ssr=false#review-details)
   [![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/agenticmarket/andromity/blob/main/LICENSE)
-  [![GitHub](https://img.shields.io/badge/GitHub-agenticmarket%2Fandromity-181717?logo=github)](https://github.com/agenticmarket/andromity)
 
-  [Website](https://andromity.dev) • [GitHub](https://github.com/agenticmarket/andromity) • [Documentation](https://andromity.dev) • [Report Issue](https://github.com/agenticmarket/andromity/issues)
+  [Website](https://andromity.agenticmarket.dev) • [GitHub](https://github.com/agenticmarket/andromity) • [Docs](https://andromity.agenticmarket.dev/docs) • [Report Issue](https://github.com/agenticmarket/andromity/issues)
 
 </div>
 
 ---
 
-**Andromity** is an AI coding assistant designed to give you superpowers in VS Code. It doesn't just autocomplete or guess code — it plans out complex architectural tasks, shows you live step-by-step blueprints, lets you review diffs before applying, and gives you instant one-click rollback if you change your mind.
+**Andromity** is a private, BYOK (Bring Your Own Key) autonomous AI coding agent for VS Code. Designed as an extensible Copilot and Cursor alternative, it doesn't just autocomplete code — it plans out complex tasks with an interactive task planner, manages parallel subagents, shows you live step-by-step blueprints, lets you review diffs before applying, and gives you instant one-click rollback if you change your mind.
 
-Connect your preferred AI model (**Claude, GPT-4o, Gemini, DeepSeek, Groq**) or run **100% locally and free with Ollama**.
+Connect your preferred AI model (**Claude 3.7 Sonnet, GPT-4o, Gemini 2.5 Pro, DeepSeek R1 & V3, Groq, OpenRouter**) or run **100% locally and free with Ollama**.
 
 ---
 
@@ -51,7 +50,7 @@ Press `Ctrl+Alt+C` (`Cmd+Alt+C` on macOS) or open the sidebar. Ask a question, s
 - Reference files with `@` mentions.
 - The agent reads files, diagnoses bugs, implements features, and writes tests.
 
-### 📝 2. Live Step-by-Step Plans
+### 📝 2. Live Task Planner & Blueprints
 When tackling complex tasks, Andromity creates an interactive implementation plan first.
 - Review steps before changes happen.
 - Approve, skip, or edit steps individually.
@@ -65,14 +64,20 @@ Every change proposed by the agent is presented as a native VS Code diff.
 ### ⏪ 4. One-Click Rollback (`/undo`)
 Made a turn you don't like? Simply trigger **Undo Last Turn** from the header menu or command palette. Andromity rolls back all file changes from that turn instantly without touching your git history.
 
-### 🖱️ 5. Right-Click Context Menu Superpowers
+### 🤖 5. Multi-Agent & Parallel Subagents
+Spawn background subagents for research, file scanning, or isolated task implementation while you continue chatting in the main session.
+
+### 🔌 6. Model Context Protocol (MCP) Ready
+Connect any MCP server (tools, documentation, database connectors) directly into the agent workflow. Schemas load on demand to minimize token usage.
+
+### 🖱️ 7. Right-Click Context Menu Superpowers
 Highlight any snippet in your code editor, right-click, and choose:
 - **Ask About Selection** (`Ctrl+Alt+A`): Inquire about logic or behavior.
 - **Explain Code** (`Ctrl+Alt+E`): Get a breakdown of what the code does.
 - **Fix Diagnostics & Errors**: Auto-resolve type errors, linter warnings, or crashes.
 - **Generate Unit Tests** (`Ctrl+Alt+T`): Auto-generate complete test suites for your functions or classes.
 
-### ✍️ 6. AI Git Commit Messages
+### ✍️ 8. AI Git Commit Messages
 Click the **Andromity icon** directly in the Source Control panel title bar to generate a clean, descriptive commit message based on your staged changes.
 
 ---
@@ -137,7 +142,7 @@ Customize Andromity in **Settings** (`Ctrl+,` → search `Andromity`):
 
 ## 🌐 Links & Community
 
-- 🏠 **Website:** [andromity.dev](https://andromity.dev)
+- 🏠 **Website:** [andromity.agenticmarket.dev](https://andromity.agenticmarket.dev)
 - 🐙 **GitHub:** [agenticmarket/andromity](https://github.com/agenticmarket/andromity)
 - 💬 **Discussions & Feedback:** [GitHub Discussions](https://github.com/agenticmarket/andromity/discussions)
 - 🐛 **Bug Reports & Requests:** [GitHub Issues](https://github.com/agenticmarket/andromity/issues)
@@ -146,7 +151,7 @@ Customize Andromity in **Settings** (`Ctrl+,` → search `Andromity`):
 
 <div align="center">
 
-**Built with ❤️ for developers by [Agentic Market](https://github.com/agenticmarket)**
+**Built with ❤️ for developers by [AgenticMarket](https://github.com/agenticmarket)**
 
 [MIT License](https://github.com/agenticmarket/andromity/blob/main/LICENSE)
 

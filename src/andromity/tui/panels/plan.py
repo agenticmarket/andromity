@@ -63,8 +63,16 @@ PlanPanel {
 
     def load_plan(self, plan) -> None:
         """Called when a new plan is written by the agent."""
+        if getattr(plan, "project_path", None):
+            self._project_path = plan.project_path
         self._title = getattr(plan, "title", "")
         self._todo_list = TodoList.load(self._project_path)
+        if (not self._todo_list or not self._todo_list.items) and getattr(plan, "steps", None):
+            from andromity.core.todo import TodoItem
+            self._todo_list.items = [
+                TodoItem(id=s.get("id", f"t{idx+1}"), title=s.get("title", str(s)), status=s.get("status", "pending"))
+                for idx, s in enumerate(plan.steps)
+            ]
         self._paint_todos()
 
     def refresh_plan(self) -> None:

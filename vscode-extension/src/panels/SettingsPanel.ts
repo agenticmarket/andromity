@@ -106,7 +106,7 @@ export class SettingsPanel {
         this._rpcClient.call<ProviderInfo[]>("config.list_providers", {}, 15000).catch(() => []),
         this._rpcClient.call<any[]>("skills.list", { project_path: workspaceFolder }, 15000).catch(() => []),
         this._rpcClient.call<any[]>("mcp.list", { project_path: workspaceFolder }, 15000).catch(() => []),
-        this._rpcClient.call<any>("usage.get", { project_path: workspaceFolder, time_range: "all" }, 15000).catch(() => ({})),
+        this._rpcClient.call<any>("usage.get", { project_path: null, time_range: "all" }, 15000).catch(() => ({})),
         this._rpcClient.call<any>("system.info", {}, 15000).catch(() => ({})),
         this._rpcClient.call<any>("trust.status", { project_path: workspaceFolder }, 15000).catch(() => ({ is_trusted: true, trusted_projects: [] })),
         this._rpcClient.call<any[]>("cron.list", { project_path: workspaceFolder }, 15000).catch(() => []),
@@ -128,6 +128,7 @@ export class SettingsPanel {
         trustData: trustData || { is_trusted: true, trusted_projects: [] },
         crons: crons || [],
         currentWorkspace: workspaceFolder || "",
+        startupSession: vscodeConfig.get<string>("startupSession", "last"),
         soundNotifications: vscodeConfig.get<boolean>("soundNotifications", true) && configData?.sound_done !== false,
         telemetry: vscodeConfig.get<boolean>("telemetry", true) && configData?.telemetry !== false,
       });
@@ -288,6 +289,9 @@ export class SettingsPanel {
           if (message.key === "mode") {
             const config = vscode.workspace.getConfiguration("andromity");
             await config.update("permissionMode", message.value, vscode.ConfigurationTarget.Global);
+          } else if (message.key === "startupSession") {
+            const config = vscode.workspace.getConfiguration("andromity");
+            await config.update("startupSession", message.value, vscode.ConfigurationTarget.Global);
           }
           this._panel.webview.postMessage({
             type: "setting_updated",
@@ -369,15 +373,18 @@ export class SettingsPanel {
 
       case "fetch_usage": {
         try {
+          const isGlobal = (message.scope || "global") === "global";
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          const projectPath = isGlobal ? null : (workspaceFolder || null);
           const usage = await this._rpcClient.call<any>("usage.get", {
             time_range: message.timeRange || "all",
-            project_path: workspaceFolder,
+            project_path: projectPath,
           }, 3000).catch(() => ({}));
           this._panel.webview.postMessage({
             type: "usage_loaded",
             usage: usage || {},
             timeRange: message.timeRange || "all",
+            scope: message.scope || "global",
           });
         } catch (err: any) {
           console.error("[SettingsPanel] Failed to fetch usage:", err);
@@ -1895,11 +1902,17 @@ export class SettingsPanel {
           <h2 class="section-title">Usage & Cost Analytics</h2>
           <p class="section-desc">Track token volume, estimated API expenditure, model usage share, and session history.</p>
         </div>
-        <div class="filter-chips" id="usage-range-chips" style="margin: 0;">
-          <div class="chip active" data-usage-range="all">All Time</div>
-          <div class="chip" data-usage-range="month">30 Days</div>
-          <div class="chip" data-usage-range="week">7 Days</div>
-          <div class="chip" data-usage-range="today">Today</div>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+          <div class="filter-chips" id="usage-scope-chips" style="margin: 0;">
+            <div class="chip active" data-usage-scope="global">All Projects (Global)</div>
+            <div class="chip" data-usage-scope="project">This Project</div>
+          </div>
+          <div class="filter-chips" id="usage-range-chips" style="margin: 0;">
+            <div class="chip active" data-usage-range="all">All Time</div>
+            <div class="chip" data-usage-range="month">30 Days</div>
+            <div class="chip" data-usage-range="week">7 Days</div>
+            <div class="chip" data-usage-range="today">Today</div>
+          </div>
         </div>
       </div>
 
@@ -2035,6 +2048,15 @@ export class SettingsPanel {
             <option value="trust">TRUST — Auto-approve modifications in workspace directories</option>
             <option value="full">FULL — Auto-approve all actions and log to stream</option>
             <option value="yolo">YOLO — Silent autonomous execution</option>
+          </select>
+        </div>
+
+        <div class="settings-card">
+          <div class="setting-label">Startup Session Restoration</div>
+          <div class="setting-desc">Control whether to resume the previous conversation or always open a fresh empty session on IDE relaunch.</div>
+          <select class="setting-select" id="setting-startup-session">
+            <option value="last">Last Session — Resume previous active session (Default)</option>
+            <option value="fresh">Fresh Session — Always start empty (history stays in drawer)</option>
           </select>
         </div>
 
@@ -2207,6 +2229,7 @@ export class SettingsPanel {
     let searchQuery = "";
     let usageData = {};
     let currentUsageRange = "all";
+    let currentUsageScope = "global";
 
     // Tabs Navigation
     const tabButtons = document.querySelectorAll(".nav-tab");
@@ -2288,6 +2311,7 @@ export class SettingsPanel {
 
     const selectProfile = document.getElementById("setting-profile");
     const selectMode = document.getElementById("setting-mode");
+    const selectStartupSession = document.getElementById("setting-startup-session");
     const selectReasoning = document.getElementById("setting-reasoning");
     const inputUserName = document.getElementById("setting-user-name");
     const inputUserEmail = document.getElementById("setting-user-email");
@@ -2295,6 +2319,12 @@ export class SettingsPanel {
     const checkAutoCompact = document.getElementById("setting-auto-compact");
     const checkSound = document.getElementById("setting-sound");
     const checkTelemetry = document.getElementById("setting-telemetry");
+
+    if (selectStartupSession) {
+      selectStartupSession.addEventListener("change", () => {
+        vscode.postMessage({ type: "update_setting", key: "startupSession", value: selectStartupSession.value });
+      });
+    }
 
     selectProfile.addEventListener("change", () => {
       vscode.postMessage({ type: "update_setting", key: "profile", value: selectProfile.value });
@@ -2383,6 +2413,18 @@ export class SettingsPanel {
       }
     });
 
+    const usageScopeChips = document.getElementById("usage-scope-chips");
+    if (usageScopeChips) {
+      usageScopeChips.addEventListener("click", (e) => {
+        const chip = e.target.closest("[data-usage-scope]");
+        if (!chip) return;
+        usageScopeChips.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
+        chip.classList.add("active");
+        currentUsageScope = chip.dataset.usageScope || "global";
+        vscode.postMessage({ type: "fetch_usage", timeRange: currentUsageRange, scope: currentUsageScope });
+      });
+    }
+
     const usageRangeChips = document.getElementById("usage-range-chips");
     if (usageRangeChips) {
       usageRangeChips.addEventListener("click", (e) => {
@@ -2392,7 +2434,7 @@ export class SettingsPanel {
         chip.classList.add("active");
         currentUsageRange = chip.dataset.usageRange || "all";
         renderUsage();
-        vscode.postMessage({ type: "fetch_usage", timeRange: currentUsageRange });
+        vscode.postMessage({ type: "fetch_usage", timeRange: currentUsageRange, scope: currentUsageScope });
       });
     }
 
@@ -2428,6 +2470,7 @@ export class SettingsPanel {
 
           if (currentConfig.default_profile && selectProfile) selectProfile.value = currentConfig.default_profile;
           if (currentConfig.permission_mode && selectMode) selectMode.value = currentConfig.permission_mode.toLowerCase();
+          if (msg.startupSession && selectStartupSession) selectStartupSession.value = msg.startupSession;
           if (currentConfig.reasoning_effort && selectReasoning) selectReasoning.value = currentConfig.reasoning_effort;
           if (currentConfig.user_name && inputUserName) inputUserName.value = currentConfig.user_name;
           if (currentConfig.user_email && inputUserEmail) inputUserEmail.value = currentConfig.user_email;
@@ -2505,6 +2548,8 @@ export class SettingsPanel {
         case "setting_updated": {
           if (msg.key === "mode") {
             selectMode.value = msg.value.toLowerCase();
+          } else if (msg.key === "startupSession" && selectStartupSession) {
+            selectStartupSession.value = msg.value;
           }
           break;
         }

@@ -139,3 +139,53 @@ async def test_single_tool_still_works(session):
                     results.append((event.tool_id, event.result))
 
     assert results == [("call_a", "result for a.txt")]
+
+
+@pytest.mark.asyncio
+async def test_interleaved_parallel_tool_streaming(session):
+    """When a streaming provider interleaves ToolCallStart/Delta/End across multiple tools,
+    all tools must be accumulated and executed rather than overwriting each other."""
+    executed = []
+
+    async def fake_execute(name, args, **kwargs):
+        executed.append(args["path"])
+        return f"result for {args['path']}"
+
+    count = 0
+    async def mock_interleaved_stream(messages, tools=None, **kwargs):
+        nonlocal count
+        count += 1
+        if count == 1:
+            # 1. Start call 1
+            yield ToolCallStart(tool_name="read_file", tool_id="call_1")
+            # 2. Start call 2 before call 1 finishes (interleaved)
+            yield ToolCallStart(tool_name="read_file", tool_id="call_2")
+            # 3. Start call 3
+            yield ToolCallStart(tool_name="read_file", tool_id="call_3")
+            # 4. Deltas arrive interleaved
+            yield ToolCallDelta(tool_id="call_1", args_json_chunk='{"path": "file1.txt"}')
+            yield ToolCallDelta(tool_id="call_2", args_json_chunk='{"path": "file2.txt"}')
+            yield ToolCallDelta(tool_id="call_3", args_json_chunk='{"path": "file3.txt"}')
+            # 5. End signals arrive
+            yield ToolCallEnd(tool_id="call_1")
+            yield ToolCallEnd(tool_id="call_2")
+            yield ToolCallEnd(tool_id="call_3")
+            yield Done()
+        else:
+            yield TextDelta(text="All done.")
+            yield Done()
+
+    agent = Agent(session, profile="builder", auto_approve=True)
+    with patch("andromity.core.agent.stream_completion", side_effect=mock_interleaved_stream):
+        with patch("andromity.core.tools.execute_tool_async", side_effect=fake_execute):
+            results = []
+            async for event in agent.run("read 3 files"):
+                if isinstance(event, ToolResult):
+                    results.append((event.tool_id, event.result))
+
+    assert len(results) == 3
+    assert set(executed) == {"file1.txt", "file2.txt", "file3.txt"}
+    assert set(r[0] for r in results) == {"call_1", "call_2", "call_3"}
+    tool_msgs = [m for m in session.messages if m.get("role") == "tool"]
+    assert [m["tool_call_id"] for m in tool_msgs] == ["call_1", "call_2", "call_3"]
+

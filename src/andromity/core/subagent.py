@@ -44,6 +44,49 @@ class SubAgentResult:
         }
 
 
+def _format_tool_activity(tool_name: str, args_raw: Any) -> str:
+    """Produce human-friendly live action descriptions for the UI."""
+    args: Dict[str, Any] = {}
+    if isinstance(args_raw, str):
+        try:
+            args = json.loads(args_raw)
+        except Exception:
+            pass
+    elif isinstance(args_raw, dict):
+        args = args_raw
+
+    import os
+    if tool_name == "read_file":
+        p = str(args.get("path") or args.get("file_path") or "")
+        base = os.path.basename(p) if p else "file"
+        lines_str = f" (lines {args['start_line']}-{args['end_line']})" if args.get("start_line") and args.get("end_line") else ""
+        return f"Reading {base}{lines_str}"
+    elif tool_name == "list_dir":
+        p = str(args.get("path") or ".")
+        return f"Browsing {p}"
+    elif tool_name == "find_files":
+        pat = str(args.get("pattern") or "*")
+        p = str(args.get("path") or ".")
+        return f"Searching '{pat}' in {p}"
+    elif tool_name == "grep_search":
+        q = str(args.get("query") or "")
+        return f"Searching code for '{q[:25]}'"
+    elif tool_name == "web_search":
+        q = str(args.get("query") or "")
+        return f"Searching web for '{q[:30]}'"
+    elif tool_name == "fetch_url":
+        u = str(args.get("url") or "")
+        return f"Fetching {u[:35]}..."
+    elif tool_name == "shell_exec":
+        cmd = str(args.get("command") or "")[:25]
+        return f"Running command: {cmd}"
+    elif tool_name in ("write_file", "edit_file", "edit_file_multi"):
+        p = str(args.get("path") or "")
+        return f"Editing {os.path.basename(p)}"
+    
+    return f"Running {tool_name}"
+
+
 class SubAgent:
     """An autonomous, scoped sub-agent spawned for a specific sub-task."""
 
@@ -62,11 +105,13 @@ class SubAgent:
         tool_id: Optional[str] = None,
         progress_callback: Optional[Any] = None,
         context_snapshot: Optional[Any] = None,
+        permission_mode: Optional[str] = None,
     ):
         self.parent_session_id = parent_session_id
         self.role = role.lower().strip()
         self.task = task
         self.project_path = project_path
+        self.permission_mode = (permission_mode or config.get("default", "permission_mode", "safe")).lower().strip()
         self.depth = depth
         self.tool_id = tool_id
         self.progress_callback = progress_callback
@@ -153,6 +198,9 @@ class SubAgent:
                 tool_args=tool_args,
                 tool_result=tool_result,
                 detail=detail,
+                model=self.model,
+                provider=self.provider,
+                task=self.task,
             )
             import inspect
             if inspect.iscoroutinefunction(self.progress_callback):
@@ -167,7 +215,7 @@ class SubAgent:
         """Run the sub-agent and return a structured SubAgentResult."""
         self.started_at = time.time()
         self.status = "running"
-        self._notify_progress(event_type="text", detail=f"Started subagent [{self.role}] with model {self.model}")
+        self._notify_progress(event_type="spawned", detail="Working on task...")
         events_accum: List[StreamEvent] = []
         final_summary = ""
         error_msg = None
@@ -201,6 +249,17 @@ class SubAgent:
             duration_ms = (self.finished_at - self.started_at) * 1000.0
 
         compressed_summary = self._compress_summary(final_summary)
+
+        # Emit a terminal progress event so UIs (webview cards / TUI) can flip the
+        # subagent from RUNNING to DONE/FAILED even when it was spawned through the
+        # tool path (orchestrator.spawn -> execute never emits SubAgentDone).
+        try:
+            self._notify_progress(
+                event_type="completed",
+                detail=compressed_summary,
+            )
+        except Exception:
+            pass
 
         tokens_data = {"total_tokens": self.session.token_total}
         tokens_data.update(self.session.usage_breakdown)
@@ -266,10 +325,8 @@ class SubAgent:
             if self._killed:
                 break
 
-            current_tool_id = None
-            current_tool_name = None
-            current_tool_args_str = ""
-            tool_calls_to_execute = []
+            pending_tool_calls: Dict[str, Dict[str, str]] = {}
+            tool_calls_to_execute: List[Dict[str, Any]] = []
             assistant_content = ""
             last_usage = None
 
@@ -284,36 +341,58 @@ class SubAgent:
                 for m in self.session.messages
             ]
 
+            if turn > 0:
+                self._notify_progress(event_type="thinking", detail="Thinking...")
+
             async for event in stream_completion(msgs, **stream_kwargs):
                 events_accum.append(event)
                 if isinstance(event, ThinkingDelta):
-                    self._notify_progress(event_type="thinking", delta_text=event.text)
+                    self._notify_progress(event_type="thinking", detail="Thinking...")
                 elif isinstance(event, TextDelta):
                     assistant_content += event.text
                 elif isinstance(event, ToolCallStart):
-                    current_tool_id = event.tool_id
-                    current_tool_name = event.tool_name
-                    current_tool_args_str = ""
+                    pending_tool_calls[event.tool_id] = {
+                        "name": event.tool_name,
+                        "args": "",
+                    }
                     # Do NOT emit here — wait for ToolCallEnd so args are available
                 elif isinstance(event, ToolCallDelta):
-                    if event.tool_id == current_tool_id:
-                        current_tool_args_str += event.args_json_chunk
+                    if event.tool_id in pending_tool_calls:
+                        pending_tool_calls[event.tool_id]["args"] += event.args_json_chunk
                 elif isinstance(event, ToolCallEnd):
-                    if current_tool_id == event.tool_id:
+                    if event.tool_id in pending_tool_calls:
+                        call_info = pending_tool_calls.pop(event.tool_id)
                         tool_calls_to_execute.append({
-                            "id": current_tool_id,
+                            "id": event.tool_id,
                             "type": "function",
-                            "function": {"name": current_tool_name, "arguments": current_tool_args_str},
+                            "function": {"name": call_info["name"], "arguments": call_info["args"]},
                         })
                         # Emit once with full args — this is the single display entry
+                        act_desc = _format_tool_activity(call_info["name"], call_info["args"])
                         self._notify_progress(
                             event_type="tool_call",
-                            tool_name=current_tool_name,
-                            tool_args=current_tool_args_str,
+                            tool_name=call_info["name"],
+                            tool_args=call_info["args"],
+                            detail=act_desc,
                         )
-                        current_tool_id = None
                 elif isinstance(event, Done):
                     last_usage = event.usage
+
+            # Flush any unclosed tool calls in case provider ended stream before ToolCallEnd
+            for tid, call_info in list(pending_tool_calls.items()):
+                tool_calls_to_execute.append({
+                    "id": tid,
+                    "type": "function",
+                    "function": {"name": call_info["name"], "arguments": call_info["args"]},
+                })
+                act_desc = _format_tool_activity(call_info["name"], call_info["args"])
+                self._notify_progress(
+                    event_type="tool_call",
+                    tool_name=call_info["name"],
+                    tool_args=call_info["args"],
+                    detail=act_desc,
+                )
+            pending_tool_calls.clear()
 
 
             model_id = f"{self.provider}/{self.model}"
@@ -358,15 +437,41 @@ class SubAgent:
                     targs = json.loads(fn.get("arguments", "{}"))
                 except Exception:
                     targs = {}
-                try:
-                    res_str = await execute_tool_async(tname, targs)
-                except Exception as ex:
-                    res_str = f"Error: Tool {tname} failed: {ex}"
+
+                res_str = None
+                write_tools = {"write_file", "edit_file", "edit_file_multi", "shell_exec"}
+                if self.permission_mode == "safe" and tname in write_tools:
+                    res_str = f"TOOL BLOCKED: Subagents cannot execute mutating tool '{tname}' in SAFE mode without user confirmation. Use read-only tools or switch permission mode to TRUST."
+                elif self.permission_mode == "trust" and tname in {"write_file", "edit_file", "edit_file_multi"}:
+                    target_p = str(targs.get("path") or targs.get("file_path") or "")
+                    if target_p and self.project_path:
+                        from pathlib import Path
+                        try:
+                            resolved_target = Path(target_p).resolve()
+                            resolved_proj = Path(self.project_path).resolve()
+                            if not resolved_target.is_relative_to(resolved_proj):
+                                res_str = f"TOOL BLOCKED: Writing to paths outside project directory is prohibited in TRUST mode ({target_p})."
+                        except Exception:
+                            pass
+                elif tname == "fetch_url":
+                    from andromity.core.security import _is_private_ip, get_domain
+                    url_target = str(targs.get("url") or "")
+                    dom = get_domain(url_target)
+                    if dom and _is_private_ip(dom):
+                        res_str = f"SECURITY BLOCKED: Fetching internal/private network addresses is blocked ({dom})."
+
+                if res_str is None:
+                    try:
+                        res_str = await execute_tool_async(tname, targs)
+                    except Exception as ex:
+                        res_str = f"Error: Tool {tname} failed: {ex}"
+                act_desc = _format_tool_activity(tname, targs)
                 self._notify_progress(
                     event_type="tool_result",
                     tool_name=tname,
+                    tool_args=json.dumps(targs),
                     tool_result=res_str[:200],
-                    detail=f"completed {tname}",
+                    detail=act_desc,
                 )
                 return tcall_id, tname, res_str
 

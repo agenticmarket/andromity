@@ -31,13 +31,16 @@ const html = provider._getHtmlForWebview(mockWebview);
 console.log(`HTML generated, length: ${html.length}`);
 
 // Extract scripts
-const scriptMatch = html.match(/<script(?:\s+[^>]*)?>([\s\S]*?)<\/script>/i);
-if (!scriptMatch) {
-  console.error("NO SCRIPT FOUND IN HTML!");
+const scriptMatches = [...html.matchAll(/<script(?:\s+[^>]*)?>([\s\S]*?)<\/script>/gi)]
+  .map(m => m[1])
+  .filter(s => s.trim().length > 0);
+
+if (scriptMatches.length === 0) {
+  console.error("NO NON-EMPTY INLINE SCRIPT FOUND IN HTML!");
   process.exit(1);
 }
 
-const js = scriptMatch[1];
+const js = scriptMatches[0];
 console.log(`Extracted JS length: ${js.length}`);
 
 // Create realistic DOM environment
@@ -146,6 +149,10 @@ const sandbox = {
   setInterval: () => 123,
   clearInterval: () => {},
   clearTimeout: () => {},
+  requestAnimationFrame: (fn) => { try { fn(); } catch(e) {} },
+  cancelAnimationFrame: () => {},
+  marked: { parse: (s) => s, use: () => {} },
+  navigator: { clipboard: { writeText: () => Promise.resolve() } },
   encodeURIComponent: encodeURIComponent,
   decodeURIComponent: decodeURIComponent,
   Math: Math,

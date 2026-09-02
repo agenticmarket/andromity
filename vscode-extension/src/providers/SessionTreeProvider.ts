@@ -9,10 +9,21 @@ export class SessionTreeItem extends vscode.TreeItem {
   ) {
     super(session.name || session.id.slice(0, 8), vscode.TreeItemCollapsibleState.None);
 
-    this.description = `${session.message_count || 0} msgs • $${(session.cost_usd || 0).toFixed(3)}`;
-    this.tooltip = `ID: ${session.id}\nUpdated: ${session.updated_at || "N/A"}\nTokens: ${session.token_total || 0}`;
+    const statusBadge = session.status && session.status !== "idle" ? `[${session.status}] ` : "";
+    this.description = `${statusBadge}${session.message_count || 0} msgs • $${(session.cost_usd || 0).toFixed(3)}`;
+    this.tooltip = `Status: ${session.status || "idle"}\nID: ${session.id}\nUpdated: ${session.updated_at || "N/A"}\nTokens: ${session.token_total || 0}`;
     this.contextValue = "sessionItem";
-    this.iconPath = new vscode.ThemeIcon(isCurrent ? "pass-filled" : "comment");
+
+    if (session.status === "running") {
+      this.iconPath = new vscode.ThemeIcon("sync~spin", new vscode.ThemeColor("charts.yellow"));
+    } else if (session.status === "error") {
+      this.iconPath = new vscode.ThemeIcon("error", new vscode.ThemeColor("errorForeground"));
+    } else if (session.status === "approval_required") {
+      this.iconPath = new vscode.ThemeIcon("shield", new vscode.ThemeColor("charts.orange"));
+    } else {
+      this.iconPath = new vscode.ThemeIcon(isCurrent ? "pass-filled" : "comment");
+    }
+
     this.command = {
       command: "andromity.switchSessionById",
       title: "Switch Session",
@@ -21,8 +32,28 @@ export class SessionTreeItem extends vscode.TreeItem {
   }
 }
 
-export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeItem> {
-  private _onDidChangeTreeData = new vscode.EventEmitter<SessionTreeItem | undefined | null | void>();
+export class SessionGroupItem extends vscode.TreeItem {
+  constructor(
+    public readonly label: string,
+    public readonly groupType: "main" | "subagents",
+    public readonly count: number
+  ) {
+    super(
+      label,
+      groupType === "main"
+        ? vscode.TreeItemCollapsibleState.Expanded
+        : vscode.TreeItemCollapsibleState.Collapsed
+    );
+    this.description = `${count}`;
+    this.iconPath = new vscode.ThemeIcon(
+      groupType === "main" ? "comment-discussion" : "hubot"
+    );
+    this.contextValue = "sessionGroup";
+  }
+}
+
+export class SessionTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
+  private _onDidChangeTreeData = new vscode.EventEmitter<vscode.TreeItem | undefined | null | void>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
   private _rpcClient: RpcClient | null = null;
   private _currentSessionId: string = "";
@@ -43,22 +74,41 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<SessionTreeI
     this._onDidChangeTreeData.fire();
   }
 
-  getTreeItem(element: SessionTreeItem): vscode.TreeItem {
+  getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
     return element;
   }
 
-  async getChildren(element?: SessionTreeItem): Promise<SessionTreeItem[]> {
-    if (element || !this._rpcClient) {
+  async getChildren(element?: vscode.TreeItem): Promise<vscode.TreeItem[]> {
+    if (!this._rpcClient) {
       return [];
     }
 
     try {
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      const sessions = await this._rpcClient.call<SessionInfo[]>("session.list", {
+      const allSessions = await this._rpcClient.call<SessionInfo[]>("session.list", {
         project_path: workspaceFolder,
-      });
+        include_subagents: true,
+      }) || [];
 
-      return sessions.map((s) => new SessionTreeItem(s, s.id === this._currentSessionId));
+      const mainSessions = allSessions.filter((s) => !s.parent_session);
+      const subagentSessions = allSessions.filter((s) => !!s.parent_session);
+
+      if (!element) {
+        if (subagentSessions.length === 0) {
+          return mainSessions.map((s) => new SessionTreeItem(s, s.id === this._currentSessionId));
+        }
+        return [
+          new SessionGroupItem("Main Sessions", "main", mainSessions.length),
+          new SessionGroupItem("Background & Subagents", "subagents", subagentSessions.length),
+        ];
+      }
+
+      if (element instanceof SessionGroupItem) {
+        const targetList = element.groupType === "main" ? mainSessions : subagentSessions;
+        return targetList.map((s) => new SessionTreeItem(s, s.id === this._currentSessionId));
+      }
+
+      return [];
     } catch (e) {
       return [];
     }

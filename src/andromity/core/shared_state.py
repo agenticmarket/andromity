@@ -40,7 +40,15 @@ class SharedStateBoard:
 
     @classmethod
     def get_instance(cls, project_path: Optional[str] = None) -> "SharedStateBoard":
-        key = project_path or "__global__"
+        # Normalize project_path to avoid duplicate boards for same project via different casing/slash
+        if project_path:
+            try:
+                from andromity.core.session import normalize_project_path
+                key = normalize_project_path(project_path)
+            except Exception:
+                key = str(Path(project_path).resolve()) if project_path else "__global__"
+        else:
+            key = "__global__"
         with cls._global_lock:
             if key not in cls._instances:
                 cls._instances[key] = cls(project_path=project_path)
@@ -82,6 +90,15 @@ class SharedStateBoard:
 
     def set(self, key: str, value: Any, author_session: Optional[str] = None) -> Any:
         """Set a namespaced key on the shared state board."""
+        # Guard value size to prevent unbounded growth / DoS
+        try:
+            serialized = json.dumps(value) if not isinstance(value, str) else value
+            if len(serialized) > 32 * 1024:
+                raise ValueError(f"Value too large ({len(serialized)} bytes > 32KB limit)")
+        except ValueError:
+            raise
+        except Exception:
+            pass
         with self._lock:
             old_value = self._data.get(key)
             self._data[key] = value
@@ -151,8 +168,14 @@ class SharedStateBoard:
         """Return a copy of the state dictionary, optionally filtered by prefix."""
         with self._lock:
             if not prefix:
+                # Cap size to prevent exfil of huge board
+                if len(self._data) > 200:
+                    return dict(list(self._data.items())[:200])
                 return dict(self._data)
-            return {k: v for k, v in self._data.items() if k.startswith(prefix)}
+            filtered = {k: v for k, v in self._data.items() if k.startswith(prefix)}
+            if len(filtered) > 200:
+                return dict(list(filtered.items())[:200])
+            return filtered
 
     def history(self, key: Optional[str] = None) -> List[Dict[str, Any]]:
         """Return history records, optionally filtered by key."""

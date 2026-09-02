@@ -33,9 +33,16 @@ class UsageTracker:
 
     def get_summary(self, time_range: TimeRange = "all",
                     project_path: str | None = None) -> UsageSummary:
-        sessions = self._load_sessions_from_db(project_path)
-        if not sessions:
-            sessions = self._load_sessions(project_path)
+        db_sessions = self._load_sessions_from_db(project_path)
+        disk_sessions = self._load_sessions(project_path)
+        
+        known_ids = {s.session_id for s in db_sessions}
+        sessions = list(db_sessions)
+        for s in disk_sessions:
+            if s.session_id not in known_ids:
+                sessions.append(s)
+                known_ids.add(s.session_id)
+
         cutoff = self._cutoff(time_range)
         summary = UsageSummary()
 
@@ -85,13 +92,20 @@ class UsageTracker:
             if project_path:
                 from andromity.core.session import normalize_project_path
                 import hashlib
+                from pathlib import Path
                 norm = normalize_project_path(project_path)
                 p_hash = hashlib.sha256(norm.encode()).hexdigest()[:16]
-                rows = conn.execute("""
+                hashes_to_check = {p_hash}
+                raw_s = str(project_path)
+                hashes_to_check.add(hashlib.sha256(raw_s.encode()).hexdigest()[:16])
+                hashes_to_check.add(hashlib.sha256(raw_s.lower().encode()).hexdigest()[:16])
+                hashes_to_check.add(hashlib.sha256(Path(project_path).resolve().as_posix().encode()).hexdigest()[:16])
+                placeholders = ",".join("?" * len(hashes_to_check))
+                rows = conn.execute(f"""
                     SELECT id, name, provider, model, token_total, cost_usd, created_at, updated_at, project_path
                     FROM sessions
-                    WHERE project_hash = ?
-                """, (p_hash,)).fetchall()
+                    WHERE project_hash IN ({placeholders})
+                """, list(hashes_to_check)).fetchall()
             else:
                 rows = conn.execute("""
                     SELECT id, name, provider, model, token_total, cost_usd, created_at, updated_at, project_path
@@ -128,15 +142,17 @@ class UsageTracker:
             return []
         stats: list[SessionStat] = []
         if project_path:
+            from andromity.core.session import normalize_project_path
             import hashlib
             from pathlib import Path
-            resolved_p = str(Path(project_path).resolve())
-            p_hash = hashlib.sha256(resolved_p.encode()).hexdigest()[:16]
-            target = sessions_root / p_hash
-            if not target.exists():
-                raw_hash = hashlib.sha256(project_path.encode()).hexdigest()[:16]
-                target = sessions_root / raw_hash
-            dirs = [target] if target.exists() else []
+            norm = normalize_project_path(project_path)
+            hashes_to_check = {
+                hashlib.sha256(norm.encode()).hexdigest()[:16],
+                hashlib.sha256(str(project_path).encode()).hexdigest()[:16],
+                hashlib.sha256(str(project_path).lower().encode()).hexdigest()[:16],
+                hashlib.sha256(Path(project_path).resolve().as_posix().encode()).hexdigest()[:16],
+            }
+            dirs = [sessions_root / h for h in hashes_to_check if (sessions_root / h).exists()]
         else:
             dirs = [d for d in sessions_root.iterdir() if d.is_dir()]
         for d in dirs:

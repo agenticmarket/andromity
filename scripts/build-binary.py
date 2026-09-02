@@ -34,8 +34,17 @@ os.makedirs(out_dir, exist_ok=True)
 print(f"Building andromity-server for {platform_key} -> {temp_dist}")
 
 # Install package + pyinstaller deps
-subprocess.check_call([sys.executable, "-m", "pip", "install", "-e", ".", "--quiet", "--no-warn-script-location"], cwd=ROOT)
-subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller", "--quiet", "--no-warn-script-location"], cwd=ROOT)
+try:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-e", ".", "--quiet", "--no-warn-script-location"], cwd=ROOT)
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller", "--quiet", "--no-warn-script-location"], cwd=ROOT)
+except Exception:
+    import shutil
+    uv_path = shutil.which("uv")
+    if uv_path:
+        subprocess.check_call([uv_path, "pip", "install", "-e", ".", "--quiet"], cwd=ROOT)
+        subprocess.check_call([uv_path, "pip", "install", "pyinstaller", "--quiet"], cwd=ROOT)
+    else:
+        raise
 
 # Build into temp_dist
 subprocess.check_call([
@@ -55,22 +64,19 @@ def robust_copy(src_root, out_dir):
             except Exception:
                 pass
             import time
-            time.sleep(0.5)
+            time.sleep(0.8)
         try:
-            for item in os.listdir(src_root):
-                src_fp = os.path.join(src_root, item)
-                dst_fp = os.path.join(out_dir, item)
-                if os.path.isdir(dst_fp):
-                    shutil.rmtree(dst_fp, ignore_errors=True)
-                elif os.path.exists(dst_fp):
+            for root, dirs, files in os.walk(src_root):
+                rel_path = os.path.relpath(root, src_root)
+                target_dir = os.path.join(out_dir, rel_path) if rel_path != "." else out_dir
+                os.makedirs(target_dir, exist_ok=True)
+                for f in files:
+                    s = os.path.join(root, f)
+                    d = os.path.join(target_dir, f)
                     try:
-                        os.remove(dst_fp)
-                    except Exception:
-                        pass
-                if os.path.isdir(src_fp):
-                    shutil.copytree(src_fp, dst_fp, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(src_fp, dst_fp)
+                        shutil.copy2(s, d)
+                    except PermissionError:
+                        pass  # Unmodified DLL currently loaded in memory
             return
         except Exception as e:
             if attempt == 4:
@@ -85,6 +91,22 @@ if not os.path.exists(src_root):
 
 robust_copy(src_root, out_dir)
 
+# Remove botocore documentation-only data files that are never loaded at runtime
+# but trigger false-positive secret scanner alerts on Open VSX (rule: square-access-token etc.)
+_BOTOCORE_DATA = os.path.join(out_dir, "_internal", "botocore", "data")
+if os.path.isdir(_BOTOCORE_DATA):
+    _removed = 0
+    for root, dirs, files in os.walk(_BOTOCORE_DATA):
+        for fname in files:
+            if fname in ("examples-1.json", "completions-1.json"):
+                try:
+                    os.remove(os.path.join(root, fname))
+                    _removed += 1
+                except Exception:
+                    pass
+    if _removed:
+        print(f"[Cleanup] Removed {_removed} botocore documentation files (examples/completions) - runtime unaffected.")
+
 print(f"\n[OK] Onedir binary bundle built and deployed at: {out_dir}")
 for f in os.listdir(out_dir):
     fp = os.path.join(out_dir, f)
@@ -92,3 +114,4 @@ for f in os.listdir(out_dir):
         print(f"  {f}/ (dir)")
     else:
         print(f"  {f}  ({os.path.getsize(fp) // 1024} KB)")
+

@@ -272,9 +272,10 @@ SettingsScreen {
 
 /* ── Usage Pane ── */
 .usage-controls-row { height: 3; margin-bottom: 1; layout: horizontal; }
+.usage-scope-tabs   { height: 3; layout: horizontal; width: auto; margin-right: 1; }
 .usage-time-tabs    { height: 3; layout: horizontal; width: auto; }
 .usage-metric-tabs  { height: 3; layout: horizontal; width: auto; margin-left: 2; }
-.usage-tab-btn, .usage-metric-btn {
+.usage-tab-btn, .usage-metric-btn, .usage-scope-btn {
     height: 3;
     min-width: 11;
     margin-right: 1;
@@ -283,20 +284,20 @@ SettingsScreen {
     border: tall $surface-lighten-2;
     padding: 0 1;
 }
-.usage-tab-btn:hover, .usage-metric-btn:hover,
-.usage-tab-btn:focus, .usage-metric-btn:focus {
+.usage-tab-btn:hover, .usage-metric-btn:hover, .usage-scope-btn:hover,
+.usage-tab-btn:focus, .usage-metric-btn:focus, .usage-scope-btn:focus {
     background: $surface !important;
     color: $text !important;
     border: tall $panel-lighten-2 !important;
 }
-.usage-tab-btn.active, .usage-metric-btn.active {
+.usage-tab-btn.active, .usage-metric-btn.active, .usage-scope-btn.active {
     background: $accent;
     color: $background;
     text-style: bold;
     border: tall $accent-lighten-1;
 }
-.usage-tab-btn.active:hover, .usage-metric-btn.active:hover,
-.usage-tab-btn.active:focus, .usage-metric-btn.active:focus {
+.usage-tab-btn.active:hover, .usage-metric-btn.active:hover, .usage-scope-btn.active:hover,
+.usage-tab-btn.active:focus, .usage-metric-btn.active:focus, .usage-scope-btn.active:focus {
     background: $accent-lighten-1 !important;
     color: $background !important;
     border: tall $accent-lighten-2 !important;
@@ -538,6 +539,9 @@ SettingsScreen {
                         yield Label("Usage Analytics", classes="settings-label")
                         yield Label("Track tokens, costs, and model usage across sessions.", classes="section-hint")
                         with Horizontal(classes="usage-controls-row"):
+                            with Horizontal(id="usage-scope-tabs", classes="usage-scope-tabs"):
+                                yield Button("Global (All)", id="usage-scope-global", classes="usage-scope-btn active")
+                                yield Button("This Project", id="usage-scope-project", classes="usage-scope-btn")
                             with Horizontal(id="usage-time-tabs", classes="usage-time-tabs"):
                                 yield Button("Today", id="usage-tab-today", classes="usage-tab-btn")
                                 yield Button("7 Days", id="usage-tab-week", classes="usage-tab-btn")
@@ -733,6 +737,7 @@ SettingsScreen {
         status change (removing widgets mid-click crashed Textual's mouse
         handling with `'NoneType' object has no attribute 'region'`).
         """
+        from rich.markup import escape
         disabled    = s_conf.get("disabled", False)
         transport   = _mcp_transport(s_conf)
         status_info = (self.mcp_manager.server_status.get(s_name, {}) if self.mcp_manager else {})
@@ -755,7 +760,7 @@ SettingsScreen {
         with Vertical(classes="mcp-card", id=f"card-{s_name}"):
             # ── Header ───────────────────────────────────────────────────
             with Horizontal(classes="mcp-card-header"):
-                yield Label(f" {s_name}", classes="mcp-name")
+                yield Label(f" {escape(s_name)}", classes="mcp-name")
                 yield Label(badge_txt, classes=f"mcp-badge {badge_cls}",
                             id=f"mcp-badge-{s_name}")
                 yield Label(
@@ -787,13 +792,13 @@ SettingsScreen {
                 cmd_str = (f"{s_conf['command']} "
                            f"{' '.join(str(a) for a in s_conf.get('args', []))}").strip()
                 cmd_str = cmd_str[:80] + "…" if len(cmd_str) > 80 else cmd_str
-                yield Label(f"[dim]Command:[/] {cmd_str}", classes="mcp-cmd-line")
+                yield Label(f"[dim]Command:[/] {escape(cmd_str)}", classes="mcp-cmd-line")
 
             # URL display — as clickable button + truncated label
             if server_url and not already_converted:
                 short = server_url[:60] + "…" if len(server_url) > 60 else server_url
                 with Horizontal(classes="mcp-transport"):
-                    yield Label(f"[dim]URL:[/] {short}", classes="mcp-cmd-line")
+                    yield Label(f"[dim]URL:[/] {escape(short)}", classes="mcp-cmd-line")
                     yield Button("🔗 Open",
                                  id=f"mcp-openurl-{s_name}",
                                  classes="mcp-url-btn",
@@ -802,7 +807,7 @@ SettingsScreen {
             # Description (1 line max)
             desc = s_conf.get("description", "").strip()
             if desc:
-                yield Label(f"[dim]{desc[:90].replace(chr(10), ' ')}[/]",
+                yield Label(f"[dim]{escape(desc[:90].replace(chr(10), ' '))}[/]",
                             classes="mcp-cmd-line")
             # Tools Collapsible — always composed, hidden until the server
             # exposes tools (status changes only toggle display in place).
@@ -862,7 +867,7 @@ SettingsScreen {
                                     classes="mcp-auth-label")
                         for env_key in missing:
                             with Horizontal(classes="mcp-token-row"):
-                                yield Label(f"[dim]{env_key}[/]",
+                                yield Label(f"[dim]{escape(env_key)}[/]",
                                             classes="mcp-cmd-line")
                                 yield Input(
                                     placeholder=f"Value…",
@@ -872,7 +877,7 @@ SettingsScreen {
                                              id=f"mcp-saveenv-{s_name}--{env_key}")
                 else:
                     yield Label(
-                        f"[green]✓[/] Credentials set: {', '.join(auth_keys)}",
+                        f"[green]✓[/] Credentials set: {escape(', '.join(auth_keys))}",
                         classes="mcp-transport")
 
             # ── Error (full detail behind a collapsible) — always composed,
@@ -891,7 +896,7 @@ SettingsScreen {
             with Horizontal(classes="mcp-card-footer"):
                 installed = s_conf.get("installedAt", "")
                 yield Label(
-                    f"[dim]{installed}[/]" if installed else "",
+                    f"[dim]{escape(installed)}[/]" if installed else "",
                     classes="mcp-install-date")
                 yield Button("[u]Uninstall[/u]",
                              id=f"mcp-remove-{s_name}",
@@ -1788,6 +1793,15 @@ SettingsScreen {
             event.stop()
             self.dismiss(False)
 
+    @on(Button.Pressed, ".usage-scope-btn")
+    def on_usage_scope_pressed(self, event: Button.Pressed):
+        btn_id = event.button.id
+        for b in self.query(".usage-scope-btn"):
+            b.remove_class("active")
+        event.button.add_class("active")
+        self._usage_scope = "global" if btn_id == "usage-scope-global" else "project"
+        self.run_worker(self._refresh_usage(), group="settings")
+
     @on(Button.Pressed, ".usage-tab-btn")
     def on_usage_tab_pressed(self, event: Button.Pressed):
         btn_id = event.button.id
@@ -1810,14 +1824,18 @@ SettingsScreen {
         self._usage_metric = "tokens" if btn_id == "usage-metric-tokens" else "cost"
         self.run_worker(self._refresh_usage(), group="settings")
 
-    async def _refresh_usage(self, time_range: str = None, metric: str = None):
+    async def _refresh_usage(self, time_range: str = None, metric: str = None, scope: str = None):
         if time_range:
             self._usage_time_range = time_range
         if metric:
             self._usage_metric = metric
+        if scope:
+            self._usage_scope = scope
         from andromity.core.usage_tracker import UsageTracker
         tracker = UsageTracker()
-        summary = tracker.get_summary(self._usage_time_range, self.project_path)
+        active_scope = getattr(self, "_usage_scope", "global")
+        project_path = None if active_scope == "global" else self.project_path
+        summary = tracker.get_summary(self._usage_time_range, project_path)
         if not self.is_attached:
             return  # screen dismissed while loading usage
         try:

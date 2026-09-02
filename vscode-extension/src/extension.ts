@@ -574,8 +574,37 @@ export async function activate(context: vscode.ExtensionContext) {
       await chatProvider.sendPromptFromExternal(
         "Explain the last terminal error and propose a fix. (Paste the error output below if available.)"
       );
+    }),
+
+    vscode.commands.registerCommand("andromity.welcome", () => {
+      vscode.commands.executeCommand(
+        "workbench.action.openWalkthrough",
+        "agenticmarket.andromity-agent#andromity.welcome",
+        false
+      );
     })
   );
+
+  // 7. Auto-open Getting Started walkthrough on first install
+  const WELCOME_KEY = "andromity.hasSeenWalkthrough";
+  const hasSeenWalkthrough = context.globalState.get<boolean>(WELCOME_KEY, false);
+  if (!hasSeenWalkthrough) {
+    vscode.commands
+      .executeCommand(
+        "workbench.action.openWalkthrough",
+        "agenticmarket.andromity-agent#andromity.welcome",
+        false
+      )
+      .then(
+        () => {
+          context.globalState.update(WELCOME_KEY, true);
+          log("[Andromity] Welcome walkthrough launched on first install.");
+        },
+        (err) => {
+          log(`[Andromity] Notice: Could not auto-open walkthrough: ${err}`);
+        }
+      );
+  }
 }
 
 async function loadPlanFromWorkspace(): Promise<any | null> {
