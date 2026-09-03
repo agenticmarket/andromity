@@ -86,6 +86,7 @@ ${styles}
         </svg>
       </button>
     </div>
+    <div class="top-bar-right">
       <button class="top-bar-icon-btn" id="btn-top-open-tab" title="Open Session in New Editor Tab (Side-by-Side)" data-action="open-current-tab">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>

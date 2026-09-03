@@ -564,7 +564,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand("andromity.openSettings", (initialTab?: string) => {
+    vscode.commands.registerCommand("andromity.openSettings", (initialTab?: any) => {
       SettingsPanel.createOrShow(
         context.extensionUri,
         pythonBridge?.getClient() || null,

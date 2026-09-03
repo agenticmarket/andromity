@@ -797,6 +797,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const btn = e.target.closest('button[data-cron-action]');
         if (!btn) return;
         const action = btn.dataset.cronAction;
+        if (action === 'create') {
+          vscode.postMessage({ type: 'open_cron_settings' });
+          if (cronsFlyout) cronsFlyout.style.display = 'none';
+          return;
+        }
         const id = btn.dataset.id;
         const name = btn.dataset.name || '';
         if (action === 'run') {
@@ -1298,7 +1303,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function renderCronsList(crons) {
       if (!cronsListEl) return;
       if (!crons || crons.length === 0) {
-        cronsListEl.innerHTML = '<div style="padding:16px 12px; text-align:center; color:var(--muted); font-size:11.5px;">No scheduled tasks active.<br/><button class="cron-btn-action" style="margin:8px auto 0 auto; padding:4px 10px;" onclick="vscode.postMessage({type:\'open_cron_settings\'})">+ Create New Task</button></div>';
+        cronsListEl.innerHTML = '<div style="padding:16px 12px; text-align:center; color:var(--muted); font-size:11.5px;">No scheduled tasks active.<br/><button class="cron-btn-action" data-cron-action="create" style="margin:8px auto 0 auto; padding:4px 10px;">+ Create New Task</button></div>';
         return;
       }
       cronsListEl.innerHTML = crons.map(c => {
