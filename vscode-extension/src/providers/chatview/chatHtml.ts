@@ -85,7 +85,12 @@ ${styles}
         </svg>
       </button>
     </div>
-    <div class="top-bar-right">
+      <button class="top-bar-icon-btn" id="btn-top-timeline" title="Conversation Timeline & Milestones" data-action="toggle-timeline">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <polyline points="12 6 12 12 16 14"></polyline>
+        </svg>
+      </button>
       <button class="top-bar-icon-btn" id="btn-top-undo" title="Undo last turn & rollback file changes" data-action="undo-turn">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 7v6h6"></path>
@@ -140,6 +145,20 @@ ${styles}
     </div>
     <div class="crons-list" id="crons-list">
       <div style="padding:14px; text-align:center; color:var(--muted); font-size:11px;">Loading crons...</div>
+    </div>
+  </div>
+
+  <!-- Conversation Timeline Flyout / Drawer -->
+  <div class="timeline-flyout" id="timeline-flyout" style="display:none;">
+    <div class="timeline-header">
+      <span style="display:flex; align-items:center; gap:6px;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+        <span>Conversation Timeline</span>
+      </span>
+      <button class="timeline-header-close" id="btn-timeline-close" title="Close">&times;</button>
+    </div>
+    <div class="timeline-list" id="timeline-list">
+      <div style="padding:16px; text-align:center; color:var(--muted); font-size:11.5px;">No conversation turns yet.</div>
     </div>
   </div>
 
@@ -211,8 +230,16 @@ ${styles}
     </div>
   </div>
 
-  <!-- Chat Messages Feed -->
-  <div class="chat-container" id="chat-messages" role="log" aria-label="Chat messages" aria-live="polite">
+  <!-- Chat Viewport Wrapper with Floating Controls -->
+  <div class="chat-viewport-wrapper" style="position:relative; flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:0; width:100%;">
+    <!-- Floating Scroll-To-Bottom Button -->
+    <button class="scroll-bottom-btn" id="btn-scroll-bottom" title="Scroll to bottom" aria-label="Scroll to bottom">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      <span class="unread-badge" id="scroll-unread-badge"></span>
+    </button>
+
+    <!-- Chat Messages Feed -->
+    <div class="chat-container" id="chat-messages" role="log" aria-label="Chat messages" aria-live="polite">
     <!-- Clean Minimalist Zero State & Onboarding Guide -->
     <div class="zero-state" id="zero-state">
       
@@ -383,6 +410,7 @@ ${styles}
       </div>
 
     </div>
+  </div>
   </div>
 
   <div id="interactive-slot" style="padding: 0 10px;"></div>

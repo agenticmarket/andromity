@@ -206,6 +206,7 @@ class JsonRpcHandler:
 
         sessions = []
         try:
+            self._prune_empty_sessions(str(target_path))
             from andromity.core.session import Session, get_all_sessions
             raw_sessions = get_all_sessions(str(target_path), include_subagents=include_subagents)
             for s in raw_sessions:
@@ -242,10 +243,65 @@ class JsonRpcHandler:
                 })
         return sessions
 
+    def _prune_empty_sessions(self, project_path: str, keep_id: Optional[str] = None) -> None:
+        """Prune abandoned empty sessions (0 messages) for the project to prevent clutter."""
+        try:
+            import hashlib
+            from andromity.core.db import get_conn, init_schema
+            from andromity.core.session import normalize_project_path
+            init_schema()
+            conn = get_conn()
+            phash = hashlib.sha256(normalize_project_path(project_path).encode()).hexdigest()[:16]
+            rows = conn.execute(
+                "SELECT id FROM sessions WHERE project_hash = ? AND (parent_session IS NULL OR parent_session = '') ORDER BY updated_at DESC",
+                (phash,),
+            ).fetchall()
+            kept_one = False
+            for r in rows:
+                sid = r[0]
+                if sid == keep_id:
+                    kept_one = True
+                    continue
+                if sid in self._running_tasks and not self._running_tasks[sid].done():
+                    continue
+                active_sess = self._active_sessions.get(sid)
+                if active_sess and len(active_sess.messages) > 0:
+                    continue
+                try:
+                    cnt = conn.execute("SELECT COUNT(*) FROM session_messages WHERE session_id = ?", (sid,)).fetchone()[0]
+                except Exception:
+                    cnt = 1
+                if cnt == 0:
+                    # Allow at most 1 empty session to remain if keep_id is not specified
+                    if keep_id is None and not kept_one:
+                        kept_one = True
+                        continue
+                    conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+                    try:
+                        conn.execute("DELETE FROM session_messages WHERE session_id = ?", (sid,))
+                    except Exception:
+                        pass
+                    self._active_sessions.pop(sid, None)
+                    try:
+                        s_file = (get_config_dir() / "sessions" / phash / f"{sid}.json").resolve()
+                        if s_file.exists():
+                            s_file.unlink()
+                    except Exception:
+                        pass
+            try:
+                conn.commit()
+            except Exception:
+                pass
+        except Exception as prune_err:
+            log.warning("Auto-pruning empty sessions error: %s", prune_err)
+
     async def rpc_session_create(self, params: Dict[str, Any]) -> Dict[str, Any]:
         name = params.get("name", "new-session")
         project_path = params.get("project_path") or str(Path.cwd().resolve())
         session_id = params.get("session_id")
+
+        self._prune_empty_sessions(project_path)
+
         session = Session(name=name, project_path=project_path, session_id=session_id)
         session.save()
         self._active_sessions[session.id] = session

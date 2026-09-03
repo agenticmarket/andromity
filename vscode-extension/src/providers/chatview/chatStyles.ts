@@ -836,6 +836,61 @@ export function getChatStyles(): string {
       animation: bannerSlideIn 0.2s ease-out;
     }
 
+    .compaction-summary-card {
+      background: rgba(147, 51, 234, 0.08);
+      border: 1px solid rgba(147, 51, 234, 0.25);
+      border-radius: 8px;
+      margin: 8px 0 12px 0;
+      overflow: hidden;
+      font-size: 11.5px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    }
+    .compaction-summary-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 12px;
+      background: rgba(147, 51, 234, 0.12);
+      color: #d8b4fe;
+      font-weight: 500;
+      cursor: pointer;
+      user-select: none;
+    }
+    .compaction-summary-header:hover {
+      background: rgba(147, 51, 234, 0.18);
+    }
+    .compaction-summary-tag {
+      font-size: 9px;
+      font-weight: 600;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: rgba(147, 51, 234, 0.3);
+      color: #f3e8ff;
+      letter-spacing: 0.5px;
+    }
+    .compaction-summary-header .compaction-chevron {
+      margin-left: auto;
+      width: 11px;
+      height: 11px;
+      transition: transform 0.15s ease;
+    }
+    .compaction-summary-card.expanded .compaction-chevron {
+      transform: rotate(90deg);
+    }
+    .compaction-summary-body {
+      padding: 10px 12px;
+      color: var(--fg);
+      font-size: 11.5px;
+      line-height: 1.5;
+      display: none;
+      border-top: 1px solid rgba(147, 51, 234, 0.15);
+      max-height: 320px;
+      overflow-y: auto;
+    }
+    .compaction-summary-card.expanded .compaction-summary-body {
+      display: block;
+    }
+
     /* ”--€ Model Quick Switcher Flyout ”----------------------------------------------------------------€ */
     .model-flyout {
       position: absolute;
@@ -913,14 +968,22 @@ export function getChatStyles(): string {
       color: var(--muted);
     }
 
-    /* ”--€ Chat Feed ”----------------------------------------------------------------------------------------------------€ */
+    /* ─── Chat Feed ─────────────────────────────────────────────────────────────────── */
     .chat-container {
+      min-width: 0;
+      word-break: break-word;
+      overflow-wrap: break-word;
       flex: 1;
       overflow-y: auto;
+      overflow-x: hidden;
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
       padding: 12px 10px;
       display: flex;
       flex-direction: column;
       gap: 12px;
+      position: relative;
     }
 
     /* ─── Zero State: Minimalist & Left-Aligned (Inspiration-Matched) ─────────────────────────── */
@@ -1650,6 +1713,9 @@ export function getChatStyles(): string {
       flex-direction: column;
       margin: 8px 0;
       width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
       position: relative;
     }
 
@@ -1671,12 +1737,15 @@ export function getChatStyles(): string {
       font-size: 13px;
       line-height: 1.4;
       word-break: break-word;
+      box-sizing: border-box;
     }
 
     .message.assistant {
       background: transparent;
       max-width: 100%;
       width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
       font-size: 13px;
       line-height: 1.5;
     }
@@ -1749,9 +1818,18 @@ export function getChatStyles(): string {
       color: var(--fg);
       background: rgba(255, 255, 255, 0.06);
     }
-    /* User bubbles -- TUI has no copy, keep footer minimal */
-    .message-wrap.user .message-footer { justify-content: flex-end; opacity: 0.6; }
-    .message-wrap.user .msg-copy-btn { display: none; }
+    /* User bubbles footer with prompt copy button */
+    .message-wrap.user .message-footer {
+      justify-content: flex-end;
+      opacity: 0.65;
+    }
+    .message-wrap.user:hover .message-footer {
+      opacity: 1;
+      visibility: visible;
+    }
+    .message-wrap.user .msg-copy-btn {
+      display: inline-flex;
+    }
 
     .turn-duration-badge {
       display: inline-flex;
@@ -1832,6 +1910,11 @@ export function getChatStyles(): string {
       line-height: 1.6;
       color: var(--fg);
       word-break: break-word;
+      overflow-wrap: break-word;
+      max-width: 100%;
+      min-width: 0;
+      width: 100%;
+      box-sizing: border-box;
     }
     .assistant-text p {
       margin: 4px 0 6px;
@@ -2077,6 +2160,10 @@ export function getChatStyles(): string {
       border-radius: var(--radius);
       background: rgba(0, 0, 0, 0.25);
       overflow: hidden;
+      max-width: 100%;
+      min-width: 0;
+      width: 100%;
+      box-sizing: border-box;
     }
     .code-block-header {
       display: flex;
@@ -2087,6 +2174,8 @@ export function getChatStyles(): string {
       border-bottom: 1px solid var(--border);
       font-size: 10.5px;
       color: var(--muted);
+      max-width: 100%;
+      box-sizing: border-box;
     }
     .code-lang-tag {
       font-weight: 600;
@@ -2122,6 +2211,9 @@ export function getChatStyles(): string {
       margin: 0;
       padding: 10px 12px;
       overflow-x: auto;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
       background: rgba(0, 0, 0, 0.35);
       border: none;
       font-family: var(--font-mono);
@@ -2129,6 +2221,8 @@ export function getChatStyles(): string {
       line-height: 1.55;
       letter-spacing: -0.015em;
       font-feature-settings: "calt", "zero";
+      white-space: pre;
+      word-break: normal;
     }
     .code-block-pre code {
       background: transparent !important;
@@ -2259,6 +2353,11 @@ export function getChatStyles(): string {
       transform: rotate(90deg);
     }
     .tool-body {
+      max-width: 100%;
+      min-width: 0;
+      overflow-x: auto;
+      word-break: break-word;
+      overflow-wrap: break-word;
       color: var(--muted);
       font-family: var(--vscode-editor-font-family, "Consolas", monospace);
       font-size: 11.5px;
@@ -3009,6 +3108,25 @@ export function getChatStyles(): string {
       box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
     }
 
+    /* Ambient Generation Aura */
+    .prompt-box.is-generating {
+      border-color: rgba(9, 249, 148, 0.45);
+      box-shadow: 0 0 16px rgba(9, 249, 148, 0.12), inset 0 0 10px rgba(9, 249, 148, 0.04);
+      animation: promptAuraGlow 1.8s ease-in-out infinite alternate;
+    }
+
+    @media (prefers-reduced-motion: reduce) { .prompt-box.is-generating { animation: none !important; } }
+    @keyframes promptAuraGlow {
+      0% {
+        border-color: rgba(9, 249, 148, 0.25);
+        box-shadow: 0 0 8px rgba(9, 249, 148, 0.08), inset 0 0 6px rgba(9, 249, 148, 0.02);
+      }
+      100% {
+        border-color: rgba(9, 249, 148, 0.6);
+        box-shadow: 0 0 22px rgba(9, 249, 148, 0.22), 0 0 35px rgba(56, 189, 248, 0.1), inset 0 0 12px rgba(9, 249, 148, 0.06);
+      }
+    }
+
     /* ─── Image Attachment Chips in Input Area ──────────────────────────────── */
     .image-attachments-container {
       display: flex;
@@ -3699,6 +3817,227 @@ export function getChatStyles(): string {
 
     .plan-feedback-field::placeholder {
       color: var(--muted, #71717a);
+    }
+
+    /* ─── Floating Scroll to Bottom Button ─────────────────────────────── */
+    .scroll-bottom-btn {
+      position: absolute;
+      bottom: 12px;
+      right: 18px;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(30, 30, 32, 0.88);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: var(--fg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+      z-index: 10;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      transform: translateY(6px);
+      opacity: 0;
+      pointer-events: none;
+    }
+    .scroll-bottom-btn.visible {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+    .scroll-bottom-btn:hover {
+      background: rgba(45, 45, 48, 0.95);
+      border-color: var(--accent-green, #09f994);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+    }
+    .scroll-bottom-btn svg {
+      width: 14px;
+      height: 14px;
+      color: var(--fg);
+      transition: transform 0.15s ease;
+    }
+    .scroll-bottom-btn:hover svg {
+      transform: translateY(1px);
+    }
+    .scroll-bottom-btn .unread-badge {
+      position: absolute;
+      top: -2px;
+      right: -2px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #09f994;
+      box-shadow: 0 0 6px #09f994;
+      display: none;
+    }
+    .scroll-bottom-btn .unread-badge.has-unread {
+      display: block;
+    }
+
+    /* ─── Turn Action Pills & File Edit Badges ─────────────────────────── */
+    .turn-actions-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+      margin-bottom: 4px;
+      align-items: center;
+      width: 100%;
+    }
+
+    .file-edited-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 8px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 6px;
+      font-size: 11.5px;
+      color: var(--fg);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      user-select: none;
+    }
+    .file-edited-chip:hover {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: var(--vscode-focusBorder, #38bdf8);
+      transform: translateY(-1px);
+    }
+    .file-edited-chip svg {
+      width: 12px;
+      height: 12px;
+      color: #38bdf8;
+      flex-shrink: 0;
+    }
+    .file-edited-chip .chip-filename {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: #f4f4f5;
+    }
+    .file-edited-chip .chip-diff-label {
+      font-size: 9.5px;
+      font-weight: 600;
+      padding: 1px 4px;
+      border-radius: 3px;
+      background: rgba(56, 189, 248, 0.15);
+      color: #38bdf8;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    /* ─── Conversation Timeline Drawer / Popover ────────────────────────── */
+    .timeline-flyout {
+      position: absolute;
+      top: 40px;
+      right: 10px;
+      width: 320px;
+      max-height: 480px;
+      background: rgba(24, 24, 27, 0.96);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 10px;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55);
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      animation: fadeInZero 0.18s ease-out;
+    }
+    .timeline-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--fg);
+    }
+    .timeline-header-close {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .timeline-header-close:hover {
+      color: var(--fg);
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .timeline-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .timeline-node {
+      padding: 8px 10px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .timeline-node:hover {
+      background: rgba(255, 255, 255, 0.07);
+      border-color: rgba(255, 255, 255, 0.16);
+      transform: translateX(2px);
+    }
+    .timeline-node-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 10.5px;
+      color: var(--muted);
+    }
+    .timeline-node-turn {
+      font-weight: 600;
+      color: var(--accent-cyan, #38bdf8);
+    }
+    .timeline-node-title {
+      font-size: 11.5px;
+      color: var(--fg);
+      font-weight: 500;
+      line-height: 1.35;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .timeline-node-badges {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      margin-top: 2px;
+    }
+    .timeline-mini-badge {
+      font-size: 9.5px;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--muted);
+    }
+    .timeline-mini-badge.tools {
+      background: rgba(56, 189, 248, 0.12);
+      color: #38bdf8;
+    }
+    .session-ghost-empty { font-size: 10px; color: var(--muted); font-style: italic; margin-left: 6px; }
+    .timeline-mini-badge.files {
+      background: rgba(9, 249, 148, 0.12);
+      color: #09f994;
     }
   </style>
 `;

@@ -39,6 +39,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    *  Guards against creating duplicate empty sessions when _loadInitialConfig
    *  fires more than once per window load. Cleared on explicit session switch. */
   private _freshSessionId: string | undefined;
+  private _creatingSession: Promise<string | null> | null = null;
 
   private _boundClient: RpcClient | null = null;
   private _rpcDisposables: Array<() => void> = [];
@@ -475,28 +476,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (startupMode === "fresh") {
           // "fresh" mode: start on an empty conversation; previous sessions
           // remain accessible in the history drawer.
-          // _loadInitialConfig(true) fires multiple times per window load
-          // (bridge connect, panel resolve, webview "ready") — reuse the
-          // session this cycle already created so each reload produces
-          // exactly ONE fresh session instead of one per call. Reuse is
-          // abandoned if that session got messages or was switched away from.
-          const listed = (sessions || []).find(
-            (s: any) => s.id === this._currentSessionId
+          // Reuse session if already created this reload cycle or if an empty session exists
+          const existingEmpty = (sessions || []).find(
+            (s: any) => (!s.message_count || s.message_count === 0) && !s.parent_session
           );
-          const stillEmpty = !listed || !((listed.message_count ?? 0) > 0);
-          const canReuse =
-            !!this._currentSessionId &&
-            this._currentSessionId === this._freshSessionId &&
-            stillEmpty;
-          if (!canReuse) {
-            const newSess = await this._rpcClient.call<SessionInfo>("session.create", {
-              name: `Session ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
-              project_path: workspaceFolder,
-            }).catch(() => ({ id: "main-session" } as SessionInfo));
-            this._currentSessionId = newSess.id;
-            this._freshSessionId = newSess.id;
+          if (this._freshSessionId) {
+            this._currentSessionId = this._freshSessionId;
+            this._persistLastActiveSession();
+          } else if (existingEmpty) {
+            this._currentSessionId = (existingEmpty as any).id;
+            this._freshSessionId = (existingEmpty as any).id;
+            this._persistLastActiveSession();
+          } else if (this._creatingSession) {
+            const waited = await this._creatingSession;
+            if (waited) this._currentSessionId = waited;
+            this._persistLastActiveSession();
+          } else {
+            this._creatingSession = (async () => {
+              try {
+                const s = await this._rpcClient!.call<SessionInfo>("session.create", {
+                  name: `Session ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+                  project_path: workspaceFolder,
+                });
+                this._currentSessionId = s.id;
+                this._freshSessionId = s.id;
+                this._persistLastActiveSession();
+                await this.fetchAndPostSessions();
+                return s.id;
+              } catch { return null; } finally { this._creatingSession = null; }
+            })();
+            await this._creatingSession;
           }
-          this._persistLastActiveSession();
         } else if (sessions && sessions.length > 0) {
           // "last" mode (default): restore exactly the session the user had
           // active when the window was last closed. Fall back to the previous
@@ -525,9 +535,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       }
 
-      if (!this._currentPlan) {
-        this._currentPlan = await this._loadPlanFromWorkspace();
-      }
+      // Do not auto-inject workspace plan.json into the chat session.
+      // The plan tracker is session-scoped (session.plan). Workspace plan is
+      // only loaded on demand when the Plan tab is opened.
 
       this._postToWebview({
         type: "init_state",
@@ -631,17 +641,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         session_id: sessionId,
         project_path: workspaceFolder,
       });
-      if (sessionData && sessionData.plan) {
+      if (sessionData && sessionData.plan && sessionData.plan.steps && sessionData.plan.steps.length > 0) {
         this._currentPlan = sessionData.plan;
-      } else if (!this._currentPlan) {
-        this._currentPlan = await this._loadPlanFromWorkspace();
+      } else {
+        this._currentPlan = null;
       }
-      if (this._currentPlan) {
-        this._postToWebview({
-          type: "plan_updated",
-          plan: this._currentPlan,
-        });
-      }
+      this._postToWebview({
+        type: "plan_updated",
+        plan: this._currentPlan,
+        session_id: sessionId,
+      });
       this._postToWebview({
         type: "session_loaded",
         session: sessionData,
@@ -992,19 +1001,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "cancel_turn": {
+        const targetSessionId = message.sessionId || this._currentSessionId;
         try {
           await this._rpcClient.call("agent.cancel", {
-            session_id: this._currentSessionId,
+            session_id: targetSessionId,
           });
         } catch (e: any) {
           console.warn("[Andromity] cancel_turn RPC failed:", e?.message || e);
           // Still notify webview so fallback can trigger even if daemon is slow/dead
-          this._postToWebview({ type: "agent_cancelled", session_id: this._currentSessionId });
+          this._postToWebview({ type: "agent_cancelled", session_id: targetSessionId });
         }
         break;
       }
 
       case "new_session": {
+        if (this._creatingSession) { await this._creatingSession; break; }
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (this._currentSessionId && this._rpcClient) {
           const currentSess = await this._rpcClient.call<any>("session.get", {
@@ -1012,20 +1023,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             project_path: workspaceFolder,
           }).catch(() => null);
           if (currentSess && (!currentSess.messages || currentSess.messages.length === 0)) {
-            // Already on an empty fresh session; reuse it cleanly
             this.setCurrentSessionId(this._currentSessionId);
             await this.fetchAndPostSessions();
             break;
           }
         }
+        this._creatingSession = (async () => {
+          const r = await this._rpcClient!.call<SessionInfo>("session.create", {
+            name: message.name || `Session ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+            project_path: workspaceFolder,
+          });
+          this.setCurrentSessionId(r.id);
+          await this.fetchAndPostSessions();
+          vscode.commands.executeCommand("andromity.refreshSessions");
+          return r.id;
+        })();
+        try { await this._creatingSession; } finally { this._creatingSession = null; }
+        break;
+      }
 
-        const res = await this._rpcClient.call<SessionInfo>("session.create", {
-          name: message.name || `Session ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
-          project_path: workspaceFolder,
-        });
-        this.setCurrentSessionId(res.id);
-        await this.fetchAndPostSessions();
-        vscode.commands.executeCommand("andromity.refreshSessions");
+      case "open_file_diff": {
+        if (message.filePath) {
+          await this.openFileDiff(message.filePath, false);
+        }
         break;
       }
 
