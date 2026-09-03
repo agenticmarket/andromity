@@ -832,7 +832,7 @@ class JsonRpcHandler:
                             "cost_usd": getattr(session, "cost_usd", 0.0),
                         })
 
-                if len(session.messages) <= 3:
+                if len(session.messages) <= 3 and (session.name in ("new-session", "Main Session") or session.name.startswith("Session ") or session.name.startswith("session-")):
                     try:
                         first_user_msg = next((m.get("content", "") for m in session.messages if m.get("role") == "user"), "")
                         if first_user_msg:

@@ -1974,13 +1974,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function renderQueue() {
-      if (promptQueue.length === 0) {
+      const sessionQueue = promptQueue.filter(q => !q.sessionId || q.sessionId === currentSessionId);
+      if (sessionQueue.length === 0) {
         queueContainer.style.display = 'none';
         queueContainer.innerHTML = '';
         return;
       }
       queueContainer.style.display = 'flex';
       queueContainer.innerHTML = promptQueue.map((q, i) => {
+        if (q.sessionId && q.sessionId !== currentSessionId) return '';
         const text = typeof q === 'object' ? (q.text || 'Image prompt') : q;
         return '<div class="queue-chip">' +
           '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
@@ -2852,6 +2854,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               promptInput.value = (sessState && sessState.draftInput) || '';
               promptInput.style.height = 'auto';
             }
+            renderQueue();
           }
           break;
 
