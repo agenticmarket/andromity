@@ -564,11 +564,11 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand("andromity.openSettings", () => {
+    vscode.commands.registerCommand("andromity.openSettings", (initialTab?: string) => {
       SettingsPanel.createOrShow(
         context.extensionUri,
         pythonBridge?.getClient() || null,
-        "keys",
+        initialTab || "keys",
         () => chatProvider.refreshConfig()
       );
     }),

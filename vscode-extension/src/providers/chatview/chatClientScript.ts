@@ -783,6 +783,33 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       vscode.postMessage({ type: 'new_session' });
     });
 
+    document.getElementById('btn-top-crons')?.addEventListener('click', () => {
+      toggleCronsFlyout();
+    });
+
+    document.getElementById('btn-crons-manage')?.addEventListener('click', () => {
+      vscode.postMessage({ type: 'open_cron_settings' });
+      if (cronsFlyout) cronsFlyout.style.display = 'none';
+    });
+
+    if (cronsListEl) {
+      cronsListEl.addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-cron-action]');
+        if (!btn) return;
+        const action = btn.dataset.cronAction;
+        const id = btn.dataset.id;
+        const name = btn.dataset.name || '';
+        if (action === 'run') {
+          btn.disabled = true;
+          btn.innerHTML = '<span>⟳ Running...</span>';
+          vscode.postMessage({ type: 'cron_run_now', id, name });
+          setTimeout(() => { if (btn) { btn.disabled = false; btn.innerHTML = '▶ Run'; } }, 4000);
+        } else if (action === 'toggle') {
+          vscode.postMessage({ type: 'cron_toggle', id });
+        }
+      });
+    }
+
     document.getElementById('btn-crons-close')?.addEventListener('click', () => {
       cronsFlyout.style.display = 'none';
     });
@@ -1271,19 +1298,72 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function renderCronsList(crons) {
       if (!cronsListEl) return;
       if (!crons || crons.length === 0) {
-        cronsListEl.innerHTML = '<div style="padding:14px; text-align:center; color:var(--muted); font-size:11.5px;">No scheduled cron jobs found.<br/><span style="font-size:10.5px; opacity:0.8;">Crons can be scheduled through prompt instructions.</span></div>';
+        cronsListEl.innerHTML = '<div style="padding:16px 12px; text-align:center; color:var(--muted); font-size:11.5px;">No scheduled tasks active.<br/><button class="cron-btn-action" style="margin:8px auto 0 auto; padding:4px 10px;" onclick="vscode.postMessage({type:\'open_cron_settings\'})">+ Create New Task</button></div>';
         return;
       }
       cronsListEl.innerHTML = crons.map(c => {
         const isEnabled = c.enabled !== false;
+        const isRunning = c.last_status === 'running';
+        const statusLabel = isRunning ? 'Running' : (isEnabled ? 'Active' : 'Paused');
+        const statusPillClass = isRunning ? 'cron-status-running' : (isEnabled ? 'cron-status-active' : 'cron-status-paused');
+
+        let lastStatusText = '○ Never run';
+        let lastStatusColor = 'var(--muted)';
+        if (c.last_status === 'success') {
+          lastStatusText = '✓ Success';
+          lastStatusColor = 'var(--green)';
+        } else if (c.last_status === 'failed') {
+          lastStatusText = '✗ Failed';
+          lastStatusColor = 'var(--red)';
+        } else if (c.last_status === 'timeout') {
+          lastStatusText = '⏱ Timeout';
+          lastStatusColor = '#eab308';
+        }
+        const nextRun = isEnabled ? (c.next_run_in ? ('Next: ' + c.next_run_in) : 'Next: soon') : 'Paused';
+
         return '<div class="cron-card">' +
           '<div class="cron-card-top">' +
-            '<span class="cron-card-schedule">' + escapeHtml(c.schedule || 'cron') + '</span>' +
-            '<span class="cron-status-pill ' + (isEnabled ? 'cron-status-active' : 'cron-status-paused') + '">' + (isEnabled ? 'Active' : 'Paused') + '</span>' +
+            '<div class="cron-card-title-group">' +
+              '<span class="cron-card-name" title="' + escapeHtml(c.name || 'Task') + '">' + escapeHtml(c.name || 'Task') + '</span>' +
+              '<span class="cron-card-schedule">' + escapeHtml(c.schedule || 'every 1h') + '</span>' +
+            '</div>' +
+            '<span class="cron-status-pill ' + statusPillClass + '">' + statusLabel + '</span>' +
           '</div>' +
-          '<div class="cron-prompt">' + escapeHtml(c.prompt || c.name || '') + '</div>' +
+          '<div class="cron-prompt">' + escapeHtml(c.prompt || '') + '</div>' +
+          '<div class="cron-card-meta">' +
+            '<div>' +
+              '<span style="color:' + lastStatusColor + '; font-weight:600;">' + lastStatusText + '</span>' +
+              '<span style="opacity:0.6; margin-left:6px;">• ' + escapeHtml(nextRun) + '</span>' +
+            '</div>' +
+            '<div class="cron-card-actions">' +
+              '<button class="cron-btn-action run-btn" data-cron-action="run" data-id="' + escapeHtml(c.id) + '" data-name="' + escapeHtml(c.name || '') + '" title="Trigger immediately">▶ Run</button>' +
+              '<button class="cron-btn-action" data-cron-action="toggle" data-id="' + escapeHtml(c.id) + '" title="' + (isEnabled ? 'Pause schedule' : 'Activate schedule') + '">' + (isEnabled ? '⏸ Pause' : '▶ Enable') + '</button>' +
+            '</div>' +
+          '</div>' +
         '</div>';
       }).join('');
+    }
+
+    function renderCronEventCard(job, run) {
+      if (!chatContainer) return;
+      const isSuccess = run.status === 'success';
+      const durSec = run.duration_ms ? (run.duration_ms / 1000).toFixed(1) : '0';
+      const outPreview = run.output_preview || (isSuccess ? 'Scheduled run completed without output.' : (run.error || 'Execution failed.'));
+
+      const card = document.createElement('div');
+      card.className = 'cron-event-card ' + (isSuccess ? 'success' : 'failed');
+      card.innerHTML =
+        '<div class="cron-event-hdr">' +
+          '<span style="display:flex; align-items:center; gap:5px;">' +
+            '<span style="color:' + (isSuccess ? 'var(--green)' : 'var(--red)') + ';">' + (isSuccess ? '✓' : '✗') + '</span>' +
+            '<span>Scheduled Task: <strong>' + escapeHtml(job?.name || run.job_name || 'Task') + '</strong></span>' +
+          '</span>' +
+          '<span style="font-size:10px; color:var(--muted); font-weight:normal;">' + durSec + 's</span>' +
+        '</div>' +
+        '<div class="cron-event-body">' + escapeHtml(outPreview) + '</div>';
+
+      chatContainer.appendChild(card);
+      scrollToBottomIfNeeded();
     }
 
     function updatePlanTracker(plan) {
@@ -3809,6 +3889,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         case 'crons_data':
           renderCronsList(msg.crons || []);
+          break;
+
+        case 'cron_event':
+          if (msg.event === 'run_completed' && msg.run) {
+            renderCronEventCard(msg.job, msg.run);
+          }
           break;
 
         case 'plan_updated':

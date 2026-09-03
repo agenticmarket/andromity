@@ -497,7 +497,8 @@ def _shell_invocation(shell: str, command: str) -> list[str]:
       - bash / sh / zsh / …  ->  -c
     Handles both bare names and full paths (e.g. C:\\Windows\\System32\\cmd.exe).
     """
-    name = os.path.basename(shell).lower()
+    clean_shell = shell.replace("\\", "/")
+    name = os.path.basename(clean_shell).lower()
     if name.endswith(".exe"):
         name = name[:-4]
     if name in ("powershell", "pwsh"):

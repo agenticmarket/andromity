@@ -1528,6 +1528,20 @@ class JsonRpcHandler:
         run_store.save_run(run)
         self.notify("cron/run_started", {"job_id": job.id, "run": run.to_dict()})
 
+        # ── Trust Governance Gate ──────────────────────────────────────────────
+        from andromity.core.session import normalize_project_path
+        trusted_projects = config.get("trust", "trusted_projects", [])
+        if project_path and trusted_projects:
+            norm_path = normalize_project_path(project_path)
+            if norm_path not in [normalize_project_path(p) for p in trusted_projects]:
+                error_msg = f"Workspace folder is untrusted. Trust this workspace in Andromity to allow autonomous cron runs."
+                run.status = "failed"
+                run.error = error_msg
+                run.finished_at = datetime.now(timezone.utc).isoformat()
+                run_store.save_run(run)
+                self.notify("cron/run_completed", {"job_id": job.id, "run": run.to_dict(), "job": job.to_dict()})
+                return run.to_dict()
+
         # Create dedicated cron session
         cron_session = Session(
             session_id=f"cron-{job.id}-{int(time.time())}",
@@ -1535,10 +1549,24 @@ class JsonRpcHandler:
             project_path=project_path,
         )
 
+        def _make_cron_approval(cron_job):
+            async def _approval(tool_name: str, args: dict) -> bool:
+                if cron_job.mode == "yolo":
+                    return True
+                if tool_name in ("shell_exec", "shell_bg"):
+                    command = str(args.get("command", "")).strip()
+                    allowed = cron_job.allowed_commands or config.get("default", "allowed_commands", [])
+                    return any(command.startswith(p) for p in allowed)
+                if tool_name in ("write_file", "edit_file", "write_to_file", "replace_file_content", "multi_replace_file_content") and cron_job.mode == "safe":
+                    return False
+                return True
+            return _approval
+
         agent = Agent(
             session=cron_session,
             profile="builder",
             auto_approve=(job.mode in ("trust", "yolo", "full")),
+            on_tool_approval=_make_cron_approval(job),
             reasoning_effort="medium",
             provider=job.provider,
             model=job.model,
@@ -1606,6 +1634,132 @@ class JsonRpcHandler:
         })
 
         return run.to_dict()
+
+    async def rpc_cron_list(self, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """List all scheduled cron jobs for the project, seeding smart default presets if empty."""
+        project_path = params.get("project_path") or os.getcwd()
+        scheduler = self._get_or_create_cron_scheduler(project_path)
+        jobs = scheduler.list()
+
+        # Seed default curated cron jobs for new projects so solo devs have instant value
+        if not jobs:
+            default_presets = [
+                {
+                    "name": "Run Tests & Verify Build",
+                    "prompt": "Run the project test suite and report any failing tests, errors, or regressions.",
+                    "schedule": "every 2h",
+                    "mode": "trust",
+                    "allowed_commands": ["pytest", "npm test", "npm run test", "git status"],
+                },
+                {
+                    "name": "Daily Code Health & TODO Scanner",
+                    "prompt": "Scan for new FIXME or TODO comments, check git diff/status, and summarize repository health.",
+                    "schedule": "every 1d",
+                    "mode": "safe",
+                    "allowed_commands": ["git status", "git diff", "git log"],
+                },
+            ]
+            for preset in default_presets:
+                created = scheduler.add(
+                    name=preset["name"],
+                    prompt=preset["prompt"],
+                    schedule=preset["schedule"],
+                    provider=config.get("default", "provider", "anthropic"),
+                    model=config.get("default", "model", "claude-sonnet-4-6"),
+                    mode=preset["mode"],
+                    allowed_commands=preset.get("allowed_commands", []),
+                )
+                # Keep newly seeded presets paused by default so user can review and enable explicitly
+                created.enabled = False
+            scheduler._store.save(scheduler._crons)
+            jobs = scheduler.list()
+
+        results = []
+        for j in jobs:
+            jd = j.to_dict()
+            jd["next_run_in"] = j.next_run_in()
+            results.append(jd)
+        return results
+
+    async def rpc_cron_create(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a new scheduled cron job."""
+        project_path = params.get("project_path") or os.getcwd()
+        scheduler = self._get_or_create_cron_scheduler(project_path)
+
+        name = params.get("name") or "Scheduled Job"
+        prompt = params.get("prompt") or ""
+        schedule = params.get("schedule") or "every 1h"
+        provider = params.get("provider") or config.get("default", "provider", "anthropic")
+        model = params.get("model") or config.get("default", "model", "claude-sonnet-4-6")
+        mode = params.get("mode") or "trust"
+        allowed_raw = params.get("allowed_commands", "")
+        if isinstance(allowed_raw, str):
+            allowed_cmds = [c.strip() for c in allowed_raw.split(",") if c.strip()]
+        elif isinstance(allowed_raw, list):
+            allowed_cmds = allowed_raw
+        else:
+            allowed_cmds = []
+        on_failure = params.get("on_failure", "notify")
+        timeout_seconds = int(params.get("timeout_seconds", 600))
+
+        job = scheduler.add(
+            name=name,
+            prompt=prompt,
+            schedule=schedule,
+            provider=provider,
+            model=model,
+            mode=mode,
+            allowed_commands=allowed_cmds,
+            on_failure=on_failure,
+            timeout_seconds=timeout_seconds,
+        )
+        jd = job.to_dict()
+        jd["next_run_in"] = job.next_run_in()
+        return jd
+
+    async def rpc_cron_toggle(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Toggle active/paused state of a scheduled cron job."""
+        project_path = params.get("project_path") or os.getcwd()
+        scheduler = self._get_or_create_cron_scheduler(project_path)
+        job_id = params.get("id")
+        if not job_id:
+            raise ValueError("Missing cron job id")
+        enabled = scheduler.toggle(job_id)
+        return {"id": job_id, "enabled": enabled}
+
+    async def rpc_cron_delete(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Delete a scheduled cron job."""
+        project_path = params.get("project_path") or os.getcwd()
+        scheduler = self._get_or_create_cron_scheduler(project_path)
+        job_id = params.get("id")
+        if not job_id:
+            raise ValueError("Missing cron job id")
+        deleted = scheduler.remove(job_id)
+        return {"id": job_id, "deleted": deleted}
+
+    async def rpc_cron_run_now(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Trigger immediate execution of a scheduled cron job."""
+        project_path = params.get("project_path") or os.getcwd()
+        scheduler = self._get_or_create_cron_scheduler(project_path)
+        job_id = params.get("id")
+        if not job_id:
+            raise ValueError("Missing cron job id")
+        job = next((c for c in scheduler.list() if c.id == job_id), None)
+        if not job:
+            raise ValueError(f"Cron job {job_id} not found")
+        asyncio.create_task(self._execute_cron_job(project_path, job))
+        return {"id": job_id, "triggered": True}
+
+    async def rpc_cron_runs(self, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Fetch execution run history for a cron job."""
+        project_path = params.get("project_path") or os.getcwd()
+        scheduler = self._get_or_create_cron_scheduler(project_path)
+        job_id = params.get("id")
+        limit = int(params.get("limit", 50))
+        if not job_id:
+            raise ValueError("Missing cron job id")
+        runs = scheduler.list_runs(job_id, limit=limit)
+        return [r.to_dict() for r in runs]
 
     async def _generate_ai_session_name(self, session: Session, prompt: str, provider: str, model: str):
         try:
@@ -1702,119 +1856,6 @@ Your output must be:
                     })
         except Exception as e:
             log.debug("Failed to generate AI session name: %s", e)
-
-    async def rpc_cron_list(self, params: Dict[str, Any]) -> List[Dict[str, Any]]:
-        project_path = params.get("project_path") or str(Path.cwd().resolve())
-        try:
-            scheduler = self._get_or_create_cron_scheduler(project_path)
-            from andromity.core.cron import CronStore
-            store = CronStore(project_path)
-            return [job.to_dict() if hasattr(job, "to_dict") else job for job in store.load()]
-        except Exception as e:
-            log.warning("Cron listing error: %s", e)
-            return []
-
-    async def rpc_cron_create(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        project_path = params.get("project_path") or str(Path.cwd().resolve())
-        try:
-            from andromity.core.cron import CronStore, CronJob, parse_interval_seconds
-            store = CronStore(project_path)
-            crons = store.load()
-            name = params.get("name") or "Scheduled Job"
-            prompt = params.get("prompt") or ""
-            schedule = params.get("schedule") or "every 1h"
-            provider = params.get("provider") or config.get("default", "provider", "anthropic")
-            model = params.get("model") or config.get("default", "model", "claude-sonnet-4-6")
-            mode = params.get("mode") or "trust"
-            interval = parse_interval_seconds(schedule)
-            allowed_commands = params.get("allowed_commands") or []
-            if isinstance(allowed_commands, str):
-                allowed_commands = [c.strip() for c in allowed_commands.split(",") if c.strip()]
-            job = CronJob(
-                id=str(uuid.uuid4())[:8],
-                name=name,
-                prompt=prompt,
-                schedule=schedule,
-                interval_seconds=interval,
-                provider=provider,
-                model=model,
-                mode=mode,
-                allowed_commands=allowed_commands,
-            )
-            crons.append(job)
-            store.save(crons)
-            scheduler = self._get_or_create_cron_scheduler(project_path)
-            scheduler._crons = crons
-            return {"success": True, "job": job.to_dict()}
-        except Exception as e:
-            log.error("Cron create error: %s", e)
-            return {"success": False, "error": str(e)}
-
-    async def rpc_cron_toggle(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        project_path = params.get("project_path") or str(Path.cwd().resolve())
-        try:
-            from andromity.core.cron import CronStore
-            store = CronStore(project_path)
-            crons = store.load()
-            job_id = params.get("job_id") or params.get("id")
-            for c in crons:
-                if c.id == job_id:
-                    c.enabled = not c.enabled
-                    store.save(crons)
-                    if project_path in self._cron_schedulers:
-                        self._cron_schedulers[project_path]._crons = crons
-                    return {"success": True, "enabled": c.enabled}
-            return {"success": False, "error": "Job not found"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    async def rpc_cron_delete(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        project_path = params.get("project_path") or str(Path.cwd().resolve())
-        try:
-            from andromity.core.cron import CronStore
-            store = CronStore(project_path)
-            crons = store.load()
-            job_id = params.get("job_id") or params.get("id")
-            crons = [c for c in crons if c.id != job_id]
-            store.save(crons)
-            if project_path in self._cron_schedulers:
-                self._cron_schedulers[project_path]._crons = crons
-            return {"success": True}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    async def rpc_cron_run_now(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        project_path = params.get("project_path") or str(Path.cwd().resolve())
-        try:
-            from andromity.core.cron import CronStore
-            store = CronStore(project_path)
-            crons = store.load()
-            job_id = params.get("job_id") or params.get("id")
-            cron = next((c for c in crons if c.id == job_id), None)
-            if not cron:
-                return {"success": False, "error": "Job not found"}
-            
-            # Execute actual AI agent turn in background or synchronous wait
-            run_dict = await self._execute_cron_job(project_path, cron)
-            return {"success": True, "job": cron.to_dict(), "run": run_dict}
-        except Exception as e:
-            log.error("Cron run_now error: %s", e)
-            return {"success": False, "error": str(e)}
-
-    async def rpc_cron_runs(self, params: Dict[str, Any]) -> List[Dict[str, Any]]:
-        project_path = params.get("project_path") or str(Path.cwd().resolve())
-        try:
-            from andromity.core.cron import CronRunStore
-            run_store = CronRunStore(project_path)
-            job_id = params.get("job_id") or params.get("id")
-            if job_id:
-                runs = run_store.list_runs(job_id, limit=20)
-            else:
-                runs = []
-            return [r.to_dict() if hasattr(r, "to_dict") else r for r in runs]
-        except Exception as e:
-            log.warning("Cron runs error: %s", e)
-            return []
 
     # ── MCP & Skills ────────────────────────────────────────────────────────────
 

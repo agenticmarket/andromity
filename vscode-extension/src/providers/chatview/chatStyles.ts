@@ -593,6 +593,24 @@ export function getChatStyles(): string {
       font-weight: 600;
       color: var(--fg);
     }
+    .crons-action-hdr-btn {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      cursor: pointer;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 10px;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      transition: all 0.15s ease;
+    }
+    .crons-action-hdr-btn:hover {
+      color: var(--fg);
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
     .crons-close-btn {
       background: transparent;
       border: none;
@@ -607,40 +625,142 @@ export function getChatStyles(): string {
       padding: 6px;
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 6px;
     }
     .cron-card {
-      padding: 8px 10px;
-      border-radius: 5px;
+      padding: 9px 11px;
+      border-radius: 6px;
       background: rgba(255, 255, 255, 0.02);
       border: 1px solid var(--border);
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 5px;
+      transition: border-color 0.15s ease;
+    }
+    .cron-card:hover {
+      border-color: rgba(255, 255, 255, 0.15);
     }
     .cron-card-top {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 6px;
+    }
+    .cron-card-title-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+    .cron-card-name {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--fg);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .cron-card-schedule {
       font-family: var(--vscode-editor-font-family, monospace);
-      font-size: 11px;
+      font-size: 10px;
       color: var(--accent);
+      background: rgba(9, 249, 148, 0.08);
+      border: 1px solid rgba(9, 249, 148, 0.2);
+      padding: 1px 5px;
+      border-radius: 4px;
+      flex-shrink: 0;
     }
     .cron-status-pill {
-      font-size: 9.5px;
+      font-size: 9px;
       font-weight: 600;
       text-transform: uppercase;
       padding: 1px 6px;
       border-radius: 8px;
+      flex-shrink: 0;
     }
     .cron-status-active { background: rgba(63, 185, 80, 0.15); color: var(--green); }
     .cron-status-paused { background: rgba(148, 163, 184, 0.15); color: var(--pending-fg); }
+    .cron-status-running { background: rgba(56, 189, 248, 0.2); color: #38bdf8; }
     .cron-prompt {
       font-size: 11px;
+      color: var(--muted);
+      line-height: 1.35;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .cron-card-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 2px;
+      padding-top: 4px;
+      border-top: 1px dashed rgba(255, 255, 255, 0.06);
+    }
+    .cron-card-actions {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .cron-btn-action {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      border-radius: 4px;
       color: var(--fg);
-      line-height: 1.3;
+      font-size: 10px;
+      padding: 2px 7px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      transition: all 0.15s ease;
+    }
+    .cron-btn-action:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 255, 255, 0.25);
+    }
+    .cron-btn-action.run-btn {
+      color: var(--green);
+      background: rgba(63, 185, 80, 0.1);
+      border-color: rgba(63, 185, 80, 0.3);
+    }
+    .cron-btn-action.run-btn:hover {
+      background: rgba(63, 185, 80, 0.2);
+    }
+
+    /* ─── Cron Run Notification Card in Chat ────────────────────────── */
+    .cron-event-card {
+      margin: 8px 12px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: rgba(18, 18, 24, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      animation: bannerSlideIn 0.25s ease;
+    }
+    .cron-event-card.success {
+      border-left: 3px solid var(--green);
+    }
+    .cron-event-card.failed {
+      border-left: 3px solid var(--red);
+    }
+    .cron-event-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11.5px;
+      font-weight: 600;
+    }
+    .cron-event-body {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.4;
     }
 
     /* ─── Collapsible Todo / Plan Tracker (Above Input Section) ─────────────── */

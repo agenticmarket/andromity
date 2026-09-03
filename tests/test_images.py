@@ -1,5 +1,6 @@
 """Tests for pasted-image support: content-parts building, vision guard,
 and session history staying text-only."""
+import os
 import pytest
 from unittest.mock import patch
 
@@ -265,9 +266,13 @@ def test_extract_image_path(tmp_path):
     img_file = tmp_path / "shot.png"
     img_file.write_bytes(b"fake")
 
-    # Quoted Windows-style path (what Windows Terminal pastes for a copied file).
-    quoted = str(img_file).replace("/", "\\")
-    assert extract_image_path(f'"{quoted}"') == str(img_file).replace("/", "\\")
+    # Quoted path (e.g. what Windows Terminal pastes for a copied file).
+    if os.name == "nt":
+        quoted = str(img_file).replace("/", "\\")
+        assert extract_image_path(f'"{quoted}"') == str(img_file).replace("/", "\\")
+    else:
+        quoted = str(img_file)
+        assert extract_image_path(f'"{quoted}"') == str(img_file)
 
     # Bare path works too.
     assert extract_image_path(str(img_file)) == str(img_file)

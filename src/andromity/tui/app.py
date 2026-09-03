@@ -537,7 +537,7 @@ class AndromityApp(App):
     def refresh_cron_status(self):
         try:
             panel = self.query_one(CronStatusPanel)
-            panel.refresh_jobs(self._cron_scheduler.list())
+            panel.refresh_jobs(self._cron_scheduler.list(), running_ids=getattr(self, "_cron_running_jobs", set()))
         except Exception:
             pass
 
@@ -886,8 +886,10 @@ class AndromityApp(App):
                     run.cost_usd = getattr(cron_session, "cost_usd", 0.0)
 
                 self._cron_scheduler.mark_result(cron.id, success=True, run=run)
-                cron_panel.push_notification(f"[green]✓ Cron '{escape(cron.name)}' completed.[/]")
+                dur_s = f"{run.duration_ms / 1000:.1f}s" if (run and run.duration_ms) else "done"
+                cron_panel.push_notification(f"[green]✓ Cron '{escape(cron.name)}' completed ({dur_s}).[/]")
                 self.refresh_cron_status()
+                self.notify(f"⏱ Cron '{cron.name}' completed ({dur_s}).", timeout=4)
 
             except asyncio.TimeoutError:
                 timeout_msg = f"Timed out after {cron.timeout_seconds}s"
@@ -903,10 +905,10 @@ class AndromityApp(App):
                     run.output_preview = output_text[:500] if output_text else ""
                 self._cron_scheduler.mark_result(cron.id, success=False, error=timeout_msg, run=run)
                 cron_panel.push_notification(
-                    f"[yellow]⏱ Cron '{escape(cron.name)}' timed out[/] after {cron.timeout_seconds}s. "
-                    f"Job is free to run again next interval."
+                    f"[yellow]⏱ Cron '{escape(cron.name)}' timed out[/] after {cron.timeout_seconds}s."
                 )
                 self.refresh_cron_status()
+                self.notify(f"⏱ Cron '{cron.name}' timed out.", severity="warning", timeout=5)
 
             except Exception as e:
                 cron_session.flush()
@@ -921,6 +923,7 @@ class AndromityApp(App):
                 self._cron_scheduler.mark_result(cron.id, success=False, error=str(e), run=run)
                 cron_panel.push_notification(f"[red]✗ Cron '{escape(cron.name)}' failed:[/] {escape(str(e))}")
                 self.refresh_cron_status()
+                self.notify(f"✗ Cron '{cron.name}' failed: {str(e)[:50]}", severity="error", timeout=5)
             finally:
                 self._cron_running_jobs.discard(cron.id)
 
@@ -933,7 +936,8 @@ class AndromityApp(App):
                 return True
             if tool_name in ("shell_exec", "shell_bg"):
                 command = str(args.get("command", "")).strip()
-                if cron.allowed_commands and any(command.startswith(p) for p in cron.allowed_commands):
+                allowed = cron.allowed_commands or config.get("default", "allowed_commands", [])
+                if any(command.startswith(p) for p in allowed):
                     return True
                 # Block unapproved commands — notify but don't prompt
                 cron_panel = self.query_one(CronStatusPanel)
@@ -1090,7 +1094,7 @@ class AndromityApp(App):
     def refresh_cron_status(self):
         try:
             panel = self.query_one(CronStatusPanel)
-            panel.refresh_jobs(self._cron_scheduler.list())
+            panel.refresh_jobs(self._cron_scheduler.list(), running_ids=getattr(self, "_cron_running_jobs", set()))
         except Exception:
             pass
 

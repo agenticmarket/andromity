@@ -93,6 +93,12 @@ ${styles}
           <line x1="10" y1="14" x2="21" y2="3"></line>
         </svg>
       </button>
+      <button class="top-bar-icon-btn" id="btn-top-crons" title="Scheduled Background Cron Jobs (/cron)" data-action="toggle-crons">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <polyline points="12 6 12 12 16 14"></polyline>
+        </svg>
+      </button>
       <button class="top-bar-icon-btn" id="btn-top-timeline" title="Conversation Timeline & Milestones" data-action="toggle-timeline">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="10"></circle>
@@ -145,11 +151,16 @@ ${styles}
     <div class="crons-flyout-header">
       <div class="crons-header-title">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-        <span>Scheduled Cron Jobs</span>
+        <span>Scheduled Tasks</span>
       </div>
-      <button class="crons-close-btn" id="btn-crons-close" title="Close">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-      </button>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <button class="crons-action-hdr-btn" id="btn-crons-manage" title="Configure in Settings">
+          <span>⚙ Settings</span>
+        </button>
+        <button class="crons-close-btn" id="btn-crons-close" title="Close">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
     </div>
     <div class="crons-list" id="crons-list">
       <div style="padding:14px; text-align:center; color:var(--muted); font-size:11px;">Loading crons...</div>

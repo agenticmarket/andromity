@@ -423,6 +423,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       vscode.commands.executeCommand("andromity.refreshSessions");
     });
 
+    bind("cron/run_started", (params: any) => {
+      this.fetchAndPostCrons();
+      this._postToWebview({
+        type: "cron_event",
+        event: "run_started",
+        job_id: params.job_id,
+        run: params.run,
+      });
+    });
+
+    bind("cron/run_completed", (params: any) => {
+      this.fetchAndPostCrons();
+      const jobName = params.job?.name || "Scheduled Job";
+      const status = params.run?.status || "completed";
+      const durSec = params.run?.duration_ms ? (params.run.duration_ms / 1000).toFixed(1) : "0";
+
+      if (status === "success") {
+        vscode.window.showInformationMessage(`⏱ Cron "${jobName}" completed in ${durSec}s.`);
+      } else if (status === "failed") {
+        vscode.window.showWarningMessage(`⏱ Cron "${jobName}" failed: ${params.run?.error || "Error during execution"}`);
+      }
+
+      this._postToWebview({
+        type: "cron_event",
+        event: "run_completed",
+        job: params.job,
+        run: params.run,
+      });
+    });
+
     bind("subagent/spawned", (params: SubAgentEvent) => {
       this._postToWebview({ type: "subagent_spawned", ...params });
     });
@@ -1104,6 +1134,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "fetch_crons": {
         await this.fetchAndPostCrons();
+        break;
+      }
+
+      case "cron_run_now": {
+        if (this._rpcClient && message.id) {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          vscode.window.showInformationMessage(`Triggering scheduled task "${message.name || message.id}"...`);
+          await this._rpcClient.call("cron.run_now", {
+            id: message.id,
+            project_path: workspaceFolder,
+          }).catch((e: any) => vscode.window.showErrorMessage(`Failed to trigger cron: ${e.message}`));
+          await this.fetchAndPostCrons();
+        }
+        break;
+      }
+
+      case "cron_toggle": {
+        if (this._rpcClient && message.id) {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          await this._rpcClient.call("cron.toggle", {
+            id: message.id,
+            project_path: workspaceFolder,
+          }).catch((e: any) => vscode.window.showErrorMessage(`Failed to toggle cron: ${e.message}`));
+          await this.fetchAndPostCrons();
+        }
+        break;
+      }
+
+      case "open_cron_settings": {
+        vscode.commands.executeCommand("andromity.openSettings", "crons");
         break;
       }
 

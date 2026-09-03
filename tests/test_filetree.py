@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -32,7 +33,8 @@ def test_is_noise_filtering():
 
 def test_is_system_or_root_path():
     # Root drive / system paths
-    assert _is_system_or_root_path(Path("C:/")) is True
+    if os.name == "nt":
+        assert _is_system_or_root_path(Path("C:/")) is True
     assert _is_system_or_root_path(Path("/")) is True
     # Typical project path should NOT be detected as root
     assert _is_system_or_root_path(Path("/home/user/my_project")) is False
