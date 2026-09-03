@@ -1,6 +1,6 @@
 [project]
 name = "andromity"
-version = "0.2.3"
+version = "0.2.5"
 description = "AI coding agent with a beautiful terminal UI. Works with Claude, Gemini, GPT, Ollama and more."
 readme = "README.md"
 requires-python = ">=3.11"

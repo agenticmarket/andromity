@@ -12,10 +12,6 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-# Suppress the Windows ProactorEventLoop "unclosed transport" ResourceWarning.
-# This is a known Python bug on Windows (bpo-43232) where pipe handles raise
-# ValueError("I/O operation on closed pipe") during GC after explicit close.
-# The pipes ARE closed — they just report incorrectly during __del__.
 if sys.platform == "win32":
     warnings.filterwarnings(
         "ignore",
@@ -77,8 +73,8 @@ class MCPStdioSession:
     async def start(self) -> bool:
         """Spawn server process, start JSON-RPC listener, and complete initialize handshake."""
         try:
-            merged_env = dict(os.environ)
-            merged_env.update(self.env)
+            from andromity.core.tools import get_clean_subprocess_env
+            merged_env = get_clean_subprocess_env(self.env)
 
             full_cmd = [self.command] + self.args
             log.info("Starting MCP server '%s': %s", self.name, " ".join(full_cmd))
@@ -206,8 +202,9 @@ class MCPStdioSession:
             return await asyncio.wait_for(future, timeout=timeout)
         except Exception as e:
             log.warning("MCP request %d (%s) failed: %s", req_id, method, e)
-            self._pending_requests.pop(req_id, None)
             return None
+        finally:
+            self._pending_requests.pop(req_id, None)
 
     async def send_notification(self, method: str, params: Dict[str, Any]):
         """Send JSON-RPC notification (no response expected)."""
@@ -477,6 +474,53 @@ class MCPClientManager:
         self.sessions: Dict[str, MCPStdioSession] = {}
         self.server_status: Dict[str, dict] = {}
 
+    def _persist_status(self, name: str, entry: dict) -> None:
+        """Persist one server_status entry to SQLite. Never raises."""
+        try:
+            from andromity.core.db import get_conn, init_schema
+            init_schema()
+            conn = get_conn()
+            conn.execute("""
+                INSERT INTO mcp_server_status(name, project_path, status, tools_count, error, error_detail, updated_at, started_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(name, project_path) DO UPDATE SET
+                    status=excluded.status,
+                    tools_count=excluded.tools_count,
+                    error=excluded.error,
+                    error_detail=excluded.error_detail,
+                    updated_at=excluded.updated_at,
+                    started_at=excluded.started_at
+            """, (
+                name, self.project_path, entry.get("status","unknown"),
+                int(entry.get("tools") or 0),
+                entry.get("error"), entry.get("error_detail"),
+                entry.get("updated_at"), entry.get("started_at"),
+            ))
+        except Exception as e:
+            log.debug("mcp persist failed for %s: %s", name, e)
+
+    def _load_status_from_db(self) -> None:
+        """Hydrate server_status from SQLite for this project_path. Never raises."""
+        try:
+            from andromity.core.db import get_conn, init_schema
+            init_schema()
+            conn = get_conn()
+            rows = conn.execute(
+                "SELECT name, status, tools_count, error, error_detail, updated_at, started_at FROM mcp_server_status WHERE project_path=?",
+                (self.project_path,)
+            ).fetchall()
+            for r in rows:
+                self.server_status[r["name"]] = {
+                    "status": r["status"],
+                    "tools": r["tools_count"],
+                    "error": r["error"],
+                    "error_detail": r["error_detail"],
+                    "updated_at": r["updated_at"],
+                    "started_at": r["started_at"],
+                }
+        except Exception as e:
+            log.debug("mcp load failed: %s", e)
+
     def _set_status(self, name: str, status: str = None, tools: int = None,
                     error: str = None, command: str = None,
                     error_detail: str = None) -> None:
@@ -484,6 +528,7 @@ class MCPClientManager:
 
         Status entries carry: status, tools, error, command, error_detail,
         started_at (ISO), updated_at (ISO).
+        Also persists to SQLite (mcp_server_status table) for restart visibility.
         """
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         entry = dict(self.server_status.get(name, {}))
@@ -493,6 +538,11 @@ class MCPClientManager:
             entry["tools"] = tools
         if error is not None:
             entry["error"] = error
+        elif status is not None:
+            # clear previous error when status changes to non-error
+            if status in ("running","initializing","stopped","disabled"):
+                entry["error"] = None
+                entry["error_detail"] = None
         if command is not None:
             entry["command"] = command
         if error_detail is not None:
@@ -500,9 +550,10 @@ class MCPClientManager:
         entry["updated_at"] = now
         if entry.get("status") == "running" and not entry.get("started_at"):
             entry["started_at"] = now
-        elif entry.get("status") in ("error", "stopped", "disabled", "needs_auth"):
+        elif entry.get("status") in ("error", "stopped", "disabled", "needs_auth", "needs_trust"):
             entry["started_at"] = None
         self.server_status[name] = entry
+        self._persist_status(name, entry)
 
     def load_config(self) -> Dict[str, Any]:
         """Load MCP server definitions from project or global config."""
@@ -532,22 +583,36 @@ class MCPClientManager:
           - If a cached OAuth token exists → convert to mcp-remote with Bearer header
           - Otherwise → mark as needs_auth so the settings UI shows Connect button
         """
-        from andromity.core.oauth import load_token, ensure_fresh_token
-        from andromity.config import config as app_config
+        if not hasattr(self, "_start_lock") or self._start_lock is None:
+            self._start_lock = asyncio.Lock()
+        async with self._start_lock:
+            from andromity.core.oauth import load_token, ensure_fresh_token
+            from andromity.config import config as app_config
 
-        mcp_config = self.load_config()
-        servers    = mcp_config.get("mcpServers", {})
-        self.server_status.clear()
-        for name in servers.keys():
-            self._set_status(name, status="initializing", tools=0, error=None, command="")
+            mcp_config = self.load_config()
+            servers    = mcp_config.get("mcpServers", {})
+            # Hydrate persisted status first, then clear stale entries for removed servers
+            self.server_status.clear()
+            self._load_status_from_db()
+            # Remove persisted entries for servers no longer in config
+            for stale in list(self.server_status.keys()):
+                if stale not in servers:
+                    self.server_status.pop(stale, None)
+                    try:
+                        from andromity.core.db import get_conn, init_schema
+                        init_schema(); get_conn().execute("DELETE FROM mcp_server_status WHERE name=? AND project_path=?", (stale, self.project_path))
+                    except Exception:
+                        pass
+            for name in servers.keys():
+                self._set_status(name, status="initializing", tools=0, error=None, command="")
 
-        # Start all servers concurrently
-        await asyncio.gather(*[
-            self.start_server(name, srv_conf)
-            for name, srv_conf in servers.items()
-        ], return_exceptions=True)
+            # Start all servers concurrently
+            await asyncio.gather(*[
+                self.start_server(name, srv_conf)
+                for name, srv_conf in servers.items()
+            ], return_exceptions=True)
 
-    async def start_server(self, name: str, srv_conf: Optional[dict] = None):
+    async def start_server(self, name: str, srv_conf: Optional[dict] = None, trusted: bool = False):
         """Start a single configured MCP server."""
         from andromity.core.oauth import ensure_fresh_token
 
@@ -626,6 +691,18 @@ class MCPClientManager:
         if not command:
             return
 
+        from andromity.config import config
+        is_user_home = Path(self.project_path).resolve() == Path.home().resolve()
+        if not is_user_home and not trusted and not config.is_trusted(self.project_path) and not srv_conf.get("trusted"):
+            cmd_str = f"{command} {' '.join(str(a) for a in args)}".strip()
+            self._set_status(
+                name, status="needs_trust", tools=0,
+                error="Untrusted folder",
+                command=cmd_str,
+                error_detail=f"MCP stdio server '{name}' was blocked because this project folder is not trusted. Mark as trusted to enable local command execution."
+            )
+            return
+
         session = MCPStdioSession(
             name=name, command=command, args=args,
             env=env, cwd=self.project_path,
@@ -644,11 +721,12 @@ class MCPClientManager:
 
     async def restart(self, name: str) -> bool:
         """Stop (if running) and start a single server. Returns True if running."""
+        srv_conf = self.load_config().get("mcpServers", {}).get(name, {})
         if name in self.sessions:
             await self.sessions[name].stop()
             del self.sessions[name]
         self.server_status.pop(name, None)
-        await self.start_server(name)
+        await self.start_server(name, srv_conf, trusted=True)
         return self.server_status.get(name, {}).get("status") == "running"
 
     def check_liveness(self) -> List[str]:
@@ -748,6 +826,11 @@ class MCPClientManager:
             except Exception as e:
                 log.warning("Error stopping MCP server %s: %s", name, e)
         self.server_status.pop(name, None)
+        try:
+            from andromity.core.db import get_conn, init_schema
+            init_schema(); get_conn().execute("DELETE FROM mcp_server_status WHERE name=? AND project_path=?", (name, self.project_path))
+        except Exception:
+            pass
 
     async def stop_all(self):
         """Stop all running MCP servers concurrently."""
@@ -756,3 +839,8 @@ class MCPClientManager:
         ], return_exceptions=True)
         self.sessions.clear()
         self.server_status.clear()
+        try:
+            from andromity.core.db import get_conn, init_schema
+            init_schema(); get_conn().execute("DELETE FROM mcp_server_status WHERE project_path=?", (self.project_path,))
+        except Exception:
+            pass

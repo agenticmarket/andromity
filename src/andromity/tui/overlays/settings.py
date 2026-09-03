@@ -272,9 +272,10 @@ SettingsScreen {
 
 /* ── Usage Pane ── */
 .usage-controls-row { height: 3; margin-bottom: 1; layout: horizontal; }
+.usage-scope-tabs   { height: 3; layout: horizontal; width: auto; margin-right: 1; }
 .usage-time-tabs    { height: 3; layout: horizontal; width: auto; }
 .usage-metric-tabs  { height: 3; layout: horizontal; width: auto; margin-left: 2; }
-.usage-tab-btn, .usage-metric-btn {
+.usage-tab-btn, .usage-metric-btn, .usage-scope-btn {
     height: 3;
     min-width: 11;
     margin-right: 1;
@@ -283,20 +284,20 @@ SettingsScreen {
     border: tall $surface-lighten-2;
     padding: 0 1;
 }
-.usage-tab-btn:hover, .usage-metric-btn:hover,
-.usage-tab-btn:focus, .usage-metric-btn:focus {
+.usage-tab-btn:hover, .usage-metric-btn:hover, .usage-scope-btn:hover,
+.usage-tab-btn:focus, .usage-metric-btn:focus, .usage-scope-btn:focus {
     background: $surface !important;
     color: $text !important;
     border: tall $panel-lighten-2 !important;
 }
-.usage-tab-btn.active, .usage-metric-btn.active {
+.usage-tab-btn.active, .usage-metric-btn.active, .usage-scope-btn.active {
     background: $accent;
     color: $background;
     text-style: bold;
     border: tall $accent-lighten-1;
 }
-.usage-tab-btn.active:hover, .usage-metric-btn.active:hover,
-.usage-tab-btn.active:focus, .usage-metric-btn.active:focus {
+.usage-tab-btn.active:hover, .usage-metric-btn.active:hover, .usage-scope-btn.active:hover,
+.usage-tab-btn.active:focus, .usage-metric-btn.active:focus, .usage-scope-btn.active:focus {
     background: $accent-lighten-1 !important;
     color: $background !important;
     border: tall $accent-lighten-2 !important;
@@ -380,10 +381,12 @@ SettingsScreen {
                     yield ListItem(Label(mcp_label),         id="nav-mcp")
                     yield ListItem(Label("Skills"),          id="nav-skills")
                     yield ListItem(Label("Profiles"),        id="nav-profiles")
+                    yield ListItem(Label("Subagents"),       id="nav-subagents")
                     yield ListItem(Label("Trust & Security"),id="nav-trust")
                     yield ListItem(Label("Usage"),           id="nav-usage")
                     yield ListItem(Label("Advanced"),        id="nav-advanced")
                     yield ListItem(Label("About"),           id="nav-about")
+
 
                 with ContentSwitcher(initial="pane-general", id="settings-content"):
 
@@ -503,11 +506,42 @@ SettingsScreen {
                             "commands to manage trust from chat.[/]",
                             classes="section-hint")
 
+                    # ── 6.4 Subagents ─────────────────────────────────────────
+                    with VerticalScroll(id="pane-subagents", classes="settings-pane"):
+                        yield Label("Subagent Configuration", classes="settings-label")
+                        yield Label("Configure AI models, providers, and concurrency limits per subagent role.", classes="section-hint")
+
+                        from andromity.core.subagent_config import DEFAULT_SUBAGENT_ROLES, SubAgentConfigManager
+                        for rname, rcfg in DEFAULT_SUBAGENT_ROLES.items():
+                            cur_cfg = SubAgentConfigManager.get_role_config(rname)
+                            yield Label(f"[bold cyan]{rname.upper()}[/] — [dim]{rcfg.description}[/]", classes="field-label")
+                            with Horizontal(classes="adv-row"):
+                                yield Label("Model:", classes="adv-label")
+                                yield Input(value=cur_cfg.model or "", placeholder="e.g. gemini-2.5-flash", id=f"setting-subagent-model-{rname}", classes="settings-input")
+                            with Horizontal(classes="adv-row"):
+                                yield Label("Provider:", classes="adv-label")
+                                yield Input(value=cur_cfg.provider or "", placeholder="e.g. google", id=f"setting-subagent-provider-{rname}", classes="settings-input")
+
+                        yield Label("\n[bold]Global Subagent Settings[/]", classes="field-label")
+                        with Horizontal(classes="adv-row"):
+                            yield Label("Max Concurrent Subagents:", classes="adv-label")
+                            yield Input(value=str(SubAgentConfigManager.get_max_concurrent()), placeholder="5", id="setting-subagent-max-concurrent", classes="settings-input")
+                        with Horizontal(classes="adv-row"):
+                            yield Label("Execution Timeout (seconds):", classes="adv-label")
+                            yield Input(value=str(int(SubAgentConfigManager.get_default_timeout())), placeholder="180", id="setting-subagent-timeout", classes="settings-input")
+                        with Horizontal(classes="adv-row"):
+                            yield Label("Result Max Tokens (budget):", classes="adv-label")
+                            yield Input(value=str(SubAgentConfigManager.get_result_max_tokens()), placeholder="750", id="setting-subagent-max-tokens", classes="settings-input")
+
                     # ── 6.5 Usage ─────────────────────────────────────────────
                     with VerticalScroll(id="pane-usage", classes="settings-pane"):
+
                         yield Label("Usage Analytics", classes="settings-label")
                         yield Label("Track tokens, costs, and model usage across sessions.", classes="section-hint")
                         with Horizontal(classes="usage-controls-row"):
+                            with Horizontal(id="usage-scope-tabs", classes="usage-scope-tabs"):
+                                yield Button("Global (All)", id="usage-scope-global", classes="usage-scope-btn active")
+                                yield Button("This Project", id="usage-scope-project", classes="usage-scope-btn")
                             with Horizontal(id="usage-time-tabs", classes="usage-time-tabs"):
                                 yield Button("Today", id="usage-tab-today", classes="usage-tab-btn")
                                 yield Button("7 Days", id="usage-tab-week", classes="usage-tab-btn")
@@ -703,6 +737,7 @@ SettingsScreen {
         status change (removing widgets mid-click crashed Textual's mouse
         handling with `'NoneType' object has no attribute 'region'`).
         """
+        from rich.markup import escape
         disabled    = s_conf.get("disabled", False)
         transport   = _mcp_transport(s_conf)
         status_info = (self.mcp_manager.server_status.get(s_name, {}) if self.mcp_manager else {})
@@ -725,7 +760,7 @@ SettingsScreen {
         with Vertical(classes="mcp-card", id=f"card-{s_name}"):
             # ── Header ───────────────────────────────────────────────────
             with Horizontal(classes="mcp-card-header"):
-                yield Label(f" {s_name}", classes="mcp-name")
+                yield Label(f" {escape(s_name)}", classes="mcp-name")
                 yield Label(badge_txt, classes=f"mcp-badge {badge_cls}",
                             id=f"mcp-badge-{s_name}")
                 yield Label(
@@ -757,13 +792,13 @@ SettingsScreen {
                 cmd_str = (f"{s_conf['command']} "
                            f"{' '.join(str(a) for a in s_conf.get('args', []))}").strip()
                 cmd_str = cmd_str[:80] + "…" if len(cmd_str) > 80 else cmd_str
-                yield Label(f"[dim]Command:[/] {cmd_str}", classes="mcp-cmd-line")
+                yield Label(f"[dim]Command:[/] {escape(cmd_str)}", classes="mcp-cmd-line")
 
             # URL display — as clickable button + truncated label
             if server_url and not already_converted:
                 short = server_url[:60] + "…" if len(server_url) > 60 else server_url
                 with Horizontal(classes="mcp-transport"):
-                    yield Label(f"[dim]URL:[/] {short}", classes="mcp-cmd-line")
+                    yield Label(f"[dim]URL:[/] {escape(short)}", classes="mcp-cmd-line")
                     yield Button("🔗 Open",
                                  id=f"mcp-openurl-{s_name}",
                                  classes="mcp-url-btn",
@@ -772,7 +807,7 @@ SettingsScreen {
             # Description (1 line max)
             desc = s_conf.get("description", "").strip()
             if desc:
-                yield Label(f"[dim]{desc[:90].replace(chr(10), ' ')}[/]",
+                yield Label(f"[dim]{escape(desc[:90].replace(chr(10), ' '))}[/]",
                             classes="mcp-cmd-line")
             # Tools Collapsible — always composed, hidden until the server
             # exposes tools (status changes only toggle display in place).
@@ -832,7 +867,7 @@ SettingsScreen {
                                     classes="mcp-auth-label")
                         for env_key in missing:
                             with Horizontal(classes="mcp-token-row"):
-                                yield Label(f"[dim]{env_key}[/]",
+                                yield Label(f"[dim]{escape(env_key)}[/]",
                                             classes="mcp-cmd-line")
                                 yield Input(
                                     placeholder=f"Value…",
@@ -842,7 +877,7 @@ SettingsScreen {
                                              id=f"mcp-saveenv-{s_name}--{env_key}")
                 else:
                     yield Label(
-                        f"[green]✓[/] Credentials set: {', '.join(auth_keys)}",
+                        f"[green]✓[/] Credentials set: {escape(', '.join(auth_keys))}",
                         classes="mcp-transport")
 
             # ── Error (full detail behind a collapsible) — always composed,
@@ -861,7 +896,7 @@ SettingsScreen {
             with Horizontal(classes="mcp-card-footer"):
                 installed = s_conf.get("installedAt", "")
                 yield Label(
-                    f"[dim]{installed}[/]" if installed else "",
+                    f"[dim]{escape(installed)}[/]" if installed else "",
                     classes="mcp-install-date")
                 yield Button("[u]Uninstall[/u]",
                              id=f"mcp-remove-{s_name}",
@@ -1725,11 +1760,47 @@ SettingsScreen {
         except Exception:
             pass
 
+        # 7. Subagents
+        try:
+            from andromity.core.subagent_config import DEFAULT_SUBAGENT_ROLES
+            for rname in DEFAULT_SUBAGENT_ROLES.keys():
+                try:
+                    m_val = self.query_one(f"#setting-subagent-model-{rname}", Input).value.strip() or None
+                    p_val = self.query_one(f"#setting-subagent-provider-{rname}", Input).value.strip() or None
+                    config.set_subagent_role(rname, model=m_val, provider=p_val)
+                except Exception:
+                    pass
+
+            try:
+                max_c = self.query_one("#setting-subagent-max-concurrent", Input).value.strip()
+                if max_c:
+                    config.set("subagents", "max_concurrent", int(max_c))
+                timeout_val = self.query_one("#setting-subagent-timeout", Input).value.strip()
+                if timeout_val:
+                    config.set("subagents", "timeout_seconds", float(timeout_val))
+                tok_val = self.query_one("#setting-subagent-max-tokens", Input).value.strip()
+                if tok_val:
+                    config.set("subagents", "result_max_tokens", int(tok_val))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+
     def on_key(self, event):
         if event.key == "escape":
             # Never let a modal's Esc bubble to the app (it cancels streaming).
             event.stop()
             self.dismiss(False)
+
+    @on(Button.Pressed, ".usage-scope-btn")
+    def on_usage_scope_pressed(self, event: Button.Pressed):
+        btn_id = event.button.id
+        for b in self.query(".usage-scope-btn"):
+            b.remove_class("active")
+        event.button.add_class("active")
+        self._usage_scope = "global" if btn_id == "usage-scope-global" else "project"
+        self.run_worker(self._refresh_usage(), group="settings")
 
     @on(Button.Pressed, ".usage-tab-btn")
     def on_usage_tab_pressed(self, event: Button.Pressed):
@@ -1753,14 +1824,18 @@ SettingsScreen {
         self._usage_metric = "tokens" if btn_id == "usage-metric-tokens" else "cost"
         self.run_worker(self._refresh_usage(), group="settings")
 
-    async def _refresh_usage(self, time_range: str = None, metric: str = None):
+    async def _refresh_usage(self, time_range: str = None, metric: str = None, scope: str = None):
         if time_range:
             self._usage_time_range = time_range
         if metric:
             self._usage_metric = metric
+        if scope:
+            self._usage_scope = scope
         from andromity.core.usage_tracker import UsageTracker
         tracker = UsageTracker()
-        summary = tracker.get_summary(self._usage_time_range, self.project_path)
+        active_scope = getattr(self, "_usage_scope", "global")
+        project_path = None if active_scope == "global" else self.project_path
+        summary = tracker.get_summary(self._usage_time_range, project_path)
         if not self.is_attached:
             return  # screen dismissed while loading usage
         try:

@@ -1,4 +1,5 @@
 import json
+import sys
 from typing import AsyncGenerator, Dict, Any, Optional, Callable
 
 from andromity.core.provider import stream_completion
@@ -6,9 +7,57 @@ from andromity.core.session import Session
 from andromity.core.profiles import get_system_prompt, filter_tools_for_profile
 from andromity.core.tools import CORE_TOOLS, ToolRegistry, execute_tool, register_session
 from andromity.core.events import (
-    StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired
+    StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired, PlanUpdated
 )
+from andromity.core.debug_log import get_logger
 from andromity.config import config
+
+log = get_logger("agent")
+
+
+def _estimate_tokens(messages: list) -> int:
+    """Estimate token count for messages including thinking and tool calls.
+
+    Old code only counted ``content`` → severely undercounts when
+    reasoning_effort=high/xhigh/max stores huge ``thinking`` blocks
+    or when many tool calls are in history (tool args bloat).
+    We count content + thinking + tool_calls args + tool result content.
+    Uses len//4 heuristic (same as elsewhere) but covers all fields.
+    """
+    total = 0
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        # content: str or list[content_parts] (vision)
+        c = m.get("content")
+        if isinstance(c, str):
+            total += len(c) // 4
+        elif isinstance(c, list):
+            for part in c:
+                if isinstance(part, dict):
+                    total += len(str(part.get("text", ""))) // 4
+                    # image_url parts are not text → ignore token-wise
+                else:
+                    total += len(str(part)) // 4
+        elif c is not None:
+            total += len(str(c)) // 4
+        # thinking / reasoning stored separately by agent.run
+        for key in ("thinking", "reasoning", "reasoning_content"):
+            v = m.get(key)
+            if isinstance(v, str) and v:
+                total += len(v) // 4
+        # tool_calls (assistant side)
+        for tc in (m.get("tool_calls") or []):
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") or {}
+            if isinstance(fn, dict):
+                total += len(str(fn.get("name", ""))) // 4
+                total += len(str(fn.get("arguments", ""))) // 4
+        # tool result name + tool_call_id are tiny, counted for completeness
+        if m.get("tool_call_id"):
+            total += 2  # rough
+    return total
 
 
 class Agent:
@@ -33,11 +82,34 @@ class Agent:
         self._turn_image_parts = None
         # Register session so plan tools can store plan in it
         register_session(session)
+        
+        # Initialize SubAgent orchestrator and SessionBus registration
+        from andromity.core.subagent_orchestrator import SubAgentOrchestrator
+        from andromity.core.session_bus import SessionBus
+
+        self.orchestrator = SubAgentOrchestrator(
+            parent_session_id=self.session.id,
+            project_path=self.session.project_path,
+            permission_mode=getattr(self.session, "permission_mode", None) or config.get("default", "permission_mode", "safe"),
+        )
+        self.session._orchestrator = self.orchestrator
+
+        try:
+            SessionBus.get_instance().register(
+                session_id=self.session.id,
+                name=self.session.name,
+                project_path=self.session.project_path,
+                capabilities=[self.profile],
+            )
+        except Exception:
+            pass
+
         sys_prompt = get_system_prompt(self.profile)
+
         deferred_catalog = ToolRegistry.get_instance().get_deferred_prompt_catalog()
         if deferred_catalog:
             sys_prompt += "\n\n" + deferred_catalog
-        # Let the agent know which skills are installed and available on request.
+
         try:
             from andromity.core.skills import SkillsManager
             skills_block = SkillsManager(self.session.project_path).prompt_block()
@@ -100,23 +172,19 @@ class Agent:
         except Exception:
             return True
 
-    async def _compact_context(self) -> AsyncGenerator[StreamEvent, None]:
+    async def _compact_context(self, force: bool = False) -> AsyncGenerator[StreamEvent, None]:
         limit = self.ctx_limit
         msg_count = len(self.session.messages)
 
         # ── Decide whether compaction is needed ──────────────────────────
-        # Two independent triggers:
-        #   1. Token-based (primary): context_tokens > 80% of model's
-        #      context window — scales naturally with model capability.
-        #   2. Message-count safety ceiling: > 1000 messages — prevents
-        #      multi-MB JSON session files from freezing the UI, even when
-        #      token estimates are unavailable or inaccurate.
         compact_reason = ""
 
-        if limit > 0:
+        if force:
+            compact_reason = "manual compaction requested"
+        elif limit > 0:
             current_tokens = getattr(self.session, "context_tokens", 0)
             if current_tokens <= 0:
-                current_tokens = sum(len(str(m.get("content", ""))) // 4 for m in self.session.messages)
+                current_tokens = _estimate_tokens(self.session.messages)
             if current_tokens > limit * 0.80:
                 limit_k = f"{limit / 1000:.0f}K" if limit < 1_000_000 else f"{limit / 1_000_000:.1f}M"
                 pct = min(current_tokens / limit * 100, 100.0)
@@ -130,26 +198,38 @@ class Agent:
 
         old_count = len(self.session.messages)
         non_system = [m for m in self.session.messages if m.get("role") != "system"]
-        keep_turns = non_system[-6:] if len(non_system) > 6 else []
-        to_compact = non_system[:-6] if len(non_system) > 6 else non_system
+        if force and len(non_system) > 2 and len(non_system) <= 6:
+            keep_turns = non_system[-2:]
+            to_compact = non_system[:-2]
+        else:
+            keep_turns = non_system[-6:] if len(non_system) > 6 else []
+            to_compact = non_system[:-6] if len(non_system) > 6 else non_system
 
         if not to_compact:
+            yield TextDelta(text="*[Context compaction skipped — not enough history to compact]*\n\n")
             return
 
         yield TextDelta(text=f"\n*[Context compacting — {compact_reason}]*\n\n")
 
         lines = []
         for m in to_compact:
-            role = m.get("role", "unknown")
-            content = m.get("content", "")
+            if not m or not isinstance(m, dict):
+                continue
+            role = m.get("role", "unknown") or "unknown"
+            content = m.get("content", "") or ""
             if content:
-                lines.append(f"{role.upper()}: {content[:300]}")
-            for tc in m.get("tool_calls", []):
-                fn = tc.get("function", {})
-                lines.append(f"TOOL CALL: {fn.get('name')}({fn.get('arguments', '')[:100]})")
-        transcript_snippet = "\n".join(lines)
+                lines.append(f"{role.upper()}: {str(content)[:300]}")
+            for tc in (m.get("tool_calls") or []):
+                if not tc or not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function") or {}
+                if isinstance(fn, dict):
+                    fn_name = fn.get("name") or "unknown"
+                    fn_args = str(fn.get("arguments") or "")[:100]
+                    lines.append(f"TOOL CALL: {fn_name}({fn_args})")
+        transcript_snippet = "\n".join(lines)[:20000]
 
-        system_msg = self.session.messages[0] if (self.session.messages and self.session.messages[0].get("role") == "system") else None
+        system_msg = self.session.messages[0] if (self.session.messages and isinstance(self.session.messages[0], dict) and self.session.messages[0].get("role") == "system") else None
         summary_prompt = [
             {"role": "system", "content": "You are a concise summarizer. Produce a dense summary of the conversation so far, preserving key facts, user goals, and current progress."},
             {"role": "user", "content": f"Summarize this conversation snippet concisely for context preservation:\n\n{transcript_snippet}"}
@@ -162,12 +242,17 @@ class Agent:
         if self.model:
             compaction_kwargs["model"] = self.model
 
-        async for event in stream_completion(summary_prompt, **compaction_kwargs):
-            if isinstance(event, TextDelta):
-                summary_text += event.text
+        try:
+            async for event in stream_completion(summary_prompt, **compaction_kwargs):
+                if isinstance(event, TextDelta):
+                    summary_text += event.text
+        except Exception as e:
+            log.warning("Compaction summary stream failed: %s", e)
+            yield TextDelta(text=f"*[Context compaction failed: {e}]*\n\n")
+            return
 
         if not summary_text.strip():
-            yield TextDelta(text="*[Context compaction skipped — summary generation failed]*\n\n")
+            yield TextDelta(text="*[Context compaction skipped — summary generation returned empty]*\n\n")
             return
 
         preserved_history = [m for m in self.session.messages if m.get("role") != "system"]
@@ -192,7 +277,6 @@ class Agent:
         self.session.context_tokens = 0
         self.session.save()
         yield TextDelta(text=f"*Context compacted successfully ({old_count} → {len(new_messages)} messages).*\n\n")
-        yield Done()
 
     async def run(self, user_input: str, images: list = None, image_uris: list = None) -> AsyncGenerator[StreamEvent, None]:
         """Run one user turn.
@@ -220,14 +304,20 @@ class Agent:
             ]
 
         self.session.add_message("user", content=user_input)
+
+        if not getattr(self.session, "_telemetry_sent", False):
+            self.session._telemetry_sent = True
+            try:
+                from andromity.telemetry import send_session_start
+                send_session_start(self.session.id)
+            except Exception:
+                pass
         
         async for event in self._compact_context():
             yield event
 
         while True:
-            current_tool_id = None
-            current_tool_name = None
-            current_tool_args_str = ""
+            pending_tool_calls: Dict[str, Dict[str, str]] = {}
             tool_calls_to_execute = []
             assistant_content = ""
             assistant_thinking = ""
@@ -245,27 +335,59 @@ class Agent:
                 self._messages_for_api(),
                 **stream_kwargs,
             ):
-                yield event
+                if isinstance(event, Done):
+                    last_usage = event.usage
+                else:
+                    yield event
                 if isinstance(event, TextDelta):
                     assistant_content += event.text
                 elif isinstance(event, ThinkingDelta):
                     assistant_thinking += event.text
                 elif isinstance(event, ToolCallStart):
-                    current_tool_id = event.tool_id
-                    current_tool_name = event.tool_name
-                    current_tool_args_str = ""
+                    pending_tool_calls[event.tool_id] = {
+                        "name": event.tool_name,
+                        "args": "",
+                    }
                 elif isinstance(event, ToolCallDelta):
-                    if event.tool_id == current_tool_id:
-                        current_tool_args_str += event.args_json_chunk
+                    if event.tool_id in pending_tool_calls:
+                        pending_tool_calls[event.tool_id]["args"] += event.args_json_chunk
                 elif isinstance(event, ToolCallEnd):
-                    if current_tool_id == event.tool_id:
+                    if event.tool_id in pending_tool_calls:
+                        call_info = pending_tool_calls.pop(event.tool_id)
                         tool_calls_to_execute.append({
-                            "id": current_tool_id, "type": "function",
-                            "function": {"name": current_tool_name, "arguments": current_tool_args_str},
+                            "id": event.tool_id, "type": "function",
+                            "function": {"name": call_info["name"], "arguments": call_info["args"]},
                         })
-                        current_tool_id = None
-                elif isinstance(event, Done):
-                    last_usage = event.usage
+
+            # Flush any unclosed tool calls in case provider ended stream before ToolCallEnd
+            for tid, call_info in list(pending_tool_calls.items()):
+                tool_calls_to_execute.append({
+                    "id": tid, "type": "function",
+                    "function": {"name": call_info["name"], "arguments": call_info["args"]},
+                })
+            pending_tool_calls.clear()
+
+            if not tool_calls_to_execute and ("<atem:invoke" in assistant_content or "<atem:function_calls>" in assistant_content):
+                import re, uuid
+                matches = re.finditer(r'<atem:invoke\s+name="([^"]+)">([\s\S]*?)</atem:invoke>', assistant_content)
+                for m in matches:
+                    fn_name = m.group(1)
+                    body = m.group(2)
+                    args = {}
+                    for param_match in re.finditer(r'<atem:parameter\s+name="([^"]+)">([\s\S]*?)</atem:parameter>', body):
+                        p_name = param_match.group(1)
+                        p_val = param_match.group(2).strip()
+                        args[p_name] = p_val
+                    call_id = f"call_{uuid.uuid4().hex[:8]}"
+                    tool_calls_to_execute.append({
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": fn_name, "arguments": json.dumps(args)},
+                    })
+                # Strip out the atem XML tags so raw XML does not leak into the chat
+                assistant_content = re.sub(r'<atem:function_calls>[\s\S]*?</atem:function_calls>', '', assistant_content).strip()
+                assistant_content = re.sub(r'<atem:invoke[\s\S]*?</atem:invoke>', '', assistant_content).strip()
+                assistant_content = re.sub(r'</?atem:[^>]+>', '', assistant_content).strip()
 
             current_p = self.provider or config.get('default', 'provider', 'ollama')
             current_m = self.model or config.get('default', 'model', '')
@@ -273,8 +395,8 @@ class Agent:
             if last_usage:
                 self.session.update_usage(last_usage, model=model_id)
             else:
-                prompt_tokens = sum(len(str(msg.get("content", ""))) // 4 for msg in self.session.messages)
-                completion_tokens = len(assistant_content) // 4
+                prompt_tokens = _estimate_tokens(self.session.messages)
+                completion_tokens = len(assistant_content) // 4 + len(assistant_thinking) // 4
                 self.session.update_usage({
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
@@ -300,7 +422,7 @@ class Agent:
                 provider = config.get("default", "provider", "")
                 model = config.get("default", "model", "")
                 limit = self.ctx_limit or get_context_limit_for_model(provider, model)
-                current_tokens = sum(len(str(m.get("content", ""))) // 4 for m in self.session.messages)
+                current_tokens = _estimate_tokens(self.session.messages)
                 if limit > 0 and current_tokens > limit * 0.9:
                     warning = (
                         f"\n**[No response from model]** Context full ({current_tokens:,}/{limit:,} tokens). "
@@ -312,24 +434,27 @@ class Agent:
                         "Try rephrasing your message or switch model with **Ctrl+L**.\n"
                     )
                 yield TextDelta(text=warning)
+                yield Done(usage=last_usage)
                 break
 
             self._empty_retried = False
 
             if not tool_calls_to_execute:
+                yield Done(usage=last_usage)
                 break
 
             # ── ask_questions: user answers in an inline panel; the answers become the
             # tool result. Pauses the loop exactly like plan review, but via an
             # async callback so no future juggling is needed downstream.
             ask_calls = [tc for tc in tool_calls_to_execute
-                         if tc.get("function", {}).get("name") in ("ask_questions", "ask_question")]
+                         if isinstance(tc, dict) and ((tc.get("function") or {}).get("name") in ("ask_questions", "ask_question"))]
             other_calls = [tc for tc in tool_calls_to_execute if tc not in ask_calls]
 
             for tc in ask_calls:
-                tool_name = tc.get("function", {}).get("name", "ask_questions")
+                fn_dict = tc.get("function") or {} if isinstance(tc, dict) else {}
+                tool_name = fn_dict.get("name", "ask_questions")
                 try:
-                    qargs = json.loads(tc["function"].get("arguments") or "{}")
+                    qargs = json.loads(fn_dict.get("arguments") or "{}")
                 except json.JSONDecodeError:
                     qargs = {}
                 questions = qargs.get("questions") or qargs.get("question") or qargs or []
@@ -372,8 +497,8 @@ class Agent:
                     args = {}
 
                 if not self.auto_approve and self.on_tool_approval:
-                    import asyncio
-                    is_approved = await self.on_tool_approval(tool_name, args) if asyncio.iscoroutinefunction(self.on_tool_approval) else self.on_tool_approval(tool_name, args)
+                    import inspect
+                    is_approved = await self.on_tool_approval(tool_name, args) if inspect.iscoroutinefunction(self.on_tool_approval) else self.on_tool_approval(tool_name, args)
                     if not is_approved:
                         rejection = (
                             f"TOOL REJECTED BY USER: '{tool_name}' was explicitly declined.\n"
@@ -387,12 +512,11 @@ class Agent:
 
             # ── Phase 2: run all accepted calls CONCURRENTLY. Results are
             # yielded as each call finishes so the UI can mark that tool's
-            # indicator done immediately; the model-facing context records them
-            # in the original tool-call order below.
-            # (Only non-question calls reach this point — ask_questions was
-            # answered inline above.)
+            # indicator done immediately; subagent progress events are also
+            # yielded live to the UI as they occur.
             if prepared:
                 import asyncio
+                from andromity.core.tools import register_subagent_progress_callback, unregister_subagent_progress_callback
 
                 async def _execute(prep: tuple[dict, str, dict]) -> tuple[str, str]:
                     tool_call, tool_name, args = prep
@@ -400,16 +524,53 @@ class Agent:
                         return tool_call["id"], f"[DRY RUN] Would execute {tool_name}({json.dumps(args, indent=2)})"
                     try:
                         from andromity.core.tools import execute_tool_async
-                        result = await execute_tool_async(tool_name, args)
+                        result = await execute_tool_async(tool_name, args, tool_id=tool_call.get("id"))
                     except Exception as e:
                         result = f"Error executing {tool_name}: {e}"
                     return tool_call["id"], str(result)
 
+
+                progress_queue: asyncio.Queue = asyncio.Queue()
+
+                def _on_subagent_prog(evt):
+                    progress_queue.put_nowait(evt)
+
+                register_subagent_progress_callback(_on_subagent_prog)
                 tasks = [asyncio.create_task(_execute(prep)) for prep in prepared]
-                for task in asyncio.as_completed(tasks):
-                    call_id, result = await task
-                    final_results[call_id] = result
-                    yield ToolResult(tool_id=call_id, result=result)
+                pending_tasks = set(tasks)
+
+                try:
+                    while pending_tasks:
+                        queue_task = asyncio.create_task(progress_queue.get())
+                        done, _ = await asyncio.wait(
+                            pending_tasks | {queue_task},
+                            return_when=asyncio.FIRST_COMPLETED
+                        )
+                        if queue_task in done:
+                            prog_evt = queue_task.result()
+                            yield prog_evt
+                        else:
+                            queue_task.cancel()
+
+                        for t in done:
+                            if t in pending_tasks:
+                                pending_tasks.remove(t)
+                                call_id, result = t.result()
+                                final_results[call_id] = result
+                                yield ToolResult(tool_id=call_id, result=result)
+
+                        # Flush any backlog in progress queue
+                        while not progress_queue.empty():
+                            yield progress_queue.get_nowait()
+                except asyncio.CancelledError:
+                    self.kill_subagents("turn_cancelled")
+                    for t in pending_tasks:
+                        if not t.done():
+                            t.cancel()
+                    raise
+                finally:
+                    unregister_subagent_progress_callback(_on_subagent_prog)
+
 
             # ── Phase 3: record tool messages into session context in the
             # original tool-call order (models expect results in call order).
@@ -422,9 +583,47 @@ class Agent:
                         tool_call_id=tool_call["id"],
                     )
 
-            # ── Phase 4: plan approvals (pauses the agent loop until answered)
+            # ── Phase 4: plan updates and approvals
             for tool_call, tool_name, args in prepared:
-                if tool_name == "write_plan":
+                if tool_name in ("write_plan", "update_plan_step"):
                     plan = self.session.load_plan_obj()
-                    if plan and plan.status == "pending":
-                        yield PlanApprovalRequired(plan=plan)
+                    if not plan and getattr(self.session, "project_path", None):
+                        from andromity.core.planner import Plan
+                        plan = Plan.load(self.session.project_path)
+                    if plan:
+                        yield PlanUpdated(plan=plan)
+                        if tool_name == "write_plan" and plan.status == "pending":
+                            yield PlanApprovalRequired(plan=plan)
+
+    async def spawn_subagent(
+        self,
+        role: str,
+        task: str,
+        model_override: Optional[str] = None,
+        provider_override: Optional[str] = None,
+        tools_override: Optional[list] = None,
+        timeout: Optional[float] = None,
+        wait: bool = True,
+    ):
+        """Spawn a subagent managed by this agent's orchestrator."""
+        return await self.orchestrator.spawn(
+            role=role,
+            task=task,
+            model_override=model_override,
+            provider_override=provider_override,
+            tools_override=tools_override,
+            timeout=timeout,
+            wait=wait,
+        )
+
+    def kill_subagents(self, reason: str = "agent_cancelled"):
+        """Terminate all active subagents spawned by this agent."""
+        if hasattr(self, "orchestrator") and self.orchestrator:
+            self.orchestrator.kill_all(reason=reason)
+
+    async def await_subagents(self):
+        """Wait for all active subagents to finish and return their results."""
+        if hasattr(self, "orchestrator") and self.orchestrator:
+            return await self.orchestrator.await_all()
+        return []
+

@@ -14,11 +14,15 @@ def _get_git_branch() -> str:
     if _git_branch_cache is not None:
         return _git_branch_cache
     try:
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         result = subprocess.run(
-            ["git", "branch", "--show-current"],
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True,
             text=True,
             timeout=1,
+            stdin=subprocess.DEVNULL,
+            creationflags=flags,
+            close_fds=True,  # frozen-build safety: see core/tools.py shell_exec
         )
         if result.returncode == 0 and result.stdout.strip():
             _git_branch_cache = result.stdout.strip()
@@ -29,11 +33,43 @@ def _get_git_branch() -> str:
     return _git_branch_cache
 
 PROFILES = {
-    "builder": {"tools": ["read_file", "grep_search", "find_files", "write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_read", "shell_kill", "shell_list", "list_dir", "write_plan", "update_plan_step", "ask_questions", "list_tools", "create_todo", "update_todo", "list_todos", "web_search", "fetch_url"]},
-    "coder":   {"tools": ["read_file", "grep_search", "find_files", "write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_read", "shell_kill", "shell_list", "list_dir", "list_tools", "create_todo", "update_todo", "list_todos", "web_search", "fetch_url"]},
-    "reviewer":{"tools": ["read_file", "grep_search", "find_files", "list_dir", "list_tools", "web_search", "fetch_url"]},
-    "planner": {"tools": ["read_file", "grep_search", "find_files", "list_dir", "write_plan", "update_plan_step", "ask_questions", "list_tools", "create_todo", "update_todo", "list_todos"]},
+    "builder": {
+        "tools": [
+            "read_file", "grep_search", "find_files", "write_file", "edit_file", "edit_file_multi",
+            "shell_exec", "shell_bg", "shell_read", "shell_kill", "shell_list", "list_dir",
+            "write_plan", "update_plan_step", "ask_questions", "list_tools", "create_todo",
+            "update_todo", "list_todos", "web_search", "fetch_url",
+            "spawn_subagent", "session_send_message", "session_ask_question", "session_broadcast",
+            "session_list", "shared_state_set", "shared_state_get", "write_handoff", "read_handoff"
+        ]
+    },
+    "coder": {
+        "tools": [
+            "read_file", "grep_search", "find_files", "write_file", "edit_file", "edit_file_multi",
+            "shell_exec", "shell_bg", "shell_read", "shell_kill", "shell_list", "list_dir",
+            "list_tools", "create_todo", "update_todo", "list_todos", "web_search", "fetch_url",
+            "session_send_message", "session_ask_question", "session_list", "shared_state_set",
+            "shared_state_get", "write_handoff", "read_handoff"
+        ]
+    },
+    "reviewer": {
+        "tools": [
+            "read_file", "grep_search", "find_files", "list_dir", "list_tools",
+            "web_search", "fetch_url", "session_send_message", "session_list",
+            "shared_state_get", "read_handoff"
+        ]
+    },
+    "planner": {
+        "tools": [
+            "read_file", "grep_search", "find_files", "list_dir", "write_plan",
+            "update_plan_step", "ask_questions", "list_tools", "create_todo",
+            "update_todo", "list_todos", "spawn_subagent", "session_send_message",
+            "session_ask_question", "session_broadcast", "session_list",
+            "shared_state_set", "shared_state_get", "write_handoff", "read_handoff"
+        ]
+    },
 }
+
 
 
 def get_system_prompt(profile: str) -> str:
@@ -76,16 +112,34 @@ def get_system_prompt(profile: str) -> str:
 - If a tool fails with an error, diagnose and explain it clearly; do not silently loop or retry failed actions repeatedly.
 
 # Code Quality & Conventions
-- **Analyze Before Editing**: Always call `read_file` to inspect exact current content and nearby conventions (imports, typing, patterns, style) before writing code.
-- **Dependency Awareness**: Never assume a library is installed. Check `package.json`, `pyproject.toml`, `Cargo.toml`, or imports first.
-- **Clean Implementation**: Avoid dead code, unnecessary dependencies, and code comments unless explicitly requested.
-- **Verification**: Run existing tests and lint/typecheck commands (e.g. `npm test`, `pytest`, `ruff`, `tsc`) if available to verify your changes.
+- Analyze user request carefully to understand the intent and scope of the task.
+- Analyze Before Editing: Always call `read_file` to inspect exact current content and nearby conventions (imports, typing, patterns, style) before writing code.
+- Dependency Awareness: Never assume a library is installed. Check `package.json`, `pyproject.toml`, `Cargo.toml`, or imports first.
+- Clean Implementation: Avoid dead code, unnecessary dependencies, and code comments unless explicitly requested.
+- Verification: Run existing tests and lint/typecheck commands (e.g. `npm test`, `pytest`, `ruff`, `tsc`) if available to verify your changes.
 
 # Tool Usage Policy
 - Batch independent tool calls in parallel within a single turn whenever possible.
 - Use `list_tools(include_description=True)` to inspect available tool schemas; never invent tool parameters.
+- Use .andromity/DECISION.md for keep report of important desicion and architecture decisions. Read it when needed.Keep updated if confuse ask user about it.
 - [IMPORTANT] For complex tasks (>2 files or architectural changes), create a structured plan using `write_plan` and keep steps updated via `update_plan_step` after everythings implemention check steps status carefully.
 - Tag reminders (<system-reminder>) provide environment hints; do not echo them to the user.
+- Use `spawn_subagent` for tasks that are independent, bounded, and can run in parallel or in isolation:
+  - Parallel work: research, search, file scanning, or analysis that doesn't block the main task
+  - Isolated execution: tasks that need their own tool context (e.g. a `reviewer` that only reads, a `search` that only fetches)
+  - Large scoped subtasks: implementing a single module, writing tests for a specific file, or auditing a subsystem — anything self-contained with a clear deliverable
+  - Context protection: offload token-heavy tasks (log parsing, large file scanning) to keep the main context lean
+- Do NOT spawn a subagent when:
+  - The task is a single tool call or trivially fast (< 5s)
+  - The subtask requires back-and-forth with the user (subagents are fire-and-forget)
+  - Shared mutable state is needed mid-execution (use `shared_state` tools for coordination instead)
+  - The result is needed inline immediately and spawning adds latency with no parallelism benefit
+- Role selection guide:
+  - `search` → web fetch, docs lookup, API exploration
+  - `coder` → write/modify files, implement features
+  - `reviewer` → audit, read-only analysis, security review
+  - `analyst` → summarize, compare, plan, reason over data
+  - `general` → anything that doesn't fit a specific role
 """
     if profile == "reviewer":
         extra = """

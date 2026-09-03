@@ -4,6 +4,30 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 
 ---
 
+## [0.2.5] — 2026-09-03
+
+### Sessions & Subagents
+- **Minimalist Running Arc Indicator**: Replaced bulky `RUNNING` text pills and jerky zoom scaling animations with a smooth, minimalist circular arc SVG spinner (`0.85s` linear infinite rotation) next to session and subagent titles.
+- **Hierarchical Sessions Tree**: Reorganized the session flyout into an intuitive tree view where subsessions (subagents) are nested directly beneath their parent sessions with expandable/collapsible toggles (`[ ▾ {count} subtasks ]`) and branch connectors (`└─`, `├─`).
+- **Active Session Dot**: Replaced raw unicode star (`★`) with an elegant glowing active indicator dot.
+- **Smart Expansion & Search**: Searching sessions searches across both parent sessions and child subagent tasks, automatically expanding matching parent nodes.
+- **VS Code Activity Bar Tree Parity**: Updated `SessionTreeProvider` to mirror the hierarchical parent/subsession tree structure directly in the VS Code sidebar.
+
+### Multi-Session & Webview Stability
+- **Parallel Editor Tabs**: Enabled seamless parallel sessions across multiple VS Code editor tabs without event crosstalk or session collision.
+- **Session Lifecycle & Deduplication**: Fixed title rename storms, pruned empty ghost sessions cleanly, and isolated plan updates per session.
+- **Conversation Timeline**: Aligned timeline styling with clean card design standards, eliminating excessive glow and gradients.
+
+---
+
+## [0.2.4] — 2026-08-30
+
+### Telemetry & Infrastructure
+- **Cloudflare D1 & Worker Redesign**: Modernized telemetry ingestion architecture with Cloudflare D1 SQL storage, automated rate limiting, and zero-PII security guarantees.
+- **Platform Detection**: Added clean OS and client provider breakdown telemetry without sensitive workspace data.
+
+---
+
 ## [0.2.3] — 2026-08-25
 
 ### Internationalization & Documentation

@@ -1,0 +1,4 @@
+.andromity/
+node_modules/
+*.vsix
+dist-test/

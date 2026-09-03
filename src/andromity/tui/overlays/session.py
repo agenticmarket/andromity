@@ -48,7 +48,14 @@ def _session_label(s: Session) -> str:
 
 
 def _session_status(s: Session, current_id: str) -> str:
-    """Status badge for a session row: active, idle, or empty."""
+    """Status badge for a session row: running, approval_required, error, active, idle, or empty."""
+    status_val = getattr(s, "status", "idle")
+    if status_val == "running":
+        return "[bold yellow]⚡ running[/]"
+    if status_val == "approval_required":
+        return "[bold magenta]✋ approval[/]"
+    if status_val == "error":
+        return "[bold red]✕ error[/]"
     if s.id == current_id:
         return "[bold green]● active[/]"
     if s.messages:

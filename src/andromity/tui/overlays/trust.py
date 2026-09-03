@@ -77,10 +77,11 @@ TrustPromptOverlay {
         self._project_path = project_path
 
     def compose(self) -> ComposeResult:
+        from rich.markup import escape
         with Vertical(id="tp-dialog"):
             yield Static(" ⚠  Untrusted Folder ", id="tp-title")
             with Vertical(id="tp-body"):
-                yield Static(self._project_path, id="tp-path")
+                yield Static(escape(self._project_path), id="tp-path")
                 yield Static(
                     "Do you trust the files in this folder?\n\n"
                     "  [green]✓[/]  Read files [dim]— always allowed[/]\n"

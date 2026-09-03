@@ -139,7 +139,7 @@ def perform_update() -> Tuple[bool, str]:
 
     if pipx_bin:
         try:
-            res = subprocess.run([pipx_bin, "list"], capture_output=True, text=True, timeout=5)
+            res = subprocess.run([pipx_bin, "list"], capture_output=True, text=True, timeout=5, close_fds=True)
             if "andromity" in res.stdout:
                 is_pipx = True
         except Exception:
@@ -152,7 +152,7 @@ def perform_update() -> Tuple[bool, str]:
 
     try:
         log.info("Running upgrade command: %s", " ".join(cmd))
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, close_fds=True)
         if result.returncode == 0:
             # Clear update cache on successful check/upgrade
             try:

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
-from typing import Optional, List, TYPE_CHECKING
+from typing import Optional, List, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from git import Repo
 
+log = logging.getLogger("andromity.git_ops")
 SNAPSHOT_BRANCH = "andromity-snapshots"
 
 
@@ -64,7 +66,7 @@ def ensure_git_tracking(project_path: Path) -> tuple["Repo", bool]:
     return repo, True
 
 
-def create_pre_edit_snapshot(repo: "Repo") -> Optional[str]:
+def create_pre_edit_snapshot(repo_or_path: Union["Repo", Path, str]) -> Optional[str]:
     """
     Snapshot the FULL working tree state (tracked + untracked) before any
     file modifications, using a temporary git index so the user's staging
@@ -76,6 +78,14 @@ def create_pre_edit_snapshot(repo: "Repo") -> Optional[str]:
     import os, tempfile
     from git.exc import GitCommandError
     try:
+        if isinstance(repo_or_path, (str, Path)):
+            repo = get_repo(Path(repo_or_path))
+        else:
+            repo = repo_or_path
+
+        if not repo:
+            return None
+
         # Need at least one commit for commit-tree to work.
         try:
             head_commit = repo.head.commit.hexsha
@@ -86,8 +96,14 @@ def create_pre_edit_snapshot(repo: "Repo") -> Optional[str]:
 
         # ── Build a tree that includes untracked files ──────────────────────
         # We use a temp index file so the user's real staging area is untouched.
-        tmp_index = tempfile.mktemp(prefix="andromity-idx-")
+        tmp_fd, tmp_index = tempfile.mkstemp(prefix="andromity-idx-")
         try:
+            os.close(tmp_fd)
+            # Remove the 0-byte file so git initializes a fresh index without 'smaller than expected' error
+            try:
+                os.unlink(tmp_index)
+            except OSError:
+                pass
             env = {**os.environ, "GIT_INDEX_FILE": tmp_index}
             # Stage everything (tracked + untracked) into the temp index.
             repo.git.execute(["git", "add", "-A"], env=env)
@@ -115,8 +131,8 @@ def create_pre_edit_snapshot(repo: "Repo") -> Optional[str]:
         repo.git.update_ref(f"refs/heads/{SNAPSHOT_BRANCH}", snap_hash)
         return snap_hash
 
-    except (Exception,) as e:
-        print(f"Warning: Failed to create snapshot: {e}")
+    except Exception as e:
+        log.warning("Failed to create snapshot: %s", e)
         return None
 
 
@@ -154,7 +170,7 @@ def restore_snapshot(repo: "Repo", commit_hash: str, files: Optional[List[str]] 
             repo.git.checkout("--force", commit_hash, "--", ".")
         return True
     except Exception as e:
-        print(f"Warning: Failed to restore snapshot: {e}")
+        log.warning("Failed to restore snapshot: %s", e)
         return False
 
 
@@ -174,7 +190,7 @@ def restore_file_snapshot(repo: Repo, commit_hash: str, rel_path: str) -> bool:
                 full_path.unlink(missing_ok=True)
             return True
     except Exception as e:
-        print(f"Warning: Failed to restore file {rel_path} from snapshot: {e}")
+        log.warning("Failed to restore file %s from snapshot: %s", rel_path, e)
         return False
 
 
@@ -284,3 +300,33 @@ def ensure_gitignore_entry(project_path: str, pattern: str) -> None:
             f.write(f"{sep}{pattern}\n")
     except Exception:
         pass
+
+
+def ensure_clean_project_andromity(project_path: str) -> None:
+    """Ensure .andromity/ is gitignored in the project root and create an internal
+    .andromity/.gitignore to prevent transient logs and cron outputs from polluting Git."""
+    try:
+        p = Path(project_path).resolve()
+        if not p.is_dir():
+            return
+        # 1. Ensure project root .gitignore ignores .andromity/
+        ensure_gitignore_entry(str(p), ".andromity/")
+
+        # 2. If .andromity exists, ensure internal .gitignore ignores temporary runtime artifacts
+        andromity_dir = p / ".andromity"
+        if andromity_dir.exists() and andromity_dir.is_dir():
+            internal_gi = andromity_dir / ".gitignore"
+            if not internal_gi.exists():
+                internal_gi.write_text(
+                    "# Ignore transient session and cron runtime logs\n"
+                    "cron_runs/\n"
+                    "handoffs/\n"
+                    "*.tmp\n"
+                    "*.lock\n"
+                    "*.log\n"
+                    "__pycache__/\n",
+                    encoding="utf-8"
+                )
+    except Exception:
+        pass
+

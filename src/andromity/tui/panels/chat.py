@@ -7,6 +7,8 @@ from andromity.config import config
 from andromity.tui.markup_utils import safe_markup, safe_update, escape_textual as escape
 import re
 import time
+from typing import Any
+
 
 _ASSISTANT_HEADER = "[bold $success]■ Andromity:[/bold $success]"
 
@@ -126,6 +128,7 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
                 yield Static(f"Args:\n{escape(args_disp)}", id="tool-args", classes="dim")
             else:
                 yield Static("", id="tool-args", classes="dim")
+            yield Static("", id="tool-subagent", classes="dim")
             res_disp = self._result_text
             if res_disp:
                 if len(res_disp) > 2000:
@@ -167,6 +170,59 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
         self._args_chunks.append(args_chunk)
         self._args_pending = True
 
+    def append_subagent_activity(self, evt: Any):
+        """Update ToolIndicator with live subagent progress."""
+        if not hasattr(self, "_subagent_logs"):
+            self._subagent_logs = []
+        if not hasattr(self, "_thinking_buf"):
+            self._thinking_buf = ""
+
+        event_type = getattr(evt, "event_type", "") or ""
+        role = getattr(evt, "role", "") or "subagent"
+        detail = getattr(evt, "detail", "") or ""
+        tool_name = getattr(evt, "tool_name", None)
+        tool_args = getattr(evt, "tool_args", None)
+        delta_text = getattr(evt, "delta_text", None)
+
+        entry = None
+
+        if event_type == "thinking" and delta_text:
+            # Accumulate thinking tokens — only flush when we hit punctuation or newline
+            self._thinking_buf += delta_text
+            flush_chars = {".", "!", "?", "\n"}
+            if any(c in self._thinking_buf for c in flush_chars) or len(self._thinking_buf) > 80:
+                snippet = self._thinking_buf.strip().replace("\n", " ")[:80]
+                self._thinking_buf = ""
+                if snippet:
+                    entry = f"[{role}] thought: {snippet}"
+                    self._current_subagent_activity = f"thinking: {snippet[:40]}"
+        elif event_type == "tool_call" and tool_name and tool_args is not None:
+            # Only emit when ToolCallEnd fires (args are populated) — skip ToolCallStart
+            args_str = f"({tool_args[:60]})" if tool_args else ""
+            entry = f"[{role}] calling {tool_name}{args_str}"
+            self._current_subagent_activity = f"calling {tool_name}"
+        elif event_type == "tool_result" and detail:
+            # Completion of tool
+            snippet = detail[:80]
+            entry = f"[{role}] {snippet}"
+            self._current_subagent_activity = snippet
+        elif event_type == "text" and detail:
+            entry = f"[{role}] {detail}"
+            self._current_subagent_activity = detail
+
+        if entry and (not self._subagent_logs or self._subagent_logs[-1] != entry):
+            self._subagent_logs.append(entry)
+            if len(self._subagent_logs) > 20:
+                self._subagent_logs.pop(0)
+
+            self._update_title()
+            try:
+                disp = "\n".join(f"  • {e}" for e in self._subagent_logs)
+                safe_update(self.query_one("#tool-subagent", Static), f"\nSubagent Activity:\n{escape(disp)}")
+            except Exception:
+                pass
+
+
     def _flush_args(self):
         if not self._args_pending:
             return
@@ -197,6 +253,8 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
 
     def _get_icon(self) -> str:
         name = self.tool_name.lower()
+        if "subagent" in name:
+            return "🤖"
         if "file" in name or "read" in name or "write" in name or "edit" in name:
             return "📝"
         if "dir" in name or "list" in name:
@@ -211,12 +269,18 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
 
     def _title_text(self) -> str:
         summary = ""
-        m = re.search(r'"(path|command|DirectoryPath|query|Url|AbsolutePath)"\s*:\s*"([^"]+)"', self._args_json)
-        if m:
-            val = m.group(2)
-            if len(val) > 35:
-                val = val[:15] + "..." + val[-15:]
-            summary = f" ({val})"
+        if self.tool_name == "spawn_subagent" and getattr(self, "_current_subagent_activity", None) and not self._done:
+            act = self._current_subagent_activity
+            if len(act) > 35:
+                act = act[:32] + "…"
+            summary = f" ({act})"
+        else:
+            m = re.search(r'"(path|command|DirectoryPath|query|Url|AbsolutePath|role)"\s*:\s*"([^"]+)"', self._args_json)
+            if m:
+                val = m.group(2)
+                if len(val) > 35:
+                    val = val[:15] + "..." + val[-15:]
+                summary = f" ({val})"
 
         elapsed = int(time.time() - self._start_time)
         icon = self._get_icon()
@@ -242,6 +306,7 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
             timeout_warn = ""
 
         return f"{spin}[dim]{icon} {escape(self.tool_name)}{escape(summary)} [{status_color}]{status}[/{status_color}]{timeout_warn}[/dim]"
+
 
     def _update_title(self):
         try:
@@ -331,6 +396,8 @@ ToolSequence Collapsible { border: none; padding: 0; background: transparent; }
         elif not self._last_tool_done and self._last_tool:
             # A specific tool is actively executing
             status = f"[$primary]{escape(self._last_tool)}[/$primary] working… ({elapsed}s)"
+        elif self._last_tool_done and self._count > 0:
+            status = f"working… ({elapsed}s)"
         else:
             # Turn/block is still active (thinking, between tools, or preparing next step)
             status = f"working… ({elapsed}s)"
@@ -1111,6 +1178,53 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
     def show_tool_end(self, tool_id: str):
         # Tools are now marked done in show_tool_result so they keep spinning during execution/approval
         pass
+
+    def show_subagent_progress(self, event: Any):
+        """Forward SubAgentProgress event to the matching spawn_subagent ToolIndicator."""
+        try:
+            target_tool_id = getattr(event, "tool_id", None)
+            target_agent_id = getattr(event, "agent_id", None)
+            indicators = list(self.query(ToolIndicator))
+
+            # 1. Exact match by parent turn's tool_id (each concurrent spawn has a
+            # unique tool_id, so this is unambiguous).
+            if target_tool_id:
+                for ind in indicators:
+                    if ind.tool_id == target_tool_id:
+                        ind.append_subagent_activity(event)
+                        return
+
+            # 2. Match by previously assigned agent_id on this indicator
+            if target_agent_id:
+                for ind in indicators:
+                    if getattr(ind, "_assigned_agent_id", None) == target_agent_id:
+                        ind.append_subagent_activity(event)
+                        return
+
+            # 3. Associate agent_id with the first running spawn_subagent indicator
+            # without an assigned agent_id.
+            if target_agent_id:
+                for ind in indicators:
+                    if ind.tool_name == "spawn_subagent" and not ind._done and not getattr(ind, "_assigned_agent_id", None):
+                        ind._assigned_agent_id = target_agent_id
+                        ind.append_subagent_activity(event)
+                        return
+
+            # 4. Fallback: forward to any running spawn_subagent indicator that
+            # isn't already bound to a different agent (prevents event stealing
+            # when multiple spawn_subagent calls run in parallel).
+            if target_agent_id:
+                for ind in reversed(indicators):
+                    if ind.tool_name == "spawn_subagent" and not ind._done:
+                        assigned = getattr(ind, "_assigned_agent_id", None)
+                        if assigned and assigned != target_agent_id:
+                            continue
+                        ind.append_subagent_activity(event)
+                        return
+        except Exception:
+            pass
+
+
 
     async def clear(self):
         self._unloaded_history.clear()

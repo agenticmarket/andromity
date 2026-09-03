@@ -356,7 +356,7 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
         headers = {}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        data = _get("https://openrouter.ai/api/v1/models", headers)
+        data = _get("https://openrouter.ai/api/v1/models", headers, timeout=6.0)
         if not data:
             return []
         
@@ -381,28 +381,49 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
             _save_pricing_cache("openrouter", pricing_cache)
 
         models = []
-        for item in data.get("data", [])[:80]:  # cap at 80 to keep list manageable
+        for item in data.get("data", []):
             m_id = item.get("id", "")
+            if not m_id:
+                continue
             m_name = item.get("name", m_id)
             ctx = item.get("context_length", 0)
             ctx_str = f"{ctx // 1000}K" if isinstance(ctx, int) and ctx >= 1000 else str(ctx)
-            desc = (item.get("description", "")[:55] + "…") if item.get("description") else ""
+            desc = (item.get("description", "")[:90] + "…") if item.get("description") else "OpenRouter model"
 
             p_info = pricing_cache.get(m_id, {})
             p_prompt = p_info.get("prompt", 0.0)
             p_comp = p_info.get("completion", 0.0)
-            if p_prompt > 0 or p_comp > 0:
-                pricing_str = f"${p_prompt * 1_000_000:.3f}/${p_comp * 1_000_000:.3f} per MTok"
-            elif ":free" in m_id.lower() or (p_prompt == 0 and p_comp == 0 and p_info):
+            is_free = False
+            if ":free" in m_id.lower() or (p_prompt == 0 and p_comp == 0 and p_info):
                 pricing_str = "Free"
+                is_free = True
+            elif p_prompt > 0 or p_comp > 0:
+                pricing_str = f"${p_prompt * 1_000_000:.3f}/${p_comp * 1_000_000:.3f} per MTok"
             else:
                 pricing_str = ""
+
+            tags = []
+            if is_free:
+                tags.append("free")
+            m_id_lower = m_id.lower()
+            if any(k in m_id_lower for k in ("code", "coder", "starcoder", "codestral")):
+                tags.append("coding")
+            if any(k in m_id_lower for k in ("r1", "reason", "o1", "o3", "o4", "thinking", "qwq")):
+                tags.append("reasoning")
+            if any(k in m_id_lower for k in ("vision", "vl", "4o", "gemini-2", "claude-3", "pixtral")):
+                tags.append("vision")
+            if any(k in m_id_lower for k in ("claude-3.7", "claude-3-7", "gpt-4o", "gemini-2.0", "deepseek-r1", "llama-3.3-70b")):
+                tags.append("flagship")
 
             m_entry: dict[str, Any] = {
                 "id": m_id,
                 "name": m_name,
                 "desc": desc,
                 "context": ctx_str,
+                "context_limit": ctx if isinstance(ctx, int) and ctx > 0 else 131072,
+                "provider": "openrouter",
+                "is_free": is_free,
+                "tags": tags,
             }
             if pricing_str:
                 m_entry["pricing"] = pricing_str
@@ -418,20 +439,19 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
         if not data:
             return []
         # NVIDIA's /v1/models endpoint exposes no context window per model.
-        # "128K" is an approximate default for all entries (incl. Gemma 3 27B
-        # and Phi-4, which actually use smaller windows); real values are not
-        # published by the API.
-        models = [{"id": "google/gemma-2-2b-it", "name": "Gemma 2 2B IT", "desc": "NVIDIA NIM accelerated model", "context": "128K"}]
+        models = [{"id": "google/gemma-2-2b-it", "name": "Gemma 2 2B IT", "desc": "NVIDIA NIM accelerated model", "context": "128K", "context_limit": 131072, "provider": "nvidia", "tags": ["fast"]}]
         for item in data.get("data", []):
             m_id = item.get("id", "")
-            # Filter for text/chat/instruct models, skipping embeddings
-            if "embed" in m_id.lower() or "rerank" in m_id.lower():
+            if not m_id or "embed" in m_id.lower() or "rerank" in m_id.lower():
                 continue
             models.append({
                 "id": m_id,
                 "name": m_id.split("/")[-1] if "/" in m_id else m_id,
                 "desc": "NVIDIA NIM accelerated model",
                 "context": "128K",
+                "context_limit": 131072,
+                "provider": "nvidia",
+                "tags": ["cloud"],
             })
         return _cache_and_return(provider_key, models)
 
@@ -459,21 +479,42 @@ def _save_pricing_cache(provider_key: str, pricing_dict: dict[str, dict]):
     except Exception:
         pass
 
+def _get_live_catalog_cache_path() -> Path:
+    from andromity.config import get_config_dir
+    return get_config_dir() / "model_live_catalog_cache.json"
+
+def get_cached_live_models(provider_key: str = None) -> list[dict]:
+    """Retrieve cached live models from disk cache."""
+    try:
+        import json
+        cache_path = _get_live_catalog_cache_path()
+        if cache_path.exists():
+            with open(cache_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if provider_key:
+                return data.get(provider_key, [])
+            all_m = []
+            for p, p_models in data.items():
+                all_m.extend(p_models)
+            return all_m
+    except Exception:
+        pass
+    return []
+
 def _cache_and_return(provider_key: str, models: list[dict]) -> list[dict]:
-    """Save context limits to cache before returning the models."""
+    """Save context limits and full catalog to cache before returning the models."""
     if not models:
         return models
     try:
         import json
+        # 1. Save context limit cache
         cache_path = _get_context_cache_path()
         cache = {}
         if cache_path.exists():
             with open(cache_path, "r", encoding="utf-8") as f:
                 cache = json.load(f)
-                
         if provider_key not in cache:
             cache[provider_key] = {}
-            
         for m in models:
             ctx_str = m.get("context", "")
             if not ctx_str or ctx_str in ("Local", "Auto", "Unknown"):
@@ -481,9 +522,18 @@ def _cache_and_return(provider_key: str, models: list[dict]) -> list[dict]:
             tokens = _parse_ctx_shorthand(ctx_str)
             if tokens:
                 cache[provider_key][m["id"]] = tokens
-                
         with open(cache_path, "w", encoding="utf-8") as f:
             json.dump(cache, f, indent=2)
+
+        # 2. Save full live catalog cache
+        cat_path = _get_live_catalog_cache_path()
+        cat_cache = {}
+        if cat_path.exists():
+            with open(cat_path, "r", encoding="utf-8") as f:
+                cat_cache = json.load(f)
+        cat_cache[provider_key] = models
+        with open(cat_path, "w", encoding="utf-8") as f:
+            json.dump(cat_cache, f, indent=2)
     except Exception:
         pass
     return models
