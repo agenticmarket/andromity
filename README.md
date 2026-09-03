@@ -7,8 +7,9 @@
 
   <video src="https://github.com/user-attachments/assets/5203a1d8-9c6d-4d8f-bee3-7b4316f6fb22" autoplay loop muted playsinline width="100%"></video>
 
+  [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/agenticmarket.andromity-agent?label=VS%20Marketplace&logo=visualstudiocode&color=blueviolet)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![PyPI](https://img.shields.io/pypi/v/andromity)](https://pypi.org/project/andromity/)
-  ![Version](https://img.shields.io/badge/version-0.2.3-blueviolet)
+  ![Version](https://img.shields.io/badge/version-0.2.6-blueviolet)
   ![Python](https://img.shields.io/badge/python-3.11+-blue)
   [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -18,7 +19,21 @@
 
 ---
 
-## Install
+## ⚡ Get Started
+
+### Option A: VS Code Extension (Recommended)
+
+Install directly from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent):
+
+```bash
+code --install-extension agenticmarket.andromity-agent
+```
+
+<div align="center">
+  <img src="vscode-extension/walkthroughs/assets/partner.webp" alt="Andromity in VS Code" width="100%" />
+</div>
+
+### Option B: Terminal CLI
 
 ```bash
 # Linux / macOS
@@ -33,7 +48,7 @@ pipx install andromity
 
 Needs Python 3.11+. The installer handles pipx if you don't have it.
 
-Then:
+Then launch anywhere:
 
 ```bash
 andromity
