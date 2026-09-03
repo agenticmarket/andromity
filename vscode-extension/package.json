@@ -172,6 +172,12 @@
         "category": "Andromity"
       },
       {
+        "command": "andromity.openSessionInTab",
+        "title": "Open Session in New Editor Tab (Side-by-Side)",
+        "category": "Andromity",
+        "icon": "$(split-horizontal)"
+      },
+      {
         "command": "andromity.deleteSession",
         "title": "Delete Session",
         "category": "Andromity",

@@ -4,6 +4,7 @@ import * as vscode from "vscode";
 import { DiffManager } from "../integrations/DiffManager.js";
 import { EditorBridge } from "../integrations/EditorBridge.js";
 import { SettingsPanel } from "../panels/SettingsPanel.js";
+import { SessionTabPanel } from "../panels/SessionTabPanel.js";
 import { PythonBridge } from "../server/PythonBridge.js";
 import { RpcClient } from "../server/RpcClient.js";
 import {
@@ -203,6 +204,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public async openFileDiff(filePath: string, isUntracked: boolean) {
     if (this._diffManager) {
       await this._diffManager.showFileDiff(filePath, isUntracked);
+    }
+  }
+
+  /** Open a session in a dedicated editor tab (side-by-side parallel view). */
+  public openSessionInTab(sessionId?: string, sessionName?: string) {
+    const sid = sessionId || this._currentSessionId;
+    if (sid) {
+      SessionTabPanel.createOrShow(
+        this._extensionUri,
+        sid,
+        sessionName || "Chat Session",
+        this._rpcClient,
+        this._context!,
+        this
+      );
     }
   }
 
@@ -1045,6 +1061,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "open_file_diff": {
         if (message.filePath) {
           await this.openFileDiff(message.filePath, false);
+        }
+        break;
+      }
+
+      case "open_session_tab": {
+        const sid = message.sessionId || this._currentSessionId;
+        const sname = message.sessionName || "Chat Session";
+        if (sid) {
+          SessionTabPanel.createOrShow(
+            this._extensionUri,
+            sid,
+            sname,
+            this._rpcClient,
+            this._context!,
+            this
+          );
         }
         break;
       }

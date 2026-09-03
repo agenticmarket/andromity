@@ -417,6 +417,12 @@ export async function activate(context: vscode.ExtensionContext) {
       sessionTreeProvider.refresh();
     }),
 
+    vscode.commands.registerCommand("andromity.openSessionInTab", (item?: any) => {
+      const sessionId = item?.session?.id || item?.id;
+      const sessionName = item?.session?.name || item?.name;
+      chatProvider.openSessionInTab(sessionId, sessionName);
+    }),
+
     vscode.commands.registerCommand("andromity.refreshCrons", () => {
       cronTreeProvider.refresh();
     }),

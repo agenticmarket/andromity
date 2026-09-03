@@ -85,6 +85,13 @@ ${styles}
         </svg>
       </button>
     </div>
+      <button class="top-bar-icon-btn" id="btn-top-open-tab" title="Open Session in New Editor Tab (Side-by-Side)" data-action="open-current-tab">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+          <polyline points="15 3 21 3 21 9"></polyline>
+          <line x1="10" y1="14" x2="21" y2="3"></line>
+        </svg>
+      </button>
       <button class="top-bar-icon-btn" id="btn-top-timeline" title="Conversation Timeline & Milestones" data-action="toggle-timeline">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="10"></circle>
@@ -108,10 +115,10 @@ ${styles}
     </div>
   </div>
 
-  <!-- Sessions Flyout / Drawer -->
+  <!-- Sessions Flyout Drawer -->
   <div class="sessions-flyout" id="sessions-flyout" style="display:none;">
     <div class="sessions-flyout-header">
-      <input type="text" class="sessions-search" id="sessions-search" placeholder="Search sessions...">
+      <input type="text" class="sessions-search" id="sessions-search" placeholder="Search sessions by name...">
       <button class="sessions-new-btn" id="btn-sessions-new" title="Create Fresh Session">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
         <span>New</span>
@@ -151,14 +158,29 @@ ${styles}
   <!-- Conversation Timeline Flyout / Drawer -->
   <div class="timeline-flyout" id="timeline-flyout" style="display:none;">
     <div class="timeline-header">
-      <span style="display:flex; align-items:center; gap:6px;">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-        <span>Conversation Timeline</span>
-      </span>
-      <button class="timeline-header-close" id="btn-timeline-close" title="Close">&times;</button>
+      <div class="timeline-header-left">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+        <span class="timeline-header-title">Conversation Timeline</span>
+        <span class="timeline-count-badge" id="timeline-turn-count">0 turns</span>
+      </div>
+      <div class="timeline-header-actions">
+        <button class="timeline-action-btn" id="btn-timeline-jump-first" title="Jump to First Turn">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>
+        </button>
+        <button class="timeline-action-btn" id="btn-timeline-jump-latest" title="Jump to Latest Turn">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </button>
+        <button class="timeline-header-close" id="btn-timeline-close" title="Close (Esc)">&times;</button>
+      </div>
+    </div>
+    <div class="timeline-toolbar">
+      <div class="timeline-search-wrap">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        <input type="text" class="timeline-search-input" id="timeline-search" placeholder="Search prompts, tools, or files..." />
+      </div>
     </div>
     <div class="timeline-list" id="timeline-list">
-      <div style="padding:16px; text-align:center; color:var(--muted); font-size:11.5px;">No conversation turns yet.</div>
+      <div style="padding:20px; text-align:center; color:var(--muted); font-size:11.5px;">No conversation turns yet.</div>
     </div>
   </div>
 

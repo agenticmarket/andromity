@@ -1062,6 +1062,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             '</div>' +
           '</div>' +
           '<div class="session-item-actions">' +
+            '<button class="session-action-icon" data-action="open-session-tab" data-session-id="' + s.id + '" data-session-name="' + escapeHtml(name) + '" title="Open in New Editor Tab (Side-by-Side)">' +
+              '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>' +
+            '</button>' +
             '<button class="session-action-icon" data-action="rename-session" data-session-id="' + s.id + '" data-session-name="' + escapeHtml(name) + '" title="Rename">' +
               '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>' +
             '</button>' +
@@ -1189,48 +1192,114 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       scrollToBottomIfNeeded();
     }
 
-    function renderConversationTimeline() {
+    function renderConversationTimeline(filterQuery) {
       if (!timelineList) return;
       timelineList.innerHTML = '';
       const userWraps = chatContainer.querySelectorAll('.message-wrap.user');
+      const countEl = document.getElementById('timeline-turn-count');
+      if (countEl) {
+        countEl.textContent = (userWraps ? userWraps.length : 0) + ' ' + (userWraps.length === 1 ? 'turn' : 'turns');
+      }
+
       if (!userWraps || userWraps.length === 0) {
-        timelineList.innerHTML = '<div style="padding:16px; text-align:center; color:var(--muted); font-size:11.5px;">No conversation turns yet.</div>';
+        timelineList.innerHTML = '<div style="padding:24px 16px; text-align:center; color:var(--muted); font-size:11.5px;">No conversation turns recorded yet.</div>';
         return;
       }
+
+      const q = (filterQuery || '').toLowerCase().trim();
+      let visibleCount = 0;
+
       userWraps.forEach((uWrap, idx) => {
         const uText = uWrap.querySelector('.message.user')?.textContent || ('Turn #' + (idx + 1));
         const cleanPrompt = uText.trim().replace(/\\s+/g, ' ');
-        const shortTitle = cleanPrompt.length > 36 ? (cleanPrompt.slice(0, 36) + '…') : cleanPrompt;
+        const timeText = uWrap.querySelector('.message-footer span')?.textContent || '';
 
         let asstWrap = uWrap.nextElementSibling;
         while (asstWrap && !asstWrap.classList.contains('message-wrap')) {
           asstWrap = asstWrap.nextElementSibling;
         }
+
+        const isTurnRunning = (idx === userWraps.length - 1) && isRunning;
         const toolCards = asstWrap ? asstWrap.querySelectorAll('.tool-card') : [];
         const fileChips = asstWrap ? asstWrap.querySelectorAll('.file-edited-chip') : [];
+        const asstTextEl = asstWrap ? asstWrap.querySelector('.assistant-text') : null;
+        let responsePreview = '';
+        if (asstTextEl) {
+          const rawAsst = (asstTextEl.textContent || '').trim().replace(/\\s+/g, ' ');
+          if (rawAsst) responsePreview = rawAsst.length > 70 ? (rawAsst.slice(0, 70) + '…') : rawAsst;
+        }
 
+        const toolNames = [];
+        toolCards.forEach(tc => {
+          const tn = tc.querySelector('.tool-title-group span')?.textContent?.trim();
+          if (tn && !toolNames.includes(tn) && toolNames.length < 3) {
+            toolNames.push(tn);
+          }
+        });
+
+        if (q) {
+          const matchPrompt = cleanPrompt.toLowerCase().includes(q);
+          const matchResponse = responsePreview.toLowerCase().includes(q);
+          const matchTools = toolNames.some(t => t.toLowerCase().includes(q));
+          if (!matchPrompt && !matchResponse && !matchTools) {
+            return;
+          }
+        }
+
+        visibleCount++;
         const node = document.createElement('div');
-        node.className = 'timeline-node';
-        node.innerHTML = '<div class="timeline-node-top">' +
-          '<span class="timeline-node-turn">Turn #' + (idx + 1) + '</span>' +
-          (toolCards.length > 0 ? ('<span class="timeline-mini-badge tools">' + toolCards.length + ' tool' + (toolCards.length > 1 ? 's' : '') + '</span>') : '') +
-        '</div>' +
-        '<div class="timeline-node-title">' + escapeHtml(shortTitle) + '</div>' +
-        '<div class="timeline-node-badges">' +
-          (fileChips.length > 0 ? ('<span class="timeline-mini-badge files">' + fileChips.length + ' file' + (fileChips.length > 1 ? 's' : '') + '</span>') : '') +
-        '</div>';
+        node.className = 'timeline-node' + (isTurnRunning ? ' active' : '');
+        node.innerHTML = '<div class="timeline-dot"></div>' +
+          '<div class="timeline-node-card">' +
+            '<div class="timeline-node-top">' +
+              '<span class="timeline-node-turn">Turn #' + (idx + 1) + '</span>' +
+              (timeText ? ('<span class="timeline-node-time">' + escapeHtml(timeText) + '</span>') : '') +
+            '</div>' +
+            '<div class="timeline-node-title" title="' + escapeHtml(cleanPrompt) + '">' + escapeHtml(cleanPrompt) + '</div>' +
+            (responsePreview ? ('<div class="timeline-node-response-preview">' + escapeHtml(responsePreview) + '</div>') : '') +
+            '<div class="timeline-node-badges">' +
+              (toolCards.length > 0 ? ('<span class="timeline-mini-badge tools"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>' + toolCards.length + ' tool' + (toolCards.length > 1 ? 's' : '') + '</span>') : '') +
+              (fileChips.length > 0 ? ('<span class="timeline-mini-badge files"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>' + fileChips.length + ' file' + (fileChips.length > 1 ? 's' : '') + '</span>') : '') +
+              toolNames.map(tn => '<span class="timeline-mini-badge tool-tag">' + escapeHtml(tn) + '</span>').join('') +
+            '</div>' +
+          '</div>';
 
         node.addEventListener('click', () => {
           if (timelineFlyout) timelineFlyout.style.display = 'none';
           uWrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          uWrap.style.transition = 'outline 0.2s';
-          uWrap.style.outline = '2px solid var(--accent-green, #09f994)';
-          setTimeout(() => { uWrap.style.outline = 'none'; }, 1800);
+          uWrap.style.transition = 'all 0.25s ease';
+          uWrap.style.boxShadow = '0 0 0 2px #38bdf8, 0 0 16px rgba(56, 189, 248, 0.45)';
+          setTimeout(() => { uWrap.style.boxShadow = 'none'; }, 2200);
         });
 
         timelineList.appendChild(node);
       });
+
+      if (q && visibleCount === 0) {
+        timelineList.innerHTML = '<div style="padding:20px 16px; text-align:center; color:var(--muted); font-size:11.5px;">No turns matching "' + escapeHtml(q) + '"</div>';
+      }
     }
+
+    const timelineSearchInput = document.getElementById('timeline-search');
+    if (timelineSearchInput) {
+      timelineSearchInput.addEventListener('input', (e) => {
+        renderConversationTimeline(e.target.value);
+      });
+    }
+    document.getElementById('btn-timeline-close')?.addEventListener('click', () => {
+      if (timelineFlyout) timelineFlyout.style.display = 'none';
+    });
+    document.getElementById('btn-timeline-jump-first')?.addEventListener('click', () => {
+      const firstWrap = chatContainer.querySelector('.message-wrap.user');
+      if (firstWrap) {
+        firstWrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (timelineFlyout) timelineFlyout.style.display = 'none';
+      }
+    });
+    document.getElementById('btn-timeline-jump-latest')?.addEventListener('click', () => {
+      scrollToBottom();
+      if (timelineFlyout) timelineFlyout.style.display = 'none';
+    });
 
     document.getElementById('btn-prompt-mode')?.addEventListener('click', () => {
       vscode.postMessage({ type: 'cycle_mode' });
@@ -1344,6 +1413,21 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             vscode.postMessage({ type: 'delete_session', sessionId: delId });
           }
           break;
+        case 'open-session-tab': {
+          e.stopPropagation();
+          const tabSid = target.getAttribute('data-session-id') || target.closest('[data-session-id]')?.getAttribute('data-session-id');
+          const tabSname = target.getAttribute('data-session-name') || target.closest('[data-session-name]')?.getAttribute('data-session-name') || '';
+          if (tabSid) {
+            if (sessionsFlyout) sessionsFlyout.style.display = 'none';
+            vscode.postMessage({ type: 'open_session_tab', sessionId: tabSid, sessionName: tabSname });
+          }
+          break;
+        }
+        case 'open-current-tab': {
+          const sNameEl = document.getElementById('active-session-name');
+          vscode.postMessage({ type: 'open_session_tab', sessionId: currentSessionId, sessionName: sNameEl?.textContent?.trim() || '' });
+          break;
+        }
         case 'open-plan-tab':
           vscode.postMessage({ type: 'open_plan_tab' });
           break;
