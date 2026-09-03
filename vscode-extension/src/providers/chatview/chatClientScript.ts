@@ -1274,9 +1274,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         node.addEventListener('click', () => {
           if (timelineFlyout) timelineFlyout.style.display = 'none';
           uWrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          uWrap.style.transition = 'all 0.25s ease';
-          uWrap.style.boxShadow = '0 0 0 2px #38bdf8, 0 0 16px rgba(56, 189, 248, 0.45)';
-          setTimeout(() => { uWrap.style.boxShadow = 'none'; }, 2200);
+          uWrap.style.transition = 'outline 0.15s ease';
+          uWrap.style.outline = '1px solid rgba(255, 255, 255, 0.25)';
+          setTimeout(() => { uWrap.style.outline = 'none'; }, 1800);
         });
 
         timelineList.appendChild(node);

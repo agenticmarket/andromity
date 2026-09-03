@@ -3965,57 +3965,55 @@ export function getChatStyles(): string {
     }
 
     /* ─── Conversation Timeline Drawer / Popover ────────────────────────── */
-    /* ─── Conversation Timeline Drawer / Popover ────────────────────────── */
+    /* ─── Conversation Timeline Drawer / Popover (Permission-Card Clean Look) ─── */
     .timeline-flyout {
       position: absolute;
       top: 40px;
       right: 10px;
-      width: 350px;
-      max-height: 520px;
-      background: rgba(18, 18, 22, 0.96);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      border-radius: 10px;
-      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65);
+      width: 340px;
+      max-height: 500px;
+      background: var(--card-bg, #18181b);
+      border: 1px solid var(--card-border, rgba(255, 255, 255, 0.08));
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
       z-index: 100;
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      animation: fadeInZero 0.18s ease-out;
+      font-family: var(--font-ui);
     }
     .timeline-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--border);
+      padding: 9px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
       background: rgba(255, 255, 255, 0.02);
     }
     .timeline-header-left {
       display: flex;
       align-items: center;
       gap: 7px;
-      color: var(--fg);
+      color: var(--fg, #f4f4f5);
     }
     .timeline-header-title {
       font-size: 12px;
       font-weight: 600;
-      letter-spacing: -0.2px;
+      letter-spacing: -0.01em;
     }
     .timeline-count-badge {
       font-size: 10px;
-      font-weight: 600;
+      font-weight: 500;
       padding: 1px 6px;
-      border-radius: 10px;
-      background: rgba(56, 189, 248, 0.12);
-      color: #38bdf8;
-      border: 1px solid rgba(56, 189, 248, 0.25);
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--muted);
     }
     .timeline-header-actions {
       display: flex;
       align-items: center;
-      gap: 4px;
+      gap: 3px;
     }
     .timeline-action-btn {
       background: transparent;
@@ -4027,132 +4025,123 @@ export function getChatStyles(): string {
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: all 0.15s ease;
+      transition: background 0.12s ease, color 0.12s ease;
     }
     .timeline-action-btn:hover {
-      color: var(--fg);
-      background: rgba(255, 255, 255, 0.08);
-      border-color: rgba(255, 255, 255, 0.12);
+      color: var(--fg, #f4f4f5);
+      background: rgba(255, 255, 255, 0.06);
     }
     .timeline-header-close {
       background: transparent;
       border: none;
       color: var(--muted);
       cursor: pointer;
-      font-size: 16px;
+      font-size: 15px;
       line-height: 1;
-      padding: 2px 6px;
+      padding: 3px 6px;
       border-radius: 4px;
       margin-left: 2px;
+      transition: background 0.12s ease, color 0.12s ease;
     }
     .timeline-header-close:hover {
-      color: var(--fg);
-      background: rgba(255, 255, 255, 0.08);
+      color: var(--fg, #f4f4f5);
+      background: rgba(255, 255, 255, 0.06);
     }
     .timeline-toolbar {
-      padding: 6px 10px;
-      border-bottom: 1px solid var(--border);
-      background: rgba(0, 0, 0, 0.2);
+      padding: 7px 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      background: transparent;
     }
     .timeline-search-wrap {
       display: flex;
       align-items: center;
       gap: 6px;
-      background: var(--input-bg);
-      border: 1px solid var(--input-border);
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: 5px;
       padding: 4px 8px;
       color: var(--muted);
-      transition: border-color 0.15s;
+      transition: border-color 0.12s ease;
     }
     .timeline-search-wrap:focus-within {
-      border-color: #38bdf8;
-      color: var(--fg);
+      border-color: rgba(255, 255, 255, 0.2);
+      color: var(--fg, #f4f4f5);
     }
     .timeline-search-input {
       flex: 1;
       background: transparent;
       border: none;
-      color: var(--fg);
+      color: var(--fg, #f4f4f5);
       font-size: 11px;
       outline: none;
       font-family: inherit;
     }
     .timeline-search-input::placeholder {
       color: var(--muted);
-      opacity: 0.7;
+      opacity: 0.6;
     }
     .timeline-list {
       flex: 1;
       overflow-y: auto;
-      padding: 12px 10px 14px;
+      padding: 10px 10px 12px;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 8px;
       position: relative;
     }
     .timeline-list::before {
       content: '';
       position: absolute;
-      top: 18px;
-      bottom: 18px;
+      top: 16px;
+      bottom: 16px;
       left: 17px;
-      width: 2px;
-      background: linear-gradient(180deg, rgba(56, 189, 248, 0.5) 0%, rgba(255, 255, 255, 0.08) 100%);
-      border-radius: 2px;
+      width: 1px;
+      background: rgba(255, 255, 255, 0.08);
       z-index: 1;
     }
     .timeline-node {
       position: relative;
-      padding-left: 26px;
+      padding-left: 24px;
       cursor: pointer;
       user-select: none;
-      transition: transform 0.15s ease;
-    }
-    .timeline-node:hover {
-      transform: translateX(3px);
     }
     .timeline-dot {
       position: absolute;
-      left: 2px;
+      left: 3px;
       top: 10px;
-      width: 10px;
-      height: 10px;
+      width: 9px;
+      height: 9px;
       border-radius: 50%;
-      background: #18181b;
-      border: 2px solid rgba(255, 255, 255, 0.3);
+      background: var(--card-bg, #18181b);
+      border: 1.5px solid rgba(255, 255, 255, 0.25);
       z-index: 2;
-      transition: all 0.18s ease;
+      transition: border-color 0.12s ease, background 0.12s ease;
     }
     .timeline-node:hover .timeline-dot {
-      border-color: #38bdf8;
-      background: #38bdf8;
-      box-shadow: 0 0 8px rgba(56, 189, 248, 0.7);
+      border-color: var(--fg, #f4f4f5);
+      background: var(--fg, #f4f4f5);
     }
     .timeline-node.active .timeline-dot {
-      border-color: #09f994;
-      background: #09f994;
-      box-shadow: 0 0 10px rgba(9, 249, 148, 0.8);
-      animation: pulseCompact 1.8s infinite;
+      border-color: #38bdf8;
+      background: #38bdf8;
     }
     .timeline-node-card {
-      background: rgba(255, 255, 255, 0.035);
-      border: 1px solid rgba(255, 255, 255, 0.07);
-      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 6px;
       padding: 8px 10px;
       display: flex;
       flex-direction: column;
       gap: 4px;
-      transition: all 0.15s ease;
+      transition: background 0.12s ease, border-color 0.12s ease;
     }
     .timeline-node:hover .timeline-node-card {
-      background: rgba(255, 255, 255, 0.065);
-      border-color: rgba(56, 189, 248, 0.3);
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(255, 255, 255, 0.14);
     }
     .timeline-node.active .timeline-node-card {
-      border-color: rgba(9, 249, 148, 0.35);
-      background: rgba(9, 249, 148, 0.04);
+      border-color: rgba(255, 255, 255, 0.18);
+      background: rgba(255, 255, 255, 0.04);
     }
     .timeline-node-top {
       display: flex;
@@ -4163,17 +4152,17 @@ export function getChatStyles(): string {
     }
     .timeline-node-turn {
       font-weight: 600;
-      color: var(--accent-cyan, #38bdf8);
-      font-family: var(--vscode-editor-font-family, monospace);
+      color: var(--fg, #f4f4f5);
+      font-family: var(--font-mono);
+      font-size: 11px;
     }
     .timeline-node-time {
       font-size: 10px;
       color: var(--muted);
-      opacity: 0.8;
     }
     .timeline-node-title {
       font-size: 11.5px;
-      color: var(--fg);
+      color: var(--fg, #f4f4f5);
       font-weight: 500;
       line-height: 1.35;
       overflow: hidden;
@@ -4189,43 +4178,43 @@ export function getChatStyles(): string {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      font-style: italic;
-      opacity: 0.85;
-      padding-left: 2px;
-      border-left: 1.5px solid rgba(255, 255, 255, 0.12);
+      padding-left: 6px;
+      border-left: 2px solid rgba(255, 255, 255, 0.08);
     }
     .timeline-node-badges {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
-      gap: 5px;
-      margin-top: 3px;
+      gap: 4px;
+      margin-top: 2px;
     }
     .timeline-mini-badge {
       font-size: 9.5px;
       font-weight: 500;
-      padding: 1.5px 6px;
-      border-radius: 3px;
-      background: rgba(255, 255, 255, 0.06);
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.07);
       color: var(--muted);
       display: inline-flex;
       align-items: center;
       gap: 3px;
     }
     .timeline-mini-badge.tools {
-      background: rgba(56, 189, 248, 0.12);
-      color: #38bdf8;
-      border: 1px solid rgba(56, 189, 248, 0.2);
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.1);
+      color: var(--fg, #f4f4f5);
     }
     .timeline-mini-badge.files {
-      background: rgba(9, 249, 148, 0.12);
-      color: #09f994;
-      border: 1px solid rgba(9, 249, 148, 0.2);
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.1);
+      color: var(--fg, #f4f4f5);
     }
     .timeline-mini-badge.tool-tag {
-      background: rgba(255, 255, 255, 0.04);
+      background: rgba(255, 255, 255, 0.03);
+      border-color: rgba(255, 255, 255, 0.06);
       color: var(--muted);
-      font-family: var(--vscode-editor-font-family, monospace);
+      font-family: var(--font-mono);
       font-size: 9px;
     }
     .session-ghost-empty { font-size: 10px; color: var(--muted); font-style: italic; margin-left: 6px; }
