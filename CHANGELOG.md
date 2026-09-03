@@ -4,6 +4,15 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 
 ---
 
+## [0.2.6] — 2026-09-04
+
+### Platform Binaries & CI
+- **Native Platform Binaries**: Standalone daemon binaries bundled per-platform (`win32-x64`, `linux-x64`, `darwin-arm64`), removing Python/pip requirements for Linux & macOS.
+- **Automated Matrix CI**: GitHub Actions workflow builds and packages slim platform-specific `.vsix` packages automatically upon release.
+- **Environment Compatibility**: Switched build pipeline to use `uv` with PEP 668 bypass for clean builds in externally-managed Python environments.
+
+---
+
 ## [0.2.5] — 2026-09-03
 
 ### Sessions & Subagents

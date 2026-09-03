@@ -30,11 +30,7 @@ jobs:
             platform_key: linux-x64
             exe_name: andromity-server
 
-          - runner: macos-13          # GitHub's Intel runner
-            platform_key: darwin-x64
-            exe_name: andromity-server
-
-          - runner: macos-latest      # GitHub's Apple Silicon (M1/M2) runner
+          - runner: macos-latest      # GitHub's Apple Silicon (M1/M2/M3) runner
             platform_key: darwin-arm64
             exe_name: andromity-server
 
@@ -122,31 +118,46 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-  # ── Optional: publish all platforms to the Marketplace after all builds pass ──
-  # Uncomment this job and add VSCE_PAT + OVSX_PAT to repository secrets
-  # to auto-publish on every version tag.
-  #
-  # publish:
-  #   name: Publish to Marketplace
-  #   needs: build
-  #   runs-on: ubuntu-latest
-  #   if: startsWith(github.ref, 'refs/tags/v')
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-node@v4
-  #       with:
-  #         node-version: "20"
-  #     - name: Download all .vsix artifacts
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         path: vsix-artifacts
-  #         pattern: "andromity-*.vsix"
-  #         merge-multiple: true
-  #     - name: Publish to VS Code Marketplace
-  #       working-directory: vsix-artifacts
-  #       run: |
-  #         for f in *.vsix; do
-  #           npx @vscode/vsce publish --packagePath "$f"
-  #         done
-  #       env:
-  #         VSCE_PAT: ${{ secrets.VSCE_PAT }}
+  # ── Publish all platforms to the Marketplace after all builds pass ────────────
+  # Runs automatically on every v* tag once VSCE_PAT is added to repo secrets:
+  #   GitHub repo → Settings → Secrets and variables → Actions → New secret
+  #   Name: VSCE_PAT   Value: your Azure DevOps Personal Access Token
+  #   (Marketplace → Manage scope)
+  publish:
+    name: Publish to VS Code Marketplace
+    needs: build                         # wait for ALL platform builds to pass
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Download all platform .vsix files produced by the build matrix
+      - name: Download all .vsix artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: vsix-artifacts
+          pattern: "andromity-*.vsix"
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh vsix-artifacts/
+
+      # Publish each platform .vsix — Marketplace serves the right one per user OS
+      - name: Publish platform .vsix files to VS Code Marketplace
+        working-directory: vsix-artifacts
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::warning::VSCE_PAT secret is not configured in repository secrets."
+            echo "Skipping marketplace publish. Download .vsix files from GitHub Actions artifacts."
+            exit 0
+          fi
+          for f in *.vsix; do
+            echo "Publishing $f ..."
+            npx @vscode/vsce publish --packagePath "$f"
+          done
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}

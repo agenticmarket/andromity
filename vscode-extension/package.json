@@ -2,7 +2,7 @@
   "name": "andromity-agent",
   "displayName": "Andromity AI Coding Agent for VS Code",
   "description": "Autonomous AI coding agent with subagents, live plans & diffs. BYOK support for Claude 3.7, GPT-4o, DeepSeek R1, Gemini & free local Ollama. MCP & Multi-Agent ready.",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "publisher": "agenticmarket",
   "license": "MIT",
   "icon": "media/icon.png",
