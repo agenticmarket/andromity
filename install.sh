@@ -54,48 +54,74 @@ fi
 PY_VERSION=$("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 info "Found Python $PY_VERSION at $(which "$PYTHON")"
 
-# ── 2. Install pipx ────────────────────────────────────────────────────────
-
-if ! command -v pipx &>/dev/null; then
-    warn "pipx not found — installing it now..."
-
-    OS="$(uname -s)"
-    if [ "$OS" = "Darwin" ] && command -v brew &>/dev/null; then
-        brew install pipx
-    elif command -v apt-get &>/dev/null; then
-        sudo apt-get install -y pipx 2>/dev/null || "$PYTHON" -m pip install --user pipx
-    elif command -v dnf &>/dev/null; then
-        sudo dnf install -y pipx 2>/dev/null || "$PYTHON" -m pip install --user pipx
-    elif command -v pacman &>/dev/null; then
-        sudo pacman -S --noconfirm python-pipx 2>/dev/null || "$PYTHON" -m pip install --user pipx
-    else
-        "$PYTHON" -m pip install --user pipx
-    fi
-
-    # Ensure pipx itself is on PATH
-    "$PYTHON" -m pipx ensurepath --force 2>/dev/null || true
-    export PATH="$HOME/.local/bin:$PATH"
-
-    if ! command -v pipx &>/dev/null; then
-        error "pipx installation failed. Please install it manually:\n  pip install --user pipx\n  python3 -m pipx ensurepath"
-    fi
-
-    success "pipx installed"
-else
-    info "pipx already installed at $(which pipx)"
-fi
-
-# ── 3. Install andromity ───────────────────────────────────────────────────
-
 info "Installing andromity..."
 
-# Upgrade if already installed, otherwise fresh install
-if pipx list 2>/dev/null | grep -q "andromity"; then
-    pipx upgrade andromity
-    success "andromity upgraded to latest version"
-else
-    pipx install andromity
-    success "andromity installed"
+INSTALLED=false
+
+if command -v uv &>/dev/null; then
+    info "uv detected -- using uv tool install"
+    if uv tool list 2>/dev/null | grep -q "andromity"; then
+        info "Upgrading existing andromity installation..."
+        if uv tool upgrade andromity &>/dev/null; then
+            success "andromity upgraded via uv"
+            INSTALLED=true
+        fi
+    fi
+    if [ "$INSTALLED" = false ]; then
+        if uv tool install andromity &>/dev/null; then
+            success "andromity installed via uv"
+            INSTALLED=true
+        else
+            warn "uv tool install failed. Falling back to pipx/pip..."
+        fi
+    fi
+    if [ "$INSTALLED" = true ]; then
+        UV_BIN=$(uv tool dir 2>/dev/null || true)
+        if [ -n "$UV_BIN" ]; then
+            export PATH="$UV_BIN:$PATH"
+        fi
+    fi
+fi
+
+if [ "$INSTALLED" = false ]; then
+    if ! command -v pipx &>/dev/null; then
+        warn "pipx not found — installing it now..."
+
+        OS="$(uname -s)"
+        if [ "$OS" = "Darwin" ] && command -v brew &>/dev/null; then
+            brew install pipx
+        elif command -v apt-get &>/dev/null; then
+            sudo apt-get install -y pipx 2>/dev/null || "$PYTHON" -m pip install --user pipx || "$PYTHON" -m pip install --user pipx --break-system-packages
+        elif command -v dnf &>/dev/null; then
+            sudo dnf install -y pipx 2>/dev/null || "$PYTHON" -m pip install --user pipx || "$PYTHON" -m pip install --user pipx --break-system-packages
+        elif command -v pacman &>/dev/null; then
+            sudo pacman -S --noconfirm python-pipx 2>/dev/null || "$PYTHON" -m pip install --user pipx || "$PYTHON" -m pip install --user pipx --break-system-packages
+        else
+            "$PYTHON" -m pip install --user pipx || "$PYTHON" -m pip install --user pipx --break-system-packages
+        fi
+
+        "$PYTHON" -m pipx ensurepath --force 2>/dev/null || true
+        export PATH="$HOME/.local/bin:$PATH"
+
+        if ! command -v pipx &>/dev/null; then
+            error "pipx installation failed. Please install it manually:\n  pip install --user pipx\n  python3 -m pipx ensurepath"
+        fi
+
+        success "pipx installed"
+    else
+        info "pipx already installed at $(which pipx)"
+    fi
+
+    if pipx list 2>/dev/null | grep -q "andromity"; then
+        pipx upgrade andromity
+        success "andromity upgraded to latest version"
+        INSTALLED=true
+    else
+        if pipx install andromity; then
+            success "andromity installed"
+            INSTALLED=true
+        fi
+    fi
 fi
 
 # ── 4. Ensure ~/.local/bin is on PATH permanently ─────────────────────────

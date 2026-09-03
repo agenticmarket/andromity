@@ -322,10 +322,9 @@ SkillsScreen {
                 "check your network, then press ↺ Refresh.[/]"
             )
         finally:
-            if not self.is_attached:
-                return
-            self._update_title()
-            self._sync_buttons()
+            if self.is_attached:
+                self._update_title()
+                self._sync_buttons()
 
     async def _fetch_desc_worker(self, key: str):
         remote = self._browse_map.get(key)
@@ -362,14 +361,13 @@ SkillsScreen {
         except Exception as e:
             self.notify(f"Install failed: {e}", severity="error", timeout=5)
         finally:
-            if not self.is_attached:
-                return
-            self._busy = False
-            self._render_installed()
-            self._render_browse()
-            self._update_title()
-            self._sync_buttons()
-            self._set_status("")
+            if self.is_attached:
+                self._busy = False
+                self._render_installed()
+                self._render_browse()
+                self._update_title()
+                self._sync_buttons()
+                self._set_status("")
 
     async def _uninstall_worker(self, name: str):
         try:
@@ -378,13 +376,12 @@ SkillsScreen {
         except Exception as e:
             self.notify(f"Uninstall failed: {e}", severity="error", timeout=5)
         finally:
-            if not self.is_attached:
-                return
-            self._reset_pending()
-            self._render_installed()
-            self._render_browse()
-            self._update_title()
-            self._sync_buttons()
+            if self.is_attached:
+                self._reset_pending()
+                self._render_installed()
+                self._render_browse()
+                self._update_title()
+                self._sync_buttons()
 
     # ── Actions ────────────────────────────────────────────────────────────
 

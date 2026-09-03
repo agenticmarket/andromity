@@ -466,8 +466,8 @@ def test_shell_invocation_flags():
     assert _shell_invocation("cmd", "echo hi") == ["cmd", "/d", "/c", "echo hi"]
     assert _shell_invocation("C:\\Windows\\System32\\cmd.exe", "x") == [
         "C:\\Windows\\System32\\cmd.exe", "/d", "/c", "x"]
-    assert _shell_invocation("powershell", "x") == ["powershell", "-Command", "x"]
-    assert _shell_invocation("pwsh", "x") == ["pwsh", "-Command", "x"]
+    assert _shell_invocation("powershell", "x") == ["powershell", "-NoProfile", "-NonInteractive", "-Command", "x"]
+    assert _shell_invocation("pwsh", "x") == ["pwsh", "-NoProfile", "-NonInteractive", "-Command", "x"]
     assert _shell_invocation("/bin/bash", "x") == ["/bin/bash", "-c", "x"]
     assert _shell_invocation("zsh", "x") == ["zsh", "-c", "x"]
 

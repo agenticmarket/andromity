@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
@@ -18,15 +19,28 @@ from andromity.core.git_ops import create_pre_edit_snapshot, get_repo
 
 log = get_logger("tools")
 
+import contextvars
+
 _PLAN_CALLBACKS: List[Callable] = []  # list of callables(plan) to notify on plan write/update
 _TODO_CALLBACKS: List[Callable] = []  # list of callables() to notify on todo changes
-_current_session = None  # set by agent before tool execution
+_SUBAGENT_PROGRESS_CALLBACKS: List[Callable] = []  # list of callables(StreamEvent) for subagent activity
+_current_session_var: contextvars.ContextVar[Any] = contextvars.ContextVar("current_session", default=None)
 _mcp_manager = None  # global MCPClientManager instance
 
 # ── Background process registry ────────────────────────────────────────────────
-# Maps process_id → {"proc": Popen, "buf": deque, "cmd": str, "started": float}
-_bg_processes: Dict[str, Any] = {}
+# Scoped by project_path to prevent cross-project leak.
+# Maps (project_key, process_id) → {"proc": Popen, "buf": deque, "cmd": str, "started": float}
+_bg_processes: Dict[tuple, Any] = {}
 _bg_lock = threading.Lock()
+
+def _bg_project_key() -> str:
+    try:
+        return str(_get_project_root().resolve())
+    except Exception:
+        return "__global__"
+
+def _bg_full_key(pid: str) -> tuple:
+    return (_bg_project_key(), pid)
 
 
 def register_plan_callback(cb: Callable):
@@ -37,10 +51,24 @@ def register_todo_callback(cb: Callable):
     _TODO_CALLBACKS.append(cb)
 
 
+def register_subagent_progress_callback(cb: Callable):
+    if cb not in _SUBAGENT_PROGRESS_CALLBACKS:
+        _SUBAGENT_PROGRESS_CALLBACKS.append(cb)
+
+
+def unregister_subagent_progress_callback(cb: Callable):
+    if cb in _SUBAGENT_PROGRESS_CALLBACKS:
+        _SUBAGENT_PROGRESS_CALLBACKS.remove(cb)
+
+
 def register_session(session):
-    """Register the active session so plan tools can store plan in it."""
-    global _current_session
-    _current_session = session
+    """Register the active session in contextvars so tool executions are thread-safe and isolated."""
+    _current_session_var.set(session)
+
+
+def get_current_session():
+    """Retrieve the active session for the current execution context."""
+    return _current_session_var.get()
 
 
 def register_mcp_manager(manager):
@@ -66,25 +94,28 @@ def _notify_todo():
 
 
 def _get_project_root() -> Path:
-    if _current_session and getattr(_current_session, "project_path", None):
-        return Path(_current_session.project_path).resolve()
+    session = _current_session_var.get()
+    if session and getattr(session, "project_path", None):
+        return Path(session.project_path).resolve()
     return Path.cwd().resolve()
 
 
-def _assert_safe_path(p: Path) -> None:
-    """Raise PermissionError if path escapes the project directory."""
+def _assert_safe_path(p: Path) -> Path:
+    """Raise PermissionError if path escapes the project directory. Returns resolved path."""
     root = _get_project_root()
+    resolved = p.resolve()
     try:
-        p.resolve().relative_to(root)
+        resolved.relative_to(root)
     except ValueError:
         raise PermissionError(
             f"Access denied: '{p}' is outside the project directory ({root}). "
             "Andromity can only access files within the active project directory."
         )
+    return resolved
 
 
 def _is_trusted() -> bool:
-    return config.is_trusted(str(Path.cwd()))
+    return config.is_trusted(str(_get_project_root()))
 
 
 def _ensure_snapshot():
@@ -180,8 +211,29 @@ def read_file(
     if not p.is_file():
         return f"Error: File '{path}' does not exist."
     try:
+        # Guard against OOM on huge files — check size before reading entire file.
+        try:
+            max_kb = int(config.get("advanced", "max_file_size_kb", 500) or 500)
+        except Exception:
+            max_kb = 500
+        max_bytes = max_kb * 1024
+        try:
+            fsize = p.stat().st_size
+            if fsize > max_bytes:
+                return (
+                    f"Error: File '{path}' is too large ({fsize} bytes, limit {max_kb} KB). "
+                    f"Use start_line/end_line to read a slice, or symbols_only=True for outline. "
+                    f"Increase limit via Settings → Advanced → max_file_size_kb."
+                )
+        except OSError:
+            pass
         with open(p, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
+            content = f.read(max_bytes + 1)
+            if len(content) > max_bytes:
+                return (
+                    f"Error: File '{path}' exceeds {max_kb} KB read limit. "
+                    f"Use start_line/end_line to read a slice, or symbols_only=True for outline."
+                )
 
         if symbols_only:
             return extract_code_symbols(path, content)
@@ -400,11 +452,47 @@ def edit_file_multi(path: str, edits: list) -> str:
 
 # ── Directory & Shell Operations ──────────────────────────────────────────────
 
+def get_clean_subprocess_env(extra_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Build a clean environment dictionary for subprocesses spawned from PyInstaller.
+
+    Prevents PyInstaller's internal PYTHONHOME/PYTHONPATH/_MEIPASS from poisoning
+    child python processes, pip, pytest, git hooks, and virtual environments.
+    """
+    env = os.environ.copy()
+
+    # 1. Restore original variables if PyInstaller preserved them
+    for var in ("PYTHONHOME", "PYTHONPATH", "PATH", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
+        orig = f"{var}_ORIG"
+        if orig in env:
+            env[var] = env[orig]
+            env.pop(orig, None)
+        elif getattr(sys, "frozen", False) and var in ("PYTHONHOME", "PYTHONPATH"):
+            # When frozen, remove PYTHONHOME/PYTHONPATH completely so child python
+            # uses its own installation directory.
+            env.pop(var, None)
+
+    # 2. Strip PyInstaller internal keys
+    for key in ("_MEIPASS2", "_PYI_APPLICATION_HOME_DIR", "_PYI_ARCHIVE_FILE", "_PYI_SPLASH_IPC"):
+        env.pop(key, None)
+
+    # 3. Clean _MEIPASS from PATH if PATH_ORIG was not set
+    if getattr(sys, "frozen", False):
+        mei = getattr(sys, "_MEIPASS", None)
+        if mei and "PATH" in env:
+            paths = env["PATH"].split(os.pathsep)
+            cleaned_paths = [p for p in paths if p and os.path.abspath(p) != os.path.abspath(mei)]
+            env["PATH"] = os.pathsep.join(cleaned_paths)
+
+    if extra_env:
+        env.update(extra_env)
+    return env
+
+
 def _shell_invocation(shell: str, command: str) -> list[str]:
     """Build the argv that tells this shell to run `command`.
 
     Different shells need different flags:
-      - powershell / pwsh     ->  -Command
+      - powershell / pwsh     ->  -NoProfile -NonInteractive -Command
       - cmd (Windows)         ->  /d /c   (cmd has no -c; /d skips AutoRun)
       - bash / sh / zsh / …  ->  -c
     Handles both bare names and full paths (e.g. C:\\Windows\\System32\\cmd.exe).
@@ -413,7 +501,7 @@ def _shell_invocation(shell: str, command: str) -> list[str]:
     if name.endswith(".exe"):
         name = name[:-4]
     if name in ("powershell", "pwsh"):
-        return [shell, "-Command", command]
+        return [shell, "-NoProfile", "-NonInteractive", "-Command", command]
     if name == "cmd":
         return [shell, "/d", "/c", command]
     return [shell, "-c", command]
@@ -430,9 +518,19 @@ def shell_exec(command: str, timeout: int = 120) -> str:
             cwd = str(_get_project_root())
         except Exception:
             cwd = os.getcwd()
+        clean_env = get_clean_subprocess_env()
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         result = subprocess.run(
-            cmd, capture_output=True, text=True, errors="replace",
-            timeout=timeout, cwd=cwd,
+            cmd,
+            stdin=subprocess.DEVNULL,  # Prevent inheriting daemon stdio stream
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=timeout,
+            cwd=cwd,
+            env=clean_env,             # Prevent PYTHONHOME/PYTHONPATH poisoning
+            close_fds=True,            # Prevent handle inheritance
+            creationflags=flags,
         )
         output = result.stdout
         if result.stderr:
@@ -459,11 +557,15 @@ def shell_bg(command: str, process_id: str = "") -> str:
         return "Error: This folder is not trusted. Use /trust to allow shell commands."
 
     import uuid
-    pid = process_id.strip() or command.split()[0].split("/")[-1][:20]
-    # Make unique if already taken
+    _cmd_tokens = command.split()
+    pid = process_id.strip() or (_cmd_tokens[0].split("/")[-1][:20] if _cmd_tokens else "bg")
+    proj_key = _bg_project_key()
+    full_key = (proj_key, pid)
+    # Make unique if already taken (per-project)
     with _bg_lock:
-        if pid in _bg_processes:
+        if full_key in _bg_processes:
             pid = f"{pid}-{uuid.uuid4().hex[:4]}"
+            full_key = (proj_key, pid)
 
     shell = get_shell()
     try:
@@ -473,10 +575,20 @@ def shell_bg(command: str, process_id: str = "") -> str:
 
     try:
         cmd = _shell_invocation(shell, command)
+        clean_env = get_clean_subprocess_env()
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, errors="replace", cwd=cwd,
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+            cwd=cwd,
+            env=clean_env,
             bufsize=1,
+            close_fds=True,
+            creationflags=flags,
         )
     except Exception as e:
         return f"Error starting background process: {e}"
@@ -497,11 +609,12 @@ def shell_bg(command: str, process_id: str = "") -> str:
     t.start()
 
     with _bg_lock:
-        _bg_processes[pid] = {
+        _bg_processes[full_key] = {
             "proc": proc,
             "buf": buf,
             "cmd": command,
             "started": _time.time(),
+            "project": proj_key,
         }
 
     return (
@@ -513,11 +626,18 @@ def shell_bg(command: str, process_id: str = "") -> str:
 
 def shell_read(process_id: str, lines: int = 50) -> str:
     """Read the latest output lines from a background process started with shell_bg."""
+    proj_key = _bg_project_key()
     with _bg_lock:
-        entry = _bg_processes.get(process_id)
+        entry = _bg_processes.get((proj_key, process_id))
+        # Fallback scan for legacy unscoped entries or cross-project debug
+        if entry is None:
+            for (pk, pid), e in _bg_processes.items():
+                if pid == process_id and pk == proj_key:
+                    entry = e
+                    break
+        scoped_ids = [pid for (pk, pid) in _bg_processes.keys() if pk == proj_key]
     if not entry:
-        ids = list(_bg_processes.keys())
-        hint = f" Running ids: {ids}" if ids else " No background processes are running."
+        hint = f" Running ids (this project): {scoped_ids}" if scoped_ids else " No background processes are running."
         return f"Error: No background process with id '{process_id}'.{hint}"
 
     proc = entry["proc"]
@@ -538,8 +658,18 @@ def shell_read(process_id: str, lines: int = 50) -> str:
 
 def shell_kill(process_id: str) -> str:
     """Kill a background process started with shell_bg."""
+    proj_key = _bg_project_key()
     with _bg_lock:
-        entry = _bg_processes.pop(process_id, None)
+        entry = _bg_processes.pop((proj_key, process_id), None)
+        if entry is None:
+            # legacy fallback: try bare pid
+            for k in list(_bg_processes.keys()):
+                if k[1] == process_id and k[0] == proj_key:
+                    entry = _bg_processes.pop(k, None)
+                    break
+                if k == process_id:  # bare string legacy
+                    entry = _bg_processes.pop(k, None)
+                    break
     if not entry:
         return f"Error: No background process with id '{process_id}'."
     proc = entry["proc"]
@@ -556,17 +686,27 @@ def shell_kill(process_id: str) -> str:
 
 def shell_list() -> str:
     """List all background processes currently running (started with shell_bg)."""
+    proj_key = _bg_project_key()
     with _bg_lock:
         entries = dict(_bg_processes)
     if not entries:
         return "No background processes are running."
     lines = []
-    for pid, entry in entries.items():
+    for key, entry in entries.items():
+        # Support both (proj,pid) tuple and legacy bare pid keys
+        if isinstance(key, tuple):
+            pk, pid = key
+            if pk != proj_key:
+                continue
+        else:
+            pid = key
         proc = entry["proc"]
         alive = proc.poll() is None
         status = "running" if alive else f"exited ({proc.returncode})"
         elapsed = int(_time.time() - entry['started'])
         lines.append(f"  '{pid}' | {status} | {elapsed}s | {entry['cmd']}")
+    if not lines:
+        return f"No background processes for current project ({proj_key})."
     return "Background processes:\n" + "\n".join(lines)
 
 
@@ -692,8 +832,8 @@ def _sync_plan_md(plan=None, todo_list=None):
                 "pending": "[ ]",
                 "active": "[/]",
                 "done": "[x]",
-                "failed": "[-]",
-                "skipped": "[~]"
+                "failed": "[!]",
+                "skipped": "[-]"
             }
             checkbox = status_map.get(item.status, "[ ]")
             md_lines.append(f"- {checkbox} {item.title}")
@@ -752,7 +892,15 @@ def write_plan(title: str, description: str = "", plan_md: str = "", steps: list
 
     project_root = str(_get_project_root())
 
-    # Save plan metadata (title / description / questions / status only — no steps)
+    # Steps become todos — single source of truth
+    todo_list = TodoList(project_path=project_root)
+    todo_list.items = [
+        TodoItem(id=f"t{i + 1}", title=text, status=status)
+        for i, (text, status) in enumerate(step_items)
+    ]
+    todo_list.save()
+
+    # Save plan metadata with steps
     from andromity.config import config
     mode = config.get("default", "permission_mode", "safe")
     auto_approve = mode in ("yolo", "full")
@@ -767,16 +915,9 @@ def write_plan(title: str, description: str = "", plan_md: str = "", steps: list
     )
     plan.save()
 
-    if _current_session:
-        _current_session.save_plan(plan.to_dict())
-
-    # Steps become todos — single source of truth
-    todo_list = TodoList(project_path=project_root)
-    todo_list.items = [
-        TodoItem(id=f"t{i + 1}", title=text, status=status)
-        for i, (text, status) in enumerate(step_items)
-    ]
-    todo_list.save()
+    cur_session = _current_session_var.get()
+    if cur_session:
+        cur_session.save_plan(plan.to_enriched_dict())
 
     _sync_plan_md(plan, todo_list)
     _notify_plan(plan)
@@ -837,6 +978,18 @@ def update_plan_step(step_index: int, status: str) -> str:
     _sync_plan_md(todo_list=todo_list)
     _notify_todo()
 
+    # Also update session plan and notify plan listeners with live step statuses
+    try:
+        from andromity.core.planner import Plan
+        plan = Plan.load(project_path)
+        if plan:
+            cur_session = _current_session_var.get()
+            if cur_session:
+                cur_session.save_plan(plan.to_enriched_dict())
+            _notify_plan(plan)
+    except Exception:
+        pass
+
     if item:
         return f"Updated Step {step_index} ({item.title}) to '{status}'."
     return f"Updated Step {step_index} status to '{status}'."   
@@ -891,9 +1044,183 @@ def list_tools(limit: int = 20, offset: int = 0, include_description: bool = Fal
     return "\n".join(output_lines)
 
 
+# ── Sub-Agent & Session Coordination Tools ───────────────────────────────────
+
+async def spawn_subagent_async(
+    role: str,
+    task: str,
+    model_override: Optional[str] = None,
+    provider_override: Optional[str] = None,
+    tools: Optional[List[str]] = None,
+    timeout: Optional[float] = None,
+    wait: bool = True,
+    context_snapshot: Optional[Any] = None,
+    tool_id: Optional[str] = None,
+) -> str:
+    from andromity.core.subagent_orchestrator import SubAgentOrchestrator
+    cur_sess = _current_session_var.get()
+    parent_id = cur_sess.id if cur_sess else "root"
+    proj_path = getattr(cur_sess, "project_path", None) if cur_sess else None
+    
+    orchestrator = getattr(cur_sess, "_orchestrator", None) if cur_sess else None
+    if not orchestrator:
+        perm_mode = getattr(cur_sess, "permission_mode", None) if cur_sess else None
+        orchestrator = SubAgentOrchestrator(parent_session_id=parent_id, project_path=proj_path, permission_mode=perm_mode)
+        if cur_sess:
+            cur_sess._orchestrator = orchestrator
+
+    def _on_subagent_progress(evt):
+        for cb in list(_SUBAGENT_PROGRESS_CALLBACKS):
+            try:
+                cb(evt)
+            except Exception:
+                pass
+
+    res = await orchestrator.spawn(
+        role=role,
+        task=task,
+        model_override=model_override,
+        provider_override=provider_override,
+        tools_override=tools,
+        timeout=timeout,
+        wait=wait,
+        tool_id=tool_id,
+        progress_callback=_on_subagent_progress,
+        context_snapshot=context_snapshot,
+    )
+    cur_sess = _current_session_var.get()
+    if cur_sess and hasattr(res, "tokens_used") and res.tokens_used:
+        try:
+            cur_sess.update_usage(res.tokens_used)
+        except Exception:
+            pass
+
+    return json.dumps(res.to_dict(), indent=2)
+
+
+
+async def session_send_message_async(to_session: str, content: str) -> str:
+    from andromity.core.session_bus import SessionBus
+    bus = SessionBus.get_instance()
+    cur_sess = _current_session_var.get()
+    sender_id = cur_sess.id if cur_sess else "anonymous"
+    success = await bus.send_message(
+        from_session_id=sender_id,
+        to_target=to_session,
+        content=content,
+    )
+    if success:
+        return f"Message sent successfully to '{to_session}'."
+    return f"Failed to send message: target session '{to_session}' was not found or is offline."
+
+
+async def session_ask_question_async(to_session: str, question: str, timeout: float = 60.0) -> str:
+    from andromity.core.session_bus import SessionBus
+    bus = SessionBus.get_instance()
+    cur_sess = _current_session_var.get()
+    sender_id = cur_sess.id if cur_sess else "anonymous"
+    return await bus.ask_question(
+        from_session_id=sender_id,
+        to_target=to_session,
+        question=question,
+        timeout=timeout,
+    )
+
+
+async def session_broadcast_async(content: str) -> str:
+    from andromity.core.session_bus import SessionBus
+    bus = SessionBus.get_instance()
+    cur_sess = _current_session_var.get()
+    sender_id = cur_sess.id if cur_sess else "anonymous"
+    count = await bus.broadcast(from_session_id=sender_id, content=content)
+    return f"Broadcast message delivered to {count} active session(s)."
+
+
+def session_list() -> str:
+    from andromity.core.session_bus import SessionBus
+    bus = SessionBus.get_instance()
+    cur_sess = _current_session_var.get()
+    proj = getattr(cur_sess, "project_path", None) if cur_sess else None
+    cur_id = getattr(cur_sess, "id", None) if cur_sess else None
+    sessions = bus.list_sessions(project_path=proj)
+    if not sessions:
+        return "No active sessions found."
+    lines = ["Active Sessions on SessionBus:"]
+    for s in sessions:
+        is_cur = (s["session_id"] == cur_id)
+        tag = " (current active session)" if is_cur else ""
+        lines.append(f"- **{s['name']}**{tag} (id: `{s['session_id'][:8]}...`, path: `{s['project_path']}`, registered: {s['registered_at']})")
+    return "\n".join(lines)
+
+
+def shared_state_set(key: str, value: Any) -> str:
+    from andromity.core.shared_state import SharedStateBoard
+    cur_sess = _current_session_var.get()
+    proj = getattr(cur_sess, "project_path", None) if cur_sess else None
+    author = cur_sess.name if cur_sess else "anonymous"
+    board = SharedStateBoard.get_instance(project_path=proj)
+    board.set(key, value, author_session=author)
+    return f"Shared state updated: '{key}' = {json.dumps(value) if not isinstance(value, str) else value}"
+
+
+def shared_state_get(key: str) -> str:
+    from andromity.core.shared_state import SharedStateBoard
+    cur_sess = _current_session_var.get()
+    proj = getattr(cur_sess, "project_path", None) if cur_sess else None
+    board = SharedStateBoard.get_instance(project_path=proj)
+    val = board.get(key)
+    if val is None:
+        prefix_matches = board.snapshot(prefix=key)
+        if prefix_matches:
+            return json.dumps(prefix_matches, indent=2)
+        return f"No value found for key '{key}'."
+    return json.dumps(val, indent=2) if isinstance(val, (dict, list)) else str(val)
+
+
+def write_handoff_tool(
+    phase: str,
+    status: str,
+    produced: Optional[Dict[str, Any]] = None,
+    blocked_on: Optional[List[str]] = None,
+    next_steps: Optional[List[str]] = None,
+    notes: str = "",
+) -> str:
+    from andromity.core.handoff import write_handoff
+    cur_sess = _current_session_var.get()
+    proj = getattr(cur_sess, "project_path", None) if cur_sess else None
+    author = cur_sess.name if cur_sess else "anonymous"
+    res = write_handoff(
+        phase=phase,
+        from_session=author,
+        status=status,
+        produced=produced,
+        blocked_on=blocked_on,
+        next_steps=next_steps,
+        notes=notes,
+        project_path=proj,
+    )
+    return f"Handoff document for phase '{phase}' ({status}) saved successfully:\n```json\n{json.dumps(res, indent=2)}\n```"
+
+
+def read_handoff_tool(phase: str = "") -> str:
+    from andromity.core.handoff import read_handoff, list_handoffs
+    cur_sess = _current_session_var.get()
+    proj = getattr(cur_sess, "project_path", None) if cur_sess else None
+    if not phase or phase == "list":
+        docs = list_handoffs(project_path=proj)
+        if not docs:
+            return "No handoff documents available."
+        return json.dumps(docs, indent=2)
+    doc = read_handoff(phase, project_path=proj)
+    if not doc:
+        return f"No handoff document found for phase '{phase}'."
+    return json.dumps(doc, indent=2)
+
+
 # ── Core Tool Schemas & Tool Registry ─────────────────────────────────────────
 
 CORE_TOOLS = [
+
     {
         "type": "function",
         "function": {
@@ -1205,6 +1532,147 @@ CORE_TOOLS = [
                 "required": ["url"],
             },
         },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "spawn_subagent",
+            "description": "Spawn a specialized sub-agent for a delegated subtask (e.g. search, coder, reviewer, analyst). Returns a structured, compressed summary.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "role": {"type": "string", "description": "Subagent role: 'search', 'coder', 'reviewer', 'analyst', or 'general'"},
+                    "task": {"type": "string", "description": "Specific, actionable task instructions for the subagent"},
+                    "model_override": {"type": "string", "description": "Optional model override for this subagent"},
+                    "provider_override": {"type": "string", "description": "Optional provider override"},
+                    "tools": {"type": "array", "items": {"type": "string"}, "description": "Optional list of tools allowed for this subagent"},
+                    "timeout": {"type": "number", "description": "Optional timeout in seconds (default 180s)"},
+                    "wait": {"type": "boolean", "description": "Whether to wait for completion (default true)"},
+                    "context_snapshot": {"type": "object", "description": "Optional curated dictionary or key context facts to pass into the subagent"},
+                },
+                "required": ["role", "task"],
+
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "session_send_message",
+            "description": "Send an asynchronous message to another active session in the workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to_session": {"type": "string", "description": "Target session name or session ID"},
+                    "content": {"type": "string", "description": "Message content to send"},
+                },
+                "required": ["to_session", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "session_ask_question",
+            "description": "Ask another active session a question and wait for its answer. Use when one session needs decisions or clarifications from another.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to_session": {"type": "string", "description": "Target session name or ID"},
+                    "question": {"type": "string", "description": "Question to ask"},
+                    "timeout": {"type": "number", "description": "Timeout in seconds (default 60s)"},
+                },
+                "required": ["to_session", "question"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "session_broadcast",
+            "description": "Broadcast an update or status change to all other active sessions on the project.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "Announcement or update message"},
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "session_list",
+            "description": "List all active agent sessions in the workspace, their registered names, IDs, and paths.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "shared_state_set",
+            "description": "Set a namespaced key-value fact on the shared state board (e.g. 'auth.endpoints', 'ui.theme', 'db.schema').",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Namespaced key name (e.g. 'auth.jwt_secret', 'db.tables')"},
+                    "value": {"description": "Value to store (string, boolean, number, list, or dictionary)"},
+                },
+                "required": ["key", "value"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "shared_state_get",
+            "description": "Get a value or prefix snapshot from the shared state board.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Key or key prefix to lookup"},
+                },
+                "required": ["key"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_handoff",
+            "description": "Write a structured phase handoff document (e.g. 'authentication', 'database', 'frontend') for other sessions to consume without context bloat.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phase": {"type": "string", "description": "Phase name (e.g. 'authentication', 'database_migration')"},
+                    "status": {"type": "string", "description": "Status: 'complete', 'in_progress', or 'blocked'"},
+                    "produced": {"type": "object", "description": "Dictionary of produced artifacts, endpoints, files, env vars"},
+                    "blocked_on": {"type": "array", "items": {"type": "string"}, "description": "List of blockers"},
+                    "next_steps": {"type": "array", "items": {"type": "string"}, "description": "Suggested next steps for other sessions"},
+                    "notes": {"type": "string", "description": "Key architectural constraints or notes"},
+                },
+                "required": ["phase", "status"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_handoff",
+            "description": "Read a structured handoff document produced by another session, or list all handoffs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phase": {"type": "string", "description": "Phase name to read (or 'list' to see all)"},
+                },
+                "required": ["phase"],
+            },
+        },
     }
 ]
 
@@ -1293,8 +1761,23 @@ class ToolRegistry:
 # ── Tool Dispatcher ───────────────────────────────────────────────────────────
 
 
+def _run_coro_sync(coro):
+    """Run an async coroutine from a synchronous tool execution context safely."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(asyncio.run, coro).result()
+    else:
+        return asyncio.run(coro)
+
+
 def execute_tool(name: str, args: Dict[str, Any]) -> str:
-    """Execute any tool (Core, Web, or MCP) with logging and error handling."""
+    """Execute any tool (Core, Web, Coordination, or MCP) with logging and error handling."""
     log.debug("TOOL CALL: %s(%s)", name, {k: (str(v)[:80] + '...' if isinstance(v, str) and len(v) > 80 else v) for k, v in args.items()})
 
     # 1. Core Built-in Tools
@@ -1331,7 +1814,27 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
     elif name in ("ask_questions", "ask_question"):
         return "Error: ask_questions is handled interactively by the agent loop and cannot be executed directly."
 
-    # 2. Web Tools
+    # 2. Sub-Agent and Session Coordination Tools
+    elif name == "spawn_subagent":
+        return _run_coro_sync(spawn_subagent_async(**args))
+    elif name == "session_send_message":
+        return _run_coro_sync(session_send_message_async(**args))
+    elif name == "session_ask_question":
+        return _run_coro_sync(session_ask_question_async(**args))
+    elif name == "session_broadcast":
+        return _run_coro_sync(session_broadcast_async(**args))
+    elif name == "session_list":
+        return session_list()
+    elif name == "shared_state_set":
+        return shared_state_set(**args)
+    elif name == "shared_state_get":
+        return shared_state_get(**args)
+    elif name == "write_handoff":
+        return write_handoff_tool(**args)
+    elif name == "read_handoff":
+        return read_handoff_tool(**args)
+
+    # 3. Web Tools
     elif name == "web_search":
         from andromity.core.web import web_search
         return web_search(**args)
@@ -1339,7 +1842,7 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
         from andromity.core.web import fetch_url
         return fetch_url(**args)
 
-    # 3. Model Context Protocol (MCP) Tools
+    # 4. Model Context Protocol (MCP) Tools
     elif name.startswith("mcp__"):
         if _mcp_manager:
             import asyncio
@@ -1355,12 +1858,23 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
     return f"Error: Unknown tool '{name}'"
 
 
-async def execute_tool_async(name: str, args: Dict[str, Any]) -> str:
-    """Asynchronous tool execution (natively awaits MCP tools, dispatches core tools)."""
+async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[str] = None) -> str:
+    """Asynchronous tool execution (natively awaits MCP tools and async coordination tools, dispatches core tools)."""
     if name.startswith("mcp__"):
         if _mcp_manager:
             return await _mcp_manager.execute_mcp_tool(name, args)
         return f"Error: MCP tool '{name}' called but no MCPClientManager is active."
+
+    # Sub-agent and session coordination async tools
+    if name == "spawn_subagent":
+        return await spawn_subagent_async(tool_id=tool_id, **args)
+    elif name == "session_send_message":
+        return await session_send_message_async(**args)
+    elif name == "session_ask_question":
+        return await session_ask_question_async(**args)
+    elif name == "session_broadcast":
+        return await session_broadcast_async(**args)
     
     # Run blocking core tools in a background thread to prevent freezing the Textual UI
     return await asyncio.to_thread(execute_tool, name, args)
+

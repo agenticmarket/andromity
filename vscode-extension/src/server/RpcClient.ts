@@ -1,0 +1,180 @@
+import { EventEmitter } from "events";
+import {
+  JsonRpcNotification,
+  JsonRpcRequest,
+  JsonRpcResponse,
+} from "./types.js";
+
+export class RpcClient extends EventEmitter {
+  private _nextId = 1;
+  private _pendingRequests = new Map<
+    string | number,
+    { resolve: (res: any) => void; reject: (err: any) => void; timer: NodeJS.Timeout }
+  >();
+  private _sendRaw: (msg: string) => void;
+  private _buffer = "";
+  private _log: (msg: string) => void;
+
+  constructor(sendRaw: (msg: string) => void, options?: { log?: (msg: string) => void }) {
+    super();
+    this._sendRaw = sendRaw;
+    // Route parse problems to the extension's output channel (visible to users)
+    // instead of only the hidden DevTools console.
+    this._log = options?.log ?? ((msg: string) => console.error(msg));
+  }
+
+  public handleIncomingMessage(raw: string): void {
+    this._buffer += raw;
+    let newlineIndex: number;
+    while ((newlineIndex = this._buffer.indexOf("\n")) !== -1) {
+      const line = this._buffer.slice(0, newlineIndex).trim();
+      this._buffer = this._buffer.slice(newlineIndex + 1);
+      if (!line) continue;
+
+      try {
+        const msg = JSON.parse(line);
+        this._dispatchMessage(msg);
+      } catch (e) {
+        // Frozen binaries / chatty libraries sometimes print to stdout WITHOUT
+        // a trailing newline, which concatenates garbage onto the next JSON-RPC
+        // line. Salvage the embedded JSON object so notifications (especially
+        // agent/done) are not silently dropped — otherwise the UI shows
+        // "working..." forever even though the turn finished daemon-side.
+        const salvaged = this._salvageJson(line);
+        if (salvaged) {
+          this._log(
+            `[Andromity RPC] Salvaged JSON from corrupted line (non-JSON prefix/suffix from the daemon): ${line.slice(0, 200)}`
+          );
+          this._dispatchMessage(salvaged);
+        } else {
+          this._log(
+            `[Andromity RPC] Failed to parse message (dropped, ${line.length} chars): ${line.slice(0, 500)}`
+          );
+        }
+      }
+    }
+  }
+
+  /** Find the first '{' that starts a plausible JSON-RPC object and try to parse from there. */
+  private _salvageJson(line: string): any | null {
+    const start = line.indexOf("{");
+    if (start <= 0) return null;
+    try {
+      const parsed = JSON.parse(line.slice(start));
+      if (typeof parsed === "object" && parsed !== null) {
+        return parsed;
+      }
+    } catch {
+      // fall through
+    }
+    return null;
+  }
+
+  private _dispatchMessage(msg: any): void {
+    if (this._isResponse(msg)) {
+      this._handleResponse(msg);
+    } else if (this._isNotification(msg)) {
+      this._handleNotification(msg);
+    }
+  }
+
+  public async call<T = any>(
+    method: string,
+    params: Record<string, any> = {},
+    timeoutMs: number = 30000
+  ): Promise<T> {
+    const id = this._nextId++;
+    const req: JsonRpcRequest = {
+      jsonrpc: "2.0",
+      id,
+      method,
+      params,
+    };
+
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this._pendingRequests.delete(id);
+        reject(new Error(`RPC timeout (${timeoutMs}ms) for method: ${method}`));
+      }, timeoutMs);
+
+      this._pendingRequests.set(id, { resolve, reject, timer });
+      this._sendRaw(JSON.stringify(req) + "\n");
+    });
+  }
+
+  public notify(method: string, params: Record<string, any> = {}): void {
+    const notif: JsonRpcNotification = {
+      jsonrpc: "2.0",
+      method,
+      params,
+    };
+    this._sendRaw(JSON.stringify(notif) + "\n");
+  }
+
+  private _isResponse(msg: any): msg is JsonRpcResponse {
+    return (
+      typeof msg === "object" &&
+      msg !== null &&
+      "id" in msg &&
+      ("result" in msg || "error" in msg)
+    );
+  }
+
+  private _isNotification(msg: any): msg is JsonRpcNotification {
+    return (
+      typeof msg === "object" &&
+      msg !== null &&
+      !("id" in msg) &&
+      "method" in msg
+    );
+  }
+
+  private _handleResponse(resp: JsonRpcResponse): void {
+    if (resp.id === null || resp.id === undefined) return;
+    const pending = this._pendingRequests.get(resp.id);
+    if (!pending) return;
+
+    this._pendingRequests.delete(resp.id);
+    clearTimeout(pending.timer);
+
+    if (resp.error) {
+      pending.reject(
+        new Error(`[RPC ${resp.error.code}] ${resp.error.message}`)
+      );
+    } else {
+      pending.resolve(resp.result);
+    }
+  }
+
+  /** EventEmitter-reserved method names must never be re-emitted directly:
+   *  emitting "error" with no listener throws an unhandled exception (crashing
+   *  the extension host), and emitting "newListener"/"removeListener" corrupts
+   *  the emitter's own listener bookkeeping. They are still forwarded to "*"
+   *  listeners so nothing observably disappears. */
+  private _isReservedEventName(method: string): boolean {
+    return (
+      method === "error" ||
+      method === "newListener" ||
+      method === "removeListener"
+    );
+  }
+
+  private _handleNotification(notif: JsonRpcNotification): void {
+    if (this._isReservedEventName(notif.method)) {
+      console.warn(
+        `[Andromity RPC] Ignoring reserved notification method: ${notif.method}`
+      );
+    } else {
+      this.emit(notif.method, notif.params);
+    }
+    this.emit("*", notif.method, notif.params);
+  }
+
+  public close(reason = "RPC connection closed"): void {
+    for (const [id, pending] of this._pendingRequests.entries()) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error(reason));
+    }
+    this._pendingRequests.clear();
+  }
+}

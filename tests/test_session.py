@@ -1,7 +1,18 @@
 """Tests for session."""
 import tempfile
+from pathlib import Path
 import pytest
+from andromity.core.db import set_custom_db_path, init_schema
 from andromity.core.session import Session
+
+
+@pytest.fixture(autouse=True)
+def isolated_db(tmp_path):
+    db_file = tmp_path / "test_session.db"
+    set_custom_db_path(db_file)
+    init_schema()
+    yield
+    set_custom_db_path(None)
 
 
 def test_session_creation():

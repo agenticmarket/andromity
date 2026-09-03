@@ -49,39 +49,31 @@ def test_populate_node_is_lazy(tmp_path):
     sub_dir.mkdir()
     (sub_dir / "nested_file.txt").write_text("nested file")
 
-    panel = FileTreePanel()
+    panel = FileTreePanel(project_path=tmp_path)
+    tree = Tree("Files")
+    # Populate root
+    panel._populate_node(tree.root, tmp_path)
 
-    with patch.object(FileTreePanel, "project_path", new_callable=lambda: property(lambda self: tmp_path)):
-        tree = Tree("Files")
-        # Populate root
-        panel._populate_node(tree.root, tmp_path)
+    # Root should contain root_file.txt and sub_dir/
+    child_names = [child.label.plain if hasattr(child.label, "plain") else str(child.label) for child in tree.root.children]
+    assert any("root_file.txt" in name for name in child_names)
+    assert any("sub_dir" in name for name in child_names)
 
-        # Root should contain root_file.txt and sub_dir/
-        child_names = [child.label.plain if hasattr(child.label, "plain") else str(child.label) for child in tree.root.children]
-        assert any("root_file.txt" in name for name in child_names)
-        assert any("sub_dir" in name for name in child_names)
+    # Lazy loading check: sub_dir node must NOT have children loaded yet!
+    sub_dir_node = next(child for child in tree.root.children if "sub_dir" in (child.label.plain if hasattr(child.label, "plain") else str(child.label)))
+    assert len(sub_dir_node.children) == 0
 
-        # Lazy loading check: sub_dir node must NOT have children loaded yet!
-        sub_dir_node = next(child for child in tree.root.children if "sub_dir" in (child.label.plain if hasattr(child.label, "plain") else str(child.label)))
-        assert len(sub_dir_node.children) == 0
-
-        # Expand/populate sub_dir explicitly
-        panel._populate_node(sub_dir_node, sub_dir)
-        assert len(sub_dir_node.children) == 1
-        nested_label = sub_dir_node.children[0].label.plain if hasattr(sub_dir_node.children[0].label, "plain") else str(sub_dir_node.children[0].label)
-        assert "nested_file.txt" in nested_label
+    # Expand/populate sub_dir explicitly
+    panel._populate_node(sub_dir_node, sub_dir)
+    assert len(sub_dir_node.children) == 1
+    nested_label = sub_dir_node.children[0].label.plain if hasattr(sub_dir_node.children[0].label, "plain") else str(sub_dir_node.children[0].label)
+    assert "nested_file.txt" in nested_label
 
 
 # ─── Incremental diff-sync tests ──────────────────────────────────────────────
 
 def _make_panel(tmp_path: Path) -> FileTreePanel:
-    panel = FileTreePanel()
-    patcher = patch.object(
-        FileTreePanel, "project_path",
-        new_callable=lambda: property(lambda self: tmp_path),
-    )
-    patcher.start()
-    return panel
+    return FileTreePanel(project_path=tmp_path)
 
 
 def test_sync_node_adds_new_file_in_place(tmp_path):

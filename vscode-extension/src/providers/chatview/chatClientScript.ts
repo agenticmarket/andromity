@@ -1,0 +1,4618 @@
+import { ChatViewState } from "./chatHtml.js";
+
+export function getChatClientScript(sidebarIconUri: string, state: ChatViewState): string {
+  return `
+    const vscode = acquireVsCodeApi();
+    const sidebarIconUri = "${sidebarIconUri}";
+
+    window.onerror = function(msg, url, lineNo, columnNo, error) {
+      console.error("[Andromity Webview Error]", msg, lineNo, columnNo, error);
+      try {
+        vscode.postMessage({
+          type: "webview_error",
+          message: String(msg),
+          line: lineNo,
+          col: columnNo,
+          stack: error ? error.stack : ""
+        });
+      } catch(e) {}
+    };
+    window.addEventListener("unhandledrejection", function(event) {
+      console.error("[Andromity Webview Unhandled Rejection]", event.reason);
+      try {
+        vscode.postMessage({
+          type: "webview_error",
+          message: "Unhandled promise rejection: " + String(event.reason),
+          stack: event.reason && event.reason.stack ? event.reason.stack : ""
+        });
+      } catch(e) {}
+    });
+
+    const chatContainer = document.getElementById('chat-messages');
+    const zeroState = document.getElementById('zero-state');
+    const promptInput = document.getElementById('prompt-input');
+    const sendBtn = document.getElementById('btn-send');
+    const cancelBtn = document.getElementById('btn-cancel');
+    const CANCEL_BTN_STOP_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>';
+    const interactiveSlot = document.getElementById('interactive-slot');
+    const activeModelName = document.getElementById('active-model-name');
+    const activeModeLabel = document.getElementById('active-mode-label');
+    const modelFlyout = document.getElementById('model-flyout');
+    const flyoutSearch = document.getElementById('flyout-search');
+    const flyoutList = document.getElementById('flyout-list');
+    const queueContainer = document.getElementById('queue-container');
+    const tokenLabel = document.getElementById('token-label');
+    const costLabel = document.getElementById('cost-label');
+
+    const sessionsFlyout = document.getElementById('sessions-flyout');
+    const sessionsSearch = document.getElementById('sessions-search');
+    const sessionsListEl = document.getElementById('sessions-list');
+    const cronsFlyout = document.getElementById('crons-flyout');
+    const cronsListEl = document.getElementById('crons-list');
+    const planTrackerStrip = document.getElementById('plan-tracker-strip');
+    const trackerTitle = document.getElementById('tracker-title');
+    const trackerCount = document.getElementById('tracker-count');
+    const trackerProgressBar = document.getElementById('tracker-progress-bar');
+    const trackerTodosList = document.getElementById('tracker-todos-list');
+    const zeroWorkspaceLabel = document.getElementById('zero-workspace-label');
+    const recentSessionsSection = document.getElementById('recent-sessions-section');
+    const recentSessionsList = document.getElementById('recent-sessions-list');
+    let allSessions = [];
+    let allProviders = [];
+    let sessionDisplayLimit = 10;
+    const sessionsState = {};
+    const sessionDomCache = new Map(); // sessionId -> { html:string, isRunning:boolean }
+    const sessionLiveBuffer = new Map(); // sessionId -> Array<raw msg> for replay when switching to a live session
+    let turnEditedFiles = new Set();
+    const btnScrollBottom = document.getElementById('btn-scroll-bottom');
+    const scrollUnreadBadge = document.getElementById('scroll-unread-badge');
+    const timelineFlyout = document.getElementById('timeline-flyout');
+    const timelineList = document.getElementById('timeline-list');
+    const btnTopTimeline = document.getElementById('btn-top-timeline');
+    const btnTimelineClose = document.getElementById('btn-timeline-close');
+
+    const onboardingSection = document.getElementById('onboarding-guide-section');
+    const readyHeroSection = document.getElementById('ready-hero-section');
+    const onboardingProvidersGrid = document.getElementById('onboarding-providers-grid');
+    const onboardingKeyForm = document.getElementById('onboarding-key-form');
+    const onboardingOllamaForm = document.getElementById('onboarding-ollama-form');
+    const onboardingKeyInput = document.getElementById('onboarding-key-input');
+    const onboardingKeyLabel = document.getElementById('onboarding-key-label');
+    const onboardingPortalLink = document.getElementById('onboarding-portal-link');
+    const btnOnboardingSave = document.getElementById('btn-onboarding-save');
+    const btnOnboardingOllamaSave = document.getElementById('btn-onboarding-ollama-save');
+    const btnToggleKeyVis = document.getElementById('btn-toggle-key-vis');
+
+    let selectedOnboardingProvider = 'anthropic';
+    let selectedOnboardingModel = 'claude-sonnet-4-6';
+
+    const slashPalette = document.getElementById('slash-palette');
+    const slashPaletteList = document.getElementById('slash-palette-list');
+    let activeSlashIdx = 0;
+    let currentSlashMatches = [];
+
+    const mentionPalette = document.getElementById('mention-palette');
+    const mentionPaletteList = document.getElementById('mention-palette-list');
+    let activeMentionIdx = 0;
+    let currentMentionMatches = [];
+    let currentMentionPrefix = '';
+    let allSkills = [];
+
+    const slashCommands = [
+      { cmd: '/help', desc: 'Show all available commands & shortcuts', action: 'help' },
+      { cmd: '/skills', desc: 'Browse and mention installed agent skills', action: 'skills' },
+      { cmd: '/undo', desc: 'Undo last turn & rollback file modifications', action: 'undo' },
+      { cmd: '/compact', desc: 'Compress conversation context to save tokens', action: 'compact' },
+      { cmd: '/new', desc: 'Start a fresh conversation session', action: 'new' },
+      { cmd: '/clear', desc: 'Clear current chat history view', action: 'clear' },
+      { cmd: '/sessions', desc: 'Open sessions browser', action: 'sessions' },
+      { cmd: '/settings', desc: 'Open Settings, Model Catalog & MCP Hub', action: 'settings' },
+      { cmd: '/model', desc: 'Switch AI model', action: 'model' },
+      { cmd: '/mode', desc: 'Cycle permission mode (safe / trust / full / yolo)', action: 'mode' },
+      { cmd: '/plan', desc: 'Open Implementation Plan editor tab', action: 'plan' },
+      { cmd: '/diff', desc: 'View git diff of current changes', action: 'diff' },
+      { cmd: '/cron', desc: 'Manage scheduled background cron jobs', action: 'cron' },
+    ];
+
+    const DEVELOPER_STATEMENTS = [
+      { main: "Make it work.<br>Make it right.", sub: "First functional, then optimal." },
+      { main: "Think twice.<br>Code once.", sub: "Clarity precedes execution." },
+      { main: "First solve the problem.<br>Then write the code.", sub: "Understand deeply before building." },
+      { main: "Ship fast.<br>Break nothing.", sub: "Precision in every iteration." },
+      { main: "Simplicity is prerequisite<br>for reliability.", sub: "Keep architectures clean & focused." },
+      { main: "Leave the code<br>better than you found it.", sub: "Continuous craftsmanship." },
+      { main: "Talk is cheap.<br>Show me the code.", sub: "Let working software speak." },
+      { main: "Stay curious.<br>Build fearlessly.", sub: "What are we engineering today?" },
+      { main: "Less code.<br>Fewer bugs.", sub: "Elegance through minimalism." },
+      { main: "Design is how it works,<br>not just how it looks.", sub: "Form follows function." },
+      { main: "Premature optimization<br>is the root of all evil.", sub: "Measure before you tune." },
+      { main: "Code is read more<br>than it is written.", sub: "Optimize for readability." }
+    ];
+
+    function setRandomStatement() {
+      const mainEl = document.getElementById('zero-statement-main');
+      const subEl = document.getElementById('zero-statement-sub');
+      if (mainEl && subEl) {
+        const item = DEVELOPER_STATEMENTS[Math.floor(Math.random() * DEVELOPER_STATEMENTS.length)];
+        mainEl.innerHTML = item.main;
+        subEl.textContent = item.sub;
+      }
+    }
+
+    function formatTokCompact(n) {
+      if (!n || n <= 0) return '0';
+      if (n >= 1000000) {
+        var val = n / 1000000;
+        return (val % 1 !== 0 && val < 10) ? val.toFixed(1) + 'M' : Math.round(val) + 'M';
+      } else if (n >= 1000) {
+        var val = n / 1000;
+        return (val % 1 !== 0 && val < 10) ? val.toFixed(1) + 'K' : Math.round(val) + 'K';
+      }
+      return String(n);
+    }
+
+    function formatTokenCount(tokens) {
+      return formatTokCompact(tokens) + ' tokens';
+    }
+
+    function parseContextToTokens(ctx) {
+      if (!ctx) return 0;
+      if (typeof ctx === 'number') return ctx;
+      const s = String(ctx).trim();
+      if (/^\\d+$/.test(s)) return parseInt(s, 10);
+      const m = s.match(/^([\\d.]+)\\s*([KMG])?$/i);
+      if (!m) return 0;
+      const num = parseFloat(m[1]);
+      const suf = (m[2] || '').toUpperCase();
+      const mult = suf === 'K' ? 1000 : suf === 'M' ? 1000000 : suf === 'G' ? 1000000000 : 1;
+      if (suf === 'K' && [4,8,16,32,64,128,200].includes(Math.round(num))) {
+        const map = {4:4096,8:8192,16:16384,32:32768,64:65536,128:131072,200:200000};
+        if (map[Math.round(num)] && s.toUpperCase().endsWith('K')) return map[Math.round(num)];
+      }
+      if (suf === 'M' && Math.round(num) === 1) return 1048576;
+      return Math.round(num * mult);
+    }
+
+    function updateTokenDisplay(sessionOrUsage) {
+      // TUI parity:
+      // Status bar displays the latest request input size (self.session.context_tokens)
+      // formatted as: "{tok_str}/{ctx_k} tok" (e.g. "7.2K/1.3M tok" or "5.3K/1.3M tok").
+      // Cumulative billed usage (token_total) is displayed in the hover tooltip.
+      let contextTok = 0;
+      let totalTok = 0;
+      let cost = 0;
+
+      if (sessionOrUsage) {
+        if (typeof sessionOrUsage.context_tokens === 'number') {
+          contextTok = sessionOrUsage.context_tokens;
+        } else if (sessionOrUsage.usage && typeof sessionOrUsage.usage.prompt_tokens === 'number') {
+          contextTok = sessionOrUsage.usage.prompt_tokens;
+        }
+        if (typeof sessionOrUsage.token_total === 'number') {
+          totalTok = sessionOrUsage.token_total;
+        } else if (sessionOrUsage.usage && typeof sessionOrUsage.usage.total_tokens === 'number') {
+          totalTok = sessionOrUsage.usage.total_tokens;
+        }
+        if (typeof sessionOrUsage.cost_usd === 'number') {
+          cost = sessionOrUsage.cost_usd;
+        }
+      }
+
+      let capacity = 0;
+      // Match active model context limit
+      let matched = null;
+      if (currentModel) {
+        const cur = String(currentModel);
+        matched = allModels.find(m => m.id === cur)
+          || allModels.find(m => cur.endsWith('/' + m.id) || cur.endsWith(m.id))
+          || allModels.find(m => m.id && (m.id.endsWith('/' + cur.split('/').pop()) || m.id.split('/').pop() === cur.split('/').pop()));
+      }
+      if (matched) {
+        if (matched.context_limit) {
+          capacity = matched.context_limit;
+        } else if (matched.context) {
+          capacity = parseContextToTokens(matched.context);
+        }
+      }
+      if (!capacity) {
+        // Fallbacks by known family — keep in sync with src/andromity/core/models.py MODEL_CATALOG
+        const cm = String(currentModel).toLowerCase();
+        if (cm.includes('gemini') || cm.includes('claude-opus') || cm.includes('claude-sonnet') || cm.includes('gpt-4.1') || cm.includes('deepseek-v4') || cm.includes('deepseek')) {
+          capacity = 1310720; // 1.3M / 1M for deepseek, gemini, claude
+        } else if (cm.includes('claude-haiku') || cm.includes('o3') || cm.includes('o4')) {
+          capacity = 200000;
+        } else if (cm.includes('llama') || cm.includes('qwen') || cm.includes('gpt-4o') || cm.includes('gpt-5')) {
+          capacity = 131072; // 128K
+        } else {
+          capacity = 131072;
+        }
+      }
+
+      const tokStr = formatTokCompact(contextTok);
+      const capStr = formatTokCompact(capacity);
+      const pct = capacity > 0 ? Math.min(100, Math.max(0, (contextTok / capacity) * 100)) : 0;
+
+      const miniBar = document.getElementById('token-mini-bar');
+      if (miniBar) {
+        miniBar.style.width = pct.toFixed(1) + '%';
+        if (pct > 85) miniBar.style.background = '#ef4444';
+        else if (pct > 65) miniBar.style.background = '#f59e0b';
+        else miniBar.style.background = 'linear-gradient(90deg, #06b6d4, #10b981)';
+      }
+
+      if (tokenLabel) {
+        tokenLabel.textContent = capacity > 0 ? (tokStr + '/' + capStr + ' tok') : (tokStr + ' tok');
+      }
+      if (costLabel) {
+        costLabel.textContent = cost > 0 ? ('$' + cost.toFixed(4) + ' USD') : '$0.0000 USD';
+      }
+
+      // Update Rich Context Popover Card
+      const popoverPct = document.getElementById('context-popover-pct');
+      if (popoverPct) {
+        popoverPct.textContent = Math.round(pct) + '%';
+      }
+
+      const ringFill = document.getElementById('context-ring-fill');
+      if (ringFill) {
+        const circum = 87.96;
+        const offset = circum * (1 - Math.min(100, Math.max(0, pct)) / 100);
+        ringFill.style.strokeDashoffset = offset.toFixed(2);
+        if (pct > 85) ringFill.style.stroke = '#ef4444';
+        else if (pct > 65) ringFill.style.stroke = '#f59e0b';
+        else ringFill.style.stroke = '#e4e4e7';
+      }
+
+      const popoverRatio = document.getElementById('context-popover-ratio');
+      if (popoverRatio) {
+        popoverRatio.textContent = Number(contextTok).toLocaleString() + ' / ' + Number(capacity).toLocaleString();
+      }
+
+      const popoverUsed = document.getElementById('context-popover-used');
+      if (popoverUsed) {
+        popoverUsed.textContent = Number(contextTok).toLocaleString();
+      }
+
+      const popoverAvail = document.getElementById('context-popover-avail');
+      if (popoverAvail) {
+        popoverAvail.textContent = Number(Math.max(0, capacity - contextTok)).toLocaleString();
+      }
+
+      const widget = document.getElementById('token-capacity-widget');
+      if (widget) {
+        widget.removeAttribute('title');
+      }
+    }
+
+    // Context Window Popover click toggle support
+    const tokenWidgetEl = document.getElementById('token-capacity-widget');
+    if (tokenWidgetEl) {
+      tokenWidgetEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        tokenWidgetEl.classList.toggle('active');
+      });
+      document.addEventListener('click', (e) => {
+        if (!tokenWidgetEl.contains(e.target)) {
+          tokenWidgetEl.classList.remove('active');
+        }
+      });
+    }
+
+    function hideZeroState() {
+      if (zeroState) zeroState.style.display = 'none';
+    }
+    function showZeroState() {
+      if (zeroState) {
+        if (!chatContainer.contains(zeroState)) {
+          chatContainer.appendChild(zeroState);
+        }
+        zeroState.style.display = 'flex';
+        updateOnboardingVisibility();
+        setRandomStatement();
+      }
+    }
+
+    let currentSessionId = ${JSON.stringify(state.currentSessionId || "")};
+    let currentModel = ${JSON.stringify(state.currentModel || "anthropic/claude-3.7-sonnet")};
+    let currentProvider = ${JSON.stringify(state.currentProvider || "openrouter")};
+    let currentMode = ${JSON.stringify(state.currentMode || "safe")};
+    let currentProfile = ${JSON.stringify(state.currentProfile || "builder")};
+    let currentReasoning = ${JSON.stringify(state.currentReasoning || "medium")};
+    const DEFAULT_POPULAR_MODELS = [
+      { id: 'anthropic/claude-3.7-sonnet', name: 'Claude 3.7 Sonnet', provider: 'openrouter', pricing: '$3.00/M' },
+      { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', provider: 'openrouter', pricing: '$3.00/M' },
+      { id: 'openai/gpt-4o', name: 'GPT-4o', provider: 'openrouter', pricing: '$2.50/M' },
+      { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini', provider: 'openrouter', pricing: '$0.15/M' },
+      { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'openrouter', pricing: '$1.25/M' },
+      { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'openrouter', pricing: '$0.10/M' },
+      { id: 'deepseek/deepseek-r1', name: 'DeepSeek R1', provider: 'openrouter', pricing: '$0.55/M' },
+      { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3', provider: 'openrouter', pricing: '$0.14/M' },
+      { id: 'qwen/qwen-2.5-coder-32b-instruct', name: 'Qwen 2.5 Coder 32B', provider: 'openrouter', pricing: '$0.07/M' },
+      { id: 'meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B', provider: 'openrouter', pricing: '$0.12/M' }
+    ];
+    let allModels = [...DEFAULT_POPULAR_MODELS];
+    let isRunning = false;
+    const promptQueue = [];
+    let currentTurnStartTime = 0;
+    let thinkingStartTime = 0;
+
+    let currentTurnAssistantDiv = null;
+    let currentThinkingDiv = null;
+    let currentThinkingContent = null;
+    let currentAssistantContent = null;
+    let accumulatedAssistantText = '';
+    let currentToolSequence = null;
+    let toolSeqCount = 0;
+    let toolSeqStartTime = 0;
+    let toolSeqTimer = null;
+    let lastToolName = "";
+    let lastToolRunning = false;
+    let planToolCalledInTurn = false;  // set true when write_plan / update_plan_step fires in the current turn
+    let userScrolledUp = false;
+
+    function isAtBottom() {
+      if (!chatContainer) return true;
+      return chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 120;
+    }
+    function scrollToBottomIfNeeded() {
+      if (!userScrolledUp && chatContainer) {
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+      } else if (userScrolledUp && scrollUnreadBadge) {
+        scrollUnreadBadge.classList.add('has-unread');
+      }
+    }
+    if (chatContainer) {
+      chatContainer.addEventListener('scroll', () => {
+        const atBottom = isAtBottom();
+        userScrolledUp = !atBottom;
+        if (btnScrollBottom) {
+          if (userScrolledUp) {
+            btnScrollBottom.classList.add('visible');
+          } else {
+            btnScrollBottom.classList.remove('visible');
+            if (scrollUnreadBadge) scrollUnreadBadge.classList.remove('has-unread');
+          }
+        }
+      });
+    }
+
+    btnScrollBottom?.addEventListener('click', () => {
+      if (chatContainer) {
+        chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+        userScrolledUp = false;
+        btnScrollBottom.classList.remove('visible');
+        if (scrollUnreadBadge) scrollUnreadBadge.classList.remove('has-unread');
+      }
+    });
+
+    let toolSeqDoneTools = new Set();
+    let toolSeqUserToggled = false;
+    let toolSeqFinished = false;
+    // Per-agent counter so a subagent calling the same tool multiple times renders
+    // one item per invocation instead of collapsing into a single line.
+    const subToolSeqCounts = {};
+
+    function ensureToolSequence() {
+      if (currentToolSequence && !toolSeqFinished) return currentToolSequence;
+
+      // Finish previous sequence if one was open
+      if (currentToolSequence) {
+        finishToolSequence();
+      }
+
+      currentToolSequence = document.createElement('div');
+      currentToolSequence.className = 'tool-sequence';
+      toolSeqCount = 0;
+      toolSeqStartTime = Date.now();
+      lastToolName = "";
+      lastToolRunning = false;
+      toolSeqDoneTools = new Set();
+      toolSeqUserToggled = false;
+      toolSeqFinished = false;
+
+      currentToolSequence.innerHTML = '<div class="tool-seq-header"><svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg><span class="tool-seq-title">0 tools · working... (0s)</span><svg class="tool-seq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg><button class="tool-seq-copy" title="Copy tool log"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button></div><div class="tool-seq-body"></div>';
+      
+      const thisSeq = currentToolSequence;
+      const hdr = thisSeq.querySelector('.tool-seq-header');
+      hdr.addEventListener('click', (e) => {
+        if (e.target.closest('.tool-seq-copy')) return;
+        thisSeq.classList.toggle('collapsed');
+        toolSeqUserToggled = true;
+      });
+
+      thisSeq.querySelector('.tool-seq-copy').addEventListener('click', () => {
+        try {
+          const parts = [];
+          thisSeq.querySelectorAll('.tool-card').forEach((c, i) => {
+            const n = c.querySelector('.tool-title-group span')?.textContent || 'tool';
+            const args = c.querySelector('.tool-body')?.textContent || '';
+            parts.push((i + 1) + '. ' + n + '\\n   Args: ' + args);
+          });
+          const txt = parts.join('\\n\\n') || thisSeq.textContent;
+          copyToClipboard(txt);
+        } catch {}
+      });
+
+      if (currentTurnAssistantDiv) {
+        currentTurnAssistantDiv.appendChild(thisSeq);
+      }
+
+      // Reset currentAssistantContent so any subsequent text creates a new text block below this tool sequence
+      currentAssistantContent = null;
+
+      if (toolSeqTimer) clearInterval(toolSeqTimer);
+      toolSeqTimer = setInterval(updateToolSeqHeader, 1000);
+      return currentToolSequence;
+    }
+
+    function updateToolSeqHeader() {
+      if (!currentToolSequence) return;
+      const elapsed = Math.floor((Date.now() - toolSeqStartTime) / 1000);
+      const el = currentToolSequence.querySelector('.tool-seq-title');
+      if (!el) return;
+      const label = toolSeqCount + (toolSeqCount === 1 ? ' tool' : ' tools');
+      const doneCount = toolSeqDoneTools.size;
+
+      if (toolSeqFinished) {
+        el.textContent = label + ' · ' + (elapsed < 1 ? 'complete' : 'worked for ' + elapsed + 's');
+      } else if (lastToolRunning && lastToolName) {
+        el.textContent = label + ' · ' + lastToolName + ' working... (' + elapsed + 's)';
+      } else if (doneCount > 0) {
+        el.textContent = label + ' · ' + doneCount + '/' + toolSeqCount + ' done · working... (' + elapsed + 's)';
+      } else {
+        el.textContent = label + ' · working... (' + elapsed + 's)';
+      }
+    }
+
+    function finishToolSequence() {
+      if (currentToolSequence && !toolSeqFinished) {
+        toolSeqFinished = true;
+        if (toolSeqTimer) {
+          clearInterval(toolSeqTimer);
+          toolSeqTimer = null;
+        }
+        updateToolSeqHeader();
+        const seqToCollapse = currentToolSequence;
+        if (!toolSeqUserToggled) {
+          seqToCollapse.classList.add('collapsed');
+        }
+        currentToolSequence = null;
+      }
+    }
+
+    function showSlashPalette(matches) {
+      if (!slashPalette || !matches || matches.length === 0) {
+        hideSlashPalette();
+        return;
+      }
+      hideMentionPalette();
+      currentSlashMatches = matches;
+      activeSlashIdx = 0;
+      slashPalette.style.display = 'flex';
+      renderSlashPalette();
+    }
+
+    function hideSlashPalette() {
+      if (slashPalette) slashPalette.style.display = 'none';
+      currentSlashMatches = [];
+      activeSlashIdx = 0;
+    }
+
+    function renderSlashPalette() {
+      if (!slashPaletteList) return;
+      slashPaletteList.innerHTML = currentSlashMatches.map((c, idx) => {
+        const isSel = idx === activeSlashIdx;
+        return '<div class="slash-item ' + (isSel ? 'active' : '') + '" data-action="select-slash-cmd" data-cmd="' + escapeHtml(c.cmd) + '" data-idx="' + idx + '" role="option" aria-selected="' + isSel + '">' +
+          '<span class="slash-cmd">' + escapeHtml(c.cmd) + '</span>' +
+          '<span class="slash-desc">' + escapeHtml(c.desc) + '</span>' +
+        '</div>';
+      }).join('');
+    }
+
+    function navigateSlashPalette(direction) {
+      if (!currentSlashMatches || currentSlashMatches.length === 0) return;
+      activeSlashIdx = (activeSlashIdx + direction + currentSlashMatches.length) % currentSlashMatches.length;
+      renderSlashPalette();
+      const activeEl = slashPaletteList.querySelector('.slash-item.active');
+      if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
+    }
+
+    function showMentionPalette(matches, prefix) {
+      if (!mentionPalette || !matches || matches.length === 0) {
+        hideMentionPalette();
+        return;
+      }
+      hideSlashPalette();
+      currentMentionMatches = matches;
+      currentMentionPrefix = prefix || '@';
+      activeMentionIdx = 0;
+      mentionPalette.style.display = 'flex';
+      renderMentionPalette();
+    }
+
+    function hideMentionPalette() {
+      if (mentionPalette) mentionPalette.style.display = 'none';
+      currentMentionMatches = [];
+      activeMentionIdx = 0;
+    }
+
+    function renderMentionPalette() {
+      if (!mentionPaletteList) return;
+      mentionPaletteList.innerHTML = currentMentionMatches.map((s, idx) => {
+        const isSel = idx === activeMentionIdx;
+        const name = s.name || s.id || 'skill';
+        const desc = s.description || 'Agent skill';
+        return '<div class="slash-item ' + (isSel ? 'active' : '') + '" data-action="select-mention-skill" data-skill="' + escapeHtml(name) + '" data-idx="' + idx + '" role="option" aria-selected="' + isSel + '">' +
+          '<span class="slash-cmd" style="color:#c084fc;">@' + escapeHtml(name) + '</span>' +
+          '<span class="slash-desc">' + escapeHtml(desc) + '</span>' +
+        '</div>';
+      }).join('');
+    }
+
+    function navigateMentionPalette(direction) {
+      if (!currentMentionMatches || currentMentionMatches.length === 0) return;
+      activeMentionIdx = (activeMentionIdx + direction + currentMentionMatches.length) % currentMentionMatches.length;
+      renderMentionPalette();
+      const activeEl = mentionPaletteList.querySelector('.slash-item.active');
+      if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
+    }
+
+    function executeMentionSkill(skillObj) {
+      if (!skillObj) return;
+      hideMentionPalette();
+      const skillName = skillObj.name || skillObj.id || '';
+      insertSkillIntoInput(skillName);
+    }
+
+    function insertSkillIntoInput(skillName) {
+      const val = promptInput.value;
+      const cursorPos = promptInput.selectionStart || val.length;
+      const textBefore = val.slice(0, cursorPos);
+      const textAfter = val.slice(cursorPos);
+      
+      const newBefore = textBefore.replace(/@([a-zA-Z0-9_-]*)$/, '@' + skillName + ' ');
+      if (newBefore === textBefore) {
+        // If not typed with @, append to beginning or cursor
+        promptInput.value = val ? val + ' @' + skillName + ' ' : '@' + skillName + ' ';
+      } else {
+        promptInput.value = newBefore + textAfter;
+      }
+      promptInput.focus();
+      promptInput.style.height = 'auto';
+      promptInput.style.height = Math.min(promptInput.scrollHeight, 160) + 'px';
+      sendBtn.classList.add('has-text');
+    }
+
+    function executeSlashCommand(cmdObj) {
+      if (!cmdObj) return;
+      hideSlashPalette();
+      promptInput.value = '';
+      promptInput.style.height = 'auto';
+      sendBtn.classList.remove('has-text');
+
+      switch (cmdObj.action) {
+        case 'help':
+          appendHelpCard();
+          break;
+        case 'skills':
+          appendSkillsCard();
+          break;
+        case 'undo':
+          vscode.postMessage({ type: 'undo_turn' });
+          break;
+        case 'compact':
+          showCompactionBanner('Compacting conversation context to reduce token usage...');
+          vscode.postMessage({ type: 'compact_session' });
+          break;
+        case 'new':
+          vscode.postMessage({ type: 'new_session' });
+          break;
+        case 'clear':
+          chatContainer.innerHTML = '';
+          hideZeroState();
+          break;
+        case 'sessions':
+          toggleSessionsFlyout();
+          break;
+        case 'settings':
+          vscode.postMessage({ type: 'open_settings' });
+          break;
+        case 'model':
+          toggleModelFlyout();
+          break;
+        case 'mode':
+          vscode.postMessage({ type: 'cycle_mode' });
+          break;
+        case 'plan':
+          vscode.postMessage({ type: 'open_plan_tab' });
+          break;
+        case 'diff':
+          vscode.postMessage({ type: 'open_diff' });
+          break;
+        case 'cron':
+          toggleCronsFlyout();
+          break;
+      }
+    }
+
+    // Send on click or Enter
+    if (sendBtn) {
+      sendBtn.addEventListener('click', sendCurrentPrompt);
+    }
+    if (promptInput) {
+      promptInput.addEventListener('keydown', (e) => {
+        // Mentions navigation
+        if (mentionPalette && mentionPalette.style.display === 'flex' && currentMentionMatches.length > 0) {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            navigateMentionPalette(1);
+            return;
+          }
+          if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            navigateMentionPalette(-1);
+            return;
+          }
+          if (e.key === 'Enter' || e.key === 'Tab') {
+            e.preventDefault();
+            executeMentionSkill(currentMentionMatches[activeMentionIdx]);
+            return;
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            hideMentionPalette();
+            return;
+          }
+        }
+
+        // Slash palette navigation
+        if (slashPalette && slashPalette.style.display === 'flex' && currentSlashMatches.length > 0) {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            navigateSlashPalette(1);
+            return;
+          }
+          if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            navigateSlashPalette(-1);
+            return;
+          }
+          if (e.key === 'Enter' || e.key === 'Tab') {
+            e.preventDefault();
+            executeSlashCommand(currentSlashMatches[activeSlashIdx]);
+            return;
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            hideSlashPalette();
+            return;
+          }
+        }
+
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendCurrentPrompt();
+        }
+      });
+
+      // Auto-resize prompt input, slash command & @ mention detection
+      promptInput.addEventListener('input', () => {
+        promptInput.style.height = 'auto';
+        promptInput.style.height = Math.min(promptInput.scrollHeight, 160) + 'px';
+        const val = promptInput.value;
+        if (currentSessionId) {
+          sessionsState[currentSessionId] = sessionsState[currentSessionId] || {};
+          sessionsState[currentSessionId].draftInput = val;
+        }
+        if (sendBtn) {
+          if (val.trim().length > 0) {
+            sendBtn.classList.add('has-text');
+          } else {
+            sendBtn.classList.remove('has-text');
+          }
+        }
+
+        const cursorPos = promptInput.selectionStart || val.length;
+        const textBefore = val.slice(0, cursorPos);
+
+        if (val.startsWith('/')) {
+          hideMentionPalette();
+          const query = val.slice(1).toLowerCase().trim();
+          const matches = slashCommands.filter(c => c.cmd.slice(1).toLowerCase().startsWith(query));
+          showSlashPalette(matches);
+        } else {
+          hideSlashPalette();
+          const atMatch = textBefore.match(/@([a-zA-Z0-9_-]*)$/);
+          if (atMatch) {
+            const query = atMatch[1].toLowerCase();
+            const skillsPool = (allSkills && allSkills.length > 0) ? allSkills : [
+              { name: 'browser', description: 'Browse and interact with web pages' },
+              { name: 'terminal', description: 'Run shell and command-line tasks' },
+              { name: 'editor', description: 'Inspect and edit codebase files' },
+              { name: 'git', description: 'Version control and commit actions' },
+            ];
+            const matches = skillsPool.filter(s => {
+              const name = (s.name || s.id || '').toLowerCase();
+              return name.includes(query);
+            });
+            showMentionPalette(matches, atMatch[0]);
+          } else {
+            hideMentionPalette();
+          }
+        }
+      });
+    }
+
+    let cancelFallbackTimer = null;
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => {
+        // Optimistic UI: immediate feedback so user knows click registered even if daemon is slow
+        cancelBtn.disabled = true;
+        cancelBtn.style.opacity = '0.6';
+        cancelBtn.innerHTML = '<span style="font-size:10px;">Cancelling...</span>';
+        appendSystemNote('Cancelling turn...');
+        vscode.postMessage({ type: 'cancel_turn', sessionId: currentSessionId });
+        // Fallback: if daemon does not reply with agent_cancelled / agent_done within 4s, force-reset UI so it never stays stuck
+        if (cancelFallbackTimer) clearTimeout(cancelFallbackTimer);
+        cancelFallbackTimer = setTimeout(() => {
+          if (isRunning) {
+            console.warn('[Andromity] Cancel fallback: forcing endAssistantTurn after timeout');
+            endAssistantTurn();
+            interactiveSlot.innerHTML = '';
+            appendSystemNote('Cancel timed out — UI force-reset. If daemon still streaming, next message will queue.');
+          }
+          cancelBtn.disabled = false;
+          cancelBtn.style.opacity = '';
+          cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
+        }, 4000);
+      });
+    }
+
+    document.getElementById('btn-session-picker')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleSessionsFlyout();
+    });
+
+    sessionsSearch?.addEventListener('input', (e) => {
+      sessionDisplayLimit = 10;
+      filterAndRenderSessions(e.target.value);
+    });
+
+    document.getElementById('btn-sessions-new')?.addEventListener('click', () => {
+      sessionsFlyout.style.display = 'none';
+      vscode.postMessage({ type: 'new_session' });
+    });
+
+    document.getElementById('btn-crons-close')?.addEventListener('click', () => {
+      cronsFlyout.style.display = 'none';
+    });
+
+    document.getElementById('btn-slash-close')?.addEventListener('click', () => {
+      hideSlashPalette();
+    });
+
+    document.getElementById('btn-mention-close')?.addEventListener('click', () => {
+      hideMentionPalette();
+    });
+
+    document.getElementById('btn-tracker-open')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      vscode.postMessage({ type: 'open_plan_tab' });
+    });
+
+    document.getElementById('tracker-header-row')?.addEventListener('click', (e) => {
+      if (e.target && (e.target.closest('#btn-tracker-open') || e.target.closest('#btn-tracker-close'))) {
+        return;
+      }
+      planTrackerStrip?.classList.toggle('collapsed');
+    });
+
+    document.getElementById('btn-tracker-close')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (planTrackerStrip) planTrackerStrip.style.display = 'none';
+    });
+
+    function updateOnboardingVisibility() {
+      if (!onboardingSection || !readyHeroSection) return;
+      const isChatActive = isRunning || (chatContainer && chatContainer.querySelectorAll('.message').length > 0);
+      if (isChatActive) {
+        onboardingSection.style.display = 'none';
+        readyHeroSection.style.display = 'none';
+        return;
+      }
+      const hasAnyKey = (allProviders || []).some(p => p.has_key && p.id !== 'ollama');
+      const isOllamaActive = currentProvider === 'ollama';
+      if (!hasAnyKey && !isOllamaActive) {
+        onboardingSection.style.display = 'flex';
+        readyHeroSection.style.display = 'none';
+      } else {
+        onboardingSection.style.display = 'none';
+        readyHeroSection.style.display = 'flex';
+      }
+    }
+
+    onboardingProvidersGrid?.querySelectorAll('.onboarding-provider-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        onboardingProvidersGrid.querySelectorAll('.onboarding-provider-chip').forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        selectedOnboardingProvider = chip.dataset.provider || 'anthropic';
+        selectedOnboardingModel = chip.dataset.model || '';
+        const name = chip.dataset.name || 'AI Provider';
+        const portal = chip.dataset.portal || '';
+
+        if (onboardingKeyLabel) onboardingKeyLabel.textContent = '2. Paste ' + name + ' API Key';
+        if (onboardingKeyInput) onboardingKeyInput.placeholder = 'Paste your ' + name + ' API key...';
+        if (onboardingPortalLink) {
+          onboardingPortalLink.dataset.url = portal;
+          const textSpan = onboardingPortalLink.querySelector('span');
+          if (textSpan) textSpan.textContent = 'Get ' + (chip.querySelector('.provider-chip-name')?.textContent || name) + ' API Key';
+        }
+
+        if (selectedOnboardingProvider === 'ollama') {
+          if (onboardingKeyForm) onboardingKeyForm.style.display = 'none';
+          if (onboardingOllamaForm) onboardingOllamaForm.style.display = 'flex';
+        } else {
+          if (onboardingKeyForm) onboardingKeyForm.style.display = 'flex';
+          if (onboardingOllamaForm) onboardingOllamaForm.style.display = 'none';
+          if (onboardingKeyInput) setTimeout(() => onboardingKeyInput.focus(), 50);
+        }
+      });
+    });
+
+    btnToggleKeyVis?.addEventListener('click', () => {
+      if (!onboardingKeyInput) return;
+      onboardingKeyInput.type = onboardingKeyInput.type === 'password' ? 'text' : 'password';
+    });
+
+    btnOnboardingSave?.addEventListener('click', () => {
+      if (!onboardingKeyInput) return;
+      const keyVal = onboardingKeyInput.value.trim();
+      if (!keyVal) {
+        onboardingKeyInput.style.borderColor = '#ef4444';
+        onboardingKeyInput.focus();
+        setTimeout(() => { onboardingKeyInput.style.borderColor = ''; }, 2000);
+        return;
+      }
+      btnOnboardingSave.disabled = true;
+      btnOnboardingSave.innerHTML = '<span>Connecting...</span>';
+      vscode.postMessage({
+        type: 'set_api_key',
+        provider: selectedOnboardingProvider,
+        apiKey: keyVal,
+        modelId: selectedOnboardingModel,
+      });
+    });
+
+    onboardingKeyInput?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        btnOnboardingSave?.click();
+      }
+    });
+
+    btnOnboardingOllamaSave?.addEventListener('click', () => {
+      btnOnboardingOllamaSave.disabled = true;
+      btnOnboardingOllamaSave.innerHTML = '<span>Activating Ollama...</span>';
+      vscode.postMessage({
+        type: 'set_api_key',
+        provider: 'ollama',
+        apiKey: '',
+        modelId: 'llama3.2:latest',
+      });
+    });
+
+    function toggleSessionsFlyout() {
+      if (!sessionsFlyout) return;
+      if (sessionsFlyout.style.display === 'none' || !sessionsFlyout.style.display) {
+        sessionsFlyout.style.display = 'flex';
+        if (cronsFlyout) cronsFlyout.style.display = 'none';
+        if (modelFlyout) modelFlyout.style.display = 'none';
+        vscode.postMessage({ type: 'fetch_sessions' });
+        if (sessionsSearch) {
+          sessionsSearch.value = '';
+          setTimeout(() => sessionsSearch.focus(), 50);
+        }
+      } else {
+        sessionsFlyout.style.display = 'none';
+      }
+    }
+
+    function toggleCronsFlyout() {
+      if (!cronsFlyout) return;
+      if (cronsFlyout.style.display === 'none' || !cronsFlyout.style.display) {
+        cronsFlyout.style.display = 'flex';
+        if (sessionsFlyout) sessionsFlyout.style.display = 'none';
+        if (modelFlyout) modelFlyout.style.display = 'none';
+        vscode.postMessage({ type: 'fetch_crons' });
+      } else {
+        cronsFlyout.style.display = 'none';
+      }
+    }
+
+    function formatDateBadge(dateStr) {
+      if (!dateStr) return '';
+      try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return '';
+        const now = new Date();
+        const diffMs = now.getTime() - d.getTime();
+        const diffMins = Math.floor(diffMs / 60000);
+        const diffHours = Math.floor(diffMins / 60);
+        const diffDays = Math.floor(diffHours / 24);
+
+        if (diffMins < 2) return 'Just now';
+        if (diffMins < 60) return diffMins + 'm ago';
+        if (diffHours < 24 && now.getDate() === d.getDate()) return formatTime(d);
+        if (diffDays === 1 || (diffDays === 0 && now.getDate() !== d.getDate())) return 'Yesterday';
+
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        return months[d.getMonth()] + ' ' + d.getDate();
+      } catch (e) {
+        return '';
+      }
+    }
+
+    function renderHomeRecentSessions(sessions) {
+      if (!recentSessionsSection || !recentSessionsList) return;
+      if (!sessions || sessions.length === 0) {
+        recentSessionsSection.style.display = 'none';
+        return;
+      }
+
+      // Only show past sessions that have actual messages (message_count > 0) and are NOT the current active session
+      const pastSessionsWithHistory = sessions.filter(s => 
+        s.id !== currentSessionId && 
+        s.message_count && 
+        s.message_count > 0
+      );
+
+      if (pastSessionsWithHistory.length === 0) {
+        recentSessionsSection.style.display = 'none';
+        return;
+      }
+
+      recentSessionsSection.style.display = 'flex';
+      const recent = pastSessionsWithHistory.slice(0, 3);
+      recentSessionsList.innerHTML = recent.map(s => {
+        const name = escapeHtml(s.name || s.id || 'Untitled Session');
+        const dateStr = formatDateBadge(s.updated_at || s.created_at);
+        const msgsText = s.message_count + (s.message_count === 1 ? ' msg' : ' msgs');
+        const modelTag = s.model ? escapeHtml(s.model.split('/').pop().replace(/-/g, ' ')) : '';
+
+        return '<div class="recent-session-card" data-action="switch-session" data-session-id="' + s.id + '">' +
+          '<div class="recent-session-main">' +
+            '<div class="recent-session-title">' + name + '</div>' +
+            '<div class="recent-session-sub">' +
+              '<span>' + msgsText + '</span>' +
+              (modelTag ? '<span>· ' + modelTag + '</span>' : '') +
+            '</div>' +
+          '</div>' +
+          '<div class="recent-session-side">' +
+            (dateStr ? '<span class="recent-session-date">' + dateStr + '</span>' : '') +
+          '</div>' +
+        '</div>';
+      }).join('');
+    }
+
+    let activeSessionFilter = 'tree';
+    const expandedSessionIds = new Set();
+
+    document.querySelectorAll('.sessions-filter-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.sessions-filter-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        activeSessionFilter = tab.dataset.filter || 'tree';
+        sessionDisplayLimit = 10;
+        filterAndRenderSessions(sessionsSearch ? sessionsSearch.value : '');
+      });
+    });
+
+    function renderSessionsList(sessions, activeId) {
+      allSessions = sessions || [];
+      sessionDisplayLimit = 10;
+      
+      const mainCount = allSessions.filter(s => !s.parent_session).length;
+      const subagentCount = allSessions.filter(s => !!s.parent_session).length;
+      const countMainEl = document.getElementById('count-main-sessions');
+      const countSubEl = document.getElementById('count-subagent-sessions');
+      if (countMainEl) countMainEl.textContent = String(mainCount);
+      if (countSubEl) countSubEl.textContent = String(subagentCount);
+
+      // Automatically expand parent of the current session or any running subagent
+      if (activeId) {
+        const activeSess = allSessions.find(s => s.id === activeId);
+        if (activeSess && activeSess.parent_session) {
+          expandedSessionIds.add(activeSess.parent_session);
+        }
+      }
+      allSessions.forEach(s => {
+        if (s.parent_session) {
+          const st = sessionsState[s.id];
+          if ((st && st.isRunning) || s.status === 'running') {
+            expandedSessionIds.add(s.parent_session);
+          }
+        }
+      });
+
+      filterAndRenderSessions(sessionsSearch ? sessionsSearch.value : '');
+      renderHomeRecentSessions(allSessions.filter(s => !s.parent_session));
+    }
+
+    function renderRunningArc() {
+      return '<svg class="session-running-arc" viewBox="0 0 24 24" fill="none" title="Running">' +
+        '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-opacity="0.25"></circle>' +
+        '<path d="M12 3a9 9 0 0 1 9 9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"></path>' +
+      '</svg>';
+    }
+
+    function renderSessionItemHtml(s, opts) {
+      opts = opts || {};
+      const isSubsession = !!opts.isSubsession;
+      const isLastChild = !!opts.isLastChild;
+      const childrenCount = opts.childrenCount || 0;
+      const isExpanded = !!opts.isExpanded;
+      const parentName = opts.parentName || '';
+
+      const isCur = s.id === currentSessionId;
+      const name = escapeHtml(s.name || s.id || (isSubsession ? 'Subagent Task' : 'Session'));
+      const msgs = s.message_count ? (s.message_count + ' msgs') : 'Empty';
+      const cost = (s.cost_usd && Number(s.cost_usd) > 0) ? ('$' + Number(s.cost_usd).toFixed(3)) : '';
+      const sessState = sessionsState[s.id];
+      const isRunningSess = !!((sessState && sessState.isRunning) || s.status === 'running');
+
+      // Sleek minimalist spinning circular arc icon when running (No bulky RUNNING text badge)
+      const runningArc = isRunningSess ? renderRunningArc() : '';
+
+      let statusBadge = '';
+      if (sessState && sessState.hasUnread && !isCur) {
+        statusBadge = '<span class="session-badge-status session-status-unread">NEW</span>';
+      } else if (s.status && s.status !== 'idle' && s.status !== 'running') {
+        statusBadge = '<span class="session-badge-status session-status-' + escapeHtml(s.status) + '">' + escapeHtml(s.status) + '</span>';
+      }
+
+      const activeDot = isCur ? '<span class="session-active-dot" title="Active session"></span>' : '';
+      const subTag = isSubsession ? '<span class="subsession-tag">Subagent</span>' : '';
+      const branchSymbol = isSubsession ? ('<span class="subsession-branch-symbol">' + (isLastChild ? '└' : '├') + '</span>') : '';
+
+      let toggleBtn = '';
+      if (!isSubsession && childrenCount > 0) {
+        toggleBtn = '<button class="subsession-toggle-btn" data-action="toggle-subsessions" data-parent-id="' + s.id + '" title="' + (isExpanded ? 'Collapse' : 'Expand') + ' ' + childrenCount + ' subagent(s)">' +
+          '<svg class="subsession-chevron' + (isExpanded ? ' expanded' : '') + '" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
+          '<span>' + childrenCount + ' subtask' + (childrenCount === 1 ? '' : 's') + '</span>' +
+        '</button>';
+      }
+
+      const parentRef = (!isSubsession && parentName) ? ('<span>· Parent: ' + escapeHtml(parentName) + '</span>') : '';
+      const itemClass = 'session-item ' + (isSubsession ? 'session-subsession-item ' : '') + (isCur ? 'active' : '');
+
+      return '<div class="' + itemClass + '" data-session-id="' + s.id + '">' +
+        '<div class="session-item-info" data-action="switch-session" data-session-id="' + s.id + '">' +
+          '<div class="session-item-title">' +
+            branchSymbol +
+            activeDot +
+            subTag +
+            '<span class="session-title-text" title="' + name + '">' + name + '</span>' +
+            runningArc +
+            statusBadge +
+          '</div>' +
+          '<div class="session-item-meta">' +
+            '<span>' + msgs + '</span>' +
+            (cost ? '<span>· ' + cost + '</span>' : '') +
+            parentRef +
+            toggleBtn +
+          '</div>' +
+        '</div>' +
+        '<div class="session-item-actions">' +
+          '<button class="session-action-icon" data-action="open-session-tab" data-session-id="' + s.id + '" data-session-name="' + name + '" title="Open in New Editor Tab (Side-by-Side)">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>' +
+          '</button>' +
+          '<button class="session-action-icon" data-action="rename-session" data-session-id="' + s.id + '" data-session-name="' + name + '" title="Rename">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>' +
+          '</button>' +
+          '<button class="session-action-icon session-action-delete" data-action="delete-session" data-session-id="' + s.id + '" title="Delete">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>' +
+          '</button>' +
+        '</div>' +
+      '</div>';
+    }
+
+    function filterAndRenderSessions(query) {
+      if (!sessionsListEl) return;
+      const q = (query || '').toLowerCase().trim();
+
+      // Build session map and parent-to-subagents map
+      const allSessionMap = new Map();
+      const subagentMap = new Map();
+      const mainSessions = [];
+
+      allSessions.forEach(s => {
+        allSessionMap.set(s.id, s);
+        if (s.parent_session) {
+          if (!subagentMap.has(s.parent_session)) {
+            subagentMap.set(s.parent_session, []);
+          }
+          subagentMap.get(s.parent_session).push(s);
+        } else {
+          mainSessions.push(s);
+        }
+      });
+
+      // Catch orphaned subagents whose parent is missing from mainSessions
+      const mainSessionIdSet = new Set(mainSessions.map(s => s.id));
+      const orphanedSubagents = [];
+      for (const [pId, subs] of subagentMap.entries()) {
+        if (!mainSessionIdSet.has(pId)) {
+          orphanedSubagents.push(...subs);
+        }
+      }
+
+      if (activeSessionFilter === 'subagents') {
+        // Flat focused view of subagents
+        const allSubs = allSessions.filter(s => !!s.parent_session);
+        const filteredSubs = allSubs.filter(s => {
+          const parentObj = allSessionMap.get(s.parent_session);
+          const pName = parentObj ? (parentObj.name || '') : '';
+          return (s.name || s.id || '').toLowerCase().includes(q) || pName.toLowerCase().includes(q);
+        });
+
+        if (filteredSubs.length === 0) {
+          sessionsListEl.innerHTML = '<div style="padding:16px 14px; text-align:center; color:var(--muted); font-size:11px;">No subagent tasks found</div>';
+          return;
+        }
+
+        const visibleSubs = filteredSubs.slice(0, sessionDisplayLimit);
+        let html = visibleSubs.map((sub, idx) => {
+          const parentObj = allSessionMap.get(sub.parent_session);
+          const parentName = parentObj ? (parentObj.name || sub.parent_session.slice(0, 8)) : (sub.parent_session ? sub.parent_session.slice(0, 8) : '');
+          return renderSessionItemHtml(sub, {
+            isSubsession: true,
+            isLastChild: idx === visibleSubs.length - 1,
+            parentName: parentName
+          });
+        }).join('');
+
+        if (filteredSubs.length > sessionDisplayLimit) {
+          const remaining = filteredSubs.length - sessionDisplayLimit;
+          html += '<div class="sessions-load-more-wrap">' +
+            '<button class="btn-load-more-sessions" data-action="load-more-sessions">' +
+              '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
+              '<span>Load More (' + remaining + ' remaining)</span>' +
+            '</button>' +
+          '</div>';
+        }
+        sessionsListEl.innerHTML = html;
+        return;
+      }
+
+      // Hierarchical tree view (default)
+      // Filter main sessions: include if main session matches query OR if any of its child subagents match
+      const filteredMains = [];
+      mainSessions.forEach(m => {
+        const subs = subagentMap.get(m.id) || [];
+        const mMatches = (m.name || m.id || '').toLowerCase().includes(q);
+        const matchingSubs = q ? subs.filter(sub => (sub.name || sub.id || '').toLowerCase().includes(q)) : subs;
+
+        if (!q || mMatches || matchingSubs.length > 0) {
+          if (q && matchingSubs.length > 0) {
+            // Auto-expand if subagent matches query
+            expandedSessionIds.add(m.id);
+          }
+          filteredMains.push({
+            session: m,
+            children: subs
+          });
+        }
+      });
+
+      // Also include any orphaned subagents if matching
+      orphanedSubagents.forEach(orphan => {
+        if (!q || (orphan.name || orphan.id || '').toLowerCase().includes(q)) {
+          filteredMains.push({
+            session: orphan,
+            children: [],
+            isOrphan: true
+          });
+        }
+      });
+
+      if (filteredMains.length === 0) {
+        sessionsListEl.innerHTML = '<div style="padding:16px 14px; text-align:center; color:var(--muted); font-size:11px;">No matching sessions found</div>';
+        return;
+      }
+
+      const visible = filteredMains.slice(0, sessionDisplayLimit);
+
+      try {
+        let html = visible.map(entry => {
+          const s = entry.session;
+          const children = entry.children || [];
+          const isExpanded = expandedSessionIds.has(s.id);
+          const parentHtml = renderSessionItemHtml(s, {
+            isSubsession: !!entry.isOrphan,
+            childrenCount: children.length,
+            isExpanded: isExpanded
+          });
+
+          if (children.length === 0) {
+            return '<div class="session-tree-group">' + parentHtml + '</div>';
+          }
+
+          const childrenHtml = children.map((sub, idx) => {
+            return renderSessionItemHtml(sub, {
+              isSubsession: true,
+              isLastChild: idx === children.length - 1
+            });
+          }).join('');
+
+          return '<div class="session-tree-group">' +
+            parentHtml +
+            '<div class="session-subsessions-list' + (isExpanded ? '' : ' collapsed') + '" id="subsessions-' + s.id + '">' +
+              childrenHtml +
+            '</div>' +
+          '</div>';
+        }).join('');
+
+        if (filteredMains.length > sessionDisplayLimit) {
+          const remaining = filteredMains.length - sessionDisplayLimit;
+          html += '<div class="sessions-load-more-wrap">' +
+            '<button class="btn-load-more-sessions" data-action="load-more-sessions">' +
+              '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
+              '<span>Load More (' + remaining + ' remaining)</span>' +
+            '</button>' +
+          '</div>';
+        }
+
+        sessionsListEl.innerHTML = html;
+      } catch (renderErr) {
+        console.error('[Andromity] Failed to render sessions list:', renderErr);
+        sessionsListEl.innerHTML = '<div style="padding:16px 14px; text-align:center; color:var(--red); font-size:11px;">Error loading sessions</div>';
+      }
+    }
+
+    function renderCronsList(crons) {
+      if (!cronsListEl) return;
+      if (!crons || crons.length === 0) {
+        cronsListEl.innerHTML = '<div style="padding:14px; text-align:center; color:var(--muted); font-size:11.5px;">No scheduled cron jobs found.<br/><span style="font-size:10.5px; opacity:0.8;">Crons can be scheduled through prompt instructions.</span></div>';
+        return;
+      }
+      cronsListEl.innerHTML = crons.map(c => {
+        const isEnabled = c.enabled !== false;
+        return '<div class="cron-card">' +
+          '<div class="cron-card-top">' +
+            '<span class="cron-card-schedule">' + escapeHtml(c.schedule || 'cron') + '</span>' +
+            '<span class="cron-status-pill ' + (isEnabled ? 'cron-status-active' : 'cron-status-paused') + '">' + (isEnabled ? 'Active' : 'Paused') + '</span>' +
+          '</div>' +
+          '<div class="cron-prompt">' + escapeHtml(c.prompt || c.name || '') + '</div>' +
+        '</div>';
+      }).join('');
+    }
+
+    function updatePlanTracker(plan) {
+      if (!planTrackerStrip) return;
+      if (!plan || (!plan.title && (!plan.steps || plan.steps.length === 0) && (!plan.todos || plan.todos.length === 0))) {
+        planTrackerStrip.style.display = 'none';
+        return;
+      }
+      const steps = plan.steps || plan.todos || [];
+      if (steps.length === 0 && !plan.title) {
+        planTrackerStrip.style.display = 'none';
+        return;
+      }
+      planTrackerStrip.style.display = 'flex';
+      if (trackerTitle) trackerTitle.textContent = plan.title || 'Plan Tasks';
+
+      let completed = 0;
+      let activeIdx = -1;
+      const stepItemsHtml = steps.map((s, idx) => {
+        const sStatus = (typeof s === 'string' ? 'pending' : (s.status || 'pending')).toLowerCase();
+        const sText = typeof s === 'string' ? s : (s.title || s.description || ('Step ' + (idx + 1)));
+        const isDone = (sStatus === 'done' || sStatus === 'completed');
+        const isActive = (sStatus === 'active' || sStatus === 'in_progress' || sStatus === 'running');
+        const isFailed = (sStatus === 'failed' || sStatus === 'error');
+
+        if (isDone) completed++;
+        if (isActive && activeIdx === -1) activeIdx = idx;
+
+        let bulletContent = '' + (idx + 1);
+        let bulletClass = '';
+        if (isDone) {
+          bulletContent = '&#x2713;';
+          bulletClass = 'is-done';
+        } else if (isActive) {
+          bulletContent = '&#x27F3;';
+          bulletClass = 'is-active';
+        } else if (isFailed) {
+          bulletContent = '&#x2715;';
+          bulletClass = 'is-failed';
+        }
+
+        return '<div class="tracker-todo-item ' + bulletClass + '">' +
+          '<span class="tracker-todo-bullet">' + bulletContent + '</span>' +
+          '<span class="tracker-todo-text">' + escapeHtml(sText) + '</span>' +
+        '</div>';
+      }).join('');
+
+      const totalSteps = steps.length;
+      const pct = totalSteps > 0 ? Math.round((completed / totalSteps) * 100) : 0;
+      if (trackerCount) {
+        trackerCount.textContent = totalSteps > 0 ? (completed + '/' + totalSteps + ' done') : 'in progress';
+      }
+      if (trackerProgressBar) {
+        trackerProgressBar.style.width = pct + '%';
+      }
+      if (trackerTodosList) {
+        trackerTodosList.innerHTML = stepItemsHtml || '<div style="color:var(--muted);font-size:11px;padding:2px 0;">No steps listed.</div>';
+      }
+    }
+
+    function renderPlanPill(plan) {
+      // Only render the pill inside the current active turn's div
+      if (!plan || !plan.title) return;
+      const targetDiv = currentTurnAssistantDiv;
+      if (!targetDiv) return;  // don't show in historical turns
+
+      let existingPill = targetDiv.querySelector('.plan-ready-pill');
+      if (!existingPill) {
+        existingPill = document.createElement('div');
+        existingPill.className = 'plan-ready-pill';
+        // Always append after everything (including the footer) so it sits at the very bottom
+        targetDiv.appendChild(existingPill);
+      }
+      const steps = plan.steps || plan.todos || [];
+      const doneCount = steps.filter(s => (s.status || '').toLowerCase() === 'done').length;
+      const progressHtml = steps.length > 0 ? ('<span class="pill-progress">(' + doneCount + '/' + steps.length + ' done)</span>') : '';
+      existingPill.innerHTML =
+        '<span class="pill-icon">' +
+          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>' +
+        '</span>' +
+        '<span class="pill-title" title="' + escapeHtml(plan.title) + '">Plan: ' + escapeHtml(plan.title) + progressHtml + '</span>' +
+        '<button class="pill-btn" data-action="open-plan-tab" title="Open full plan tab">' +
+          '<span>Open Plan</span>' +
+          '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
+        '</button>';
+      scrollToBottomIfNeeded();
+    }
+
+    function renderConversationTimeline(filterQuery) {
+      if (!timelineList) return;
+      timelineList.innerHTML = '';
+      const userWraps = chatContainer.querySelectorAll('.message-wrap.user');
+      const countEl = document.getElementById('timeline-turn-count');
+      if (countEl) {
+        countEl.textContent = (userWraps ? userWraps.length : 0) + ' ' + (userWraps.length === 1 ? 'turn' : 'turns');
+      }
+
+      if (!userWraps || userWraps.length === 0) {
+        timelineList.innerHTML = '<div style="padding:24px 16px; text-align:center; color:var(--muted); font-size:11.5px;">No conversation turns recorded yet.</div>';
+        return;
+      }
+
+      const q = (filterQuery || '').toLowerCase().trim();
+      let visibleCount = 0;
+
+      userWraps.forEach((uWrap, idx) => {
+        const uText = uWrap.querySelector('.message.user')?.textContent || ('Turn #' + (idx + 1));
+        const cleanPrompt = uText.trim().replace(/\\s+/g, ' ');
+        const timeText = uWrap.querySelector('.message-footer span')?.textContent || '';
+
+        let asstWrap = uWrap.nextElementSibling;
+        while (asstWrap && !asstWrap.classList.contains('message-wrap')) {
+          asstWrap = asstWrap.nextElementSibling;
+        }
+
+        const isTurnRunning = (idx === userWraps.length - 1) && isRunning;
+        const toolCards = asstWrap ? asstWrap.querySelectorAll('.tool-card') : [];
+        const fileChips = asstWrap ? asstWrap.querySelectorAll('.file-edited-chip') : [];
+        const asstTextEl = asstWrap ? asstWrap.querySelector('.assistant-text') : null;
+        let responsePreview = '';
+        if (asstTextEl) {
+          const rawAsst = (asstTextEl.textContent || '').trim().replace(/\\s+/g, ' ');
+          if (rawAsst) responsePreview = rawAsst.length > 70 ? (rawAsst.slice(0, 70) + '…') : rawAsst;
+        }
+
+        const toolNames = [];
+        toolCards.forEach(tc => {
+          const tn = tc.querySelector('.tool-title-group span')?.textContent?.trim();
+          if (tn && !toolNames.includes(tn) && toolNames.length < 3) {
+            toolNames.push(tn);
+          }
+        });
+
+        if (q) {
+          const matchPrompt = cleanPrompt.toLowerCase().includes(q);
+          const matchResponse = responsePreview.toLowerCase().includes(q);
+          const matchTools = toolNames.some(t => t.toLowerCase().includes(q));
+          if (!matchPrompt && !matchResponse && !matchTools) {
+            return;
+          }
+        }
+
+        visibleCount++;
+        const node = document.createElement('div');
+        node.className = 'timeline-node' + (isTurnRunning ? ' active' : '');
+        node.innerHTML = '<div class="timeline-dot"></div>' +
+          '<div class="timeline-node-card">' +
+            '<div class="timeline-node-top">' +
+              '<span class="timeline-node-turn">Turn #' + (idx + 1) + '</span>' +
+              (timeText ? ('<span class="timeline-node-time">' + escapeHtml(timeText) + '</span>') : '') +
+            '</div>' +
+            '<div class="timeline-node-title" title="' + escapeHtml(cleanPrompt) + '">' + escapeHtml(cleanPrompt) + '</div>' +
+            (responsePreview ? ('<div class="timeline-node-response-preview">' + escapeHtml(responsePreview) + '</div>') : '') +
+            '<div class="timeline-node-badges">' +
+              (toolCards.length > 0 ? ('<span class="timeline-mini-badge tools"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>' + toolCards.length + ' tool' + (toolCards.length > 1 ? 's' : '') + '</span>') : '') +
+              (fileChips.length > 0 ? ('<span class="timeline-mini-badge files"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>' + fileChips.length + ' file' + (fileChips.length > 1 ? 's' : '') + '</span>') : '') +
+              toolNames.map(tn => '<span class="timeline-mini-badge tool-tag">' + escapeHtml(tn) + '</span>').join('') +
+            '</div>' +
+          '</div>';
+
+        node.addEventListener('click', () => {
+          if (timelineFlyout) timelineFlyout.style.display = 'none';
+          uWrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          uWrap.style.transition = 'outline 0.15s ease';
+          uWrap.style.outline = '1px solid rgba(255, 255, 255, 0.25)';
+          setTimeout(() => { uWrap.style.outline = 'none'; }, 1800);
+        });
+
+        timelineList.appendChild(node);
+      });
+
+      if (q && visibleCount === 0) {
+        timelineList.innerHTML = '<div style="padding:20px 16px; text-align:center; color:var(--muted); font-size:11.5px;">No turns matching "' + escapeHtml(q) + '"</div>';
+      }
+    }
+
+    const timelineSearchInput = document.getElementById('timeline-search');
+    if (timelineSearchInput) {
+      timelineSearchInput.addEventListener('input', (e) => {
+        renderConversationTimeline(e.target.value);
+      });
+    }
+    document.getElementById('btn-timeline-close')?.addEventListener('click', () => {
+      if (timelineFlyout) timelineFlyout.style.display = 'none';
+    });
+    document.getElementById('btn-timeline-jump-first')?.addEventListener('click', () => {
+      const firstWrap = chatContainer.querySelector('.message-wrap.user');
+      if (firstWrap) {
+        firstWrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (timelineFlyout) timelineFlyout.style.display = 'none';
+      }
+    });
+    document.getElementById('btn-timeline-jump-latest')?.addEventListener('click', () => {
+      scrollToBottom();
+      if (timelineFlyout) timelineFlyout.style.display = 'none';
+    });
+
+    document.getElementById('btn-prompt-mode')?.addEventListener('click', () => {
+      vscode.postMessage({ type: 'cycle_mode' });
+    });
+
+    document.getElementById('btn-model-picker')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleModelFlyout();
+    });
+
+    document.getElementById('btn-prompt-model')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleModelFlyout();
+    });
+
+    document.getElementById('btn-flyout-open-hub')?.addEventListener('click', () => {
+      modelFlyout.style.display = 'none';
+      vscode.postMessage({ type: 'open_model_hub' });
+    });
+
+    if (flyoutSearch) {
+      flyoutSearch.addEventListener('input', (e) => {
+        renderFlyoutList(e.target.value.toLowerCase().trim());
+      });
+    }
+
+    document.addEventListener('click', (e) => {
+      const isPicker = e.target.closest('#btn-model-picker') || e.target.closest('#btn-prompt-model');
+      if (modelFlyout && !modelFlyout.contains(e.target) && !isPicker) {
+        modelFlyout.style.display = 'none';
+      }
+      const isSessionTrigger = e.target.closest('#btn-session-picker');
+      if (sessionsFlyout && !sessionsFlyout.contains(e.target) && !isSessionTrigger) {
+        sessionsFlyout.style.display = 'none';
+      }
+      const isTimelineTrigger = e.target.closest('#btn-top-timeline');
+      if (timelineFlyout && !timelineFlyout.contains(e.target) && !isTimelineTrigger) {
+        timelineFlyout.style.display = 'none';
+      }
+      const isCronsClose = e.target.closest('#btn-crons-close');
+      if (cronsFlyout && !cronsFlyout.contains(e.target) && !isCronsClose) {
+        cronsFlyout.style.display = 'none';
+      }
+      if (slashPalette && !slashPalette.contains(e.target) && e.target !== promptInput) {
+        hideSlashPalette();
+      }
+      if (mentionPalette && !mentionPalette.contains(e.target) && e.target !== promptInput) {
+        hideMentionPalette();
+      }
+    });
+
+    // Global event delegation for headers and actions (CSP compliant)
+    document.addEventListener('click', (e) => {
+      // 1. Thinking card toggle (works while streaming, after turn ends, and in session history)
+      const thinkingHdr = e.target.closest('.thinking-header');
+      if (thinkingHdr) {
+        const card = thinkingHdr.closest('.thinking-card');
+        if (card) {
+          card.classList.toggle('expanded');
+        }
+        return;
+      }
+
+      // 2. Tool card toggle (works while streaming, after turn ends, and in session history)
+      const toolHdr = e.target.closest('.tool-header');
+      if (toolHdr) {
+        const card = toolHdr.closest('.tool-card');
+        if (card) {
+          card.classList.toggle('expanded');
+        }
+        return;
+      }
+
+      // 3. Approval parameter toggle
+      const argsToggle = e.target.closest('.approval-toggle-args');
+      if (argsToggle) {
+        const card = argsToggle.closest('.approval-card');
+        if (card) {
+          card.classList.toggle('show-args');
+          argsToggle.textContent = card.classList.contains('show-args') ? '&#x25BE; Hide parameters' : '&#x25B8; View parameters';
+        }
+        return;
+      }
+
+      // 4. Action buttons
+      const target = e.target.closest('[data-action]');
+      if (!target) return;
+      const action = target.getAttribute('data-action');
+      switch (action) {
+        case 'toggle-subsessions': {
+          e.stopPropagation();
+          const pId = target.getAttribute('data-parent-id') || target.getAttribute('data-session-id');
+          if (pId) {
+            if (expandedSessionIds.has(pId)) {
+              expandedSessionIds.delete(pId);
+            } else {
+              expandedSessionIds.add(pId);
+            }
+            filterAndRenderSessions(sessionsSearch ? sessionsSearch.value : '');
+          }
+          break;
+        }
+        case 'switch-session':
+          const sId = target.getAttribute('data-session-id');
+          if (sId) {
+            sessionsFlyout.style.display = 'none';
+            if (planTrackerStrip) planTrackerStrip.style.display = 'none';
+            vscode.postMessage({ type: 'switch_session', sessionId: sId });
+          }
+          break;
+        case 'view-all-sessions':
+          toggleSessionsFlyout();
+          break;
+        case 'rename-session':
+          e.stopPropagation();
+          const rId = target.getAttribute('data-session-id');
+          const rName = target.getAttribute('data-session-name') || '';
+          vscode.postMessage({ type: 'request_rename_session', sessionId: rId, currentName: rName });
+          break;
+        case 'delete-session':
+          e.stopPropagation();
+          const delId = target.getAttribute('data-session-id');
+          if (delId) {
+            vscode.postMessage({ type: 'delete_session', sessionId: delId });
+          }
+          break;
+        case 'open-session-tab': {
+          e.stopPropagation();
+          const tabSid = target.getAttribute('data-session-id') || target.closest('[data-session-id]')?.getAttribute('data-session-id');
+          const tabSname = target.getAttribute('data-session-name') || target.closest('[data-session-name]')?.getAttribute('data-session-name') || '';
+          if (tabSid) {
+            if (sessionsFlyout) sessionsFlyout.style.display = 'none';
+            vscode.postMessage({ type: 'open_session_tab', sessionId: tabSid, sessionName: tabSname });
+          }
+          break;
+        }
+        case 'open-current-tab': {
+          const sNameEl = document.getElementById('active-session-name');
+          vscode.postMessage({ type: 'open_session_tab', sessionId: currentSessionId, sessionName: sNameEl?.textContent?.trim() || '' });
+          break;
+        }
+        case 'open-plan-tab':
+          vscode.postMessage({ type: 'open_plan_tab' });
+          break;
+        case 'open-file-diff': {
+          const fPath = target.getAttribute('data-file-path') || target.closest('.file-edited-chip')?.getAttribute('data-file-path');
+          if (fPath) {
+            vscode.postMessage({ type: 'open_file_diff', filePath: fPath });
+          }
+          break;
+        }
+        case 'toggle-timeline':
+          if (timelineFlyout) {
+            const isVis = timelineFlyout.style.display !== 'none';
+            if (!isVis) {
+              renderConversationTimeline();
+              timelineFlyout.style.display = 'flex';
+            } else {
+              timelineFlyout.style.display = 'none';
+            }
+          }
+          break;
+        case 'copy-prompt':
+          window.copyMessageText(target);
+          break;
+        case 'new-session':
+          vscode.postMessage({ type: 'new_session' });
+          break;
+        case 'open-diff':
+          vscode.postMessage({ type: 'open_diff' });
+          break;
+        case 'undo-turn':
+          vscode.postMessage({ type: 'undo_turn' });
+          break;
+        case 'compact-session':
+          showCompactionBanner('Compacting conversation context to reduce token usage...');
+          vscode.postMessage({ type: 'compact_session' });
+          break;
+        case 'load-more-sessions':
+          sessionDisplayLimit += 20;
+          filterAndRenderSessions(sessionsSearch ? sessionsSearch.value : '');
+          break;
+        case 'select-slash-cmd':
+          const selCmd = target.getAttribute('data-cmd');
+          const foundCmd = slashCommands.find(c => c.cmd === selCmd);
+          if (foundCmd) executeSlashCommand(foundCmd);
+          break;
+        case 'select-mention-skill': {
+          const selSkill = target.getAttribute('data-skill');
+          const foundSkill = allSkills.find(s => s.name === selSkill);
+          if (foundSkill) executeMentionSkill(foundSkill);
+          break;
+        }
+        case 'insert-skill-mention': {
+          const sName = target.getAttribute('data-skill');
+          if (sName) insertSkillIntoInput(sName);
+          break;
+        }
+        case 'open-skills-settings':
+          vscode.postMessage({ type: 'open_skills_settings' });
+          break;
+        case 'close-skills-card': {
+          const card = target.closest('.skills-card');
+          if (card) {
+            card.remove();
+          }
+          break;
+        }
+        case 'open-settings':
+        case 'open-full-settings':
+          vscode.postMessage({ type: 'open_settings' });
+          break;
+        case 'open-portal': {
+          const portalUrl = target.getAttribute('data-url') || target.closest('[data-url]')?.getAttribute('data-url');
+          if (portalUrl) {
+            vscode.postMessage({ type: 'open_external_url', url: portalUrl });
+          }
+          break;
+        }
+        case 'send-starter':
+          promptInput.value = target.getAttribute('data-prompt') || '';
+          sendCurrentPrompt();
+          break;
+        case 'open-model-hub':
+          vscode.postMessage({ type: 'open_model_hub' });
+          break;
+        case 'pick-model':
+          pickModel(target.getAttribute('data-model-id'), target.getAttribute('data-provider'));
+          break;
+        case 'remove-queued':
+          removeQueued(parseInt(target.getAttribute('data-idx') || '0', 10));
+          break;
+        case 'copy-code':
+          copyCode(target);
+          break;
+        case 'apply-code':
+          applyCode(target);
+          break;
+        case 'copy-message':
+          copyMessageText(target);
+          break;
+        case 'approve-tool':
+        case 'approve-tool-once':
+          window.approveTool(target.getAttribute('data-approval-id'), 'once', target.getAttribute('data-tool'));
+          break;
+        case 'approve-tool-session':
+          window.approveTool(target.getAttribute('data-approval-id'), 'session', target.getAttribute('data-tool'));
+          break;
+        case 'approve-tool-always':
+          window.approveTool(target.getAttribute('data-approval-id'), 'always', target.getAttribute('data-tool'));
+          break;
+        case 'reject-tool':
+          window.rejectTool(target.getAttribute('data-approval-id'));
+          break;
+        case 'toggle-perm-params': {
+          const card = target.closest('.permission-card');
+          if (card) {
+            const body = card.querySelector('.permission-params-body');
+            const chev = card.querySelector('.params-chevron');
+            if (body) {
+              const isHidden = body.style.display === 'none';
+              body.style.display = isHidden ? 'block' : 'none';
+              if (chev) chev.innerHTML = isHidden ? '&#x25BE;' : '&#x25B8;';
+            }
+          }
+          break;
+        }
+        case 'approve-plan':
+          approvePlan();
+          break;
+        case 'reject-plan':
+          rejectPlan();
+          break;
+        case 'q-prev':
+          window.navigateQuestionSlide(-1);
+          break;
+        case 'q-next':
+          window.navigateQuestionSlide(1);
+          break;
+        case 'submit-questions':
+          submitQuestions(target.getAttribute('data-question-id'), parseInt(target.getAttribute('data-total-q') || '0', 10));
+          break;
+      }
+    });
+
+    // CSP-safe Enter handling for free-text question inputs (replaces inline onkeydown)
+    document.addEventListener('keydown', (e) => {
+      const ta = e.target.closest('.question-textarea');
+      if (!ta) return;
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        if (window.currentQuestionSlide < window.totalQuestionSlides - 1) {
+          window.navigateQuestionSlide(1);
+        } else {
+          const s = document.getElementById('btn-q-submit');
+          if (s) s.click();
+        }
+      }
+    });
+
+    function toggleModelFlyout() {
+      if (!modelFlyout) return;
+      const isVisible = modelFlyout.style.display === 'flex';
+      if (isVisible) {
+        modelFlyout.style.display = 'none';
+      } else {
+        modelFlyout.style.display = 'flex';
+        if (flyoutSearch) flyoutSearch.value = '';
+        renderFlyoutList('');
+        if (flyoutSearch) setTimeout(() => flyoutSearch.focus(), 50);
+      }
+    }
+
+    function renderFlyoutList(query) {
+      if (!flyoutList) return;
+      const modelsPool = (allModels && allModels.length > 0) ? allModels : DEFAULT_POPULAR_MODELS;
+      const filtered = modelsPool.filter(m => {
+        if (!query) return true;
+        const hay = ((m.name || '') + ' ' + (m.id || '') + ' ' + (m.provider || '')).toLowerCase();
+        return hay.includes(query);
+      }).slice(0, 50);
+
+      if (filtered.length === 0) {
+        flyoutList.innerHTML = '<div style="padding:14px; text-align:center; color:var(--muted); font-size:11.5px;">No matching models found.<br><button class="prompt-pill-btn" data-action="open-model-hub" style="margin-top:8px;">Browse Model Hub</button></div>';
+        return;
+      }
+
+      flyoutList.innerHTML = filtered.map(m => {
+        const isActive = m.id === currentModel;
+        return '<div class="flyout-item ' + (isActive ? 'active' : '') + '" data-action="pick-model" data-model-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || 'openrouter') + '">' +
+          '<span>' + escapeHtml(m.name || m.id) + '</span>' +
+          '<span class="flyout-item-meta">' + escapeHtml(m.provider || 'openrouter') + (m.pricing ? ' · ' + escapeHtml(m.pricing) : '') + '</span>' +
+        '</div>';
+      }).join('');
+    }
+
+    window.pickModel = function(modelId, provider) {
+      currentModel = modelId;
+      if (provider) currentProvider = provider;
+      updateModelBadge();
+      modelFlyout.style.display = 'none';
+      vscode.postMessage({ type: 'update_config', key: 'model', value: modelId });
+      if (provider) {
+        vscode.postMessage({ type: 'update_config', key: 'provider', value: provider });
+      }
+    };
+
+    window.openModelHub = function() {
+      vscode.postMessage({ type: 'open_model_hub' });
+    };
+
+    window.sendStarter = function(promptText) {
+      promptInput.value = promptText;
+      sendCurrentPrompt();
+    };
+
+    function formatModelDisplayName(id) {
+      if (!id || id === 'Loading model...') return 'Claude 3.7 Sonnet';
+      const parts = id.split('/');
+      const raw = parts.length > 1 ? parts.slice(1).join('/') : parts[0];
+      return raw
+        .replace(/-/g, ' ')
+        .replace(/\\b\\w/g, l => l.toUpperCase())
+        .replace(/Gpt/g, 'GPT')
+        .replace(/Claude/g, 'Claude')
+        .replace(/Gemini/g, 'Gemini');
+    }
+
+    let availableProfiles = ['builder', 'coder', 'reviewer', 'planner'];
+    let availableReasoningEfforts = ['low', 'medium', 'high', 'off'];
+    let attachedImages = [];
+
+    function updateProfileBadge() {
+      const lbl = document.getElementById('prompt-profile-label');
+      if (lbl) {
+        lbl.textContent = (currentProfile || 'builder').toUpperCase();
+        if (lbl.parentElement) {
+          lbl.parentElement.title = 'Active Profile: ' + (currentProfile || 'builder').toUpperCase() + ' (Click to cycle Builder, Coder, Reviewer, Planner)';
+        }
+      }
+    }
+
+    function updateReasoningBadge() {
+      const lbl = document.getElementById('prompt-reasoning-label');
+      if (lbl) {
+        const val = currentReasoning || 'medium';
+        const icons = { high: 'High', medium: 'Medium', low: 'Low', off: 'Off' };
+        lbl.textContent = icons[val] || val.toUpperCase();
+        if (lbl.parentElement) {
+          lbl.parentElement.title = 'Reasoning Effort: ' + val.toUpperCase() + ' (Click to cycle High, Medium, Low, Off)';
+        }
+      }
+    }
+
+    function renderImageAttachments() {
+      const container = document.getElementById('image-attachments-container');
+      if (!container) return;
+      if (!attachedImages || attachedImages.length === 0) {
+        container.style.display = 'none';
+        container.innerHTML = '';
+        return;
+      }
+      container.style.display = 'flex';
+      container.innerHTML = attachedImages.map((imgUri, idx) => {
+        const title = 'Attachment ' + (idx + 1) + (attachedImages.length > 1 ? (' of ' + attachedImages.length) : '');
+        return '<div class="image-attachment-chip" data-action="preview-image" data-src="' + escapeHtml(imgUri) + '" data-title="' + escapeHtml(title) + '" title="Click to preview image">' +
+          '<img class="image-attachment-thumb" src="' + imgUri + '" alt="Attachment ' + (idx + 1) + '" />' +
+          '<button class="image-attachment-remove" data-action="remove-image-attachment" data-idx="' + idx + '" title="Remove image">&#x2715;</button>' +
+        '</div>';
+      }).join('');
+    }
+
+    function addImageAttachment(dataUri) {
+      if (!dataUri) return;
+      if (attachedImages.length >= 5) {
+        appendSystemNote('Maximum 5 images can be attached per message.');
+        return;
+      }
+      attachedImages.push(dataUri);
+      renderImageAttachments();
+    }
+
+    function removeImageAttachment(idx) {
+      if (idx >= 0 && idx < attachedImages.length) {
+        attachedImages.splice(idx, 1);
+        renderImageAttachments();
+      }
+    }
+
+    function handlePasteImage(e) {
+      const clipboardData = e.clipboardData || window.clipboardData;
+      if (!clipboardData || !clipboardData.items) return;
+      const items = clipboardData.items;
+      let handled = false;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type && items[i].type.indexOf('image') !== -1) {
+          const file = items[i].getAsFile();
+          if (file) {
+            const reader = new FileReader();
+            reader.onload = function(event) {
+              if (event.target && event.target.result) {
+                addImageAttachment(event.target.result);
+              }
+            };
+            reader.readAsDataURL(file);
+            handled = true;
+          }
+        }
+      }
+      if (handled) {
+        e.preventDefault();
+      }
+    }
+
+    promptInput.addEventListener('paste', handlePasteImage);
+    window.addEventListener('paste', (e) => {
+      if (e.target !== promptInput && !e.target.closest('input, textarea')) {
+        handlePasteImage(e);
+      }
+    });
+
+    const promptBoxEl = document.querySelector('.prompt-box');
+    if (promptBoxEl) {
+      promptBoxEl.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        promptBoxEl.style.borderColor = 'var(--accent)';
+      });
+      promptBoxEl.addEventListener('dragleave', () => {
+        promptBoxEl.style.borderColor = '';
+      });
+      promptBoxEl.addEventListener('drop', (e) => {
+        e.preventDefault();
+        promptBoxEl.style.borderColor = '';
+        if (e.dataTransfer && e.dataTransfer.files) {
+          for (let i = 0; i < e.dataTransfer.files.length; i++) {
+            const file = e.dataTransfer.files[i];
+            if (file.type && file.type.indexOf('image') !== -1) {
+              const reader = new FileReader();
+              reader.onload = function(evt) {
+                if (evt.target && evt.target.result) {
+                  addImageAttachment(evt.target.result);
+                }
+              };
+              reader.readAsDataURL(file);
+            }
+          }
+        }
+      });
+    }
+
+    const btnProfileEl = document.getElementById('btn-prompt-profile');
+    if (btnProfileEl) {
+      btnProfileEl.addEventListener('click', () => {
+        const nextIdx = (availableProfiles.indexOf(currentProfile.toLowerCase()) + 1) % availableProfiles.length;
+        currentProfile = availableProfiles[nextIdx];
+        updateProfileBadge();
+        vscode.postMessage({ type: 'update_config', key: 'profile', value: currentProfile });
+      });
+    }
+
+    const btnReasoningEl = document.getElementById('btn-prompt-reasoning');
+    if (btnReasoningEl) {
+      btnReasoningEl.addEventListener('click', () => {
+        const val = (currentReasoning || 'medium').toLowerCase();
+        const nextIdx = (availableReasoningEfforts.indexOf(val) + 1) % availableReasoningEfforts.length;
+        currentReasoning = availableReasoningEfforts[nextIdx];
+        updateReasoningBadge();
+        vscode.postMessage({ type: 'update_config', key: 'reasoningEffort', value: currentReasoning });
+      });
+    }
+
+    function appendHelpCard() {
+      const card = document.createElement('div');
+      card.className = 'help-card';
+      card.style.cssText = 'background:var(--card-bg); border:1px solid var(--border); border-radius:8px; padding:12px; margin:8px 0; font-size:12px; box-shadow: 0 4px 14px rgba(0,0,0,0.3);';
+
+      const commandsHtml = slashCommands.map(function(c) {
+        return '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 8px; border-radius:4px; transition:background 0.12s; cursor:pointer;" data-action="select-slash-cmd" data-cmd="' + escapeHtml(c.cmd) + '">' +
+          '<div style="display:flex; align-items:center; gap:8px; min-width:0;">' +
+            '<code style="background:rgba(6,182,212,0.15); color:var(--accent); padding:2px 6px; border-radius:4px; font-weight:600; font-family:var(--vscode-editor-font-family, monospace); font-size:11.5px;">' + escapeHtml(c.cmd) + '</code>' +
+            '<span style="color:var(--fg); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(c.desc) + '</span>' +
+          '</div>' +
+          '<button class="prompt-pill-btn" style="padding:2px 8px; font-size:10.5px; flex-shrink:0;">Run</button>' +
+        '</div>';
+      }).join('');
+
+      card.innerHTML = 
+        '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid var(--border);">' +
+          '<div style="display:flex; align-items:center; gap:6px; font-weight:600; color:var(--fg); font-size:12.5px;">' +
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>' +
+            '<span>Available Commands & Shortcuts</span>' +
+          '</div>' +
+          '<span style="font-size:10.5px; color:var(--muted);">Click command to run</span>' +
+        '</div>' +
+        '<div style="display:flex; flex-direction:column; gap:2px;">' +
+          commandsHtml +
+        '</div>' +
+        '<div style="margin-top:8px; padding-top:6px; border-top:1px solid var(--border); font-size:11px; color:var(--muted); display:flex; justify-content:space-between;">' +
+          '<span>Tip: Type <code>/</code> for commands, <code>@</code> for skills</span>' +
+          '<span>Paste images with <code>Ctrl+V</code></span>' +
+        '</div>';
+      chatContainer.appendChild(card);
+      scrollToBottomIfNeeded();
+    }
+
+    function appendSkillsCard() {
+      const card = document.createElement('div');
+      card.className = 'skills-card';
+      card.style.cssText = 'background:var(--card-bg); border:1px solid var(--border); border-radius:8px; padding:12px; margin:8px 0; font-size:12px; box-shadow: 0 4px 14px rgba(0,0,0,0.3);';
+
+      const skillsListHtml = allSkills && allSkills.length > 0
+        ? allSkills.map(function(s) {
+          const name = s.name || s.id || 'skill';
+          const desc = s.description || 'Specialized agent skill';
+          return '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 8px; border-radius:4px; transition:background 0.12s; cursor:pointer;" data-action="insert-skill-mention" data-skill="' + escapeHtml(name) + '">' +
+            '<div style="display:flex; align-items:center; gap:8px; min-width:0;">' +
+              '<span style="background:rgba(168,85,247,0.18); color:#c084fc; padding:2px 6px; border-radius:4px; font-weight:600; font-family:var(--vscode-editor-font-family, monospace); font-size:11.5px;">@' + escapeHtml(name) + '</span>' +
+              '<span style="color:var(--fg); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(desc) + '</span>' +
+            '</div>' +
+            '<button class="prompt-pill-btn" style="padding:2px 8px; font-size:10.5px; flex-shrink:0;">Use</button>' +
+          '</div>';
+        }).join('')
+        : '<div style="color:var(--muted); padding:8px 0; text-align:center;">No custom skills found. Open Settings > Skills to manage skills.</div>';
+
+      card.innerHTML = 
+        '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid var(--border);">' +
+          '<div style="display:flex; align-items:center; gap:6px; font-weight:600; color:var(--fg); font-size:12.5px;">' +
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>' +
+            '<span>Agent Skills (' + allSkills.length + ' active)</span>' +
+          '</div>' +
+          '<div style="display:flex; align-items:center; gap:6px;">' +
+            '<button class="prompt-pill-btn" data-action="open-skills-settings" style="font-size:10.5px;">Browse Hub</button>' +
+            '<button class="skills-card-close-btn" data-action="close-skills-card" title="Close skills panel">&times;</button>' +
+          '</div>' +
+        '</div>' +
+        '<div style="display:flex; flex-direction:column; gap:2px; max-height:220px; overflow-y:auto;">' +
+          skillsListHtml +
+        '</div>' +
+        '<div style="margin-top:8px; padding-top:6px; border-top:1px solid var(--border); font-size:11px; color:var(--muted); display:flex; justify-content:space-between;">' +
+          '<span>Tip: Type <code>@</code> in chat to mention any skill</span>' +
+          '<span>Or click any skill to insert</span>' +
+        '</div>';
+      chatContainer.appendChild(card);
+      scrollToBottomIfNeeded();
+    }
+
+    function updateModelBadge() {
+      const found = allModels.find(m => m.id === currentModel);
+      let name = found ? (found.name || found.id) : formatModelDisplayName(currentModel);
+      if (!name || name === "Loading model...") {
+        name = "Claude 3.7 Sonnet";
+      }
+      if (activeModelName) {
+        activeModelName.textContent = name;
+        activeModelName.title = "Model: " + currentModel + " (" + currentProvider + ")";
+      }
+      const promptModelLabel = document.getElementById('prompt-model-label');
+      if (promptModelLabel) {
+        promptModelLabel.textContent = name;
+        if (promptModelLabel.parentElement) {
+          promptModelLabel.parentElement.title = "Active Model: " + currentModel + " (" + currentProvider + ") - Click to switch";
+        }
+      }
+      updateProfileBadge();
+      updateReasoningBadge();
+    }
+    updateModelBadge();
+
+    function sendCurrentPrompt() {
+      const text = promptInput.value.trim();
+      const imagesToSend = [...attachedImages];
+      if (!text && imagesToSend.length === 0) return;
+      promptInput.value = '';
+      promptInput.style.height = 'auto';
+      sendBtn.classList.remove('has-text');
+      attachedImages = [];
+      renderImageAttachments();
+
+      if (isRunning) {
+        promptQueue.push({ text: text || 'Please inspect attached image', images: imagesToSend, sessionId: currentSessionId });
+        renderQueue();
+        return;
+      }
+      dispatchPrompt(text || 'Please inspect attached image', true, imagesToSend);
+    }
+
+    function dispatchPrompt(text, attachContext, images) {
+      try {
+        console.log('[Andromity webview] dispatchPrompt sending:', text.slice(0,120));
+        hideZeroState();
+
+        // Immediate session title derivation from first user prompt (TUI parity)
+        const activeSessName = document.getElementById('active-session-name');
+        if (activeSessName && (activeSessName.textContent === 'Main Session' || activeSessName.textContent === 'new-session' || activeSessName.textContent.startsWith('Session '))) {
+          const firstLine = text.trim().split(String.fromCharCode(10))[0].trim();
+          if (firstLine) {
+            let shortTitle = firstLine.slice(0, 32);
+            if (firstLine.length > 32) shortTitle += '...';
+            activeSessName.textContent = shortTitle;
+          }
+        }
+
+        appendUserMessage(text, images);
+        startAssistantTurn();
+        vscode.postMessage({
+          type: 'send_prompt',
+          prompt: text,
+          sessionId: currentSessionId,
+          profile: currentProfile,
+          mode: currentMode,
+          model: currentModel,
+          provider: currentProvider,
+          reasoningEffort: currentReasoning,
+          attachContext: attachContext,
+          images: images || [],
+        });
+      } catch (e) {
+        console.error('[Andromity webview] dispatchPrompt failed', e);
+        appendSystemNote('Webview error: ' + (e.message||String(e)));
+      }
+    }
+
+    function hideZeroState() {
+      if (zeroState) zeroState.style.display = 'none';
+    }
+
+    function flushQueue() {
+      if (promptQueue.length === 0) return;
+      const idx = promptQueue.findIndex(q => !q.sessionId || q.sessionId === currentSessionId);
+      if (idx === -1) return;
+      const next = promptQueue.splice(idx, 1)[0];
+      renderQueue();
+      if (typeof next === 'object' && next !== null) {
+        dispatchPrompt(next.text || '', true, next.images || []);
+      } else {
+        dispatchPrompt(next, true, []);
+      }
+    }
+
+    function renderQueue() {
+      const sessionQueue = promptQueue.filter(q => !q.sessionId || q.sessionId === currentSessionId);
+      if (sessionQueue.length === 0) {
+        queueContainer.style.display = 'none';
+        queueContainer.innerHTML = '';
+        return;
+      }
+      queueContainer.style.display = 'flex';
+      queueContainer.innerHTML = promptQueue.map((q, i) => {
+        if (q.sessionId && q.sessionId !== currentSessionId) return '';
+        const text = typeof q === 'object' ? (q.text || 'Image prompt') : q;
+        return '<div class="queue-chip">' +
+          '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
+          '<span class="queue-text">' + escapeHtml(text) + '</span>' +
+          '<button class="queue-remove" data-action="remove-queued" data-idx="' + i + '">&#x2715;</button>' +
+        '</div>';
+      }).join('');
+    }
+
+    window.removeQueued = function(idx) {
+      promptQueue.splice(idx, 1);
+      renderQueue();
+    };
+
+    try {
+      if (typeof marked !== 'undefined') {
+        const markedRenderer = {
+          code(token) {
+            const text = token && typeof token === 'object' ? (token.text || '') : String(token || '');
+            const lang = token && typeof token === 'object' ? (token.lang || 'code') : 'code';
+            const language = (lang || 'code').trim();
+            const enc = encodeURIComponent(text);
+            return '<div class="code-block-container">' +
+              '<div class="code-block-header">' +
+                '<span class="code-lang-tag">' + escapeHtml(language.toUpperCase()) + '</span>' +
+                '<div class="code-block-actions">' +
+                  '<button class="code-btn" data-code="' + enc + '" data-action="copy-code"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button>' +
+                  '<button class="code-btn" data-code="' + enc + '" data-action="apply-code"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg> Insert</button>' +
+                '</div>' +
+              '</div>' +
+              '<pre class="code-block-pre"><code>' + escapeHtml(text) + '</code></pre>' +
+            '</div>';
+          },
+          table(token) {
+            let headerHtml = '';
+            let bodyHtml = '';
+            const self = this;
+            if (token && token.header) {
+              headerHtml = '<thead><tr>' + token.header.map(cell => {
+                const align = cell.align ? ' style="text-align:' + cell.align + ';"' : '';
+                const content = cell.tokens && self.parser ? self.parser.parseInline(cell.tokens) : (cell.text || '');
+                return '<th' + align + '>' + content + '</th>';
+              }).join('') + '</tr></thead>';
+            }
+            if (token && token.rows) {
+              bodyHtml = '<tbody>' + token.rows.map(row => {
+                return '<tr>' + row.map(cell => {
+                  const align = cell.align ? ' style="text-align:' + cell.align + ';"' : '';
+                  const content = cell.tokens && self.parser ? self.parser.parseInline(cell.tokens) : (cell.text || '');
+                  return '<td' + align + '>' + content + '</td>';
+                }).join('') + '</tr>';
+              }).join('') + '</tbody>';
+            }
+            return '<div class="table-scroll-wrapper"><table class="md-table">' + headerHtml + bodyHtml + '</table></div>';
+          },
+          link(token) {
+            const href = token && typeof token === 'object' ? (token.href || '#') : String(token || '#');
+            const title = token && typeof token === 'object' ? token.title : '';
+            const text = token && typeof token === 'object' ? (token.text || href) : href;
+            return '<a href="' + escapeHtml(href) + '" target="_blank" style="color:var(--accent); text-decoration:underline;"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + text + '</a>';
+          },
+          image(token) {
+            const href = token && typeof token === 'object' ? (token.href || '') : String(token || '');
+            const title = token && typeof token === 'object' ? token.title : '';
+            const text = token && typeof token === 'object' ? token.text : '';
+            return '<img class="md-image" src="' + escapeHtml(href) + '" alt="' + escapeHtml(text || '') + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + ' loading="lazy" />';
+          }
+        };
+        marked.use({ renderer: markedRenderer, gfm: true, breaks: true });
+      }
+    } catch (e) {
+      console.warn('[Andromity] marked configuration note:', e);
+    }
+
+    function renderInline(str) {
+      if (!str) return '';
+      var codeSpans = [];
+      // 1. Protect inline code spans with tokens so code inside backticks does not break bold/italic
+      var t = str.replace(/\`([^\`]+)\`/g, function(_, code) {
+        codeSpans.push(code);
+        return String.fromCharCode(1) + 'CODE_' + (codeSpans.length - 1) + String.fromCharCode(1);
+      });
+      t = escapeHtml(t);
+
+      // 2. Images & links
+      t = t.replace(/!\\[([^\\]]*)\\]\\(([^)]+)\\)/g, '<img class="md-image" src="$2" alt="$1" title="$1" loading="lazy" />');
+      t = t.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank" style="color:var(--accent); text-decoration:underline;">$1</a>');
+
+      // 3. Strikethrough
+      t = t.replace(/~~(.*?)~~/g, '<del>$1</del>');
+
+      // 4. Bold + Italic
+      t = t.replace(/\\*\\*\\*(.*?)\\*\\*\\*/g, '<strong><em>$1</em></strong>');
+      t = t.replace(/___([^_]+)___/g, '<strong><em>$1</em></strong>');
+
+      // 5. Bold
+      t = t.replace(/\\*\\*(.*?)\\*\\*/g, '<strong>$1</strong>');
+      t = t.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+
+      // 6. Italic
+      t = t.replace(/\\*([^*\\n]+)\\*/g, '<em>$1</em>');
+      t = t.replace(/(?:^|(?<=[\\s(\\[{\\'"]))_([^_]+)_(?=[\\s.,;:!?)}\\'"]|$)/g, '<em>$1</em>');
+
+      // 7. Restore inline code
+      for (var i = 0; i < codeSpans.length; i++) {
+        var token = String.fromCharCode(1) + 'CODE_' + i + String.fromCharCode(1);
+        t = t.split(token).join('<code>' + escapeHtml(codeSpans[i]) + '</code>');
+      }
+      return t;
+    }
+
+    function renderMarkdown(md) {
+      if (!md) return '';
+      if (typeof marked !== 'undefined' && marked.parse) {
+        try {
+          return marked.parse(md);
+        } catch (e) {
+          console.warn('[Andromity] marked.parse failed, falling back:', e);
+        }
+      }
+      var codeParts = md.split(String.fromCharCode(96, 96, 96));
+      var html = '';
+
+      for (var i = 0; i < codeParts.length; i++) {
+        if (i % 2 === 1) {
+          var lines = codeParts[i].split('\\n');
+          var lang = lines[0].trim() || 'code';
+          var code = lines.slice(1).join('\\n');
+          var enc = encodeURIComponent(code);
+          html += '<div class="code-block-container">' +
+            '<div class="code-block-header">' +
+              '<span class="code-lang-tag">' + escapeHtml(lang.toUpperCase()) + '</span>' +
+              '<div class="code-block-actions">' +
+                '<button class="code-btn" data-code="' + enc + '" data-action="copy-code"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button>' +
+                '<button class="code-btn" data-code="' + enc + '" data-action="apply-code"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg> Insert</button>' +
+              '</div>' +
+            '</div>' +
+            '<pre class="code-block-pre"><code>' + escapeHtml(code.trim()) + '</code></pre>' +
+          '</div>';
+        } else {
+          var rawLines = codeParts[i].split('\\n');
+          for (var l = 0; l < rawLines.length; l++) {
+            var line = rawLines[l];
+            var trimmed = line.trim();
+
+            if (!trimmed) {
+              html += '<div class="md-spacer"></div>';
+              continue;
+            }
+
+            // HTML details and summary
+            if (trimmed.startsWith('<details') || trimmed.startsWith('</details') || trimmed.startsWith('<summary') || trimmed.startsWith('</summary')) {
+              html += trimmed;
+              continue;
+            }
+
+            // Horizontal Rule: --- or *** or ___
+            if (/^(?:---|\\*\\*\\*|___)\\s*$/.test(trimmed)) {
+              html += '<hr class="md-hr">';
+              continue;
+            }
+
+            // GFM Table parsing (with or without boundary pipes)
+            var isTableSep = function(str) { return /^\\s*\\|?(?:\\s*:?-+:?\\s*\\|?)+\\s*$/.test(str) && str.indexOf('-') !== -1; };
+            if (trimmed.indexOf('|') !== -1 && l + 1 < rawLines.length && isTableSep(rawLines[l+1].trim())) {
+              var tableLines = [trimmed];
+              var sepLine = rawLines[l+1].trim();
+              l++;
+              while (l + 1 < rawLines.length && rawLines[l+1].trim().indexOf('|') !== -1 && !rawLines[l+1].trim().startsWith(String.fromCharCode(96, 96, 96))) {
+                l++;
+                tableLines.push(rawLines[l].trim());
+              }
+              var rawAligns = sepLine.replace(/^\\|/, '').replace(/\\|$/, '').split('|');
+              var aligns = [];
+              for (var a = 0; a < rawAligns.length; a++) {
+                var s = rawAligns[a].trim();
+                if (s.startsWith(':') && s.endsWith(':')) aligns.push('center');
+                else if (s.endsWith(':')) aligns.push('right');
+                else aligns.push('left');
+              }
+              var rawHeaders = tableLines[0].replace(/^\\|/, '').replace(/\\|$/, '').split('|');
+              var tableHtml = '<div class="table-scroll-wrapper"><table class="md-table"><thead><tr>';
+              for (var h = 0; h < rawHeaders.length; h++) {
+                var al = aligns[h] || 'left';
+                tableHtml += '<th style="text-align:' + al + ';">' + renderInline(rawHeaders[h].trim()) + '</th>';
+              }
+              tableHtml += '</tr></thead><tbody>';
+              for (var r = 1; r < tableLines.length; r++) {
+                var cells = tableLines[r].replace(/^\\|/, '').replace(/\\|$/, '').split('|');
+                tableHtml += '<tr>';
+                for (var c = 0; c < rawHeaders.length; c++) {
+                  var cellText = (cells[c] || '').trim();
+                  var cal = aligns[c] || 'left';
+                  tableHtml += '<td style="text-align:' + cal + ';">' + renderInline(cellText) + '</td>';
+                }
+                tableHtml += '</tr>';
+              }
+              tableHtml += '</tbody></table></div>';
+              html += tableHtml;
+              continue;
+            }
+
+            // Task list items: - [x] or - [ ] or * [x]
+            var taskMatch = trimmed.match(/^[-*\\u2022]\\s+\\[([ xX])\\]\\s*(.*)$/);
+            if (taskMatch) {
+              var isChecked = taskMatch[1].toLowerCase() === 'x';
+              html += '<div class="md-task-item"><input type="checkbox" class="md-checkbox" ' + (isChecked ? 'checked' : '') + ' disabled><span class="md-task-text ' + (isChecked ? 'completed' : '') + '">' + renderInline(taskMatch[2]) + '</span></div>';
+              continue;
+            }
+
+            if (/^###\\s+/.test(trimmed)) {
+              html += '<h5>' + renderInline(trimmed.replace(/^###\\s+/, '')) + '</h5>';
+            } else if (/^##\\s+/.test(trimmed)) {
+              html += '<h4>' + renderInline(trimmed.replace(/^##\\s+/, '')) + '</h4>';
+            } else if (/^#\\s+/.test(trimmed)) {
+              html += '<h3>' + renderInline(trimmed.replace(/^#\\s+/, '')) + '</h3>';
+            } else if (/^[-*+•]\\s+/.test(trimmed)) {
+              var itemText = trimmed.replace(/^[-*+•]\\s+/, '');
+              html += '<div class="md-bullet"><span class="md-dot">•</span><span class="md-text">' + renderInline(itemText) + '</span></div>';
+            } else if (/^\\d+\\.\\s+/.test(trimmed)) {
+              var numMatch = trimmed.match(/^(\\d+)\\.\\s+(.*)$/);
+              var num = numMatch ? numMatch[1] : '1';
+              var itemText = numMatch ? numMatch[2] : trimmed;
+              html += '<div class="md-bullet"><span class="md-num">' + num + '.</span><span class="md-text">' + renderInline(itemText) + '</span></div>';
+            } else if (/^>\\s+/.test(trimmed)) {
+              var quoteText = trimmed.replace(/^>\\s+/, '');
+              html += '<div class="md-quote">' + renderInline(quoteText) + '</div>';
+            } else {
+              html += '<div class="md-line">' + renderInline(line) + '</div>';
+            }
+          }
+        }
+      }
+      return html;
+    }
+
+    function copyToClipboard(text) {
+      if (!text) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).catch(() => {
+          fallbackCopyText(text);
+        });
+      } else {
+        fallbackCopyText(text);
+      }
+      vscode.postMessage({ type: 'copy_clipboard', text: text });
+    }
+
+    function fallbackCopyText(text) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      try { document.execCommand('copy'); } catch(e) {}
+      document.body.removeChild(ta);
+    }
+
+    window.copyCode = function(btn) {
+      var enc = btn.getAttribute('data-code') || '';
+      var code = decodeURIComponent(enc);
+      copyToClipboard(code);
+      var orig = btn.innerHTML;
+      btn.innerHTML = '<span style="color:var(--green)">Copied!</span>';
+      setTimeout(function() { btn.innerHTML = orig; }, 1500);
+    };
+
+    window.applyCode = function(btn) {
+      var enc = btn.getAttribute('data-code') || '';
+      var code = decodeURIComponent(enc);
+      vscode.postMessage({ type: 'apply_code', code: code });
+    };
+
+    function formatTime(date) {
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function appendUserMessage(text, images) {
+      const wrap = document.createElement('div');
+      wrap.className = 'message-wrap user';
+
+      const msgDiv = document.createElement('div');
+      msgDiv.className = 'message user';
+
+      if (images && Array.isArray(images) && images.length > 0) {
+        const imgWrap = document.createElement('div');
+        imgWrap.style.cssText = 'display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px;';
+        images.forEach(uri => {
+          const imgEl = document.createElement('img');
+          imgEl.src = uri;
+          imgEl.style.cssText = 'max-width:220px; max-height:140px; border-radius:6px; object-fit:cover; border:1px solid rgba(255,255,255,0.2); cursor:pointer; transition:transform 0.15s, border-color 0.15s;';
+          imgEl.title = 'Click to preview full size';
+          imgEl.addEventListener('mouseenter', () => { imgEl.style.transform = 'scale(1.02)'; imgEl.style.borderColor = 'var(--vscode-focusBorder, #007fd4)'; });
+          imgEl.addEventListener('mouseleave', () => { imgEl.style.transform = 'scale(1)'; imgEl.style.borderColor = 'rgba(255,255,255,0.2)'; });
+          imgEl.addEventListener('click', () => {
+            openImageLightbox(uri);
+          });
+          imgWrap.appendChild(imgEl);
+        });
+        msgDiv.appendChild(imgWrap);
+      }
+
+      if (text) {
+        const textSpan = document.createElement('div');
+        textSpan.textContent = text;
+        msgDiv.appendChild(textSpan);
+      }
+
+      wrap.appendChild(msgDiv);
+
+      const footer = document.createElement('div');
+      footer.className = 'message-footer';
+      footer.innerHTML = '<span>' + formatTime(new Date()) + '</span>' +
+        '<button class="msg-copy-btn" data-action="copy-prompt" title="Copy prompt">' +
+          '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy' +
+        '</button>';
+      wrap.appendChild(footer);
+
+      chatContainer.appendChild(wrap);
+      scrollToBottomIfNeeded();
+    }
+
+    function appendCompactionSummaryCard(rawText) {
+      const card = document.createElement('div');
+      card.className = 'compaction-summary-card';
+
+      let headerText = 'Earlier Conversation Turns Compacted';
+      let bodyText = rawText || '';
+      const firstLineEnd = rawText.indexOf('\\n');
+      if (firstLineEnd !== -1) {
+        const firstLine = rawText.substring(0, firstLineEnd).trim();
+        headerText = firstLine.replace(/^\[|\]:?$/g, '').trim() || headerText;
+        bodyText = rawText.substring(firstLineEnd + 1).trim();
+      }
+
+      card.innerHTML = '<div class="compaction-summary-header">' +
+        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>' +
+        '<span>' + escapeHtml(headerText) + '</span>' +
+        '<span class="compaction-summary-tag">MEMORY</span>' +
+        '<svg class="compaction-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
+      '</div>' +
+      '<div class="compaction-summary-body">' + renderMarkdown(bodyText) + '</div>';
+
+      card.querySelector('.compaction-summary-header').addEventListener('click', () => {
+        card.classList.toggle('expanded');
+      });
+
+      chatContainer.appendChild(card);
+      scrollToBottomIfNeeded();
+    }
+
+    function appendCompactedHistoryBanner(count) {
+      const banner = document.createElement('div');
+      banner.className = 'compacted-history-banner';
+      banner.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
+        '<span>Previous conversation history (' + count + ' earlier messages preserved)</span>';
+      chatContainer.appendChild(banner);
+    }
+
+    function showCompactionBanner(reason) {
+      appendSystemNote('⚡ ' + (reason || 'Compacting conversation context to reduce token usage...'));
+    }
+
+    function hideCompactionBannerWithSuccess(msg) {
+      if (msg && msg.skipped) {
+        appendSystemNote('Context is already compact: ' + (msg.reason || ''));
+      } else if (msg && !msg.error) {
+        appendSystemNote('Context compacted successfully: earlier turns summarized.');
+      }
+    }
+
+    function updateSessionActivityIndicator() {
+      const dot = document.getElementById('session-activity-dot');
+      if (!dot) return;
+      const anyUnreadOrRunning = Object.keys(sessionsState).some(id => {
+        return id !== currentSessionId && (sessionsState[id]?.hasUnread || sessionsState[id]?.isRunning);
+      });
+      dot.style.display = anyUnreadOrRunning ? 'inline-block' : 'none';
+    }
+
+    window.copyMessageText = function(btn) {
+      const wrap = btn.closest('.message-wrap');
+      if (!wrap) return;
+      let text = '';
+      const userMsg = wrap.querySelector('.message.user');
+      const asstMsg = wrap.querySelector('.assistant-text');
+      if (userMsg) text = userMsg.textContent || '';
+      else if (asstMsg) text = asstMsg.innerText || asstMsg.textContent || '';
+      if (text) {
+        copyToClipboard(text);
+        const orig = btn.innerHTML;
+        btn.innerHTML = '<span style="color:var(--green)">Copied!</span>';
+        setTimeout(function() { btn.innerHTML = orig; }, 1500);
+      }
+    };
+
+    let lastSoundPlayedAt = 0;
+    function playTone(kind) {
+      const now = Date.now();
+      if (now - lastSoundPlayedAt < 1200) {
+        return; // Prevent duplicate sound triggers in quick succession
+      }
+      lastSoundPlayedAt = now;
+      try {
+        const audio = document.getElementById('audio-done');
+        if (audio) {
+          audio.currentTime = 0;
+          audio.play().catch(function() {});
+        }
+      } catch (e) {
+        console.warn('Audio play failed:', e);
+      }
+    }
+
+    let compactionBannerTimer = null;
+    let compactionSafetyTimeout = null;
+
+    function showCompactionBanner(reason) {
+      const banner = document.getElementById('compaction-banner');
+      const topCompactBtn = document.getElementById('btn-top-compact');
+      if (topCompactBtn) {
+        topCompactBtn.classList.add('compacting');
+        topCompactBtn.title = 'Compacting context window in progress...';
+      }
+      if (compactionBannerTimer) {
+        clearTimeout(compactionBannerTimer);
+        compactionBannerTimer = null;
+      }
+      if (compactionSafetyTimeout) {
+        clearTimeout(compactionSafetyTimeout);
+        compactionSafetyTimeout = null;
+      }
+      if (banner) {
+        banner.className = 'compaction-banner';
+        banner.style.display = 'flex';
+        const titleEl = document.getElementById('compaction-title');
+        const detailEl = document.getElementById('compaction-detail');
+        if (titleEl) titleEl.textContent = 'Compacting Conversation Context...';
+        if (detailEl) detailEl.textContent = reason || 'Summarizing message history into dense semantic memory';
+      }
+      // Also append an inline working card in the chat messages stream if not already present
+      let inlineCard = document.getElementById('inline-compaction-note');
+      if (!inlineCard && chatContainer) {
+        inlineCard = document.createElement('div');
+        inlineCard.id = 'inline-compaction-note';
+        inlineCard.className = 'inline-compaction-card';
+        inlineCard.innerHTML = '<svg class="compaction-spin-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>' +
+          '<span><strong>Context compaction in progress:</strong> ' + escapeHtml(reason || 'Summarizing history to free token window...') + '</span>';
+        chatContainer.appendChild(inlineCard);
+        scrollToBottomIfNeeded();
+      }
+
+      // Safety timeout: if daemon does not reply within 18 seconds, dismiss spinner
+      compactionSafetyTimeout = setTimeout(() => {
+        hideCompactionBannerWithSuccess({ error: 'Compaction timed out' });
+      }, 18000);
+    }
+
+    function hideCompactionBannerWithSuccess(msg) {
+      if (compactionSafetyTimeout) {
+        clearTimeout(compactionSafetyTimeout);
+        compactionSafetyTimeout = null;
+      }
+      if (compactionBannerTimer) {
+        clearTimeout(compactionBannerTimer);
+        compactionBannerTimer = null;
+      }
+
+      const banner = document.getElementById('compaction-banner');
+      const topCompactBtn = document.getElementById('btn-top-compact');
+      if (topCompactBtn) {
+        topCompactBtn.classList.remove('compacting');
+        topCompactBtn.title = 'Compact context window';
+      }
+      // Remove inline spinner card
+      const inlineCard = document.getElementById('inline-compaction-note');
+      if (inlineCard) {
+        inlineCard.remove();
+      }
+
+      if (msg && msg.error) {
+        if (banner) {
+          banner.className = 'compaction-banner';
+          const titleEl = document.getElementById('compaction-title');
+          const detailEl = document.getElementById('compaction-detail');
+          if (titleEl) titleEl.textContent = 'Compaction Skipped';
+          if (detailEl) detailEl.textContent = msg.error;
+          compactionBannerTimer = setTimeout(() => {
+            banner.style.display = 'none';
+          }, 3000);
+        }
+        appendSystemNote('Notice: ' + msg.error);
+        return;
+      }
+
+      if (msg && msg.skipped) {
+        const skippedReason = msg.reason || 'Conversation is already short — no compaction needed.';
+        if (banner) {
+          banner.className = 'compaction-banner success';
+          const titleEl = document.getElementById('compaction-title');
+          const detailEl = document.getElementById('compaction-detail');
+          if (titleEl) titleEl.textContent = '✓ Context Already Clean';
+          if (detailEl) detailEl.textContent = skippedReason;
+          compactionBannerTimer = setTimeout(() => {
+            banner.style.display = 'none';
+            banner.className = 'compaction-banner';
+          }, 2500);
+        }
+        appendSystemNote(skippedReason);
+        return;
+      }
+
+      const oldCount = msg && msg.old_count !== undefined ? msg.old_count : (msg && msg.oldCount);
+      const newCount = msg && msg.message_count !== undefined ? msg.message_count : (msg && msg.messageCount);
+      let summaryText = 'Context compacted: conversation history compressed to save tokens.';
+      if (oldCount && newCount && oldCount > newCount) {
+        summaryText = 'Context compacted: ' + oldCount + ' messages compressed to ' + newCount + ' messages.';
+      } else if (newCount) {
+        summaryText = 'Context is already compact (' + newCount + ' messages).';
+      }
+
+      if (banner) {
+        banner.className = 'compaction-banner success';
+        const titleEl = document.getElementById('compaction-title');
+        const detailEl = document.getElementById('compaction-detail');
+        if (titleEl) titleEl.textContent = '✓ Compaction Complete';
+        if (detailEl) detailEl.textContent = summaryText;
+
+        compactionBannerTimer = setTimeout(() => {
+          banner.style.display = 'none';
+          banner.className = 'compaction-banner';
+        }, 3000);
+      }
+
+      appendSystemNote(summaryText);
+    }
+
+    function updateModeBadge(mode) {
+      if (!mode) return;
+      currentMode = mode.toLowerCase();
+      if (activeModeLabel) activeModeLabel.textContent = currentMode.toUpperCase();
+      const modeBtn = document.getElementById('btn-mode-cycle');
+      if (modeBtn) modeBtn.className = 'mode-badge-btn mode-' + currentMode;
+      const promptModeLabel = document.getElementById('prompt-mode-label');
+      if (promptModeLabel) {
+        promptModeLabel.textContent = currentMode.toUpperCase();
+      }
+      const titles = {
+        safe: 'SAFE Mode: Confirms before every file edit and shell command (Click to cycle)',
+        trust: 'TRUST Mode: Auto-approves file writes in workspace; prompts for commands (Click to cycle)',
+        full: 'FULL Mode: Auto-approves all tool actions and logs to stream (Click to cycle)',
+        yolo: 'YOLO Mode: Autonomous silent execution (Click to cycle)'
+      };
+      if (modeBtn) modeBtn.title = titles[currentMode] || 'Permission Governance Mode (Click to cycle)';
+    }
+
+    function removeTurnLoader() {
+      const el = document.getElementById('turn-loading-indicator');
+      if (el) el.remove();
+    }
+
+    function finishCurrentThinking() {
+      if (currentThinkingDiv) {
+        const elapsedSec = thinkingStartTime ? ((Date.now() - thinkingStartTime) / 1000).toFixed(1) : '0.0';
+        const hdr = currentThinkingDiv.querySelector('.thinking-header span');
+        if (hdr) hdr.textContent = 'thought (' + elapsedSec + 's)';
+        const pulse = currentThinkingDiv.querySelector('.thinking-pulse');
+        if (pulse) {
+          pulse.style.opacity = '0.4';
+          pulse.style.animation = 'none';
+          pulse.style.boxShadow = 'none';
+        }
+        // Auto-collapse when done (TUI parity)
+        currentThinkingDiv.classList.remove('expanded');
+        currentThinkingDiv = null;
+        currentThinkingContent = null;
+      }
+    }
+
+    function startAssistantTurn() {
+      isRunning = true;
+      userScrolledUp = false; // new turn always shows latest
+      document.querySelector('.prompt-box')?.classList.add('is-generating');
+      if (promptInput) { promptInput.setAttribute('aria-busy','true'); }
+      if (sendBtn) sendBtn.setAttribute('disabled','true');
+      if (currentSessionId) {
+        sessionsState[currentSessionId] = sessionsState[currentSessionId] || {};
+        sessionsState[currentSessionId].isRunning = true;
+      }
+      turnEditedFiles.clear();
+      cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
+      cancelBtn.disabled = false;
+      cancelBtn.style.opacity = '';
+      cancelBtn.style.display = 'flex';
+      sendBtn.style.display = 'none';
+      accumulatedAssistantText = '';
+      currentTurnStartTime = Date.now();
+      currentToolSequence = null; toolSeqCount = 0; lastToolName = ""; lastToolRunning = false;
+      planToolCalledInTurn = false;  // reset plan tool flag for the new turn
+      if (toolSeqTimer) { clearInterval(toolSeqTimer); toolSeqTimer = null; }
+
+      const wrap = document.createElement('div');
+      wrap.className = 'message-wrap assistant';
+      currentTurnAssistantDiv = wrap;
+
+      const header = document.createElement('div');
+      header.className = 'assistant-header';
+      header.innerHTML = '<div class="assistant-avatar">' +
+        '<img class="" src="' + sidebarIconUri + '" width="48" alt="Andromity" />' +
+      '</div>' +
+      '<span class="assistant-name">Andromity</span>';
+      wrap.appendChild(header);
+
+      const loader = document.createElement('div');
+      loader.className = 'andromity-turn-loader';
+      loader.id = 'turn-loading-indicator';
+      loader.innerHTML = '<img class="spinning" src="' + sidebarIconUri + '" width="14" height="14" alt="Andromity" /> <span>Andromity is thinking... (0s)</span>';
+      wrap.appendChild(loader);
+
+      const loaderTimer = setInterval(() => {
+        const span = loader.querySelector('span');
+        if (!span || !document.getElementById('turn-loading-indicator')) {
+          clearInterval(loaderTimer);
+          return;
+        }
+        const elapsed = Math.floor((Date.now() - currentTurnStartTime) / 1000);
+        if (elapsed < 6) {
+          span.textContent = 'Andromity is thinking... (' + elapsed + 's)';
+        } else if (elapsed < 16) {
+          span.textContent = 'Contacting ' + (currentModel || 'model') + '... (' + elapsed + 's)';
+        } else {
+          span.textContent = 'Waiting for ' + (currentProvider || 'provider') + ' stream... (' + elapsed + 's)';
+        }
+      }, 1000);
+
+      currentAssistantContent = null;
+      accumulatedAssistantText = '';
+
+      chatContainer.appendChild(wrap);
+      scrollToBottomIfNeeded();
+    }
+
+    function endAssistantTurn() {
+      removeTurnLoader();
+      finishCurrentThinking();
+      finishToolSequence();
+
+      if (currentTurnAssistantDiv) {
+        currentTurnAssistantDiv.querySelectorAll('.tool-tag').forEach(tag => {
+          if (tag.textContent === 'RUNNING') {
+            tag.textContent = 'DONE';
+            tag.style.background = 'rgba(63, 185, 80, 0.2)';
+            tag.style.color = 'var(--green)';
+          }
+        });
+        currentTurnAssistantDiv.querySelectorAll('.subagent-status').forEach(tag => {
+          if (tag.textContent === 'RUNNING') {
+            tag.className = 'subagent-status done';
+            tag.textContent = 'DONE';
+          }
+        });
+      }
+
+      isRunning = false;
+      document.querySelector('.prompt-box')?.classList.remove('is-generating');
+      if (promptInput) promptInput.removeAttribute('aria-busy');
+      if (sendBtn) sendBtn.removeAttribute('disabled');
+      if (currentSessionId && sessionsState[currentSessionId]) {
+        sessionsState[currentSessionId].isRunning = false;
+      }
+      cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
+      cancelBtn.disabled = false;
+      cancelBtn.style.opacity = '';
+      cancelBtn.style.display = 'none';
+      sendBtn.style.display = 'flex';
+
+      if (currentTurnAssistantDiv) {
+        if (turnEditedFiles.size > 0) {
+          const strip = document.createElement('div');
+          strip.className = 'turn-actions-strip';
+          turnEditedFiles.forEach(filePath => {
+            const chip = document.createElement('div');
+            chip.className = 'file-edited-chip';
+            chip.setAttribute('data-action', 'open-file-diff');
+            chip.setAttribute('data-file-path', filePath);
+            const filename = filePath.split(/[\\\\/]/).pop() || filePath;
+            chip.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>' +
+              '<span class="chip-filename" title="' + escapeHtml(filePath) + '">' + escapeHtml(filename) + '</span>' +
+              '<span class="chip-diff-label">Diff</span>';
+            strip.appendChild(chip);
+          });
+          currentTurnAssistantDiv.appendChild(strip);
+        }
+
+        const elapsedSec = ((Date.now() - currentTurnStartTime) / 1000).toFixed(1);
+        const footer = document.createElement('div');
+        footer.className = 'message-footer';
+        footer.innerHTML = '<span class="turn-duration-badge">' +
+          '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:2px;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
+          '<span>' + elapsedSec + 's · ' + formatTime(new Date()) + '</span>' +
+        '</span>' +
+        '<button class="msg-copy-btn" data-action="copy-message" title="Copy response">' +
+          '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy' +
+        '</button>';
+        currentTurnAssistantDiv.appendChild(footer);
+      }
+
+      currentTurnAssistantDiv = null;
+      currentThinkingDiv = null;
+      currentThinkingContent = null;
+      currentAssistantContent = null;
+      accumulatedAssistantText = '';
+      renderConversationTimeline();
+    }
+
+    const trustBanner = document.getElementById('trust-banner');
+    document.getElementById('btn-trust-confirm')?.addEventListener('click', () => {
+      trustBanner.style.display = 'none';
+      vscode.postMessage({ type: 'trust_workspace' });
+    });
+    document.getElementById('btn-trust-dismiss')?.addEventListener('click', () => {
+      trustBanner.style.display = 'none';
+    });
+
+    function clearSkeletonState() {
+      try {
+        document.body.classList.remove('loading');
+        document.querySelectorAll('.skeleton').forEach(el => el.classList.remove('skeleton'));
+        document.querySelectorAll('[aria-busy="true"]').forEach(el => el.removeAttribute('aria-busy'));
+      } catch {}
+    }
+
+    window.addEventListener('message', event => {
+      const msg = event.data;
+      switch (msg.type) {
+        case 'init_state':
+          clearSkeletonState();
+          currentSessionId = msg.sessionId;
+          allModels = msg.models || [];
+          if (msg.skills) {
+            allSkills = msg.skills;
+          }
+          if (msg.model) currentModel = msg.model;
+          if (msg.provider) currentProvider = msg.provider;
+          if (msg.mode) {
+            updateModeBadge(msg.mode);
+          }
+          if (msg.profile) currentProfile = msg.profile;
+          if (msg.reasoningEffort) currentReasoning = msg.reasoningEffort;
+          if (msg.isTrusted === false) {
+            trustBanner.style.display = 'flex';
+          } else {
+            trustBanner.style.display = 'none';
+          }
+          const curSess = (msg.sessions || []).find(s => s.id === msg.sessionId);
+          const sessLabel = document.getElementById('active-session-name');
+          if (sessLabel) {
+            sessLabel.textContent = curSess ? (curSess.name || curSess.id) : 'Main Session';
+          }
+          if (msg.sessions) {
+            allSessions = msg.sessions;
+            renderHomeRecentSessions(allSessions);
+          }
+          if (msg.workspaceName && zeroWorkspaceLabel) {
+            zeroWorkspaceLabel.textContent = msg.workspaceName;
+          }
+          if (curSess) {
+            updateTokenDisplay(curSess);
+          }
+          if (msg.currentPlan && msg.currentPlan.steps && msg.currentPlan.steps.length > 0) {
+            updatePlanTracker(msg.currentPlan);
+          } else if (planTrackerStrip) {
+            planTrackerStrip.style.display = 'none';
+          }
+          if (msg.models && msg.models.length > 0) {
+            allModels = msg.models;
+          }
+          if (msg.providers) {
+            allProviders = msg.providers;
+          }
+          updateModelBadge();
+          updateOnboardingVisibility();
+          break;
+
+        case 'trust_updated':
+          if (msg.isTrusted) {
+            trustBanner.style.display = 'none';
+          } else {
+            trustBanner.style.display = 'flex';
+          }
+          break;
+
+        case 'config_updated':
+          if (msg.key === 'mode') {
+            updateModeBadge(msg.value);
+            // If switched from SAFE to TRUST/FULL/YOLO, auto-dismiss any pending tool approval card
+            if (msg.value !== 'safe') {
+              const appCard = interactiveSlot.querySelector('.approval-card');
+              if (appCard) {
+                interactiveSlot.innerHTML = '';
+                appendSystemNote('Mode switched to ' + msg.value.toUpperCase() + ' -- pending tool auto-approved.');
+              }
+            }
+          } else if (msg.key === 'model') {
+            currentModel = msg.value;
+            updateModelBadge();
+          } else if (msg.key === 'provider') {
+            currentProvider = msg.value;
+            updateModelBadge();
+          } else if (msg.key === 'profile') {
+            currentProfile = msg.value;
+          } else if (msg.key === 'reasoningEffort') {
+            currentReasoning = msg.value;
+          }
+          break;
+
+        case 'session_updated':
+          if (msg.name) {
+            const activeSessName = document.getElementById('active-session-name');
+            if (activeSessName) {
+              activeSessName.textContent = msg.name;
+            }
+          }
+          break;
+
+        case 'session_switched':
+          if (currentSessionId) {
+            sessionsState[currentSessionId] = sessionsState[currentSessionId] || {};
+            sessionsState[currentSessionId].draftInput = promptInput ? promptInput.value : '';
+            try { sessionDomCache.set(currentSessionId, { html: chatContainer.innerHTML, isRunning: isRunning }); } catch {}
+            // Detach live turn state — next session must not reuse previous turn divs
+            currentTurnAssistantDiv = null;
+            currentThinkingDiv = null;
+            currentThinkingContent = null;
+            currentAssistantContent = null;
+            currentToolSequence = null;
+          }
+          if (msg.sessionId) {
+            currentSessionId = msg.sessionId;
+          }
+          if (sessionsState[currentSessionId]) {
+            sessionsState[currentSessionId].hasUnread = false;
+          }
+          updateSessionActivityIndicator();
+          removeTurnLoader();
+          finishCurrentThinking();
+          interactiveSlot.innerHTML = '';
+          {
+            const sessState = sessionsState[currentSessionId];
+            if (sessState && sessState.pendingApproval) {
+              interactiveSlot.innerHTML = renderPermissionCard(sessState.pendingApproval);
+            } else if (sessState && sessState.pendingPlanApproval) {
+              interactiveSlot.innerHTML = renderPlanApprovalCard(sessState.pendingPlanApproval);
+            }
+            if (sessState && sessState.isRunning) {
+              isRunning = true;
+              cancelBtn.style.display = 'flex';
+              sendBtn.style.display = 'none';
+              document.querySelector('.prompt-box')?.classList.add('is-generating');
+            } else {
+              isRunning = false;
+              cancelBtn.style.display = 'none';
+              sendBtn.style.display = 'flex';
+              document.querySelector('.prompt-box')?.classList.remove('is-generating');
+            }
+            if (promptInput) {
+              promptInput.value = (sessState && sessState.draftInput) || '';
+              promptInput.style.height = 'auto';
+            }
+            renderQueue();
+          }
+          break;
+
+        case 'session_loaded':
+          removeTurnLoader();
+          finishCurrentThinking();
+          chatContainer.innerHTML = '';
+          interactiveSlot.innerHTML = '';
+          if (msg.session && msg.session.id) {
+            currentSessionId = msg.session.id;
+          }
+          {
+            const sessState = sessionsState[currentSessionId];
+            if (sessState && sessState.isRunning) {
+              isRunning = true;
+              cancelBtn.style.display = 'flex';
+              sendBtn.style.display = 'none';
+              document.querySelector('.prompt-box')?.classList.add('is-generating');
+            } else {
+              isRunning = false;
+              cancelBtn.style.display = 'none';
+              sendBtn.style.display = 'flex';
+              document.querySelector('.prompt-box')?.classList.remove('is-generating');
+            }
+            if (promptInput) {
+              promptInput.value = (sessState && sessState.draftInput) || '';
+              promptInput.style.height = 'auto';
+            }
+          }
+          const activeSessName = document.getElementById('active-session-name');
+          if (activeSessName && msg.session) {
+            activeSessName.textContent = msg.session.name || msg.session.id || 'Main Session';
+          }
+          const hasCompactedHistory = msg.session && Array.isArray(msg.session.compacted_history) && msg.session.compacted_history.length > 0;
+          let allMessages = [];
+          if (hasCompactedHistory) {
+            allMessages = allMessages.concat(msg.session.compacted_history.filter(m => m.role !== 'system'));
+          }
+          if (msg.session && Array.isArray(msg.session.messages) && msg.session.messages.length > 0) {
+            allMessages = allMessages.concat(msg.session.messages.filter(m => {
+              if (m.role === 'system') return false;
+              if (m.role === 'assistant' && (m.content || '').trim() === 'Understood. I have the context of our earlier discussion and will continue from here.') {
+                return false;
+              }
+              return true;
+            }));
+          }
+
+          if (allMessages.length > 0) {
+            hideZeroState();
+            if (hasCompactedHistory) {
+              appendCompactedHistoryBanner(msg.session.compacted_history.length);
+            }
+            let currentAssistantWrap = null;
+            let currentTurnToolSeq = null;
+            let currentTurnToolBody = null;
+            let currentTurnToolCount = 0;
+            let turnEditedFilesForLoad = new Set();
+
+            for (let i = 0; i < allMessages.length; i++) {
+              const m = allMessages[i];
+              if (m.role === 'user') {
+                currentAssistantWrap = null;
+                currentTurnToolSeq = null;
+                currentTurnToolBody = null;
+                currentTurnToolCount = 0;
+                turnEditedFilesForLoad = new Set();
+
+                const uContent = (m.content || '').trim();
+                if (uContent.startsWith('[Conversation summary') || uContent.startsWith('[Previous context summary')) {
+                  appendCompactionSummaryCard(uContent);
+                } else {
+                  appendUserMessage(m.content || '');
+                }
+              } else if (m.role === 'assistant') {
+                if (!currentAssistantWrap) {
+                  currentAssistantWrap = document.createElement('div');
+                  currentAssistantWrap.className = 'message-wrap assistant';
+
+                  const hdr = document.createElement('div');
+                  hdr.className = 'assistant-header';
+                  hdr.innerHTML = '<div class="assistant-avatar">' +
+                    '<img src="' + sidebarIconUri + '" width="14" height="14" alt="Andromity" />' +
+                  '</div>' +
+                  '<span class="assistant-name">Andromity</span>';
+                  currentAssistantWrap.appendChild(hdr);
+                  chatContainer.appendChild(currentAssistantWrap);
+                }
+
+                // 1. Thinking block (if any)
+                const _thinking = m.thinking || '';
+                if (_thinking.trim()) {
+                  const thinkEl = document.createElement('div');
+                  thinkEl.className = 'thinking-card';
+                  thinkEl.innerHTML = '<div class="thinking-header"><div class="thinking-pulse" style="opacity:0.4; animation:none;"></div><span>thought</span><svg class="thinking-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg></div><div class="thinking-content">' + escapeHtml(_thinking) + '</div>';
+                  thinkEl.querySelector('.thinking-header').addEventListener('click', () => {
+                    thinkEl.classList.toggle('expanded');
+                  });
+                  // If a tool sequence is already active in this turn, thinking lives inside it (TUI parity)
+                  if (currentTurnToolBody) {
+                    currentTurnToolBody.appendChild(thinkEl);
+                  } else {
+                    currentAssistantWrap.appendChild(thinkEl);
+                  }
+                }
+
+                // 2. Tool calls (grouped into a single unified sector per turn)
+                if (m.tool_calls && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+                  if (!currentTurnToolSeq) {
+                    currentTurnToolSeq = document.createElement('div');
+                    currentTurnToolSeq.className = 'tool-sequence collapsed';
+                    currentTurnToolSeq.innerHTML = '<div class="tool-seq-header">' +
+                      '<svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>' +
+                      '<span class="tool-seq-title">0 tools · worked</span>' +
+                      '<svg class="tool-seq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
+                      '<button class="tool-seq-copy" title="Copy tool log"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button>' +
+                    '</div>' +
+                    '<div class="tool-seq-body"></div>';
+
+                    const seqEl = currentTurnToolSeq;
+                    seqEl.querySelector('.tool-seq-header').addEventListener('click', (e) => {
+                      if (e.target.closest('.tool-seq-copy')) return;
+                      seqEl.classList.toggle('collapsed');
+                    });
+                    seqEl.querySelector('.tool-seq-copy').addEventListener('click', () => {
+                      try {
+                        const parts = [];
+                        seqEl.querySelectorAll('.tool-card').forEach((c, idx) => {
+                          const n = c.querySelector('.tool-title-group span')?.textContent || 'tool';
+                          const args = c.querySelector('.tool-body')?.textContent || '';
+                          parts.push((idx + 1) + '. ' + n + '\\n   Args: ' + args);
+                        });
+                        copyToClipboard(parts.join('\\n\\n') || seqEl.textContent);
+                      } catch {}
+                    });
+
+                    currentTurnToolBody = seqEl.querySelector('.tool-seq-body');
+                    currentAssistantWrap.appendChild(seqEl);
+                  }
+
+                  for (const tc of m.tool_calls) {
+                    currentTurnToolCount++;
+                    const fn = tc.function || {};
+                    const toolName = fn.name || 'tool';
+                    const toolArgs = fn.arguments || '';
+
+                    // ONLY track actual mutating tools for DIFF chips!
+                    const isWriteTool = /^(write_file|write_to_file|edit_file|edit_file_multi|multi_replace_file_content|replace_file_content|patch_file|create_file|delete_file|move_file|rename_file|save_file)$/.test(toolName);
+                    if (isWriteTool) {
+                      try {
+                        const parsedArgs = JSON.parse(toolArgs);
+                        const p = parsedArgs.path || parsedArgs.target_path || parsedArgs.target_file || parsedArgs.file_path;
+                        if (p) turnEditedFilesForLoad.add(p);
+                        if (Array.isArray(parsedArgs.edits)) {
+                          for (const e of parsedArgs.edits) {
+                            const ep = e.path || e.target_path || e.file_path;
+                            if (ep) turnEditedFilesForLoad.add(ep);
+                          }
+                        }
+                      } catch {}
+                    }
+
+                    const tDiv = document.createElement('div');
+                    tDiv.className = 'tool-card';
+                    tDiv.innerHTML = '<div class="tool-header">' +
+                      '<div class="tool-title-group">' +
+                        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>' +
+                        '<span>' + escapeHtml(toolName) + '</span>' +
+                      '</div>' +
+                      '<div style="display:flex; align-items:center;">' +
+                        '<span class="tool-tag" style="background:rgba(63,185,80,0.2); color:var(--green);">DONE</span>' +
+                        '<svg class="tool-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
+                      '</div>' +
+                    '</div>' +
+                    '<div class="tool-body">' + escapeHtml(toolArgs) + '</div>';
+                    tDiv.querySelector('.tool-header').addEventListener('click', () => {
+                      tDiv.classList.toggle('expanded');
+                    });
+                    currentTurnToolBody.appendChild(tDiv);
+                  }
+
+                  const titleSpan = currentTurnToolSeq.querySelector('.tool-seq-title');
+                  if (titleSpan) {
+                    titleSpan.textContent = currentTurnToolCount + (currentTurnToolCount === 1 ? ' tool' : ' tools') + ' · worked';
+                  }
+                }
+
+                // 3. Text content in chronological order
+                const _content = m.content || '';
+                if (_content.trim()) {
+                  const textEl = document.createElement('div');
+                  textEl.className = 'assistant-text';
+                  textEl.innerHTML = renderMarkdown(_content);
+                  currentAssistantWrap.appendChild(textEl);
+                  // Reset tool sequence pointer so subsequent tools create a new sequence after text
+                  currentTurnToolSeq = null;
+                  currentTurnToolBody = null;
+                  currentTurnToolCount = 0;
+                }
+
+                // 4. End of assistant turn check (only close when no more assistant messages exist in this turn)
+                let hasMoreAssistantInTurn = false;
+                for (let j = i + 1; j < allMessages.length; j++) {
+                  if (allMessages[j].role === 'user') break;
+                  if (allMessages[j].role === 'assistant') {
+                    hasMoreAssistantInTurn = true;
+                    break;
+                  }
+                }
+
+                if (!hasMoreAssistantInTurn) {
+                  currentTurnToolSeq = null;
+                  currentTurnToolBody = null;
+                  currentTurnToolCount = 0;
+                  if (turnEditedFilesForLoad.size > 0) {
+                    const strip = document.createElement('div');
+                    strip.className = 'turn-actions-strip';
+                    turnEditedFilesForLoad.forEach(filePath => {
+                      const chip = document.createElement('div');
+                      chip.className = 'file-edited-chip';
+                      chip.setAttribute('data-action', 'open-file-diff');
+                      chip.setAttribute('data-file-path', filePath);
+                      const filename = filePath.split(/[\\/]/).pop() || filePath;
+                      chip.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>' +
+                        '<span class="chip-filename" title="' + escapeHtml(filePath) + '">' + escapeHtml(filename) + '</span>' +
+                        '<span class="chip-diff-label">Diff</span>';
+                      strip.appendChild(chip);
+                    });
+                    currentAssistantWrap.appendChild(strip);
+                  }
+
+                  const footer = document.createElement('div');
+                  footer.className = 'message-footer';
+                  footer.innerHTML = '<button class="msg-copy-btn" data-action="copy-message" title="Copy response">' +
+                    '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy' +
+                  '</button>';
+                  currentAssistantWrap.appendChild(footer);
+                  currentAssistantWrap = null;
+                }
+              }
+            }
+          } else {
+            chatContainer.appendChild(zeroState);
+            zeroState.style.display = 'flex';
+          }
+          if (msg.session) {
+            currentSessionId = msg.session.id || currentSessionId;
+            if (msg.session.model) {
+              currentModel = msg.session.model;
+              if (msg.session.provider) currentProvider = msg.session.provider;
+              updateModelBadge();
+            }
+            updateTokenDisplay(msg.session);
+            if (msg.session && msg.session.plan && msg.session.plan.steps && msg.session.plan.steps.length > 0) {
+              updatePlanTracker(msg.session.plan);
+            } else if (planTrackerStrip) {
+              planTrackerStrip.style.display = 'none';
+            }
+          }
+          // Replay any live buffered deltas that arrived while this session was in background
+          {
+            const buffered = sessionLiveBuffer.get(currentSessionId);
+            if (buffered && buffered.length > 0) {
+              // Ensure a live turn wrapper exists to append into
+              const needTurn = !currentTurnAssistantDiv || !chatContainer.contains(currentTurnAssistantDiv);
+              if (needTurn) {
+                // Create a continuation wrapper that visually continues the last assistant turn
+                // If chat already ends with an assistant wrap, reuse it; else start a new turn
+                const lastWrap = chatContainer.querySelector('.message-wrap.assistant:last-of-type');
+                if (lastWrap && buffered.some(e => e.t==='text_delta' || e.t==='tool_start')) {
+                  currentTurnAssistantDiv = lastWrap;
+                  // find or create assistant-text slot
+                  let found = lastWrap.querySelector('.assistant-text');
+                  if (found) { currentAssistantContent = found; }
+                }
+                if (!currentTurnAssistantDiv || !chatContainer.contains(currentTurnAssistantDiv)) {
+                  startAssistantTurn();
+                } else {
+                  // mark as running so prompt aura matches background session state
+                  const st = sessionsState[currentSessionId];
+                  if (st && st.isRunning) { isRunning = true; document.querySelector('.prompt-box')?.classList.add('is-generating'); cancelBtn.style.display='flex'; sendBtn.style.display='none'; }
+                }
+              }
+              for (const ev of buffered) {
+                if (ev.t === 'thinking_delta') {
+                  if (!currentThinkingDiv) {
+                    thinkingStartTime = Date.now();
+                    currentThinkingDiv = document.createElement('div');
+                    currentThinkingDiv.className = 'thinking-card expanded';
+                    currentThinkingDiv.innerHTML = '<div class="thinking-header"><div class="thinking-pulse"></div><span>thinking...</span><svg class="thinking-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg></div>';
+                    currentThinkingContent = document.createElement('div');
+                    currentThinkingContent.className = 'thinking-content';
+                    currentThinkingDiv.appendChild(currentThinkingContent);
+                    if (currentToolSequence) currentToolSequence.querySelector('.tool-seq-body').appendChild(currentThinkingDiv);
+                    else if (currentTurnAssistantDiv) currentTurnAssistantDiv.appendChild(currentThinkingDiv);
+                  }
+                  if (currentThinkingContent) { currentThinkingContent.textContent += ev.text; currentThinkingContent.scrollTop = currentThinkingContent.scrollHeight; }
+                } else if (ev.t === 'text_delta') {
+                  removeTurnLoader(); finishCurrentThinking(); if (currentToolSequence) finishToolSequence();
+                  if (!currentAssistantContent) {
+                    currentAssistantContent = document.createElement('div');
+                    currentAssistantContent.className = 'assistant-text';
+                    currentAssistantContent._blockText = '';
+                    if (currentTurnAssistantDiv) currentTurnAssistantDiv.appendChild(currentAssistantContent);
+                  }
+                  currentAssistantContent._blockText = (currentAssistantContent._blockText||'') + ev.text;
+                  currentAssistantContent.innerHTML = renderMarkdown(currentAssistantContent._blockText);
+                } else if (ev.t === 'tool_start') {
+                  removeTurnLoader(); finishCurrentThinking(); currentAssistantContent = null;
+                  const seq = ensureToolSequence(); toolSeqCount++; lastToolName = ev.tool_name||'tool'; lastToolRunning=true; updateToolSeqHeader();
+                  const td = document.createElement('div'); td.className='tool-card expanded'; td.id='tool-'+ev.tool_id;
+                  td.innerHTML = '<div class="tool-header"><div class="tool-title-group"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg><span>'+escapeHtml(ev.tool_name)+'</span></div><div style="display:flex; align-items:center;"><span class="tool-tag">RUNNING</span><svg class="tool-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg></div></div><div class="tool-body" id="args-'+ev.tool_id+'"></div>';
+                  seq.querySelector('.tool-seq-body').appendChild(td);
+                } else if (ev.t === 'tool_delta') {
+                  const ae = document.getElementById('args-'+ev.tool_id); if (ae) ae.textContent += ev.chunk;
+                } else if (ev.t === 'tool_result') {
+                  const tt = document.getElementById('tool-'+ev.tool_id);
+                  if (tt) { const tag=tt.querySelector('.tool-tag'); if(tag){tag.textContent='DONE'; tag.style.background='rgba(63,185,80,0.2)'; tag.style.color='var(--green)';} tt.classList.remove('expanded'); }
+                }
+              }
+              sessionLiveBuffer.delete(currentSessionId);
+              scrollToBottomIfNeeded();
+            }
+          }
+          renderConversationTimeline();
+          break;
+
+        case 'play_sound':
+          playTone(msg.kind);
+          break;
+
+        case 'text_delta': {
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
+            sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
+            sessionsState[msg.session_id].isRunning = true;
+            sessionsState[msg.session_id].hasUnread = true;
+            updateSessionActivityIndicator();
+            const buf = sessionLiveBuffer.get(msg.session_id) || [];
+            buf.push({ t:'text_delta', text: msg.text });
+            sessionLiveBuffer.set(msg.session_id, buf);
+            // keep DOM cache html if we have snapshot
+            try {
+              const c = sessionDomCache.get(msg.session_id);
+              if (c && c.html !== undefined) { /* buffer is replayed on switch */ }
+            } catch {}
+            break;
+          }
+          const _tdText = msg.text || '';
+          const _isMeaningful = _tdText.trim().length > 0;
+          removeTurnLoader();
+          finishCurrentThinking();
+          if (_isMeaningful && currentToolSequence) finishToolSequence();
+          if (!_isMeaningful) {
+            // whitespace-only deltas: preserve grouping, do not break tool block
+            if (currentAssistantContent) {
+              currentAssistantContent._blockText = (currentAssistantContent._blockText || '') + _tdText;
+              accumulatedAssistantText += _tdText;
+            }
+            break;
+          }
+          if (!currentTurnAssistantDiv) startAssistantTurn();
+
+          if (!currentAssistantContent) {
+            currentAssistantContent = document.createElement('div');
+            currentAssistantContent.className = 'assistant-text';
+            currentTurnAssistantDiv.appendChild(currentAssistantContent);
+            currentAssistantContent._blockText = '';
+          }
+          currentAssistantContent._blockText = (currentAssistantContent._blockText || '') + _tdText;
+          accumulatedAssistantText += _tdText;
+          currentAssistantContent.innerHTML = renderMarkdown(currentAssistantContent._blockText);
+          scrollToBottomIfNeeded();
+          break; }
+
+        case 'thinking_delta': {
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
+            sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
+            sessionsState[msg.session_id].isRunning = true;
+            sessionsState[msg.session_id].hasUnread = true;
+            updateSessionActivityIndicator();
+            const buf = sessionLiveBuffer.get(msg.session_id) || [];
+            buf.push({ t:'thinking_delta', text: msg.text });
+            sessionLiveBuffer.set(msg.session_id, buf);
+            break;
+          }
+          removeTurnLoader();
+          if (!currentTurnAssistantDiv) startAssistantTurn();
+          if (!currentThinkingDiv) {
+            thinkingStartTime = Date.now();
+            currentThinkingDiv = document.createElement('div');
+            currentThinkingDiv.className = 'thinking-card expanded';
+            currentThinkingDiv.innerHTML = '<div class="thinking-header">' +
+              '<div class="thinking-pulse"></div>' +
+              '<span>thinking...</span>' +
+              '<svg class="thinking-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
+            '</div>';
+            currentThinkingContent = document.createElement('div');
+            currentThinkingContent.className = 'thinking-content';
+            currentThinkingDiv.appendChild(currentThinkingContent);
+            // TUI parity: thinking between tools goes inside tool sequence
+            if (currentToolSequence) {
+              currentToolSequence.querySelector('.tool-seq-body').appendChild(currentThinkingDiv);
+            } else {
+              currentTurnAssistantDiv.appendChild(currentThinkingDiv);
+            }
+          }
+          currentThinkingContent.textContent += msg.text;
+          currentThinkingContent.scrollTop = currentThinkingContent.scrollHeight;
+          scrollToBottomIfNeeded();
+          break; }
+
+        case 'tool_start': {
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
+            sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
+            sessionsState[msg.session_id].isRunning = true;
+            sessionsState[msg.session_id].hasUnread = true;
+            updateSessionActivityIndicator();
+            const buf = sessionLiveBuffer.get(msg.session_id) || [];
+            buf.push({ t:'tool_start', tool_id: msg.tool_id, tool_name: msg.tool_name });
+            sessionLiveBuffer.set(msg.session_id, buf);
+            break;
+          }
+          removeTurnLoader();
+          finishCurrentThinking();
+          if (!currentTurnAssistantDiv) startAssistantTurn();
+
+          // Reset assistant text block so text following this tool sequence creates a new block
+          currentAssistantContent = null;
+
+          const seq = ensureToolSequence();
+          toolSeqCount++;
+          lastToolName = msg.tool_name || 'tool';
+          lastToolRunning = true;
+          // Track if this turn uses plan tools
+          if (msg.tool_name === 'write_plan' || msg.tool_name === 'update_plan_step') {
+            planToolCalledInTurn = true;
+          }
+          updateToolSeqHeader();
+          const toolDiv = document.createElement('div');
+          toolDiv.className = 'tool-card expanded';
+          toolDiv.id = 'tool-' + msg.tool_id;
+          toolDiv.innerHTML = '<div class="tool-header">' +
+            '<div class="tool-title-group">' +
+              '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>' +
+              '<span>' + escapeHtml(msg.tool_name) + '</span>' +
+            '</div>' +
+            '<div style="display:flex; align-items:center;">' +
+              '<span class="tool-tag">RUNNING</span>' +
+              '<svg class="tool-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
+            '</div>' +
+          '</div>' +
+          '<div class="tool-body" id="args-' + msg.tool_id + '"></div>';
+          seq.querySelector('.tool-seq-body').appendChild(toolDiv);
+          scrollToBottomIfNeeded();
+          break; }
+
+        case 'tool_delta': {
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
+            sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
+            sessionsState[msg.session_id].isRunning = true;
+            const buf = sessionLiveBuffer.get(msg.session_id) || [];
+            buf.push({ t:'tool_delta', tool_id: msg.tool_id, chunk: msg.chunk });
+            sessionLiveBuffer.set(msg.session_id, buf);
+            break;
+          }
+          const argsEl = document.getElementById('args-' + msg.tool_id);
+          if (argsEl) argsEl.textContent += msg.chunk;
+          break; }
+
+        case 'tool_result':
+        case 'tool_end': {
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
+            const buf = sessionLiveBuffer.get(msg.session_id) || [];
+            buf.push({ t:'tool_result', tool_id: msg.tool_id, result: msg.result });
+            sessionLiveBuffer.set(msg.session_id, buf);
+            break;
+          }
+          const targetTool = document.getElementById('tool-' + msg.tool_id);
+          if (targetTool) {
+            const argsEl = document.getElementById('args-' + msg.tool_id);
+            if (argsEl && argsEl.textContent) {
+              // Only track file paths for tools that actually mutate files
+              const toolNameEl = targetTool.querySelector('.tool-title-group span');
+              const toolName = toolNameEl ? toolNameEl.textContent.trim() : '';
+              const isWriteTool = /^(write_file|write_to_file|edit_file|edit_file_multi|multi_replace_file_content|replace_file_content|patch_file|create_file|delete_file|move_file|rename_file|save_file)$/.test(toolName);
+              if (isWriteTool) {
+                try {
+                  const parsed = JSON.parse(argsEl.textContent);
+                  const p = parsed.path || parsed.target_path || parsed.target_file || parsed.file_path;
+                  if (p) turnEditedFiles.add(p);
+                  // edit_file_multi may contain edits array with multiple files
+                  if (Array.isArray(parsed.edits)) {
+                    for (const e of parsed.edits) {
+                      const ep = e.path || e.target_path || e.file_path;
+                      if (ep) turnEditedFiles.add(ep);
+                    }
+                  }
+                } catch {}
+              }
+            }
+            const tag = targetTool.querySelector('.tool-tag');
+            if (tag) {
+              tag.textContent = 'DONE';
+              tag.style.background = 'rgba(63, 185, 80, 0.2)';
+              tag.style.color = 'var(--green)';
+            }
+            targetTool.classList.remove('expanded');
+          }
+          if (msg.tool_id) {
+            toolSeqDoneTools.add(msg.tool_id);
+          }
+          lastToolRunning = false;
+          updateToolSeqHeader();
+          // Tool-path spawns never emit subagent/done (orchestrator.spawn doesn't
+          // use run_stream). The tool result IS the SubAgentResult JSON — use it as
+          // the backstop to flip the matching subagent card to DONE/FAILED.
+          if (msg.result) {
+            try {
+              const parsed = JSON.parse(msg.result);
+              if (parsed && parsed.agent_id && parsed.status) {
+                const finished = parsed.status === 'completed';
+                updateSubagentCard({
+                  type: finished ? 'subagent_done' : 'subagent_failed',
+                  agent_id: parsed.agent_id,
+                  status: parsed.status,
+                  result: parsed.summary || parsed.error || '',
+                  error: parsed.error || undefined,
+                });
+              }
+            } catch (e) { /* not a JSON subagent result */ }
+          }
+          break; }
+
+        case 'tool_approval_required': {
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
+            sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
+            sessionsState[msg.session_id].isRunning = true;
+            sessionsState[msg.session_id].pendingApproval = msg;
+            break;
+          }
+          interactiveSlot.innerHTML = renderPermissionCard(msg);
+          scrollToBottomIfNeeded();
+          break; }
+
+        case 'ask_questions': {
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
+            sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
+            sessionsState[msg.session_id].isRunning = true;
+            sessionsState[msg.session_id].pendingQuestions = msg;
+            break;
+          }
+          const questions = msg.questions || [];
+          const totalQ = questions.length;
+          window.currentQuestionSlide = 0;
+          window.totalQuestionSlides = totalQ;
+
+          let slidesHtml = '';
+          questions.forEach((q, idx) => {
+            let optionsHtml = '';
+            if (q.options && q.options.length > 0) {
+              const isMulti = q.type === 'multi';
+              optionsHtml = '<div class="question-options-list">';
+              q.options.forEach(opt => {
+                optionsHtml += '<label class="question-option-row">' +
+                  '<input type="' + (isMulti ? 'checkbox' : 'radio') + '" name="q_' + idx + '" value="' + escapeHtml(opt) + '">' +
+                  '<span>' + escapeHtml(opt) + '</span>' +
+                '</label>';
+              });
+              optionsHtml += '</div>';
+            } else {
+              optionsHtml = '<div style="margin-top:4px;">' +
+                '<textarea id="q_input_' + idx + '" class="question-textarea" data-q-idx="' + idx + '" placeholder="Type your answer..." rows="2"></textarea>' +
+              '</div>';
+            }
+
+            slidesHtml += '<div class="question-slide" id="q-slide-' + idx + '" style="' + (idx === 0 ? 'display:block;' : 'display:none;') + '">' +
+              '<div class="question-prompt">' +
+                (totalQ > 1 ? '<span class="question-num-tag">Question ' + (idx + 1) + ':</span> ' : '') + escapeHtml(q.question) +
+              '</div>' +
+              optionsHtml +
+            '</div>';
+          });
+
+          let qHtml = '<div class="questions-card" id="questions-carousel-card">' +
+            '<div class="questions-header">' +
+              '<div class="questions-title">Clarifying Questions</div>' +
+              (totalQ > 1 ? '<div class="questions-step-badge" id="q-step-badge">1 of ' + totalQ + '</div>' : '') +
+            '</div>' +
+            '<div class="carousel-slides">' + slidesHtml + '</div>' +
+            '<div class="carousel-footer">' +
+              '<button class="btn-carousel-prev" id="btn-q-prev" data-action="q-prev" style="visibility:hidden;">Back</button>' +
+              '<div style="display:flex; gap:6px;">' +
+                (totalQ > 1 ? '<button class="btn-carousel-next" id="btn-q-next" data-action="q-next">Next</button>' : '') +
+                '<button class="btn-carousel-submit" id="btn-q-submit" data-action="submit-questions" data-question-id="' + msg.question_id + '" data-total-q="' + totalQ + '" style="' + (totalQ > 1 ? 'display:none;' : '') + '">Submit ' + (totalQ > 1 ? 'Answers' : 'Answer') + '</button>' +
+              '</div>' +
+            '</div>' +
+          '</div>';
+
+          interactiveSlot.innerHTML = qHtml;
+          break;
+        }
+
+        case 'plan_approval':
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
+            sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
+            sessionsState[msg.session_id].isRunning = true;
+            sessionsState[msg.session_id].pendingPlanApproval = msg;
+            break;
+          }
+          interactiveSlot.innerHTML = renderPlanApprovalCard(msg);
+          scrollToBottomIfNeeded();
+          break;
+
+        case 'subagent_spawned': {
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
+            sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
+            sessionsState[msg.session_id].isRunning = true;
+            break;
+          }
+          if (!currentTurnAssistantDiv) startAssistantTurn();
+          appendSubagentCard(msg);
+          break; }
+
+        case 'subagent_progress':
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
+          // Tool-path spawns arrive as subagent_progress with event_type 'spawned'
+          // (they never emit subagent_spawned). Lazily create the card here too so a
+          // genuinely parallel set of spawns renders one card per agent_id.
+          if (msg.event_type === 'spawned') {
+            if (!currentTurnAssistantDiv) startAssistantTurn();
+            appendSubagentCard(msg);
+          }
+          updateSubagentCard(msg);
+          break;
+
+        case 'subagent_done':
+        case 'subagent_failed': {
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
+          updateSubagentCard(msg);
+          break; }
+
+        case 'agent_started':
+          if (msg.session_id) {
+            sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
+            sessionsState[msg.session_id].isRunning = true;
+            if (msg.session_id !== currentSessionId) {
+              sessionsState[msg.session_id].hasUnread = true;
+            }
+            updateSessionActivityIndicator();
+          }
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
+          if (!currentTurnAssistantDiv) startAssistantTurn();
+          break;
+
+        case 'session_compacting':
+          showCompactionBanner(msg.reason || 'Compacting conversation context to reduce token usage...');
+          break;
+
+        case 'session_compacted':
+          hideCompactionBannerWithSuccess(msg);
+          break;
+
+        case 'turn_undone':
+          appendSystemNote('Last turn undone: file changes rolled back.');
+          break;
+
+        case 'agent_busy':
+          if (msg.queuedPrompt) {
+            promptQueue.push(msg.queuedPrompt);
+            renderQueue();
+            appendSystemNote('Agent busy -- your message was queued (will send after this turn).');
+          } else {
+            appendSystemNote('Agent is still working -- please wait for this turn to finish.');
+          }
+          break;
+
+        case 'agent_done': {
+          if (msg.session_id) {
+            sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
+            sessionsState[msg.session_id].isRunning = false;
+            if (msg.session_id !== currentSessionId) {
+              sessionsState[msg.session_id].hasUnread = true;
+            }
+            updateSessionActivityIndicator();
+            try { sessionDomCache.delete(msg.session_id); sessionLiveBuffer.delete(msg.session_id); } catch {}
+          }
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
+          if (cancelFallbackTimer) { clearTimeout(cancelFallbackTimer); cancelFallbackTimer = null; }
+          cancelBtn.disabled = false;
+          cancelBtn.style.opacity = '';
+          cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
+          endAssistantTurn();
+          interactiveSlot.innerHTML = '';
+          activePendingApprovalId = null;
+          activePendingToolName = '';
+          activePendingPlan = false;
+          updateTokenDisplay({
+            token_total: msg.token_total,
+            context_tokens: msg.context_tokens,
+            cost_usd: msg.cost_usd,
+          });
+          flushQueue();
+          break; }
+
+        case 'agent_cancelled': {
+          if (msg.session_id) {
+            sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
+            sessionsState[msg.session_id].isRunning = false;
+          }
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
+          if (cancelFallbackTimer) { clearTimeout(cancelFallbackTimer); cancelFallbackTimer = null; }
+          cancelBtn.disabled = false;
+          cancelBtn.style.opacity = '';
+          cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
+          endAssistantTurn();
+          interactiveSlot.innerHTML = '';
+          activePendingApprovalId = null;
+          activePendingToolName = '';
+          activePendingPlan = false;
+          appendSystemNote('Turn cancelled by user.');
+          if (msg.token_total !== undefined || msg.context_tokens !== undefined) {
+            updateTokenDisplay({
+              token_total: msg.token_total,
+              context_tokens: msg.context_tokens,
+              cost_usd: msg.cost_usd,
+            });
+          }
+          flushQueue();
+          break;
+        }
+
+        case 'agent_error': {
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
+            sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
+            sessionsState[msg.session_id].isRunning = false;
+            break;
+          }
+          if (cancelFallbackTimer) { clearTimeout(cancelFallbackTimer); cancelFallbackTimer = null; }
+          cancelBtn.disabled = false;
+          cancelBtn.style.opacity = '';
+          cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
+          // If error is just a timeout but stream already started, don't end turn abruptly
+          if (msg.error && msg.error.includes('RPC timeout')) {
+            appendSystemNote('Note: ' + msg.error + ' -- but agent is still streaming. Watch the footer for progress.');
+            if (!currentTurnAssistantDiv) startAssistantTurn();
+            break;
+          }
+          endAssistantTurn();
+          interactiveSlot.innerHTML = '';
+          appendErrorCard(msg.error || 'Unknown agent error.');
+          flushQueue();
+          break;
+        }
+
+        case 'toggle_sessions':
+          toggleSessionsFlyout();
+          break;
+
+        case 'toggle_crons':
+          toggleCronsFlyout();
+          break;
+
+        case 'sessions_data':
+          renderSessionsList(msg.sessions || [], msg.currentSessionId || currentSessionId);
+          break;
+
+        case 'crons_data':
+          renderCronsList(msg.crons || []);
+          break;
+
+        case 'plan_updated':
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
+            break;
+          }
+          if (msg.plan && msg.plan.steps && msg.plan.steps.length > 0) {
+            updatePlanTracker(msg.plan);
+          } else if (planTrackerStrip) {
+            planTrackerStrip.style.display = 'none';
+          }
+          // Only show the pill in the chat if a plan tool was explicitly called
+          // this turn (not on session restore / disk load which fires outside a turn)
+          if (msg.plan && msg.plan.title && planToolCalledInTurn) {
+            renderPlanPill(msg.plan);
+          }
+          break;
+
+        case 'key_configured_success': {
+          if (btnOnboardingSave) {
+            btnOnboardingSave.disabled = false;
+            btnOnboardingSave.innerHTML = '<span>Connected! ✓</span>';
+          }
+          if (btnOnboardingOllamaSave) {
+            btnOnboardingOllamaSave.disabled = false;
+            btnOnboardingOllamaSave.innerHTML = '<span>Activated! ✓</span>';
+          }
+          if (msg.provider) currentProvider = msg.provider;
+          if (msg.model) currentModel = msg.model;
+          updateModelBadge();
+          setTimeout(() => {
+            updateOnboardingVisibility();
+            if (chatInput) chatInput.focus();
+          }, 350);
+          break;
+        }
+
+        case 'key_configure_failed': {
+          if (btnOnboardingSave) {
+            btnOnboardingSave.disabled = false;
+            btnOnboardingSave.innerHTML = '<span>Connect & Start Coding</span>';
+          }
+          if (btnOnboardingOllamaSave) {
+            btnOnboardingOllamaSave.disabled = false;
+            btnOnboardingOllamaSave.innerHTML = '<span>Activate Local Ollama</span>';
+          }
+          break;
+        }
+
+        case 'backend_ready': {
+          const card = document.getElementById('setup-guide-card');
+          if (card) card.style.display = 'none';
+          break;
+        }
+
+        case 'backend_offline': {
+          const card = document.getElementById('setup-guide-card');
+          if (card) card.style.display = 'flex';
+          if (msg.message) {
+            const body = document.getElementById('setup-guide-body');
+            if (body) body.textContent = msg.message;
+          }
+          break;
+        }
+
+        case 'session_updated':
+          if (msg.name) {
+            const activeSessName = document.getElementById('active-session-name');
+            if (activeSessName && (!msg.session_id || msg.session_id === currentSessionId)) {
+              activeSessName.textContent = msg.name;
+            }
+            const sObj = allSessions.find(s => s.id === (msg.session_id || currentSessionId));
+            if (sObj) {
+              sObj.name = msg.name;
+              if (msg.message_count !== undefined) sObj.message_count = msg.message_count;
+              if (msg.context_tokens !== undefined) sObj.context_tokens = msg.context_tokens;
+              renderHomeRecentSessions(allSessions);
+            }
+          }
+          if (msg.context_tokens !== undefined || msg.token_total !== undefined) {
+            if (!msg.session_id || msg.session_id === currentSessionId) {
+              updateTokenDisplay(msg);
+            }
+          }
+          break;
+
+        case 'external_prompt': {
+          // Sent by extension commands: Explain Code, Ask About Selection, Generate Tests
+          const extPrompt = msg.prompt || '';
+          const extCtx = msg.context || null;
+          if (!extPrompt) break;
+
+          // Focus the chat view and make sure chat is visible
+          hideZeroState();
+
+          // Build user message with context snippet if provided
+          let fullUserMsg = extPrompt;
+          if (extCtx && extCtx.selectedText) {
+            const lang = extCtx.languageId || '';
+            const filePath = extCtx.relativePath || extCtx.filePath || '';
+            const lineInfo = extCtx.selectionRange
+              ? ' (lines ' + extCtx.selectionRange.startLine + '-' + extCtx.selectionRange.endLine + ')'
+              : '';
+            const bt = String.fromCharCode(96); const fence = bt+bt+bt;
+            const nl = String.fromCharCode(10);
+            fullUserMsg = extPrompt + nl + nl + fence + lang + (filePath ? '  // ' + filePath + lineInfo : '') + nl + extCtx.selectedText + nl + fence;
+          }
+
+          // Cleanly send via dispatchPrompt (creates UI bubbles, starts turn loader, and sends send_prompt RPC)
+          if (promptInput) promptInput.value = '';
+          dispatchPrompt(fullUserMsg, false, []);
+          break;
+        }
+      }
+    });
+
+    function appendErrorCard(text) {
+      const errDiv = document.createElement('div');
+      errDiv.className = 'error-card';
+      errDiv.style.color = 'var(--red)';
+      errDiv.style.fontSize = '12px';
+      errDiv.textContent = 'Error: ' + text;
+      chatContainer.appendChild(errDiv);
+      scrollToBottomIfNeeded();
+    }
+
+    function appendSystemNote(text) {
+      const note = document.createElement('div');
+      note.className = 'system-note';
+      note.style.fontSize = '11px';
+      note.style.color = 'var(--muted)';
+      note.textContent = text;
+      chatContainer.appendChild(note);
+      scrollToBottomIfNeeded();
+    }
+
+    function appendSubagentCard(msg) {
+      if (!msg || !msg.agent_id) return;
+      if (document.getElementById('subagent-' + msg.agent_id)) return;
+
+      const card = document.createElement('div');
+      card.className = 'subagent-card';
+      card.id = 'subagent-' + msg.agent_id;
+      const roleStr = escapeHtml(msg.role || 'subagent');
+      const modelStr = msg.model ? ('<span class="badge blue" style="font-size:9.5px; margin-left:4px;">' + escapeHtml(msg.model) + '</span>') : '';
+      
+      card.innerHTML =
+        '<div class="subagent-header">' +
+          '<div class="subagent-header-left">' +
+            '<svg class="subagent-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M12 1v6m0 6v6m11-9h-6m-6 0H1"></path></svg>' +
+            '<span class="subagent-role">' + roleStr + '</span>' +
+            modelStr +
+          '</div>' +
+          '<div class="subagent-header-right">' +
+            '<span class="subagent-status running">RUNNING</span>' +
+            '<svg class="subagent-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
+          '</div>' +
+        '</div>' +
+        '<div class="subagent-body">' +
+          (msg.task ? ('<div class="subagent-task"><span class="subagent-task-label">Task:</span> ' + escapeHtml(msg.task) + '</div>') : '') +
+          '<div class="subagent-live-status">' +
+            '<span class="subagent-spinner"></span>' +
+            '<span class="subagent-live-text">' + escapeHtml(msg.detail || 'Working on task...') + '</span>' +
+          '</div>' +
+          '<div class="subagent-tools-container"></div>' +
+          '<div class="subagent-result-box" style="display:none;"></div>' +
+        '</div>';
+
+      const header = card.querySelector('.subagent-header');
+      if (header) {
+        header.addEventListener('click', () => {
+          card.classList.toggle('collapsed');
+        });
+      }
+
+      if (currentToolSequence) {
+        currentToolSequence.querySelector('.tool-seq-body').appendChild(card);
+      } else if (currentTurnAssistantDiv) {
+        currentTurnAssistantDiv.appendChild(card);
+      }
+      scrollToBottomIfNeeded();
+    }
+
+    function updateSubagentCard(msg) {
+      if (!msg || !msg.agent_id) return;
+      let card = document.getElementById('subagent-' + msg.agent_id);
+      if (!card) {
+        if (!currentTurnAssistantDiv) return;
+        appendSubagentCard(msg);
+        card = document.getElementById('subagent-' + msg.agent_id);
+        if (!card) return;
+      }
+      const statusEl = card.querySelector('.subagent-status');
+      const liveStatusEl = card.querySelector('.subagent-live-status');
+      const liveTextEl = card.querySelector('.subagent-live-text');
+      const toolsContainer = card.querySelector('.subagent-tools-container');
+      const resultBox = card.querySelector('.subagent-result-box');
+
+      // Live step updates
+      if (msg.detail && msg.detail !== 'running' && liveTextEl) {
+        liveTextEl.textContent = msg.detail;
+      }
+
+      // Record inspectable tool action
+      if (msg.tool_name && toolsContainer) {
+        const tNameKey = msg.tool_name.replace(/[^a-zA-Z0-9_]/g, '_');
+        if (!subToolSeqCounts[msg.agent_id]) subToolSeqCounts[msg.agent_id] = {};
+        const seqCount = subToolSeqCounts[msg.agent_id][tNameKey] || 0;
+        subToolSeqCounts[msg.agent_id][tNameKey] = seqCount + 1;
+        const itemKey = 'subtool-' + msg.agent_id + '-' + tNameKey + (seqCount > 0 ? '-' + seqCount : '');
+        let toolItem = card.querySelector('#' + itemKey);
+        const actDesc = msg.detail || msg.tool_name;
+        
+        let argsContent = '';
+        if (msg.tool_args) {
+          try {
+            const parsed = typeof msg.tool_args === 'string' ? JSON.parse(msg.tool_args) : msg.tool_args;
+            argsContent = JSON.stringify(parsed, null, 2);
+          } catch(e) {
+            argsContent = String(msg.tool_args);
+          }
+        }
+        const resultText = msg.tool_result ? ('\\n\\n[Output]:\\n' + String(msg.tool_result)) : '';
+
+        if (!toolItem) {
+          toolItem = document.createElement('div');
+          toolItem.className = 'subagent-tool-item';
+          toolItem.id = itemKey;
+          toolItem.innerHTML =
+            '<div class="subagent-tool-item-header">' +
+              '<span class="subagent-tool-name">' +
+                '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>' +
+                escapeHtml(msg.tool_name) +
+              '</span>' +
+              '<span class="subagent-tool-desc">' + escapeHtml(actDesc) + '</span>' +
+            '</div>' +
+            '<div class="subagent-tool-item-body">' + escapeHtml(argsContent + resultText) + '</div>';
+
+          const itemHeader = toolItem.querySelector('.subagent-tool-item-header');
+          if (itemHeader) {
+            itemHeader.addEventListener('click', (e) => {
+              e.stopPropagation();
+              toolItem.classList.toggle('expanded');
+            });
+          }
+          toolsContainer.appendChild(toolItem);
+        } else {
+          const descEl = toolItem.querySelector('.subagent-tool-desc');
+          if (descEl) descEl.textContent = actDesc;
+          const bodyEl = toolItem.querySelector('.subagent-tool-item-body');
+          if (bodyEl && (argsContent || resultText)) {
+            bodyEl.textContent = argsContent + resultText;
+          }
+        }
+      }
+
+      const TERMINAL_FAILED = ['failed', 'timeout', 'killed', 'error', 'cancelled'];
+      if (msg.error || msg.type === 'subagent_failed' || TERMINAL_FAILED.includes(msg.status)) {
+        if (statusEl) {
+          statusEl.className = 'subagent-status failed';
+          statusEl.textContent = msg.status === 'failed' ? 'FAILED' : (msg.status || 'FAILED').toUpperCase();
+        }
+        if (liveStatusEl) liveStatusEl.style.display = 'none';
+        if (resultBox && (msg.error || msg.detail || (msg.result && typeof msg.result === 'string'))) {
+          resultBox.style.display = 'block';
+          const failMsg = msg.error || msg.detail || (typeof msg.result === 'string' ? msg.result : '');
+          resultBox.innerHTML = '<span style="color:var(--red); font-weight:500;">' + escapeHtml((msg.status || 'failed').toUpperCase()) + ':</span> ' + escapeHtml(failMsg);
+        }
+      } else if (msg.type === 'subagent_done' || msg.result !== undefined || msg.status === 'completed' || msg.status === 'done') {
+        if (statusEl) {
+          statusEl.className = 'subagent-status done';
+          statusEl.textContent = 'DONE';
+        }
+        if (liveStatusEl) liveStatusEl.style.display = 'none';
+        if (resultBox && (msg.result || msg.output || (msg.status === 'completed' && msg.detail))) {
+          resultBox.style.display = 'block';
+          const resContent = typeof msg.result === 'string' ? msg.result : (msg.output || msg.detail || JSON.stringify(msg.result, null, 2));
+          resultBox.innerHTML = '<div class="subagent-result-title">Result</div>' + renderMarkdown(resContent);
+        }
+      }
+      scrollToBottomIfNeeded();
+    }
+
+    let activePendingApprovalId = null;
+    let activePendingToolName = '';
+    let activePendingPlan = false;
+
+    function renderPermissionCard(msg) {
+      activePendingPlan = false;
+      const toolName = msg.tool_name || 'tool';
+      const approvalId = msg.approval_id || '';
+      activePendingApprovalId = approvalId;
+      activePendingToolName = toolName;
+      const toolArgs = msg.args || {};
+
+      let actionTitle = 'Running action';
+      let iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
+      let iconClass = 'command';
+      let codeDisplay = '';
+      let subPath = '';
+
+      const lowerTool = toolName.toLowerCase();
+      if (lowerTool === 'shell_exec' || lowerTool === 'run_command' || lowerTool === 'bash' || lowerTool === 'exec' || lowerTool === 'cmd') {
+        actionTitle = 'Running command';
+        iconClass = 'command';
+        iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>';
+        const cmd = toolArgs.command || toolArgs.cmd || toolArgs.CommandLine || '';
+        const shellName = (navigator.platform && navigator.platform.indexOf('Win') > -1) ? 'powershell' : 'bash';
+        codeDisplay = (shellName + ': ' + cmd).trim();
+        subPath = toolArgs.cwd || toolArgs.Cwd || (zeroWorkspaceLabel ? zeroWorkspaceLabel.textContent : '') || '';
+      } else if (lowerTool === 'edit_file' || lowerTool === 'write_to_file' || lowerTool === 'replace_file_content' || lowerTool === 'multi_replace_file_content' || lowerTool === 'create_file') {
+        actionTitle = 'Edit file';
+        iconClass = 'file';
+        iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>';
+        const filePath = toolArgs.path || toolArgs.file || toolArgs.TargetFile || '';
+        codeDisplay = 'file: ' + filePath;
+        if (toolArgs.Instruction || toolArgs.Description) {
+          codeDisplay += '\\n' + (toolArgs.Instruction || toolArgs.Description);
+        }
+        subPath = filePath;
+      } else if (lowerTool === 'read_file' || lowerTool === 'view_file') {
+        actionTitle = 'Read file';
+        iconClass = 'file';
+        iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+        const filePath = toolArgs.path || toolArgs.file || toolArgs.AbsolutePath || '';
+        codeDisplay = 'read: ' + filePath;
+        subPath = filePath;
+      } else if (lowerTool === 'web_search' || lowerTool === 'search_web') {
+        actionTitle = 'Web search';
+        iconClass = 'web';
+        iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>';
+        codeDisplay = 'query: "' + (toolArgs.query || toolArgs.q || '') + '"';
+        subPath = 'domain: ' + (toolArgs.domain || 'web');
+      } else if (lowerTool === 'fetch_url' || lowerTool === 'read_url_content') {
+        actionTitle = 'Fetch URL';
+        iconClass = 'web';
+        iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>';
+        codeDisplay = 'url: ' + (toolArgs.url || toolArgs.Url || '');
+        subPath = toolArgs.url || '';
+      } else {
+        actionTitle = 'Execute ' + toolName;
+        iconClass = 'command';
+        try {
+          codeDisplay = JSON.stringify(toolArgs, null, 2);
+        } catch {
+          codeDisplay = String(toolArgs);
+        }
+        subPath = 'tool: ' + toolName;
+      }
+
+      if (!subPath) {
+        subPath = (zeroWorkspaceLabel ? zeroWorkspaceLabel.textContent : '') || 'workspace';
+      }
+      if (subPath.length > 48) {
+        subPath = subPath.slice(0, 22) + '...' + subPath.slice(-22);
+      }
+
+      let rawParams = '';
+      try {
+        if (Object.keys(toolArgs).length > 1 || (lowerTool !== 'shell_exec' && lowerTool !== 'run_command')) {
+          rawParams = JSON.stringify(toolArgs, null, 2);
+        }
+      } catch {}
+
+      return '<div class="permission-card" id="permission-card-' + escapeHtml(approvalId) + '">' +
+        '<div class="permission-header">' +
+          '<div class="permission-title-row">' +
+            '<div class="permission-icon-title">' +
+              '<span class="permission-icon-box ' + iconClass + '">' + iconSvg + '</span>' +
+              '<span class="permission-title">' + escapeHtml(actionTitle) + '</span>' +
+            '</div>' +
+            '<button class="permission-close-btn" data-action="reject-tool" data-approval-id="' + escapeHtml(approvalId) + '" title="Deny (Esc)">' +
+              '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>' +
+            '</button>' +
+          '</div>' +
+          '<div class="permission-code-box">' + escapeHtml(codeDisplay) + '</div>' +
+          (rawParams ? (
+            '<div class="permission-params-toggle" data-action="toggle-perm-params">' +
+              '<span class="params-chevron">&#x25B8;</span> ' +
+              '<span>View full parameters</span>' +
+            '</div>' +
+            '<div class="permission-params-body" style="display:none;">' +
+              '<pre style="margin:0; font-family:var(--font-mono);">' + escapeHtml(rawParams) + '</pre>' +
+            '</div>'
+          ) : '') +
+        '</div>' +
+
+        '<div class="permission-options-group">' +
+          '<div class="permission-option-row" data-action="approve-tool-once" data-approval-id="' + escapeHtml(approvalId) + '" data-tool="' + escapeHtml(toolName) + '" tabindex="0" role="button">' +
+            '<div class="option-row-main">' +
+              '<div class="option-row-title">Allow once</div>' +
+            '</div>' +
+            '<div class="option-row-badge">' +
+              '<kbd class="perm-kbd">Ctrl</kbd> <kbd class="perm-kbd">Y</kbd>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="permission-option-row" data-action="approve-tool-session" data-approval-id="' + escapeHtml(approvalId) + '" data-tool="' + escapeHtml(toolName) + '" tabindex="0" role="button">' +
+            '<div class="option-row-main">' +
+              '<div class="option-row-title">Allow for remainder of this session</div>' +
+              '<div class="option-row-sub">path: ' + escapeHtml(subPath) + '</div>' +
+            '</div>' +
+            '<div class="option-row-badge">' +
+              '<kbd class="perm-kbd">Ctrl</kbd> <kbd class="perm-kbd">Alt</kbd> <kbd class="perm-kbd">Y</kbd>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="permission-option-row" data-action="approve-tool-always" data-approval-id="' + escapeHtml(approvalId) + '" data-tool="' + escapeHtml(toolName) + '" tabindex="0" role="button">' +
+            '<div class="option-row-main">' +
+              '<div class="option-row-title">Always allow</div>' +
+              '<div class="option-row-sub">path: ' + escapeHtml(subPath) + '</div>' +
+            '</div>' +
+            '<div class="option-row-badge">' +
+              '<kbd class="perm-kbd">Ctrl</kbd> <kbd class="perm-kbd">Shift</kbd> <kbd class="perm-kbd">Y</kbd>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="permission-option-row option-deny" data-action="reject-tool" data-approval-id="' + escapeHtml(approvalId) + '" tabindex="0" role="button">' +
+            '<div class="option-row-main">' +
+              '<div class="option-row-title deny-text">Deny</div>' +
+            '</div>' +
+            '<div class="option-row-badge">' +
+              '<kbd class="perm-kbd">Ctrl</kbd> <kbd class="perm-kbd">Alt</kbd> <kbd class="perm-kbd">N</kbd>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    function renderPlanApprovalCard(msg) {
+      activePendingPlan = true;
+      activePendingApprovalId = null;
+      activePendingToolName = '';
+      const plan = msg.plan || {};
+      const title = plan.title || 'Implementation Plan';
+      const desc = plan.description || '';
+      const steps = plan.steps || plan.todos || [];
+      const planMd = plan.plan_md || plan.body || '';
+
+      let stepsHtml = '';
+      if (steps.length > 0) {
+        stepsHtml = '<div class="plan-steps-preview">' +
+          steps.map(function(s, idx) {
+            const txt = typeof s === 'string' ? s : (s.title || s.description || s.text || '');
+            const isDone = (s.status || '').toLowerCase() === 'done';
+            return '<div class="plan-step-item' + (isDone ? ' is-done' : '') + '">' +
+              '<span class="plan-step-bullet">' + (isDone ? '✓' : (idx + 1)) + '</span>' +
+              '<span class="plan-step-txt">' + escapeHtml(txt) + '</span>' +
+            '</div>';
+          }).join('') +
+        '</div>';
+      }
+
+      let fullPlanToggle = '';
+      if (planMd && planMd.trim()) {
+        fullPlanToggle =
+          '<div class="permission-params-toggle" data-action="toggle-perm-params">' +
+            '<span class="params-chevron">&#x25B8;</span> ' +
+            '<span>View full plan markdown</span>' +
+          '</div>' +
+          '<div class="permission-params-body" style="display:none;">' +
+            '<pre style="margin:0; font-family:var(--font-mono); white-space:pre-wrap; word-break:break-word;">' + escapeHtml(planMd) + '</pre>' +
+          '</div>';
+      }
+
+      return '<div class="permission-card plan-approval-card" id="plan-approval-card">' +
+        '<div class="permission-header">' +
+          '<div class="permission-title-row">' +
+            '<div class="permission-icon-title">' +
+              '<span class="permission-icon-box plan">' +
+                '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>' +
+              '</span>' +
+              '<span class="permission-title">Plan Review: ' + escapeHtml(title) + '</span>' +
+            '</div>' +
+            '<button class="permission-close-btn" data-action="reject-plan" title="Deny / Reject (Esc)">' +
+              '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>' +
+            '</button>' +
+          '</div>' +
+          (desc ? ('<div class="plan-desc-text">' + escapeHtml(desc) + '</div>') : '') +
+          (stepsHtml ? ('<div class="permission-code-box plan-code-box">' + stepsHtml + '</div>') : '') +
+          fullPlanToggle +
+          '<div class="plan-feedback-wrapper">' +
+            '<input type="text" id="plan-feedback-input" class="plan-feedback-field" placeholder="Optional review note or instruction..." autocomplete="off">' +
+          '</div>' +
+        '</div>' +
+
+        '<div class="permission-options-group">' +
+          '<div class="permission-option-row" data-action="approve-plan" tabindex="0" role="button">' +
+            '<div class="option-row-main">' +
+              '<div class="option-row-title">Approve & Execute</div>' +
+              '<div class="option-row-sub">Proceed with planned implementation</div>' +
+            '</div>' +
+            '<div class="option-row-badge">' +
+              '<kbd class="perm-kbd">Ctrl</kbd> <kbd class="perm-kbd">Y</kbd>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="permission-option-row" data-action="open-plan-tab" tabindex="0" role="button">' +
+            '<div class="option-row-main">' +
+              '<div class="option-row-title">View full plan in editor tab</div>' +
+              '<div class="option-row-sub">Open interactive side-by-side plan viewer</div>' +
+            '</div>' +
+            '<div class="option-row-badge">' +
+              '<kbd class="perm-kbd">/plan</kbd>' +
+            '</div>' +
+          '</div>' +
+
+          '<div class="permission-option-row option-deny" data-action="reject-plan" tabindex="0" role="button">' +
+            '<div class="option-row-main">' +
+              '<div class="option-row-title deny-text">Reject & Revise</div>' +
+              '<div class="option-row-sub">Send review feedback to agent</div>' +
+            '</div>' +
+            '<div class="option-row-badge">' +
+              '<kbd class="perm-kbd">Esc</kbd>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    document.addEventListener('keydown', (e) => {
+      const isInput = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
+
+      // ── Plan Approval Keyboard Handling ──
+      if (activePendingPlan) {
+        if (isInput && e.target.id === 'plan-feedback-input') {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            window.approvePlan();
+            return;
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            window.rejectPlan();
+            return;
+          }
+        } else if (!isInput) {
+          if (e.key === 'Enter' || (e.ctrlKey && (e.key === 'y' || e.key === 'Y'))) {
+            e.preventDefault();
+            window.approvePlan();
+            return;
+          }
+          if (e.key === 'Escape' || (e.ctrlKey && (e.key === 'n' || e.key === 'N'))) {
+            e.preventDefault();
+            window.rejectPlan();
+            return;
+          }
+        }
+      }
+
+      if (!activePendingApprovalId) return;
+      const isToolInput = isInput;
+
+      // 1. Allow Once: Ctrl+Y, or Enter (when not inside input)
+      if ((e.ctrlKey && (e.key === 'y' || e.key === 'Y') && !e.altKey && !e.shiftKey) || (!isToolInput && e.key === 'Enter')) {
+        e.preventDefault();
+        window.approveTool(activePendingApprovalId, 'once', activePendingToolName);
+        return;
+      }
+
+      // 2. Allow for remainder of session: Ctrl+Alt+Y or Alt+Y
+      if ((e.ctrlKey && e.altKey && (e.key === 'y' || e.key === 'Y')) || (e.altKey && (e.key === 'y' || e.key === 'Y'))) {
+        e.preventDefault();
+        window.approveTool(activePendingApprovalId, 'session', activePendingToolName);
+        return;
+      }
+
+      // 3. Always allow: Ctrl+Shift+Y
+      if (e.ctrlKey && e.shiftKey && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        window.approveTool(activePendingApprovalId, 'always', activePendingToolName);
+        return;
+      }
+
+      // 4. Deny: Escape or Ctrl+Alt+N or Ctrl+N
+      if (e.key === 'Escape' || (e.ctrlKey && e.altKey && (e.key === 'n' || e.key === 'N')) || (e.ctrlKey && (e.key === 'n' || e.key === 'N'))) {
+        e.preventDefault();
+        window.rejectTool(activePendingApprovalId);
+        return;
+      }
+    });
+
+    window.approveTool = function(approvalId, scope, toolName) {
+      interactiveSlot.innerHTML = '';
+      activePendingApprovalId = null;
+      activePendingToolName = '';
+      vscode.postMessage({ type: 'approve_tool', approvalId, scope: scope || 'once', toolName });
+    };
+
+    window.rejectTool = function(approvalId) {
+      interactiveSlot.innerHTML = '';
+      activePendingApprovalId = null;
+      activePendingToolName = '';
+      vscode.postMessage({ type: 'reject_tool', approvalId });
+    };
+
+    window.approvePlan = function() {
+      activePendingPlan = false;
+      const feedbackInput = document.getElementById('plan-feedback-input');
+      const feedback = feedbackInput ? feedbackInput.value.trim() : '';
+      interactiveSlot.innerHTML = '';
+      vscode.postMessage({ type: 'approve_plan', feedback });
+    };
+
+    window.rejectPlan = function() {
+      activePendingPlan = false;
+      const feedbackInput = document.getElementById('plan-feedback-input');
+      const feedback = feedbackInput ? feedbackInput.value.trim() : '';
+      interactiveSlot.innerHTML = '';
+      vscode.postMessage({ type: 'reject_plan', feedback });
+    };
+
+    window.currentQuestionSlide = 0;
+    window.totalQuestionSlides = 1;
+
+    window.navigateQuestionSlide = function(delta) {
+      const nextIdx = window.currentQuestionSlide + delta;
+      if (nextIdx < 0 || nextIdx >= window.totalQuestionSlides) return;
+      const oldSlide = document.getElementById('q-slide-' + window.currentQuestionSlide);
+      const newSlide = document.getElementById('q-slide-' + nextIdx);
+      if (oldSlide) oldSlide.style.display = 'none';
+      if (newSlide) newSlide.style.display = 'block';
+
+      window.currentQuestionSlide = nextIdx;
+
+      const badge = document.getElementById('q-step-badge');
+      if (badge) badge.textContent = (nextIdx + 1) + ' of ' + window.totalQuestionSlides;
+
+      const btnPrev = document.getElementById('btn-q-prev');
+      if (btnPrev) btnPrev.style.visibility = (nextIdx > 0) ? 'visible' : 'hidden';
+
+      const btnNext = document.getElementById('btn-q-next');
+      const btnSubmit = document.getElementById('btn-q-submit');
+      if (nextIdx === window.totalQuestionSlides - 1) {
+        if (btnNext) btnNext.style.display = 'none';
+        if (btnSubmit) btnSubmit.style.display = 'inline-flex';
+      } else {
+        if (btnNext) btnNext.style.display = 'inline-flex';
+        if (btnSubmit) btnSubmit.style.display = 'none';
+      }
+    };
+
+    window.handleQuestionKey = function(event, idx) {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        if (window.currentQuestionSlide < window.totalQuestionSlides - 1) {
+          window.navigateQuestionSlide(1);
+        } else {
+          const s = document.getElementById('btn-q-submit');
+          if (s) s.click();
+        }
+      }
+    };
+
+    window.submitQuestions = function(questionId, totalQ) {
+      const answers = [];
+      for (let i = 0; i < totalQ; i++) {
+        const checked = document.querySelectorAll('input[name="q_' + i + '"]:checked');
+        if (checked.length > 0) {
+          const vals = Array.from(checked).map(c => c.value);
+          answers.push(vals.join(', '));
+        } else {
+          const textIn = document.getElementById('q_input_' + i);
+          answers.push(textIn ? textIn.value.trim() : '');
+        }
+      }
+      interactiveSlot.innerHTML = '';
+      vscode.postMessage({ type: 'answer_question', questionId, answers: answers.join(', ') });
+    };
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    window.openImageLightbox = function(uri, title) {
+      const overlay = document.getElementById('image-lightbox-overlay');
+      const img = document.getElementById('image-lightbox-img');
+      const titleEl = document.getElementById('image-lightbox-title');
+      if (overlay && img && uri) {
+        img.src = uri;
+        if (titleEl) titleEl.textContent = title || 'Image Preview';
+        overlay.style.display = 'flex';
+        void overlay.offsetWidth;
+        overlay.classList.add('open');
+      }
+    };
+
+    window.closeImageLightbox = function() {
+      const overlay = document.getElementById('image-lightbox-overlay');
+      if (overlay) {
+        overlay.classList.remove('open');
+        setTimeout(function() {
+          if (!overlay.classList.contains('open')) {
+            overlay.style.display = 'none';
+            const img = document.getElementById('image-lightbox-img');
+            if (img) img.src = '';
+          }
+        }, 200);
+      }
+    };
+
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        window.closeImageLightbox();
+      }
+    });
+
+    document.addEventListener('click', function(e) {
+      const closeLb = e.target.closest('#btn-lightbox-close');
+      const overlayLb = e.target === document.getElementById('image-lightbox-overlay') || (e.target.classList && e.target.classList.contains('image-lightbox-container'));
+      if (closeLb || overlayLb) {
+        window.closeImageLightbox();
+        return;
+      }
+      const rmImg = e.target.closest('[data-action="remove-image-attachment"]');
+      if (rmImg) {
+        const idx = parseInt(rmImg.getAttribute('data-idx') || '0', 10);
+        removeImageAttachment(idx);
+        return;
+      }
+      const previewImg = e.target.closest('[data-action="preview-image"]');
+      if (previewImg && !e.target.closest('[data-action="remove-image-attachment"]')) {
+        const src = previewImg.getAttribute('data-src') || (previewImg.querySelector('img') ? previewImg.querySelector('img').src : '');
+        const title = previewImg.getAttribute('data-title') || 'Image Preview';
+        if (src) {
+          window.openImageLightbox(src, title);
+        }
+        return;
+      }
+      const chatImg = e.target.closest('.message img, .assistant-text img, .user-text img');
+      if (chatImg && chatImg.src && !chatImg.closest('button') && !chatImg.classList.contains('avatar-img') && !chatImg.classList.contains('token-icon')) {
+        window.openImageLightbox(chatImg.src, chatImg.alt || 'Image Preview');
+        return;
+      }
+      const setupCheck = e.target.closest('[data-action="run-setup-check"]');
+      if (setupCheck) {
+        vscode.postMessage({ type: 'check_setup' });
+        return;
+      }
+      const setupInstall = e.target.closest('[data-action="install-python-web"]');
+      if (setupInstall) {
+        vscode.postMessage({ type: 'install_python' });
+        return;
+      }
+      const setupConfig = e.target.closest('[data-action="configure-python-path"]');
+      if (setupConfig) {
+        vscode.postMessage({ type: 'configure_python_path' });
+        return;
+      }
+      const slashCmd = e.target.closest('[data-action="select-slash-cmd"]');
+      if (slashCmd) {
+        const cmdName = slashCmd.getAttribute('data-cmd');
+        const found = slashCommands.find(c => c.cmd === cmdName);
+        if (found) {
+          executeSlashCommand(found);
+        }
+        return;
+      }
+    });
+
+    function focusPrompt() {
+      // VS Code webview ignores native autofocus attr; must focus via JS after visible
+      try {
+        if (promptInput && document.hasFocus && !document.hasFocus()) {
+          // still try — webview host may delegate focus later
+        }
+        if (promptInput) {
+          promptInput.focus({ preventScroll: true });
+          // Move cursor to end if already has value
+          const len = promptInput.value.length;
+          try { promptInput.setSelectionRange(len, len); } catch {}
+        }
+      } catch {}
+    }
+
+    // Initial focus after DOM ready + after VS Code reveals the view
+    // Use rAF + timeout because webview may still be hidden during first paint
+    function scheduleFocus() {
+      requestAnimationFrame(() => setTimeout(focusPrompt, 50));
+      setTimeout(focusPrompt, 300);
+    }
+    scheduleFocus();
+    document.addEventListener('DOMContentLoaded', scheduleFocus);
+    window.addEventListener('focus', focusPrompt);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') scheduleFocus();
+    });
+    // Refocus after every turn ends / errors / cancels so user can type immediately
+    const _origEndAssistantTurn = endAssistantTurn;
+    endAssistantTurn = function() {
+      _origEndAssistantTurn();
+      scheduleFocus();
+    };
+
+    setRandomStatement();
+    vscode.postMessage({ type: 'ready' });
+    vscode.postMessage({ type: 'webview_ready' });
+    // Also request host to transfer focus into webview (required on first show)
+    setTimeout(() => focusPrompt(), 100);
+`;
+}

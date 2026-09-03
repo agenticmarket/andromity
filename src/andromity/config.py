@@ -11,7 +11,50 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib
 
-import tomli_w
+try:
+    import tomli_w
+except ImportError:
+    class _TomliWFallback:
+        @staticmethod
+        def dump(d: dict, f):
+            f.write(_TomliWFallback.dumps(d).encode("utf-8"))
+
+        @staticmethod
+        def dumps(d: dict) -> str:
+            lines = []
+            tables = []
+            array_tables = []
+            for k, v in d.items():
+                if isinstance(v, dict):
+                    tables.append((k, v))
+                elif isinstance(v, list) and v and all(isinstance(i, dict) for i in v):
+                    array_tables.append((k, v))
+                else:
+                    lines.append(f"{k} = {_TomliWFallback._format_val(v)}")
+            for k, v in tables:
+                lines.append(f"\n[{k}]")
+                for sub_k, sub_v in v.items():
+                    lines.append(f"{sub_k} = {_TomliWFallback._format_val(sub_v)}")
+            for k, items in array_tables:
+                for item in items:
+                    lines.append(f"\n[[{k}]]")
+                    for sub_k, sub_v in item.items():
+                        lines.append(f"{sub_k} = {_TomliWFallback._format_val(sub_v)}")
+            return "\n".join(lines) + "\n"
+
+        @staticmethod
+        def _format_val(v) -> str:
+            if isinstance(v, bool):
+                return "true" if v else "false"
+            elif isinstance(v, (int, float)):
+                return str(v)
+            elif isinstance(v, list):
+                return "[" + ", ".join(_TomliWFallback._format_val(i) for i in v) + "]"
+            else:
+                s = str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+                return f'"{s}"'
+
+    tomli_w = _TomliWFallback
 
 
 def get_config_dir() -> Path:
@@ -63,14 +106,34 @@ class ConfigManager:
         self.save(default_config)
 
     def save(self, config_data: Optional[Dict[str, Any]] = None):
+        import os
         data_to_save = config_data if config_data is not None else self._config_cache
-        with open(self.config_path, "wb") as f:
-            tomli_w.dump(data_to_save, f)
+        tmp_path = self.config_path.with_suffix(".tmp")
+        try:
+            with open(tmp_path, "wb") as f:
+                tomli_w.dump(data_to_save, f)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
+            os.replace(str(tmp_path), str(self.config_path))
+        except Exception:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except Exception:
+                    pass
+            raise
         if config_data is not None:
             self._config_cache = config_data
 
-    def get(self, section: str, key: str, default: Any = None) -> Any:
-        return self._config_cache.get(section, {}).get(key, default)
+    def get(self, section: str, key: str, default: Any = None, fallback: Any = None) -> Any:
+        eff_default = default if fallback is None else fallback
+        sec = self._config_cache.get(section, {})
+        if not isinstance(sec, dict):
+            return eff_default
+        return sec.get(key, eff_default)
 
     def set(self, section: str, key: str, value: Any):
         if section not in self._config_cache:
@@ -332,6 +395,9 @@ class ConfigManager:
         return "p" + hashlib.sha256(resolved.encode()).hexdigest()[:15]
 
     def is_trusted(self, path: str) -> bool:
+        mode = self._config_cache.get("default", {}).get("permission_mode", "safe")
+        if mode in ("full", "yolo"):
+            return True
         key = self._trust_key(path)
         return key in self._config_cache.get("trusted_projects", {})
 
@@ -353,5 +419,58 @@ class ConfigManager:
             del trusted[key]
             self.save()
 
+    # ─── Subagent Management ─────────────────────────────────────────────
+    def get_subagents_config(self) -> Dict[str, Any]:
+        return self._config_cache.get("subagents", {})
+
+    def get_subagent_role(self, role_name: str) -> Optional[Dict[str, Any]]:
+
+        roles = self._config_cache.get("subagents", {}).get("roles", [])
+        for r in roles:
+            if isinstance(r, dict) and r.get("name", "").lower() == role_name.lower():
+                return r
+        return None
+
+    def set_subagent_role(
+        self,
+        role_name: str,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
+        tools: Optional[list] = None,
+        description: Optional[str] = None,
+    ):
+        if "subagents" not in self._config_cache:
+            self._config_cache["subagents"] = {}
+        roles = self._config_cache["subagents"].setdefault("roles", [])
+        found = False
+        for r in roles:
+            if isinstance(r, dict) and r.get("name", "").lower() == role_name.lower():
+                if model is not None:
+                    r["model"] = model
+                if provider is not None:
+                    r["provider"] = provider
+                if tools is not None:
+                    r["tools"] = tools
+                if description is not None:
+                    r["description"] = description
+                found = True
+                break
+        if not found:
+            entry = {"name": role_name}
+            if model is not None:
+                entry["model"] = model
+            if provider is not None:
+                entry["provider"] = provider
+            if tools is not None:
+                entry["tools"] = tools
+            if description is not None:
+                entry["description"] = description
+            roles.append(entry)
+        self.save()
+
+    def list_subagent_roles(self) -> list:
+        return self._config_cache.get("subagents", {}).get("roles", [])
+
 
 config = ConfigManager()
+

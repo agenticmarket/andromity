@@ -1,0 +1,500 @@
+{
+  "name": "andromity-agent",
+  "displayName": "Andromity AI Coding Agent for VS Code",
+  "description": "Autonomous AI coding agent with subagents, live plans & diffs. BYOK support for Claude 3.7, GPT-4o, DeepSeek R1, Gemini & free local Ollama. MCP & Multi-Agent ready.",
+  "version": "0.2.5",
+  "publisher": "agenticmarket",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/agenticmarket/andromity"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Programming Languages",
+    "Testing",
+    "Snippets"
+  ],
+  "keywords": [
+    "ai agent",
+    "coding agent",
+    "copilot",
+    "claude",
+    "gemini",
+    "gpt",
+    "ollama",
+    "deepseek",
+    "mcp",
+    "byok",
+    "multi agent",
+    "subagents",
+    "local ai",
+    "cursor",
+    "model context protocol",
+    "task planner",
+    "groq",
+    "openrouter",
+    "pair programming",
+    "unit tests"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "icons": {
+      "andromity-logo": {
+        "description": "Andromity Logo",
+        "default": {
+          "fontPath": "media/andromity-font.woff",
+          "fontCharacter": "\\E001"
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "andromity-sidebar",
+          "title": "Andromity",
+          "icon": "media/sidebar-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "andromity-sidebar": [
+        {
+          "type": "webview",
+          "id": "andromity.chatView",
+          "name": "Andromity",
+          "visibility": "visible"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "andromity.openChat",
+        "title": "Open Chat",
+        "category": "Andromity",
+        "icon": {
+          "light": "media/sidebar-icon.svg",
+          "dark": "media/sidebar-icon.svg"
+        }
+      },
+      {
+        "command": "andromity.newSession",
+        "title": "New Session",
+        "category": "Andromity",
+        "icon": "$(add)"
+      },
+      {
+        "command": "andromity.askAboutSelection",
+        "title": "Ask About Selection",
+        "category": "Andromity",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "andromity.explainCode",
+        "title": "Explain Code",
+        "category": "Andromity",
+        "icon": "$(info)"
+      },
+      {
+        "command": "andromity.fixErrors",
+        "title": "Fix Diagnostics & Errors",
+        "category": "Andromity",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "andromity.generateTests",
+        "title": "Generate Unit Tests",
+        "category": "Andromity",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "andromity.undoTurn",
+        "title": "Undo Last Turn & Rollback Diff",
+        "category": "Andromity",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "andromity.viewGitDiff",
+        "title": "View File Diffs (Changed Files)",
+        "category": "Andromity",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "andromity.showSessions",
+        "title": "Show Sessions History",
+        "category": "Andromity",
+        "icon": "$(history)"
+      },
+      {
+        "command": "andromity.generateCommitMessage",
+        "title": "Generate Commit Message",
+        "category": "Andromity",
+        "icon": {
+          "light": "media/sidebar-icon.svg",
+          "dark": "media/sidebar-icon.svg"
+        }
+      },
+      {
+        "command": "andromity.openSettings",
+        "title": "Settings & API Keys",
+        "category": "Andromity",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "andromity.checkSetup",
+        "title": "System Setup Check",
+        "category": "Andromity",
+        "icon": "$(check)"
+      },
+      {
+        "command": "andromity.restartServer",
+        "title": "Restart Engine / Server",
+        "category": "Andromity",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "andromity.compactSession",
+        "title": "Compact Session Context",
+        "category": "Andromity",
+        "icon": "$(fold-up)"
+      },
+      {
+        "command": "andromity.openFileDiff",
+        "title": "Open File Diff",
+        "category": "Andromity"
+      },
+      {
+        "command": "andromity.openSessionInTab",
+        "title": "Open Session in New Editor Tab (Side-by-Side)",
+        "category": "Andromity",
+        "icon": "$(split-horizontal)"
+      },
+      {
+        "command": "andromity.deleteSession",
+        "title": "Delete Session",
+        "category": "Andromity",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "andromity.welcome",
+        "title": "Welcome / Getting Started",
+        "category": "Andromity",
+        "icon": "$(rocket)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "andromity.openChat",
+        "key": "ctrl+alt+c",
+        "mac": "cmd+alt+c"
+      },
+      {
+        "command": "andromity.askAboutSelection",
+        "key": "ctrl+alt+a",
+        "mac": "cmd+alt+a",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "andromity.explainCode",
+        "key": "ctrl+alt+e",
+        "mac": "cmd+alt+e",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "andromity.generateTests",
+        "key": "ctrl+alt+t",
+        "mac": "cmd+alt+t",
+        "when": "editorHasSelection"
+      }
+    ],
+    "submenus": [
+      {
+        "id": "andromity.editorMenu",
+        "label": "Andromity"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "andromity.openFileDiff",
+          "when": "false"
+        },
+        {
+          "command": "andromity.deleteSession",
+          "when": "false"
+        }
+      ],
+      "editor/context": [
+        {
+          "submenu": "andromity.editorMenu",
+          "group": "andromity@1"
+        }
+      ],
+      "andromity.editorMenu": [
+        {
+          "command": "andromity.askAboutSelection",
+          "group": "1_actions@1",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "andromity.explainCode",
+          "group": "1_actions@2",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "andromity.fixErrors",
+          "group": "1_actions@3"
+        },
+        {
+          "command": "andromity.generateTests",
+          "group": "1_actions@4",
+          "when": "editorHasSelection"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "andromity.generateCommitMessage",
+          "group": "navigation@1",
+          "when": "scmProvider == git"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "andromity.openChat",
+          "group": "navigation@1",
+          "when": "!editorReadonly"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "andromity.explainCode",
+          "group": "andromity@1"
+        },
+        {
+          "command": "andromity.generateTests",
+          "group": "andromity@2"
+        }
+      ],
+      "scm/resourceState/context": [
+        {
+          "command": "andromity.openFileDiff",
+          "group": "andromity@1"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "andromity.newSession",
+          "when": "view == andromity.chatView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "andromity.viewGitDiff",
+          "when": "view == andromity.chatView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "andromity.showSessions",
+          "when": "view == andromity.chatView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "andromity.openSettings",
+          "when": "view == andromity.chatView",
+          "group": "navigation@4"
+        },
+        {
+          "command": "andromity.checkSetup",
+          "when": "view == andromity.chatView",
+          "group": "1_more@1"
+        },
+        {
+          "command": "andromity.restartServer",
+          "when": "view == andromity.chatView",
+          "group": "1_more@2"
+        },
+        {
+          "command": "andromity.compactSession",
+          "when": "view == andromity.chatView",
+          "group": "1_more@3"
+        },
+        {
+          "command": "andromity.undoTurn",
+          "when": "view == andromity.chatView",
+          "group": "1_more@4"
+        },
+        {
+          "command": "andromity.welcome",
+          "when": "view == andromity.chatView",
+          "group": "1_more@5"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "andromity.deleteSession",
+          "when": "view == andromity.sessionsView && viewItem == sessionItem",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Andromity",
+      "properties": {
+        "andromity.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to Python executable with Andromity installed (auto-detected if empty)."
+        },
+        "andromity.defaultProvider": {
+          "type": "string",
+          "default": "anthropic",
+          "enum": [
+            "anthropic",
+            "openai",
+            "google",
+            "groq",
+            "openrouter",
+            "ollama",
+            "nvidia"
+          ],
+          "description": "Default AI provider."
+        },
+        "andromity.defaultModel": {
+          "type": "string",
+          "default": "claude-sonnet-4-6",
+          "description": "Default model ID."
+        },
+        "andromity.startupSession": {
+          "type": "string",
+          "default": "last",
+          "enum": ["last", "fresh"],
+          "enumDescriptions": [
+            "Resume the session that was active when the panel/window was last closed.",
+            "Always start a new empty session on load (previous sessions remain in history)."
+          ],
+          "description": "Which chat session to open when the Andromity panel loads (applies on window reload or panel reopen)."
+        },
+        "andromity.defaultProfile": {
+          "type": "string",
+          "default": "builder",
+          "enum": [
+            "builder",
+            "coder",
+            "reviewer",
+            "planner"
+          ],
+          "description": "Default Agent Profile: Builder (plans & implements), Coder (direct act), Reviewer (audit), Planner (plans only)."
+        },
+        "andromity.permissionMode": {
+          "type": "string",
+          "default": "safe",
+          "enum": [
+            "safe",
+            "trust",
+            "full",
+            "yolo"
+          ],
+          "description": "Trust Permission Mode: SAFE (review all), TRUST (auto file/shell in trusted dirs), FULL (auto-run with logs), YOLO (silent autonomous)."
+        },
+        "andromity.reasoningEffort": {
+          "type": "string",
+          "default": "medium",
+          "enum": [
+            "off",
+            "low",
+            "medium",
+            "high"
+          ],
+          "description": "Reasoning/Thinking effort for thinking models."
+        },
+        "andromity.soundNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Play sound notifications on turn finish or approval required."
+        },
+        "andromity.telemetry": {
+          "type": "boolean",
+          "default": true,
+          "description": "Send anonymous launch and performance telemetry to edge worker."
+        },
+        "andromity.serverPort": {
+          "type": "number",
+          "default": 0,
+          "description": "TCP port to connect to an external Andromity daemon (0 for embedded stdio process)."
+        }
+      }
+    },
+    "walkthroughs": [
+      {
+        "id": "andromity.welcome",
+        "title": "Get started with Andromity",
+        "description": "Learn how to use Andromity to write, plan, and automate your code.",
+        "featuredImage": "media/icon.png",
+        "steps": [
+          {
+            "id": "andromity.welcome.partner",
+            "title": "Your AI coding partner",
+            "description": "Andromity helps you write, plan, and automate code right in VS Code.",
+            "media": {
+              "markdown": "walkthroughs/partner.md"
+            },
+            "completionEvents": [
+              "onCommand:andromity.openChat"
+            ]
+          },
+          {
+            "id": "andromity.welcome.planning",
+            "title": "Plan before you code",
+            "description": "Formulate interactive plans and inspect components before modifying code.",
+            "media": {
+              "markdown": "walkthroughs/planning.md"
+            },
+            "completionEvents": [
+              "onCommand:andromity.newSession"
+            ]
+          },
+          {
+            "id": "andromity.welcome.trusted",
+            "title": "Trust & Workspace Governance",
+            "description": "Manage folder permissions, review auto-approved directories, and choose your permission mode.",
+            "media": {
+              "markdown": "walkthroughs/trusted.md"
+            },
+            "completionEvents": [
+              "onCommand:andromity.openSettings"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "build": "node esbuild.js",
+    "package": "vsce package",
+    "test": "node --test dist-test/**/*.test.js",
+    "test:build": "tsc -p ./tsconfig.test.json && node --test dist-test/**/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.24.0",
+    "esbuild": "^0.20.0",
+    "svg2ttf": "^6.1.0",
+    "svgicons2svgfont": "^16.0.0",
+    "ttf2woff": "^3.0.0",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "marked": "^18.0.11"
+  }
+}

@@ -33,7 +33,16 @@ class UsageTracker:
 
     def get_summary(self, time_range: TimeRange = "all",
                     project_path: str | None = None) -> UsageSummary:
-        sessions = self._load_sessions(project_path)
+        db_sessions = self._load_sessions_from_db(project_path)
+        disk_sessions = self._load_sessions(project_path)
+        
+        known_ids = {s.session_id for s in db_sessions}
+        sessions = list(db_sessions)
+        for s in disk_sessions:
+            if s.session_id not in known_ids:
+                sessions.append(s)
+                known_ids.add(s.session_id)
+
         cutoff = self._cutoff(time_range)
         summary = UsageSummary()
 
@@ -75,21 +84,75 @@ class UsageTracker:
             return (now - timedelta(days=30)).isoformat()
         return None  # all time
 
+    def _load_sessions_from_db(self, project_path: str | None) -> list[SessionStat]:
+        try:
+            from andromity.core.db import get_conn, init_schema
+            init_schema()
+            conn = get_conn()
+            if project_path:
+                from andromity.core.session import normalize_project_path
+                import hashlib
+                from pathlib import Path
+                norm = normalize_project_path(project_path)
+                p_hash = hashlib.sha256(norm.encode()).hexdigest()[:16]
+                hashes_to_check = {p_hash}
+                raw_s = str(project_path)
+                hashes_to_check.add(hashlib.sha256(raw_s.encode()).hexdigest()[:16])
+                hashes_to_check.add(hashlib.sha256(raw_s.lower().encode()).hexdigest()[:16])
+                hashes_to_check.add(hashlib.sha256(Path(project_path).resolve().as_posix().encode()).hexdigest()[:16])
+                placeholders = ",".join("?" * len(hashes_to_check))
+                rows = conn.execute(f"""
+                    SELECT id, name, provider, model, token_total, cost_usd, created_at, updated_at, project_path
+                    FROM sessions
+                    WHERE project_hash IN ({placeholders})
+                """, list(hashes_to_check)).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT id, name, provider, model, token_total, cost_usd, created_at, updated_at, project_path
+                    FROM sessions
+                """).fetchall()
+
+            if rows:
+                stats = []
+                for r in rows:
+                    provider = (r["provider"] or "").strip() or "unknown"
+                    model = (r["model"] or "").strip() or "unknown"
+                    cost_usd = float(r["cost_usd"] or 0.0)
+                    if ":free" in model.lower() or provider.lower() in ("ollama", "local"):
+                        cost_usd = 0.0
+                    stats.append(SessionStat(
+                        session_id=r["id"],
+                        name=r["name"] or "Unnamed",
+                        provider=provider,
+                        model=model,
+                        tokens=int(r["token_total"] or 0),
+                        cost_usd=cost_usd,
+                        created_at=r["created_at"] or "",
+                        updated_at=r["updated_at"] or "",
+                        project_path=r["project_path"] or "",
+                    ))
+                return stats
+        except Exception:
+            pass
+        return []
+
     def _load_sessions(self, project_path: str | None) -> list[SessionStat]:
         sessions_root = get_config_dir() / "sessions"
         if not sessions_root.exists():
             return []
         stats: list[SessionStat] = []
         if project_path:
+            from andromity.core.session import normalize_project_path
             import hashlib
             from pathlib import Path
-            resolved_p = str(Path(project_path).resolve())
-            p_hash = hashlib.sha256(resolved_p.encode()).hexdigest()[:16]
-            target = sessions_root / p_hash
-            if not target.exists():
-                raw_hash = hashlib.sha256(project_path.encode()).hexdigest()[:16]
-                target = sessions_root / raw_hash
-            dirs = [target] if target.exists() else []
+            norm = normalize_project_path(project_path)
+            hashes_to_check = {
+                hashlib.sha256(norm.encode()).hexdigest()[:16],
+                hashlib.sha256(str(project_path).encode()).hexdigest()[:16],
+                hashlib.sha256(str(project_path).lower().encode()).hexdigest()[:16],
+                hashlib.sha256(Path(project_path).resolve().as_posix().encode()).hexdigest()[:16],
+            }
+            dirs = [sessions_root / h for h in hashes_to_check if (sessions_root / h).exists()]
         else:
             dirs = [d for d in sessions_root.iterdir() if d.is_dir()]
         for d in dirs:

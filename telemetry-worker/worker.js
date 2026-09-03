@@ -1,27 +1,38 @@
 export default {
   async fetch(request, env, ctx) {
-    const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+    const requestHeaders = request.headers.get('Access-Control-Request-Headers') || '*';
+    const securityHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': requestHeaders,
+      'Access-Control-Max-Age': '86400',
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
+    };
 
+    // 1. Immediately answer CORS preflights before any rate limiting
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: securityHeaders });
+    }
+
+    // 2. IP Rate limiting with proper CORS headers on 429
+    const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
     if (env.RATE_LIMITER) {
       const { success: ipOk } = await env.RATE_LIMITER.limit({ key: ip });
       if (!ipOk) {
-        return new Response('Too Many Requests', {
+        return new Response(JSON.stringify({ error: 'Too Many Requests' }), {
           status: 429,
-          headers: { 'Retry-After': '60' },
+          headers: {
+            ...securityHeaders,
+            'Content-Type': 'application/json',
+            'Retry-After': '60',
+          },
         });
       }
     }
 
     const url = new URL(request.url);
-    const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, User-Agent, Authorization, x-stats-key',
-    };
-
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: corsHeaders });
-    }
 
     if (request.method === 'GET') {
       if (url.pathname === '/api/stats' || url.pathname === '/stats') {
@@ -30,30 +41,44 @@ export default {
                             request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '') ||
                             url.searchParams.get('key');
 
-        if (!expectedSecret || providedKey !== expectedSecret) {
-          return new Response(JSON.stringify({
-            error: 'Unauthorized: Internal access only. Configure STATS_SECRET in environment and provide valid key.',
-          }), {
+        if (expectedSecret && !timingSafeMatch(providedKey, expectedSecret)) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
             status: 401,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            headers: { ...securityHeaders, 'Content-Type': 'application/json' },
           });
         }
 
         try {
-          const stats = await getAggregatedStats(env);
+          const stats = await getD1Stats(env);
+          const wantsHtml = url.pathname === '/stats' && (
+            url.searchParams.get('format') === 'html' ||
+            request.headers.get('Accept')?.includes('text/html')
+          );
+
+          if (wantsHtml) {
+            return new Response(renderStatsHtml(stats), {
+              status: 200,
+              headers: {
+                ...securityHeaders,
+                'Content-Type': 'text/html; charset=utf-8',
+                'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+              },
+            });
+          }
+
           return new Response(JSON.stringify(stats, null, 2), {
             status: 200,
             headers: {
-              ...corsHeaders,
+              ...securityHeaders,
               'Content-Type': 'application/json',
-              'Cache-Control': 'no-store',
+              'Cache-Control': 'no-store, no-cache, must-revalidate, private',
             },
           });
         } catch (err) {
-          console.error('Failed to get stats:', err);
-          return new Response(JSON.stringify({ error: 'Failed to retrieve telemetry stats' }), {
+          console.error('Stats query failed:', err);
+          return new Response(JSON.stringify({ error: 'Failed to retrieve stats' }), {
             status: 500,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            headers: { ...securityHeaders, 'Content-Type': 'application/json' },
           });
         }
       }
@@ -62,21 +87,14 @@ export default {
         const cmdName = url.pathname.replace('/cmd/', '').toLowerCase().trim();
         const lorePayload = await getLoreDirective(cmdName, env);
         if (!lorePayload) {
-          return new Response(JSON.stringify({
-            error: 'unknown_signal',
-            hint: 'The signal dissolved into background radiation before reaching the receiver.',
-          }), {
+          return new Response(JSON.stringify({ error: 'unknown_signal' }), {
             status: 404,
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
           });
         }
         return new Response(JSON.stringify(lorePayload, null, 2), {
           status: 200,
-          headers: {
-            ...corsHeaders,
-            'Content-Type': 'application/json',
-            'Cache-Control': 'public, max-age=60',
-          },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60' },
         });
       }
 
@@ -84,11 +102,7 @@ export default {
         const tipPayload = await getRandomTip(url, env);
         return new Response(JSON.stringify(tipPayload, null, 2), {
           status: 200,
-          headers: {
-            ...corsHeaders,
-            'Content-Type': 'application/json',
-            'Cache-Control': 'no-store',
-          },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
         });
       }
 
@@ -96,11 +110,7 @@ export default {
         const newsPayload = await getLatestNews(env);
         return new Response(JSON.stringify(newsPayload, null, 2), {
           status: 200,
-          headers: {
-            ...corsHeaders,
-            'Content-Type': 'application/json',
-            'Cache-Control': 'public, max-age=300',
-          },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300' },
         });
       }
 
@@ -108,134 +118,342 @@ export default {
         const seasonInfo = await getSeasonalInfo(env);
         return new Response(JSON.stringify(seasonInfo, null, 2), {
           status: 200,
-          headers: {
-            ...corsHeaders,
-            'Content-Type': 'application/json',
-            'Cache-Control': 'no-store',
-          },
+          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
         });
       }
     }
 
     if (request.method !== 'POST') {
-      return new Response('Method Not Allowed', { status: 405, headers: corsHeaders });
+      return new Response('Method Not Allowed', { status: 405, headers: securityHeaders });
     }
 
-    if (url.pathname !== '/ping') {
-      return new Response('Not Found', { status: 404, headers: corsHeaders });
+    if (url.pathname !== '/ping' && url.pathname !== '/event') {
+      return new Response('Not Found', { status: 404, headers: securityHeaders });
+    }
+
+    const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
+    if (contentLength > 16384) {
+      return new Response(JSON.stringify({ error: 'Payload too large' }), {
+        status: 413,
+        headers: { ...securityHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     try {
       const data = await request.json();
-
-      if (!['first_launch', 'session_start'].includes(data.event) || !data.os || !data.version) {
-        return new Response('Bad Request', { status: 400, headers: corsHeaders });
+      const rawUserId = typeof data.user_id === 'string' ? data.user_id.trim() : '';
+      if (!/^[a-zA-Z0-9_-]{8,64}$/.test(rawUserId)) {
+        return new Response(JSON.stringify({ error: 'Invalid user_id format' }), {
+          status: 400,
+          headers: { ...securityHeaders, 'Content-Type': 'application/json' },
+        });
       }
 
-      const dateStr = new Date().toISOString().split('T')[0];
-      const country = (request.cf?.country ?? 'UNKNOWN').toUpperCase();
-
-      if (data.user_id && env.TELEMETRY_KV) {
-        if (data.event === 'first_launch') {
-          const launchKey = `ratelimit:first_launch:${dateStr}:${data.user_id}`;
-          const alreadyLaunched = await env.TELEMETRY_KV.get(launchKey);
-          if (alreadyLaunched) {
-            return new Response('OK', { status: 202, headers: corsHeaders });
-          }
-          ctx.waitUntil(
-            env.TELEMETRY_KV.put(launchKey, '1', { expirationTtl: 86400 * 2 })
-          );
-        } else if (data.event === 'session_start') {
-          const sessionKey = `ratelimit:session:${dateStr}:${data.user_id}`;
-          const sessionCount = parseInt(await env.TELEMETRY_KV.get(sessionKey) ?? '0', 10);
-          if (sessionCount >= 50) {
-            return new Response('Too Many Requests', {
-              status: 429,
-              headers: { ...corsHeaders, 'Retry-After': '3600' },
-            });
-          }
-          ctx.waitUntil(
-            env.TELEMETRY_KV.put(sessionKey, (sessionCount + 1).toString(), {
-              expirationTtl: 86400 * 2,
-            })
-          );
-        }
+      let rawSessionId = typeof data.session_id === 'string' ? data.session_id.trim() : '';
+      if (rawSessionId && !/^[a-zA-Z0-9_-]{4,64}$/.test(rawSessionId)) {
+        return new Response(JSON.stringify({ error: 'Invalid session_id format' }), {
+          status: 400,
+          headers: { ...securityHeaders, 'Content-Type': 'application/json' },
+        });
       }
 
-      const keys = [];
+      const clientRaw = typeof data.client === 'string' ? data.client.toLowerCase().trim() : 'cli';
+      const client = ['vscode', 'tui', 'cli', 'server'].includes(clientRaw) ? clientRaw : 'cli';
 
-      if (data.event === 'first_launch') {
-        keys.push(
-          `installs:${dateStr}:total`,
-          `installs:${dateStr}:os:${data.os}`,
-          `installs:${dateStr}:version:${data.version}`,
-          `installs:${dateStr}:country:${country}`,
-          `summary:total_installs`,
-          `summary:country:${country}`,
-          `summary:country:${country}:installs`,
-          `summary:country:${country}:os:${data.os}`,
-          `summary:os:${data.os}`,
-          `summary:version:${data.version}`
-        );
-      } else if (data.event === 'session_start') {
-        keys.push(
-          `sessions:${dateStr}:total`,
-          `sessions:${dateStr}:os:${data.os}`,
-          `sessions:${dateStr}:country:${country}`,
-          `summary:total_sessions`,
-          `summary:country:${country}`,
-          `summary:country:${country}:sessions`,
-          `summary:country:${country}:os:${data.os}`,
-          `summary:os:${data.os}`
-        );
-        if (data.provider) {
-          keys.push(
-            `usage:${dateStr}:provider:${data.provider}`,
-            `usage:${dateStr}:country:${country}:provider:${data.provider}`,
-            `summary:provider:${data.provider}`,
-            `summary:country:${country}:provider:${data.provider}`
-          );
-        }
-        if (data.profile) {
-          keys.push(
-            `usage:${dateStr}:profile:${data.profile}`,
-            `summary:profile:${data.profile}`,
-            `summary:country:${country}:profile:${data.profile}`
-          );
-        }
-      }
+      const osRaw = typeof data.os === 'string' ? data.os.toLowerCase().trim() : 'unknown';
+      const os = ['windows', 'darwin', 'linux', 'unknown'].includes(osRaw) ? osRaw : 'unknown';
 
-      if (data.user_id && env.TELEMETRY_KV) {
+      const version = String(data.version || '0.0.0').slice(0, 20).replace(/[^0-9a-zA-Z.-]/g, '');
+
+      const rawCountry = String(data.country || request.cf?.country || '').toUpperCase().trim();
+      const country = /^[A-Z]{2}$/.test(rawCountry) ? rawCountry : 'XX';
+
+      const now = new Date().toISOString();
+      const date = now.split('T')[0];
+      const sessionId = rawSessionId || `sess-${date}-${rawUserId.slice(0, 8)}`;
+
+      if (env.DB) {
         ctx.waitUntil(
-          env.TELEMETRY_KV.put(
-            `active_users:${dateStr}:${data.user_id}`,
-            '1',
-            { expirationTtl: 86400 * 30 }
-          ).catch(err => console.error('DAU KV Error', err))
+          env.DB.batch([
+            env.DB.prepare(`
+              INSERT INTO users (user_id, first_seen, last_seen, country, session_count)
+              VALUES (?, ?, ?, ?, 1)
+              ON CONFLICT(user_id) DO UPDATE SET
+                last_seen = excluded.last_seen,
+                country = COALESCE(users.country, excluded.country),
+                session_count = users.session_count + 1
+            `).bind(rawUserId, now, now, country),
+            env.DB.prepare(`
+              INSERT OR IGNORE INTO sessions (session_id, user_id, client, country, os, version, created_at, date)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `).bind(sessionId, rawUserId, client, country, os, version, now, date),
+          ]).catch((err) => console.error('D1 Telemetry Write Failed:', err))
         );
       }
 
-      if (env.TELEMETRY_KV) {
-        ctx.waitUntil(
-          Promise.all(
-            keys.map(async (key) => {
-              try {
-                const current = await env.TELEMETRY_KV.get(key) ?? '0';
-                await env.TELEMETRY_KV.put(key, (parseInt(current, 10) + 1).toString());
-              } catch (err) {
-                console.error('KV Error for key', key, err);
-              }
-            })
-          )
-        );
-      }
-
-      return new Response('OK', { status: 202, headers: corsHeaders });
-    } catch (e) {
-      return new Response('Bad Request', { status: 400, headers: corsHeaders });
+      return new Response('OK', { status: 202, headers: securityHeaders });
+    } catch {
+      return new Response(JSON.stringify({ error: 'Bad Request' }), {
+        status: 400,
+        headers: { ...securityHeaders, 'Content-Type': 'application/json' },
+      });
     }
   },
 };
+
+function timingSafeMatch(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+async function getD1Stats(env) {
+  if (!env.DB) {
+    return { error: 'Database not bound' };
+  }
+
+  const [
+    totalUsersRes,
+    totalSessionsRes,
+    returningUsersRes,
+    todayStatsRes,
+    todayReturningRes,
+    dailyRes,
+    clientsRes,
+    countriesRes,
+  ] = await env.DB.batch([
+    env.DB.prepare(`SELECT COUNT(*) AS count FROM users`),
+    env.DB.prepare(`SELECT COUNT(*) AS count FROM sessions`),
+    env.DB.prepare(`SELECT COUNT(*) AS count FROM (SELECT user_id FROM sessions GROUP BY user_id HAVING COUNT(DISTINCT date) > 1)`),
+    env.DB.prepare(`SELECT COUNT(DISTINCT user_id) AS dau, COUNT(*) AS sessions FROM sessions WHERE date = date('now')`),
+    env.DB.prepare(`
+      SELECT COUNT(DISTINCT s.user_id) AS count
+      FROM sessions s
+      JOIN users u ON s.user_id = u.user_id
+      WHERE s.date = date('now') AND date(u.first_seen) < date('now')
+    `),
+    env.DB.prepare(`
+      SELECT
+        s.date,
+        COUNT(DISTINCT s.user_id) AS dau,
+        COUNT(*) AS sessions,
+        COUNT(DISTINCT CASE WHEN date(u.first_seen) < s.date THEN s.user_id END) AS returning_users,
+        COUNT(DISTINCT CASE WHEN date(u.first_seen) = s.date THEN s.user_id END) AS new_users
+      FROM sessions s
+      JOIN users u ON s.user_id = u.user_id
+      WHERE s.date >= date('now', '-30 days')
+      GROUP BY s.date
+      ORDER BY s.date DESC
+    `),
+    env.DB.prepare(`
+      SELECT client, COUNT(DISTINCT user_id) AS users, COUNT(*) AS sessions
+      FROM sessions
+      GROUP BY client
+      ORDER BY sessions DESC
+    `),
+    env.DB.prepare(`
+      SELECT COALESCE(country, 'UNKNOWN') AS country, COUNT(DISTINCT user_id) AS users, COUNT(*) AS sessions
+      FROM sessions
+      GROUP BY country
+      ORDER BY users DESC
+      LIMIT 30
+    `),
+  ]);
+
+  const totalUsers = totalUsersRes.results?.[0]?.count ?? 0;
+  const totalSessions = totalSessionsRes.results?.[0]?.count ?? 0;
+  const totalReturning = returningUsersRes.results?.[0]?.count ?? 0;
+  const dauToday = todayStatsRes.results?.[0]?.dau ?? 0;
+  const sessionsToday = todayStatsRes.results?.[0]?.sessions ?? 0;
+  const returningToday = todayReturningRes.results?.[0]?.count ?? 0;
+  const newUsersToday = Math.max(0, dauToday - returningToday);
+
+  return {
+    summary: {
+      total_users: totalUsers,
+      total_sessions: totalSessions,
+      total_returning_users: totalReturning,
+      returning_user_rate: totalUsers > 0 ? Number(((totalReturning / totalUsers) * 100).toFixed(1)) : 0,
+      today: {
+        dau: dauToday,
+        sessions: sessionsToday,
+        returning_users: returningToday,
+        new_users: newUsersToday,
+      },
+    },
+    daily: dailyRes.results ?? [],
+    clients: clientsRes.results ?? [],
+    countries: countriesRes.results ?? [],
+    updated_at: new Date().toISOString(),
+  };
+}
+
+function renderStatsHtml(stats) {
+  const { summary, daily, clients, countries, updated_at } = stats;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Andromity Telemetry</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #111827;
+      --border: #1f2937;
+      --text: #f3f4f6;
+      --subtext: #9ca3af;
+      --accent: #6366f1;
+      --green: #10b981;
+      --blue: #3b82f6;
+      --purple: #8b5cf6;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 32px 20px;
+    }
+    .container { max-width: 1100px; margin: 0 auto; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 28px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
+    .timestamp { font-size: 13px; color: var(--subtext); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .card-label { font-size: 13px; color: var(--subtext); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .card-value { font-size: 32px; font-weight: 700; color: var(--text); }
+    .card-sub { font-size: 12px; color: var(--green); margin-top: 6px; }
+    .section-title { font-size: 18px; font-weight: 600; margin: 24px 0 12px 0; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 24px;
+    }
+    th, td {
+      padding: 12px 16px;
+      text-align: left;
+      font-size: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    th { background: #162032; color: var(--subtext); font-weight: 600; }
+    tr:last-child td { border-bottom: none; }
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #1f2937;
+      color: #93c5fd;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>Andromity Telemetry</h1>
+        <div class="timestamp">Live telemetry &middot; Last updated: ${updated_at}</div>
+      </div>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <div class="card-label">Daily Active Users (Today)</div>
+        <div class="card-value">${summary.today.dau.toLocaleString()}</div>
+        <div class="card-sub">${summary.today.returning_users.toLocaleString()} returning &middot; ${summary.today.new_users.toLocaleString()} new</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Total Unique Users</div>
+        <div class="card-value">${summary.total_users.toLocaleString()}</div>
+        <div class="card-sub">${summary.total_returning_users.toLocaleString()} returned (${summary.returning_user_rate}%)</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Sessions (Today)</div>
+        <div class="card-value">${summary.today.sessions.toLocaleString()}</div>
+        <div class="card-sub">${summary.total_sessions.toLocaleString()} all-time</div>
+      </div>
+    </div>
+
+    <div class="section-title">Clients</div>
+    <table>
+      <thead>
+        <tr><th>Client</th><th>Unique Users</th><th>Total Sessions</th></tr>
+      </thead>
+      <tbody>
+        ${clients.map((c) => `
+          <tr>
+            <td><span class="tag">${c.client.toUpperCase()}</span></td>
+            <td>${c.users.toLocaleString()}</td>
+            <td>${c.sessions.toLocaleString()}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+
+    <div class="section-title">Daily Activity (Last 30 Days)</div>
+    <table>
+      <thead>
+        <tr><th>Date</th><th>DAU</th><th>Sessions</th><th>Returning Users</th><th>New Users</th></tr>
+      </thead>
+      <tbody>
+        ${daily.map((d) => `
+          <tr>
+            <td>${d.date}</td>
+            <td><strong>${d.dau.toLocaleString()}</strong></td>
+            <td>${d.sessions.toLocaleString()}</td>
+            <td>${d.returning_users.toLocaleString()}</td>
+            <td>${d.new_users.toLocaleString()}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+
+    <div class="section-title">Top Countries</div>
+    <table>
+      <thead>
+        <tr><th>Country</th><th>Unique Users</th><th>Sessions</th></tr>
+      </thead>
+      <tbody>
+        ${countries.map((c) => `
+          <tr>
+            <td><strong>${c.country}</strong></td>
+            <td>${c.users.toLocaleString()}</td>
+            <td>${c.sessions.toLocaleString()}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>`;
+}
 
 const LORE_DIRECTIVES = {
   void: {
@@ -330,89 +548,38 @@ const DEV_TIPS = [
   { id: 12, tag: 'git', tip: '`git switch -` quickly jumps back to your previously checked-out branch, like `cd -` for directories.' },
 ];
 
-async function getSeasonalInfo(env) {
-  if (env.TELEMETRY_KV) {
-    const override = await env.TELEMETRY_KV.get('config:season_override');
-    if (override) {
-      try { return JSON.parse(override); } catch (e) {}
-    }
-  }
-
+async function getSeasonalInfo() {
   const now = new Date();
   const month = now.getUTCMonth() + 1;
   const day = now.getUTCDate();
   const hour = now.getUTCHours();
 
   if (month === 10 && day >= 24) {
-    return {
-      active: true,
-      season: 'halloween',
-      name: '🎃 Spooky Halloween Season',
-      modifier: 'Gothic and mysterious atmosphere active across all terminals.',
-    };
+    return { active: true, season: 'halloween', name: '🎃 Spooky Halloween Season', modifier: 'Gothic and mysterious atmosphere active across all terminals.' };
   }
   if (month === 11 && day <= 5) {
-    return {
-      active: true,
-      season: 'diwali',
-      name: '🪔 Festival of Lights Season',
-      modifier: 'Bright, enlightened, and auspicious code architecture vibes.',
-    };
+    return { active: true, season: 'diwali', name: '🪔 Festival of Lights Season', modifier: 'Bright, enlightened, and auspicious code architecture vibes.' };
   }
   if (month === 12 && day >= 20) {
-    return {
-      active: true,
-      season: 'christmas',
-      name: '🎄 Holiday Season',
-      modifier: 'Festive spirit, generous code reviews, and holiday cheer.',
-    };
+    return { active: true, season: 'christmas', name: '🎄 Holiday Season', modifier: 'Festive spirit, generous code reviews, and holiday cheer.' };
   }
   if (month === 1 && day <= 5) {
-    return {
-      active: true,
-      season: 'new_year',
-      name: '🎆 New Year Coding Sprint',
-      modifier: 'Fresh clean slates, zero technical debt resolutions.',
-    };
+    return { active: true, season: 'new_year', name: '🎆 New Year Coding Sprint', modifier: 'Fresh clean slates, zero technical debt resolutions.' };
   }
   if (month === 4 && day === 1) {
-    return {
-      active: true,
-      season: 'april_fools',
-      name: '🤡 April Fools Chaos',
-      modifier: 'Absurdist engineering suggestions and playful paradoxes.',
-    };
+    return { active: true, season: 'april_fools', name: '🤡 April Fools Chaos', modifier: 'Absurdist engineering suggestions and playful paradoxes.' };
   }
   if (hour >= 21 || hour <= 4) {
-    return {
-      active: true,
-      season: 'midnight',
-      name: '🌙 Midnight Coding Shift',
-      modifier: 'Deep night quiet focus, tea/coffee fueled late-night clarity.',
-    };
+    return { active: true, season: 'midnight', name: '🌙 Midnight Coding Shift', modifier: 'Deep night quiet focus, tea/coffee fueled late-night clarity.' };
   }
 
-  return {
-    active: false,
-    season: 'standard',
-    name: 'Standard Operational Flow',
-    modifier: null,
-  };
+  return { active: false, season: 'standard', name: 'Standard Operational Flow', modifier: null };
 }
 
-async function getLoreDirective(cmdName, env) {
-  let base = LORE_DIRECTIVES[cmdName];
-  if (!base && env.TELEMETRY_KV) {
-    const custom = await env.TELEMETRY_KV.get(`lore:cmd:${cmdName}`);
-    if (custom) {
-      try { base = JSON.parse(custom); } catch (e) {}
-    }
-  }
-
+async function getLoreDirective(cmdName) {
+  const base = LORE_DIRECTIVES[cmdName];
   if (!base) return null;
-
-  const season = await getSeasonalInfo(env);
-
+  const season = await getSeasonalInfo();
   return {
     command: cmdName,
     flavor: base.flavor,
@@ -420,21 +587,20 @@ async function getLoreDirective(cmdName, env) {
     seasonal: season.active ? season.season : null,
     seasonal_modifier: season.active ? season.modifier : null,
     clue: base.clue,
-    version: '0.2.1',
+    version: '0.2.4',
     ts: new Date().toISOString(),
   };
 }
 
-async function getRandomTip(url, env) {
+async function getRandomTip(url) {
   const tag = url.searchParams.get('tag');
   let pool = DEV_TIPS;
   if (tag) {
-    pool = pool.filter(t => t.tag === tag.toLowerCase());
+    pool = pool.filter((t) => t.tag === tag.toLowerCase());
     if (pool.length === 0) pool = DEV_TIPS;
   }
   const chosen = pool[Math.floor(Math.random() * pool.length)];
-  const season = await getSeasonalInfo(env);
-
+  const season = await getSeasonalInfo();
   return {
     status: 'ok',
     tip: chosen.tip,
@@ -444,223 +610,20 @@ async function getRandomTip(url, env) {
   };
 }
 
-async function getLatestNews(env) {
-  const season = await getSeasonalInfo(env);
+async function getLatestNews() {
+  const season = await getSeasonalInfo();
   return {
     status: 'ok',
-    version: '0.2.1',
-    title: 'Andromity 0.2.1 — Autonomous Cron, Model Router & Telemetry Intelligence',
-    released_at: '2026-08-24',
+    version: '0.2.4',
+    title: 'Andromity 0.2.4 — Autonomous Agent Engine',
+    released_at: '2026-09-03',
     highlights: [
-      '⚡ Built-in Cron Scheduler for autonomous task execution while you sleep',
-      '🌐 Real-time Geographic Telemetry & Model Analytics on Cloudflare Edge',
+      '⚡ Autonomous multi-agent coordination with durable sessions',
+      '🌐 Real-time Edge Telemetry on Cloudflare D1',
       '🛠️ MCP (Model Context Protocol) integration for dynamic tool orchestration',
-      '🎨 Refined terminal TUI with split diffs, session undo, and sound effects',
+      '🎨 Refined terminal TUI and VS Code Extension integration',
     ],
     season_banner: season.active ? season.name : null,
     docs_url: 'https://github.com/agenticmarket/andromity',
-  };
-}
-
-async function getAggregatedStats(env) {
-  if (!env.TELEMETRY_KV) {
-    return {
-      status: 'demo',
-      total_installs: 0,
-      total_sessions: 0,
-      dau: 0,
-      countries: {},
-      country_breakdown: {},
-      os: { windows: 0, darwin: 0, linux: 0 },
-      providers: {},
-      profiles: {},
-      recent_daily: [],
-      updated_at: new Date().toISOString(),
-    };
-  }
-
-  const recentDaily = [];
-  const now = new Date();
-  let calculatedInstalls = 0;
-  let calculatedSessions = 0;
-  let latestDau = 0;
-
-  for (let i = 13; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    const dateStr = d.toISOString().split('T')[0];
-
-    const installs = parseInt(await env.TELEMETRY_KV.get(`installs:${dateStr}:total`) ?? '0', 10);
-    const sessions = parseInt(await env.TELEMETRY_KV.get(`sessions:${dateStr}:total`) ?? '0', 10);
-
-    calculatedInstalls += installs;
-    calculatedSessions += sessions;
-
-    if (i === 0) {
-      latestDau = installs + sessions;
-    }
-
-    recentDaily.push({
-      date: dateStr,
-      installs,
-      sessions,
-    });
-  }
-
-  const summaryInstalls = parseInt(await env.TELEMETRY_KV.get('summary:total_installs') ?? '0', 10);
-  const summarySessions = parseInt(await env.TELEMETRY_KV.get('summary:total_sessions') ?? '0', 10);
-
-  const totalInstalls = Math.max(summaryInstalls, calculatedInstalls);
-  const totalSessions = Math.max(summarySessions, calculatedSessions);
-
-  const countries = {};
-  const countryBreakdown = {};
-  const osList = { windows: 0, darwin: 0, linux: 0 };
-  const providers = {};
-  const profiles = {};
-
-  const ensureCountry = (c) => {
-    if (!countryBreakdown[c]) {
-      countryBreakdown[c] = {
-        code: c,
-        installs: 0,
-        sessions: 0,
-        os: { windows: 0, darwin: 0, linux: 0 },
-        providers: {},
-        top_provider: 'None',
-      };
-    }
-    return countryBreakdown[c];
-  };
-
-  try {
-    const keyPrefixes = ['summary:', 'installs:', 'sessions:', 'usage:'];
-    for (const prefix of keyPrefixes) {
-      const listRes = await env.TELEMETRY_KV.list({ prefix, limit: 1000 });
-      for (const item of listRes.keys) {
-        const k = item.name;
-        if (k.endsWith(':total') || k === 'summary:total_installs' || k === 'summary:total_sessions') continue;
-
-        const val = parseInt(await env.TELEMETRY_KV.get(k) ?? '0', 10);
-        if (!val) continue;
-
-        if (k.startsWith('summary:country:')) {
-          const rest = k.replace('summary:country:', '');
-          const parts = rest.split(':');
-          const c = parts[0].toUpperCase();
-          const target = ensureCountry(c);
-
-          if (parts.length === 1) {
-            countries[c] = Math.max(countries[c] || 0, val);
-          } else if (parts[1] === 'installs') {
-            target.installs = Math.max(target.installs, val);
-          } else if (parts[1] === 'sessions') {
-            target.sessions = Math.max(target.sessions, val);
-          } else if (parts[1] === 'os' && parts[2]) {
-            const o = parts[2].toLowerCase();
-            target.os[o] = Math.max(target.os[o] || 0, val);
-          } else if (parts[1] === 'provider' && parts[2]) {
-            const p = parts[2].toLowerCase();
-            target.providers[p] = Math.max(target.providers[p] || 0, val);
-          }
-        } else if (k.includes(':country:')) {
-          const parts = k.split(':country:');
-          const rest = parts[1];
-          const subParts = rest.split(':');
-          const c = subParts[0].toUpperCase();
-          const target = ensureCountry(c);
-
-          if (k.startsWith('installs:')) {
-            target.installs += val;
-          } else if (k.startsWith('sessions:')) {
-            target.sessions += val;
-            countries[c] = (countries[c] || 0) + val;
-          }
-
-          if (subParts[1] === 'provider' && subParts[2]) {
-            const p = subParts[2].toLowerCase();
-            target.providers[p] = (target.providers[p] || 0) + val;
-          }
-        } else if (k.includes(':os:')) {
-          const parts = k.split(':os:');
-          const o = parts[1].toLowerCase();
-          if (k.startsWith('summary:')) {
-            osList[o] = Math.max(osList[o] || 0, val);
-          } else {
-            osList[o] = (osList[o] || 0) + val;
-          }
-        } else if (k.includes(':provider:')) {
-          const parts = k.split(':provider:');
-          const p = parts[1].toLowerCase();
-          if (k.startsWith('summary:')) {
-            providers[p] = Math.max(providers[p] || 0, val);
-          } else {
-            providers[p] = (providers[p] || 0) + val;
-          }
-        } else if (k.includes(':profile:')) {
-          const parts = k.split(':profile:');
-          const pr = parts[1].toLowerCase();
-          if (k.startsWith('summary:')) {
-            profiles[pr] = Math.max(profiles[pr] || 0, val);
-          } else {
-            profiles[pr] = (profiles[pr] || 0) + val;
-          }
-        }
-      }
-    }
-  } catch (err) {
-    console.error('Error scanning KV keys:', err);
-  }
-
-  const globalProviderTotal = Object.values(providers).reduce((a, b) => a + b, 0) || 1;
-  const sortedGlobalProviders = Object.entries(providers).sort((a, b) => b[1] - a[1]);
-
-  for (const [code, cData] of Object.entries(countryBreakdown)) {
-    const cSessions = cData.sessions || 0;
-    const recordedSum = Object.values(cData.providers).reduce((a, b) => a + b, 0);
-
-    if (recordedSum === 0 && cSessions > 0) {
-      const scaled = {};
-      let assigned = 0;
-
-      for (let i = 0; i < sortedGlobalProviders.length; i++) {
-        const [pName, pGlobalVal] = sortedGlobalProviders[i];
-        if (i === sortedGlobalProviders.length - 1) {
-          const rem = Math.max(0, cSessions - assigned);
-          if (rem > 0 || Object.keys(scaled).length === 0) scaled[pName] = rem;
-        } else {
-          const share = Math.max(0, Math.round((pGlobalVal / globalProviderTotal) * cSessions));
-          if (share > 0) {
-            scaled[pName] = share;
-            assigned += share;
-          }
-        }
-      }
-      cData.providers = scaled;
-    }
-
-    let topP = '';
-    let topPCount = -1;
-    for (const [p, count] of Object.entries(cData.providers)) {
-      if (count > topPCount && count > 0) {
-        topPCount = count;
-        topP = p;
-      }
-    }
-    cData.top_provider = topP || 'anthropic';
-  }
-
-  return {
-    status: 'live',
-    total_installs: totalInstalls,
-    total_sessions: totalSessions,
-    dau: latestDau || Math.max(0, Math.round(totalSessions * 0.18)),
-    countries,
-    country_breakdown: countryBreakdown,
-    os: osList,
-    providers,
-    profiles,
-    recent_daily: recentDaily,
-    updated_at: new Date().toISOString(),
   };
 }

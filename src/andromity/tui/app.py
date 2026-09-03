@@ -31,8 +31,9 @@ from andromity.tui.overlays.questions import QuestionPanel, format_question_answ
 from andromity.core.session import Session
 from andromity.core.agent import Agent
 from andromity.core.events import (
-    StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired
+    StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired, SubAgentProgress
 )
+
 from andromity.core.models import get_context_limit_for_model
 from andromity.core.debug_log import get_logger, LOG_PATH
 from andromity.core.cron import CronScheduler, CronJob
@@ -261,11 +262,11 @@ class AndromityApp(App):
 
     def on_mount(self):
         try:
-            from andromity.telemetry import send_session_start
-            send_session_start()
+            from andromity.core.db import init_schema
+            init_schema()
         except Exception:
             pass
-            
+
         self.focus_input()
         provider = config.get("default", "provider", "")
         model = config.get("default", "model", "")
@@ -328,7 +329,18 @@ class AndromityApp(App):
                     pass
 
         self.run_worker(_init_mcp(), exclusive=False, group="mcp-init")
-        # Do NOT auto-load stale plan from disk — plans are session-scoped
+        # Restore active plan from session if one exists
+        if hasattr(self, "session") and self.session:
+            try:
+                plan = self.session.load_plan_obj()
+                if plan:
+                    self.query_one(PlanPanel).load_plan(plan)
+                    from andromity.core.todo import TodoList
+                    todo_list = TodoList.load(getattr(plan, "project_path", self._project_path))
+                    done, total = todo_list.progress()
+                    self.query_one(StatusBar).update_todo_progress(done, total)
+            except Exception:
+                pass
         # Check trust FIRST before showing welcome
         if not config.is_trusted(self._project_path):
             def _on_trust(trusted: bool | None) -> None:
@@ -541,11 +553,11 @@ class AndromityApp(App):
 
         mode = config.get("default", "permission_mode", "safe")
         
-        sensitive_patterns = [".env", ".ssh", ".git", "config.toml", "secret", "password"]
-        target_path = str(args.get("path", "")).lower()
-        is_sensitive = any(p in target_path for p in sensitive_patterns) if target_path else False
+        from andromity.core.security import is_sensitive_path
+        target_path = str(args.get("path", "") or args.get("target_path", "") or args.get("target_file", ""))
+        is_sensitive = is_sensitive_path(target_path) if target_path else False
         
-        if tool_name in ("write_file", "edit_file", "edit_file_multi", "delete_file"):
+        if tool_name in ("write_file", "edit_file", "edit_file_multi"):
             # Only track for batch review in SAFE mode.
             # TRUST/FULL/YOLO all auto-approve writes — no review overlay needed.
             if mode == "safe":
@@ -571,11 +583,25 @@ class AndromityApp(App):
             if mode == "safe":
                 needs_approval = True
             elif mode == "trust":
-                allowed = config.get("default", "allowed_commands", [])
-                if not allowed:
+                import shlex
+                import re as _re
+                _SHELL_META = _re.compile(r'[;&|`$(){}\\<>]')
+                if _SHELL_META.search(command):
                     needs_approval = True
-                elif not any(command.startswith(prefix) for prefix in allowed):
-                    needs_approval = True
+                else:
+                    global_allowed = config.get("default", "allowed_commands", []) or []
+                    session_allowed = getattr(self.session, "allowed_commands", []) if hasattr(self, "session") else []
+                    allowed = set(global_allowed) | set(session_allowed)
+                    if not allowed:
+                        needs_approval = True
+                    else:
+                        try:
+                            cmd_token = shlex.split(command)[0] if command else ""
+                        except ValueError:
+                            cmd_token = ""
+                        if not any(cmd_token == prefix or command.startswith(prefix + " ") or command == prefix
+                                   for prefix in allowed):
+                            needs_approval = True
         elif tool_name == "shell_kill":
             if mode == "safe":
                 needs_approval = True
@@ -591,7 +617,9 @@ class AndromityApp(App):
             elif mode == "trust":
                 from andromity.core.security import is_domain_allowed
                 url = str(args.get("url", ""))
-                allowed_domains = config.get("default", "allowed_domains", [])
+                global_domains = config.get("default", "allowed_domains", []) or []
+                session_domains = getattr(self.session, "allowed_domains", []) if hasattr(self, "session") else []
+                allowed_domains = list(global_domains) + list(session_domains)
                 if not is_domain_allowed(url, allowed_domains):
                     needs_approval = True
         elif tool_name.startswith("mcp__"):
@@ -724,7 +752,6 @@ class AndromityApp(App):
             msg += f" User note: {comment}"
             
         if getattr(self, "_plan_approval_future", None) and not self._plan_approval_future.done():
-            self._send_to_agent(msg)
             self._plan_approval_future.set_result(True)
         else:
             self._send_to_agent(msg)
@@ -741,7 +768,6 @@ class AndromityApp(App):
             msg += f" User reason: {feedback}"
             
         if getattr(self, "_plan_approval_future", None) and not self._plan_approval_future.done():
-            self._process_message(msg)
             self._plan_approval_future.set_result(False)
         else:
             self._process_message(msg)
@@ -1358,6 +1384,8 @@ class AndromityApp(App):
                                 break
                     except Exception:
                         pass
+                elif isinstance(event, SubAgentProgress):
+                    chat.show_subagent_progress(event)
                 elif isinstance(event, PlanApprovalRequired):
                     log.info("Plan approval required. Pausing agent loop.")
                     self._plan_approval_future = asyncio.Future()
@@ -1373,6 +1401,18 @@ class AndromityApp(App):
 
         except asyncio.CancelledError:
             log.info("Stream cancelled by user")
+            try:
+                self.agent.kill_subagents("user_cancelled")
+            except Exception:
+                pass
+            try:
+                from andromity.tui.panels.chat import ToolIndicator
+                for ind in chat.query(ToolIndicator):
+                    if not ind._done:
+                        ind.mark_done()
+            except Exception:
+                pass
+
         except Exception as e:
             log.error("Unhandled exception in _stream_agent: %s", e, exc_info=True)
             _err_msg = str(e)
@@ -1951,6 +1991,55 @@ Your output must be:
                 lines.append("")
                 lines.append(f"[dim]Config: .andromity/mcp.json  |  Manage servers in Settings → MCP[/]")
                 chat.add_system_message("\n".join(lines))
+        elif command == "/subagent":
+            from andromity.core.subagent_config import SubAgentConfigManager, DEFAULT_SUBAGENT_ROLES
+            subargs = parts[1].strip().split() if len(parts) > 1 else []
+            subcmd = subargs[0].lower() if subargs else "list"
+
+            if subcmd in ("list", "show", "status"):
+                lines = ["[bold]Subagent Role Configurations[/]\n"]
+                for rname, rcfg in DEFAULT_SUBAGENT_ROLES.items():
+                    active_cfg = SubAgentConfigManager.get_role_config(rname)
+                    m_disp = active_cfg.model or "[dim]default[/]"
+                    p_disp = active_cfg.provider or "[dim]default[/]"
+                    tools_str = ", ".join(active_cfg.tools[:4]) + (f" +{len(active_cfg.tools)-4}" if len(active_cfg.tools) > 4 else "")
+                    lines.append(f"  [bold cyan]{rname:<10}[/]  model: [green]{m_disp:<24}[/] provider: [yellow]{p_disp:<12}[/]")
+                    lines.append(f"              [dim]tools: {tools_str}[/]")
+                
+                lines.append("")
+                lines.append(f"  [bold]Settings:[/] max_concurrent=[cyan]{SubAgentConfigManager.get_max_concurrent()}[/] | timeout=[cyan]{SubAgentConfigManager.get_default_timeout()}s[/] | max_tokens=[cyan]{SubAgentConfigManager.get_result_max_tokens()}[/]")
+                lines.append("\n[dim]Usage:\n  /subagent set <role> <model> [provider]\n  /subagent config <max_concurrent|timeout|result_tokens> <value>[/]")
+                chat.add_system_message("\n".join(lines))
+            elif subcmd == "set" and len(subargs) >= 3:
+                role_name = subargs[1].lower()
+                model_name = subargs[2]
+                provider_name = subargs[3] if len(subargs) > 3 else None
+                config.set_subagent_role(role_name, model=model_name, provider=provider_name)
+                chat.add_system_message(f"[green]✓ Updated subagent role [bold]{role_name}[/]:[/] model=[cyan]{model_name}[/]" + (f" provider=[yellow]{provider_name}[/]" if provider_name else ""))
+            elif subcmd == "config" and len(subargs) >= 3:
+                key = subargs[1].lower()
+                val = subargs[2]
+                try:
+                    if key in ("max_concurrent", "concurrent"):
+                        config.set("subagents", "max_concurrent", int(val))
+                    elif key in ("timeout", "timeout_seconds"):
+                        config.set("subagents", "timeout_seconds", float(val))
+                    elif key in ("result_tokens", "result_max_tokens", "max_tokens"):
+                        config.set("subagents", "result_max_tokens", int(val))
+                    else:
+                        chat.add_system_message(f"[red]Unknown config key:[/] {key}. Use max_concurrent, timeout, or result_tokens.")
+                        return
+                    chat.add_system_message(f"[green]✓ Updated subagent config:[/] {key} = {val}")
+                except Exception as ex:
+                    chat.add_system_message(f"[red]Error updating config:[/] {ex}")
+            else:
+                chat.add_system_message(
+                    "Usage:\n"
+                    "  [bold cyan]/subagent list[/]                           — View all subagent roles\n"
+                    "  [bold cyan]/subagent set <role> <model> [provider][/]   — Set role model & provider\n"
+                    "  [bold cyan]/subagent config <key> <value>[/]            — Set max_concurrent / timeout / result_tokens"
+                )
+
         elif command == "/attach":
             if len(parts) > 1 and parts[1].strip():
                 raw = parts[1].strip().strip('"').strip("'")
@@ -2102,6 +2191,23 @@ Your output must be:
 
     @on(Button.Pressed, "#btn-allow-domain")
     def on_btn_allow_domain(self, event: Button.Pressed):
+        try:
+            diff_panel = self.query_one("#diff-panel", DiffPanel)
+            pending_args = getattr(diff_panel, "_current_args", None) or {}
+            url = str(pending_args.get("url", ""))
+            if url:
+                from andromity.core.security import get_domain
+                domain = get_domain(url)
+                if domain:
+                    existing = config.get("default", "allowed_domains", []) or []
+                    if isinstance(existing, str):
+                        existing = [existing]
+                    if domain not in existing:
+                        config.set("default", "allowed_domains", existing + [domain])
+                    if hasattr(self, "session") and self.session:
+                        self.session.allow_domain(domain)
+        except Exception:
+            pass
         self._resolve_tool_approval(True)
         try:
             self.query_one("#diff-panel", DiffPanel).dismiss_tool()
@@ -2204,9 +2310,13 @@ Your output must be:
             # ── 2. Trim session messages & recalculate context tokens ─────────
             if msg_count <= len(self.session.messages):
                 self.session.messages = self.session.messages[:msg_count]
-                self.session.context_tokens = sum(
-                    len(str(msg.get("content", ""))) // 4 for msg in self.session.messages
-                )
+                try:
+                    from andromity.core.agent import _estimate_tokens as _est2
+                    self.session.context_tokens = _est2(self.session.messages)
+                except Exception:
+                    self.session.context_tokens = sum(
+                        len(str(msg.get("content", ""))) // 4 + len(str(msg.get("thinking", ""))) // 4 for msg in self.session.messages
+                    )
                 self.session.save()
 
             # ── 3. Clean visual chat panel rollback (await before system msg) ─
