@@ -1,24 +1,25 @@
 name: Build Platform Binaries
 
-# Builds andromity-server binaries for Windows, Linux, and macOS.
-# Triggers on version tags (same as publish.yml) and on manual dispatch.
+# Builds andromity-server for each platform and packages a slim, platform-specific
+# .vsix for each target. Each .vsix only contains its own platform binary.
 #
-# After each run, download the per-platform artifacts from the Actions UI,
-# extract them into vscode-extension/bin/<platform>/, commit, then run
-# `vsce package` to produce a .vsix that bundles all binaries.
+# VS Code Marketplace / Open VSX accept per-platform .vsix files published with
+# `vsce publish --target <platform>` or `ovsx publish --target <platform>`.
+#
+# Triggers: push of a v* tag  OR  manual workflow_dispatch.
 
 on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:      # Allow manual trigger from the GitHub UI
+  workflow_dispatch:
 
 jobs:
   build:
     name: Build · ${{ matrix.platform_key }}
     runs-on: ${{ matrix.runner }}
     strategy:
-      fail-fast: false    # Build all platforms even if one fails
+      fail-fast: false          # Build all platforms even if one fails
       matrix:
         include:
           - runner: windows-latest
@@ -29,44 +30,41 @@ jobs:
             platform_key: linux-x64
             exe_name: andromity-server
 
-          - runner: macos-13        # GitHub's Intel runner
+          - runner: macos-13          # GitHub's Intel runner
             platform_key: darwin-x64
             exe_name: andromity-server
 
-          - runner: macos-latest    # GitHub's Apple Silicon (M1/M2) runner
+          - runner: macos-latest      # GitHub's Apple Silicon (M1/M2) runner
             platform_key: darwin-arm64
             exe_name: andromity-server
 
     steps:
+      # ── Source ────────────────────────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── Python ──────────────────────────────────────────────────────────────
+      # ── Python ────────────────────────────────────────────────────────────────
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      # ── uv (fast, avoids externally-managed-environment errors on Linux/macOS)
+      # uv avoids PEP 668 "externally-managed-environment" errors on Linux/macOS
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
 
-      # ── Dependencies ─────────────────────────────────────────────────────────
-      # Install the project and PyInstaller into the current Python env via uv.
-      # uv pip install targets the current interpreter (setup-python's Python),
-      # bypassing PEP 668 "externally-managed" restrictions.
-      - name: Install project and PyInstaller
+      - name: Install Python dependencies
         run: |
           uv pip install -e ".[dev]" --system
           uv pip install pyinstaller --system
 
-      # ── Build ─────────────────────────────────────────────────────────────────
-      - name: Build binary
+      # ── Build binary ──────────────────────────────────────────────────────────
+      - name: Build andromity-server binary
         run: python scripts/build-binary.py
 
-      # ── Verify the binary was produced ───────────────────────────────────────
+      # ── Verify binary ─────────────────────────────────────────────────────────
       - name: Verify binary exists (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -76,6 +74,7 @@ jobs:
             ls -la vscode-extension/bin/ || true
             exit 1
           fi
+          chmod +x "$BIN"
           echo "Binary size: $(du -sh "$BIN" | cut -f1)"
 
       - name: Verify binary exists (Windows)
@@ -91,13 +90,63 @@ jobs:
           $size = (Get-Item $bin).Length / 1MB
           Write-Output ("Binary size: {0:N1} MB" -f $size)
 
-      # ── Upload artifact ───────────────────────────────────────────────────────
-      # Uploads the entire bin/<platform>/ folder so the directory layout
-      # can be directly placed at vscode-extension/bin/<platform>/ in the repo.
-      - name: Upload binary artifact
+      # ── Node / Extension build ────────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install npm dependencies
+        working-directory: vscode-extension
+        run: npm ci
+
+      - name: Build extension JS bundle
+        working-directory: vscode-extension
+        run: npm run build -- --production
+
+      # ── Package platform-specific .vsix ──────────────────────────────────────
+      # `vsce package --target <platform>` produces a .vsix that ONLY includes
+      # the bin/<platform>/ directory — all other bin/ subdirs are excluded.
+      # This keeps each platform .vsix slim (~no dead binaries from other OSes).
+      - name: Package platform .vsix
+        working-directory: vscode-extension
+        run: npx @vscode/vsce package --target ${{ matrix.platform_key }} --no-git-tag-version --no-update-package-json
+
+      # ── Upload .vsix artifact ─────────────────────────────────────────────────
+      - name: Upload .vsix artifact
         uses: actions/upload-artifact@v4
         with:
-          name: andromity-server-${{ matrix.platform_key }}
-          path: vscode-extension/bin/${{ matrix.platform_key }}/
+          name: andromity-${{ matrix.platform_key }}.vsix
+          # glob picks up andromity-agent-<version>-<platform>.vsix
+          path: vscode-extension/*.vsix
           retention-days: 30
           if-no-files-found: error
+
+  # ── Optional: publish all platforms to the Marketplace after all builds pass ──
+  # Uncomment this job and add VSCE_PAT + OVSX_PAT to repository secrets
+  # to auto-publish on every version tag.
+  #
+  # publish:
+  #   name: Publish to Marketplace
+  #   needs: build
+  #   runs-on: ubuntu-latest
+  #   if: startsWith(github.ref, 'refs/tags/v')
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-node@v4
+  #       with:
+  #         node-version: "20"
+  #     - name: Download all .vsix artifacts
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         path: vsix-artifacts
+  #         pattern: "andromity-*.vsix"
+  #         merge-multiple: true
+  #     - name: Publish to VS Code Marketplace
+  #       working-directory: vsix-artifacts
+  #       run: |
+  #         for f in *.vsix; do
+  #           npx @vscode/vsce publish --packagePath "$f"
+  #         done
+  #       env:
+  #         VSCE_PAT: ${{ secrets.VSCE_PAT }}
