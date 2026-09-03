@@ -1,21 +1,29 @@
 <div align="center">
-  <img src="andromity.png" alt="Andromity" width="60" height="60" />
+  <img src="andromity.png" alt="Andromity" width="70" height="70" />
 
-  # Andromity
+  # Andromity — AI Coding Agent for VS Code & Terminal
 
-  **A terminal AI coding agent. Autonomous by choice, gated by trust.**
+  **Trust-governed, BYOK, autonomous coding agent with subagents, live plans, native diffs & one-click rollback.**
 
-  <video src="https://github.com/user-attachments/assets/5203a1d8-9c6d-4d8f-bee3-7b4316f6fb22" autoplay loop muted playsinline width="100%"></video>
-
-  [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/agenticmarket.andromity-agent?label=VS%20Marketplace&logo=visualstudiocode&color=blueviolet)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.6-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![PyPI](https://img.shields.io/pypi/v/andromity)](https://pypi.org/project/andromity/)
-  ![Version](https://img.shields.io/badge/version-0.2.6-blueviolet)
   ![Python](https://img.shields.io/badge/python-3.11+-blue)
+  [![Tests](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml/badge.svg)](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml)
   [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
   English | [简体中文](README.zh-CN.md) | [Русский](README.ru.md) | [Português (Brasil)](README.pt-BR.md) | [日本語](README.ja.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [हिन्दी](README.hi.md)
 
 </div>
+
+<div align="center">
+  <img src="vscode-extension/walkthroughs/assets/partner.webp" alt="Andromity AI Coding Partner in VS Code" width="100%" />
+</div>
+
+---
+
+**Andromity** is a private, BYOK (Bring Your Own Key) autonomous AI coding agent. Use it inside VS Code with the extension, or run it as a standalone terminal workspace. It plans complex tasks, manages parallel subagents, shows live step-by-step blueprints, lets you review diffs before applying, and gives you instant one-click rollback.
+
+Connect your preferred AI model (**Claude 3.7 Sonnet, GPT-4o, Gemini 2.5 Pro, DeepSeek R1 & V3, Groq, OpenRouter**) or run **100% locally and free with Ollama**.
 
 ---
 
@@ -28,10 +36,6 @@ Install directly from the [VS Code Marketplace](https://marketplace.visualstudio
 ```bash
 code --install-extension agenticmarket.andromity-agent
 ```
-
-<div align="center">
-  <img src="vscode-extension/walkthroughs/assets/partner.webp" alt="Andromity in VS Code" width="100%" />
-</div>
 
 ### Option B: Terminal CLI
 
@@ -46,70 +50,42 @@ irm https://raw.githubusercontent.com/agenticmarket/andromity/main/install.ps1 |
 pipx install andromity
 ```
 
-Needs Python 3.11+. The installer handles pipx if you don't have it.
+---
 
-Then launch anywhere:
+## ✨ Key Features
 
-```bash
-andromity
-```
+<div align="center">
+  <img src="vscode-extension/walkthroughs/assets/planning.webp" alt="Live Task Planner & Blueprints" width="100%" />
+</div>
 
-Point it at a folder, answer the trust prompt, pick a model — you're in.
+### 📝 Live Task Planner & Blueprints
+Andromity analyzes your codebase, creates an interactive step-by-step implementation plan, and waits for your approval before writing a single line of code. Review, approve, or skip any step.
 
 ---
 
-Andromity is not a chat window. Not a plugin. It's a proper terminal workspace — sessions, diffs, file viewer, cron scheduler, profiles — with an AI agent wired into all of it.
+<div align="center">
+  <img src="vscode-extension/walkthroughs/assets/models.webp" alt="396+ Model Support including local Ollama" width="100%" />
+</div>
 
-It works with Claude, Gemini, GPT, Groq, Ollama, and anything LiteLLM supports. Run it entirely local with Ollama and pay nothing. Swap models mid-session with `Ctrl+L`.
-
-The thing that makes it different: **nothing runs until you say the folder is trusted.**
+### 🤖 396+ Models — Including Free Local Ollama
+Connect Claude 3.7, GPT-4o, Gemini 2.5 Pro, DeepSeek R1, Groq, or run 100% offline with Ollama. Swap models mid-session with `Ctrl+L`.
 
 ---
 
-## How the trust model works
+<div align="center">
+  <img src="vscode-extension/walkthroughs/assets/trusted.webp" alt="Trust and Workspace Governance" width="100%" />
+</div>
 
-When you open a folder, Andromity asks if you trust it. That answer controls everything — not your permission mode, not your API key, not your settings. Say no, and the agent cannot write a file, run a command, or touch anything. Full stop.
+### 🔐 Trust Governance — You Are Always in Control
 
-Say yes, and you pick how much rope the agent gets:
-
-| Mode | Plans | File writes | Shell commands |
-|------|-------|-------------|----------------|
-| **SAFE** | Approve each one | Approve each one | Approve each one |
-| **TRUST** | Approve | Direct — no review | Direct — no review |
+| Mode | Plans | File Writes | Terminal Commands |
+|------|-------|-------------|-------------------|
+| **SAFE** *(default)* | Approve each | Approve each | Approve each |
+| **TRUST** | Approve | Direct | Direct |
 | **FULL** | Auto | Direct | Direct |
-| **YOLO** | Auto (shown as FYI) | Silent | Silent |
+| **YOLO** | Auto | Silent | Silent |
 
-Start in SAFE. Move to YOLO when you know what the agent does in your codebase. `/trust` and `/untrust` any time.
-
----
-
-## Headless / scripted
-
-```bash
-andromity run "add error handling to auth.py"
-andromity run "refactor this to async" --yes      # auto-approve everything
-andromity run "review session.py" --dry-run       # see what it would do
-```
-
----
-
-## What's inside
-
-**Scheduler.** Run the agent on a timer while you sleep. `/cron` opens the scheduler. Jobs persist per project in `.andromity/crons.json`. Works with any permission mode — use YOLO for fully unattended runs.
-
-**Profiles.** Switch what the agent is trying to do.
-- `builder` — plans, then implements
-- `coder` — implements directly, no planning phase
-- `reviewer` — read-only, produces findings
-- `planner` — plans only, touches nothing
-
-**MCP support.** Drop a `mcp.json` in your project. Tool schemas index first, full payloads load only when the agent needs them. Keeps token use sane with 50+ tools connected.
-
-**Sessions.** Everything is saved. Switch between sessions with `/sessions` or `Ctrl+O`. `/compact` when context gets heavy. `/undo` to revert the last turn and all its file changes.
-
-**Sound notifications.** The agent pings you when it needs approval or finishes a turn. Toggle them independently under `Ctrl+E → Advanced → Sounds`.
-
-**Model-agnostic.** LiteLLM under the hood. Anthropic, OpenAI, Gemini, Groq, OpenRouter, Ollama, NVIDIA NIM. Switch mid-session with `Ctrl+L`.
+Nothing runs until you say a folder is trusted. Start in SAFE, move to YOLO when you know what the agent does.
 
 ---
 
@@ -119,13 +95,70 @@ andromity run "review session.py" --dry-run       # see what it would do
 |--|-----------|-------|--------|-------------|
 | Folder trust model | ✅ | ❌ | ❌ | ❌ |
 | Permission levels (SAFE → YOLO) | ✅ | ❌ | Partial | ❌ |
-| Built-in cron scheduler | ✅ | ❌ | ❌ | ❌ |
+| **Built-in cron scheduler** | ✅ | ❌ | ❌ | ❌ |
+| **Parallel sessions & subagents** | ✅ | ❌ | ❌ | Partial |
 | Inline diff viewer | ✅ | ✅ | ✅ | ✅ |
 | Session management + `/undo` | ✅ | ❌ | Partial | ❌ |
 | Agent profiles | ✅ | ❌ | ❌ | Partial |
 | Local-first / Ollama / BYOK | ✅ | ✅ | ❌ | ❌ |
 | MCP support | ✅ | ❌ | Partial | ✅ |
-| TUI workspace | ✅ | ❌ | ❌ | ❌ |
+| VS Code Extension | ✅ | ❌ | ✅ | ✅ |
+
+---
+
+## ⏰ Cron Scheduler — AI That Works While You Sleep
+
+No other AI coding agent has this. Open `/cron` inside Andromity, write your task, set a schedule — and the agent executes it autonomously on a timer while you're away.
+
+```bash
+# Example: auto-run test suite and fix failures every night at 2 AM
+/cron  →  "run pytest, fix any failing tests, commit the fix"  →  0 2 * * *
+```
+
+Jobs persist in `.andromity/crons.json` per project. Use FULL or YOLO mode for fully unattended overnight runs. Wake up to commits already made.
+
+---
+
+## 🤖 Parallel Sessions & Subagents
+
+Spawn background subagents for parallel workstreams without interrupting your main session. Example: while one subagent researches an unfamiliar library, another implements a feature, and you review the plan in the main session — all simultaneously.
+
+```
+Main session      → Plan & implement Feature A
+Subagent 1        → Research the best auth library
+Subagent 2        → Write unit tests for Feature B
+```
+
+Switch between all sessions with `Ctrl+O`. Every session has its own context, history, and file change log. `/undo` reverts only the current session's changes.
+
+---
+
+## What's inside the terminal workspace
+
+> The VS Code extension and the terminal share the same agent core. The terminal workspace gives you the raw power.
+
+<div align="center">
+  <video src="https://github.com/user-attachments/assets/5203a1d8-9c6d-4d8f-bee3-7b4316f6fb22" autoplay loop muted playsinline width="100%"></video>
+</div>
+
+**Profiles.** Switch what the agent is trying to do mid-session.
+- `builder` — plans first, then implements
+- `coder` — implements directly, no planning phase
+- `reviewer` — read-only, produces findings
+- `planner` — plans only, touches nothing
+
+**MCP support.** Drop a `mcp.json` in your project. Tool schemas load on demand — keeps token use sane with 50+ tools connected.
+
+**Sessions.** Everything is saved. `/sessions` or `Ctrl+O` to switch. `/compact` when context gets heavy. `/undo` to revert the last turn and all its file changes.
+
+**Headless / scripted runs.**
+```bash
+andromity run "add error handling to auth.py"
+andromity run "refactor this to async" --yes      # auto-approve everything
+andromity run "review session.py" --dry-run       # see what it would do
+```
+
+**Model-agnostic.** LiteLLM under the hood. Anthropic, OpenAI, Gemini, Groq, OpenRouter, Ollama, NVIDIA NIM. Swap mid-session with `Ctrl+L`.
 
 ---
 
@@ -133,14 +166,9 @@ andromity run "review session.py" --dry-run       # see what it would do
 
 Your code goes to one place: the LLM provider you configure. Not us.
 
-- API keys live in `~/.andromity/config.toml`
+- API keys live in `~/.andromity/config.toml` — encrypted locally
 - Sessions stored locally in `~/.andromity/sessions/`
-- Anonymous ping on first launch — no code, no paths, no keys. Full details in [telemetry-worker/README.md](telemetry-worker/README.md)
-- Opt out: `export DO_NOT_TRACK=1`, or `telemetry = false` in config, or `Ctrl+E → Advanced → Telemetry`
-
----
-
-> 💡 Run `/help` inside the workspace. Not every feature is documented here — discovery is part of the experience.
+- Opt out of telemetry: `export DO_NOT_TRACK=1`
 
 ---
 
@@ -152,8 +180,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for project layout and dev setup.
 
 **MIT** — see [LICENSE](LICENSE).
 
----
-
-<div align="center">
-  <img src="screen_shot.png" alt="Andromity in action" width="100%" />
-</div>
