@@ -388,6 +388,8 @@ class JsonRpcHandler:
 
     async def rpc_session_compact(self, params: Dict[str, Any]) -> Dict[str, Any]:
         session_id = params.get("session_id")
+        if session_id in self._running_tasks and not self._running_tasks[session_id].done():
+            return {"success": False, "error": f"Session {session_id} is currently running an active turn. Cancel or wait for it to finish."}
         session = self._get_or_load_session(session_id, params.get("project_path"))
         if not session:
             return {"success": False, "error": f"Session {session_id} not found"}
@@ -477,6 +479,8 @@ class JsonRpcHandler:
 
     async def rpc_session_undo(self, params: Dict[str, Any]) -> Dict[str, Any]:
         session_id = params.get("session_id")
+        if session_id in self._running_tasks and not self._running_tasks[session_id].done():
+            return {"success": False, "error": f"Session {session_id} is currently running an active turn. Cancel or wait for it to finish."}
         session = self._get_or_load_session(session_id, params.get("project_path"))
 
         # Rollback git snapshot if available
@@ -524,8 +528,8 @@ class JsonRpcHandler:
         model = params.get("model") or config.get("default", "model", "claude-sonnet-4-6")
         provider = params.get("provider") or config.get("default", "provider", "anthropic")
         reasoning_effort = params.get("reasoning_effort") or config.get("default", "reasoning_effort", "medium")
-        # Primary source of truth is server config permission mode
-        mode = config.get("default", "permission_mode", "safe").lower()
+        # Respect per-session mode passed from client, falling back to server default
+        mode = (params.get("mode") or config.get("default", "permission_mode", "safe")).lower()
         is_trusted_workspace = config.is_trusted(session.project_path)
         auto_approve = mode in ("full", "yolo")
 
@@ -870,8 +874,12 @@ class JsonRpcHandler:
 
         task = asyncio.create_task(_run_stream())
         self._running_tasks[session_id] = task
+        task.add_done_callback(lambda _: self._running_tasks.pop(session_id, None))
 
         return {"status": "started", "session_id": session_id}
+
+    # Alias for client backwards-compatibility
+    rpc_agent_run = rpc_agent_prompt
 
     async def rpc_agent_quickPrompt(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Lightweight single-turn completion for commit messages / summaries."""
@@ -1045,12 +1053,16 @@ class JsonRpcHandler:
                 task.cancel()
                 cancelled = True
 
-        # Resolve any pending futures for this session or all
+        # Resolve any pending futures specifically for this session
         for aid, item in list(self._pending_approvals.items()):
+            if isinstance(item, tuple) and len(item) > 0 and item[0] != session_id:
+                continue
             fut = item[1] if isinstance(item, tuple) else item
             if not fut.done():
                 fut.set_result(False)
         for qid, item in list(self._pending_questions.items()):
+            if isinstance(item, tuple) and len(item) > 0 and item[0] != session_id:
+                continue
             fut = item[1] if isinstance(item, tuple) else item
             if not fut.done():
                 fut.set_result("Cancelled by user")

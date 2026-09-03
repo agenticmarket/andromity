@@ -22,8 +22,17 @@ export class SessionTabPanel {
   private readonly _viewProvider: ChatViewProvider;
   private _sessionId: string;
   private _sessionName: string;
+  private _currentMode: string = "safe";
+  private _currentModel: string = "anthropic/claude-3.7-sonnet";
+  private _currentProvider: string = "openrouter";
+  private _currentProfile: string = "builder";
+  private _currentReasoning: string = "medium";
   private _disposables: vscode.Disposable[] = [];
   private _rpcDisposables: Array<() => void> = [];
+
+  public static getAllPanels(): SessionTabPanel[] {
+    return Array.from(SessionTabPanel._panels.values());
+  }
 
   public static createOrShow(
     extensionUri: vscode.Uri,
@@ -36,7 +45,9 @@ export class SessionTabPanel {
     // If a tab for this session is already open, reveal it
     if (SessionTabPanel._panels.has(sessionId)) {
       const existing = SessionTabPanel._panels.get(sessionId)!;
-      existing._rpcClient = rpcClient;
+      if (rpcClient && existing._rpcClient !== rpcClient) {
+        existing.setRpcClient(rpcClient);
+      }
       if (sessionName) {
         existing._sessionName = sessionName;
         existing._panel.title = sessionName;
@@ -107,8 +118,32 @@ export class SessionTabPanel {
 
     this._bindRpcEvents();
 
-    // Render chat HTML
-    this._panel.webview.html = this._viewProvider._getHtmlForWebview(this._panel.webview);
+    // Render chat HTML with session-isolated state and hide redundant "Open in tab" icon
+    let html = this._viewProvider._getHtmlForWebview(this._panel.webview, {
+      currentSessionId: this._sessionId,
+      currentModel: this._currentModel,
+      currentProvider: this._currentProvider,
+      currentMode: this._currentMode,
+      currentProfile: this._currentProfile,
+      currentReasoning: this._currentReasoning,
+    });
+    // In an editor tab, hide the redundant "Open in tab" action button in the top bar
+    html = html.replace("</head>", "<style>#btn-top-open-tab { display: none !important; }</style></head>");
+    this._panel.webview.html = html;
+  }
+
+  public setRpcClient(client: RpcClient) {
+    this._disposeRpcEvents();
+    this._rpcClient = client;
+    this._bindRpcEvents();
+    this._postMessage({ type: "backend_ready" });
+  }
+
+  private _disposeRpcEvents() {
+    for (const d of this._rpcDisposables) {
+      try { d(); } catch {}
+    }
+    this._rpcDisposables = [];
   }
 
   private _postMessage(msg: any) {
@@ -127,8 +162,9 @@ export class SessionTabPanel {
     };
 
     const isMatch = (params: any) => {
-      // Route events matching this session, or broadcast events
-      return !params || !params.session_id || params.session_id === this._sessionId;
+      if (!params) return true;
+      if (params.session_id) return params.session_id === this._sessionId;
+      return true;
     };
 
     bind("agent/started", (params: any) => {
@@ -164,6 +200,18 @@ export class SessionTabPanel {
     bind("agent/planUpdated", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "plan_updated", plan: params.plan, session_id: params.session_id });
     });
+    bind("subagent/spawned", (params: any) => {
+      if (isMatch(params)) this._postMessage({ type: "subagent_spawned", ...params });
+    });
+    bind("subagent/progress", (params: any) => {
+      if (isMatch(params)) this._postMessage({ type: "subagent_progress", ...params });
+    });
+    bind("subagent/done", (params: any) => {
+      if (isMatch(params)) this._postMessage({ type: "subagent_done", ...params });
+    });
+    bind("subagent/failed", (params: any) => {
+      if (isMatch(params)) this._postMessage({ type: "subagent_failed", ...params });
+    });
     bind("agent/done", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "agent_done", ...params });
     });
@@ -172,6 +220,12 @@ export class SessionTabPanel {
     });
     bind("agent/error", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "agent_error", ...params });
+    });
+    bind("session/compacting", (params: any) => {
+      if (isMatch(params)) this._postMessage({ type: "session_compacting", ...params });
+    });
+    bind("session/compacted", (params: any) => {
+      if (isMatch(params)) this._postMessage({ type: "session_compacted", ...params });
     });
     bind("session/updated", (params: any) => {
       if (isMatch(params)) {
@@ -228,6 +282,17 @@ export class SessionTabPanel {
       return;
     }
 
+    if (message.type === "open_diff") {
+      await this._viewProvider.showGitDiff();
+      return;
+    }
+
+    if (message.type === "get_editor_context") {
+      const ctx = EditorBridge.getActiveContext();
+      this._postMessage({ type: "editor_context", context: ctx });
+      return;
+    }
+
     if (message.type === "open_session_tab") {
       if (message.sessionId) {
         SessionTabPanel.createOrShow(
@@ -248,20 +313,27 @@ export class SessionTabPanel {
     }
 
     switch (message.type) {
+      case "send_prompt":
       case "prompt": {
         try {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-          await this._rpcClient.call("agent.run", {
-            prompt: message.prompt,
+          let promptText = message.prompt || "";
+          const editorContext = EditorBridge.getActiveContext();
+          if (message.attachContext && editorContext.selectedText) {
+            promptText += `\n\n--- Context from ${editorContext.relativePath} (lines ${editorContext.selectionRange?.startLine}-${editorContext.selectionRange?.endLine}) ---\n\`\`\`${editorContext.languageId || ""}\n${editorContext.selectedText}\n\`\`\``;
+          }
+          const cleanModel = (message.model || this._currentModel || "").replace(/^~+/, "");
+          await this._rpcClient.call("agent.prompt", {
             session_id: this._sessionId,
-            model: message.model,
-            provider: message.provider,
-            mode: message.mode,
-            profile: message.profile,
-            reasoning_effort: message.reasoningEffort,
+            prompt: promptText,
             project_path: workspaceFolder,
-            images: message.images,
-          });
+            profile: message.profile || this._currentProfile,
+            model: cleanModel,
+            provider: message.provider || this._currentProvider,
+            mode: message.mode || this._currentMode,
+            reasoning_effort: message.reasoningEffort || this._currentReasoning,
+            image_uris: message.images || [],
+          }, 120000);
         } catch (err: any) {
           vscode.window.showErrorMessage(`Agent run failed: ${err.message}`);
           this._postMessage({ type: "agent_error", error: err.message, session_id: this._sessionId });
@@ -269,11 +341,36 @@ export class SessionTabPanel {
         break;
       }
 
+      case "cancel_turn":
       case "cancel_agent": {
         try {
           await this._rpcClient.call("agent.cancel", { session_id: this._sessionId });
         } catch {
           this._postMessage({ type: "agent_cancelled", session_id: this._sessionId });
+        }
+        break;
+      }
+
+      case "cycle_mode": {
+        const nextMode = message.nextMode || (this._currentMode === "safe" ? "trust" : this._currentMode === "trust" ? "yolo" : "safe");
+        this._currentMode = nextMode;
+        this._postMessage({ type: "config_updated", key: "mode", value: nextMode });
+        break;
+      }
+
+      case "select_model":
+      case "update_config": {
+        const key = message.key || (message.modelId ? "model" : undefined);
+        const value = message.value || message.modelId;
+        if (key) {
+          switch (key) {
+            case "model": this._currentModel = value; break;
+            case "provider": this._currentProvider = value; break;
+            case "profile": this._currentProfile = value; break;
+            case "mode": this._currentMode = value; break;
+            case "reasoningEffort": this._currentReasoning = value; break;
+          }
+          this._postMessage({ type: "config_updated", key: key, value: value, provider: message.provider || this._currentProvider });
         }
         break;
       }
@@ -284,13 +381,34 @@ export class SessionTabPanel {
           approved: message.approved,
           reason: message.reason,
           answer: message.answer,
-        }).catch((err) => console.error("Tool approval error:", err));
+        }).catch((err) => console.error("[SessionTab] Tool approval error:", err));
+        break;
+      }
+
+      case "plan_approval_response": {
+        await this._rpcClient.call("agent.approve_plan", {
+          session_id: this._sessionId,
+          approved: message.approved,
+          feedback: message.feedback,
+        }).catch((err) => console.error("[SessionTab] Plan approval error:", err));
+        break;
+      }
+
+      case "ask_question_response": {
+        await this._rpcClient.call("agent.answer_questions", {
+          session_id: this._sessionId,
+          question_id: message.questionId,
+          answers: message.answers,
+        }).catch((err) => console.error("[SessionTab] Answer question error:", err));
         break;
       }
 
       case "switch_session": {
         if (message.sessionId && message.sessionId !== this._sessionId) {
+          const oldId = this._sessionId;
           this._sessionId = message.sessionId;
+          SessionTabPanel._panels.delete(oldId);
+          SessionTabPanel._panels.set(this._sessionId, this);
           await this._loadSession();
         }
         break;
@@ -304,6 +422,8 @@ export class SessionTabPanel {
         }).catch(() => null);
         if (res?.success) {
           await this._loadSession();
+        } else if (res?.error) {
+          vscode.window.showWarningMessage(res.error);
         }
         break;
       }
@@ -314,9 +434,11 @@ export class SessionTabPanel {
           session_id: this._sessionId,
           project_path: workspaceFolder,
         }).catch(() => null);
-        if (res) {
+        if (res?.success) {
           this._postMessage({ type: "session_compacted", ...res });
           await this._loadSession();
+        } else if (res?.error) {
+          vscode.window.showWarningMessage(res.error);
         }
         break;
       }
@@ -350,6 +472,22 @@ export class SessionTabPanel {
         }
         break;
       }
+
+      case "request_rename_session": {
+        if (message.sessionId && message.name) {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          await this._rpcClient.call("session.rename", {
+            session_id: message.sessionId,
+            name: message.name,
+            project_path: workspaceFolder,
+          }).catch(() => null);
+          if (message.sessionId === this._sessionId) {
+            this._sessionName = message.name;
+            this._panel.title = message.name;
+          }
+        }
+        break;
+      }
     }
   }
 
@@ -370,16 +508,22 @@ export class SessionTabPanel {
         this._panel.title = sessionData.name;
       }
 
+      this._currentModel = sessionData?.model || configData?.default_model || "anthropic/claude-3.7-sonnet";
+      this._currentProvider = sessionData?.provider || configData?.default_provider || "openrouter";
+      this._currentMode = sessionData?.mode || configData?.permission_mode || "safe";
+      this._currentProfile = configData?.default_profile || "builder";
+      this._currentReasoning = configData?.reasoning_effort || "medium";
+
       this._postMessage({
         type: "init_state",
         sessionId: this._sessionId,
-        profile: configData?.default_profile || "builder",
+        profile: this._currentProfile,
         availableProfiles: configData?.available_profiles || ["builder", "coder", "reviewer", "planner"],
         availableReasoningEfforts: configData?.available_reasoning_efforts || ["low", "medium", "high", "off"],
-        model: sessionData?.model || configData?.default_model || "anthropic/claude-3.7-sonnet",
-        provider: sessionData?.provider || configData?.default_provider || "openrouter",
-        mode: configData?.permission_mode || "safe",
-        reasoningEffort: configData?.reasoning_effort || "medium",
+        model: this._currentModel,
+        provider: this._currentProvider,
+        mode: this._currentMode,
+        reasoningEffort: this._currentReasoning,
         models: models || [],
         providers: providers || [],
         skills: [],
@@ -400,10 +544,7 @@ export class SessionTabPanel {
 
   public dispose() {
     SessionTabPanel._panels.delete(this._sessionId);
-    for (const d of this._rpcDisposables) {
-      try { d(); } catch {}
-    }
-    this._rpcDisposables = [];
+    this._disposeRpcEvents();
     while (this._disposables.length) {
       const x = this._disposables.pop();
       if (x) x.dispose();

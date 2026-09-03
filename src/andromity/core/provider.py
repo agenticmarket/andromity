@@ -202,7 +202,27 @@ async def stream_completion(
                 # OpenAI o-series and compatible providers
                 kwargs["reasoning_effort"] = reasoning_effort
 
-        response_stream = await acompletion(**kwargs)
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                response_stream = await acompletion(**kwargs)
+                break
+            except Exception as e:
+                msg = str(e).lower()
+                is_429 = "429" in msg or "rate limit" in msg or "ratelimit" in msg or "quota" in msg
+                if is_429 and attempt < max_retries:
+                    import re
+                    wait_s = 2.0 * (attempt + 1)
+                    m = re.search(r"retry in ([\d.]+)s", msg)
+                    if m:
+                        try:
+                            wait_s = min(max(float(m.group(1)), 1.0), 8.0)
+                        except Exception:
+                            pass
+                    log.warning("Rate limit on initial call, retrying in %.1fs (attempt %d/%d)...", wait_s, attempt + 1, max_retries)
+                    await asyncio.sleep(wait_s)
+                    continue
+                raise
     except Exception as e:
         log.error("acompletion initial error: %s", e, exc_info=True)
         yield TextDelta(text=_format_error_text(e))

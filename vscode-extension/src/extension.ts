@@ -27,28 +27,50 @@ function markEngineStartFailed() {
   }
 }
 
-/** Reflects daemon turn state in the status bar (idle / running / approval needed). */
+const activeRunningSessions = new Set<string>();
+
+/** Reflects daemon turn state in the status bar across all parallel sessions. */
 function bindStatusBarEvents(client: RpcClient) {
   if (lastBoundStatusBarClient === client) return;
   lastBoundStatusBarClient = client;
-  client.on("agent/textDelta", () => {
-    statusBarItem.text = "$(sync~spin) Andromity";
-  });
-  client.on("agent/toolStart", () => {
-    statusBarItem.text = "$(sync~spin) Andromity";
-  });
+
+  const updateStatusBar = () => {
+    if (activeRunningSessions.size > 1) {
+      statusBarItem.text = `$(sync~spin) Andromity (${activeRunningSessions.size} running)`;
+    } else if (activeRunningSessions.size === 1) {
+      statusBarItem.text = "$(sync~spin) Andromity";
+    } else {
+      statusBarItem.text = "$(andromity-logo) Andromity";
+    }
+  };
+
+  const markRunning = (params?: any) => {
+    const sid = params?.session_id || "main";
+    activeRunningSessions.add(sid);
+    updateStatusBar();
+  };
+
+  const markFinished = (params?: any) => {
+    if (params?.session_id) {
+      activeRunningSessions.delete(params.session_id);
+    } else {
+      activeRunningSessions.clear();
+    }
+    updateStatusBar();
+  };
+
+  client.on("agent/started", markRunning);
+  client.on("agent/textDelta", markRunning);
+  client.on("agent/toolStart", markRunning);
   client.on("agent/toolApprovalRequired", () => {
     statusBarItem.text = "$(alert) Andromity";
   });
   client.on("agent/askQuestions", () => {
     statusBarItem.text = "$(question) Andromity";
   });
-  const idle = () => {
-    statusBarItem.text = "$(andromity-logo) Andromity";
-  };
-  client.on("agent/done", idle);
-  client.on("agent/cancelled", idle);
-  client.on("agent/error", idle);
+  client.on("agent/done", markFinished);
+  client.on("agent/cancelled", markFinished);
+  client.on("agent/error", markFinished);
 }
 
 export async function activate(context: vscode.ExtensionContext) {

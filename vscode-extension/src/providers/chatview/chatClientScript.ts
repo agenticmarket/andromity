@@ -1913,7 +1913,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       renderImageAttachments();
 
       if (isRunning) {
-        promptQueue.push({ text: text || 'Please inspect attached image', images: imagesToSend });
+        promptQueue.push({ text: text || 'Please inspect attached image', images: imagesToSend, sessionId: currentSessionId });
         renderQueue();
         return;
       }
@@ -1962,7 +1962,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function flushQueue() {
       if (promptQueue.length === 0) return;
-      const next = promptQueue.shift();
+      const idx = promptQueue.findIndex(q => !q.sessionId || q.sessionId === currentSessionId);
+      if (idx === -1) return;
+      const next = promptQueue.splice(idx, 1)[0];
       renderQueue();
       if (typeof next === 'object' && next !== null) {
         dispatchPrompt(next.text || '', true, next.images || []);
@@ -2830,6 +2832,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           interactiveSlot.innerHTML = '';
           {
             const sessState = sessionsState[currentSessionId];
+            if (sessState && sessState.pendingApproval) {
+              interactiveSlot.innerHTML = renderPermissionCard(sessState.pendingApproval);
+            } else if (sessState && sessState.pendingPlanApproval) {
+              interactiveSlot.innerHTML = renderPlanApprovalCard(sessState.pendingPlanApproval);
+            }
             if (sessState && sessState.isRunning) {
               isRunning = true;
               cancelBtn.style.display = 'flex';
@@ -3440,6 +3447,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
 
         case 'plan_approval':
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
+            sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
+            sessionsState[msg.session_id].isRunning = true;
+            sessionsState[msg.session_id].pendingPlanApproval = msg;
+            break;
+          }
           interactiveSlot.innerHTML = renderPlanApprovalCard(msg);
           scrollToBottomIfNeeded();
           break;

@@ -15,7 +15,7 @@ import {
   SubAgentEvent,
   ToolApprovalEvent,
 } from "../server/types.js";
-import { getChatViewHtml } from "./chatview/chatHtml.js";
+import { getChatViewHtml, ChatViewState } from "./chatview/chatHtml.js";
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "andromity.chatView";
@@ -69,6 +69,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } else {
       this._diffManager.setRpcClient(client);
     }
+    // Also re-bind RPC client for any open SessionTabPanel tabs
+    for (const tab of SessionTabPanel.getAllPanels()) {
+      try { tab.setRpcClient(client); } catch {}
+    }
     this._bindRpcEvents();
     this._postToWebview({ type: "backend_ready" });
     this._loadInitialConfig(true);
@@ -84,6 +88,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this._rpcDisposables = [];
     this._boundClient = null;
+  }
+
+  public async showGitDiff(): Promise<void> {
+    if (this._diffManager) {
+      await this._diffManager.showGitDiff();
+    }
   }
 
   public toggleSessionsDrawer() {
@@ -386,7 +396,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     bind("agent/planApproval", (params: any) => {
       this._currentPlan = params.plan;
-      this._postToWebview({ type: "plan_approval", plan: params.plan });
+      this._postToWebview({ type: "plan_approval", plan: params.plan, session_id: params.session_id });
       const cfg = vscode.workspace.getConfiguration("andromity");
       if (cfg.get<boolean>("soundNotifications", true)) {
         this._postToWebview({ type: "play_sound", kind: "attention" });
@@ -396,7 +406,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     bind("agent/planUpdated", (params: any) => {
       if (params.plan) {
         this._currentPlan = params.plan;
-        this._postToWebview({ type: "plan_updated", plan: params.plan });
+        this._postToWebview({ type: "plan_updated", plan: params.plan, session_id: params.session_id });
       }
     });
 
@@ -754,10 +764,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             promptText += `\n\n--- Context from ${editorContext.relativePath} (lines ${editorContext.selectionRange?.startLine}-${editorContext.selectionRange?.endLine}) ---\n\`\`\`${editorContext.languageId || ""}\n${editorContext.selectedText}\n\`\`\``;
           }
 
-          if (!this._currentSessionId && message.sessionId) {
-            this._currentSessionId = message.sessionId;
+          const targetSessionId = message.sessionId || this._currentSessionId;
+          if (!this._currentSessionId && targetSessionId) {
+            this._currentSessionId = targetSessionId;
           }
-          if (!this._currentSessionId) {
+          if (!targetSessionId) {
             const newSess = await this._rpcClient.call<SessionInfo>("session.create", {
               name: "Main Session",
               project_path: workspaceFolder,
@@ -768,7 +779,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
           const cleanModel = (message.model || this._currentModel || "").replace(/^~+/, "");
           await this._rpcClient.call("agent.prompt", {
-            session_id: this._currentSessionId,
+            session_id: targetSessionId || this._currentSessionId,
             prompt: promptText,
             project_path: workspaceFolder,
             profile: message.profile || this._currentProfile,
@@ -1344,15 +1355,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  public _getHtmlForWebview(webview: vscode.Webview): string {
+  public _getHtmlForWebview(webview: vscode.Webview, customState?: Partial<ChatViewState>): string {
     return getChatViewHtml(webview, this._extensionUri, {
-      currentSessionId: this._currentSessionId,
-      currentModel: this._currentModel,
-      currentProvider: this._currentProvider,
-      currentMode: this._currentMode,
-      currentProfile: this._currentProfile,
-      currentReasoning: this._currentReasoning,
-      models: this._models,
+      currentSessionId: customState?.currentSessionId ?? this._currentSessionId,
+      currentModel: customState?.currentModel ?? this._currentModel,
+      currentProvider: customState?.currentProvider ?? this._currentProvider,
+      currentMode: customState?.currentMode ?? this._currentMode,
+      currentProfile: customState?.currentProfile ?? this._currentProfile,
+      currentReasoning: customState?.currentReasoning ?? this._currentReasoning,
+      models: customState?.models ?? this._models,
     });
   }
 }
