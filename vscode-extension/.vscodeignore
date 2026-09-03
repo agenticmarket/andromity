@@ -17,5 +17,8 @@ dist/providers/**
 dist/server/**
 dist/test-check.js
 dist/*.map
+assets/**
+*.disabled
+**/*.disabled
 
 

@@ -993,13 +993,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }).join('');
     }
 
-    let activeSessionFilter = 'main';
+    let activeSessionFilter = 'tree';
+    const expandedSessionIds = new Set();
 
     document.querySelectorAll('.sessions-filter-tab').forEach(tab => {
       tab.addEventListener('click', () => {
         document.querySelectorAll('.sessions-filter-tab').forEach(t => t.classList.remove('active'));
         tab.classList.add('active');
-        activeSessionFilter = tab.dataset.filter || 'main';
+        activeSessionFilter = tab.dataset.filter || 'tree';
         sessionDisplayLimit = 10;
         filterAndRenderSessions(sessionsSearch ? sessionsSearch.value : '');
       });
@@ -1016,76 +1017,242 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (countMainEl) countMainEl.textContent = String(mainCount);
       if (countSubEl) countSubEl.textContent = String(subagentCount);
 
+      // Automatically expand parent of the current session or any running subagent
+      if (activeId) {
+        const activeSess = allSessions.find(s => s.id === activeId);
+        if (activeSess && activeSess.parent_session) {
+          expandedSessionIds.add(activeSess.parent_session);
+        }
+      }
+      allSessions.forEach(s => {
+        if (s.parent_session) {
+          const st = sessionsState[s.id];
+          if ((st && st.isRunning) || s.status === 'running') {
+            expandedSessionIds.add(s.parent_session);
+          }
+        }
+      });
+
       filterAndRenderSessions(sessionsSearch ? sessionsSearch.value : '');
       renderHomeRecentSessions(allSessions.filter(s => !s.parent_session));
+    }
+
+    function renderRunningArc() {
+      return '<svg class="session-running-arc" viewBox="0 0 24 24" fill="none" title="Running">' +
+        '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-opacity="0.25"></circle>' +
+        '<path d="M12 3a9 9 0 0 1 9 9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"></path>' +
+      '</svg>';
+    }
+
+    function renderSessionItemHtml(s, opts) {
+      opts = opts || {};
+      const isSubsession = !!opts.isSubsession;
+      const isLastChild = !!opts.isLastChild;
+      const childrenCount = opts.childrenCount || 0;
+      const isExpanded = !!opts.isExpanded;
+      const parentName = opts.parentName || '';
+
+      const isCur = s.id === currentSessionId;
+      const name = escapeHtml(s.name || s.id || (isSubsession ? 'Subagent Task' : 'Session'));
+      const msgs = s.message_count ? (s.message_count + ' msgs') : 'Empty';
+      const cost = (s.cost_usd && Number(s.cost_usd) > 0) ? ('$' + Number(s.cost_usd).toFixed(3)) : '';
+      const sessState = sessionsState[s.id];
+      const isRunningSess = !!((sessState && sessState.isRunning) || s.status === 'running');
+
+      // Sleek minimalist spinning circular arc icon when running (No bulky RUNNING text badge)
+      const runningArc = isRunningSess ? renderRunningArc() : '';
+
+      let statusBadge = '';
+      if (sessState && sessState.hasUnread && !isCur) {
+        statusBadge = '<span class="session-badge-status session-status-unread">NEW</span>';
+      } else if (s.status && s.status !== 'idle' && s.status !== 'running') {
+        statusBadge = '<span class="session-badge-status session-status-' + escapeHtml(s.status) + '">' + escapeHtml(s.status) + '</span>';
+      }
+
+      const activeDot = isCur ? '<span class="session-active-dot" title="Active session"></span>' : '';
+      const subTag = isSubsession ? '<span class="subsession-tag">Subagent</span>' : '';
+      const branchSymbol = isSubsession ? ('<span class="subsession-branch-symbol">' + (isLastChild ? '└' : '├') + '</span>') : '';
+
+      let toggleBtn = '';
+      if (!isSubsession && childrenCount > 0) {
+        toggleBtn = '<button class="subsession-toggle-btn" data-action="toggle-subsessions" data-parent-id="' + s.id + '" title="' + (isExpanded ? 'Collapse' : 'Expand') + ' ' + childrenCount + ' subagent(s)">' +
+          '<svg class="subsession-chevron' + (isExpanded ? ' expanded' : '') + '" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
+          '<span>' + childrenCount + ' subtask' + (childrenCount === 1 ? '' : 's') + '</span>' +
+        '</button>';
+      }
+
+      const parentRef = (!isSubsession && parentName) ? ('<span>· Parent: ' + escapeHtml(parentName) + '</span>') : '';
+      const itemClass = 'session-item ' + (isSubsession ? 'session-subsession-item ' : '') + (isCur ? 'active' : '');
+
+      return '<div class="' + itemClass + '" data-session-id="' + s.id + '">' +
+        '<div class="session-item-info" data-action="switch-session" data-session-id="' + s.id + '">' +
+          '<div class="session-item-title">' +
+            branchSymbol +
+            activeDot +
+            subTag +
+            '<span class="session-title-text" title="' + name + '">' + name + '</span>' +
+            runningArc +
+            statusBadge +
+          '</div>' +
+          '<div class="session-item-meta">' +
+            '<span>' + msgs + '</span>' +
+            (cost ? '<span>· ' + cost + '</span>' : '') +
+            parentRef +
+            toggleBtn +
+          '</div>' +
+        '</div>' +
+        '<div class="session-item-actions">' +
+          '<button class="session-action-icon" data-action="open-session-tab" data-session-id="' + s.id + '" data-session-name="' + name + '" title="Open in New Editor Tab (Side-by-Side)">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>' +
+          '</button>' +
+          '<button class="session-action-icon" data-action="rename-session" data-session-id="' + s.id + '" data-session-name="' + name + '" title="Rename">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>' +
+          '</button>' +
+          '<button class="session-action-icon session-action-delete" data-action="delete-session" data-session-id="' + s.id + '" title="Delete">' +
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>' +
+          '</button>' +
+        '</div>' +
+      '</div>';
     }
 
     function filterAndRenderSessions(query) {
       if (!sessionsListEl) return;
       const q = (query || '').toLowerCase().trim();
-      
-      // Filter by dual-list category (main sessions vs background/subagents)
-      const categorized = allSessions.filter(s => {
-        if (activeSessionFilter === 'subagents') {
-          return !!s.parent_session;
+
+      // Build session map and parent-to-subagents map
+      const allSessionMap = new Map();
+      const subagentMap = new Map();
+      const mainSessions = [];
+
+      allSessions.forEach(s => {
+        allSessionMap.set(s.id, s);
+        if (s.parent_session) {
+          if (!subagentMap.has(s.parent_session)) {
+            subagentMap.set(s.parent_session, []);
+          }
+          subagentMap.get(s.parent_session).push(s);
+        } else {
+          mainSessions.push(s);
         }
-        return !s.parent_session;
       });
 
-      const filtered = categorized.filter(s => (s.name || s.id || '').toLowerCase().includes(q));
+      // Catch orphaned subagents whose parent is missing from mainSessions
+      const mainSessionIdSet = new Set(mainSessions.map(s => s.id));
+      const orphanedSubagents = [];
+      for (const [pId, subs] of subagentMap.entries()) {
+        if (!mainSessionIdSet.has(pId)) {
+          orphanedSubagents.push(...subs);
+        }
+      }
 
-      if (filtered.length === 0) {
-        const emptyMsg = activeSessionFilter === 'subagents' 
-          ? 'No background or subagent tasks found'
-          : 'No matching sessions';
-        sessionsListEl.innerHTML = '<div style="padding:16px 14px; text-align:center; color:var(--muted); font-size:11px;">' + emptyMsg + '</div>';
+      if (activeSessionFilter === 'subagents') {
+        // Flat focused view of subagents
+        const allSubs = allSessions.filter(s => !!s.parent_session);
+        const filteredSubs = allSubs.filter(s => {
+          const parentObj = allSessionMap.get(s.parent_session);
+          const pName = parentObj ? (parentObj.name || '') : '';
+          return (s.name || s.id || '').toLowerCase().includes(q) || pName.toLowerCase().includes(q);
+        });
+
+        if (filteredSubs.length === 0) {
+          sessionsListEl.innerHTML = '<div style="padding:16px 14px; text-align:center; color:var(--muted); font-size:11px;">No subagent tasks found</div>';
+          return;
+        }
+
+        const visibleSubs = filteredSubs.slice(0, sessionDisplayLimit);
+        let html = visibleSubs.map((sub, idx) => {
+          const parentObj = allSessionMap.get(sub.parent_session);
+          const parentName = parentObj ? (parentObj.name || sub.parent_session.slice(0, 8)) : (sub.parent_session ? sub.parent_session.slice(0, 8) : '');
+          return renderSessionItemHtml(sub, {
+            isSubsession: true,
+            isLastChild: idx === visibleSubs.length - 1,
+            parentName: parentName
+          });
+        }).join('');
+
+        if (filteredSubs.length > sessionDisplayLimit) {
+          const remaining = filteredSubs.length - sessionDisplayLimit;
+          html += '<div class="sessions-load-more-wrap">' +
+            '<button class="btn-load-more-sessions" data-action="load-more-sessions">' +
+              '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
+              '<span>Load More (' + remaining + ' remaining)</span>' +
+            '</button>' +
+          '</div>';
+        }
+        sessionsListEl.innerHTML = html;
         return;
       }
 
-      const visible = filtered.slice(0, sessionDisplayLimit);
+      // Hierarchical tree view (default)
+      // Filter main sessions: include if main session matches query OR if any of its child subagents match
+      const filteredMains = [];
+      mainSessions.forEach(m => {
+        const subs = subagentMap.get(m.id) || [];
+        const mMatches = (m.name || m.id || '').toLowerCase().includes(q);
+        const matchingSubs = q ? subs.filter(sub => (sub.name || sub.id || '').toLowerCase().includes(q)) : subs;
+
+        if (!q || mMatches || matchingSubs.length > 0) {
+          if (q && matchingSubs.length > 0) {
+            // Auto-expand if subagent matches query
+            expandedSessionIds.add(m.id);
+          }
+          filteredMains.push({
+            session: m,
+            children: subs
+          });
+        }
+      });
+
+      // Also include any orphaned subagents if matching
+      orphanedSubagents.forEach(orphan => {
+        if (!q || (orphan.name || orphan.id || '').toLowerCase().includes(q)) {
+          filteredMains.push({
+            session: orphan,
+            children: [],
+            isOrphan: true
+          });
+        }
+      });
+
+      if (filteredMains.length === 0) {
+        sessionsListEl.innerHTML = '<div style="padding:16px 14px; text-align:center; color:var(--muted); font-size:11px;">No matching sessions found</div>';
+        return;
+      }
+
+      const visible = filteredMains.slice(0, sessionDisplayLimit);
 
       try {
-        let html = visible.map(s => {
-          const isCur = s.id === currentSessionId;
-          const name = escapeHtml(s.name || s.id || 'Session');
-          const msgs = s.message_count ? (s.message_count + ' msgs') : 'Empty';
-          const cost = (s.cost_usd && Number(s.cost_usd) > 0) ? ('$' + Number(s.cost_usd).toFixed(3)) : '';
-          const sessState = sessionsState[s.id];
-          let statusBadge = '';
-          if (sessState && sessState.isRunning) {
-            statusBadge = '<span class="session-badge-status session-status-running">RUNNING</span>';
-          } else if (sessState && sessState.hasUnread && !isCur) {
-            statusBadge = '<span class="session-badge-status session-status-unread">NEW</span>';
-          } else if (s.status && s.status !== 'idle') {
-            statusBadge = '<span class="session-badge-status session-status-' + escapeHtml(s.status) + '">' + escapeHtml(s.status) + '</span>';
-          }
-          const subagentTag = s.parent_session ? '<span class="session-badge-status" style="background:rgba(99,102,241,0.15);color:#818cf8;">Subagent</span>' : '';
+        let html = visible.map(entry => {
+          const s = entry.session;
+          const children = entry.children || [];
+          const isExpanded = expandedSessionIds.has(s.id);
+          const parentHtml = renderSessionItemHtml(s, {
+            isSubsession: !!entry.isOrphan,
+            childrenCount: children.length,
+            isExpanded: isExpanded
+          });
 
-          return '<div class="session-item ' + (isCur ? 'active' : '') + '">' +
-            '<div class="session-item-info" data-action="switch-session" data-session-id="' + s.id + '">' +
-              '<div class="session-item-title">' + (isCur ? '&#x2605; ' : '') + name + (statusBadge ? ' ' + statusBadge : '') + (subagentTag ? ' ' + subagentTag : '') + '</div>' +
-              '<div class="session-item-meta">' +
-                '<span>' + msgs + '</span>' +
-                (cost ? '<span>· ' + cost + '</span>' : '') +
-                (s.parent_session ? '<span>· Parent: ' + escapeHtml(s.parent_session.slice(0, 8)) + '</span>' : '') +
-              '</div>' +
-            '</div>' +
-            '<div class="session-item-actions">' +
-              '<button class="session-action-icon" data-action="open-session-tab" data-session-id="' + s.id + '" data-session-name="' + escapeHtml(name) + '" title="Open in New Editor Tab (Side-by-Side)">' +
-                '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>' +
-              '</button>' +
-              '<button class="session-action-icon" data-action="rename-session" data-session-id="' + s.id + '" data-session-name="' + escapeHtml(name) + '" title="Rename">' +
-                '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>' +
-              '</button>' +
-              '<button class="session-action-icon session-action-delete" data-action="delete-session" data-session-id="' + s.id + '" title="Delete">' +
-                '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>' +
-              '</button>' +
+          if (children.length === 0) {
+            return '<div class="session-tree-group">' + parentHtml + '</div>';
+          }
+
+          const childrenHtml = children.map((sub, idx) => {
+            return renderSessionItemHtml(sub, {
+              isSubsession: true,
+              isLastChild: idx === children.length - 1
+            });
+          }).join('');
+
+          return '<div class="session-tree-group">' +
+            parentHtml +
+            '<div class="session-subsessions-list' + (isExpanded ? '' : ' collapsed') + '" id="subsessions-' + s.id + '">' +
+              childrenHtml +
             '</div>' +
           '</div>';
         }).join('');
 
-        if (filtered.length > sessionDisplayLimit) {
-          const remaining = filtered.length - sessionDisplayLimit;
+        if (filteredMains.length > sessionDisplayLimit) {
+          const remaining = filteredMains.length - sessionDisplayLimit;
           html += '<div class="sessions-load-more-wrap">' +
             '<button class="btn-load-more-sessions" data-action="load-more-sessions">' +
               '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
@@ -1402,6 +1569,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (!target) return;
       const action = target.getAttribute('data-action');
       switch (action) {
+        case 'toggle-subsessions': {
+          e.stopPropagation();
+          const pId = target.getAttribute('data-parent-id') || target.getAttribute('data-session-id');
+          if (pId) {
+            if (expandedSessionIds.has(pId)) {
+              expandedSessionIds.delete(pId);
+            } else {
+              expandedSessionIds.add(pId);
+            }
+            filterAndRenderSessions(sessionsSearch ? sessionsSearch.value : '');
+          }
+          break;
+        }
         case 'switch-session':
           const sId = target.getAttribute('data-session-id');
           if (sId) {

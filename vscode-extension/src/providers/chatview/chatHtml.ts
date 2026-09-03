@@ -126,12 +126,12 @@ ${styles}
       </button>
     </div>
     <div class="sessions-filter-tabs" id="sessions-filter-tabs">
-      <button class="sessions-filter-tab active" data-filter="main" id="filter-tab-main">
-        <span>Main Sessions</span>
+      <button class="sessions-filter-tab active" data-filter="tree" id="filter-tab-main">
+        <span>Sessions Tree</span>
         <span class="filter-count" id="count-main-sessions">0</span>
       </button>
       <button class="sessions-filter-tab" data-filter="subagents" id="filter-tab-subagents">
-        <span>Background / Subagents</span>
+        <span>Subagents Only</span>
         <span class="filter-count" id="count-subagent-sessions">0</span>
       </button>
     </div>

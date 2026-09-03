@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: andromity
-Version: 0.2.4
+Version: 0.2.5
 Summary: AI coding agent with a beautiful terminal UI. Works with Claude, Gemini, GPT, Ollama and more.
 Author-email: Agentic Market <hello@agenticmarket.dev>
 License: MIT

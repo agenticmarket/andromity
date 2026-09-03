@@ -353,6 +353,36 @@ export function getChatStyles(): string {
       align-items: center;
       gap: 6px;
     }
+    .session-title-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      min-width: 0;
+    }
+    .session-active-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 6px var(--accent);
+      flex-shrink: 0;
+      display: inline-block;
+    }
+    @keyframes sessionSpin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .session-running-arc {
+      width: 13px;
+      height: 13px;
+      animation: sessionSpin 0.85s linear infinite;
+      color: #38bdf8;
+      flex-shrink: 0;
+      display: inline-block;
+      vertical-align: middle;
+      margin-left: 2px;
+    }
     .session-badge-status {
       font-size: 9px;
       font-weight: 600;
@@ -365,15 +395,14 @@ export function getChatStyles(): string {
       flex-shrink: 0;
     }
     .session-badge-status.session-status-running {
-      background: rgba(56, 189, 248, 0.2);
+      background: rgba(56, 189, 248, 0.15);
       color: #38bdf8;
-      border: 1px solid rgba(56, 189, 248, 0.35);
-      animation: pulseCompact 1.5s infinite;
+      border: 1px solid rgba(56, 189, 248, 0.3);
     }
     .session-badge-status.session-status-unread {
-      background: rgba(9, 249, 148, 0.2);
+      background: rgba(9, 249, 148, 0.15);
       color: #09f994;
-      border: 1px solid rgba(9, 249, 148, 0.35);
+      border: 1px solid rgba(9, 249, 148, 0.3);
     }
     .session-badge-status.session-status-error {
       background: rgba(239, 68, 68, 0.15);
@@ -387,6 +416,7 @@ export function getChatStyles(): string {
       font-size: 10px;
       color: var(--muted);
       display: flex;
+      align-items: center;
       gap: 8px;
     }
     .session-item-actions {
@@ -396,7 +426,8 @@ export function getChatStyles(): string {
       opacity: 0;
       transition: opacity 0.12s;
     }
-    .session-item:hover .session-item-actions {
+    .session-item:hover .session-item-actions,
+    .session-subsession-item:hover .session-item-actions {
       opacity: 1;
     }
     .session-action-icon {
@@ -416,6 +447,94 @@ export function getChatStyles(): string {
     }
     .session-action-delete:hover {
       color: var(--red);
+    }
+
+    /* Hierarchical Subsessions Tree */
+    .session-tree-group {
+      display: flex;
+      flex-direction: column;
+      margin-bottom: 2px;
+    }
+    .session-subsessions-list {
+      margin-left: 14px;
+      padding-left: 10px;
+      border-left: 1.5px solid rgba(255, 255, 255, 0.12);
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      margin-top: 2px;
+      margin-bottom: 5px;
+    }
+    .session-subsessions-list.collapsed {
+      display: none;
+    }
+    .session-subsession-item {
+      padding: 5px 8px;
+      font-size: 11px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      color: var(--fg);
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .session-subsession-item:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(255, 255, 255, 0.08);
+    }
+    .session-subsession-item.active {
+      background: rgba(6, 182, 212, 0.08);
+      border-color: rgba(6, 182, 212, 0.25);
+      color: var(--accent);
+    }
+    .subsession-branch-symbol {
+      color: var(--muted);
+      opacity: 0.45;
+      font-family: monospace;
+      font-size: 11px;
+      margin-right: 2px;
+      flex-shrink: 0;
+    }
+    .subsession-tag {
+      font-size: 8.5px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      padding: 1px 4px;
+      border-radius: 3px;
+      background: rgba(99, 102, 241, 0.15);
+      color: #818cf8;
+      border: 1px solid rgba(99, 102, 241, 0.25);
+      flex-shrink: 0;
+    }
+    .subsession-toggle-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      background: rgba(99, 102, 241, 0.1);
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      color: #a5b4fc;
+      border-radius: 9px;
+      padding: 1px 6px;
+      font-size: 9px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .subsession-toggle-btn:hover {
+      background: rgba(99, 102, 241, 0.2);
+      border-color: rgba(99, 102, 241, 0.4);
+      color: #c7d2fe;
+    }
+    .subsession-chevron {
+      transition: transform 0.18s ease;
+      flex-shrink: 0;
+    }
+    .subsession-chevron.expanded {
+      transform: rotate(180deg);
     }
 
     .sessions-load-more-wrap {
@@ -819,14 +938,14 @@ export function getChatStyles(): string {
 
     .top-bar-icon-btn.compacting {
       color: #38bdf8 !important;
-      animation: pulseCompact 1.5s infinite ease-in-out;
+      animation: sessionSpin 1s infinite linear;
       pointer-events: none;
       opacity: 0.8;
     }
 
     @keyframes pulseCompact {
-      0%, 100% { opacity: 0.5; transform: scale(0.95); }
-      50% { opacity: 1; transform: scale(1.08); }
+      0%, 100% { opacity: 0.4; }
+      50% { opacity: 1; }
     }
 
     .inline-compaction-card {
