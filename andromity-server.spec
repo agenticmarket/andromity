@@ -83,7 +83,11 @@ a = Analysis(
         collect_submodules('litellm') +
         collect_submodules('fastuuid') +
         collect_submodules('rpds') +
-        ['rpds.rpds', 'tiktoken._tiktoken', 'fastuuid.fastuuid', '_overlapped', '_asyncio', '_sqlite3', 'sqlite3', 'litellm.llms', 'litellm.utils', 'litellm.litellm_core_utils.tokenizers', 'httpx', 'pydantic', 'rich', 'asyncio']
+        # _overlapped is Windows-only (part of asyncio's Windows proactor event loop);
+        # including it on Linux/macOS causes a PyInstaller hook error.
+        (['_overlapped'] if sys.platform == 'win32' else []) +
+        ['_asyncio', '_sqlite3', 'sqlite3', 'litellm.llms', 'litellm.utils', 'litellm.litellm_core_utils.tokenizers', 'httpx', 'pydantic', 'rich', 'asyncio',
+         'tiktoken._tiktoken', 'fastuuid.fastuuid', 'rpds.rpds']
     ),
     hookspath=[],
     hooksconfig={},

@@ -5,9 +5,10 @@
 
   **The only AI coding agent with trust governance, subagents, live plans, native diffs & one-click rollback.**
 
-  [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/agenticmarket.andromity-agent?label=VS%20Marketplace&logo=visualstudiocode&color=blueviolet)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
-  [![Installs](https://img.shields.io/visual-studio-marketplace/i/agenticmarket.andromity-agent?color=brightgreen)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
-  [![Rating](https://img.shields.io/visual-studio-marketplace/stars/agenticmarket.andromity-agent?color=gold)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent&ssr=false#review-details)
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.6-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![VS Code](https://img.shields.io/badge/VS_Code-%5E1.85.0-blue?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-informational)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![Tests](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml/badge.svg)](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml)
   [![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/agenticmarket/andromity/blob/main/LICENSE)
 
   [Website](https://andromity.agenticmarket.dev) • [GitHub](https://github.com/agenticmarket/andromity) • [Docs](https://andromity.agenticmarket.dev/docs) • [Report Issue](https://github.com/agenticmarket/andromity/issues)
@@ -19,6 +20,19 @@
 **Andromity** is a private, BYOK (Bring Your Own Key) autonomous AI coding agent for VS Code. Designed as an extensible Copilot and Cursor alternative, it doesn't just autocomplete code — it plans out complex tasks with an interactive task planner, manages parallel subagents, shows you live step-by-step blueprints, lets you review diffs before applying, and gives you instant one-click rollback if you change your mind.
 
 Connect your preferred AI model (**Claude 3.7 Sonnet, GPT-4o, Gemini 2.5 Pro, DeepSeek R1 & V3, Groq, OpenRouter**) or run **100% locally and free with Ollama**.
+
+<div align="center">
+  <img src="walkthroughs/assets/partner.webp" alt="Andromity AI Coding Partner in VS Code" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+</div>
+
+---
+
+## ✨ Interactive Welcome Walkthrough
+
+New to Andromity? VS Code includes a built-in interactive walkthrough to get you oriented in under a minute:
+1. Press `Ctrl+Shift+P` (`Cmd+Shift+P` on macOS) to open the Command Palette.
+2. Select **`Andromity: Welcome / Getting Started`** (or click the 🚀 rocket icon in the Andromity panel header).
+3. Follow the guided walkthrough to tour your AI coding partner, inspect planning blueprints, and adjust workspace governance.
 
 ---
 
@@ -38,6 +52,10 @@ Click **Install** on this Marketplace page. That's it!
    - **DeepSeek / OpenRouter**
    - **Ollama (Free / Local)**: No API key required! Just have Ollama running locally on your machine.
 
+<div align="center">
+  <img src="walkthroughs/assets/models.webp" alt="Model Hub and Local AI Support" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+</div>
+
 ### 3. Start Coding!
 Press `Ctrl+Alt+C` (`Cmd+Alt+C` on macOS) or open the sidebar. Ask a question, select a file, or describe a feature you want to build.
 
@@ -55,6 +73,10 @@ When tackling complex tasks, Andromity creates an interactive implementation pla
 - Review steps before changes happen.
 - Approve, skip, or edit steps individually.
 - Watch real-time execution status for each task.
+
+<div align="center">
+  <img src="walkthroughs/assets/planning.webp" alt="Live Task Planner and Step Blueprints" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+</div>
 
 ### 🔍 3. Side-by-Side Diff Review
 Every change proposed by the agent is presented as a native VS Code diff.
@@ -92,6 +114,10 @@ You are always in control of what the agent does in your workspace:
 | **TRUST** | You approve | Direct (No review needed) | Direct (No review needed) |
 | **FULL** | Auto-runs with live log | Direct | Direct |
 | **YOLO** | Auto-runs silently | Silent | Silent |
+
+<div align="center">
+  <img src="walkthroughs/assets/trusted.webp" alt="Trust and Workspace Governance" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+</div>
 
 Switch modes anytime by clicking the permission badge in the top bar or via `Andromity: Switch Permission Mode`.
 

@@ -1,0 +1,163 @@
+name: Build Platform Binaries
+
+# Builds andromity-server for each platform and packages a slim, platform-specific
+# .vsix for each target. Each .vsix only contains its own platform binary.
+#
+# VS Code Marketplace / Open VSX accept per-platform .vsix files published with
+# `vsce publish --target <platform>` or `ovsx publish --target <platform>`.
+#
+# Triggers: push of a v* tag  OR  manual workflow_dispatch.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build · ${{ matrix.platform_key }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false          # Build all platforms even if one fails
+      matrix:
+        include:
+          - runner: windows-latest
+            platform_key: win32-x64
+            exe_name: andromity-server.exe
+
+          - runner: ubuntu-latest
+            platform_key: linux-x64
+            exe_name: andromity-server
+
+          - runner: macos-latest      # GitHub's Apple Silicon (M1/M2/M3) runner
+            platform_key: darwin-arm64
+            exe_name: andromity-server
+
+    steps:
+      # ── Source ────────────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Python ────────────────────────────────────────────────────────────────
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # uv avoids PEP 668 "externally-managed-environment" errors on Linux/macOS
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Install Python dependencies
+        run: |
+          uv pip install -e ".[dev]" --system
+          uv pip install pyinstaller --system
+
+      # ── Build binary ──────────────────────────────────────────────────────────
+      - name: Build andromity-server binary
+        run: python scripts/build-binary.py
+
+      # ── Verify binary ─────────────────────────────────────────────────────────
+      - name: Verify binary exists (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          BIN=vscode-extension/bin/${{ matrix.platform_key }}/${{ matrix.exe_name }}
+          if [ ! -f "$BIN" ]; then
+            echo "ERROR: Binary not found at $BIN"
+            ls -la vscode-extension/bin/ || true
+            exit 1
+          fi
+          chmod +x "$BIN"
+          echo "Binary size: $(du -sh "$BIN" | cut -f1)"
+
+      - name: Verify binary exists (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bin = "vscode-extension/bin/${{ matrix.platform_key }}/${{ matrix.exe_name }}"
+          if (-not (Test-Path $bin)) {
+            Write-Error "Binary not found at $bin"
+            Get-ChildItem vscode-extension/bin/ -ErrorAction SilentlyContinue
+            exit 1
+          }
+          $size = (Get-Item $bin).Length / 1MB
+          Write-Output ("Binary size: {0:N1} MB" -f $size)
+
+      # ── Node / Extension build ────────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install npm dependencies
+        working-directory: vscode-extension
+        run: npm ci
+
+      - name: Build extension JS bundle
+        working-directory: vscode-extension
+        run: npm run build -- --production
+
+      # ── Package platform-specific .vsix ──────────────────────────────────────
+      # `vsce package --target <platform>` produces a .vsix that ONLY includes
+      # the bin/<platform>/ directory — all other bin/ subdirs are excluded.
+      # This keeps each platform .vsix slim (~no dead binaries from other OSes).
+      - name: Package platform .vsix
+        working-directory: vscode-extension
+        run: npx @vscode/vsce package --target ${{ matrix.platform_key }} --no-git-tag-version --no-update-package-json
+
+      # ── Upload .vsix artifact ─────────────────────────────────────────────────
+      - name: Upload .vsix artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: andromity-${{ matrix.platform_key }}.vsix
+          # glob picks up andromity-agent-<version>-<platform>.vsix
+          path: vscode-extension/*.vsix
+          retention-days: 30
+          if-no-files-found: error
+
+  # ── Publish all platforms to the Marketplace after all builds pass ────────────
+  # Runs automatically on every v* tag once VSCE_PAT is added to repo secrets:
+  #   GitHub repo → Settings → Secrets and variables → Actions → New secret
+  #   Name: VSCE_PAT   Value: your Azure DevOps Personal Access Token
+  #   (Marketplace → Manage scope)
+  publish:
+    name: Publish to VS Code Marketplace
+    needs: build                         # wait for ALL platform builds to pass
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Download all platform .vsix files produced by the build matrix
+      - name: Download all .vsix artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: vsix-artifacts
+          pattern: "andromity-*.vsix"
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh vsix-artifacts/
+
+      # Publish each platform .vsix — Marketplace serves the right one per user OS
+      - name: Publish platform .vsix files to VS Code Marketplace
+        working-directory: vsix-artifacts
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::warning::VSCE_PAT secret is not configured in repository secrets."
+            echo "Skipping marketplace publish. Download .vsix files from GitHub Actions artifacts."
+            exit 0
+          fi
+          for f in *.vsix; do
+            echo "Publishing $f ..."
+            npx @vscode/vsce publish --packagePath "$f"
+          done
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}

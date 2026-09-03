@@ -33,18 +33,36 @@ os.makedirs(out_dir, exist_ok=True)
 
 print(f"Building andromity-server for {platform_key} -> {temp_dist}")
 
-# Install package + pyinstaller deps
-try:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-e", ".", "--quiet", "--no-warn-script-location"], cwd=ROOT)
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller", "--quiet", "--no-warn-script-location"], cwd=ROOT)
-except Exception:
-    import shutil
-    uv_path = shutil.which("uv")
-    if uv_path:
-        subprocess.check_call([uv_path, "pip", "install", "-e", ".", "--quiet"], cwd=ROOT)
-        subprocess.check_call([uv_path, "pip", "install", "pyinstaller", "--quiet"], cwd=ROOT)
-    else:
-        raise
+# Install package + pyinstaller deps.
+# Prefer uv (avoids PEP 668 "externally-managed-environment" errors on
+# Ubuntu 23+, Homebrew, and other managed Python environments).
+# Fall back to pip with --break-system-packages if uv is not available.
+uv_path = shutil.which("uv")
+if uv_path:
+    # --system targets the current interpreter (sys.executable), matching
+    # whatever Python the caller is running (e.g. actions/setup-python's Python).
+    subprocess.check_call([uv_path, "pip", "install", "-e", ".", "--quiet", "--system"], cwd=ROOT)
+    subprocess.check_call([uv_path, "pip", "install", "pyinstaller", "--quiet", "--system"], cwd=ROOT)
+else:
+    # Plain pip — works on Windows and in venvs where pip isn't restricted.
+    # On externally-managed systems (Linux/macOS), add --break-system-packages
+    # as a last-resort fallback so the build still succeeds in CI.
+    def _pip_install(pkg_args):
+        try:
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install"] + pkg_args +
+                ["--quiet", "--no-warn-script-location"],
+                cwd=ROOT,
+            )
+        except subprocess.CalledProcessError:
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install"] + pkg_args +
+                ["--quiet", "--no-warn-script-location", "--break-system-packages"],
+                cwd=ROOT,
+            )
+
+    _pip_install(["-e", "."])
+    _pip_install(["pyinstaller"])
 
 # Build into temp_dist
 subprocess.check_call([

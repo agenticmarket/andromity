@@ -2,6 +2,12 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [0.2.6] - 2026-09-04
+
+### Added & Improved
+- **Platform-Specific Binaries & Slim VSIX:** Included standalone binaries for `win32-x64`, `linux-x64`, and `darwin-arm64` (Apple Silicon) built and packaged independently for each platform, eliminating Python/pip installation requirements on Linux and macOS.
+- **CI Automated Packaging:** Integrated multi-platform GitHub Actions build matrix with automated package generation.
+
 ## [0.2.5] - 2026-09-03
 
 ### Added & Improved

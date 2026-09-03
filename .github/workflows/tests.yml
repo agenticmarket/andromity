@@ -1,0 +1,71 @@
+name: Tests
+
+# Runs pytest on every push and pull request.
+# Results show directly on GitHub PRs and commits.
+# A failing test blocks the build — no broken code ships.
+
+on:
+  push:
+    branches: ["**"]        # Every branch push
+    paths:
+      - "src/**"            # Only rerun if source or tests change
+      - "tests/**"
+      - "pyproject.toml"
+  pull_request:
+    branches: ["**"]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+  workflow_dispatch:         # Allow manual trigger from Actions tab
+
+jobs:
+  test:
+    name: pytest · ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false       # Run all platforms even if one fails
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Python ────────────────────────────────────────────────────────────────
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"        # Cache pip downloads across runs
+
+      # ── Install uv (avoids PEP 668 errors on modern Linux/macOS) ─────────────
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      # ── Install package + dev deps (pytest, pytest-asyncio) ──────────────────
+      - name: Install dependencies
+        run: |
+          uv pip install -e ".[dev]" --system
+
+      # ── Run pytest ────────────────────────────────────────────────────────────
+      - name: Run tests
+        run: pytest --tb=short -q
+        env:
+          # Ensure tests that touch the terminal don't try to open a real display
+          CI: "true"
+          TERM: "xterm-256color"
+
+      # ── Upload pytest HTML report on failure ──────────────────────────────────
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-results-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: |
+            .pytest_cache/
+          retention-days: 7
