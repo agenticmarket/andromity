@@ -267,12 +267,6 @@ class AndromityApp(App):
         except Exception:
             pass
 
-        try:
-            from andromity.telemetry import send_session_start
-            send_session_start()
-        except Exception:
-            pass
-            
         self.focus_input()
         provider = config.get("default", "provider", "")
         model = config.get("default", "model", "")

@@ -15,9 +15,8 @@ def main(ctx):
 
 
 def _launch_tui():
-    from andromity.telemetry import maybe_ping
-    maybe_ping()
-
+    import os
+    os.environ.setdefault("ANDROMITY_CLIENT", "tui")
     from rich.console import Console
     console = Console()
     print("""
@@ -110,6 +109,8 @@ def uninstall_context_menu_cmd():
 @click.option("--host", type=str, default="127.0.0.1", help="TCP host to bind")
 def server_cmd(stdio, port, host):
     """Launch the JSON-RPC daemon server for VS Code extension, desktop apps, and external clients."""
+    import os
+    os.environ.setdefault("ANDROMITY_CLIENT", "server")
     from andromity.server.main import start_stdio_server, start_tcp_server
     if port is not None:
         asyncio.run(start_tcp_server(host=host, port=port))
@@ -119,6 +120,8 @@ def server_cmd(stdio, port, host):
 
 
 async def _run_async(prompt, yes, dry_run, profile):
+    import os
+    os.environ.setdefault("ANDROMITY_CLIENT", "cli")
     from pathlib import Path
     from andromity.config import config
     if yes:

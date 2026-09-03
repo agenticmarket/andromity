@@ -457,6 +457,7 @@ export class PythonBridge {
         ...(process.env as Record<string, string>),
         PYTHONUNBUFFERED: "1",
         PYTHONIOENCODING: "utf-8",
+        ANDROMITY_CLIENT: "vscode",
       };
       const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
       return this._spawnDaemon(bundledBin, ["--stdio"], cwd, env, startAttemptTime);
@@ -538,6 +539,7 @@ export class PythonBridge {
       ...(process.env as Record<string, string>),
       PYTHONUNBUFFERED: "1",
       PYTHONIOENCODING: "utf-8",
+      ANDROMITY_CLIENT: "vscode",
     };
 
     const daemonSrcDir = projectRoot ? path.join(projectRoot, "src") : path.join(cwd, "src");

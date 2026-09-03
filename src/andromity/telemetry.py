@@ -4,100 +4,100 @@ import platform
 import sys
 import threading
 import urllib.request
-from pathlib import Path
+import uuid
+from typing import Optional
 
+from andromity import __version__
 from andromity.config import get_config_dir, config
-from andromity.core.debug_log import get_logger
-log = get_logger("telemetry")
 
-def _should_send_telemetry(is_first_launch: bool = False) -> bool:
+_ENDPOINT = "https://telemetry.agenticmarket.dev/ping"
+_tracked_sessions = set()
+_lock = threading.Lock()
+
+
+def _should_send_telemetry() -> bool:
     if os.environ.get("DO_NOT_TRACK") in ("1", "true", "True", "TRUE"):
         return False
     if os.environ.get("ANDROMITY_NO_TELEMETRY") in ("1", "true", "True", "TRUE"):
         return False
+    return bool(config.get("default", "telemetry", True))
 
-    if not config.get("default", "telemetry", True):
-        return False
-
-    if is_first_launch:
-        marker = get_config_dir() / ".telemetry_sent"
-        if marker.exists():
-            return False
-    return True
-
-
-import uuid
 
 def _get_or_create_user_id() -> str:
     uuid_file = get_config_dir() / ".telemetry_uuid"
     if uuid_file.exists():
         try:
-            return uuid_file.read_text().strip()
+            val = uuid_file.read_text(encoding="utf-8").strip()
+            if val:
+                return val
         except Exception:
             pass
-    # Generate new random UUID
+
     new_id = uuid.uuid4().hex
     try:
-        uuid_file.write_text(new_id)
+        uuid_file.write_text(new_id, encoding="utf-8")
     except Exception:
         pass
     return new_id
 
 
-def _send_ping_worker(event: str = "first_launch", provider: str = None, profile: str = None):
+def _detect_client() -> str:
+    explicit = os.environ.get("ANDROMITY_CLIENT")
+    if explicit:
+        return explicit.lower().strip()
+
+    if os.environ.get("VSCODE_PID") or os.environ.get("VSCODE_IPC_HOOK"):
+        return "vscode"
+
+    if "andromity.server" in sys.argv or os.environ.get("ANDROMITY_SERVER_MODE"):
+        return "server"
+
+    if hasattr(sys.stdout, "isatty") and sys.stdout.isatty():
+        return "tui"
+
+    return "cli"
+
+
+def _send_ping_worker(session_id: str, client: str):
     try:
-        log.info("Sending '%s' ping to telemetry server...", event)
-        from andromity import __version__
-        data = {
-            "event": event,
+        payload = {
+            "event": "session_start",
+            "user_id": _get_or_create_user_id(),
+            "session_id": session_id,
+            "client": client,
             "os": platform.system().lower(),
-            "python": f"{sys.version_info.major}.{sys.version_info.minor}",
             "version": __version__,
-            "user_id": _get_or_create_user_id()
         }
-        if provider:
-            data["provider"] = provider
-        if profile:
-            data["profile"] = profile
-            
         req = urllib.request.Request(
-            "https://telemetry.agenticmarket.dev/ping",
-            data=json.dumps(data).encode("utf-8"),
-            headers={"Content-Type": "application/json", "User-Agent": f"andromity-cli/{__version__}"},
-            method="POST"
+            _ENDPOINT,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": f"andromity/{__version__} ({client})",
+            },
+            method="POST",
         )
-        # Fast timeout so it doesn't hang the app if the network is down
-        with urllib.request.urlopen(req, timeout=3.0) as response:
-            if response.status in (200, 201, 202, 204) and event == "first_launch":
-                # Mark as sent
-                marker = get_config_dir() / ".telemetry_sent"
-                marker.touch()
-    except Exception as e:
-        # Swallow all errors — telemetry should never break the app
-        log.error("Telemetry ping failed: %s", e)
+        with urllib.request.urlopen(req, timeout=2.5):
+            pass
+    except Exception:
         pass
 
 
+def send_session_start(session_id: Optional[str] = None):
+    if not _should_send_telemetry():
+        return
+
+    sid = str(session_id).strip() if session_id else uuid.uuid4().hex
+
+    with _lock:
+        if sid in _tracked_sessions:
+            return
+        _tracked_sessions.add(sid)
+
+    client = _detect_client()
+    t = threading.Thread(target=_send_ping_worker, args=(sid, client), daemon=True)
+    t.start()
+
+
 def maybe_ping():
-    """
-    Non-blocking anonymous telemetry ping for first launch.
-    """
-    if _should_send_telemetry(is_first_launch=True):
-        print("\n\033[90mAndromity collects anonymous usage data to help us improve.")
-        print("We do not collect PII, IP addresses, or code.")
-        print("To opt-out, set the DO_NOT_TRACK=1 environment variable.\033[0m\n")
-        log.info("First launch telemetry ping will be sent...")
-        t = threading.Thread(target=_send_ping_worker, args=("first_launch",), daemon=True)
-        t.start()
-
-
-def send_session_start():
-    """
-    Non-blocking anonymous telemetry ping for a new session.
-    """
-    if _should_send_telemetry(is_first_launch=False):
-        provider = config.get("default", "provider", "")
-        profile = config.get("default", "profile", "builder")
-        log.info("Session start telemetry ping will be sent...")
-        t = threading.Thread(target=_send_ping_worker, args=("session_start", provider, profile), daemon=True)
-        t.start()
+    pass

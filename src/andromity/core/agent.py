@@ -304,6 +304,14 @@ class Agent:
             ]
 
         self.session.add_message("user", content=user_input)
+
+        if not getattr(self.session, "_telemetry_sent", False):
+            self.session._telemetry_sent = True
+            try:
+                from andromity.telemetry import send_session_start
+                send_session_start(self.session.id)
+            except Exception:
+                pass
         
         async for event in self._compact_context():
             yield event
