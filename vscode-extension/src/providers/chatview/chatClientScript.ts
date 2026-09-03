@@ -1044,55 +1044,61 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       const visible = filtered.slice(0, sessionDisplayLimit);
 
-      let html = visible.map(s => {
-        const isCur = s.id === currentSessionId;
-        const name = escapeHtml(s.name || s.id || 'Session');
-        const msgs = s.message_count ? (s.message_count + ' msgs') : 'Empty';
-        const sessState = sessionsState[s.id];
-        let statusBadge = '';
-        if (sessState && sessState.isRunning) {
-          statusBadge = '<span class="session-badge-status session-status-running">RUNNING</span>';
-        } else if (sessState && sessState.hasUnread && !isCur) {
-          statusBadge = '<span class="session-badge-status session-status-unread">NEW</span>';
-        } else if (s.status && s.status !== 'idle') {
-          statusBadge = '<span class="session-badge-status session-status-' + escapeHtml(s.status) + '">' + escapeHtml(s.status) + '</span>';
-        }
-        const subagentTag = s.parent_session ? '<span class="session-badge-status" style="background:rgba(99,102,241,0.15);color:#818cf8;">Subagent</span>' : '';
+      try {
+        let html = visible.map(s => {
+          const isCur = s.id === currentSessionId;
+          const name = escapeHtml(s.name || s.id || 'Session');
+          const msgs = s.message_count ? (s.message_count + ' msgs') : 'Empty';
+          const cost = (s.cost_usd && Number(s.cost_usd) > 0) ? ('$' + Number(s.cost_usd).toFixed(3)) : '';
+          const sessState = sessionsState[s.id];
+          let statusBadge = '';
+          if (sessState && sessState.isRunning) {
+            statusBadge = '<span class="session-badge-status session-status-running">RUNNING</span>';
+          } else if (sessState && sessState.hasUnread && !isCur) {
+            statusBadge = '<span class="session-badge-status session-status-unread">NEW</span>';
+          } else if (s.status && s.status !== 'idle') {
+            statusBadge = '<span class="session-badge-status session-status-' + escapeHtml(s.status) + '">' + escapeHtml(s.status) + '</span>';
+          }
+          const subagentTag = s.parent_session ? '<span class="session-badge-status" style="background:rgba(99,102,241,0.15);color:#818cf8;">Subagent</span>' : '';
 
-        return '<div class="session-item ' + (isCur ? 'active' : '') + '">' +
-          '<div class="session-item-info" data-action="switch-session" data-session-id="' + s.id + '">' +
-            '<div class="session-item-title">' + (isCur ? '&#x2605; ' : '') + name + (statusBadge ? ' ' + statusBadge : '') + (subagentTag ? ' ' + subagentTag : '') + '</div>' +
-            '<div class="session-item-meta">' +
-              '<span>' + msgs + '</span>' +
-              (cost ? '<span>· ' + cost + '</span>' : '') +
-              (s.parent_session ? '<span>· Parent: ' + escapeHtml(s.parent_session.slice(0, 8)) + '</span>' : '') +
+          return '<div class="session-item ' + (isCur ? 'active' : '') + '">' +
+            '<div class="session-item-info" data-action="switch-session" data-session-id="' + s.id + '">' +
+              '<div class="session-item-title">' + (isCur ? '&#x2605; ' : '') + name + (statusBadge ? ' ' + statusBadge : '') + (subagentTag ? ' ' + subagentTag : '') + '</div>' +
+              '<div class="session-item-meta">' +
+                '<span>' + msgs + '</span>' +
+                (cost ? '<span>· ' + cost + '</span>' : '') +
+                (s.parent_session ? '<span>· Parent: ' + escapeHtml(s.parent_session.slice(0, 8)) + '</span>' : '') +
+              '</div>' +
             '</div>' +
-          '</div>' +
-          '<div class="session-item-actions">' +
-            '<button class="session-action-icon" data-action="open-session-tab" data-session-id="' + s.id + '" data-session-name="' + escapeHtml(name) + '" title="Open in New Editor Tab (Side-by-Side)">' +
-              '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>' +
-            '</button>' +
-            '<button class="session-action-icon" data-action="rename-session" data-session-id="' + s.id + '" data-session-name="' + escapeHtml(name) + '" title="Rename">' +
-              '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>' +
-            '</button>' +
-            '<button class="session-action-icon session-action-delete" data-action="delete-session" data-session-id="' + s.id + '" title="Delete">' +
-              '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>' +
-            '</button>' +
-          '</div>' +
-        '</div>';
-      }).join('');
+            '<div class="session-item-actions">' +
+              '<button class="session-action-icon" data-action="open-session-tab" data-session-id="' + s.id + '" data-session-name="' + escapeHtml(name) + '" title="Open in New Editor Tab (Side-by-Side)">' +
+                '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>' +
+              '</button>' +
+              '<button class="session-action-icon" data-action="rename-session" data-session-id="' + s.id + '" data-session-name="' + escapeHtml(name) + '" title="Rename">' +
+                '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>' +
+              '</button>' +
+              '<button class="session-action-icon session-action-delete" data-action="delete-session" data-session-id="' + s.id + '" title="Delete">' +
+                '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>' +
+              '</button>' +
+            '</div>' +
+          '</div>';
+        }).join('');
 
-      if (filtered.length > sessionDisplayLimit) {
-        const remaining = filtered.length - sessionDisplayLimit;
-        html += '<div class="sessions-load-more-wrap">' +
-          '<button class="btn-load-more-sessions" data-action="load-more-sessions">' +
-            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
-            '<span>Load More (' + remaining + ' remaining)</span>' +
-          '</button>' +
-        '</div>';
+        if (filtered.length > sessionDisplayLimit) {
+          const remaining = filtered.length - sessionDisplayLimit;
+          html += '<div class="sessions-load-more-wrap">' +
+            '<button class="btn-load-more-sessions" data-action="load-more-sessions">' +
+              '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
+              '<span>Load More (' + remaining + ' remaining)</span>' +
+            '</button>' +
+          '</div>';
+        }
+
+        sessionsListEl.innerHTML = html;
+      } catch (renderErr) {
+        console.error('[Andromity] Failed to render sessions list:', renderErr);
+        sessionsListEl.innerHTML = '<div style="padding:16px 14px; text-align:center; color:var(--red); font-size:11px;">Error loading sessions</div>';
       }
-
-      sessionsListEl.innerHTML = html;
     }
 
     function renderCronsList(crons) {
