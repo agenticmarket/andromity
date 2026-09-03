@@ -1,4 +1,28 @@
-.andromity/
+# Dependencies
 node_modules/
-*.vsix
+
+# Compilation & Build outputs
+dist/
 dist-test/
+out/
+*.tsbuildinfo
+*.map
+
+# Binaries & Packaged Extensions
+bin/
+*.vsix
+*.disabled
+**/*.disabled
+
+# Environment & Local Secrets
+.env
+.env.*
+!.env.example
+
+# VS Code testing & internal runtime caches
+.vscode-test/
+.andromity/
+
+# OS metadata
+.DS_Store
+Thumbs.db
