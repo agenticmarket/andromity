@@ -365,8 +365,15 @@ export function getChatStyles(): string {
       flex-shrink: 0;
     }
     .session-badge-status.session-status-running {
-      background: rgba(234, 179, 8, 0.15);
-      color: #eab308;
+      background: rgba(56, 189, 248, 0.2);
+      color: #38bdf8;
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      animation: pulseCompact 1.5s infinite;
+    }
+    .session-badge-status.session-status-unread {
+      background: rgba(9, 249, 148, 0.2);
+      color: #09f994;
+      border: 1px solid rgba(9, 249, 148, 0.35);
     }
     .session-badge-status.session-status-error {
       background: rgba(239, 68, 68, 0.15);
@@ -889,6 +896,33 @@ export function getChatStyles(): string {
     }
     .compaction-summary-card.expanded .compaction-summary-body {
       display: block;
+    }
+
+    .session-activity-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #09f994;
+      box-shadow: 0 0 8px #09f994;
+      display: inline-block;
+      margin-left: 2px;
+      animation: pulseCompact 1.5s infinite;
+      flex-shrink: 0;
+    }
+
+    .compacted-history-banner {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      margin: 8px auto 12px auto;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 20px;
+      font-size: 11px;
+      color: var(--muted);
+      width: fit-content;
+      user-select: none;
     }
 
     /* ”--€ Model Quick Switcher Flyout ”----------------------------------------------------------------€ */

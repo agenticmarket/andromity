@@ -1048,8 +1048,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const isCur = s.id === currentSessionId;
         const name = escapeHtml(s.name || s.id || 'Session');
         const msgs = s.message_count ? (s.message_count + ' msgs') : 'Empty';
-        const cost = s.cost_usd ? ('$' + s.cost_usd.toFixed(3)) : '';
-        const statusBadge = (s.status && s.status !== 'idle') ? '<span class="session-badge-status session-status-' + escapeHtml(s.status) + '">' + escapeHtml(s.status) + '</span>' : '';
+        const sessState = sessionsState[s.id];
+        let statusBadge = '';
+        if (sessState && sessState.isRunning) {
+          statusBadge = '<span class="session-badge-status session-status-running">RUNNING</span>';
+        } else if (sessState && sessState.hasUnread && !isCur) {
+          statusBadge = '<span class="session-badge-status session-status-unread">NEW</span>';
+        } else if (s.status && s.status !== 'idle') {
+          statusBadge = '<span class="session-badge-status session-status-' + escapeHtml(s.status) + '">' + escapeHtml(s.status) + '</span>';
+        }
         const subagentTag = s.parent_session ? '<span class="session-badge-status" style="background:rgba(99,102,241,0.15);color:#818cf8;">Subagent</span>' : '';
 
         return '<div class="session-item ' + (isCur ? 'active' : '') + '">' +
@@ -2325,6 +2332,35 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       scrollToBottomIfNeeded();
     }
 
+    function appendCompactedHistoryBanner(count) {
+      const banner = document.createElement('div');
+      banner.className = 'compacted-history-banner';
+      banner.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
+        '<span>Previous conversation history (' + count + ' earlier messages preserved)</span>';
+      chatContainer.appendChild(banner);
+    }
+
+    function showCompactionBanner(reason) {
+      appendSystemNote('⚡ ' + (reason || 'Compacting conversation context to reduce token usage...'));
+    }
+
+    function hideCompactionBannerWithSuccess(msg) {
+      if (msg && msg.skipped) {
+        appendSystemNote('Context is already compact: ' + (msg.reason || ''));
+      } else if (msg && !msg.error) {
+        appendSystemNote('Context compacted successfully: earlier turns summarized.');
+      }
+    }
+
+    function updateSessionActivityIndicator() {
+      const dot = document.getElementById('session-activity-dot');
+      if (!dot) return;
+      const anyUnreadOrRunning = Object.keys(sessionsState).some(id => {
+        return id !== currentSessionId && (sessionsState[id]?.hasUnread || sessionsState[id]?.isRunning);
+      });
+      dot.style.display = anyUnreadOrRunning ? 'inline-block' : 'none';
+    }
+
     window.copyMessageText = function(btn) {
       const wrap = btn.closest('.message-wrap');
       if (!wrap) return;
@@ -2785,6 +2821,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.sessionId) {
             currentSessionId = msg.sessionId;
           }
+          if (sessionsState[currentSessionId]) {
+            sessionsState[currentSessionId].hasUnread = false;
+          }
+          updateSessionActivityIndicator();
           removeTurnLoader();
           finishCurrentThinking();
           interactiveSlot.innerHTML = '';
@@ -2838,16 +2878,34 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (activeSessName && msg.session) {
             activeSessName.textContent = msg.session.name || msg.session.id || 'Main Session';
           }
-          if (msg.session && msg.session.messages && msg.session.messages.length > 0) {
+          const hasCompactedHistory = msg.session && Array.isArray(msg.session.compacted_history) && msg.session.compacted_history.length > 0;
+          let allMessages = [];
+          if (hasCompactedHistory) {
+            allMessages = allMessages.concat(msg.session.compacted_history.filter(m => m.role !== 'system'));
+          }
+          if (msg.session && Array.isArray(msg.session.messages) && msg.session.messages.length > 0) {
+            allMessages = allMessages.concat(msg.session.messages.filter(m => {
+              if (m.role === 'system') return false;
+              if (m.role === 'assistant' && (m.content || '').trim() === 'Understood. I have the context of our earlier discussion and will continue from here.') {
+                return false;
+              }
+              return true;
+            }));
+          }
+
+          if (allMessages.length > 0) {
             hideZeroState();
+            if (hasCompactedHistory) {
+              appendCompactedHistoryBanner(msg.session.compacted_history.length);
+            }
             let currentAssistantWrap = null;
             let currentTurnToolSeq = null;
             let currentTurnToolBody = null;
             let currentTurnToolCount = 0;
             let turnEditedFilesForLoad = new Set();
 
-            for (let i = 0; i < msg.session.messages.length; i++) {
-              const m = msg.session.messages[i];
+            for (let i = 0; i < allMessages.length; i++) {
+              const m = allMessages[i];
               if (m.role === 'user') {
                 currentAssistantWrap = null;
                 currentTurnToolSeq = null;
@@ -3114,6 +3172,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
             sessionsState[msg.session_id].isRunning = true;
+            sessionsState[msg.session_id].hasUnread = true;
+            updateSessionActivityIndicator();
             const buf = sessionLiveBuffer.get(msg.session_id) || [];
             buf.push({ t:'text_delta', text: msg.text });
             sessionLiveBuffer.set(msg.session_id, buf);
@@ -3155,6 +3215,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
             sessionsState[msg.session_id].isRunning = true;
+            sessionsState[msg.session_id].hasUnread = true;
+            updateSessionActivityIndicator();
             const buf = sessionLiveBuffer.get(msg.session_id) || [];
             buf.push({ t:'thinking_delta', text: msg.text });
             sessionLiveBuffer.set(msg.session_id, buf);
@@ -3190,6 +3252,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
             sessionsState[msg.session_id].isRunning = true;
+            sessionsState[msg.session_id].hasUnread = true;
+            updateSessionActivityIndicator();
             const buf = sessionLiveBuffer.get(msg.session_id) || [];
             buf.push({ t:'tool_start', tool_id: msg.tool_id, tool_name: msg.tool_name });
             sessionLiveBuffer.set(msg.session_id, buf);
@@ -3412,6 +3476,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.session_id) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
             sessionsState[msg.session_id].isRunning = true;
+            if (msg.session_id !== currentSessionId) {
+              sessionsState[msg.session_id].hasUnread = true;
+            }
+            updateSessionActivityIndicator();
           }
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
           if (!currentTurnAssistantDiv) startAssistantTurn();
@@ -3443,6 +3511,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.session_id) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
             sessionsState[msg.session_id].isRunning = false;
+            if (msg.session_id !== currentSessionId) {
+              sessionsState[msg.session_id].hasUnread = true;
+            }
+            updateSessionActivityIndicator();
             try { sessionDomCache.delete(msg.session_id); sessionLiveBuffer.delete(msg.session_id); } catch {}
           }
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
