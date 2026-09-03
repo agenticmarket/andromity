@@ -3061,9 +3061,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   currentTurnToolCount = 0;
                 }
 
-                // 4. End of assistant turn check
-                const nextMsg = msg.session.messages[i + 1];
-                if (!nextMsg || nextMsg.role === 'user') {
+                // 4. End of assistant turn check (only close when no more assistant messages exist in this turn)
+                let hasMoreAssistantInTurn = false;
+                for (let j = i + 1; j < allMessages.length; j++) {
+                  if (allMessages[j].role === 'user') break;
+                  if (allMessages[j].role === 'assistant') {
+                    hasMoreAssistantInTurn = true;
+                    break;
+                  }
+                }
+
+                if (!hasMoreAssistantInTurn) {
                   currentTurnToolSeq = null;
                   currentTurnToolBody = null;
                   currentTurnToolCount = 0;
@@ -3075,7 +3083,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                       chip.className = 'file-edited-chip';
                       chip.setAttribute('data-action', 'open-file-diff');
                       chip.setAttribute('data-file-path', filePath);
-                      const filename = filePath.split(/[\\\\/]/).pop() || filePath;
+                      const filename = filePath.split(/[\\/]/).pop() || filePath;
                       chip.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>' +
                         '<span class="chip-filename" title="' + escapeHtml(filePath) + '">' + escapeHtml(filename) + '</span>' +
                         '<span class="chip-diff-label">Diff</span>';
