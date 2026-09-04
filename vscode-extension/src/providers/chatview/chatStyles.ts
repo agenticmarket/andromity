@@ -4417,21 +4417,66 @@ export function getChatStyles(): string {
     .files-changed-lang-tag {
       font-family: var(--font-mono, monospace);
       font-size: 10.5px;
-      font-weight: 500;
-      color: var(--muted, #71717a);
-      min-width: 22px;
+      font-weight: 600;
+      min-width: 24px;
       flex-shrink: 0;
       text-transform: lowercase;
       letter-spacing: -0.01em;
-      opacity: 0.65;
       background: none;
       border: none;
       padding: 0;
       line-height: 1;
+      opacity: 0.85;
+      color: var(--muted, #a1a1aa);
     }
     .files-changed-row:hover .files-changed-lang-tag {
-      opacity: 0.95;
-      color: var(--fg, #d4d4d8);
+      opacity: 1;
+    }
+    .files-changed-lang-tag.lang-py {
+      color: #38bdf8;
+    }
+    .files-changed-lang-tag.lang-ts,
+    .files-changed-lang-tag.lang-tsx {
+      color: #38bdf8;
+    }
+    .files-changed-lang-tag.lang-js,
+    .files-changed-lang-tag.lang-jsx,
+    .files-changed-lang-tag.lang-mjs,
+    .files-changed-lang-tag.lang-cjs {
+      color: #facc15;
+    }
+    .files-changed-lang-tag.lang-json {
+      color: #c084fc;
+    }
+    .files-changed-lang-tag.lang-css,
+    .files-changed-lang-tag.lang-scss,
+    .files-changed-lang-tag.lang-less {
+      color: #f472b6;
+    }
+    .files-changed-lang-tag.lang-md,
+    .files-changed-lang-tag.lang-markdown {
+      color: #cbd5e1;
+    }
+    .files-changed-lang-tag.lang-html,
+    .files-changed-lang-tag.lang-htm {
+      color: #fb923c;
+    }
+    .files-changed-lang-tag.lang-txt {
+      color: #94a3b8;
+    }
+    .files-changed-lang-tag.lang-rs {
+      color: #f97316;
+    }
+    .files-changed-lang-tag.lang-go {
+      color: #22d3ee;
+    }
+    .files-changed-lang-tag.lang-sh,
+    .files-changed-lang-tag.lang-bash,
+    .files-changed-lang-tag.lang-zsh {
+      color: #4ade80;
+    }
+    .files-changed-lang-tag.lang-sql {
+      color: #818cf8;
     }
 
     .files-changed-name {
