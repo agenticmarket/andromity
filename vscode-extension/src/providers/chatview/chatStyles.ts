@@ -4339,27 +4339,26 @@ export function getChatStyles(): string {
     /* ─── Files Changed Review Card ────────────────────────────────────── */
     .files-changed-card {
       width: 100%;
-      background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.015) 100%), #141416;
-      border: 1px solid rgba(255, 255, 255, 0.085);
-      border-radius: 10px;
-      padding: 10px 14px;
-      margin: 9px 0 5px 0;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 8px;
+      padding: 9px 12px;
+      margin: 8px 0 4px 0;
       box-sizing: border-box;
-      box-shadow: 0 4px 18px -2px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
       transition: border-color 0.15s ease, box-shadow 0.15s ease;
     }
     .files-changed-card:hover {
-      border-color: rgba(255, 255, 255, 0.14);
-      box-shadow: 0 6px 24px -2px rgba(0, 0, 0, 0.55), 0 2px 5px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.11);
+      box-shadow: 0 3px 12px rgba(0, 0, 0, 0.28);
     }
 
     .files-changed-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 7px;
-      padding-bottom: 7px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      margin-bottom: 6px;
+      padding-bottom: 4px;
     }
 
     .files-changed-title {
@@ -4370,22 +4369,19 @@ export function getChatStyles(): string {
     }
 
     .files-changed-review-btn {
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: transparent;
+      border: none;
       color: var(--muted, #a1a1aa);
-      font-size: 11px;
+      font-size: 11.5px;
       font-weight: 500;
       cursor: pointer;
-      padding: 2px 8px;
-      border-radius: 5px;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+      padding: 2px 6px;
+      border-radius: 4px;
       transition: all 0.12s ease;
     }
     .files-changed-review-btn:hover {
       color: #ffffff;
-      background: rgba(255, 255, 255, 0.08);
-      border-color: rgba(255, 255, 255, 0.14);
-      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.25);
+      background: rgba(255, 255, 255, 0.06);
     }
 
     .files-changed-list {
@@ -4398,12 +4394,12 @@ export function getChatStyles(): string {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 5px 8px;
-      margin: 0 -4px;
-      border-radius: 6px;
+      padding: 4px 6px;
+      margin: 0 -3px;
+      border-radius: 5px;
       cursor: pointer;
       transition: background 0.12s ease;
-      gap: 10px;
+      gap: 9px;
       user-select: none;
     }
     .files-changed-row:hover {
@@ -4413,90 +4409,29 @@ export function getChatStyles(): string {
     .files-changed-row-left {
       display: flex;
       align-items: center;
-      gap: 7px;
+      gap: 8px;
       min-width: 0;
       flex: 1;
     }
 
     .files-changed-lang-tag {
       font-family: var(--font-mono, monospace);
-      font-size: 9.5px;
-      font-weight: 600;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 1px 4.5px;
-      border-radius: 4px;
-      line-height: 1.2;
+      font-size: 10.5px;
+      font-weight: 500;
+      color: var(--muted, #71717a);
+      min-width: 22px;
       flex-shrink: 0;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      color: var(--muted, #a1a1aa);
-      letter-spacing: -0.01em;
       text-transform: lowercase;
+      letter-spacing: -0.01em;
+      opacity: 0.65;
+      background: none;
+      border: none;
+      padding: 0;
+      line-height: 1;
     }
-    .files-changed-lang-tag.lang-py {
-      color: #38bdf8;
-      background: rgba(56, 189, 248, 0.09);
-      border-color: rgba(56, 189, 248, 0.2);
-    }
-    .files-changed-lang-tag.lang-ts,
-    .files-changed-lang-tag.lang-tsx {
-      color: #38bdf8;
-      background: rgba(56, 189, 248, 0.09);
-      border-color: rgba(56, 189, 248, 0.2);
-    }
-    .files-changed-lang-tag.lang-js,
-    .files-changed-lang-tag.lang-jsx,
-    .files-changed-lang-tag.lang-mjs,
-    .files-changed-lang-tag.lang-cjs {
-      color: #facc15;
-      background: rgba(250, 204, 21, 0.09);
-      border-color: rgba(250, 204, 21, 0.2);
-    }
-    .files-changed-lang-tag.lang-json {
-      color: #c084fc;
-      background: rgba(192, 132, 252, 0.09);
-      border-color: rgba(192, 132, 252, 0.2);
-    }
-    .files-changed-lang-tag.lang-css,
-    .files-changed-lang-tag.lang-scss,
-    .files-changed-lang-tag.lang-less {
-      color: #f472b6;
-      background: rgba(244, 114, 182, 0.09);
-      border-color: rgba(244, 114, 182, 0.2);
-    }
-    .files-changed-lang-tag.lang-md,
-    .files-changed-lang-tag.lang-markdown {
-      color: #cbd5e1;
-      background: rgba(203, 213, 225, 0.09);
-      border-color: rgba(203, 213, 225, 0.2);
-    }
-    .files-changed-lang-tag.lang-html,
-    .files-changed-lang-tag.lang-htm {
-      color: #fb923c;
-      background: rgba(251, 146, 60, 0.09);
-      border-color: rgba(251, 146, 60, 0.2);
-    }
-    .files-changed-lang-tag.lang-txt {
-      color: #94a3b8;
-      background: rgba(148, 163, 184, 0.09);
-      border-color: rgba(148, 163, 184, 0.2);
-    }
-    .files-changed-lang-tag.lang-rs {
-      color: #f97316;
-      background: rgba(249, 115, 22, 0.09);
-      border-color: rgba(249, 115, 22, 0.2);
-    }
-    .files-changed-lang-tag.lang-go {
-      color: #22d3ee;
-      background: rgba(34, 211, 238, 0.09);
-      border-color: rgba(34, 211, 238, 0.2);
-    }
-    .files-changed-lang-tag.lang-default {
-      color: var(--muted, #a1a1aa);
-      background: rgba(255, 255, 255, 0.04);
-      border-color: rgba(255, 255, 255, 0.08);
+    .files-changed-row:hover .files-changed-lang-tag {
+      opacity: 0.95;
+      color: var(--fg, #d4d4d8);
     }
 
     .files-changed-name {
