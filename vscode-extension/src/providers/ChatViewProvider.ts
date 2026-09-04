@@ -196,7 +196,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (this._diffManager) {
       await this._diffManager.undoLastTurn(this._currentSessionId);
       await this._loadSession(this._currentSessionId);
-      vscode.commands.executeCommand("andromity.refreshChanges");
+      try {
+        vscode.commands.executeCommand("git.refresh");
+        vscode.commands.executeCommand("andromity.refreshChanges");
+      } catch {}
     } else if (this._rpcClient) {
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       const res = await this._rpcClient.call<any>("session.undo", {
@@ -204,6 +207,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         project_path: workspaceFolder,
       });
       if (res?.success) {
+        try {
+          vscode.commands.executeCommand("git.refresh");
+          vscode.commands.executeCommand("andromity.refreshChanges");
+        } catch {}
         vscode.window.showInformationMessage(`Turn undone successfully. (${res.popped_messages || 0} messages removed.)`);
         await this._loadSession(this._currentSessionId);
       }
@@ -1106,6 +1113,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "get_file_diff_stats": {
+        const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        try {
+          const res = await this._rpcClient?.call<{ files: Record<string, { additions: number; deletions: number }> }>(
+            "git.diff_numstat",
+            { project_path: ws }
+          );
+          if (res?.files) {
+            this._postToWebview({
+              type: "file_diff_stats_result",
+              stats: res.files,
+            });
+          }
+        } catch {}
+        break;
+      }
+
       case "open_session_tab": {
         const sid = message.sessionId || this._currentSessionId;
         const sname = message.sessionName || "Chat Session";
@@ -1308,7 +1332,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (undone) {
             await this._loadSession(this._currentSessionId);
             this._postToWebview({ type: "turn_undone" });
-            vscode.commands.executeCommand("andromity.refreshChanges");
+            try {
+              vscode.commands.executeCommand("git.refresh");
+              vscode.commands.executeCommand("andromity.refreshChanges");
+            } catch {}
           }
         } else if (this._rpcClient) {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -1317,6 +1344,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             project_path: workspaceFolder,
           });
           if (res?.success) {
+            try {
+              vscode.commands.executeCommand("git.refresh");
+              vscode.commands.executeCommand("andromity.refreshChanges");
+            } catch {}
             vscode.window.showInformationMessage(`Turn undone successfully. (${res.popped_messages || 0} messages removed.)`);
             await this._loadSession(this._currentSessionId);
             this._postToWebview({ type: "turn_undone" });

@@ -488,10 +488,17 @@ class JsonRpcHandler:
         rollback_msg = "No git snapshot available"
         if repo:
             try:
-                snaps = list_snapshots(repo, limit=2)
-                if snaps:
-                    ok = restore_snapshot(repo, snaps[0]["hash"])
-                    rollback_msg = f"Restored snapshot {snaps[0]['hash'][:7]}" if ok else "Failed to restore snapshot"
+                snap_hash = None
+                if hasattr(session, "undo_stack") and session.undo_stack:
+                    item = session.undo_stack.pop()
+                    snap_hash = item.get("snapshot_hash")
+                if not snap_hash:
+                    snaps = list_snapshots(repo, limit=2)
+                    if snaps:
+                        snap_hash = snaps[0]["hash"]
+                if snap_hash:
+                    ok = restore_snapshot(repo, snap_hash)
+                    rollback_msg = f"Restored snapshot {snap_hash[:7]}" if ok else "Failed to restore snapshot"
                 else:
                     rollback_msg = "No snapshots recorded"
             except Exception as e:
@@ -695,9 +702,18 @@ class JsonRpcHandler:
 
         async def _run_stream():
             try:
-                # Trigger snapshot in fire-and-forget background task so turn start is instantaneous
+                # Reset turn snapshot flag and take pre-turn snapshot
+                session._turn_snapshotted = False
                 try:
-                    asyncio.create_task(asyncio.to_thread(create_pre_edit_snapshot, Path(session.project_path)))
+                    snap_hash = await asyncio.to_thread(create_pre_edit_snapshot, Path(session.project_path))
+                    if snap_hash:
+                        session._turn_snapshotted = True
+                        if not hasattr(session, "undo_stack") or session.undo_stack is None:
+                            session.undo_stack = []
+                        session.undo_stack.append({
+                            "snapshot_hash": snap_hash,
+                            "msg_count": len(session.messages),
+                        })
                 except Exception as snap_err:
                     log.debug("Pre-edit snapshot skipped: %s", snap_err)
 
@@ -1492,6 +1508,46 @@ class JsonRpcHandler:
         except Exception:
             diff_text = ""
         return {"diff": diff_text}
+
+    async def rpc_git_diff_numstat(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Return numstat diff (+additions, -deletions) for files against HEAD or index."""
+        project_path = Path(params.get("project_path") or Path.cwd()).resolve()
+        repo = get_repo(project_path)
+        if not repo:
+            return {"files": {}}
+
+        files_stats: Dict[str, Dict[str, int]] = {}
+        try:
+            try:
+                raw_numstat = repo.git.diff("HEAD", "--numstat")
+            except Exception:
+                raw_numstat = repo.git.diff("--numstat")
+
+            for line in raw_numstat.splitlines():
+                parts = line.strip().split("\t")
+                if len(parts) >= 3:
+                    add = int(parts[0]) if parts[0].isdigit() else 0
+                    dele = int(parts[1]) if parts[1].isdigit() else 0
+                    rel_p = parts[2].replace("\\", "/")
+                    files_stats[rel_p] = {"additions": add, "deletions": dele}
+        except Exception:
+            pass
+
+        try:
+            for untracked in repo.untracked_files:
+                p = project_path / untracked
+                if p.is_file():
+                    try:
+                        line_count = sum(1 for _ in p.open("r", encoding="utf-8", errors="ignore"))
+                        rel_p = Path(untracked).as_posix()
+                        if rel_p not in files_stats:
+                            files_stats[rel_p] = {"additions": line_count, "deletions": 0}
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        return {"files": files_stats}
 
     # ── Cron & Scheduled Jobs ───────────────────────────────────────────────────
 

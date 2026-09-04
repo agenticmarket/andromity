@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 import collections
 import threading
@@ -100,10 +100,21 @@ def _get_project_root() -> Path:
     return Path.cwd().resolve()
 
 
+def _resolve_project_path(path: Union[str, Path]) -> Path:
+    """Resolve path relative to project root if it is not already absolute."""
+    p = Path(path)
+    if not p.is_absolute():
+        p = _get_project_root() / p
+    return p.resolve()
+
+
 def _assert_safe_path(p: Path) -> Path:
     """Raise PermissionError if path escapes the project directory. Returns resolved path."""
     root = _get_project_root()
-    resolved = p.resolve()
+    if not p.is_absolute():
+        resolved = (root / p).resolve()
+    else:
+        resolved = p.resolve()
     try:
         resolved.relative_to(root)
     except ValueError:
@@ -119,9 +130,15 @@ def _is_trusted() -> bool:
 
 
 def _ensure_snapshot():
-    repo = get_repo()
+    session = _current_session_var.get()
+    if session and getattr(session, "_turn_snapshotted", False):
+        return
+    root = _get_project_root()
+    repo = get_repo(root)
     if repo:
         create_pre_edit_snapshot(repo)
+        if session:
+            session._turn_snapshotted = True
 
 
 # ── AST & Code Symbol Extraction ──────────────────────────────────────────────
@@ -203,7 +220,7 @@ def read_file(
     Reads the contents of a file with line numbers.
     If symbols_only=True, returns an outline of classes and functions with line ranges.
     """
-    p = Path(path).resolve()
+    p = _resolve_project_path(path)
     try:
         _assert_safe_path(p)
     except Exception as e:
@@ -276,7 +293,7 @@ def write_file(path: str, content: str) -> str:
     """Writes full content to a new or existing file."""
     if not _is_trusted():
         return "Error: This folder is not trusted. Use /trust to allow file writes."
-    p = Path(path).resolve()
+    p = _resolve_project_path(path)
     try:
         _assert_safe_path(p)
     except Exception as e:
@@ -306,7 +323,7 @@ def edit_file(
     """
     if not _is_trusted():
         return "Error: This folder is not trusted. Use /trust to allow file edits."
-    p = Path(path).resolve()
+    p = _resolve_project_path(path)
     try:
         _assert_safe_path(p)
     except Exception as e:
@@ -415,7 +432,7 @@ def edit_file_multi(path: str, edits: list) -> str:
     """
     if not _is_trusted():
         return "Error: This folder is not trusted. Use /trust to allow file edits."
-    p = Path(path).resolve()
+    p = _resolve_project_path(path)
     try:
         _assert_safe_path(p)
     except Exception as e:
@@ -713,7 +730,7 @@ def shell_list() -> str:
 
 def list_dir(path: str = ".", show_hidden: bool = False) -> str:
     """Lists contents of a directory. Skips node_modules, .venv, and cache folders by default."""
-    p = Path(path).resolve()
+    p = _resolve_project_path(path)
     try:
         _assert_safe_path(p)
     except Exception as e:
@@ -757,7 +774,7 @@ def grep_search(
     max_results: int = 50,
 ) -> str:
     """Search for text or regex patterns across the codebase."""
-    p = Path(path).resolve()
+    p = _resolve_project_path(path)
     try:
         _assert_safe_path(p)
     except Exception as e:
@@ -774,7 +791,7 @@ def grep_search(
 
 def find_files(pattern: str = "*", path: str = ".", max_results: int = 50) -> str:
     """Find files matching a glob pattern across the codebase."""
-    p = Path(path).resolve()
+    p = _resolve_project_path(path)
     try:
         _assert_safe_path(p)
     except Exception as e:

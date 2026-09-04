@@ -149,25 +149,56 @@ def restore_snapshot(repo: "Repo", commit_hash: str, files: Optional[List[str]] 
     """
     from git.exc import GitCommandError
     try:
+        work_dir = Path(repo.working_tree_dir)
         if files:
             for rel in files:
                 restore_file_snapshot(repo, commit_hash, rel)
             return True
 
-        # Restore all files that exist in the snapshot tree.
+        # 1. Query all files present in the snapshot commit tree
         try:
-            changed = repo.git.diff(
-                "--name-only", commit_hash, "HEAD"
-            ).splitlines()
+            snapshot_files = set(repo.git.ls_tree("-r", "--name-only", commit_hash).splitlines())
         except (GitCommandError, Exception):
-            changed = []
+            snapshot_files = set()
 
-        if changed:
-            for rel in changed:
-                restore_file_snapshot(repo, commit_hash, rel)
-        else:
-            # Nothing tracked changed — just do a fast checkout.
+        # 2. Inspect untracked and modified working directory files via git status
+        # Any file currently present on disk that did not exist in the snapshot was created during the turn
+        try:
+            status_lines = repo.git.status("--porcelain=v1", "-uall").splitlines()
+            for line in status_lines:
+                if not line.strip():
+                    continue
+                path_part = line[3:].strip()
+                if " -> " in path_part:
+                    path_part = path_part.split(" -> ")[-1]
+                path_part = path_part.strip('"').replace("\\", "/")
+                if path_part and path_part not in snapshot_files:
+                    target_path = work_dir / path_part
+                    if target_path.is_file() or target_path.is_symlink():
+                        try:
+                            target_path.unlink(missing_ok=True)
+                            # Remove empty parent directories up to work_dir
+                            parent = target_path.parent
+                            while parent != work_dir and parent.is_dir() and not any(parent.iterdir()):
+                                parent.rmdir()
+                                parent = parent.parent
+                        except Exception as del_err:
+                            log.warning("Failed to remove newly created file %s during rollback: %s", target_path, del_err)
+        except Exception as st_err:
+            log.warning("Failed to inspect status during restore: %s", st_err)
+
+        # 3. Checkout all files from the snapshot commit to restore modified/deleted files
+        try:
             repo.git.checkout("--force", commit_hash, "--", ".")
+        except GitCommandError as chk_err:
+            log.warning("Git checkout failed during snapshot restore: %s", chk_err)
+
+        # 4. Reset index so staging area is clean
+        try:
+            repo.git.reset()
+        except Exception:
+            pass
+
         return True
     except Exception as e:
         log.warning("Failed to restore snapshot: %s", e)
@@ -179,15 +210,29 @@ def restore_file_snapshot(repo: Repo, commit_hash: str, rel_path: str) -> bool:
     from git.exc import GitCommandError
     try:
         norm_path = rel_path.replace("\\", "/")
+        work_dir = Path(repo.working_tree_dir)
+        full_path = work_dir / norm_path
+
+        # Check if file existed in snapshot tree
+        in_snapshot = False
         try:
+            repo.git.cat_file("-e", f"{commit_hash}:{norm_path}")
+            in_snapshot = True
+        except (GitCommandError, Exception):
+            in_snapshot = False
+
+        if in_snapshot:
             repo.git.checkout("--force", commit_hash, "--", norm_path)
             return True
-        except GitCommandError:
-            # File likely didn't exist in the snapshot (it was newly created).
-            # git checkout fails for untracked paths, so we must manually delete it.
-            full_path = Path(repo.working_tree_dir) / norm_path
-            if full_path.exists():
+        else:
+            # File did not exist in the snapshot (it was newly created during the turn).
+            # Delete it from disk and clean empty parent directories.
+            if full_path.is_file() or full_path.is_symlink():
                 full_path.unlink(missing_ok=True)
+                parent = full_path.parent
+                while parent != work_dir and parent.is_dir() and not any(parent.iterdir()):
+                    parent.rmdir()
+                    parent = parent.parent
             return True
     except Exception as e:
         log.warning("Failed to restore file %s from snapshot: %s", rel_path, e)

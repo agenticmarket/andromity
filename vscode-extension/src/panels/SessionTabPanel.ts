@@ -313,6 +313,23 @@ export class SessionTabPanel {
       return;
     }
 
+    if (message.type === "get_file_diff_stats") {
+      const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      try {
+        const res = await this._rpcClient?.call<{ files: Record<string, { additions: number; deletions: number }> }>(
+          "git.diff_numstat",
+          { project_path: ws }
+        );
+        if (res?.files) {
+          this._postMessage({
+            type: "file_diff_stats_result",
+            stats: res.files,
+          });
+        }
+      } catch {}
+      return;
+    }
+
     if (message.type === "get_editor_context") {
       const ctx = EditorBridge.getActiveContext();
       this._postMessage({ type: "editor_context", context: ctx });
@@ -447,6 +464,10 @@ export class SessionTabPanel {
           project_path: workspaceFolder,
         }).catch(() => null);
         if (res?.success) {
+          try {
+            vscode.commands.executeCommand("git.refresh");
+            vscode.commands.executeCommand("andromity.refreshChanges");
+          } catch {}
           await this._loadSession();
         } else if (res?.error) {
           vscode.window.showWarningMessage(res.error);

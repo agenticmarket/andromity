@@ -99,14 +99,15 @@ export class DiffManager {
     const ws = this._workspaceFolder();
     if (!ws) return;
 
-    const rightUri = vscode.Uri.file(filePath);
-    const fileName = path.basename(filePath);
+    const absPath = path.isAbsolute(filePath) ? filePath : path.join(ws.uri.fsPath, filePath);
+    const rightUri = vscode.Uri.file(absPath);
+    const fileName = path.basename(absPath);
 
     if (isUntracked) {
       // No HEAD version exists — show empty file vs. working copy.
       const leftUri = vscode.Uri.from({
         scheme: HEAD_SCHEME,
-        path: filePath,
+        path: absPath,
         query: "ref=EMPTY",
         fragment: ws.uri.fsPath,
       });
@@ -122,7 +123,7 @@ export class DiffManager {
 
     const leftUri = vscode.Uri.from({
       scheme: HEAD_SCHEME,
-      path: filePath,
+      path: absPath,
       query: "ref=HEAD",
       fragment: ws.uri.fsPath,
     });
@@ -185,6 +186,10 @@ export class DiffManager {
       );
 
       if (res.success) {
+        try {
+          vscode.commands.executeCommand("git.refresh");
+          vscode.commands.executeCommand("andromity.refreshChanges");
+        } catch {}
         vscode.window.showInformationMessage(
           `Turn undone successfully. (${res.popped_messages} messages removed. ${res.git_status})`
         );

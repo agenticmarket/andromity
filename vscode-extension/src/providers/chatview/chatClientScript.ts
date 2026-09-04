@@ -64,6 +64,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const sessionDomCache = new Map(); // sessionId -> { html:string, isRunning:boolean }
     const sessionLiveBuffer = new Map(); // sessionId -> Array<raw msg> for replay when switching to a live session
     let turnEditedFiles = new Set();
+    let globalDiffStats = {};
     const btnScrollBottom = document.getElementById('btn-scroll-bottom');
     const scrollUnreadBadge = document.getElementById('scroll-unread-badge');
     const timelineFlyout = document.getElementById('timeline-flyout');
@@ -1755,6 +1756,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'open-diff':
           vscode.postMessage({ type: 'open_diff' });
           break;
+        case 'toggle-more-files': {
+          e.stopPropagation();
+          const card = target.closest('.files-changed-card');
+          if (card) {
+            const isExpanded = card.getAttribute('data-expanded') === 'true';
+            card.setAttribute('data-expanded', isExpanded ? 'false' : 'true');
+            const extras = card.querySelectorAll('.files-changed-extra');
+            extras.forEach(el => { el.style.display = isExpanded ? 'none' : 'flex'; });
+            target.textContent = isExpanded ? ('... Show ' + extras.length + ' more') : 'Show less ▴';
+          }
+          break;
+        }
         case 'undo-turn':
           vscode.postMessage({ type: 'undo_turn' });
           break;
@@ -3114,6 +3127,109 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       scrollToBottomIfNeeded();
     }
 
+    function getLangBadgeHtml(filePath) {
+      const ext = (filePath.split('.').pop() || '').toLowerCase();
+      if (ext === 'py') {
+        return '<span class="files-changed-lang-tag lang-py">🐍</span>';
+      } else if (ext === 'ts' || ext === 'tsx') {
+        return '<span class="files-changed-lang-tag lang-ts">TS</span>';
+      } else if (ext === 'js' || ext === 'jsx' || ext === 'mjs' || ext === 'cjs') {
+        return '<span class="files-changed-lang-tag lang-js">JS</span>';
+      } else if (ext === 'json') {
+        return '<span class="files-changed-lang-tag lang-json">{}</span>';
+      } else if (ext === 'css' || ext === 'scss' || ext === 'less') {
+        return '<span class="files-changed-lang-tag lang-css">CSS</span>';
+      } else if (ext === 'md' || ext === 'markdown') {
+        return '<span class="files-changed-lang-tag lang-md">MD</span>';
+      } else if (ext === 'html' || ext === 'htm') {
+        return '<span class="files-changed-lang-tag lang-html">&lt;&gt;</span>';
+      }
+      return '<span class="files-changed-lang-tag lang-default">📄</span>';
+    }
+
+    function createFilesChangedCard(filePathsSet) {
+      if (!filePathsSet) return null;
+      const seen = new Map();
+      Array.from(filePathsSet).forEach(filePath => {
+        if (!filePath || typeof filePath !== 'string') return;
+        const norm = filePath.split('\\\\').join('/').trim();
+        const base = norm.split('/').pop().toLowerCase();
+        if (!seen.has(base) || norm.length > seen.get(base).length) {
+          seen.set(base, norm);
+        }
+      });
+      const files = Array.from(seen.values());
+      if (files.length === 0) return null;
+
+      const card = document.createElement('div');
+      card.className = 'files-changed-card';
+
+      const header = document.createElement('div');
+      header.className = 'files-changed-header';
+      header.innerHTML = '<span class="files-changed-title">' + files.length + ' File' + (files.length > 1 ? 's' : '') + ' Changed</span>' +
+        '<button class="files-changed-review-btn" data-action="open-diff" title="Review All Changes in Git Diff">Review</button>';
+      card.appendChild(header);
+
+      const list = document.createElement('div');
+      list.className = 'files-changed-list';
+
+      const MAX_PREVIEW = 4;
+      files.forEach((filePath, idx) => {
+        const row = document.createElement('div');
+        row.className = 'files-changed-row' + (idx >= MAX_PREVIEW ? ' files-changed-extra' : '');
+        if (idx >= MAX_PREVIEW) row.style.display = 'none';
+        row.setAttribute('data-action', 'open-file-diff');
+        row.setAttribute('data-file-path', filePath);
+        row.setAttribute('title', 'Click to view diff for ' + filePath);
+
+        const normalizedKey = filePath.split('\\\\').join('/');
+        const filename = normalizedKey.split('/').pop() || filePath;
+
+        let stat = globalDiffStats[normalizedKey];
+        if (!stat) {
+          for (const k in globalDiffStats) {
+            if (normalizedKey.endsWith(k) || k.endsWith(normalizedKey)) {
+              stat = globalDiffStats[k];
+              break;
+            }
+          }
+        }
+
+        let statsHtml = '';
+        if (stat) {
+          if (stat.additions > 0) statsHtml += '<span class="files-stat-add">+' + stat.additions + '</span>';
+          if (stat.deletions > 0) statsHtml += '<span class="files-stat-del">-' + stat.deletions + '</span>';
+          if (stat.additions === 0 && stat.deletions === 0) statsHtml += '<span class="chip-diff-label">Diff</span>';
+        } else {
+          statsHtml = '<span class="chip-diff-label">Diff</span>';
+        }
+
+        row.innerHTML = '<div class="files-changed-row-left">' +
+          getLangBadgeHtml(filename) +
+          '<span class="files-changed-name">' + escapeHtml(filename) + '</span>' +
+        '</div>' +
+        '<div class="files-changed-row-stats">' + statsHtml + '</div>';
+
+        list.appendChild(row);
+      });
+
+      card.appendChild(list);
+
+      if (files.length > MAX_PREVIEW) {
+        const moreBtn = document.createElement('button');
+        moreBtn.className = 'files-changed-more-btn';
+        moreBtn.setAttribute('data-action', 'toggle-more-files');
+        moreBtn.textContent = '... Show ' + (files.length - MAX_PREVIEW) + ' more';
+        card.appendChild(moreBtn);
+      }
+
+      try {
+        vscode.postMessage({ type: 'get_file_diff_stats' });
+      } catch {}
+
+      return card;
+    }
+
     function endAssistantTurn() {
       removeTurnLoader();
       finishCurrentThinking();
@@ -3150,20 +3266,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       if (currentTurnAssistantDiv) {
         if (turnEditedFiles.size > 0) {
-          const strip = document.createElement('div');
-          strip.className = 'turn-actions-strip';
-          turnEditedFiles.forEach(filePath => {
-            const chip = document.createElement('div');
-            chip.className = 'file-edited-chip';
-            chip.setAttribute('data-action', 'open-file-diff');
-            chip.setAttribute('data-file-path', filePath);
-            const filename = filePath.split(/[\\\\/]/).pop() || filePath;
-            chip.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>' +
-              '<span class="chip-filename" title="' + escapeHtml(filePath) + '">' + escapeHtml(filename) + '</span>' +
-              '<span class="chip-diff-label">Diff</span>';
-            strip.appendChild(chip);
-          });
-          currentTurnAssistantDiv.appendChild(strip);
+          const card = createFilesChangedCard(turnEditedFiles);
+          if (card) currentTurnAssistantDiv.appendChild(card);
         }
 
         const elapsedSec = ((Date.now() - currentTurnStartTime) / 1000).toFixed(1);
@@ -3208,6 +3312,36 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     window.addEventListener('message', event => {
       const msg = event.data;
       switch (msg.type) {
+        case 'file_diff_stats_result': {
+          if (msg.stats) {
+            globalDiffStats = Object.assign(globalDiffStats || {}, msg.stats);
+            document.querySelectorAll('.files-changed-row').forEach(row => {
+              const fPath = row.getAttribute('data-file-path');
+              if (!fPath) return;
+              const normalized = fPath.split('\\\\').join('/');
+              let s = globalDiffStats[normalized];
+              if (!s) {
+                for (const k in globalDiffStats) {
+                  if (normalized.endsWith(k) || k.endsWith(normalized)) {
+                    s = globalDiffStats[k];
+                    break;
+                  }
+                }
+              }
+              if (s) {
+                const statsEl = row.querySelector('.files-changed-row-stats');
+                if (statsEl) {
+                  let html = '';
+                  if (s.additions > 0) html += '<span class="files-stat-add">+' + s.additions + '</span>';
+                  if (s.deletions > 0) html += '<span class="files-stat-del">-' + s.deletions + '</span>';
+                  if (s.additions === 0 && s.deletions === 0) html += '<span class="chip-diff-label">Diff</span>';
+                  if (html) statsEl.innerHTML = html;
+                }
+              }
+            });
+          }
+          break;
+        }
         case 'init_state':
           clearSkeletonState();
           currentSessionId = msg.sessionId;
@@ -3584,20 +3718,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   currentTurnToolBody = null;
                   currentTurnToolCount = 0;
                   if (turnEditedFilesForLoad.size > 0) {
-                    const strip = document.createElement('div');
-                    strip.className = 'turn-actions-strip';
-                    turnEditedFilesForLoad.forEach(filePath => {
-                      const chip = document.createElement('div');
-                      chip.className = 'file-edited-chip';
-                      chip.setAttribute('data-action', 'open-file-diff');
-                      chip.setAttribute('data-file-path', filePath);
-                      const filename = filePath.split(/[\\/]/).pop() || filePath;
-                      chip.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>' +
-                        '<span class="chip-filename" title="' + escapeHtml(filePath) + '">' + escapeHtml(filename) + '</span>' +
-                        '<span class="chip-diff-label">Diff</span>';
-                      strip.appendChild(chip);
-                    });
-                    currentAssistantWrap.appendChild(strip);
+                    const card = createFilesChangedCard(turnEditedFilesForLoad);
+                    if (card) currentAssistantWrap.appendChild(card);
                   }
 
                   let elapsedSec = m.duration ? Number(m.duration).toFixed(1) : null;

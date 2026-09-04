@@ -4336,6 +4336,169 @@ export function getChatStyles(): string {
       letter-spacing: 0.3px;
     }
 
+    /* ─── Files Changed Review Card ────────────────────────────────────── */
+    .files-changed-card {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.025);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 10px;
+      padding: 10px 14px;
+      margin: 8px 0 4px 0;
+      box-sizing: border-box;
+      transition: border-color 0.15s ease;
+    }
+    .files-changed-card:hover {
+      border-color: rgba(255, 255, 255, 0.14);
+    }
+
+    .files-changed-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+      padding-bottom: 4px;
+    }
+
+    .files-changed-title {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--fg, #e4e4e7);
+      letter-spacing: -0.01em;
+    }
+
+    .files-changed-review-btn {
+      background: transparent;
+      border: none;
+      color: var(--muted, #a1a1aa);
+      font-size: 11.5px;
+      font-weight: 500;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      transition: all 0.12s ease;
+    }
+    .files-changed-review-btn:hover {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .files-changed-list {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+
+    .files-changed-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 5px 6px;
+      margin: 0 -4px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.12s ease;
+      gap: 10px;
+      user-select: none;
+    }
+    .files-changed-row:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .files-changed-row-left {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .files-changed-lang-tag {
+      font-size: 10px;
+      font-weight: 700;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 18px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .files-changed-lang-tag.lang-py {
+      font-size: 12px;
+    }
+    .files-changed-lang-tag.lang-ts {
+      color: #38bdf8;
+    }
+    .files-changed-lang-tag.lang-js {
+      color: #facc15;
+    }
+    .files-changed-lang-tag.lang-json {
+      color: #c084fc;
+    }
+    .files-changed-lang-tag.lang-css {
+      color: #38bdf8;
+    }
+    .files-changed-lang-tag.lang-md {
+      color: #94a3b8;
+    }
+    .files-changed-lang-tag.lang-html {
+      color: #fb923c;
+    }
+    .files-changed-lang-tag.lang-default {
+      color: var(--muted, #a1a1aa);
+      font-size: 11px;
+    }
+
+    .files-changed-name {
+      font-family: var(--font-mono, monospace);
+      font-size: 12px;
+      color: var(--fg, #e4e4e7);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .files-changed-row:hover .files-changed-name {
+      color: #ffffff;
+    }
+
+    .files-changed-row-stats {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-family: var(--font-mono, monospace);
+      font-size: 11px;
+      font-weight: 500;
+      flex-shrink: 0;
+    }
+
+    .files-stat-add {
+      color: #4ade80;
+    }
+
+    .files-stat-del {
+      color: #f87171;
+    }
+
+    .files-changed-more-btn {
+      background: transparent;
+      border: none;
+      color: var(--muted, #71717a);
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      padding: 4px 6px;
+      margin-top: 2px;
+      text-align: left;
+      border-radius: 4px;
+      transition: color 0.12s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      user-select: none;
+    }
+    .files-changed-more-btn:hover {
+      color: var(--fg, #e4e4e7);
+    }
+
     /* ─── Conversation Timeline Drawer / Popover ────────────────────────── */
     /* ─── Conversation Timeline Drawer / Popover (Permission-Card Clean Look) ─── */
     .timeline-flyout {
