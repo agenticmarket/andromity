@@ -2606,7 +2606,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           imgEl.src = uri;
           imgEl.className = 'prompt-image-thumb';
           imgEl.title = 'Click to preview full size';
-          imgEl.addEventListener('click', () => {
+          imgEl.addEventListener('click', (e) => {
+            if (e && e.stopPropagation) e.stopPropagation();
             openImageLightbox(uri);
           });
           carousel.appendChild(imgEl);
