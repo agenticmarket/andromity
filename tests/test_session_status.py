@@ -2,18 +2,19 @@
 import tempfile
 from pathlib import Path
 import pytest
-from andromity.core.db import get_conn, init_schema, set_custom_db_path
+from andromity.core.db import close_conn, get_conn, init_schema, set_custom_db_path
 from andromity.core.session import Session
 
 
 @pytest.fixture(autouse=True)
-def isolated_db():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_file = Path(tmpdir) / "status_test.db"
-        set_custom_db_path(db_file)
-        init_schema()
-        yield db_file
-        set_custom_db_path(None)
+def isolated_db(tmp_path):
+    db_file = tmp_path / "status_test.db"
+    set_custom_db_path(db_file)
+    init_schema()
+    yield db_file
+    set_custom_db_path(None)
+    close_conn()
+
 
 
 def test_session_default_status_is_idle():

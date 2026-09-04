@@ -13,6 +13,7 @@ from andromity.core.cron import (
     _validate_cron_id,
 )
 from andromity.core.db import (
+    close_conn,
     get_conn,
     init_schema,
     j,
@@ -27,13 +28,14 @@ from andromity.server.rpc_handler import JsonRpcHandler
 
 
 @pytest.fixture(autouse=True)
-def isolated_env():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_file = Path(tmpdir) / "test_remediation.db"
-        set_custom_db_path(db_file)
-        init_schema()
-        yield Path(tmpdir)
-        set_custom_db_path(None)
+def isolated_env(tmp_path):
+    db_file = tmp_path / "test_remediation.db"
+    set_custom_db_path(db_file)
+    init_schema()
+    yield tmp_path
+    set_custom_db_path(None)
+    close_conn()
+
 
 
 def test_nested_transaction_reentrancy():

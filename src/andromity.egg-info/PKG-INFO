@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: andromity
-Version: 0.2.6
+Version: 0.2.7
 Summary: AI coding agent with a beautiful terminal UI. Works with Claude, Gemini, GPT, Ollama and more.
 Author-email: Agentic Market <hello@agenticmarket.dev>
 License: MIT
@@ -212,6 +212,23 @@ Your code goes to one place: the LLM provider you configure. Not us.
 - API keys live in `~/.andromity/config.toml` — encrypted locally
 - Sessions stored locally in `~/.andromity/sessions/`
 - Opt out of telemetry: `export DO_NOT_TRACK=1`
+
+---
+## Star History
+
+<a href="https://www.star-history.com/?repos=agenticmarket%2Fandromity&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&legend=top-left" />
+ </picture>
+</a>
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for detailed release history and version notes.
 
 ---
 

@@ -30,6 +30,15 @@ def close_conn() -> None:
         except Exception:
             pass
         _local.conn = None
+    if hasattr(_local, "conn_path"):
+        _local.conn_path = None
+    try:
+        from andromity.core.session import Session
+        Session.cancel_all_timers()
+    except Exception:
+        pass
+    import gc
+    gc.collect()
 
 
 def get_db_path() -> Path:
@@ -52,22 +61,23 @@ def get_conn() -> sqlite3.Connection:
             db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(
             str(db_path),
-            timeout=5.0,
+            timeout=10.0,
             check_same_thread=False,
             isolation_level=None,  # Autocommit mode; explicit BEGIN/COMMIT via transaction()
         )
         conn.row_factory = sqlite3.Row
         
-        # High performance & safety PRAGMAs
+        # High performance & safety PRAGMAs (set busy_timeout first so lock waiting applies to all pragmas)
+        conn.execute("PRAGMA busy_timeout = 10000;")
         conn.execute("PRAGMA journal_mode = WAL;")
         conn.execute("PRAGMA synchronous = NORMAL;")
-        conn.execute("PRAGMA busy_timeout = 5000;")
         conn.execute("PRAGMA foreign_keys = ON;")
         conn.execute("PRAGMA cache_size = -32000;")  # 32MB page cache
         conn.execute("PRAGMA temp_store = MEMORY;")
         _local.conn = conn
         _local.conn_path = db_path
     return _local.conn
+
 
 
 def init_schema() -> None:

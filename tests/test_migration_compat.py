@@ -4,19 +4,20 @@ import tempfile
 from pathlib import Path
 import pytest
 from andromity.core.cron import CronJob, CronRun, CronRunStore, CronStore
-from andromity.core.db import get_conn, init_schema, set_custom_db_path
+from andromity.core.db import close_conn, get_conn, init_schema, set_custom_db_path
 from andromity.core.session import Session, normalize_project_path
 from andromity.core.usage_tracker import UsageTracker
 
 
 @pytest.fixture(autouse=True)
-def isolated_env():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_file = Path(tmpdir) / "compat_andromity.db"
-        set_custom_db_path(db_file)
-        init_schema()
-        yield Path(tmpdir)
-        set_custom_db_path(None)
+def isolated_env(tmp_path):
+    db_file = tmp_path / "compat_andromity.db"
+    set_custom_db_path(db_file)
+    init_schema()
+    yield tmp_path
+    set_custom_db_path(None)
+    close_conn()
+
 
 
 def test_legacy_session_json_auto_migrates(isolated_env, monkeypatch):

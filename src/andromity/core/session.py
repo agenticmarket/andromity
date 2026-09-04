@@ -134,6 +134,27 @@ class Session:
         self._save_to_db()
         self._mark_dirty(delay=0.05)
 
+    _active_timers: set = set()
+
+    def __del__(self):
+        try:
+            if getattr(self, "_save_timer", None) is not None:
+                self._save_timer.cancel()
+                Session._active_timers.discard(self._save_timer)
+        except Exception:
+            pass
+
+    @classmethod
+    def cancel_all_timers(cls) -> None:
+        """Cancel all pending debounced save timers (used in tests and teardown)."""
+        timers = list(cls._active_timers)
+        cls._active_timers.clear()
+        for t in timers:
+            try:
+                t.cancel()
+            except Exception:
+                pass
+
     def _mark_dirty(self, delay: float = 1.5):
         """Schedule a debounced write to avoid synchronous disk thrashing on rapid appends."""
         with self._save_lock:
@@ -141,15 +162,19 @@ class Session:
             if self._save_timer is not None:
                 try:
                     self._save_timer.cancel()
+                    Session._active_timers.discard(self._save_timer)
                 except Exception:
                     pass
             t = threading.Timer(delay, self._flush_save)
             t.daemon = True
             self._save_timer = t
+            Session._active_timers.add(t)
             t.start()
 
     def _flush_save(self):
         with self._save_lock:
+            if self._save_timer is not None:
+                Session._active_timers.discard(self._save_timer)
             if self._dirty:
                 self._dirty = False
                 self._save_timer = None
@@ -161,12 +186,14 @@ class Session:
             if self._save_timer is not None:
                 try:
                     self._save_timer.cancel()
+                    Session._active_timers.discard(self._save_timer)
                 except Exception:
                     pass
                 self._save_timer = None
             if self._dirty:
                 self._dirty = False
                 self.save()
+
 
     def add_message(self, role: str, content: Optional[str] = None,
                     tool_calls: Optional[List[Dict]] = None,

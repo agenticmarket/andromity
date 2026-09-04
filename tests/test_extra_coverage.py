@@ -5,25 +5,26 @@ from pathlib import Path
 import pytest
 from unittest.mock import patch
 
-from andromity.core.db import get_conn, init_schema, set_custom_db_path
+from andromity.core.db import close_conn, get_conn, init_schema, set_custom_db_path
 from andromity.core.mcp import MCPClientManager
 from andromity.core.shared_state import SharedStateBoard
 from andromity.core.session import Session, normalize_project_path
 from andromity.core import tools as tools_mod
 
 @pytest.fixture(autouse=True)
-def isolate_db():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_file = Path(tmpdir) / "extra.db"
-        set_custom_db_path(db_file)
-        init_schema()
-        SharedStateBoard.reset_instances()
-        yield Path(tmpdir)
-        set_custom_db_path(None)
-        SharedStateBoard.reset_instances()
-        # cleanup bg dict
-        with tools_mod._bg_lock:
-            tools_mod._bg_processes.clear()
+def isolate_db(tmp_path):
+    db_file = tmp_path / "extra.db"
+    set_custom_db_path(db_file)
+    init_schema()
+    SharedStateBoard.reset_instances()
+    yield tmp_path
+    set_custom_db_path(None)
+    close_conn()
+    SharedStateBoard.reset_instances()
+    # cleanup bg dict
+    with tools_mod._bg_lock:
+        tools_mod._bg_processes.clear()
+
 
 # ── MCP persistence ──────────────────────────────────────────────────────────
 

@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 import pytest
 from andromity.core.db import (
+    close_conn,
     get_conn,
     get_db_path,
     init_schema,
@@ -15,13 +16,14 @@ from andromity.core.db import (
 
 
 @pytest.fixture(autouse=True)
-def isolated_db():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_file = Path(tmpdir) / "test_andromity.db"
-        set_custom_db_path(db_file)
-        init_schema()
-        yield db_file
-        set_custom_db_path(None)
+def isolated_db(tmp_path):
+    db_file = tmp_path / "test_andromity.db"
+    set_custom_db_path(db_file)
+    init_schema()
+    yield db_file
+    set_custom_db_path(None)
+    close_conn()
+
 
 
 def test_init_schema_creates_tables():
