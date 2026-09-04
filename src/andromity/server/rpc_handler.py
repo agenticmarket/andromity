@@ -1473,7 +1473,7 @@ class JsonRpcHandler:
         return {"diff": diff_text}
 
     async def rpc_git_show_file(self, params: Dict[str, Any]) -> Dict[str, str]:
-        """Return the content of a file at a given git ref (default HEAD)."""
+        """Return the content of a file at a given git ref (default HEAD or index)."""
         project_path = Path(params.get("project_path") or Path.cwd()).resolve()
         file_path = params.get("path", "")
         ref = params.get("ref", "HEAD")
@@ -1485,14 +1485,37 @@ class JsonRpcHandler:
             raise ValueError("Not a git repository")
 
         rel = Path(file_path).resolve().relative_to(project_path.resolve()).as_posix()
+        content = ""
+
+        if ref == "EMPTY":
+            return {"content": ""}
+
+        # 1. Try reading from the Git Index first (handles staged files that aren't in HEAD yet)
         try:
-            content = repo.git.show(f"{ref}:{rel}")
+            content = repo.git.show(f":{rel}")
         except Exception:
-            content = ""
+            pass
+
+        # 2. If not in index, try reading from the requested ref (e.g. HEAD)
+        if not content and ref and ref != "SNAPSHOT":
+            try:
+                content = repo.git.show(f"{ref}:{rel}")
+            except Exception:
+                pass
+
+        # 3. If still empty, try reading from the latest pre-turn snapshot
+        if not content:
+            try:
+                snaps = list_snapshots(repo, limit=1)
+                if snaps:
+                    content = repo.git.show(f"{snaps[0]['hash']}:{rel}")
+            except Exception:
+                pass
+
         return {"content": content}
 
     async def rpc_git_file_diff(self, params: Dict[str, Any]) -> Dict[str, str]:
-        """Return the unified diff of a single file against HEAD."""
+        """Return the unified diff of a single file against index or HEAD."""
         project_path = Path(params.get("project_path") or Path.cwd()).resolve()
         file_path = params.get("path", "")
         if not file_path:
@@ -1503,27 +1526,39 @@ class JsonRpcHandler:
             return {"diff": ""}
 
         rel = Path(file_path).resolve().relative_to(project_path.resolve()).as_posix()
+        diff_text = ""
+        # 1. Unstaged changes in working tree vs index
         try:
-            diff_text = repo.git.diff("HEAD", "--", rel)
+            diff_text = repo.git.diff("--", rel)
         except Exception:
-            diff_text = ""
+            pass
+        # 2. If empty, staged changes vs HEAD
+        if not diff_text:
+            try:
+                diff_text = repo.git.diff("--cached", "--", rel)
+            except Exception:
+                pass
+        # 3. If still empty, working tree vs HEAD
+        if not diff_text:
+            try:
+                diff_text = repo.git.diff("HEAD", "--", rel)
+            except Exception:
+                pass
         return {"diff": diff_text}
 
     async def rpc_git_diff_numstat(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Return numstat diff (+additions, -deletions) for files against HEAD or index."""
+        """Return numstat diff (+additions, -deletions) for files against index or HEAD."""
         project_path = Path(params.get("project_path") or Path.cwd()).resolve()
         repo = get_repo(project_path)
         if not repo:
             return {"files": {}}
 
         files_stats: Dict[str, Dict[str, int]] = {}
-        try:
-            try:
-                raw_numstat = repo.git.diff("HEAD", "--numstat")
-            except Exception:
-                raw_numstat = repo.git.diff("--numstat")
 
-            for line in raw_numstat.splitlines():
+        # 1. Unstaged changes in working tree (Working tree vs Index)
+        try:
+            unstaged = repo.git.diff("--numstat")
+            for line in unstaged.splitlines():
                 parts = line.strip().split("\t")
                 if len(parts) >= 3:
                     add = int(parts[0]) if parts[0].isdigit() else 0
@@ -1533,6 +1568,21 @@ class JsonRpcHandler:
         except Exception:
             pass
 
+        # 2. Staged changes in index (Index vs HEAD) for files not already in unstaged changes
+        try:
+            staged = repo.git.diff("--cached", "--numstat")
+            for line in staged.splitlines():
+                parts = line.strip().split("\t")
+                if len(parts) >= 3:
+                    add = int(parts[0]) if parts[0].isdigit() else 0
+                    dele = int(parts[1]) if parts[1].isdigit() else 0
+                    rel_p = parts[2].replace("\\", "/")
+                    if rel_p not in files_stats:
+                        files_stats[rel_p] = {"additions": add, "deletions": dele}
+        except Exception:
+            pass
+
+        # 3. Untracked files
         try:
             for untracked in repo.untracked_files:
                 p = project_path / untracked
@@ -1546,7 +1596,6 @@ class JsonRpcHandler:
                         pass
         except Exception:
             pass
-
         return {"files": files_stats}
 
     # ── Cron & Scheduled Jobs ───────────────────────────────────────────────────

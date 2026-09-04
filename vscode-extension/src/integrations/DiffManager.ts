@@ -94,7 +94,7 @@ export class DiffManager {
     }
   }
 
-  /** Open a native two-way diff editor for a single file vs. HEAD. */
+  /** Open a native two-way diff editor for a single file. */
   public async showFileDiff(filePath: string, isUntracked: boolean = false): Promise<void> {
     const ws = this._workspaceFolder();
     if (!ws) return;
@@ -103,19 +103,30 @@ export class DiffManager {
     const rightUri = vscode.Uri.file(absPath);
     const fileName = path.basename(absPath);
 
+    // 1. First attempt: use VS Code's native git.openChange command.
+    // This automatically compares Working Tree vs Index (Staged) or vs HEAD,
+    // exactly matching what VS Code Source Control panel opens.
+    if (!isUntracked) {
+      try {
+        await vscode.commands.executeCommand("git.openChange", rightUri);
+        return;
+      } catch {
+        // Fallback to custom GitRefContentProvider below
+      }
+    }
+
     if (isUntracked) {
-      // No HEAD version exists — show empty file vs. working copy.
       const leftUri = vscode.Uri.from({
         scheme: HEAD_SCHEME,
         path: absPath,
-        query: "ref=EMPTY",
+        query: "ref=SNAPSHOT",
         fragment: ws.uri.fsPath,
       });
       await vscode.commands.executeCommand(
         "vscode.diff",
         leftUri,
         rightUri,
-        `${fileName} (Untracked) ↔ Working Copy`,
+        `${fileName} (Working Tree)`,
         { preview: true }
       );
       return;
@@ -131,7 +142,7 @@ export class DiffManager {
       "vscode.diff",
       leftUri,
       rightUri,
-      `${fileName} (HEAD) ↔ Working Copy`,
+      `${fileName} (Working Tree)`,
       { preview: true }
     );
   }

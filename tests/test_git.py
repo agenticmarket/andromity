@@ -146,3 +146,71 @@ def test_user_untracked_file_preserved_on_rollback():
 
         repo.close()
 
+
+import pytest
+
+@pytest.mark.asyncio
+async def test_rpc_staged_file_diff_and_show():
+    """Verify that when a user stages a new file without committing to HEAD,
+    rpc_git_show_file returns the staged index content and diff compares against it."""
+    from andromity.server.rpc_handler import JsonRpcHandler
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        repo = Repo.init(tmp)
+        with repo.config_writer() as writer:
+            writer.set_value("user", "name", "Test")
+            writer.set_value("user", "email", "test@example.com")
+
+        # User creates a new file and stages it
+        sample = tmp / "sample_java.java"
+        initial_content = (
+            "public class SampleJava {\n"
+            "    public static void main(String[] args) {\n"
+            "        System.out.println(\"Hello from Java!\");\n"
+            "    }\n"
+            "}\n"
+        )
+        sample.write_text(initial_content, encoding="utf-8")
+        repo.git.add("sample_java.java")
+
+        # Now AI makes edits in working tree (not yet staged/committed)
+        edited_content = (
+            "public class SampleJava {\n"
+            "    public static void main(String[] args) {\n"
+            "        int result = 0;\n"
+            "        for (int i = 1; i <= 10; i++) {\n"
+            "            result += i;\n"
+            "        }\n"
+            "        System.out.println(\"Hello from Java! Sum = \" + result);\n"
+            "    }\n"
+            "}\n"
+        )
+        sample.write_text(edited_content, encoding="utf-8")
+
+        handler = JsonRpcHandler()
+
+        # 1. rpc_git_show_file should return the staged content from index, NOT empty string
+        show_res = await handler.rpc_git_show_file({
+            "project_path": str(tmp),
+            "path": str(sample),
+            "ref": "HEAD"
+        })
+        assert show_res["content"].strip() == initial_content.strip(), f"Expected staged content, got: {show_res['content']}"
+
+        # 2. rpc_git_diff_numstat should report the diff against index (+5 -1)
+        numstat_res = await handler.rpc_git_diff_numstat({"project_path": str(tmp)})
+        assert "sample_java.java" in numstat_res["files"]
+        stats = numstat_res["files"]["sample_java.java"]
+        assert stats["additions"] == 5
+        assert stats["deletions"] == 1
+
+        # 3. rpc_git_file_diff should return the working tree diff vs index
+        diff_res = await handler.rpc_git_file_diff({
+            "project_path": str(tmp),
+            "path": str(sample),
+        })
+        assert "+        int result = 0;" in diff_res["diff"]
+        assert "-        System.out.println(\"Hello from Java!\");" in diff_res["diff"]
+
+        repo.close()
+
