@@ -2,6 +2,14 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [0.2.7] - 2026-09-05
+
+### Added & Improved
+- **Native VS Code Diff Integration (`git.openChange`):** Clicking files in the changed files list now delegates directly to VS Code's native Git diff viewer (`<file> (Working Tree)`), matching VS Code Source Control panel behavior.
+- **Staged File Diff Support:** Resolved issue where newly staged files without a `HEAD` commit showed an empty left pane; now seamlessly retrieves the staged baseline from the Git Index.
+- **Refined File Badges & Card Depth:** Removed bulky pill backgrounds and borders around file extensions in changed file cards in favor of clean, syntax-colored monospace labels and subtle modern elevation.
+- **Daemon Git Performance:** Optimized git status queries to avoid disk saturation when working inside large repositories.
+
 ## [0.2.6] - 2026-09-04
 
 ### Added & Improved

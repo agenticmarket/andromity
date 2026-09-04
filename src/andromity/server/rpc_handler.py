@@ -1452,12 +1452,36 @@ class JsonRpcHandler:
         if not repo:
             return {"is_git": False, "branch": None, "dirty": False}
 
+        untracked: List[str] = []
+        modified: List[str] = []
+        try:
+            raw = repo.git.status("--porcelain", "-unormal")
+            for line in raw.splitlines():
+                if len(line) >= 4:
+                    code = line[:2]
+                    p = line[3:].strip().replace("\\", "/")
+                    if " -> " in p:
+                        p = p.split(" -> ")[-1]
+                    if code.startswith("??"):
+                        untracked.append(p)
+                    else:
+                        modified.append(p)
+        except Exception:
+            pass
+
+        branch_name = "detached"
+        try:
+            if not repo.head.is_detached:
+                branch_name = str(repo.active_branch)
+        except Exception:
+            pass
+
         return {
             "is_git": True,
-            "branch": str(repo.active_branch) if not repo.head.is_detached else "detached",
-            "dirty": repo.is_dirty(untracked_files=True),
-            "untracked_files": repo.untracked_files,
-            "modified_files": [item.a_path for item in repo.index.diff(None)],
+            "branch": branch_name,
+            "dirty": bool(untracked or modified),
+            "untracked_files": untracked,
+            "modified_files": modified,
         }
 
     async def rpc_git_diff(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1582,18 +1606,20 @@ class JsonRpcHandler:
         except Exception:
             pass
 
-        # 3. Untracked files
+        # 3. Untracked files (using -unormal to avoid scanning full subtrees)
         try:
-            for untracked in repo.untracked_files:
-                p = project_path / untracked
-                if p.is_file():
-                    try:
-                        line_count = sum(1 for _ in p.open("r", encoding="utf-8", errors="ignore"))
-                        rel_p = Path(untracked).as_posix()
-                        if rel_p not in files_stats:
-                            files_stats[rel_p] = {"additions": line_count, "deletions": 0}
-                    except Exception:
-                        pass
+            raw_untracked = repo.git.status("--porcelain", "-unormal")
+            for line in raw_untracked.splitlines():
+                if line.startswith("?? "):
+                    untracked_rel = line[3:].strip().replace("\\", "/")
+                    p = project_path / untracked_rel
+                    if p.is_file():
+                        try:
+                            line_count = sum(1 for _ in p.open("r", encoding="utf-8", errors="ignore"))
+                            if untracked_rel not in files_stats:
+                                files_stats[untracked_rel] = {"additions": line_count, "deletions": 0}
+                        except Exception:
+                            pass
         except Exception:
             pass
         return {"files": files_stats}

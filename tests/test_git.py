@@ -2,9 +2,14 @@
 import sys
 import tempfile
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+import pytest
 from git import Repo
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
 from andromity.core.git_ops import get_repo, get_file_diff
+from andromity.server.rpc_handler import JsonRpcHandler
 
 
 def test_get_repo_invalid_path():
@@ -147,13 +152,10 @@ def test_user_untracked_file_preserved_on_rollback():
         repo.close()
 
 
-import pytest
-
 @pytest.mark.asyncio
 async def test_rpc_staged_file_diff_and_show():
     """Verify that when a user stages a new file without committing to HEAD,
     rpc_git_show_file returns the staged index content and diff compares against it."""
-    from andromity.server.rpc_handler import JsonRpcHandler
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
         repo = Repo.init(tmp)

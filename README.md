@@ -171,6 +171,23 @@ Your code goes to one place: the LLM provider you configure. Not us.
 - Opt out of telemetry: `export DO_NOT_TRACK=1`
 
 ---
+## Star History
+
+<a href="https://www.star-history.com/?repos=agenticmarket%2Fandromity&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&legend=top-left" />
+ </picture>
+</a>
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for detailed release history and version notes.
+
+---
 
 ## Contributing
 

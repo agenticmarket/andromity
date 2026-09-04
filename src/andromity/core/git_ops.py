@@ -261,30 +261,24 @@ def list_snapshots(repo: Repo, limit: int = 20) -> List[dict]:
 
 
 def get_git_status(repo: Repo) -> dict:
-    from git.exc import GitCommandError
     try:
         status = {}
-        # Unstaged changes (Index vs Working tree)
-        for item in repo.index.diff(None):
-            if item.a_path:
-                status[item.a_path.replace("\\", "/")] = item.change_type
-        # Staged changes (HEAD vs Index)
-        try:
-            for item in repo.head.commit.diff():
-                path = item.b_path or item.a_path
-                if path:
-                    status[path.replace("\\", "/")] = item.change_type
-        except (ValueError, AttributeError):
-            # Brand new repo with no commits yet — all staged files are 'A'
-            for entry in getattr(repo.index, "entries", {}).keys():
-                path = entry[0] if isinstance(entry, tuple) else str(entry)
-                if path:
-                    status[path.replace("\\", "/")] = "A"
-        for path in repo.untracked_files:
-            if path:
-                status[path.replace("\\", "/")] = "U"
+        # Single efficient porcelain status call with -unormal (prevents crawling every single file in subdirs)
+        output = repo.git.status("--porcelain", "-unormal")
+        for line in output.splitlines():
+            if len(line) < 4:
+                continue
+            x = line[0]
+            y = line[1]
+            path = line[3:].strip().replace("\\", "/")
+            if " -> " in path:
+                path = path.split(" -> ")[-1]
+            if x == "?" and y == "?":
+                status[path] = "U"
+            elif x in ("M", "A", "D", "R", "C") or y in ("M", "A", "D", "R", "C"):
+                status[path] = y if y != " " else x
         return status
-    except (GitCommandError, Exception):
+    except Exception:
         return {}
 
 
@@ -314,14 +308,15 @@ def get_file_diff(repo: Repo, rel_path: str) -> str:
             return diff
 
         # If untracked, read current content
-        if norm_path in repo.untracked_files:
-            try:
+        try:
+            untracked = repo.git.ls_files("--others", "--exclude-standard", "--", norm_path)
+            if untracked.strip():
                 full_path = Path(repo.working_tree_dir) / norm_path
                 with open(full_path, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read()
                 return f"--- /dev/null\n+++ b/{norm_path}\n@@ -0,0 +1,{len(content.splitlines())} @@\n" + "\n".join(f"+{line}" for line in content.splitlines())
-            except Exception:
-                pass
+        except Exception:
+            pass
         return ""
     except Exception:
         return ""

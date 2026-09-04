@@ -1,6 +1,6 @@
 [project]
 name = "andromity"
-version = "0.2.6"
+version = "0.2.7"
 description = "AI coding agent with a beautiful terminal UI. Works with Claude, Gemini, GPT, Ollama and more."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -63,6 +63,7 @@ andromity = ["assets/sounds/*.wav", "assets/*.ico", "assets/*", "assets/**/*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["src"]
 filterwarnings = [
     "ignore::ResourceWarning",
 ]
