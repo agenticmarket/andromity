@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS session_messages (
     name            TEXT,
     tool_call_id    TEXT,
     ts              TEXT NOT NULL,
+    images          TEXT,
+    duration        REAL,
     PRIMARY KEY (session_id, seq)
 );
 

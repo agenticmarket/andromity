@@ -94,27 +94,39 @@ export class DiffManager {
     }
   }
 
-  /** Open a native two-way diff editor for a single file vs. HEAD. */
+  /** Open a native two-way diff editor for a single file. */
   public async showFileDiff(filePath: string, isUntracked: boolean = false): Promise<void> {
     const ws = this._workspaceFolder();
     if (!ws) return;
 
-    const rightUri = vscode.Uri.file(filePath);
-    const fileName = path.basename(filePath);
+    const absPath = path.isAbsolute(filePath) ? filePath : path.join(ws.uri.fsPath, filePath);
+    const rightUri = vscode.Uri.file(absPath);
+    const fileName = path.basename(absPath);
+
+    // 1. First attempt: use VS Code's native git.openChange command.
+    // This automatically compares Working Tree vs Index (Staged) or vs HEAD,
+    // exactly matching what VS Code Source Control panel opens.
+    if (!isUntracked) {
+      try {
+        await vscode.commands.executeCommand("git.openChange", rightUri);
+        return;
+      } catch {
+        // Fallback to custom GitRefContentProvider below
+      }
+    }
 
     if (isUntracked) {
-      // No HEAD version exists — show empty file vs. working copy.
       const leftUri = vscode.Uri.from({
         scheme: HEAD_SCHEME,
-        path: filePath,
-        query: "ref=EMPTY",
+        path: absPath,
+        query: "ref=SNAPSHOT",
         fragment: ws.uri.fsPath,
       });
       await vscode.commands.executeCommand(
         "vscode.diff",
         leftUri,
         rightUri,
-        `${fileName} (Untracked) ↔ Working Copy`,
+        `${fileName} (Working Tree)`,
         { preview: true }
       );
       return;
@@ -122,7 +134,7 @@ export class DiffManager {
 
     const leftUri = vscode.Uri.from({
       scheme: HEAD_SCHEME,
-      path: filePath,
+      path: absPath,
       query: "ref=HEAD",
       fragment: ws.uri.fsPath,
     });
@@ -130,7 +142,7 @@ export class DiffManager {
       "vscode.diff",
       leftUri,
       rightUri,
-      `${fileName} (HEAD) ↔ Working Copy`,
+      `${fileName} (Working Tree)`,
       { preview: true }
     );
   }
@@ -169,15 +181,14 @@ export class DiffManager {
     }
   }
 
-  public async undoLastTurn(sessionId: string): Promise<void> {
+  public async undoLastTurn(sessionId: string): Promise<boolean> {
     const confirm = await vscode.window.showWarningMessage(
       "Undo last turn and rollback all file modifications made in that turn?",
       { modal: true },
-      "Yes, Rollback",
-      "Cancel"
+      "Yes, Rollback"
     );
 
-    if (confirm !== "Yes, Rollback") return;
+    if (confirm !== "Yes, Rollback") return false;
 
     try {
       const res = await this._rpcClient.call<{ success: boolean; popped_messages: number; git_status: string }>(
@@ -186,12 +197,19 @@ export class DiffManager {
       );
 
       if (res.success) {
+        try {
+          vscode.commands.executeCommand("git.refresh");
+          vscode.commands.executeCommand("andromity.refreshChanges");
+        } catch {}
         vscode.window.showInformationMessage(
           `Turn undone successfully. (${res.popped_messages} messages removed. ${res.git_status})`
         );
+        return true;
       }
+      return false;
     } catch (e: any) {
       vscode.window.showErrorMessage(`Failed to undo turn: ${e.message}`);
+      return false;
     }
   }
 }

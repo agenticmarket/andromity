@@ -2132,7 +2132,7 @@ export class SettingsPanel {
             <input type="checkbox" id="setting-telemetry">
             <div>
               <div class="setting-label">Anonymous Telemetry</div>
-              <div class="setting-desc">Anonymous ping on first launch to count users and edge performance. No code, keys, or file paths are ever transmitted.</div>
+              <div class="setting-desc">Sends anonymous session metadata to help improve Andromity: OS, app version, provider name (e.g. "anthropic"), model name (e.g. "claude-sonnet-5"), reasoning mode, and coarse session stats (turn count, duration bucket). <strong>No prompts, code, file paths, or API keys are ever transmitted.</strong> Opt out anytime with <code>DO_NOT_TRACK=1</code>.</div>
             </div>
           </label>
         </div>

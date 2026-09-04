@@ -30,6 +30,15 @@ def close_conn() -> None:
         except Exception:
             pass
         _local.conn = None
+    if hasattr(_local, "conn_path"):
+        _local.conn_path = None
+    try:
+        from andromity.core.session import Session
+        Session.cancel_all_timers()
+    except Exception:
+        pass
+    import gc
+    gc.collect()
 
 
 def get_db_path() -> Path:
@@ -52,22 +61,23 @@ def get_conn() -> sqlite3.Connection:
             db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(
             str(db_path),
-            timeout=5.0,
+            timeout=10.0,
             check_same_thread=False,
             isolation_level=None,  # Autocommit mode; explicit BEGIN/COMMIT via transaction()
         )
         conn.row_factory = sqlite3.Row
         
-        # High performance & safety PRAGMAs
+        # High performance & safety PRAGMAs (set busy_timeout first so lock waiting applies to all pragmas)
+        conn.execute("PRAGMA busy_timeout = 10000;")
         conn.execute("PRAGMA journal_mode = WAL;")
         conn.execute("PRAGMA synchronous = NORMAL;")
-        conn.execute("PRAGMA busy_timeout = 5000;")
         conn.execute("PRAGMA foreign_keys = ON;")
         conn.execute("PRAGMA cache_size = -32000;")  # 32MB page cache
         conn.execute("PRAGMA temp_store = MEMORY;")
         _local.conn = conn
         _local.conn_path = db_path
     return _local.conn
+
 
 
 def init_schema() -> None:
@@ -99,6 +109,7 @@ def init_schema() -> None:
                 session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
                 seq INTEGER NOT NULL, role TEXT NOT NULL, content TEXT, tool_calls TEXT,
                 thinking TEXT, name TEXT, tool_call_id TEXT, ts TEXT NOT NULL,
+                images TEXT, duration REAL,
                 PRIMARY KEY (session_id, seq)
             );
             CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON session_messages(session_id, seq ASC);
@@ -148,6 +159,12 @@ def init_schema() -> None:
                 conn.execute(f"ALTER TABLE sessions ADD COLUMN {col_name} TEXT NOT NULL DEFAULT '[]';")
             except sqlite3.OperationalError:
                 pass  # column already exists
+
+        for col_name, col_type in (("images", "TEXT"), ("duration", "REAL")):
+            try:
+                conn.execute(f"ALTER TABLE session_messages ADD COLUMN {col_name} {col_type};")
+            except sqlite3.OperationalError:
+                pass
 
         _SCHEMA_INITIALIZED = True
 

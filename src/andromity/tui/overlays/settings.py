@@ -570,7 +570,7 @@ SettingsScreen {
                             yield Switch(id="setting-dryrun")
                         with Horizontal(classes="adv-row"):
                             yield Label(
-                                "Anonymous Telemetry  [dim](one ping on first launch to count users)[/]",
+                                "Anonymous Telemetry  [dim](session start/end · provider · model name · OS · version — never prompts or paths)[/]",
                                 classes="adv-label")
                             yield Switch(id="setting-telemetry")
                         with Horizontal(classes="adv-row"):

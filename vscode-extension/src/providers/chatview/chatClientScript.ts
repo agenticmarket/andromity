@@ -64,6 +64,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const sessionDomCache = new Map(); // sessionId -> { html:string, isRunning:boolean }
     const sessionLiveBuffer = new Map(); // sessionId -> Array<raw msg> for replay when switching to a live session
     let turnEditedFiles = new Set();
+    let globalDiffStats = {};
     const btnScrollBottom = document.getElementById('btn-scroll-bottom');
     const scrollUnreadBadge = document.getElementById('scroll-unread-badge');
     const timelineFlyout = document.getElementById('timeline-flyout');
@@ -333,6 +334,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let allModels = [...DEFAULT_POPULAR_MODELS];
     let isRunning = false;
     const promptQueue = [];
+    let lastAppendedUserText = '';
+    let lastAppendedUserTime = 0;
     let currentTurnStartTime = 0;
     let thinkingStartTime = 0;
 
@@ -413,25 +416,21 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       currentToolSequence.innerHTML = '<div class="tool-seq-header"><svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg><span class="tool-seq-title">0 tools · working... (0s)</span><svg class="tool-seq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg><button class="tool-seq-copy" title="Copy tool log"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button></div><div class="tool-seq-body"></div>';
       
       const thisSeq = currentToolSequence;
-      const hdr = thisSeq.querySelector('.tool-seq-header');
-      hdr.addEventListener('click', (e) => {
-        if (e.target.closest('.tool-seq-copy')) return;
-        thisSeq.classList.toggle('collapsed');
-        toolSeqUserToggled = true;
-      });
-
-      thisSeq.querySelector('.tool-seq-copy').addEventListener('click', () => {
-        try {
-          const parts = [];
-          thisSeq.querySelectorAll('.tool-card').forEach((c, i) => {
-            const n = c.querySelector('.tool-title-group span')?.textContent || 'tool';
-            const args = c.querySelector('.tool-body')?.textContent || '';
-            parts.push((i + 1) + '. ' + n + '\\n   Args: ' + args);
-          });
-          const txt = parts.join('\\n\\n') || thisSeq.textContent;
-          copyToClipboard(txt);
-        } catch {}
-      });
+      const copyBtn = thisSeq.querySelector('.tool-seq-copy');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', () => {
+          try {
+            const parts = [];
+            thisSeq.querySelectorAll('.tool-card').forEach((c, i) => {
+              const n = c.querySelector('.tool-title-group span')?.textContent || 'tool';
+              const args = c.querySelector('.tool-body')?.textContent || '';
+              parts.push((i + 1) + '. ' + n + '\\n   Args: ' + args);
+            });
+            const txt = parts.join('\\n\\n') || thisSeq.textContent;
+            copyToClipboard(txt);
+          } catch {}
+        });
+      }
 
       if (currentTurnAssistantDiv) {
         currentTurnAssistantDiv.appendChild(thisSeq);
@@ -783,6 +782,38 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       vscode.postMessage({ type: 'new_session' });
     });
 
+    document.getElementById('btn-top-crons')?.addEventListener('click', () => {
+      toggleCronsFlyout();
+    });
+
+    document.getElementById('btn-crons-manage')?.addEventListener('click', () => {
+      vscode.postMessage({ type: 'open_cron_settings' });
+      if (cronsFlyout) cronsFlyout.style.display = 'none';
+    });
+
+    if (cronsListEl) {
+      cronsListEl.addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-cron-action]');
+        if (!btn) return;
+        const action = btn.dataset.cronAction;
+        if (action === 'create') {
+          vscode.postMessage({ type: 'open_cron_settings' });
+          if (cronsFlyout) cronsFlyout.style.display = 'none';
+          return;
+        }
+        const id = btn.dataset.id;
+        const name = btn.dataset.name || '';
+        if (action === 'run') {
+          btn.disabled = true;
+          btn.innerHTML = '<span>⟳ Running...</span>';
+          vscode.postMessage({ type: 'cron_run_now', id, name });
+          setTimeout(() => { if (btn) { btn.disabled = false; btn.innerHTML = '▶ Run'; } }, 4000);
+        } else if (action === 'toggle') {
+          vscode.postMessage({ type: 'cron_toggle', id });
+        }
+      });
+    }
+
     document.getElementById('btn-crons-close')?.addEventListener('click', () => {
       cronsFlyout.style.display = 'none';
     });
@@ -1103,13 +1134,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         '</div>' +
         '<div class="session-item-actions">' +
           '<button class="session-action-icon" data-action="open-session-tab" data-session-id="' + s.id + '" data-session-name="' + name + '" title="Open in New Editor Tab (Side-by-Side)">' +
-            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>' +
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>' +
           '</button>' +
           '<button class="session-action-icon" data-action="rename-session" data-session-id="' + s.id + '" data-session-name="' + name + '" title="Rename">' +
-            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>' +
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>' +
           '</button>' +
           '<button class="session-action-icon session-action-delete" data-action="delete-session" data-session-id="' + s.id + '" title="Delete">' +
-            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>' +
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>' +
           '</button>' +
         '</div>' +
       '</div>';
@@ -1271,19 +1302,72 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function renderCronsList(crons) {
       if (!cronsListEl) return;
       if (!crons || crons.length === 0) {
-        cronsListEl.innerHTML = '<div style="padding:14px; text-align:center; color:var(--muted); font-size:11.5px;">No scheduled cron jobs found.<br/><span style="font-size:10.5px; opacity:0.8;">Crons can be scheduled through prompt instructions.</span></div>';
+        cronsListEl.innerHTML = '<div style="padding:16px 12px; text-align:center; color:var(--muted); font-size:11.5px;">No scheduled tasks active.<br/><button class="cron-btn-action" data-cron-action="create" style="margin:8px auto 0 auto; padding:4px 10px;">+ Create New Task</button></div>';
         return;
       }
       cronsListEl.innerHTML = crons.map(c => {
         const isEnabled = c.enabled !== false;
+        const isRunning = c.last_status === 'running';
+        const statusLabel = isRunning ? 'Running' : (isEnabled ? 'Active' : 'Paused');
+        const statusPillClass = isRunning ? 'cron-status-running' : (isEnabled ? 'cron-status-active' : 'cron-status-paused');
+
+        let lastStatusText = '○ Never run';
+        let lastStatusColor = 'var(--muted)';
+        if (c.last_status === 'success') {
+          lastStatusText = '✓ Success';
+          lastStatusColor = 'var(--green)';
+        } else if (c.last_status === 'failed') {
+          lastStatusText = '✗ Failed';
+          lastStatusColor = 'var(--red)';
+        } else if (c.last_status === 'timeout') {
+          lastStatusText = '⏱ Timeout';
+          lastStatusColor = '#eab308';
+        }
+        const nextRun = isEnabled ? (c.next_run_in ? ('Next: ' + c.next_run_in) : 'Next: soon') : 'Paused';
+
         return '<div class="cron-card">' +
           '<div class="cron-card-top">' +
-            '<span class="cron-card-schedule">' + escapeHtml(c.schedule || 'cron') + '</span>' +
-            '<span class="cron-status-pill ' + (isEnabled ? 'cron-status-active' : 'cron-status-paused') + '">' + (isEnabled ? 'Active' : 'Paused') + '</span>' +
+            '<div class="cron-card-title-group">' +
+              '<span class="cron-card-name" title="' + escapeHtml(c.name || 'Task') + '">' + escapeHtml(c.name || 'Task') + '</span>' +
+              '<span class="cron-card-schedule">' + escapeHtml(c.schedule || 'every 1h') + '</span>' +
+            '</div>' +
+            '<span class="cron-status-pill ' + statusPillClass + '">' + statusLabel + '</span>' +
           '</div>' +
-          '<div class="cron-prompt">' + escapeHtml(c.prompt || c.name || '') + '</div>' +
+          '<div class="cron-prompt">' + escapeHtml(c.prompt || '') + '</div>' +
+          '<div class="cron-card-meta">' +
+            '<div>' +
+              '<span style="color:' + lastStatusColor + '; font-weight:600;">' + lastStatusText + '</span>' +
+              '<span style="opacity:0.6; margin-left:6px;">• ' + escapeHtml(nextRun) + '</span>' +
+            '</div>' +
+            '<div class="cron-card-actions">' +
+              '<button class="cron-btn-action run-btn" data-cron-action="run" data-id="' + escapeHtml(c.id) + '" data-name="' + escapeHtml(c.name || '') + '" title="Trigger immediately">▶ Run</button>' +
+              '<button class="cron-btn-action" data-cron-action="toggle" data-id="' + escapeHtml(c.id) + '" title="' + (isEnabled ? 'Pause schedule' : 'Activate schedule') + '">' + (isEnabled ? '⏸ Pause' : '▶ Enable') + '</button>' +
+            '</div>' +
+          '</div>' +
         '</div>';
       }).join('');
+    }
+
+    function renderCronEventCard(job, run) {
+      if (!chatContainer) return;
+      const isSuccess = run.status === 'success';
+      const durSec = run.duration_ms ? (run.duration_ms / 1000).toFixed(1) : '0';
+      const outPreview = run.output_preview || (isSuccess ? 'Scheduled run completed without output.' : (run.error || 'Execution failed.'));
+
+      const card = document.createElement('div');
+      card.className = 'cron-event-card ' + (isSuccess ? 'success' : 'failed');
+      card.innerHTML =
+        '<div class="cron-event-hdr">' +
+          '<span style="display:flex; align-items:center; gap:5px;">' +
+            '<span style="color:' + (isSuccess ? 'var(--green)' : 'var(--red)') + ';">' + (isSuccess ? '✓' : '✗') + '</span>' +
+            '<span>Scheduled Task: <strong>' + escapeHtml(job?.name || run.job_name || 'Task') + '</strong></span>' +
+          '</span>' +
+          '<span style="font-size:10px; color:var(--muted); font-weight:normal;">' + durSec + 's</span>' +
+        '</div>' +
+        '<div class="cron-event-body">' + escapeHtml(outPreview) + '</div>';
+
+      chatContainer.appendChild(card);
+      scrollToBottomIfNeeded();
     }
 
     function updatePlanTracker(plan) {
@@ -1553,6 +1637,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         return;
       }
 
+      // 2b. Tool sequence header toggle
+      const toolSeqHdr = e.target.closest('.tool-seq-header');
+      if (toolSeqHdr) {
+        if (e.target.closest('.tool-seq-copy')) return;
+        const seq = toolSeqHdr.closest('.tool-sequence');
+        if (seq) {
+          seq.classList.toggle('collapsed');
+          if (typeof toolSeqUserToggled !== 'undefined') toolSeqUserToggled = true;
+        }
+        return;
+      }
+
       // 3. Approval parameter toggle
       const argsToggle = e.target.closest('.approval-toggle-args');
       if (argsToggle) {
@@ -1612,13 +1708,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           const tabSname = target.getAttribute('data-session-name') || target.closest('[data-session-name]')?.getAttribute('data-session-name') || '';
           if (tabSid) {
             if (sessionsFlyout) sessionsFlyout.style.display = 'none';
-            vscode.postMessage({ type: 'open_session_tab', sessionId: tabSid, sessionName: tabSname });
+            const isCurrent = tabSid === currentSessionId;
+            const tabPayload = collectOpenTabPayload(isCurrent);
+            if (isCurrent) {
+              promptQueue.length = 0;
+              renderQueue();
+            }
+            vscode.postMessage({ type: 'open_session_tab', sessionId: tabSid, sessionName: tabSname, ...tabPayload });
           }
           break;
         }
         case 'open-current-tab': {
           const sNameEl = document.getElementById('active-session-name');
-          vscode.postMessage({ type: 'open_session_tab', sessionId: currentSessionId, sessionName: sNameEl?.textContent?.trim() || '' });
+          const tabPayload = collectOpenTabPayload(true);
+          promptQueue.length = 0;
+          renderQueue();
+          vscode.postMessage({ type: 'open_session_tab', sessionId: currentSessionId, sessionName: sNameEl?.textContent?.trim() || '', ...tabPayload });
           break;
         }
         case 'open-plan-tab':
@@ -1651,9 +1756,42 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'open-diff':
           vscode.postMessage({ type: 'open_diff' });
           break;
+        case 'toggle-more-files': {
+          e.stopPropagation();
+          const card = target.closest('.files-changed-card');
+          if (card) {
+            const isExpanded = card.getAttribute('data-expanded') === 'true';
+            card.setAttribute('data-expanded', isExpanded ? 'false' : 'true');
+            const extras = card.querySelectorAll('.files-changed-extra');
+            extras.forEach(el => { el.style.display = isExpanded ? 'none' : 'flex'; });
+            target.textContent = isExpanded ? ('... Show ' + extras.length + ' more') : 'Show less ▴';
+          }
+          break;
+        }
         case 'undo-turn':
           vscode.postMessage({ type: 'undo_turn' });
           break;
+        case 'carousel-prev': {
+          const cWrap = target.closest('.prompt-images-container');
+          const carousel = cWrap ? cWrap.querySelector('.prompt-image-carousel') : null;
+          if (carousel) carousel.scrollBy({ left: -140, behavior: 'smooth' });
+          break;
+        }
+        case 'carousel-next': {
+          const cWrap = target.closest('.prompt-images-container');
+          const carousel = cWrap ? cWrap.querySelector('.prompt-image-carousel') : null;
+          if (carousel) carousel.scrollBy({ left: 140, behavior: 'smooth' });
+          break;
+        }
+        case 'toggle-prompt-expand': {
+          const pWrap = target.closest('.prompt-text-wrapper');
+          const pContent = pWrap ? pWrap.querySelector('.prompt-text-content') : null;
+          if (pContent) {
+            const isClamped = pContent.classList.toggle('clamped');
+            target.textContent = isClamped ? 'Show more ▾' : 'Show less ▴';
+          }
+          break;
+        }
         case 'compact-session':
           showCompactionBanner('Compacting conversation context to reduce token usage...');
           vscode.postMessage({ type: 'compact_session' });
@@ -1810,7 +1948,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       flyoutList.innerHTML = filtered.map(m => {
         const isActive = m.id === currentModel;
         return '<div class="flyout-item ' + (isActive ? 'active' : '') + '" data-action="pick-model" data-model-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || 'openrouter') + '">' +
-          '<span>' + escapeHtml(m.name || m.id) + '</span>' +
+          '<div class="flyout-item-info">' +
+            (isActive ? '<span class="flyout-active-dot"></span>' : '') +
+            '<span class="flyout-item-name">' + escapeHtml(m.name || m.id) + '</span>' +
+          '</div>' +
           '<span class="flyout-item-meta">' + escapeHtml(m.provider || 'openrouter') + (m.pricing ? ' · ' + escapeHtml(m.pricing) : '') + '</span>' +
         '</div>';
       }).join('');
@@ -2122,7 +2263,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
         }
 
-        appendUserMessage(text, images);
+        appendUserMessage(text, images, new Date().toISOString());
         startAssistantTurn();
         vscode.postMessage({
           type: 'send_prompt',
@@ -2444,46 +2585,185 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       vscode.postMessage({ type: 'apply_code', code: code });
     };
 
+    function extractMessageText(content) {
+      if (content == null) return '';
+      if (typeof content === 'string') return content;
+      if (Array.isArray(content)) {
+        return content.map(function(part) {
+          if (typeof part === 'string') return part;
+          if (part && typeof part === 'object' && typeof part.text === 'string') return part.text;
+          return '';
+        }).join('');
+      }
+      if (typeof content === 'object' && typeof content.text === 'string') return content.text;
+      try { return String(content); } catch (e) { return ''; }
+    }
+
+    function transcriptHasUserPrompt(messages) {
+      return (messages || []).some(function(m) {
+        if (!m || m.role !== 'user') return false;
+        const text = extractMessageText(m.content).trim();
+        if (!text) return false;
+        if (text.startsWith('[Conversation summary') || text.startsWith('[Previous context summary')) return false;
+        return true;
+      });
+    }
+
+    function captureTranscriptForTab() {
+      const out = [];
+      if (!chatContainer) return out;
+      const children = chatContainer.children;
+      for (let i = 0; i < children.length; i++) {
+        const el = children[i];
+        if (el.classList.contains('message-wrap') && el.classList.contains('user')) {
+          const textEl = el.querySelector('.prompt-text-content');
+          const images = Array.prototype.map.call(el.querySelectorAll('.prompt-image-thumb'), function(img) { return img.src; }).filter(Boolean);
+          out.push({ role: 'user', content: (textEl && textEl.textContent) || '', images: images });
+        } else if (el.classList.contains('message-wrap') && el.classList.contains('assistant')) {
+          const thinkEl = el.querySelector('.thinking-content');
+          const textNodes = el.querySelectorAll('.assistant-text');
+          let asstText = '';
+          for (let t = 0; t < textNodes.length; t++) {
+            if (t) asstText += '\\n\\n';
+            asstText += textNodes[t].textContent || '';
+          }
+          out.push({ role: 'assistant', content: asstText, thinking: (thinkEl && thinkEl.textContent) || '' });
+        }
+      }
+      return out;
+    }
+
+    function collectOpenTabPayload(includeTranscript) {
+      return {
+        queue: [...promptQueue],
+        draft: promptInput ? promptInput.value : '',
+        images: [...attachedImages],
+        seedMessages: includeTranscript ? captureTranscriptForTab() : [],
+      };
+    }
+
+    function applyTabComposerState(draft, images) {
+      if (promptInput && typeof draft === 'string' && draft) {
+        promptInput.value = draft;
+        promptInput.style.height = 'auto';
+        promptInput.style.height = Math.min(promptInput.scrollHeight, 160) + 'px';
+        if (sendBtn) sendBtn.classList.add('has-text');
+      }
+      if (Array.isArray(images) && images.length > 0) {
+        attachedImages = [...images];
+        renderImageAttachments();
+      }
+    }
+
     function formatTime(date) {
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
-    function appendUserMessage(text, images) {
+    function appendUserMessage(text, images, ts, opts) {
+      const displayText = typeof text === 'string' ? text : extractMessageText(text);
+      const trimmed = (displayText || '').trim();
+      const now = Date.now();
+      if (!opts || !opts.skipDedupe) {
+        if (trimmed && trimmed === lastAppendedUserText && (now - lastAppendedUserTime) < 1500) {
+          return;
+        }
+      }
+      if (trimmed) {
+        lastAppendedUserText = trimmed;
+        lastAppendedUserTime = now;
+      }
+
       const wrap = document.createElement('div');
       wrap.className = 'message-wrap user';
 
+      const actionsDiv = document.createElement('div');
+      actionsDiv.className = 'user-prompt-actions';
+      actionsDiv.innerHTML = '<button class="prompt-undo-btn" data-action="undo-turn" title="Undo to here">' +
+        '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">' +
+          '<path d="M3 7v6h6"></path>' +
+          '<path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path>' +
+        '</svg>' +
+        '<span>Undo to here</span>' +
+      '</button>';
+      wrap.appendChild(actionsDiv);
+
       const msgDiv = document.createElement('div');
-      msgDiv.className = 'message user';
+      msgDiv.className = 'message user prompt-card';
 
       if (images && Array.isArray(images) && images.length > 0) {
-        const imgWrap = document.createElement('div');
-        imgWrap.style.cssText = 'display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px;';
+        const imgContainer = document.createElement('div');
+        imgContainer.className = 'prompt-images-container';
+
+        const prevBtn = document.createElement('button');
+        prevBtn.className = 'carousel-nav-btn prev';
+        prevBtn.setAttribute('data-action', 'carousel-prev');
+        prevBtn.setAttribute('title', 'Scroll left');
+        prevBtn.setAttribute('aria-label', 'Previous image');
+        prevBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"></polyline></svg>';
+
+        const nextBtn = document.createElement('button');
+        nextBtn.className = 'carousel-nav-btn next';
+        nextBtn.setAttribute('data-action', 'carousel-next');
+        nextBtn.setAttribute('title', 'Scroll right');
+        nextBtn.setAttribute('aria-label', 'Next image');
+        nextBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+
+        const carousel = document.createElement('div');
+        carousel.className = 'prompt-image-carousel';
+
         images.forEach(uri => {
           const imgEl = document.createElement('img');
           imgEl.src = uri;
-          imgEl.style.cssText = 'max-width:220px; max-height:140px; border-radius:6px; object-fit:cover; border:1px solid rgba(255,255,255,0.2); cursor:pointer; transition:transform 0.15s, border-color 0.15s;';
+          imgEl.className = 'prompt-image-thumb';
           imgEl.title = 'Click to preview full size';
-          imgEl.addEventListener('mouseenter', () => { imgEl.style.transform = 'scale(1.02)'; imgEl.style.borderColor = 'var(--vscode-focusBorder, #007fd4)'; });
-          imgEl.addEventListener('mouseleave', () => { imgEl.style.transform = 'scale(1)'; imgEl.style.borderColor = 'rgba(255,255,255,0.2)'; });
-          imgEl.addEventListener('click', () => {
+          imgEl.addEventListener('click', (e) => {
+            if (e && e.stopPropagation) e.stopPropagation();
             openImageLightbox(uri);
           });
-          imgWrap.appendChild(imgEl);
+          carousel.appendChild(imgEl);
         });
-        msgDiv.appendChild(imgWrap);
+
+        imgContainer.appendChild(prevBtn);
+        imgContainer.appendChild(carousel);
+        imgContainer.appendChild(nextBtn);
+
+        setTimeout(() => {
+          if (carousel.scrollWidth > carousel.clientWidth + 4) {
+            imgContainer.classList.add('has-overflow');
+          }
+        }, 50);
+
+        msgDiv.appendChild(imgContainer);
       }
 
-      if (text) {
-        const textSpan = document.createElement('div');
-        textSpan.textContent = text;
-        msgDiv.appendChild(textSpan);
+      if (displayText) {
+        const textWrapper = document.createElement('div');
+        textWrapper.className = 'prompt-text-wrapper';
+
+        const textContent = document.createElement('div');
+        textContent.className = 'prompt-text-content';
+        textContent.textContent = displayText;
+        textWrapper.appendChild(textContent);
+
+        const isLong = displayText.length > 220 || displayText.split(/\\r?\\n/).length > 3;
+        if (isLong) {
+          textContent.classList.add('clamped');
+          const expandBtn = document.createElement('button');
+          expandBtn.className = 'prompt-expand-btn';
+          expandBtn.setAttribute('data-action', 'toggle-prompt-expand');
+          expandBtn.textContent = 'Show more ▾';
+          textWrapper.appendChild(expandBtn);
+        }
+
+        msgDiv.appendChild(textWrapper);
       }
 
       wrap.appendChild(msgDiv);
 
       const footer = document.createElement('div');
       footer.className = 'message-footer';
-      footer.innerHTML = '<span>' + formatTime(new Date()) + '</span>' +
+      const timeStr = ts ? formatTime(new Date(ts)) : formatTime(new Date());
+      footer.innerHTML = '<span>' + timeStr + '</span>' +
         '<button class="msg-copy-btn" data-action="copy-prompt" title="Copy prompt">' +
           '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy' +
         '</button>';
@@ -2551,21 +2831,55 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       dot.style.display = anyUnreadOrRunning ? 'inline-block' : 'none';
     }
 
-    window.copyMessageText = function(btn) {
+    function copyMessageText(btn) {
       const wrap = btn.closest('.message-wrap');
       if (!wrap) return;
       let text = '';
+      const promptTextEl = wrap.querySelector('.prompt-text-content');
       const userMsg = wrap.querySelector('.message.user');
-      const asstMsg = wrap.querySelector('.assistant-text');
-      if (userMsg) text = userMsg.textContent || '';
-      else if (asstMsg) text = asstMsg.innerText || asstMsg.textContent || '';
+      if (promptTextEl) {
+        text = promptTextEl.textContent || '';
+      } else if (userMsg) {
+        text = userMsg.textContent || '';
+      } else {
+        if (wrap._rawMarkdown) {
+          text = wrap._rawMarkdown;
+        } else {
+          const asstBlocks = wrap.querySelectorAll('.assistant-text');
+          if (asstBlocks && asstBlocks.length > 0) {
+            const parts = [];
+            asstBlocks.forEach(function(block) {
+              if (block._blockText) {
+                parts.push(block._blockText);
+              } else if (block._rawMarkdown) {
+                parts.push(block._rawMarkdown);
+              } else {
+                try {
+                  const clone = block.cloneNode(true);
+                  clone.querySelectorAll('.code-block-header, .code-copy-btn, button').forEach(function(el) {
+                    if (el.remove) el.remove();
+                    else if (el.parentElement) el.parentElement.removeChild(el);
+                  });
+                  const bText = (clone.innerText || clone.textContent || '').trim();
+                  if (bText) parts.push(bText);
+                } catch (e) {
+                  const bText = (block.innerText || block.textContent || '').trim();
+                  if (bText) parts.push(bText);
+                }
+              }
+            });
+            text = parts.join('\\n\\n');
+          }
+        }
+      }
       if (text) {
         copyToClipboard(text);
         const orig = btn.innerHTML;
         btn.innerHTML = '<span style="color:var(--green)">Copied!</span>';
         setTimeout(function() { btn.innerHTML = orig; }, 1500);
       }
-    };
+    }
+    window.copyMessageText = copyMessageText;
 
     let lastSoundPlayedAt = 0;
     function playTone(kind) {
@@ -2813,6 +3127,97 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       scrollToBottomIfNeeded();
     }
 
+    function getLangBadgeHtml(filePath) {
+      const parts = filePath.split('.');
+      const ext = parts.length > 1 ? parts.pop().toLowerCase().trim() : '';
+      const displayExt = ext ? (ext.length <= 4 ? ext : ext.substring(0, 4)) : 'file';
+      const safeClass = ext ? 'lang-' + escapeHtml(ext) : 'lang-default';
+      return '<span class="files-changed-lang-tag ' + safeClass + '">' + escapeHtml(displayExt) + '</span>';
+    }
+
+    function createFilesChangedCard(filePathsSet) {
+      if (!filePathsSet) return null;
+      const seen = new Map();
+      Array.from(filePathsSet).forEach(filePath => {
+        if (!filePath || typeof filePath !== 'string') return;
+        const norm = filePath.split('\\\\').join('/').trim();
+        const base = norm.split('/').pop().toLowerCase();
+        if (!seen.has(base) || norm.length > seen.get(base).length) {
+          seen.set(base, norm);
+        }
+      });
+      const files = Array.from(seen.values());
+      if (files.length === 0) return null;
+
+      const card = document.createElement('div');
+      card.className = 'files-changed-card';
+
+      const header = document.createElement('div');
+      header.className = 'files-changed-header';
+      header.innerHTML = '<span class="files-changed-title">' + files.length + ' File' + (files.length > 1 ? 's' : '') + ' Changed</span>' +
+        '<button class="files-changed-review-btn" data-action="open-diff" title="Review All Changes in Git Diff">Review</button>';
+      card.appendChild(header);
+
+      const list = document.createElement('div');
+      list.className = 'files-changed-list';
+
+      const MAX_PREVIEW = 4;
+      files.forEach((filePath, idx) => {
+        const row = document.createElement('div');
+        row.className = 'files-changed-row' + (idx >= MAX_PREVIEW ? ' files-changed-extra' : '');
+        if (idx >= MAX_PREVIEW) row.style.display = 'none';
+        row.setAttribute('data-action', 'open-file-diff');
+        row.setAttribute('data-file-path', filePath);
+        row.setAttribute('title', 'Click to view diff for ' + filePath);
+
+        const normalizedKey = filePath.split('\\\\').join('/');
+        const filename = normalizedKey.split('/').pop() || filePath;
+
+        let stat = globalDiffStats[normalizedKey];
+        if (!stat) {
+          for (const k in globalDiffStats) {
+            if (normalizedKey.endsWith(k) || k.endsWith(normalizedKey)) {
+              stat = globalDiffStats[k];
+              break;
+            }
+          }
+        }
+
+        let statsHtml = '';
+        if (stat) {
+          if (stat.additions > 0) statsHtml += '<span class="files-stat-add">+' + stat.additions + '</span>';
+          if (stat.deletions > 0) statsHtml += '<span class="files-stat-del">-' + stat.deletions + '</span>';
+          if (stat.additions === 0 && stat.deletions === 0) statsHtml += '<span class="chip-diff-label">Diff</span>';
+        } else {
+          statsHtml = '<span class="chip-diff-label">Diff</span>';
+        }
+
+        row.innerHTML = '<div class="files-changed-row-left">' +
+          getLangBadgeHtml(filename) +
+          '<span class="files-changed-name">' + escapeHtml(filename) + '</span>' +
+        '</div>' +
+        '<div class="files-changed-row-stats">' + statsHtml + '</div>';
+
+        list.appendChild(row);
+      });
+
+      card.appendChild(list);
+
+      if (files.length > MAX_PREVIEW) {
+        const moreBtn = document.createElement('button');
+        moreBtn.className = 'files-changed-more-btn';
+        moreBtn.setAttribute('data-action', 'toggle-more-files');
+        moreBtn.textContent = '... Show ' + (files.length - MAX_PREVIEW) + ' more';
+        card.appendChild(moreBtn);
+      }
+
+      try {
+        vscode.postMessage({ type: 'get_file_diff_stats' });
+      } catch {}
+
+      return card;
+    }
+
     function endAssistantTurn() {
       removeTurnLoader();
       finishCurrentThinking();
@@ -2849,23 +3254,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       if (currentTurnAssistantDiv) {
         if (turnEditedFiles.size > 0) {
-          const strip = document.createElement('div');
-          strip.className = 'turn-actions-strip';
-          turnEditedFiles.forEach(filePath => {
-            const chip = document.createElement('div');
-            chip.className = 'file-edited-chip';
-            chip.setAttribute('data-action', 'open-file-diff');
-            chip.setAttribute('data-file-path', filePath);
-            const filename = filePath.split(/[\\\\/]/).pop() || filePath;
-            chip.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>' +
-              '<span class="chip-filename" title="' + escapeHtml(filePath) + '">' + escapeHtml(filename) + '</span>' +
-              '<span class="chip-diff-label">Diff</span>';
-            strip.appendChild(chip);
-          });
-          currentTurnAssistantDiv.appendChild(strip);
+          const card = createFilesChangedCard(turnEditedFiles);
+          if (card) currentTurnAssistantDiv.appendChild(card);
         }
 
         const elapsedSec = ((Date.now() - currentTurnStartTime) / 1000).toFixed(1);
+        currentTurnAssistantDiv._rawMarkdown = accumulatedAssistantText;
         const footer = document.createElement('div');
         footer.className = 'message-footer';
         footer.innerHTML = '<span class="turn-duration-badge">' +
@@ -2906,6 +3300,36 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     window.addEventListener('message', event => {
       const msg = event.data;
       switch (msg.type) {
+        case 'file_diff_stats_result': {
+          if (msg.stats) {
+            globalDiffStats = Object.assign(globalDiffStats || {}, msg.stats);
+            document.querySelectorAll('.files-changed-row').forEach(row => {
+              const fPath = row.getAttribute('data-file-path');
+              if (!fPath) return;
+              const normalized = fPath.split('\\\\').join('/');
+              let s = globalDiffStats[normalized];
+              if (!s) {
+                for (const k in globalDiffStats) {
+                  if (normalized.endsWith(k) || k.endsWith(normalized)) {
+                    s = globalDiffStats[k];
+                    break;
+                  }
+                }
+              }
+              if (s) {
+                const statsEl = row.querySelector('.files-changed-row-stats');
+                if (statsEl) {
+                  let html = '';
+                  if (s.additions > 0) html += '<span class="files-stat-add">+' + s.additions + '</span>';
+                  if (s.deletions > 0) html += '<span class="files-stat-del">-' + s.deletions + '</span>';
+                  if (s.additions === 0 && s.deletions === 0) html += '<span class="chip-diff-label">Diff</span>';
+                  if (html) statsEl.innerHTML = html;
+                }
+              }
+            });
+          }
+          break;
+        }
         case 'init_state':
           clearSkeletonState();
           currentSessionId = msg.sessionId;
@@ -3065,7 +3489,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               sendBtn.style.display = 'flex';
               document.querySelector('.prompt-box')?.classList.remove('is-generating');
             }
-            if (promptInput) {
+            if (promptInput && !msg.draft) {
               promptInput.value = (sessState && sessState.draftInput) || '';
               promptInput.style.height = 'auto';
             }
@@ -3082,18 +3506,25 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.session && Array.isArray(msg.session.messages) && msg.session.messages.length > 0) {
             allMessages = allMessages.concat(msg.session.messages.filter(m => {
               if (m.role === 'system') return false;
-              if (m.role === 'assistant' && (m.content || '').trim() === 'Understood. I have the context of our earlier discussion and will continue from here.') {
+              if (m.role === 'assistant' && extractMessageText(m.content).trim() === 'Understood. I have the context of our earlier discussion and will continue from here.') {
                 return false;
               }
               return true;
             }));
           }
+          if (!transcriptHasUserPrompt(allMessages) && Array.isArray(msg.seedMessages) && msg.seedMessages.length > 0) {
+            allMessages = msg.seedMessages;
+          }
+
+          lastAppendedUserText = '';
+          lastAppendedUserTime = 0;
 
           if (allMessages.length > 0) {
             hideZeroState();
             if (hasCompactedHistory) {
               appendCompactedHistoryBanner(msg.session.compacted_history.length);
             }
+            let lastUserMsgTs = null;
             let currentAssistantWrap = null;
             let currentTurnToolSeq = null;
             let currentTurnToolBody = null;
@@ -3101,19 +3532,25 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             let turnEditedFilesForLoad = new Set();
 
             for (let i = 0; i < allMessages.length; i++) {
+              try {
               const m = allMessages[i];
               if (m.role === 'user') {
+                lastUserMsgTs = m.ts || null;
                 currentAssistantWrap = null;
                 currentTurnToolSeq = null;
                 currentTurnToolBody = null;
                 currentTurnToolCount = 0;
                 turnEditedFilesForLoad = new Set();
 
-                const uContent = (m.content || '').trim();
+                const uContent = extractMessageText(m.content).trim();
                 if (uContent.startsWith('[Conversation summary') || uContent.startsWith('[Previous context summary')) {
                   appendCompactionSummaryCard(uContent);
                 } else {
-                  appendUserMessage(m.content || '');
+                  try {
+                    appendUserMessage(uContent, m.images || [], m.ts, { skipDedupe: true });
+                  } catch (userRenderErr) {
+                    console.error('[Andromity webview] Failed to render user prompt', userRenderErr);
+                  }
                 }
               } else if (m.role === 'assistant') {
                 if (!currentAssistantWrap) {
@@ -3133,13 +3570,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 // 1. Thinking block (if any)
                 const _thinking = m.thinking || '';
                 if (_thinking.trim()) {
+                  let thinkDuration = m.duration ? Number(m.duration).toFixed(1) : null;
+                  if (!thinkDuration && m.ts && lastUserMsgTs) {
+                    const delta = (new Date(m.ts).getTime() - new Date(lastUserMsgTs).getTime()) / 1000;
+                    if (delta > 0 && delta < 3600) thinkDuration = delta.toFixed(1);
+                  }
                   const thinkEl = document.createElement('div');
                   thinkEl.className = 'thinking-card';
-                  thinkEl.innerHTML = '<div class="thinking-header"><div class="thinking-pulse" style="opacity:0.4; animation:none;"></div><span>thought</span><svg class="thinking-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg></div><div class="thinking-content">' + escapeHtml(_thinking) + '</div>';
-                  thinkEl.querySelector('.thinking-header').addEventListener('click', () => {
-                    thinkEl.classList.toggle('expanded');
-                  });
-                  // If a tool sequence is already active in this turn, thinking lives inside it (TUI parity)
+                  const thinkLabel = thinkDuration ? ('thought (' + thinkDuration + 's)') : 'thought';
+                  thinkEl.innerHTML = '<div class="thinking-header"><div class="thinking-pulse" style="opacity:0.4; animation:none;"></div><span>' + thinkLabel + '</span><svg class="thinking-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg></div><div class="thinking-content">' + escapeHtml(_thinking) + '</div>';
+                  // Delegated listener handles header toggle without double-toggling
                   if (currentTurnToolBody) {
                     currentTurnToolBody.appendChild(thinkEl);
                   } else {
@@ -3161,23 +3601,27 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     '<div class="tool-seq-body"></div>';
 
                     const seqEl = currentTurnToolSeq;
-                    seqEl.querySelector('.tool-seq-header').addEventListener('click', (e) => {
-                      if (e.target.closest('.tool-seq-copy')) return;
-                      seqEl.classList.toggle('collapsed');
-                    });
-                    seqEl.querySelector('.tool-seq-copy').addEventListener('click', () => {
-                      try {
-                        const parts = [];
-                        seqEl.querySelectorAll('.tool-card').forEach((c, idx) => {
-                          const n = c.querySelector('.tool-title-group span')?.textContent || 'tool';
-                          const args = c.querySelector('.tool-body')?.textContent || '';
-                          parts.push((idx + 1) + '. ' + n + '\\n   Args: ' + args);
-                        });
-                        copyToClipboard(parts.join('\\n\\n') || seqEl.textContent);
-                      } catch {}
-                    });
+                    const copyBtn = seqEl.querySelector('.tool-seq-copy');
+                    if (copyBtn) {
+                      copyBtn.addEventListener('click', () => {
+                        try {
+                          const parts = [];
+                          seqEl.querySelectorAll('.tool-card').forEach((c, idx) => {
+                            const n = c.querySelector('.tool-title-group span')?.textContent || 'tool';
+                            const args = c.querySelector('.tool-body')?.textContent || '';
+                            parts.push((idx + 1) + '. ' + n + '\\n   Args: ' + args);
+                          });
+                          copyToClipboard(parts.join('\\n\\n') || seqEl.textContent);
+                        } catch {}
+                      });
+                    }
 
                     currentTurnToolBody = seqEl.querySelector('.tool-seq-body');
+                    if (!currentTurnToolBody) {
+                      currentTurnToolBody = document.createElement('div');
+                      currentTurnToolBody.className = 'tool-seq-body';
+                      seqEl.appendChild(currentTurnToolBody);
+                    }
                     currentAssistantWrap.appendChild(seqEl);
                   }
 
@@ -3216,24 +3660,30 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                       '</div>' +
                     '</div>' +
                     '<div class="tool-body">' + escapeHtml(toolArgs) + '</div>';
-                    tDiv.querySelector('.tool-header').addEventListener('click', () => {
-                      tDiv.classList.toggle('expanded');
-                    });
+                    // Delegated listener handles tool-header click without double toggle
                     currentTurnToolBody.appendChild(tDiv);
                   }
 
                   const titleSpan = currentTurnToolSeq.querySelector('.tool-seq-title');
                   if (titleSpan) {
-                    titleSpan.textContent = currentTurnToolCount + (currentTurnToolCount === 1 ? ' tool' : ' tools') + ' · worked';
+                    let toolDuration = m.duration ? Number(m.duration).toFixed(1) : null;
+                    if (!toolDuration && m.ts && lastUserMsgTs) {
+                      const delta = (new Date(m.ts).getTime() - new Date(lastUserMsgTs).getTime()) / 1000;
+                      if (delta > 0 && delta < 3600) toolDuration = delta.toFixed(1);
+                    }
+                    const toolWord = currentTurnToolCount + (currentTurnToolCount === 1 ? ' tool' : ' tools');
+                    titleSpan.textContent = toolWord + (toolDuration ? ' · worked for ' + toolDuration + 's' : ' · worked');
                   }
                 }
 
                 // 3. Text content in chronological order
-                const _content = m.content || '';
+                const _content = extractMessageText(m.content);
                 if (_content.trim()) {
                   const textEl = document.createElement('div');
                   textEl.className = 'assistant-text';
                   textEl.innerHTML = renderMarkdown(_content);
+                  textEl._rawMarkdown = _content;
+                  currentAssistantWrap._rawMarkdown = (currentAssistantWrap._rawMarkdown ? (currentAssistantWrap._rawMarkdown + '\\n\\n') : '') + _content;
                   currentAssistantWrap.appendChild(textEl);
                   // Reset tool sequence pointer so subsequent tools create a new sequence after text
                   currentTurnToolSeq = null;
@@ -3256,36 +3706,42 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   currentTurnToolBody = null;
                   currentTurnToolCount = 0;
                   if (turnEditedFilesForLoad.size > 0) {
-                    const strip = document.createElement('div');
-                    strip.className = 'turn-actions-strip';
-                    turnEditedFilesForLoad.forEach(filePath => {
-                      const chip = document.createElement('div');
-                      chip.className = 'file-edited-chip';
-                      chip.setAttribute('data-action', 'open-file-diff');
-                      chip.setAttribute('data-file-path', filePath);
-                      const filename = filePath.split(/[\\/]/).pop() || filePath;
-                      chip.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>' +
-                        '<span class="chip-filename" title="' + escapeHtml(filePath) + '">' + escapeHtml(filename) + '</span>' +
-                        '<span class="chip-diff-label">Diff</span>';
-                      strip.appendChild(chip);
-                    });
-                    currentAssistantWrap.appendChild(strip);
+                    const card = createFilesChangedCard(turnEditedFilesForLoad);
+                    if (card) currentAssistantWrap.appendChild(card);
                   }
+
+                  let elapsedSec = m.duration ? Number(m.duration).toFixed(1) : null;
+                  if (!elapsedSec && m.ts && lastUserMsgTs) {
+                    const delta = (new Date(m.ts).getTime() - new Date(lastUserMsgTs).getTime()) / 1000;
+                    if (delta > 0 && delta < 3600) {
+                      elapsedSec = delta.toFixed(1);
+                    }
+                  }
+                  const timeStr = m.ts ? formatTime(new Date(m.ts)) : formatTime(new Date());
+                  const badgeText = elapsedSec ? (elapsedSec + 's · ' + timeStr) : timeStr;
 
                   const footer = document.createElement('div');
                   footer.className = 'message-footer';
-                  footer.innerHTML = '<button class="msg-copy-btn" data-action="copy-message" title="Copy response">' +
+                  footer.innerHTML = '<span class="turn-duration-badge">' +
+                    '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:2px;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
+                    '<span>' + badgeText + '</span>' +
+                  '</span>' +
+                  '<button class="msg-copy-btn" data-action="copy-message" title="Copy response">' +
                     '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy' +
                   '</button>';
                   currentAssistantWrap.appendChild(footer);
                   currentAssistantWrap = null;
                 }
               }
+              } catch (replayErr) {
+                console.error('[Andromity webview] Failed to replay history message', replayErr);
+              }
             }
           } else {
             chatContainer.appendChild(zeroState);
             zeroState.style.display = 'flex';
           }
+          applyTabComposerState(msg.draft, msg.images);
           if (msg.session) {
             currentSessionId = msg.session.id || currentSessionId;
             if (msg.session.model) {
@@ -3682,6 +4138,41 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           updateSubagentCard(msg);
           break; }
 
+        case 'init_queue':
+          if (Array.isArray(msg.queue) && msg.queue.length > 0) {
+            promptQueue.push(...msg.queue);
+            renderQueue();
+          }
+          break;
+
+        case 'init_tab_state':
+          if (Array.isArray(msg.queue) && msg.queue.length > 0) {
+            promptQueue.push(...msg.queue);
+            renderQueue();
+          }
+          if (!chatContainer.querySelector('.message-wrap.user') && Array.isArray(msg.seedMessages) && msg.seedMessages.length > 0) {
+            hideZeroState();
+            lastAppendedUserText = '';
+            lastAppendedUserTime = 0;
+            msg.seedMessages.forEach(function(m) {
+              if (!m) return;
+              if (m.role === 'user') {
+                appendUserMessage(extractMessageText(m.content), m.images || [], m.ts, { skipDedupe: true });
+              } else if (m.role === 'assistant' && extractMessageText(m.content).trim()) {
+                const wrap = document.createElement('div');
+                wrap.className = 'message-wrap assistant';
+                wrap.innerHTML = '<div class="assistant-header"><div class="assistant-avatar"><img src="' + sidebarIconUri + '" width="14" height="14" alt="Andromity" /></div><span class="assistant-name">Andromity</span></div>';
+                const textEl = document.createElement('div');
+                textEl.className = 'assistant-text';
+                textEl.innerHTML = renderMarkdown(extractMessageText(m.content));
+                wrap.appendChild(textEl);
+                chatContainer.appendChild(wrap);
+              }
+            });
+          }
+          applyTabComposerState(msg.draft, msg.images);
+          break;
+
         case 'agent_started':
           if (msg.session_id) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
@@ -3809,6 +4300,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         case 'crons_data':
           renderCronsList(msg.crons || []);
+          break;
+
+        case 'cron_event':
+          if (msg.event === 'run_completed' && msg.run) {
+            renderCronEventCard(msg.job, msg.run);
+          }
           break;
 
         case 'plan_updated':

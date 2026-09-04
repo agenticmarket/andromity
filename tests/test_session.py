@@ -2,7 +2,7 @@
 import tempfile
 from pathlib import Path
 import pytest
-from andromity.core.db import set_custom_db_path, init_schema
+from andromity.core.db import close_conn, init_schema, set_custom_db_path
 from andromity.core.session import Session
 
 
@@ -13,6 +13,8 @@ def isolated_db(tmp_path):
     init_schema()
     yield
     set_custom_db_path(None)
+    close_conn()
+
 
 
 def test_session_creation():

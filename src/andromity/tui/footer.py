@@ -865,22 +865,26 @@ CronStatusPanel.has-crons { display: block; }
         yield Static("", id="cron-jobs-list")
         yield Static("", id="cron-notifs")
 
-    def refresh_jobs(self, jobs: list):
+    def refresh_jobs(self, jobs: list, running_ids: set = None):
         self._jobs = jobs
         if not jobs:
             self.remove_class("has-crons")
         else:
             self.add_class("has-crons")
-        
+
+        running_ids = running_ids or set()
         try:
             list_el = self.query_one("#cron-jobs-list", Static)
             lines = []
             for j in jobs:
-                status_icon = {"never": "○", "success": "✓", "failed": "✗"}.get(j.last_status, "○")
-                color = {"never": "dim", "success": "green", "failed": "red"}.get(j.last_status, "dim")
-                enabled_c = "white" if j.enabled else "dim"
-                next_run = j.next_run_in() if j.enabled else "off"
-                lines.append(f"[{color}]{status_icon}[/] [{enabled_c}]{escape(j.name)}[/] [dim]({next_run})[/]")
+                if j.id in running_ids:
+                    lines.append(f"[cyan bold]⟳ {escape(j.name)}[/] [cyan dim](running…)[/]")
+                else:
+                    status_icon = {"never": "○", "success": "✓", "failed": "✗", "timeout": "⏱"}.get(j.last_status, "○")
+                    color = {"never": "dim", "success": "green", "failed": "red", "timeout": "yellow"}.get(j.last_status, "dim")
+                    enabled_c = "white" if j.enabled else "dim"
+                    next_run = j.next_run_in() if j.enabled else "paused"
+                    lines.append(f"[{color}]{status_icon}[/] [{enabled_c}]{escape(j.name)}[/] [dim]({next_run})[/]")
             safe_update(list_el, "\n".join(lines))
         except Exception as e:
             log.warning("CronStatusPanel error: %s", e)

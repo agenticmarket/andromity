@@ -162,3 +162,71 @@ async def test_rpc_trust_endpoints(tmp_path):
     resp_set = await handler.handle_request(req_set)
     assert resp_set.error is None
     assert resp_set.result["is_trusted"] is True
+
+
+@pytest.mark.asyncio
+async def test_rpc_cron_lifecycle(tmp_path):
+    notifications = []
+
+    def on_notify(n):
+        notifications.append((n.method, n.params))
+
+    handler = JsonRpcHandler(send_notification=on_notify)
+
+    # 1. List crons on fresh project (auto-seeds default presets)
+    list_req = JsonRpcRequest(id=301, method="cron.list", params={"project_path": str(tmp_path)})
+    list_resp = await handler.handle_request(list_req)
+    assert list_resp.error is None
+    assert isinstance(list_resp.result, list)
+    assert len(list_resp.result) >= 2
+    assert any("Run Tests" in j["name"] for j in list_resp.result)
+
+    # 2. Create a new custom cron job
+    create_req = JsonRpcRequest(
+        id=302,
+        method="cron.create",
+        params={
+            "project_path": str(tmp_path),
+            "name": "E2E Nightly Sweep",
+            "prompt": "Run full test suite and verify build",
+            "schedule": "every 6h",
+            "mode": "trust",
+            "allowed_commands": ["pytest", "git status"],
+        },
+    )
+    create_resp = await handler.handle_request(create_req)
+    assert create_resp.error is None
+    job_id = create_resp.result["id"]
+    assert create_resp.result["name"] == "E2E Nightly Sweep"
+    assert create_resp.result["enabled"] is True
+
+    # 3. Toggle the cron job (pause)
+    toggle_req = JsonRpcRequest(
+        id=303,
+        method="cron.toggle",
+        params={"project_path": str(tmp_path), "id": job_id},
+    )
+    toggle_resp = await handler.handle_request(toggle_req)
+    assert toggle_resp.error is None
+    assert toggle_resp.result["enabled"] is False
+
+    # 4. List runs for the job
+    runs_req = JsonRpcRequest(
+        id=304,
+        method="cron.runs",
+        params={"project_path": str(tmp_path), "id": job_id},
+    )
+    runs_resp = await handler.handle_request(runs_req)
+    assert runs_resp.error is None
+    assert isinstance(runs_resp.result, list)
+
+    # 5. Delete the cron job
+    del_req = JsonRpcRequest(
+        id=305,
+        method="cron.delete",
+        params={"project_path": str(tmp_path), "id": job_id},
+    )
+    del_resp = await handler.handle_request(del_req)
+    assert del_resp.error is None
+    assert del_resp.result["deleted"] is True
+

@@ -36,3 +36,5 @@ dist-server/
 build/
 sqlite_migration_plan.md
 *.vsix
+pannel/
+knownbug.md

@@ -75,38 +75,30 @@ ${styles}
   <!-- Top Bar (Clean Session Header, No Duplicate Buttons) -->
   <div class="top-bar">
     <div class="top-bar-left">
-      <button class="session-badge-btn" id="btn-session-picker" title="Sessions (Click to switch or manage sessions)">
-        <svg class="session-badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-        </svg>
+      <div class="session-badge-btn" id="btn-session-picker" title="Sessions (Click to switch or manage sessions)">
         <span class="session-badge-text skeleton skeleton-session" id="active-session-name" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
         <span class="session-activity-dot" id="session-activity-dot" style="display:none;" title="Background session activity"></span>
         <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="6 9 12 15 18 9"></polyline>
         </svg>
-      </button>
+      </div>
     </div>
+    <div class="top-bar-right">
       <button class="top-bar-icon-btn" id="btn-top-open-tab" title="Open Session in New Editor Tab (Side-by-Side)" data-action="open-current-tab">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
           <polyline points="15 3 21 3 21 9"></polyline>
           <line x1="10" y1="14" x2="21" y2="3"></line>
         </svg>
       </button>
       <button class="top-bar-icon-btn" id="btn-top-timeline" title="Conversation Timeline & Milestones" data-action="toggle-timeline">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <circle cx="12" cy="12" r="10"></circle>
           <polyline points="12 6 12 12 16 14"></polyline>
         </svg>
       </button>
-      <button class="top-bar-icon-btn" id="btn-top-undo" title="Undo last turn & rollback file changes" data-action="undo-turn">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M3 7v6h6"></path>
-          <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path>
-        </svg>
-      </button>
       <button class="top-bar-icon-btn" id="btn-top-compact" title="Compact context window" data-action="compact-session">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <polyline points="4 14 10 14 10 20"></polyline>
           <polyline points="20 10 14 10 14 4"></polyline>
           <line x1="14" y1="10" x2="21" y2="3"></line>
@@ -145,11 +137,16 @@ ${styles}
     <div class="crons-flyout-header">
       <div class="crons-header-title">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-        <span>Scheduled Cron Jobs</span>
+        <span>Scheduled Tasks</span>
       </div>
-      <button class="crons-close-btn" id="btn-crons-close" title="Close">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-      </button>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <button class="crons-action-hdr-btn" id="btn-crons-manage" title="Configure in Settings">
+          <span>⚙ Settings</span>
+        </button>
+        <button class="crons-close-btn" id="btn-crons-close" title="Close">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
     </div>
     <div class="crons-list" id="crons-list">
       <div style="padding:14px; text-align:center; color:var(--muted); font-size:11px;">Loading crons...</div>
@@ -188,7 +185,10 @@ ${styles}
   <div class="model-flyout" id="model-flyout" style="display:none;">
     <div class="flyout-header">
       <input type="text" class="flyout-search" id="flyout-search" placeholder="Search 396+ models...">
-      <button class="flyout-hub-link" id="btn-flyout-open-hub">Open Full Hub</button>
+      <button class="flyout-hub-link" id="btn-flyout-open-hub" title="Open Full Model Hub">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path></svg>
+        <span>Full Hub</span>
+      </button>
     </div>
     <div class="flyout-list" id="flyout-list"></div>
   </div>

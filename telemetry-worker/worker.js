@@ -141,6 +141,8 @@ export default {
 
     try {
       const data = await request.json();
+
+      // ── Shared field sanitisation ──────────────────────────────────────────
       const rawUserId = typeof data.user_id === 'string' ? data.user_id.trim() : '';
       if (!/^[a-zA-Z0-9_-]{8,64}$/.test(rawUserId)) {
         return new Response(JSON.stringify({ error: 'Invalid user_id format' }), {
@@ -168,30 +170,119 @@ export default {
       const rawCountry = String(data.country || request.cf?.country || '').toUpperCase().trim();
       const country = /^[A-Z]{2}$/.test(rawCountry) ? rawCountry : 'XX';
 
-      const now = new Date().toISOString();
-      const date = now.split('T')[0];
+      // v2 — model/provider fields (safe, bounded)
+      const provider        = String(data.provider || 'unknown').slice(0, 32).replace(/[^a-zA-Z0-9._-]/g, '') || 'unknown';
+      const model           = String(data.model    || 'unknown').slice(0, 64).replace(/[^a-zA-Z0-9._:-]/g, '') || 'unknown';
+      const providerTypeRaw = String(data.provider_type || 'cloud').toLowerCase();
+      const providerType    = ['cloud', 'local'].includes(providerTypeRaw) ? providerTypeRaw : 'cloud';
+      const reasoningEffort = ['off', 'low', 'medium', 'high'].includes(data.reasoning_effort) ? data.reasoning_effort : 'off';
+      const mcpToolsCount   = Math.min(Math.max(0, parseInt(data.mcp_tools_count || 0, 10)), 999);
+
+      const now     = new Date().toISOString();
+      const date    = now.split('T')[0];
       const sessionId = rawSessionId || `sess-${date}-${rawUserId.slice(0, 8)}`;
 
-      if (env.DB) {
-        ctx.waitUntil(
-          env.DB.batch([
-            env.DB.prepare(`
-              INSERT INTO users (user_id, first_seen, last_seen, country, session_count)
-              VALUES (?, ?, ?, ?, 1)
-              ON CONFLICT(user_id) DO UPDATE SET
-                last_seen = excluded.last_seen,
-                country = COALESCE(users.country, excluded.country),
-                session_count = users.session_count + 1
-            `).bind(rawUserId, now, now, country),
-            env.DB.prepare(`
-              INSERT OR IGNORE INTO sessions (session_id, user_id, client, country, os, version, created_at, date)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            `).bind(sessionId, rawUserId, client, country, os, version, now, date),
-          ]).catch((err) => console.error('D1 Telemetry Write Failed:', err))
-        );
+      // ── /ping  →  session_start ────────────────────────────────────────────
+      if (url.pathname === '/ping') {
+        if (env.DB) {
+          ctx.waitUntil(
+            env.DB.batch([
+              env.DB.prepare(`
+                INSERT INTO users (user_id, first_seen, last_seen, country, session_count)
+                VALUES (?, ?, ?, ?, 1)
+                ON CONFLICT(user_id) DO UPDATE SET
+                  last_seen     = excluded.last_seen,
+                  country       = COALESCE(users.country, excluded.country),
+                  session_count = users.session_count + 1
+              `).bind(rawUserId, now, now, country),
+              env.DB.prepare(`
+                INSERT OR IGNORE INTO sessions
+                  (session_id, user_id, client, country, os, version,
+                   provider, model, provider_type, reasoning_effort, mcp_tools_count,
+                   created_at, date)
+                VALUES (?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?,
+                        ?, ?)
+              `).bind(
+                sessionId, rawUserId, client, country, os, version,
+                provider, model, providerType, reasoningEffort, mcpToolsCount,
+                now, date
+              ),
+            ]).catch((err) => console.error('D1 /ping Write Failed:', err))
+          );
+        }
+        return new Response('OK', { status: 202, headers: securityHeaders });
       }
 
-      return new Response('OK', { status: 202, headers: securityHeaders });
+      // ── /event  →  session_end | weekly_summary ────────────────────────────
+      if (url.pathname === '/event') {
+        const ALLOWED_EVENTS = ['session_end', 'weekly_summary', 'compact_triggered'];
+        const eventType = ALLOWED_EVENTS.includes(data.event) ? data.event : null;
+        if (!eventType) {
+          return new Response(JSON.stringify({ error: 'Unknown event type' }), {
+            status: 400,
+            headers: { ...securityHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        if (env.DB) {
+          // session_end / compact_triggered
+          if (eventType === 'session_end' || eventType === 'compact_triggered') {
+            const turnCount      = Math.min(Math.max(0, parseInt(data.turn_count       || 0, 10)), 9999);
+            const hadError       = data.had_error === 1 || data.had_error === true ? 1 : 0;
+            const VALID_BUCKETS  = ['0-5min', '5-15min', '15-30min', '30min+'];
+            const durationBucket = VALID_BUCKETS.includes(data.duration_bucket) ? data.duration_bucket : '0-5min';
+            const toolBash  = Math.min(Math.max(0, parseInt(data.tool_bash_count || 0, 10)), 9999);
+            const toolFile  = Math.min(Math.max(0, parseInt(data.tool_file_count || 0, 10)), 9999);
+            const toolWeb   = Math.min(Math.max(0, parseInt(data.tool_web_count  || 0, 10)), 9999);
+
+            ctx.waitUntil(
+              env.DB.prepare(`
+                INSERT INTO events
+                  (event, user_id, session_id, client, os, version,
+                   provider, model, provider_type,
+                   turn_count, had_error, duration_bucket,
+                   tool_bash_count, tool_file_count, tool_web_count,
+                   created_at, date)
+                VALUES (?, ?, ?, ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?)
+              `).bind(
+                eventType, rawUserId, sessionId, client, os, version,
+                provider, model, providerType,
+                turnCount, hadError, durationBucket,
+                toolBash, toolFile, toolWeb,
+                now, date
+              ).run().catch((err) => console.error('D1 /event Write Failed:', err))
+            );
+          }
+
+          // weekly_summary — store minimal record (no session linkage)
+          if (eventType === 'weekly_summary') {
+            const featuresRaw = Array.isArray(data.features_used) ? data.features_used : [];
+            const features = featuresRaw
+              .filter((f) => typeof f === 'string' && /^[a-zA-Z0-9_]{1,32}$/.test(f))
+              .slice(0, 20)
+              .join(',');
+
+            ctx.waitUntil(
+              env.DB.prepare(`
+                INSERT INTO events
+                  (event, user_id, session_id, client, os, version, created_at, date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              `).bind(
+                'weekly_summary', rawUserId, features, client, os, version, now, date
+              ).run().catch((err) => console.error('D1 weekly_summary Write Failed:', err))
+            );
+          }
+        }
+
+        return new Response('OK', { status: 202, headers: securityHeaders });
+      }
+
+      return new Response('Not Found', { status: 404, headers: securityHeaders });
     } catch {
       return new Response(JSON.stringify({ error: 'Bad Request' }), {
         status: 400,
@@ -200,6 +291,7 @@ export default {
     }
   },
 };
+
 
 function timingSafeMatch(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
@@ -225,6 +317,17 @@ async function getD1Stats(env) {
     dailyRes,
     clientsRes,
     countriesRes,
+    osRes,
+    versionsRes,
+    hourlyRes,
+    recentSessionsRes,
+    userBucketsRes,
+    // v2 — new queries
+    providersRes,
+    modelsRes,
+    providerTypesRes,
+    reasoningRes,
+    durationRes,
   ] = await env.DB.batch([
     env.DB.prepare(`SELECT COUNT(*) AS count FROM users`),
     env.DB.prepare(`SELECT COUNT(*) AS count FROM sessions`),
@@ -262,38 +365,163 @@ async function getD1Stats(env) {
       ORDER BY users DESC
       LIMIT 30
     `),
+    env.DB.prepare(`
+      SELECT COALESCE(os, 'unknown') AS os, COUNT(DISTINCT user_id) AS users, COUNT(*) AS sessions
+      FROM sessions
+      GROUP BY os
+      ORDER BY sessions DESC
+    `),
+    env.DB.prepare(`
+      SELECT COALESCE(version, '0.0.0') AS version, COUNT(DISTINCT user_id) AS users, COUNT(*) AS sessions
+      FROM sessions
+      GROUP BY version
+      ORDER BY sessions DESC
+      LIMIT 20
+    `),
+    env.DB.prepare(`
+      SELECT strftime('%H', created_at) AS hour, COUNT(*) AS sessions
+      FROM sessions
+      WHERE created_at >= datetime('now', '-7 days')
+      GROUP BY hour
+      ORDER BY hour ASC
+    `),
+    env.DB.prepare(`
+      SELECT session_id, substr(user_id, 1, 8) AS user_prefix, client,
+             COALESCE(os, 'unknown') AS os, COALESCE(version, '0.0.0') AS version,
+             COALESCE(country, 'XX') AS country,
+             COALESCE(provider, 'unknown') AS provider,
+             COALESCE(model, 'unknown') AS model,
+             created_at
+      FROM sessions
+      ORDER BY created_at DESC
+      LIMIT 30
+    `),
+    env.DB.prepare(`
+      SELECT
+        CASE
+          WHEN session_count = 1 THEN '1 session'
+          WHEN session_count BETWEEN 2 AND 5 THEN '2-5 sessions'
+          WHEN session_count BETWEEN 6 AND 20 THEN '6-20 sessions'
+          ELSE '20+ sessions'
+        END AS bucket,
+        COUNT(*) AS users
+      FROM users
+      GROUP BY bucket
+    `),
+    // v2 — providers
+    env.DB.prepare(`
+      SELECT COALESCE(provider, 'unknown') AS provider,
+             COUNT(DISTINCT user_id) AS users,
+             COUNT(*) AS sessions
+      FROM sessions
+      WHERE provider IS NOT NULL AND provider != 'unknown'
+      GROUP BY provider
+      ORDER BY sessions DESC
+      LIMIT 20
+    `),
+    // v2 — models
+    env.DB.prepare(`
+      SELECT COALESCE(model, 'unknown') AS model,
+             COALESCE(provider, 'unknown') AS provider,
+             COUNT(DISTINCT user_id) AS users,
+             COUNT(*) AS sessions
+      FROM sessions
+      WHERE model IS NOT NULL AND model != 'unknown'
+      GROUP BY model
+      ORDER BY sessions DESC
+      LIMIT 30
+    `),
+    // v2 — cloud vs local split
+    env.DB.prepare(`
+      SELECT COALESCE(provider_type, 'cloud') AS provider_type,
+             COUNT(DISTINCT user_id) AS users,
+             COUNT(*) AS sessions
+      FROM sessions
+      GROUP BY provider_type
+    `),
+    // v2 — reasoning effort adoption
+    env.DB.prepare(`
+      SELECT COALESCE(reasoning_effort, 'off') AS reasoning_effort,
+             COUNT(DISTINCT user_id) AS users,
+             COUNT(*) AS sessions
+      FROM sessions
+      GROUP BY reasoning_effort
+      ORDER BY sessions DESC
+    `),
+    // v2 — session duration distribution (from events table)
+    env.DB.prepare(`
+      SELECT COALESCE(duration_bucket, '0-5min') AS duration_bucket,
+             COUNT(*) AS sessions
+      FROM events
+      WHERE event = 'session_end'
+      GROUP BY duration_bucket
+      ORDER BY CASE duration_bucket
+        WHEN '0-5min'   THEN 1
+        WHEN '5-15min'  THEN 2
+        WHEN '15-30min' THEN 3
+        WHEN '30min+'   THEN 4
+        ELSE 5
+      END
+    `),
   ]);
 
-  const totalUsers = totalUsersRes.results?.[0]?.count ?? 0;
-  const totalSessions = totalSessionsRes.results?.[0]?.count ?? 0;
-  const totalReturning = returningUsersRes.results?.[0]?.count ?? 0;
-  const dauToday = todayStatsRes.results?.[0]?.dau ?? 0;
-  const sessionsToday = todayStatsRes.results?.[0]?.sessions ?? 0;
-  const returningToday = todayReturningRes.results?.[0]?.count ?? 0;
-  const newUsersToday = Math.max(0, dauToday - returningToday);
+  const totalUsers      = totalUsersRes.results?.[0]?.count ?? 0;
+  const totalSessions   = totalSessionsRes.results?.[0]?.count ?? 0;
+  const totalReturning  = returningUsersRes.results?.[0]?.count ?? 0;
+  const dauToday        = todayStatsRes.results?.[0]?.dau ?? 0;
+  const sessionsToday   = todayStatsRes.results?.[0]?.sessions ?? 0;
+  const returningToday  = todayReturningRes.results?.[0]?.count ?? 0;
+  const newUsersToday   = Math.max(0, dauToday - returningToday);
 
   return {
     summary: {
-      total_users: totalUsers,
-      total_sessions: totalSessions,
+      total_users:           totalUsers,
+      total_sessions:        totalSessions,
       total_returning_users: totalReturning,
-      returning_user_rate: totalUsers > 0 ? Number(((totalReturning / totalUsers) * 100).toFixed(1)) : 0,
+      returning_user_rate:   totalUsers > 0 ? Number(((totalReturning / totalUsers) * 100).toFixed(1)) : 0,
       today: {
-        dau: dauToday,
-        sessions: sessionsToday,
+        dau:             dauToday,
+        sessions:        sessionsToday,
         returning_users: returningToday,
-        new_users: newUsersToday,
+        new_users:       newUsersToday,
       },
     },
-    daily: dailyRes.results ?? [],
-    clients: clientsRes.results ?? [],
-    countries: countriesRes.results ?? [],
+    daily:            dailyRes.results ?? [],
+    clients:          clientsRes.results ?? [],
+    countries:        countriesRes.results ?? [],
+    os:               osRes.results ?? [],
+    versions:         versionsRes.results ?? [],
+    hourly:           hourlyRes.results ?? [],
+    recent_sessions:  recentSessionsRes.results ?? [],
+    user_distribution: userBucketsRes.results ?? [],
+    // v2
+    providers:         providersRes.results ?? [],
+    models:            modelsRes.results ?? [],
+    provider_types:    providerTypesRes.results ?? [],
+    reasoning_efforts: reasoningRes.results ?? [],
+    duration_buckets:  durationRes.results ?? [],
     updated_at: new Date().toISOString(),
   };
 }
 
+
 function renderStatsHtml(stats) {
-  const { summary, daily, clients, countries, updated_at } = stats;
+  const {
+    summary, daily, clients, countries, updated_at,
+    providers = [], models = [], provider_types = [],
+    reasoning_efforts = [], duration_buckets = [],
+  } = stats;
+
+  const cloudSessions = provider_types.find((p) => p.provider_type === 'cloud')?.sessions ?? 0;
+  const localSessions = provider_types.find((p) => p.provider_type === 'local')?.sessions ?? 0;
+  const totalPT = cloudSessions + localSessions || 1;
+  const cloudPct = ((cloudSessions / totalPT) * 100).toFixed(0);
+  const localPct = ((localSessions / totalPT) * 100).toFixed(0);
+
+  const thinkingSessions = reasoning_efforts.filter((r) => r.reasoning_effort !== 'off').reduce((s, r) => s + r.sessions, 0);
+  const totalRE = reasoning_efforts.reduce((s, r) => s + r.sessions, 0) || 1;
+  const thinkingPct = ((thinkingSessions / totalRE) * 100).toFixed(0);
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -311,6 +539,7 @@ function renderStatsHtml(stats) {
       --green: #10b981;
       --blue: #3b82f6;
       --purple: #8b5cf6;
+      --orange: #f59e0b;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -319,7 +548,7 @@ function renderStatsHtml(stats) {
       color: var(--text);
       padding: 32px 20px;
     }
-    .container { max-width: 1100px; margin: 0 auto; }
+    .container { max-width: 1200px; margin: 0 auto; }
     header {
       display: flex;
       justify-content: space-between;
@@ -329,10 +558,11 @@ function renderStatsHtml(stats) {
       border-bottom: 1px solid var(--border);
     }
     h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
+    .badge { font-size: 11px; background: #1e3a5f; color: #60a5fa; border-radius: 6px; padding: 2px 8px; margin-left: 10px; vertical-align: middle; }
     .timestamp { font-size: 13px; color: var(--subtext); }
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 16px;
       margin-bottom: 32px;
     }
@@ -342,10 +572,12 @@ function renderStatsHtml(stats) {
       border-radius: 12px;
       padding: 20px;
     }
-    .card-label { font-size: 13px; color: var(--subtext); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
-    .card-value { font-size: 32px; font-weight: 700; color: var(--text); }
+    .card-label { font-size: 12px; color: var(--subtext); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .card-value { font-size: 30px; font-weight: 700; color: var(--text); }
     .card-sub { font-size: 12px; color: var(--green); margin-top: 6px; }
-    .section-title { font-size: 18px; font-weight: 600; margin: 24px 0 12px 0; }
+    .section-title { font-size: 18px; font-weight: 600; margin: 28px 0 12px 0; }
+    .tables-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 700px) { .tables-row { grid-template-columns: 1fr; } }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -355,12 +587,7 @@ function renderStatsHtml(stats) {
       overflow: hidden;
       margin-bottom: 24px;
     }
-    th, td {
-      padding: 12px 16px;
-      text-align: left;
-      font-size: 14px;
-      border-bottom: 1px solid var(--border);
-    }
+    th, td { padding: 11px 14px; text-align: left; font-size: 14px; border-bottom: 1px solid var(--border); }
     th { background: #162032; color: var(--subtext); font-weight: 600; }
     tr:last-child td { border-bottom: none; }
     .tag {
@@ -372,13 +599,19 @@ function renderStatsHtml(stats) {
       background: #1f2937;
       color: #93c5fd;
     }
+    .tag-green { background: #052e16; color: #34d399; }
+    .tag-purple { background: #2e1065; color: #c4b5fd; }
+    .tag-orange { background: #431407; color: #fbbf24; }
+    .bar-wrap { background: #1f2937; border-radius: 4px; height: 6px; margin-top: 4px; }
+    .bar { background: var(--accent); border-radius: 4px; height: 6px; }
+    .bar-green { background: var(--green); }
   </style>
 </head>
 <body>
   <div class="container">
     <header>
       <div>
-        <h1>Andromity Telemetry</h1>
+        <h1>Andromity Telemetry <span class="badge">v2</span></h1>
         <div class="timestamp">Live telemetry &middot; Last updated: ${updated_at}</div>
       </div>
     </header>
@@ -399,13 +632,84 @@ function renderStatsHtml(stats) {
         <div class="card-value">${summary.today.sessions.toLocaleString()}</div>
         <div class="card-sub">${summary.total_sessions.toLocaleString()} all-time</div>
       </div>
+      <div class="card">
+        <div class="card-label">Cloud vs Local</div>
+        <div class="card-value">${cloudPct}% ☁</div>
+        <div class="card-sub">${localPct}% local (Ollama)</div>
+        <div class="bar-wrap" style="margin-top:10px"><div class="bar" style="width:${cloudPct}%"></div></div>
+      </div>
+      <div class="card">
+        <div class="card-label">Thinking Mode Adoption</div>
+        <div class="card-value">${thinkingPct}%</div>
+        <div class="card-sub">${thinkingSessions.toLocaleString()} sessions with reasoning</div>
+        <div class="bar-wrap" style="margin-top:10px"><div class="bar bar-green" style="width:${thinkingPct}%"></div></div>
+      </div>
     </div>
+
+    <div class="tables-row">
+      <div>
+        <div class="section-title">Top Providers</div>
+        <table>
+          <thead><tr><th>Provider</th><th>Users</th><th>Sessions</th></tr></thead>
+          <tbody>
+            ${providers.length ? providers.map((p) => `
+              <tr>
+                <td><span class="tag">${p.provider.toUpperCase()}</span></td>
+                <td>${p.users.toLocaleString()}</td>
+                <td>${p.sessions.toLocaleString()}</td>
+              </tr>
+            `).join('') : '<tr><td colspan="3" style="color:var(--subtext);text-align:center">No data yet — collecting soon</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <div class="section-title">Reasoning Effort</div>
+        <table>
+          <thead><tr><th>Mode</th><th>Users</th><th>Sessions</th></tr></thead>
+          <tbody>
+            ${reasoning_efforts.length ? reasoning_efforts.map((r) => `
+              <tr>
+                <td><span class="tag ${r.reasoning_effort !== 'off' ? 'tag-purple' : ''}">${r.reasoning_effort}</span></td>
+                <td>${r.users.toLocaleString()}</td>
+                <td>${r.sessions.toLocaleString()}</td>
+              </tr>
+            `).join('') : '<tr><td colspan="3" style="color:var(--subtext);text-align:center">No data yet</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section-title">Top Models</div>
+    <table>
+      <thead><tr><th>Model</th><th>Provider</th><th>Unique Users</th><th>Sessions</th></tr></thead>
+      <tbody>
+        ${models.length ? models.map((m) => `
+          <tr>
+            <td><strong>${m.model}</strong></td>
+            <td><span class="tag">${m.provider.toUpperCase()}</span></td>
+            <td>${m.users.toLocaleString()}</td>
+            <td>${m.sessions.toLocaleString()}</td>
+          </tr>
+        `).join('') : '<tr><td colspan="4" style="color:var(--subtext);text-align:center">No data yet — collecting soon</td></tr>'}
+      </tbody>
+    </table>
+
+    <div class="section-title">Session Duration Distribution</div>
+    <table>
+      <thead><tr><th>Duration</th><th>Sessions</th></tr></thead>
+      <tbody>
+        ${duration_buckets.length ? duration_buckets.map((d) => `
+          <tr>
+            <td>${d.duration_bucket}</td>
+            <td>${d.sessions.toLocaleString()}</td>
+          </tr>
+        `).join('') : '<tr><td colspan="2" style="color:var(--subtext);text-align:center">No data yet</td></tr>'}
+      </tbody>
+    </table>
 
     <div class="section-title">Clients</div>
     <table>
-      <thead>
-        <tr><th>Client</th><th>Unique Users</th><th>Total Sessions</th></tr>
-      </thead>
+      <thead><tr><th>Client</th><th>Unique Users</th><th>Total Sessions</th></tr></thead>
       <tbody>
         ${clients.map((c) => `
           <tr>
@@ -419,9 +723,7 @@ function renderStatsHtml(stats) {
 
     <div class="section-title">Daily Activity (Last 30 Days)</div>
     <table>
-      <thead>
-        <tr><th>Date</th><th>DAU</th><th>Sessions</th><th>Returning Users</th><th>New Users</th></tr>
-      </thead>
+      <thead><tr><th>Date</th><th>DAU</th><th>Sessions</th><th>Returning</th><th>New</th></tr></thead>
       <tbody>
         ${daily.map((d) => `
           <tr>
@@ -437,9 +739,7 @@ function renderStatsHtml(stats) {
 
     <div class="section-title">Top Countries</div>
     <table>
-      <thead>
-        <tr><th>Country</th><th>Unique Users</th><th>Sessions</th></tr>
-      </thead>
+      <thead><tr><th>Country</th><th>Unique Users</th><th>Sessions</th></tr></thead>
       <tbody>
         ${countries.map((c) => `
           <tr>
@@ -454,6 +754,7 @@ function renderStatsHtml(stats) {
 </body>
 </html>`;
 }
+
 
 const LORE_DIRECTIVES = {
   void: {

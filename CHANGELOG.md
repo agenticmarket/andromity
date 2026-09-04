@@ -2,6 +2,14 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
+## [0.2.7] — 2026-09-05
+
+### Git Diff & Staging Integration
+- **Index-Aware Staged Diff Viewer**: Clicking a modified file in the review card now properly diffs Working Tree vs. Git Index (`:rel`), matching native VS Code Source Control behavior (`(Working Tree)`) rather than falling back to an empty `HEAD` baseline for newly staged files.
+- **Accurate Diff Numstat**: Combines unstaged working tree diffs and staged index changes so newly staged and modified files reflect accurate additions and deletions (`+` / `-`).
+- **Disk I/O & Performance Optimization**: Replaced recursive `repo.untracked_files` with `git status --porcelain -unormal` across `git_ops.py` and `rpc_handler.py`, eliminating 100% disk usage and performance freezes during git status checks.
+- **Rollback Safety**: Preserves user-created untracked files during snapshot rollbacks while cleanly pruning AI-created turn files.
+
 ---
 
 ## [0.2.6] — 2026-09-04

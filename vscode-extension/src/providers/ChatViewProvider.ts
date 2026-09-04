@@ -196,7 +196,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (this._diffManager) {
       await this._diffManager.undoLastTurn(this._currentSessionId);
       await this._loadSession(this._currentSessionId);
-      vscode.commands.executeCommand("andromity.refreshChanges");
+      try {
+        vscode.commands.executeCommand("git.refresh");
+        vscode.commands.executeCommand("andromity.refreshChanges");
+      } catch {}
     } else if (this._rpcClient) {
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       const res = await this._rpcClient.call<any>("session.undo", {
@@ -204,6 +207,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         project_path: workspaceFolder,
       });
       if (res?.success) {
+        try {
+          vscode.commands.executeCommand("git.refresh");
+          vscode.commands.executeCommand("andromity.refreshChanges");
+        } catch {}
         vscode.window.showInformationMessage(`Turn undone successfully. (${res.popped_messages || 0} messages removed.)`);
         await this._loadSession(this._currentSessionId);
       }
@@ -421,6 +428,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         cost_usd: params.cost_usd,
       });
       vscode.commands.executeCommand("andromity.refreshSessions");
+    });
+
+    bind("cron/run_started", (params: any) => {
+      this.fetchAndPostCrons();
+      this._postToWebview({
+        type: "cron_event",
+        event: "run_started",
+        job_id: params.job_id,
+        run: params.run,
+      });
+    });
+
+    bind("cron/run_completed", (params: any) => {
+      this.fetchAndPostCrons();
+      const jobName = params.job?.name || "Scheduled Job";
+      const status = params.run?.status || "completed";
+      const durSec = params.run?.duration_ms ? (params.run.duration_ms / 1000).toFixed(1) : "0";
+
+      if (status === "success") {
+        vscode.window.showInformationMessage(`⏱ Cron "${jobName}" completed in ${durSec}s.`);
+      } else if (status === "failed") {
+        vscode.window.showWarningMessage(`⏱ Cron "${jobName}" failed: ${params.run?.error || "Error during execution"}`);
+      }
+
+      this._postToWebview({
+        type: "cron_event",
+        event: "run_completed",
+        job: params.job,
+        run: params.run,
+      });
     });
 
     bind("subagent/spawned", (params: SubAgentEvent) => {
@@ -1076,6 +1113,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "get_file_diff_stats": {
+        const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        try {
+          const res = await this._rpcClient?.call<{ files: Record<string, { additions: number; deletions: number }> }>(
+            "git.diff_numstat",
+            { project_path: ws }
+          );
+          if (res?.files) {
+            this._postToWebview({
+              type: "file_diff_stats_result",
+              stats: res.files,
+            });
+          }
+        } catch {}
+        break;
+      }
+
       case "open_session_tab": {
         const sid = message.sessionId || this._currentSessionId;
         const sname = message.sessionName || "Chat Session";
@@ -1086,8 +1140,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             sname,
             this._rpcClient,
             this._context!,
-            this
+            this,
+            message.queue,
+            {
+              draft: message.draft || "",
+              images: message.images || [],
+              seedMessages: message.seedMessages || [],
+            }
           );
+          // If shifting the active session from the sidebar to an editor tab,
+          // give the sidebar a fresh new session so it starts clean!
+          if (sid === this._currentSessionId) {
+            const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            if (this._rpcClient) {
+              const r = await this._rpcClient.call<SessionInfo>("session.create", {
+                name: `Session ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+                project_path: workspaceFolder,
+                keep_id: sid,
+              }).catch(() => null);
+              if (r && r.id) {
+                this.setCurrentSessionId(r.id);
+                await this.fetchAndPostSessions();
+                vscode.commands.executeCommand("andromity.refreshSessions");
+              }
+            }
+          }
         }
         break;
       }
@@ -1104,6 +1181,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "fetch_crons": {
         await this.fetchAndPostCrons();
+        break;
+      }
+
+      case "cron_run_now": {
+        if (this._rpcClient && message.id) {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          vscode.window.showInformationMessage(`Triggering scheduled task "${message.name || message.id}"...`);
+          await this._rpcClient.call("cron.run_now", {
+            id: message.id,
+            project_path: workspaceFolder,
+          }).catch((e: any) => vscode.window.showErrorMessage(`Failed to trigger cron: ${e.message}`));
+          await this.fetchAndPostCrons();
+        }
+        break;
+      }
+
+      case "cron_toggle": {
+        if (this._rpcClient && message.id) {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          await this._rpcClient.call("cron.toggle", {
+            id: message.id,
+            project_path: workspaceFolder,
+          }).catch((e: any) => vscode.window.showErrorMessage(`Failed to toggle cron: ${e.message}`));
+          await this.fetchAndPostCrons();
+        }
+        break;
+      }
+
+      case "open_cron_settings": {
+        vscode.commands.executeCommand("andromity.openSettings", "crons");
         break;
       }
 
@@ -1221,10 +1328,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "undo_turn": {
         if (this._diffManager) {
-          await this._diffManager.undoLastTurn(this._currentSessionId);
-          await this._loadSession(this._currentSessionId);
-          this._postToWebview({ type: "turn_undone" });
-          vscode.commands.executeCommand("andromity.refreshChanges");
+          const undone = await this._diffManager.undoLastTurn(this._currentSessionId);
+          if (undone) {
+            await this._loadSession(this._currentSessionId);
+            this._postToWebview({ type: "turn_undone" });
+            try {
+              vscode.commands.executeCommand("git.refresh");
+              vscode.commands.executeCommand("andromity.refreshChanges");
+            } catch {}
+          }
         } else if (this._rpcClient) {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           const res = await this._rpcClient.call<any>("session.undo", {
@@ -1232,6 +1344,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             project_path: workspaceFolder,
           });
           if (res?.success) {
+            try {
+              vscode.commands.executeCommand("git.refresh");
+              vscode.commands.executeCommand("andromity.refreshChanges");
+            } catch {}
             vscode.window.showInformationMessage(`Turn undone successfully. (${res.popped_messages || 0} messages removed.)`);
             await this._loadSession(this._currentSessionId);
             this._postToWebview({ type: "turn_undone" });
