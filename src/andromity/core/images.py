@@ -9,7 +9,7 @@ import io
 import os
 import shutil
 import subprocess
-from typing import Optional
+from typing import Any, Optional
 
 # Product limit: how many images one message may carry.
 MAX_IMAGES = 5
@@ -146,3 +146,41 @@ def image_label(image, index: int) -> str:
         return f"🖼 Image {index} · {width}×{height}"
     except Exception:
         return f"🖼 Image {index}"
+
+
+def save_and_thumbnail_image(image_data: str, storage_dir: Optional[Any] = None, thumb_dimension: int = 360) -> str:
+    """Save full image binary to disk and return a compact thumbnail data URI (~10-15KB)
+    for session history and UI carousel rendering, preventing SQLite and JSON storage bloat.
+    """
+    from PIL import Image
+    import hashlib
+
+    if not isinstance(image_data, str) or not image_data.startswith("data:"):
+        return image_data
+
+    try:
+        header, b64 = image_data.split(",", 1)
+        raw_bytes = base64.b64decode(b64)
+
+        if storage_dir:
+            from pathlib import Path
+            img_dir = Path(storage_dir) / "images"
+            img_dir.mkdir(parents=True, exist_ok=True)
+            img_hash = hashlib.sha256(raw_bytes).hexdigest()[:16]
+            file_path = img_dir / f"{img_hash}.jpg"
+            if not file_path.exists():
+                file_path.write_bytes(raw_bytes)
+
+        with Image.open(io.BytesIO(raw_bytes)) as img:
+            w, height = img.size
+            if max(w, height) > thumb_dimension:
+                scale = thumb_dimension / max(w, height)
+                img = img.resize((max(1, int(w * scale)), max(1, int(height * scale))), Image.LANCZOS)
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            thumb_buf = io.BytesIO()
+            img.save(thumb_buf, format="JPEG", quality=72, optimize=True)
+            thumb_b64 = base64.b64encode(thumb_buf.getvalue()).decode("ascii")
+            return f"data:image/jpeg;base64,{thumb_b64}"
+    except Exception:
+        return image_data

@@ -1,5 +1,6 @@
 import json
 import sys
+import time
 from typing import AsyncGenerator, Dict, Any, Optional, Callable
 
 from andromity.core.provider import stream_completion
@@ -80,6 +81,12 @@ class Agent:
         self._empty_retried = False
         # Set when the current turn carries pasted images (see run()).
         self._turn_image_parts = None
+        # Coarse tool-usage counters for session_end telemetry (no args stored)
+        self._tool_usage_counts: Dict[str, int] = {"bash": 0, "file": 0, "web": 0}
+        # Session wall-clock start time for duration telemetry
+        self._session_start_time: float = time.time()
+        # Turn counter for telemetry (incremented per user message)
+        self._turn_count: int = 0
         # Register session so plan tools can store plan in it
         register_session(session)
         
@@ -303,13 +310,30 @@ class Agent:
                 *({"type": "image_url", "image_url": {"url": uri}} for uri in _uris),
             ]
 
-        self.session.add_message("user", content=user_input)
+        turn_start_time = time.time()
+        thumb_uris = None
+        if _uris:
+            from andromity.core.images import save_and_thumbnail_image
+            thumb_uris = [
+                save_and_thumbnail_image(u, storage_dir=getattr(self.session, "storage_dir", None))
+                for u in _uris
+            ]
+        self.session.add_message("user", content=user_input, images=thumb_uris)
+        self._turn_count += 1
 
         if not getattr(self.session, "_telemetry_sent", False):
             self.session._telemetry_sent = True
             try:
                 from andromity.telemetry import send_session_start
-                send_session_start(self.session.id)
+                _prov = self.provider or config.get("default", "provider", "")
+                _mod  = self.model  or config.get("default", "model", "")
+                send_session_start(
+                    self.session.id,
+                    provider=_prov,
+                    model=_mod,
+                    reasoning_effort=getattr(self, "reasoning_effort", None),
+                    mcp_tools_count=len(self.allowed_tools or []),
+                )
             except Exception:
                 pass
         
@@ -404,11 +428,13 @@ class Agent:
                     "usage_source": "estimate",
                 }, model=model_id)
 
+            turn_duration = round(time.time() - turn_start_time, 2)
             self.session.add_message(
                 "assistant",
                 content=assistant_content if assistant_content else None,
                 tool_calls=tool_calls_to_execute if tool_calls_to_execute else None,
                 thinking=assistant_thinking if assistant_thinking else None,
+                duration=turn_duration,
             )
 
             if not assistant_content and not tool_calls_to_execute:
@@ -435,12 +461,14 @@ class Agent:
                     )
                 yield TextDelta(text=warning)
                 yield Done(usage=last_usage)
+                self._fire_session_end(had_error=True)
                 break
 
             self._empty_retried = False
 
             if not tool_calls_to_execute:
                 yield Done(usage=last_usage)
+                self._fire_session_end()
                 break
 
             # ── ask_questions: user answers in an inline panel; the answers become the
@@ -520,6 +548,18 @@ class Agent:
 
                 async def _execute(prep: tuple[dict, str, dict]) -> tuple[str, str]:
                     tool_call, tool_name, args = prep
+                    # Categorise tool for telemetry — counts only, no args stored
+                    _BASH_TOOLS = {"run_terminal_cmd", "run_command", "execute_command", "bash"}
+                    _WEB_TOOLS  = {"web_search", "read_url", "browser", "search_web", "read_url_content"}
+                    _FILE_TOOLS = {"read_file", "write_file", "edit_file", "view_file",
+                                   "write_to_file", "replace_file_content", "multi_replace_file_content",
+                                   "list_dir", "grep_search"}
+                    if tool_name in _BASH_TOOLS:
+                        self._tool_usage_counts["bash"] += 1
+                    elif tool_name in _WEB_TOOLS:
+                        self._tool_usage_counts["web"] += 1
+                    elif tool_name in _FILE_TOOLS:
+                        self._tool_usage_counts["file"] += 1
                     if self.dry_run:
                         return tool_call["id"], f"[DRY RUN] Would execute {tool_name}({json.dumps(args, indent=2)})"
                     try:
@@ -594,6 +634,27 @@ class Agent:
                         yield PlanUpdated(plan=plan)
                         if tool_name == "write_plan" and plan.status == "pending":
                             yield PlanApprovalRequired(plan=plan)
+
+    def _fire_session_end(self, had_error: bool = False) -> None:
+        """Fire send_session_end once per agent lifetime (idempotent)."""
+        if getattr(self, "_session_end_sent", False):
+            return
+        self._session_end_sent = True
+        try:
+            from andromity.telemetry import send_session_end
+            _prov = self.provider or config.get("default", "provider", "")
+            _mod  = self.model  or config.get("default", "model", "")
+            send_session_end(
+                self.session.id,
+                provider=_prov,
+                model=_mod,
+                turn_count=self._turn_count,
+                had_error=had_error,
+                duration_sec=time.time() - self._session_start_time,
+                tool_counts=dict(self._tool_usage_counts),
+            )
+        except Exception:
+            pass
 
     async def spawn_subagent(
         self,

@@ -1,3 +1,5 @@
+import { getPromptStyles } from "./chatPromptStyles.js";
+
 export function getChatStyles(): string {
   return `
     @import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..700;1,14..32,300..700&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap');
@@ -1992,25 +1994,8 @@ export function getChatStyles(): string {
       position: relative;
     }
 
-    .message-wrap.user {
-      align-items: flex-end;
-    }
-
     .message-wrap.assistant {
       align-items: flex-start;
-    }
-
-    .message.user {
-      background: rgba(0, 127, 212, 0.15);
-      border: 1px solid rgba(0, 127, 212, 0.3);
-      color: var(--fg);
-      padding: 8px 12px;
-      border-radius: 8px 8px 2px 8px;
-      max-width: 85%;
-      font-size: 13px;
-      line-height: 1.4;
-      word-break: break-word;
-      box-sizing: border-box;
     }
 
     .message.assistant {
@@ -4457,7 +4442,7 @@ export function getChatStyles(): string {
       font-size: 9px;
     }
     .session-ghost-empty { font-size: 10px; color: var(--muted); font-style: italic; margin-left: 6px; }
-    }
-  </style>
+
+    ${getPromptStyles()}
 `;
 }

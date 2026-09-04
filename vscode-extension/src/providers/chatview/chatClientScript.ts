@@ -413,25 +413,21 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       currentToolSequence.innerHTML = '<div class="tool-seq-header"><svg class="tool-seq-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg><span class="tool-seq-title">0 tools · working... (0s)</span><svg class="tool-seq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg><button class="tool-seq-copy" title="Copy tool log"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button></div><div class="tool-seq-body"></div>';
       
       const thisSeq = currentToolSequence;
-      const hdr = thisSeq.querySelector('.tool-seq-header');
-      hdr.addEventListener('click', (e) => {
-        if (e.target.closest('.tool-seq-copy')) return;
-        thisSeq.classList.toggle('collapsed');
-        toolSeqUserToggled = true;
-      });
-
-      thisSeq.querySelector('.tool-seq-copy').addEventListener('click', () => {
-        try {
-          const parts = [];
-          thisSeq.querySelectorAll('.tool-card').forEach((c, i) => {
-            const n = c.querySelector('.tool-title-group span')?.textContent || 'tool';
-            const args = c.querySelector('.tool-body')?.textContent || '';
-            parts.push((i + 1) + '. ' + n + '\\n   Args: ' + args);
-          });
-          const txt = parts.join('\\n\\n') || thisSeq.textContent;
-          copyToClipboard(txt);
-        } catch {}
-      });
+      const copyBtn = thisSeq.querySelector('.tool-seq-copy');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', () => {
+          try {
+            const parts = [];
+            thisSeq.querySelectorAll('.tool-card').forEach((c, i) => {
+              const n = c.querySelector('.tool-title-group span')?.textContent || 'tool';
+              const args = c.querySelector('.tool-body')?.textContent || '';
+              parts.push((i + 1) + '. ' + n + '\\n   Args: ' + args);
+            });
+            const txt = parts.join('\\n\\n') || thisSeq.textContent;
+            copyToClipboard(txt);
+          } catch {}
+        });
+      }
 
       if (currentTurnAssistantDiv) {
         currentTurnAssistantDiv.appendChild(thisSeq);
@@ -1638,6 +1634,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         return;
       }
 
+      // 2b. Tool sequence header toggle
+      const toolSeqHdr = e.target.closest('.tool-seq-header');
+      if (toolSeqHdr) {
+        if (e.target.closest('.tool-seq-copy')) return;
+        const seq = toolSeqHdr.closest('.tool-sequence');
+        if (seq) {
+          seq.classList.toggle('collapsed');
+          if (typeof toolSeqUserToggled !== 'undefined') toolSeqUserToggled = true;
+        }
+        return;
+      }
+
       // 3. Approval parameter toggle
       const argsToggle = e.target.closest('.approval-toggle-args');
       if (argsToggle) {
@@ -1739,6 +1747,27 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'undo-turn':
           vscode.postMessage({ type: 'undo_turn' });
           break;
+        case 'carousel-prev': {
+          const cWrap = target.closest('.prompt-images-container');
+          const carousel = cWrap ? cWrap.querySelector('.prompt-image-carousel') : null;
+          if (carousel) carousel.scrollBy({ left: -140, behavior: 'smooth' });
+          break;
+        }
+        case 'carousel-next': {
+          const cWrap = target.closest('.prompt-images-container');
+          const carousel = cWrap ? cWrap.querySelector('.prompt-image-carousel') : null;
+          if (carousel) carousel.scrollBy({ left: 140, behavior: 'smooth' });
+          break;
+        }
+        case 'toggle-prompt-expand': {
+          const pWrap = target.closest('.prompt-text-wrapper');
+          const pContent = pWrap ? pWrap.querySelector('.prompt-text-content') : null;
+          if (pContent) {
+            const isClamped = pContent.classList.toggle('clamped');
+            target.textContent = isClamped ? 'Show more ▾' : 'Show less ▴';
+          }
+          break;
+        }
         case 'compact-session':
           showCompactionBanner('Compacting conversation context to reduce token usage...');
           vscode.postMessage({ type: 'compact_session' });
@@ -2207,7 +2236,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
         }
 
-        appendUserMessage(text, images);
+        appendUserMessage(text, images, new Date().toISOString());
         startAssistantTurn();
         vscode.postMessage({
           type: 'send_prompt',
@@ -2533,42 +2562,97 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
-    function appendUserMessage(text, images) {
+    function appendUserMessage(text, images, ts) {
       const wrap = document.createElement('div');
       wrap.className = 'message-wrap user';
 
+      const actionsDiv = document.createElement('div');
+      actionsDiv.className = 'user-prompt-actions';
+      actionsDiv.innerHTML = '<button class="prompt-undo-btn" data-action="undo-turn" title="Undo to here">' +
+        '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">' +
+          '<path d="M3 7v6h6"></path>' +
+          '<path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path>' +
+        '</svg>' +
+        '<span>Undo to here</span>' +
+      '</button>';
+      wrap.appendChild(actionsDiv);
+
       const msgDiv = document.createElement('div');
-      msgDiv.className = 'message user';
+      msgDiv.className = 'message user prompt-card';
 
       if (images && Array.isArray(images) && images.length > 0) {
-        const imgWrap = document.createElement('div');
-        imgWrap.style.cssText = 'display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px;';
+        const imgContainer = document.createElement('div');
+        imgContainer.className = 'prompt-images-container';
+
+        const prevBtn = document.createElement('button');
+        prevBtn.className = 'carousel-nav-btn prev';
+        prevBtn.setAttribute('data-action', 'carousel-prev');
+        prevBtn.setAttribute('title', 'Scroll left');
+        prevBtn.setAttribute('aria-label', 'Previous image');
+        prevBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"></polyline></svg>';
+
+        const nextBtn = document.createElement('button');
+        nextBtn.className = 'carousel-nav-btn next';
+        nextBtn.setAttribute('data-action', 'carousel-next');
+        nextBtn.setAttribute('title', 'Scroll right');
+        nextBtn.setAttribute('aria-label', 'Next image');
+        nextBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+
+        const carousel = document.createElement('div');
+        carousel.className = 'prompt-image-carousel';
+
         images.forEach(uri => {
           const imgEl = document.createElement('img');
           imgEl.src = uri;
-          imgEl.style.cssText = 'max-width:220px; max-height:140px; border-radius:6px; object-fit:cover; border:1px solid rgba(255,255,255,0.2); cursor:pointer; transition:transform 0.15s, border-color 0.15s;';
+          imgEl.className = 'prompt-image-thumb';
           imgEl.title = 'Click to preview full size';
-          imgEl.addEventListener('mouseenter', () => { imgEl.style.transform = 'scale(1.02)'; imgEl.style.borderColor = 'var(--vscode-focusBorder, #007fd4)'; });
-          imgEl.addEventListener('mouseleave', () => { imgEl.style.transform = 'scale(1)'; imgEl.style.borderColor = 'rgba(255,255,255,0.2)'; });
           imgEl.addEventListener('click', () => {
             openImageLightbox(uri);
           });
-          imgWrap.appendChild(imgEl);
+          carousel.appendChild(imgEl);
         });
-        msgDiv.appendChild(imgWrap);
+
+        imgContainer.appendChild(prevBtn);
+        imgContainer.appendChild(carousel);
+        imgContainer.appendChild(nextBtn);
+
+        setTimeout(() => {
+          if (carousel.scrollWidth > carousel.clientWidth + 4) {
+            imgContainer.classList.add('has-overflow');
+          }
+        }, 50);
+
+        msgDiv.appendChild(imgContainer);
       }
 
       if (text) {
-        const textSpan = document.createElement('div');
-        textSpan.textContent = text;
-        msgDiv.appendChild(textSpan);
+        const textWrapper = document.createElement('div');
+        textWrapper.className = 'prompt-text-wrapper';
+
+        const textContent = document.createElement('div');
+        textContent.className = 'prompt-text-content';
+        textContent.textContent = text;
+        textWrapper.appendChild(textContent);
+
+        const isLong = text.length > 220 || text.split(/\\r?\\n/).length > 3;
+        if (isLong) {
+          textContent.classList.add('clamped');
+          const expandBtn = document.createElement('button');
+          expandBtn.className = 'prompt-expand-btn';
+          expandBtn.setAttribute('data-action', 'toggle-prompt-expand');
+          expandBtn.textContent = 'Show more ▾';
+          textWrapper.appendChild(expandBtn);
+        }
+
+        msgDiv.appendChild(textWrapper);
       }
 
       wrap.appendChild(msgDiv);
 
       const footer = document.createElement('div');
       footer.className = 'message-footer';
-      footer.innerHTML = '<span>' + formatTime(new Date()) + '</span>' +
+      const timeStr = ts ? formatTime(new Date(ts)) : formatTime(new Date());
+      footer.innerHTML = '<span>' + timeStr + '</span>' +
         '<button class="msg-copy-btn" data-action="copy-prompt" title="Copy prompt">' +
           '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy' +
         '</button>';
@@ -2636,21 +2720,55 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       dot.style.display = anyUnreadOrRunning ? 'inline-block' : 'none';
     }
 
-    window.copyMessageText = function(btn) {
+    function copyMessageText(btn) {
       const wrap = btn.closest('.message-wrap');
       if (!wrap) return;
       let text = '';
+      const promptTextEl = wrap.querySelector('.prompt-text-content');
       const userMsg = wrap.querySelector('.message.user');
-      const asstMsg = wrap.querySelector('.assistant-text');
-      if (userMsg) text = userMsg.textContent || '';
-      else if (asstMsg) text = asstMsg.innerText || asstMsg.textContent || '';
+      if (promptTextEl) {
+        text = promptTextEl.textContent || '';
+      } else if (userMsg) {
+        text = userMsg.textContent || '';
+      } else {
+        if (wrap._rawMarkdown) {
+          text = wrap._rawMarkdown;
+        } else {
+          const asstBlocks = wrap.querySelectorAll('.assistant-text');
+          if (asstBlocks && asstBlocks.length > 0) {
+            const parts = [];
+            asstBlocks.forEach(function(block) {
+              if (block._blockText) {
+                parts.push(block._blockText);
+              } else if (block._rawMarkdown) {
+                parts.push(block._rawMarkdown);
+              } else {
+                try {
+                  const clone = block.cloneNode(true);
+                  clone.querySelectorAll('.code-block-header, .code-copy-btn, button').forEach(function(el) {
+                    if (el.remove) el.remove();
+                    else if (el.parentElement) el.parentElement.removeChild(el);
+                  });
+                  const bText = (clone.innerText || clone.textContent || '').trim();
+                  if (bText) parts.push(bText);
+                } catch (e) {
+                  const bText = (block.innerText || block.textContent || '').trim();
+                  if (bText) parts.push(bText);
+                }
+              }
+            });
+            text = parts.join('\\n\\n');
+          }
+        }
+      }
       if (text) {
         copyToClipboard(text);
         const orig = btn.innerHTML;
         btn.innerHTML = '<span style="color:var(--green)">Copied!</span>';
         setTimeout(function() { btn.innerHTML = orig; }, 1500);
       }
-    };
+    }
+    window.copyMessageText = copyMessageText;
 
     let lastSoundPlayedAt = 0;
     function playTone(kind) {
@@ -2951,6 +3069,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
 
         const elapsedSec = ((Date.now() - currentTurnStartTime) / 1000).toFixed(1);
+        currentTurnAssistantDiv._rawMarkdown = accumulatedAssistantText;
         const footer = document.createElement('div');
         footer.className = 'message-footer';
         footer.innerHTML = '<span class="turn-duration-badge">' +
@@ -3179,6 +3298,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             if (hasCompactedHistory) {
               appendCompactedHistoryBanner(msg.session.compacted_history.length);
             }
+            let lastUserMsgTs = null;
             let currentAssistantWrap = null;
             let currentTurnToolSeq = null;
             let currentTurnToolBody = null;
@@ -3188,6 +3308,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             for (let i = 0; i < allMessages.length; i++) {
               const m = allMessages[i];
               if (m.role === 'user') {
+                lastUserMsgTs = m.ts || null;
                 currentAssistantWrap = null;
                 currentTurnToolSeq = null;
                 currentTurnToolBody = null;
@@ -3198,7 +3319,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 if (uContent.startsWith('[Conversation summary') || uContent.startsWith('[Previous context summary')) {
                   appendCompactionSummaryCard(uContent);
                 } else {
-                  appendUserMessage(m.content || '');
+                  appendUserMessage(m.content || '', m.images || [], m.ts);
                 }
               } else if (m.role === 'assistant') {
                 if (!currentAssistantWrap) {
@@ -3218,13 +3339,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 // 1. Thinking block (if any)
                 const _thinking = m.thinking || '';
                 if (_thinking.trim()) {
+                  let thinkDuration = m.duration ? Number(m.duration).toFixed(1) : null;
+                  if (!thinkDuration && m.ts && lastUserMsgTs) {
+                    const delta = (new Date(m.ts).getTime() - new Date(lastUserMsgTs).getTime()) / 1000;
+                    if (delta > 0 && delta < 3600) thinkDuration = delta.toFixed(1);
+                  }
                   const thinkEl = document.createElement('div');
                   thinkEl.className = 'thinking-card';
-                  thinkEl.innerHTML = '<div class="thinking-header"><div class="thinking-pulse" style="opacity:0.4; animation:none;"></div><span>thought</span><svg class="thinking-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg></div><div class="thinking-content">' + escapeHtml(_thinking) + '</div>';
-                  thinkEl.querySelector('.thinking-header').addEventListener('click', () => {
-                    thinkEl.classList.toggle('expanded');
-                  });
-                  // If a tool sequence is already active in this turn, thinking lives inside it (TUI parity)
+                  const thinkLabel = thinkDuration ? ('thought (' + thinkDuration + 's)') : 'thought';
+                  thinkEl.innerHTML = '<div class="thinking-header"><div class="thinking-pulse" style="opacity:0.4; animation:none;"></div><span>' + thinkLabel + '</span><svg class="thinking-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg></div><div class="thinking-content">' + escapeHtml(_thinking) + '</div>';
+                  // Delegated listener handles header toggle without double-toggling
                   if (currentTurnToolBody) {
                     currentTurnToolBody.appendChild(thinkEl);
                   } else {
@@ -3246,23 +3370,27 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     '<div class="tool-seq-body"></div>';
 
                     const seqEl = currentTurnToolSeq;
-                    seqEl.querySelector('.tool-seq-header').addEventListener('click', (e) => {
-                      if (e.target.closest('.tool-seq-copy')) return;
-                      seqEl.classList.toggle('collapsed');
-                    });
-                    seqEl.querySelector('.tool-seq-copy').addEventListener('click', () => {
-                      try {
-                        const parts = [];
-                        seqEl.querySelectorAll('.tool-card').forEach((c, idx) => {
-                          const n = c.querySelector('.tool-title-group span')?.textContent || 'tool';
-                          const args = c.querySelector('.tool-body')?.textContent || '';
-                          parts.push((idx + 1) + '. ' + n + '\\n   Args: ' + args);
-                        });
-                        copyToClipboard(parts.join('\\n\\n') || seqEl.textContent);
-                      } catch {}
-                    });
+                    const copyBtn = seqEl.querySelector('.tool-seq-copy');
+                    if (copyBtn) {
+                      copyBtn.addEventListener('click', () => {
+                        try {
+                          const parts = [];
+                          seqEl.querySelectorAll('.tool-card').forEach((c, idx) => {
+                            const n = c.querySelector('.tool-title-group span')?.textContent || 'tool';
+                            const args = c.querySelector('.tool-body')?.textContent || '';
+                            parts.push((idx + 1) + '. ' + n + '\\n   Args: ' + args);
+                          });
+                          copyToClipboard(parts.join('\\n\\n') || seqEl.textContent);
+                        } catch {}
+                      });
+                    }
 
                     currentTurnToolBody = seqEl.querySelector('.tool-seq-body');
+                    if (!currentTurnToolBody) {
+                      currentTurnToolBody = document.createElement('div');
+                      currentTurnToolBody.className = 'tool-seq-body';
+                      seqEl.appendChild(currentTurnToolBody);
+                    }
                     currentAssistantWrap.appendChild(seqEl);
                   }
 
@@ -3301,15 +3429,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                       '</div>' +
                     '</div>' +
                     '<div class="tool-body">' + escapeHtml(toolArgs) + '</div>';
-                    tDiv.querySelector('.tool-header').addEventListener('click', () => {
-                      tDiv.classList.toggle('expanded');
-                    });
+                    // Delegated listener handles tool-header click without double toggle
                     currentTurnToolBody.appendChild(tDiv);
                   }
 
                   const titleSpan = currentTurnToolSeq.querySelector('.tool-seq-title');
                   if (titleSpan) {
-                    titleSpan.textContent = currentTurnToolCount + (currentTurnToolCount === 1 ? ' tool' : ' tools') + ' · worked';
+                    let toolDuration = m.duration ? Number(m.duration).toFixed(1) : null;
+                    if (!toolDuration && m.ts && lastUserMsgTs) {
+                      const delta = (new Date(m.ts).getTime() - new Date(lastUserMsgTs).getTime()) / 1000;
+                      if (delta > 0 && delta < 3600) toolDuration = delta.toFixed(1);
+                    }
+                    const toolWord = currentTurnToolCount + (currentTurnToolCount === 1 ? ' tool' : ' tools');
+                    titleSpan.textContent = toolWord + (toolDuration ? ' · worked for ' + toolDuration + 's' : ' · worked');
                   }
                 }
 
@@ -3319,6 +3451,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   const textEl = document.createElement('div');
                   textEl.className = 'assistant-text';
                   textEl.innerHTML = renderMarkdown(_content);
+                  textEl._rawMarkdown = _content;
+                  currentAssistantWrap._rawMarkdown = (currentAssistantWrap._rawMarkdown ? (currentAssistantWrap._rawMarkdown + '\\n\\n') : '') + _content;
                   currentAssistantWrap.appendChild(textEl);
                   // Reset tool sequence pointer so subsequent tools create a new sequence after text
                   currentTurnToolSeq = null;
@@ -3357,9 +3491,23 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     currentAssistantWrap.appendChild(strip);
                   }
 
+                  let elapsedSec = m.duration ? Number(m.duration).toFixed(1) : null;
+                  if (!elapsedSec && m.ts && lastUserMsgTs) {
+                    const delta = (new Date(m.ts).getTime() - new Date(lastUserMsgTs).getTime()) / 1000;
+                    if (delta > 0 && delta < 3600) {
+                      elapsedSec = delta.toFixed(1);
+                    }
+                  }
+                  const timeStr = m.ts ? formatTime(new Date(m.ts)) : formatTime(new Date());
+                  const badgeText = elapsedSec ? (elapsedSec + 's · ' + timeStr) : timeStr;
+
                   const footer = document.createElement('div');
                   footer.className = 'message-footer';
-                  footer.innerHTML = '<button class="msg-copy-btn" data-action="copy-message" title="Copy response">' +
+                  footer.innerHTML = '<span class="turn-duration-badge">' +
+                    '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:2px;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
+                    '<span>' + badgeText + '</span>' +
+                  '</span>' +
+                  '<button class="msg-copy-btn" data-action="copy-message" title="Copy response">' +
                     '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy' +
                   '</button>';
                   currentAssistantWrap.appendChild(footer);

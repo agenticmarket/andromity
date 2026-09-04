@@ -99,6 +99,7 @@ def init_schema() -> None:
                 session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
                 seq INTEGER NOT NULL, role TEXT NOT NULL, content TEXT, tool_calls TEXT,
                 thinking TEXT, name TEXT, tool_call_id TEXT, ts TEXT NOT NULL,
+                images TEXT, duration REAL,
                 PRIMARY KEY (session_id, seq)
             );
             CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON session_messages(session_id, seq ASC);
@@ -148,6 +149,12 @@ def init_schema() -> None:
                 conn.execute(f"ALTER TABLE sessions ADD COLUMN {col_name} TEXT NOT NULL DEFAULT '[]';")
             except sqlite3.OperationalError:
                 pass  # column already exists
+
+        for col_name, col_type in (("images", "TEXT"), ("duration", "REAL")):
+            try:
+                conn.execute(f"ALTER TABLE session_messages ADD COLUMN {col_name} {col_type};")
+            except sqlite3.OperationalError:
+                pass
 
         _SCHEMA_INITIALIZED = True
 

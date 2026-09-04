@@ -169,15 +169,14 @@ export class DiffManager {
     }
   }
 
-  public async undoLastTurn(sessionId: string): Promise<void> {
+  public async undoLastTurn(sessionId: string): Promise<boolean> {
     const confirm = await vscode.window.showWarningMessage(
       "Undo last turn and rollback all file modifications made in that turn?",
       { modal: true },
-      "Yes, Rollback",
-      "Cancel"
+      "Yes, Rollback"
     );
 
-    if (confirm !== "Yes, Rollback") return;
+    if (confirm !== "Yes, Rollback") return false;
 
     try {
       const res = await this._rpcClient.call<{ success: boolean; popped_messages: number; git_status: string }>(
@@ -189,9 +188,12 @@ export class DiffManager {
         vscode.window.showInformationMessage(
           `Turn undone successfully. (${res.popped_messages} messages removed. ${res.git_status})`
         );
+        return true;
       }
+      return false;
     } catch (e: any) {
       vscode.window.showErrorMessage(`Failed to undo turn: ${e.message}`);
+      return false;
     }
   }
 }

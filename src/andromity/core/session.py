@@ -171,7 +171,9 @@ class Session:
     def add_message(self, role: str, content: Optional[str] = None,
                     tool_calls: Optional[List[Dict]] = None,
                     name: Optional[str] = None, tool_call_id: Optional[str] = None,
-                    thinking: Optional[str] = None):
+                    thinking: Optional[str] = None,
+                    images: Optional[List[str]] = None,
+                    duration: Optional[float] = None):
         msg: Dict[str, Any] = {"role": role, "ts": datetime.now(timezone.utc).isoformat()}
         if content is not None:
             msg["content"] = content
@@ -183,6 +185,10 @@ class Session:
             msg["name"] = name
         if tool_call_id is not None:
             msg["tool_call_id"] = tool_call_id
+        if images is not None:
+            msg["images"] = images
+        if duration is not None:
+            msg["duration"] = duration
         with self._save_lock:
             self.messages.append(msg)
             need_save = not self.file_path.exists()
@@ -352,15 +358,17 @@ class Session:
                             m.get("thinking"),
                             m.get("name"),
                             m.get("tool_call_id"),
-                            m.get("ts", self.updated_at)
+                            m.get("ts", self.updated_at),
+                            j(m["images"]) if "images" in m else None,
+                            m.get("duration"),
                         )
                         for seq, m in enumerate(self.messages[start_idx:], start=start_idx)
                     ]
                     conn.executemany("""
                         INSERT OR REPLACE INTO session_messages (
                             session_id, seq, role, content, tool_calls,
-                            thinking, name, tool_call_id, ts
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            thinking, name, tool_call_id, ts, images, duration
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, rows_to_insert)
         except Exception as e:
             log.exception("Failed to persist session %s to SQLite: %s", getattr(self, "id", "unknown"), e)
@@ -480,6 +488,10 @@ class Session:
                 m["name"] = mr["name"]
             if "tool_call_id" in mr_keys and mr["tool_call_id"] is not None:
                 m["tool_call_id"] = mr["tool_call_id"]
+            if "images" in mr_keys and mr["images"]:
+                m["images"] = uj(mr["images"], [])
+            if "duration" in mr_keys and mr["duration"] is not None:
+                m["duration"] = mr["duration"]
             msgs.append(m)
         session.messages = msgs
 

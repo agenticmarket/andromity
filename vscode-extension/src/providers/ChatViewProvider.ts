@@ -1281,10 +1281,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "undo_turn": {
         if (this._diffManager) {
-          await this._diffManager.undoLastTurn(this._currentSessionId);
-          await this._loadSession(this._currentSessionId);
-          this._postToWebview({ type: "turn_undone" });
-          vscode.commands.executeCommand("andromity.refreshChanges");
+          const undone = await this._diffManager.undoLastTurn(this._currentSessionId);
+          if (undone) {
+            await this._loadSession(this._currentSessionId);
+            this._postToWebview({ type: "turn_undone" });
+            vscode.commands.executeCommand("andromity.refreshChanges");
+          }
         } else if (this._rpcClient) {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           const res = await this._rpcClient.call<any>("session.undo", {
