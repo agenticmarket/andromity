@@ -3128,23 +3128,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function getLangBadgeHtml(filePath) {
-      const ext = (filePath.split('.').pop() || '').toLowerCase();
-      if (ext === 'py') {
-        return '<span class="files-changed-lang-tag lang-py">🐍</span>';
-      } else if (ext === 'ts' || ext === 'tsx') {
-        return '<span class="files-changed-lang-tag lang-ts">TS</span>';
-      } else if (ext === 'js' || ext === 'jsx' || ext === 'mjs' || ext === 'cjs') {
-        return '<span class="files-changed-lang-tag lang-js">JS</span>';
-      } else if (ext === 'json') {
-        return '<span class="files-changed-lang-tag lang-json">{}</span>';
-      } else if (ext === 'css' || ext === 'scss' || ext === 'less') {
-        return '<span class="files-changed-lang-tag lang-css">CSS</span>';
-      } else if (ext === 'md' || ext === 'markdown') {
-        return '<span class="files-changed-lang-tag lang-md">MD</span>';
-      } else if (ext === 'html' || ext === 'htm') {
-        return '<span class="files-changed-lang-tag lang-html">&lt;&gt;</span>';
-      }
-      return '<span class="files-changed-lang-tag lang-default">📄</span>';
+      const parts = filePath.split('.');
+      const ext = parts.length > 1 ? parts.pop().toLowerCase().trim() : '';
+      const displayExt = ext ? (ext.length <= 4 ? ext : ext.substring(0, 4)) : 'file';
+      const safeClass = ext ? 'lang-' + escapeHtml(ext) : 'lang-default';
+      return '<span class="files-changed-lang-tag ' + safeClass + '">' + escapeHtml(displayExt) + '</span>';
     }
 
     function createFilesChangedCard(filePathsSet) {
