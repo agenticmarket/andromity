@@ -153,11 +153,31 @@ jobs:
           if [ -z "$VSCE_PAT" ]; then
             echo "::warning::VSCE_PAT secret is not configured in repository secrets."
             echo "Skipping marketplace publish. Download .vsix files from GitHub Actions artifacts."
-            exit 0
+          else
+            for f in *.vsix; do
+              echo "Publishing $f to VS Code Marketplace..."
+              npx @vscode/vsce publish --packagePath "$f"
+            done
           fi
-          for f in *.vsix; do
-            echo "Publishing $f ..."
-            npx @vscode/vsce publish --packagePath "$f"
-          done
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      # Publish each platform .vsix to Open VSX Registry
+      - name: Publish platform .vsix files to Open VSX
+        working-directory: vsix-artifacts
+        run: |
+          TOKEN="${OVSX_PAT:-${OPEN_VSX_TOKEN:-$OPENVSX_TOKEN}}"
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::OVSX_PAT secret is not configured in repository secrets."
+            echo "Skipping Open VSX publish."
+          else
+            for f in *.vsix; do
+              echo "Publishing $f to Open VSX..."
+              npx ovsx publish "$f" -p "$TOKEN"
+            done
+          fi
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          OPEN_VSX_TOKEN: ${{ secrets.OPEN_VSX_TOKEN }}
+          OPENVSX_TOKEN: ${{ secrets.OPENVSX_TOKEN }}
+
