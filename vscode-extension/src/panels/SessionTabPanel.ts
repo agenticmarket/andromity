@@ -34,13 +34,20 @@ export class SessionTabPanel {
     return Array.from(SessionTabPanel._panels.values());
   }
 
+  private _initialQueue: any[] = [];
+  private _initialDraft: string = "";
+  private _initialImages: string[] = [];
+  private _initialSeedMessages: any[] = [];
+
   public static createOrShow(
     extensionUri: vscode.Uri,
     sessionId: string,
     sessionName: string,
     rpcClient: RpcClient | null,
     context: vscode.ExtensionContext,
-    viewProvider: ChatViewProvider
+    viewProvider: ChatViewProvider,
+    initialQueue?: any[],
+    tabState?: { draft?: string; images?: string[]; seedMessages?: any[] }
   ): SessionTabPanel {
     // If a tab for this session is already open, reveal it
     if (SessionTabPanel._panels.has(sessionId)) {
@@ -52,6 +59,13 @@ export class SessionTabPanel {
         existing._sessionName = sessionName;
         existing._panel.title = sessionName;
       }
+      existing._postMessage({
+        type: "init_tab_state",
+        queue: initialQueue || [],
+        draft: tabState?.draft || "",
+        images: tabState?.images || [],
+        seedMessages: tabState?.seedMessages || [],
+      });
       existing._panel.reveal(vscode.ViewColumn.Beside);
       return existing;
     }
@@ -74,7 +88,9 @@ export class SessionTabPanel {
       sessionName,
       rpcClient,
       context,
-      viewProvider
+      viewProvider,
+      initialQueue,
+      tabState
     );
 
     SessionTabPanel._panels.set(sessionId, instance);
@@ -88,7 +104,9 @@ export class SessionTabPanel {
     sessionName: string,
     rpcClient: RpcClient | null,
     context: vscode.ExtensionContext,
-    viewProvider: ChatViewProvider
+    viewProvider: ChatViewProvider,
+    initialQueue?: any[],
+    tabState?: { draft?: string; images?: string[]; seedMessages?: any[] }
   ) {
     this._panel = panel;
     this._extensionUri = extensionUri;
@@ -97,6 +115,10 @@ export class SessionTabPanel {
     this._rpcClient = rpcClient;
     this._context = context;
     this._viewProvider = viewProvider;
+    this._initialQueue = initialQueue || [];
+    this._initialDraft = tabState?.draft || "";
+    this._initialImages = tabState?.images || [];
+    this._initialSeedMessages = tabState?.seedMessages || [];
 
     this._panel.iconPath = vscode.Uri.joinPath(extensionUri, "media", "icon.svg");
 
@@ -128,7 +150,11 @@ export class SessionTabPanel {
       currentReasoning: this._currentReasoning,
     });
     // In an editor tab, hide the redundant "Open in tab" action button in the top bar
-    html = html.replace("</head>", "<style>#btn-top-open-tab { display: none !important; }</style></head>");
+    html = html.replace(
+      "</head>",
+      "<style>#btn-top-open-tab { display: none !important; }</style></head>"
+    );
+    html = html.replace('<body class="loading">', '<body class="loading andromity-session-tab">');
     this._panel.webview.html = html;
   }
 
@@ -536,7 +562,21 @@ export class SessionTabPanel {
       this._postMessage({
         type: "session_loaded",
         session: sessionData,
+        draft: this._initialDraft,
+        images: this._initialImages,
+        seedMessages: this._initialSeedMessages,
       });
+
+      if (this._initialQueue && this._initialQueue.length > 0) {
+        this._postMessage({
+          type: "init_queue",
+          queue: this._initialQueue,
+        });
+      }
+      this._initialQueue = [];
+      this._initialDraft = "";
+      this._initialImages = [];
+      this._initialSeedMessages = [];
     } catch (err) {
       console.error("[Andromity SessionTab] Failed to load session:", err);
     }

@@ -65,6 +65,13 @@ export function getPromptStyles(): string {
       border-color: rgba(255, 255, 255, 0.14);
     }
 
+    /* Editor tabs use the editor background for --card-bg, which can hide prompt text.
+       Keep user prompts on the sidebar surface so they stay readable. */
+    body.andromity-session-tab .message.user.prompt-card {
+      background: var(--vscode-sideBar-background, #18181b);
+      border-color: var(--vscode-widget-border, rgba(255, 255, 255, 0.14));
+    }
+
     /* Prompt Attached Image Gallery / Carousel */
     .prompt-images-container {
       position: relative;

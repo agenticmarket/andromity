@@ -300,7 +300,7 @@ class JsonRpcHandler:
         project_path = params.get("project_path") or str(Path.cwd().resolve())
         session_id = params.get("session_id")
 
-        self._prune_empty_sessions(project_path)
+        self._prune_empty_sessions(project_path, keep_id=params.get("keep_id"))
 
         session = Session(name=name, project_path=project_path, session_id=session_id)
         session.save()
@@ -701,10 +701,10 @@ class JsonRpcHandler:
                 except Exception as snap_err:
                     log.debug("Pre-edit snapshot skipped: %s", snap_err)
 
-                self.notify("agent/started", {"session_id": session_id})
-                session.set_status("running")
                 images = params.get("images")
                 image_uris = params.get("image_uris")
+                self.notify("agent/started", {"session_id": session_id})
+                session.set_status("running")
                 async for event in agent.run(prompt, images=images, image_uris=image_uris):
                     if isinstance(event, TextDelta):
                         if "[Context compacting" in event.text:

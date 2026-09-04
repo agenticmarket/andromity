@@ -1116,8 +1116,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             sname,
             this._rpcClient,
             this._context!,
-            this
+            this,
+            message.queue,
+            {
+              draft: message.draft || "",
+              images: message.images || [],
+              seedMessages: message.seedMessages || [],
+            }
           );
+          // If shifting the active session from the sidebar to an editor tab,
+          // give the sidebar a fresh new session so it starts clean!
+          if (sid === this._currentSessionId) {
+            const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            if (this._rpcClient) {
+              const r = await this._rpcClient.call<SessionInfo>("session.create", {
+                name: `Session ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+                project_path: workspaceFolder,
+                keep_id: sid,
+              }).catch(() => null);
+              if (r && r.id) {
+                this.setCurrentSessionId(r.id);
+                await this.fetchAndPostSessions();
+                vscode.commands.executeCommand("andromity.refreshSessions");
+              }
+            }
+          }
         }
         break;
       }

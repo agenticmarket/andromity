@@ -333,6 +333,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let allModels = [...DEFAULT_POPULAR_MODELS];
     let isRunning = false;
     const promptQueue = [];
+    let lastAppendedUserText = '';
+    let lastAppendedUserTime = 0;
     let currentTurnStartTime = 0;
     let thinkingStartTime = 0;
 
@@ -1131,13 +1133,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         '</div>' +
         '<div class="session-item-actions">' +
           '<button class="session-action-icon" data-action="open-session-tab" data-session-id="' + s.id + '" data-session-name="' + name + '" title="Open in New Editor Tab (Side-by-Side)">' +
-            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>' +
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>' +
           '</button>' +
           '<button class="session-action-icon" data-action="rename-session" data-session-id="' + s.id + '" data-session-name="' + name + '" title="Rename">' +
-            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>' +
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>' +
           '</button>' +
           '<button class="session-action-icon session-action-delete" data-action="delete-session" data-session-id="' + s.id + '" title="Delete">' +
-            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>' +
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>' +
           '</button>' +
         '</div>' +
       '</div>';
@@ -1705,13 +1707,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           const tabSname = target.getAttribute('data-session-name') || target.closest('[data-session-name]')?.getAttribute('data-session-name') || '';
           if (tabSid) {
             if (sessionsFlyout) sessionsFlyout.style.display = 'none';
-            vscode.postMessage({ type: 'open_session_tab', sessionId: tabSid, sessionName: tabSname });
+            const isCurrent = tabSid === currentSessionId;
+            const tabPayload = collectOpenTabPayload(isCurrent);
+            if (isCurrent) {
+              promptQueue.length = 0;
+              renderQueue();
+            }
+            vscode.postMessage({ type: 'open_session_tab', sessionId: tabSid, sessionName: tabSname, ...tabPayload });
           }
           break;
         }
         case 'open-current-tab': {
           const sNameEl = document.getElementById('active-session-name');
-          vscode.postMessage({ type: 'open_session_tab', sessionId: currentSessionId, sessionName: sNameEl?.textContent?.trim() || '' });
+          const tabPayload = collectOpenTabPayload(true);
+          promptQueue.length = 0;
+          renderQueue();
+          vscode.postMessage({ type: 'open_session_tab', sessionId: currentSessionId, sessionName: sNameEl?.textContent?.trim() || '', ...tabPayload });
           break;
         }
         case 'open-plan-tab':
@@ -1924,7 +1935,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       flyoutList.innerHTML = filtered.map(m => {
         const isActive = m.id === currentModel;
         return '<div class="flyout-item ' + (isActive ? 'active' : '') + '" data-action="pick-model" data-model-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || 'openrouter') + '">' +
-          '<span>' + escapeHtml(m.name || m.id) + '</span>' +
+          '<div class="flyout-item-info">' +
+            (isActive ? '<span class="flyout-active-dot"></span>' : '') +
+            '<span class="flyout-item-name">' + escapeHtml(m.name || m.id) + '</span>' +
+          '</div>' +
           '<span class="flyout-item-meta">' + escapeHtml(m.provider || 'openrouter') + (m.pricing ? ' · ' + escapeHtml(m.pricing) : '') + '</span>' +
         '</div>';
       }).join('');
@@ -2558,11 +2572,94 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       vscode.postMessage({ type: 'apply_code', code: code });
     };
 
+    function extractMessageText(content) {
+      if (content == null) return '';
+      if (typeof content === 'string') return content;
+      if (Array.isArray(content)) {
+        return content.map(function(part) {
+          if (typeof part === 'string') return part;
+          if (part && typeof part === 'object' && typeof part.text === 'string') return part.text;
+          return '';
+        }).join('');
+      }
+      if (typeof content === 'object' && typeof content.text === 'string') return content.text;
+      try { return String(content); } catch (e) { return ''; }
+    }
+
+    function transcriptHasUserPrompt(messages) {
+      return (messages || []).some(function(m) {
+        if (!m || m.role !== 'user') return false;
+        const text = extractMessageText(m.content).trim();
+        if (!text) return false;
+        if (text.startsWith('[Conversation summary') || text.startsWith('[Previous context summary')) return false;
+        return true;
+      });
+    }
+
+    function captureTranscriptForTab() {
+      const out = [];
+      if (!chatContainer) return out;
+      const children = chatContainer.children;
+      for (let i = 0; i < children.length; i++) {
+        const el = children[i];
+        if (el.classList.contains('message-wrap') && el.classList.contains('user')) {
+          const textEl = el.querySelector('.prompt-text-content');
+          const images = Array.prototype.map.call(el.querySelectorAll('.prompt-image-thumb'), function(img) { return img.src; }).filter(Boolean);
+          out.push({ role: 'user', content: (textEl && textEl.textContent) || '', images: images });
+        } else if (el.classList.contains('message-wrap') && el.classList.contains('assistant')) {
+          const thinkEl = el.querySelector('.thinking-content');
+          const textNodes = el.querySelectorAll('.assistant-text');
+          let asstText = '';
+          for (let t = 0; t < textNodes.length; t++) {
+            if (t) asstText += '\\n\\n';
+            asstText += textNodes[t].textContent || '';
+          }
+          out.push({ role: 'assistant', content: asstText, thinking: (thinkEl && thinkEl.textContent) || '' });
+        }
+      }
+      return out;
+    }
+
+    function collectOpenTabPayload(includeTranscript) {
+      return {
+        queue: [...promptQueue],
+        draft: promptInput ? promptInput.value : '',
+        images: [...attachedImages],
+        seedMessages: includeTranscript ? captureTranscriptForTab() : [],
+      };
+    }
+
+    function applyTabComposerState(draft, images) {
+      if (promptInput && typeof draft === 'string' && draft) {
+        promptInput.value = draft;
+        promptInput.style.height = 'auto';
+        promptInput.style.height = Math.min(promptInput.scrollHeight, 160) + 'px';
+        if (sendBtn) sendBtn.classList.add('has-text');
+      }
+      if (Array.isArray(images) && images.length > 0) {
+        attachedImages = [...images];
+        renderImageAttachments();
+      }
+    }
+
     function formatTime(date) {
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
-    function appendUserMessage(text, images, ts) {
+    function appendUserMessage(text, images, ts, opts) {
+      const displayText = typeof text === 'string' ? text : extractMessageText(text);
+      const trimmed = (displayText || '').trim();
+      const now = Date.now();
+      if (!opts || !opts.skipDedupe) {
+        if (trimmed && trimmed === lastAppendedUserText && (now - lastAppendedUserTime) < 1500) {
+          return;
+        }
+      }
+      if (trimmed) {
+        lastAppendedUserText = trimmed;
+        lastAppendedUserTime = now;
+      }
+
       const wrap = document.createElement('div');
       wrap.className = 'message-wrap user';
 
@@ -2626,16 +2723,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         msgDiv.appendChild(imgContainer);
       }
 
-      if (text) {
+      if (displayText) {
         const textWrapper = document.createElement('div');
         textWrapper.className = 'prompt-text-wrapper';
 
         const textContent = document.createElement('div');
         textContent.className = 'prompt-text-content';
-        textContent.textContent = text;
+        textContent.textContent = displayText;
         textWrapper.appendChild(textContent);
 
-        const isLong = text.length > 220 || text.split(/\\r?\\n/).length > 3;
+        const isLong = displayText.length > 220 || displayText.split(/\\r?\\n/).length > 3;
         if (isLong) {
           textContent.classList.add('clamped');
           const expandBtn = document.createElement('button');
@@ -3270,7 +3367,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               sendBtn.style.display = 'flex';
               document.querySelector('.prompt-box')?.classList.remove('is-generating');
             }
-            if (promptInput) {
+            if (promptInput && !msg.draft) {
               promptInput.value = (sessState && sessState.draftInput) || '';
               promptInput.style.height = 'auto';
             }
@@ -3287,12 +3384,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.session && Array.isArray(msg.session.messages) && msg.session.messages.length > 0) {
             allMessages = allMessages.concat(msg.session.messages.filter(m => {
               if (m.role === 'system') return false;
-              if (m.role === 'assistant' && (m.content || '').trim() === 'Understood. I have the context of our earlier discussion and will continue from here.') {
+              if (m.role === 'assistant' && extractMessageText(m.content).trim() === 'Understood. I have the context of our earlier discussion and will continue from here.') {
                 return false;
               }
               return true;
             }));
           }
+          if (!transcriptHasUserPrompt(allMessages) && Array.isArray(msg.seedMessages) && msg.seedMessages.length > 0) {
+            allMessages = msg.seedMessages;
+          }
+
+          lastAppendedUserText = '';
+          lastAppendedUserTime = 0;
 
           if (allMessages.length > 0) {
             hideZeroState();
@@ -3307,6 +3410,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             let turnEditedFilesForLoad = new Set();
 
             for (let i = 0; i < allMessages.length; i++) {
+              try {
               const m = allMessages[i];
               if (m.role === 'user') {
                 lastUserMsgTs = m.ts || null;
@@ -3316,11 +3420,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 currentTurnToolCount = 0;
                 turnEditedFilesForLoad = new Set();
 
-                const uContent = (m.content || '').trim();
+                const uContent = extractMessageText(m.content).trim();
                 if (uContent.startsWith('[Conversation summary') || uContent.startsWith('[Previous context summary')) {
                   appendCompactionSummaryCard(uContent);
                 } else {
-                  appendUserMessage(m.content || '', m.images || [], m.ts);
+                  try {
+                    appendUserMessage(uContent, m.images || [], m.ts, { skipDedupe: true });
+                  } catch (userRenderErr) {
+                    console.error('[Andromity webview] Failed to render user prompt', userRenderErr);
+                  }
                 }
               } else if (m.role === 'assistant') {
                 if (!currentAssistantWrap) {
@@ -3447,7 +3555,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 }
 
                 // 3. Text content in chronological order
-                const _content = m.content || '';
+                const _content = extractMessageText(m.content);
                 if (_content.trim()) {
                   const textEl = document.createElement('div');
                   textEl.className = 'assistant-text';
@@ -3515,11 +3623,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   currentAssistantWrap = null;
                 }
               }
+              } catch (replayErr) {
+                console.error('[Andromity webview] Failed to replay history message', replayErr);
+              }
             }
           } else {
             chatContainer.appendChild(zeroState);
             zeroState.style.display = 'flex';
           }
+          applyTabComposerState(msg.draft, msg.images);
           if (msg.session) {
             currentSessionId = msg.session.id || currentSessionId;
             if (msg.session.model) {
@@ -3915,6 +4027,41 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
           updateSubagentCard(msg);
           break; }
+
+        case 'init_queue':
+          if (Array.isArray(msg.queue) && msg.queue.length > 0) {
+            promptQueue.push(...msg.queue);
+            renderQueue();
+          }
+          break;
+
+        case 'init_tab_state':
+          if (Array.isArray(msg.queue) && msg.queue.length > 0) {
+            promptQueue.push(...msg.queue);
+            renderQueue();
+          }
+          if (!chatContainer.querySelector('.message-wrap.user') && Array.isArray(msg.seedMessages) && msg.seedMessages.length > 0) {
+            hideZeroState();
+            lastAppendedUserText = '';
+            lastAppendedUserTime = 0;
+            msg.seedMessages.forEach(function(m) {
+              if (!m) return;
+              if (m.role === 'user') {
+                appendUserMessage(extractMessageText(m.content), m.images || [], m.ts, { skipDedupe: true });
+              } else if (m.role === 'assistant' && extractMessageText(m.content).trim()) {
+                const wrap = document.createElement('div');
+                wrap.className = 'message-wrap assistant';
+                wrap.innerHTML = '<div class="assistant-header"><div class="assistant-avatar"><img src="' + sidebarIconUri + '" width="14" height="14" alt="Andromity" /></div><span class="assistant-name">Andromity</span></div>';
+                const textEl = document.createElement('div');
+                textEl.className = 'assistant-text';
+                textEl.innerHTML = renderMarkdown(extractMessageText(m.content));
+                wrap.appendChild(textEl);
+                chatContainer.appendChild(wrap);
+              }
+            });
+          }
+          applyTabComposerState(msg.draft, msg.images);
+          break;
 
         case 'agent_started':
           if (msg.session_id) {
