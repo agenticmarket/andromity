@@ -112,6 +112,21 @@ ${styles}
           <line x1="3" y1="21" x2="10" y2="14"></line>
         </svg>
       </button>
+
+      <!-- Waterfall First-Session Tooltip Callout -->
+      <div class="waterfall-callout-popover" id="waterfall-callout-popover" style="display:none;" role="tooltip" aria-label="Waterfall Trace guide">
+        <div class="popover-arrow"></div>
+        <div class="popover-header">
+          <div class="popover-badge">🌊 Live Waterfall</div>
+          <button class="popover-close-btn" id="btn-dismiss-wf-callout" title="Dismiss">&times;</button>
+        </div>
+        <div class="popover-body">
+          Watch real-time execution tracks, TTFB latency, LLM reasoning, and tool calls as your agent runs.
+        </div>
+        <div class="popover-footer">
+          <button class="popover-action-btn" id="btn-action-wf-callout">Open Waterfall</button>
+        </div>
+      </div>
     </div>
   </div>
 

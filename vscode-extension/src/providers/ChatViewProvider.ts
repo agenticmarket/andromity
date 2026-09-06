@@ -375,6 +375,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     bind("agent/started", (params: any) => {
       this._postToWebview({ type: "agent_started", ...params });
+      const sid = params?.session_id || this._currentSessionId;
+      if (sid && this._context) {
+        const alreadyShown = this._context.globalState.get<boolean>("andromity.waterfallFirstSessionShown", false);
+        if (!alreadyShown) {
+          void this._context.globalState.update("andromity.waterfallFirstSessionShown", true);
+          WaterfallPanel.createOrShow(
+            this._extensionUri,
+            sid,
+            "Live Session",
+            this._rpcClient,
+            this._context
+          );
+          this._postToWebview({ type: "dismiss_waterfall_callout" });
+        }
+      }
     });
 
     bind("agent/textDelta", (params: any) => {
@@ -665,6 +680,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         isTrusted: trustStatus?.is_trusted !== false,
         workspaceName: workspaceFolder ? path.basename(workspaceFolder) : "Workspace Ready",
         currentPlan: this._currentPlan,
+        waterfallFirstSessionShown: this._context?.globalState.get<boolean>("andromity.waterfallFirstSessionShown", false) || false,
       });
     } catch (e: any) {
       console.error("[Andromity Chat] Initial config load failed:", e);
@@ -1172,6 +1188,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const sid = message.sessionId || this._currentSessionId;
         const sname = message.sessionName || "Chat Session";
         if (sid) {
+          if (this._context) {
+            void this._context.globalState.update("andromity.waterfallFirstSessionShown", true);
+          }
           WaterfallPanel.createOrShow(
             this._extensionUri,
             sid,

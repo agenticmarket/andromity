@@ -84,6 +84,49 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const btnOnboardingOllamaSave = document.getElementById('btn-onboarding-ollama-save');
     const btnToggleKeyVis = document.getElementById('btn-toggle-key-vis');
 
+    const wfCallout = document.getElementById('waterfall-callout-popover');
+    const btnWfTop = document.getElementById('btn-top-waterfall');
+    const btnDismissWfCallout = document.getElementById('btn-dismiss-wf-callout');
+    const btnActionWfCallout = document.getElementById('btn-action-wf-callout');
+
+    function checkWaterfallOnboarding(alreadyShownServer) {
+      try {
+        if (alreadyShownServer === true) {
+          dismissWaterfallOnboarding();
+          return;
+        }
+        const shown = localStorage.getItem('andromity_waterfall_callout_shown');
+        if (!shown && wfCallout && btnWfTop) {
+          wfCallout.style.display = 'block';
+          btnWfTop.classList.add('waterfall-highlight');
+        }
+      } catch (e) {}
+    }
+
+    function dismissWaterfallOnboarding() {
+      try {
+        if (wfCallout) wfCallout.style.display = 'none';
+        if (btnWfTop) btnWfTop.classList.remove('waterfall-highlight');
+        localStorage.setItem('andromity_waterfall_callout_shown', 'true');
+      } catch (e) {}
+    }
+
+    btnDismissWfCallout?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dismissWaterfallOnboarding();
+    });
+
+    btnActionWfCallout?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dismissWaterfallOnboarding();
+      const sNameEl = document.getElementById('active-session-name');
+      vscode.postMessage({
+        type: 'open_waterfall',
+        sessionId: currentSessionId,
+        sessionName: sNameEl?.textContent?.trim() || 'Session'
+      });
+    });
+
     let selectedOnboardingProvider = 'anthropic';
     let selectedOnboardingModel = 'claude-sonnet-4-6';
 
@@ -1730,6 +1773,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           vscode.postMessage({ type: 'open_plan_tab' });
           break;
         case 'open-waterfall': {
+          dismissWaterfallOnboarding();
           const sNameEl = document.getElementById('active-session-name');
           vscode.postMessage({
             type: 'open_waterfall',
@@ -3458,6 +3502,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           updateModelBadge();
           updateOnboardingVisibility();
+          if (msg.waterfallFirstSessionShown) {
+            dismissWaterfallOnboarding();
+          } else {
+            checkWaterfallOnboarding(msg.waterfallFirstSessionShown);
+          }
+          break;
+
+        case 'dismiss_waterfall_callout':
+          dismissWaterfallOnboarding();
+          break;
+
+        case 'show_waterfall_tooltip':
+          checkWaterfallOnboarding(false);
           break;
 
         case 'trust_updated':

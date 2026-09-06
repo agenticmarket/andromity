@@ -4840,6 +4840,111 @@ export function getChatStyles(): string {
       word-break: break-word;
     }
 
+    /* Waterfall First-Session Onboarding Popover */
+    .waterfall-callout-popover {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 28px;
+      z-index: 1000;
+      width: 220px;
+      background: #18181b;
+      border: 1px solid rgba(139, 92, 246, 0.45);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 14px rgba(139, 92, 246, 0.25);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-family: var(--font-ui);
+      animation: popoverFadeSlide 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes popoverFadeSlide {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .waterfall-callout-popover .popover-arrow {
+      position: absolute;
+      top: -5px;
+      right: 38px;
+      width: 10px;
+      height: 10px;
+      background: #18181b;
+      border-left: 1px solid rgba(139, 92, 246, 0.45);
+      border-top: 1px solid rgba(139, 92, 246, 0.45);
+      transform: rotate(45deg);
+    }
+
+    .waterfall-callout-popover .popover-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+
+    .waterfall-callout-popover .popover-badge {
+      font-size: 11px;
+      font-weight: 600;
+      color: #c084fc;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .waterfall-callout-popover .popover-close-btn {
+      background: transparent;
+      border: none;
+      color: var(--muted, #888);
+      font-size: 15px;
+      cursor: pointer;
+      padding: 0 2px;
+      line-height: 1;
+    }
+
+    .waterfall-callout-popover .popover-close-btn:hover {
+      color: var(--fg, #e4e4e7);
+    }
+
+    .waterfall-callout-popover .popover-body {
+      font-size: 11px;
+      line-height: 1.45;
+      color: var(--fg, #e4e4e7);
+      opacity: 0.9;
+      margin-bottom: 10px;
+    }
+
+    .waterfall-callout-popover .popover-footer {
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .waterfall-callout-popover .popover-action-btn {
+      background: linear-gradient(135deg, #7c3aed, #6366f1);
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+      padding: 4px 10px;
+      cursor: pointer;
+      transition: opacity 0.15s ease;
+    }
+
+    .waterfall-callout-popover .popover-action-btn:hover {
+      opacity: 0.9;
+    }
+
+    #btn-top-waterfall.waterfall-highlight {
+      position: relative;
+      color: #c084fc;
+      box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.4);
+      animation: waterfallPulse 2s infinite ease-in-out;
+    }
+
+    @keyframes waterfallPulse {
+      0% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.6); }
+      70% { box-shadow: 0 0 0 6px rgba(139, 92, 246, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0); }
+    }
+
     ${getPromptStyles()}
 `;
 }
