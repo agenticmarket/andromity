@@ -76,7 +76,7 @@ andromity run "revisar session.py" --dry-run       # ver qué haría
 ---
 
 <!-- Replace with GIF showing trust prompt → diff → approval flow -->
-![Andromity diff and approval flow](screen_shot.png)
+![Andromity diff and approval flow](vscode-extension/walkthroughs/assets/trusted.webp)
 
 ---
 
@@ -140,8 +140,4 @@ Consulta [CONTRIBUTING.md](CONTRIBUTING.md) para ver el diseño del proyecto y l
 
 **MIT** — consulta [LICENSE](LICENSE).
 
----
 
-<div align="center">
-  <img src="screen_shot.png" alt="Andromity in action" width="100%" />
-</div>

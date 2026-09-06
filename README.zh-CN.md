@@ -76,7 +76,7 @@ andromity run "审查 session.py" --dry-run       # 演练模式，查看它将�
 ---
 
 <!-- 替换为显示信任提示 → diff → 审批流程的 GIF -->
-![Andromity 差异对比和审批流程](screen_shot.png)
+![Andromity 差异对比和审批流程](vscode-extension/walkthroughs/assets/trusted.webp)
 
 ---
 
@@ -140,8 +140,4 @@ andromity run "审查 session.py" --dry-run       # 演练模式，查看它将�
 
 **MIT** 协议 — 详见 [LICENSE](LICENSE)。
 
----
 
-<div align="center">
-  <img src="screen_shot.png" alt="Andromity in action" width="100%" />
-</div>

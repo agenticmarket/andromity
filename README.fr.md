@@ -76,7 +76,7 @@ andromity run "revoir session.py" --dry-run       # voir ce qu'il ferait
 ---
 
 <!-- Replace with GIF showing trust prompt → diff → approval flow -->
-![Andromity diff and approval flow](screen_shot.png)
+![Andromity diff and approval flow](vscode-extension/walkthroughs/assets/trusted.webp)
 
 ---
 
@@ -140,8 +140,4 @@ Voir [CONTRIBUTING.md](CONTRIBUTING.md) pour la structure du projet et la config
 
 **MIT** — voir [LICENSE](LICENSE).
 
----
 
-<div align="center">
-  <img src="screen_shot.png" alt="Andromity in action" width="100%" />
-</div>

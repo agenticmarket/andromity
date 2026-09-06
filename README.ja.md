@@ -76,7 +76,7 @@ andromity run "session.py をレビューして" --dry-run       # 何をする�
 ---
 
 <!-- Replace with GIF showing trust prompt → diff → approval flow -->
-![Andromity diff and approval flow](screen_shot.png)
+![Andromity diff and approval flow](vscode-extension/walkthroughs/assets/trusted.webp)
 
 ---
 
@@ -140,8 +140,4 @@ IssueまたはPRを作成してください。現時点では、機能の要望�
 
 **MIT** — [LICENSE](LICENSE) を参照してください。
 
----
 
-<div align="center">
-  <img src="screen_shot.png" alt="Andromity in action" width="100%" />
-</div>
