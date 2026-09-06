@@ -193,6 +193,30 @@ export class WaterfallPanel {
     bind("subagent/failed", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "subagent_failed", ...params });
     });
+    const isSessionTarget = (params: any) => {
+      if (!params) return false;
+      const sId = this._sessionId;
+      const sName = this._sessionName;
+      return params.to_session_id === sId || params.to_session === sId || (sName && params.to_session === sName) ||
+             params.from_session_id === sId || params.from_session === sId || (sName && params.from_session === sName) ||
+             params.to_session === "all" || params.to_session === "*";
+    };
+
+    bind("session/messageReceived", (params: any) => {
+      if (isSessionTarget(params)) this._postMessage({ type: "session_message_received", ...params });
+    });
+    bind("session/questionReceived", (params: any) => {
+      if (isSessionTarget(params)) this._postMessage({ type: "session_question_received", ...params });
+    });
+    bind("session/answerReceived", (params: any) => {
+      if (isSessionTarget(params)) this._postMessage({ type: "session_answer_received", ...params });
+    });
+    bind("session/sharedStateChanged", (params: any) => {
+      this._postMessage({ type: "session_shared_state_changed", ...params });
+    });
+    bind("session/handoffWritten", (params: any) => {
+      if (isSessionTarget(params)) this._postMessage({ type: "session_handoff_written", ...params });
+    });
   }
 
   private async _handleMessage(message: any) {

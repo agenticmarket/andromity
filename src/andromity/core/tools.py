@@ -803,19 +803,21 @@ def find_files(pattern: str = "*", path: str = ".", max_results: int = 50) -> st
 # ── Unified Plan & Progress Tracking ──────────────────────────────────────────
 
 def _sync_plan_md(plan=None, todo_list=None):
-    from andromity.core.planner import Plan
+    from andromity.core.planner import Plan, get_plans_dir
     from andromity.core.todo import TodoList
     project_root = str(_get_project_root())
+    cur_session = _current_session_var.get()
+    session_id = cur_session.id if cur_session else ""
     
     if not plan:
         try:
-            plan = Plan.load(project_root)
+            plan = cur_session.load_plan_obj() if cur_session else Plan.load(project_root, session_id=session_id)
         except Exception:
             plan = None
             
     if not todo_list:
         try:
-            todo_list = TodoList.load(project_root)
+            todo_list = TodoList.load(project_root, session_id=session_id)
         except Exception:
             todo_list = None
             
@@ -827,11 +829,6 @@ def _sync_plan_md(plan=None, todo_list=None):
         md_lines.append(f"# Plan: {plan.title}")
         if plan.description:
             md_lines.append(f"\n> {plan.description}\n")
-        # Full markdown document written by the AI (architecture, file-by-file
-        # changes, verification plan, etc.). Written verbatim, then the live
-        # checklist is appended below so progress stays in sync. When the model
-        # omitted plan_md, fall back to a small structured skeleton so the
-        # file is still organised.
         body = getattr(plan, "body", "") or ""
         if body:
             md_lines.append(body.rstrip())
@@ -858,34 +855,21 @@ def _sync_plan_md(plan=None, todo_list=None):
     else:
         md_lines.append("*No steps yet.*")
         
-    # Keep the human-readable mirror inside .andromity/ with the rest of
-    # Andromity's internal state (plan.json, todos.md) — never in the
-    # project root, and it's gitignored via ensure_gitignore_entry below.
-    md_path = Path(project_root) / ".andromity" / "PLAN.md"
+    md_path = get_plans_dir(project_root) / f"{session_id or 'plan'}.md"
     try:
         md_path.parent.mkdir(parents=True, exist_ok=True)
         with open(md_path, "w", encoding="utf-8") as f:
             f.write("\n".join(md_lines))
-        try:
-            from andromity.core.git_ops import ensure_gitignore_entry
-            ensure_gitignore_entry(project_root, ".andromity/")
-        except Exception:
-            pass
     except Exception as e:
         import logging
-        logging.getLogger("andromity.tools").warning(f"Failed to write PLAN.md: {e}")
+        logging.getLogger("andromity.tools").warning(f"Failed to write plan markdown: {e}")
 
 
 
 def write_plan(title: str, description: str = "", plan_md: str = "", steps: list = None, questions: list = None, **kwargs) -> str:
     """
     Create a plan (title + description + optional full markdown document) and
-    convert steps directly into todos. Steps are NOT stored separately in the
-    Plan object — todos ARE the steps. This avoids duplicating the same list
-    twice. steps is optional — if omitted, the plan is created with no todos
-    yet. plan_md is the full human-readable plan document (architecture, file
-    changes, verification plan) written into .andromity/PLAN.md; the step
-    checklist is auto-appended to it.
+    convert steps directly into todos scoped to the current session.
     """
     from andromity.core.planner import Plan
     from andromity.core.todo import TodoItem, TodoList
@@ -896,7 +880,6 @@ def write_plan(title: str, description: str = "", plan_md: str = "", steps: list
     if isinstance(steps, str):
         steps = [s.strip() for s in steps.split("\n") if s.strip()]
 
-    # Normalise each step to (text, status)
     step_items = []
     for s in steps:
         if isinstance(s, dict):
@@ -908,17 +891,22 @@ def write_plan(title: str, description: str = "", plan_md: str = "", steps: list
             status = "pending"
         step_items.append((text, status))
 
+    cur_session = _current_session_var.get()
+    session_id = cur_session.id if cur_session else ""
     project_root = str(_get_project_root())
 
-    # Steps become todos — single source of truth
-    todo_list = TodoList(project_path=project_root)
+    formatted_steps = [
+        {"id": f"t{i + 1}", "title": text, "status": status}
+        for i, (text, status) in enumerate(step_items)
+    ]
+
+    todo_list = TodoList(project_path=project_root, session_id=session_id)
     todo_list.items = [
         TodoItem(id=f"t{i + 1}", title=text, status=status)
         for i, (text, status) in enumerate(step_items)
     ]
     todo_list.save()
 
-    # Save plan metadata with steps
     from andromity.config import config
     mode = config.get("default", "permission_mode", "safe")
     auto_approve = mode in ("yolo", "full")
@@ -930,10 +918,11 @@ def write_plan(title: str, description: str = "", plan_md: str = "", steps: list
         questions=questions or [],
         status="approved" if auto_approve else "pending",
         project_path=project_root,
+        session_id=session_id,
+        steps=formatted_steps,
     )
     plan.save()
 
-    cur_session = _current_session_var.get()
     if cur_session:
         cur_session.save_plan(plan.to_enriched_dict())
 
@@ -948,20 +937,18 @@ def write_plan(title: str, description: str = "", plan_md: str = "", steps: list
             "containing Overview, Architecture, File-by-File Changes and Verification sections."
         )
     if auto_approve:
-        return f"Plan '{title}' created with {len(step_items)} steps (auto-approved in {mode.upper()} mode). A detailed PLAN.md has been generated in .andromity/. Proceeding.{detail_hint}"
-    return f"Plan '{title}' created with {len(step_items)} steps. A detailed PLAN.md has been generated in .andromity/PLAN.md. Review it in the Viewer (Ctrl+D) or open the file, then confirm before making any changes.{detail_hint}"
+        return f"Plan '{title}' created with {len(step_items)} steps (auto-approved in {mode.upper()} mode). Proceeding.{detail_hint}"
+    return f"Plan '{title}' created with {len(step_items)} steps. Review it in the Plan tab, then confirm before making any changes.{detail_hint}"
 
 
 def update_plan_step(step_index: int, status: str) -> str:
     """
     Update step progress (e.g. 'active', 'done', 'failed', 'skipped').
     Updates both the plan and the corresponding todo checklist in real-time.
-    Automatically marks any previously active step as 'done' when starting a new active step.
     """
     from andromity.core.planner import Plan
     from andromity.core.todo import TodoList
 
-    # Normalize common status aliases from various LLM models
     status_aliases = {
         "in_progress": "active",
         "running": "active",
@@ -981,11 +968,11 @@ def update_plan_step(step_index: int, status: str) -> str:
     if status not in valid_statuses:
         return f"Error: status must be one of {valid_statuses}"
 
+    cur_session = _current_session_var.get()
+    session_id = cur_session.id if cur_session else ""
     project_path = str(_get_project_root())
-    todo_list = TodoList.load(project_path)
+    todo_list = TodoList.load(project_path, session_id=session_id)
 
-    # When transitioning a step to 'active', automatically mark any
-    # previously 'active' steps as 'done' so unfinished active steps don't linger.
     if status == "active":
         for item in todo_list.items:
             if item.id != f"t{step_index}" and item.status == "active":
@@ -993,20 +980,34 @@ def update_plan_step(step_index: int, status: str) -> str:
 
     item = todo_list.update(f"t{step_index}", status)
 
-    _sync_plan_md(todo_list=todo_list)
-    _notify_todo()
-
-    # Also update session plan and notify plan listeners with live step statuses
-    try:
-        from andromity.core.planner import Plan
-        plan = Plan.load(project_path)
+    if cur_session and cur_session.plan:
+        steps = cur_session.plan.get("steps") or cur_session.plan.get("todos") or []
+        for s in steps:
+            if s.get("id") == f"t{step_index}":
+                s["status"] = status
+            elif status == "active" and s.get("status") == "active":
+                s["status"] = "done"
+        cur_session.plan["steps"] = steps
+        cur_session.plan["todos"] = steps
+        cur_session.save_plan(cur_session.plan)
+        plan_obj = cur_session.load_plan_obj()
+        if plan_obj:
+            plan_obj.save()
+            _notify_plan(plan_obj)
+    else:
+        plan = Plan.load(project_path, session_id=session_id)
         if plan:
-            cur_session = _current_session_var.get()
+            plan.steps = [
+                {"id": it.id, "title": it.title, "status": it.status}
+                for it in todo_list.items
+            ]
+            plan.save()
             if cur_session:
                 cur_session.save_plan(plan.to_enriched_dict())
             _notify_plan(plan)
-    except Exception:
-        pass
+
+    _sync_plan_md(todo_list=todo_list)
+    _notify_todo()
 
     if item:
         return f"Updated Step {step_index} ({item.title}) to '{status}'."
@@ -1169,6 +1170,48 @@ def session_list() -> str:
         tag = " (current active session)" if is_cur else ""
         lines.append(f"- **{s['name']}**{tag} (id: `{s['session_id'][:8]}...`, path: `{s['project_path']}`, registered: {s['registered_at']})")
     return "\n".join(lines)
+
+
+def session_read_messages(max_count: int = 5) -> str:
+    from andromity.core.session_bus import SessionBus
+    bus = SessionBus.get_instance()
+    cur_sess = _current_session_var.get()
+    cur_id = cur_sess.id if cur_sess else "anonymous"
+
+    questions = bus.get_pending_questions_for(cur_id)
+    messages = bus.drain_mailbox(cur_id, max_count=max_count)
+
+    if not questions and not messages:
+        return "No unread messages or pending questions in session mailbox."
+
+    lines = []
+    if questions:
+        lines.append(f"### Pending Questions ({len(questions)}):")
+        for q in questions:
+            lines.append(
+                f"- **From {q['from_session']}** (ID: `{q['question_id']}`):\n"
+                f"  \"{q['question']}\"\n"
+                f"  *(Use session_answer_question(question_id='{q['question_id']}', answer='...') to respond)*"
+            )
+
+    if messages:
+        lines.append(f"\n### Incoming Messages ({len(messages)}):")
+        for m in messages:
+            lines.append(f"- **From {m.from_session_name}** [{m.message_type}]:\n  {m.content}")
+
+    return "\n".join(lines)
+
+
+def session_answer_question(question_id: str, answer: str) -> str:
+    from andromity.core.session_bus import SessionBus
+    bus = SessionBus.get_instance()
+    cur_sess = _current_session_var.get()
+    cur_id = cur_sess.id if cur_sess else "anonymous"
+
+    success = bus.answer_question(from_session_id=cur_id, question_id=question_id, answer=answer)
+    if success:
+        return f"Successfully delivered answer for question '{question_id}'."
+    return f"Error: Question '{question_id}' was not found, has timed out, or was already answered."
 
 
 def shared_state_set(key: str, value: Any) -> str:
@@ -1633,6 +1676,34 @@ CORE_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "session_read_messages",
+            "description": "Read and drain unread messages and pending questions sent to this session by other co-agents.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "max_count": {"type": "integer", "description": "Maximum number of messages to retrieve (default 5)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "session_answer_question",
+            "description": "Answer a pending question asked by another co-agent (using the question_id from session_read_messages).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question_id": {"type": "string", "description": "The question_id to answer"},
+                    "answer": {"type": "string", "description": "The answer payload to return to the asking session"},
+                },
+                "required": ["question_id", "answer"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "shared_state_set",
             "description": "Set a namespaced key-value fact on the shared state board (e.g. 'auth.endpoints', 'ui.theme', 'db.schema').",
             "parameters": {
@@ -1844,6 +1915,10 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
         return _run_coro_sync(session_broadcast_async(**args))
     elif name == "session_list":
         return session_list()
+    elif name == "session_read_messages":
+        return session_read_messages(**args)
+    elif name == "session_answer_question":
+        return session_answer_question(**args)
     elif name == "shared_state_set":
         return shared_state_set(**args)
     elif name == "shared_state_get":
@@ -1893,6 +1968,12 @@ async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[
         return await session_ask_question_async(**args)
     elif name == "session_broadcast":
         return await session_broadcast_async(**args)
+    elif name == "session_list":
+        return session_list()
+    elif name == "session_read_messages":
+        return session_read_messages(**args)
+    elif name == "session_answer_question":
+        return session_answer_question(**args)
     
     # Run blocking core tools in a background thread to prevent freezing the Textual UI
     return await asyncio.to_thread(execute_tool, name, args)

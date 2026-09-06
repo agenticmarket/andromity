@@ -86,6 +86,55 @@ class JsonRpcHandler:
         self._active_agents: Dict[str, Any] = {}
         self._mcp_manager: Optional[Any] = None
         self._mcp_started: bool = False
+        from andromity.core.session_bus import SessionBus
+        SessionBus.get_instance().subscribe(self._on_session_bus_event)
+
+    def _on_session_bus_event(self, event: StreamEvent):
+        if isinstance(event, SessionMessageReceived):
+            self.notify("session/messageReceived", {
+                "from_session": event.from_session,
+                "to_session": event.to_session,
+                "from_session_id": getattr(event, "from_session_id", ""),
+                "to_session_id": getattr(event, "to_session_id", ""),
+                "content": event.content,
+                "message_type": event.message_type,
+                "timestamp": event.timestamp,
+            })
+        elif isinstance(event, SessionQuestionReceived):
+            self.notify("session/questionReceived", {
+                "question_id": event.question_id,
+                "from_session": event.from_session,
+                "to_session": event.to_session,
+                "from_session_id": getattr(event, "from_session_id", ""),
+                "to_session_id": getattr(event, "to_session_id", ""),
+                "question": event.question,
+                "timestamp": event.timestamp,
+            })
+        elif isinstance(event, SessionAnswerReceived):
+            self.notify("session/answerReceived", {
+                "question_id": event.question_id,
+                "from_session": event.from_session,
+                "to_session": event.to_session,
+                "from_session_id": getattr(event, "from_session_id", ""),
+                "to_session_id": getattr(event, "to_session_id", ""),
+                "answer": event.answer,
+                "timestamp": event.timestamp,
+            })
+        elif isinstance(event, SharedStateChanged):
+            self.notify("session/sharedStateChanged", {
+                "key": event.key,
+                "value": event.value,
+                "author_session": event.author_session,
+                "timestamp": event.timestamp,
+            })
+        elif isinstance(event, HandoffWritten):
+            self.notify("session/handoffWritten", {
+                "handoff_id": event.handoff_id,
+                "from_session": event.from_session,
+                "to_session": event.to_session,
+                "task_summary": event.task_summary,
+                "timestamp": event.timestamp,
+            })
 
     def notify(self, method: str, params: Dict[str, Any]):
         """Send a JSON-RPC notification to the client."""
@@ -520,6 +569,86 @@ class JsonRpcHandler:
 
         return {"success": True, "popped_messages": popped, "git_status": rollback_msg}
 
+    async def rpc_session_sendMessage(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from andromity.core.session_bus import SessionBus
+        bus = SessionBus.get_instance()
+        from_id = params.get("from_session", "user")
+        to_id = params.get("to_session")
+        content = params.get("content", "")
+        message_type = params.get("message_type", "chat")
+        if not to_id:
+            raise ValueError("to_session is required")
+        ok = await bus.send_message(
+            from_session_id=from_id,
+            to_target=to_id,
+            content=content,
+            message_type=message_type,
+        )
+        return {"success": ok}
+
+    async def rpc_session_askQuestion(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from andromity.core.session_bus import SessionBus
+        bus = SessionBus.get_instance()
+        from_id = params.get("from_session", "user")
+        to_id = params.get("to_session")
+        question = params.get("question", "")
+        timeout = float(params.get("timeout", 60.0))
+        if not to_id or not question:
+            raise ValueError("to_session and question are required")
+        answer = await bus.ask_question(
+            from_session_id=from_id,
+            to_target=to_id,
+            question=question,
+            timeout=timeout,
+        )
+        return {"success": True, "answer": answer}
+
+    async def rpc_session_answerQuestion(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from andromity.core.session_bus import SessionBus
+        bus = SessionBus.get_instance()
+        from_id = params.get("from_session", "user")
+        question_id = params.get("question_id")
+        answer = params.get("answer", "")
+        if not question_id:
+            raise ValueError("question_id is required")
+        success = bus.answer_question(
+            from_session_id=from_id,
+            question_id=question_id,
+            answer=answer,
+        )
+        return {"success": success}
+
+    async def rpc_session_readMessages(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from andromity.core.session_bus import SessionBus
+        bus = SessionBus.get_instance()
+        session_id = params.get("session_id")
+        max_count = int(params.get("max_count", 10))
+        if not session_id:
+            raise ValueError("session_id is required")
+        msgs = bus.drain_mailbox(session_id, max_count=max_count)
+        return {
+            "messages": [
+                {
+                    "id": m.id,
+                    "from_session": m.from_session_name,
+                    "to_session": m.to_session_id,
+                    "content": m.content,
+                    "message_type": m.message_type,
+                    "timestamp": m.created_at,
+                }
+                for m in msgs
+            ]
+        }
+
+    async def rpc_session_getPendingQuestions(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from andromity.core.session_bus import SessionBus
+        bus = SessionBus.get_instance()
+        session_id = params.get("session_id")
+        if not session_id:
+            raise ValueError("session_id is required")
+        questions = bus.get_pending_questions_for(session_id)
+        return {"questions": questions}
+
     # ── Agent Execution & Streaming Methods ─────────────────────────────────────
 
     async def rpc_agent_prompt(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -793,8 +922,7 @@ class JsonRpcHandler:
                             "ts": getattr(event, "ts", 0.0) or time.time(),
                         })
                         try:
-                            from andromity.core.planner import Plan
-                            plan_obj = Plan.load(session.project_path)
+                            plan_obj = session.load_plan_obj() if session else None
                             if plan_obj:
                                 self.notify("agent/planUpdated", {
                                     "session_id": session_id,
@@ -1495,6 +1623,12 @@ class JsonRpcHandler:
             raise ValueError("No pending plan found for this session")
         plan.status = "approved"
         plan.save()
+        enriched = plan.to_enriched_dict()
+        session.save_plan(enriched)
+        self.notify("agent/planUpdated", {
+            "session_id": session_id,
+            "plan": enriched,
+        })
         return {"success": True, "status": "approved"}
 
     async def rpc_plan_reject(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1508,7 +1642,22 @@ class JsonRpcHandler:
             raise ValueError("No pending plan found for this session")
         plan.status = "rejected"
         plan.save()
+        enriched = plan.to_enriched_dict()
+        session.save_plan(enriched)
+        self.notify("agent/planUpdated", {
+            "session_id": session_id,
+            "plan": enriched,
+        })
         return {"success": True, "status": "rejected"}
+
+    async def rpc_plan_get(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Get the current session's active plan."""
+        session_id = params.get("session_id")
+        if not session_id:
+            return {"plan": None}
+        session = self._get_or_load_session(session_id, params.get("project_path"))
+        plan = session.load_plan_obj()
+        return {"plan": plan.to_enriched_dict() if plan else None}
 
 
     # ── Git & Snapshots ─────────────────────────────────────────────────────────

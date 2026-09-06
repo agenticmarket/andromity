@@ -16,14 +16,23 @@ class ChatMessage(Widget):
     DEFAULT_CSS = """\
 ChatMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
 .assistant-header, #assistant-header { width: 1fr; content-align: left middle; }
+.session-msg { border-left: tall #58a6ff; background: #58a6ff 10%; margin: 1 0; padding: 0 1; }
+.session-question { border-left: tall #d2a8ff; background: #d2a8ff 10%; margin: 1 0; padding: 0 1; }
+.session-answer { border-left: tall #3fb950; background: #3fb950 10%; margin: 1 0; padding: 0 1; }
+.session-state { border-left: tall #79c0ff; background: #79c0ff 10%; margin: 1 0; padding: 0 1; }
+.session-handoff { border-left: tall #f0883e; background: #f0883e 10%; margin: 1 0; padding: 0 1; }
 """
     def __init__(self, role: str, content: str = "", show_header: bool = True,
-                 show_footer: bool = True, **kwargs):
+                 show_footer: bool = True, sender: str = "", question_id: str = "", **kwargs):
         super().__init__(**kwargs)
         self.role = role
         self._content = content
         self._show_header = show_header
         self._show_footer = show_footer
+        self._sender = sender or "Co-Agent"
+        self._question_id = question_id
+        if role.startswith("session-"):
+            self.add_class(role.replace("session-", "session-"))
 
     def compose(self) -> ComposeResult:
         if self.role == "user":
@@ -35,9 +44,6 @@ ChatMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
                 yield Markdown(self._content)
             else:
                 yield Static("")
-            # One compact footer line: copy button + timing + tool calls.
-            # Intermediate text blocks parked between tool calls pass
-            # show_footer=False so only the final block of the turn shows it.
             if self._show_footer:
                 with Horizontal(classes="response-footer"):
                     yield Button("⧉ Copy", classes="copy-btn")
@@ -45,10 +51,20 @@ ChatMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
         elif self.role == "system":
             yield Static(f"[dim italic]{escape(self._content)}[/dim italic]")
         elif self.role == "system-markup":
-            # Pre-validate markup — bad tags fall back to plain escaped text
             yield Static(safe_markup(self._content))
         elif self.role == "tool":
             yield Static(f"[dim][tool: {escape(self._content)}][/dim]")
+        elif self.role == "session-message":
+            yield Static(f"[bold #58a6ff]✉ Co-Agent [{escape(self._sender)}]:[/bold #58a6ff]\n{escape(self._content)}")
+        elif self.role == "session-question":
+            qid_str = f" [dim](ID: {escape(self._question_id)})[/dim]" if self._question_id else ""
+            yield Static(f"[bold #d2a8ff]❓ Question from [{escape(self._sender)}]{qid_str}:[/bold #d2a8ff]\n{escape(self._content)}")
+        elif self.role == "session-answer":
+            yield Static(f"[bold #3fb950]✔ Answer from [{escape(self._sender)}]:[/bold #3fb950]\n{escape(self._content)}")
+        elif self.role == "session-state":
+            yield Static(f"[dim cyan]⚡ Shared State [{escape(self._sender)}]: {escape(self._content)}[/dim cyan]")
+        elif self.role == "session-handoff":
+            yield Static(f"[bold #f0883e]🤝 Handoff from [{escape(self._sender)}]:[/bold #f0883e] {escape(self._content)}")
 
     def on_button_pressed(self, event: Button.Pressed):
         """Copy the raw message content when the ⧉ button is pressed."""
@@ -913,9 +929,35 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
         self.mount(msg)
         if not ephemeral:
             self._prune_dom()
-        # Only auto-scroll if the user hasn't scrolled up to read history
         if not self._user_scrolled_up:
             self.scroll_end()
+
+    def add_session_message(self, sender: str, content: str, message_type: str = "chat"):
+        msg = ChatMessage("session-message", content=content, sender=sender)
+        self._append_widget(msg)
+        self._prune_dom()
+
+    def add_session_question(self, sender: str, question: str, question_id: str):
+        msg = ChatMessage("session-question", content=question, sender=sender, question_id=question_id)
+        self._append_widget(msg)
+        self._prune_dom()
+
+    def add_session_answer(self, sender: str, answer: str, question_id: str = ""):
+        msg = ChatMessage("session-answer", content=answer, sender=sender, question_id=question_id)
+        self._append_widget(msg)
+        self._prune_dom()
+
+    def add_shared_state_notification(self, author: str, key: str, value: Any):
+        content = f"{key} = {value}"
+        msg = ChatMessage("session-state", content=content, sender=author)
+        self._append_widget(msg)
+        self._prune_dom()
+
+    def add_handoff_notification(self, sender: str, task_summary: str, handoff_id: str):
+        content = f"{task_summary} (id: {handoff_id})"
+        msg = ChatMessage("session-handoff", content=content, sender=sender)
+        self._append_widget(msg)
+        self._prune_dom()
 
     def clear_ephemeral(self):
         """Remove any system messages marked as ephemeral from the UI."""

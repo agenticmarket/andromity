@@ -104,6 +104,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const chatProvider = new ChatViewProvider(context.extensionUri, context);
   chatProvider.setPythonBridge(pythonBridge);
   const planProvider = new PlanViewProvider(context.extensionUri);
+  chatProvider.setPlanViewProvider(planProvider);
   const sessionTreeProvider = new SessionTreeProvider();
   const cronTreeProvider = new CronTreeProvider();
   const changesTreeProvider = new ChangesTreeProvider();
@@ -148,7 +149,8 @@ export async function activate(context: vscode.ExtensionContext) {
     rpcClient.on("agent/planApproval", (params: any) => {
       if (params?.plan) {
         currentPlan = params.plan;
-        chatProvider.updateCurrentPlan(params.plan);
+        chatProvider.updateCurrentPlan(params.plan, params.session_id);
+        planProvider.updatePlan(params.plan, params.session_id);
         PlanEditorPanel.createOrShow(
           context.extensionUri,
           params.plan,
@@ -163,7 +165,8 @@ export async function activate(context: vscode.ExtensionContext) {
     rpcClient.on("agent/planUpdated", (params: any) => {
       if (params?.plan) {
         currentPlan = params.plan;
-        chatProvider.updateCurrentPlan(params.plan);
+        chatProvider.updateCurrentPlan(params.plan, params.session_id);
+        planProvider.updatePlan(params.plan, params.session_id);
         PlanEditorPanel.currentPanel?.updatePlan(params.plan);
       }
     });
@@ -409,10 +412,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("andromity.openPlanTab", async (plan?: any) => {
-      let planToShow = plan || currentPlan || chatProvider.getCurrentPlan();
-      if (!planToShow) {
-        planToShow = await loadPlanFromWorkspace();
-      }
+      const planToShow = plan || currentPlan || chatProvider.getCurrentPlan();
       PlanEditorPanel.createOrShow(
         context.extensionUri,
         planToShow,
@@ -652,46 +652,7 @@ export async function activate(context: vscode.ExtensionContext) {
   }
 }
 
-async function loadPlanFromWorkspace(): Promise<any | null> {
-  const folders = vscode.workspace.workspaceFolders;
-  if (!folders || folders.length === 0) return null;
-  const rootUri = folders[0].uri;
 
-  // 1. Try .andromity/plan.json
-  try {
-    const jsonUri = vscode.Uri.joinPath(rootUri, ".andromity", "plan.json");
-    const bytes = await vscode.workspace.fs.readFile(jsonUri);
-    const text = new TextDecoder().decode(bytes);
-    const parsed = JSON.parse(text);
-    if (parsed) {
-      try {
-        const todoUri = vscode.Uri.joinPath(rootUri, ".andromity", "todo.json");
-        const todoBytes = await vscode.workspace.fs.readFile(todoUri);
-        const todoParsed = JSON.parse(new TextDecoder().decode(todoBytes));
-        if (todoParsed && Array.isArray(todoParsed.items)) {
-          parsed.steps = todoParsed.items;
-        }
-      } catch {}
-      return parsed;
-    }
-  } catch {}
-
-  // 2. Try .andromity/PLAN.md
-  try {
-    const mdUri = vscode.Uri.joinPath(rootUri, ".andromity", "PLAN.md");
-    const bytes = await vscode.workspace.fs.readFile(mdUri);
-    const text = new TextDecoder().decode(bytes);
-    if (text) {
-      return {
-        title: "Implementation Plan",
-        body: text,
-        status: "approved",
-      };
-    }
-  } catch {}
-
-  return null;
-}
 
 export function deactivate() {
   if (pythonBridge) {

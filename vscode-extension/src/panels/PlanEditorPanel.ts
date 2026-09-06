@@ -77,11 +77,6 @@ export class PlanEditorPanel {
           case "webview_ready":
             if (this._currentPlan) {
               this.updatePlan(this._currentPlan);
-            } else {
-              const loaded = await this._loadPlanFromDisk();
-              if (loaded) {
-                this.updatePlan(loaded);
-              }
             }
             break;
           case "proceed_plan":
@@ -137,46 +132,7 @@ export class PlanEditorPanel {
     }
   }
 
-  private async _loadPlanFromDisk(): Promise<any | null> {
-    const folders = vscode.workspace.workspaceFolders;
-    if (!folders || folders.length === 0) return null;
-    const rootUri = folders[0].uri;
 
-    // 1. Try .andromity/plan.json
-    try {
-      const jsonUri = vscode.Uri.joinPath(rootUri, ".andromity", "plan.json");
-      const bytes = await vscode.workspace.fs.readFile(jsonUri);
-      const text = new TextDecoder().decode(bytes);
-      const parsed = JSON.parse(text);
-      if (parsed) {
-        try {
-          const todoUri = vscode.Uri.joinPath(rootUri, ".andromity", "todo.json");
-          const todoBytes = await vscode.workspace.fs.readFile(todoUri);
-          const todoParsed = JSON.parse(new TextDecoder().decode(todoBytes));
-          if (todoParsed && Array.isArray(todoParsed.items)) {
-            parsed.steps = todoParsed.items;
-          }
-        } catch {}
-        return parsed;
-      }
-    } catch {}
-
-    // 2. Try .andromity/PLAN.md
-    try {
-      const mdUri = vscode.Uri.joinPath(rootUri, ".andromity", "PLAN.md");
-      const bytes = await vscode.workspace.fs.readFile(mdUri);
-      const text = new TextDecoder().decode(bytes);
-      if (text) {
-        return {
-          title: "Implementation Plan",
-          body: text,
-          status: "approved"
-        };
-      }
-    } catch {}
-
-    return null;
-  }
 
   private _getHtmlForWebview(webview: vscode.Webview): string {
     const nonce = getNonce();

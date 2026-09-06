@@ -194,8 +194,15 @@ def transaction(conn: Optional[sqlite3.Connection] = None) -> Generator[sqlite3.
         raise
 
 
+def clean_surrogates(val: Any) -> Any:
+    """Safely replace any lone unicode surrogates (which crash sqlite3 UTF-8 encoding)."""
+    if isinstance(val, str):
+        return val.encode("utf-8", "replace").decode("utf-8")
+    return val
+
+
 def j(value: Any, default: Optional[str] = None) -> Optional[str]:
-    """Serialize value to compact JSON string.
+    """Serialize value to compact JSON string without lone surrogates.
     
     If value is None and default is provided, returns default.
     If value is None and default is None, returns None.
@@ -203,7 +210,8 @@ def j(value: Any, default: Optional[str] = None) -> Optional[str]:
     if value is None:
         return default
     try:
-        return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+        res = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+        return res.encode("utf-8", "replace").decode("utf-8")
     except Exception:
         return default if default is not None else "{}"
 

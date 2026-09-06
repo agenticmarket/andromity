@@ -6,6 +6,8 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private _rpcClient: RpcClient | null = null;
   private _currentPlan: any = null;
+  private _currentSessionId: string = "";
+  private _sessionPlans: Map<string, any> = new Map();
   private _planActionHandler: ((approved: boolean, feedback: string) => void) | null = null;
 
   constructor(private readonly _extensionUri: vscode.Uri) {}
@@ -14,18 +16,17 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
     this._rpcClient = client;
     this._rpcClient.on("agent/planApproval", (params: any) => {
       if (params.plan) {
-        this.updatePlan(params.plan);
+        this.updatePlan(params.plan, params.session_id);
         this._reveal();
       }
     });
     this._rpcClient.on("agent/planUpdated", (params: any) => {
       if (params.plan) {
-        this.updatePlan(params.plan);
+        this.updatePlan(params.plan, params.session_id);
       }
     });
   }
 
-  /** Called by extension.ts — routes approve/reject through the chat queue. */
   public setPlanActionHandler(handler: (approved: boolean, feedback: string) => void) {
     this._planActionHandler = handler;
   }
@@ -34,10 +35,30 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
     vscode.commands.executeCommand("andromity.planView.focus");
   }
 
-  public updatePlan(plan: any) {
+  public updatePlan(plan: any, sessionId?: string) {
+    if (sessionId) {
+      if (plan) {
+        this._sessionPlans.set(sessionId, plan);
+      } else {
+        this._sessionPlans.delete(sessionId);
+      }
+    }
+    if (sessionId && this._currentSessionId && sessionId !== this._currentSessionId) {
+      return;
+    }
     this._currentPlan = plan;
     if (this._view) {
       this._view.webview.postMessage({ type: "plan_updated", plan });
+    }
+  }
+
+  public setActiveSession(sessionId: string, plan?: any) {
+    this._currentSessionId = sessionId;
+    if (plan !== undefined) {
+      this.updatePlan(plan, sessionId);
+    } else {
+      const existing = this._sessionPlans.get(sessionId) || null;
+      this.updatePlan(existing, sessionId);
     }
   }
 
@@ -53,14 +74,7 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage(async (message) => {
       switch (message.type) {
         case "webview_ready":
-          if (this._currentPlan) {
-            this.updatePlan(this._currentPlan);
-          } else {
-            const loaded = await this._loadPlanFromDisk();
-            if (loaded) {
-              this.updatePlan(loaded);
-            }
-          }
+          this.updatePlan(this._currentPlan, this._currentSessionId);
           break;
         case "approve_plan":
           this._planActionHandler?.(true, message.feedback || "");
@@ -72,73 +86,8 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
     });
 
     if (this._currentPlan) {
-      this.updatePlan(this._currentPlan);
-    } else {
-      this._loadPlanFromDisk().then(p => { if (p) this.updatePlan(p); });
+      this.updatePlan(this._currentPlan, this._currentSessionId);
     }
-  }
-
-  private async _loadPlanFromDisk(): Promise<any | null> {
-    const folders = vscode.workspace.workspaceFolders;
-    if (!folders || folders.length === 0) return null;
-    const rootUri = folders[0].uri;
-
-    // 1. Try .andromity/plan.json
-    try {
-      const jsonUri = vscode.Uri.joinPath(rootUri, ".andromity", "plan.json");
-      const bytes = await vscode.workspace.fs.readFile(jsonUri);
-      const text = new TextDecoder().decode(bytes);
-      const parsed = JSON.parse(text);
-      if (parsed) {
-        if (!parsed.steps || parsed.steps.length === 0) {
-          try {
-            const todosUri = vscode.Uri.joinPath(rootUri, ".andromity", "todos.md");
-            const mdBytes = await vscode.workspace.fs.readFile(todosUri);
-            const mdText = new TextDecoder().decode(mdBytes);
-            const lines = mdText.split("\n");
-            const steps: any[] = [];
-            for (const line of lines) {
-              const m = line.match(/^-\s+(\[[ x/!\-]\])\s+(t\d+)\.\s+(.+)/);
-              if (m) {
-                const statusMap: Record<string, string> = {
-                  "[ ]": "pending",
-                  "[x]": "done",
-                  "[/]": "active",
-                  "[!]": "failed",
-                  "[-]": "skipped",
-                };
-                steps.push({
-                  id: m[2],
-                  title: m[3].trim(),
-                  status: statusMap[m[1]] || "pending",
-                });
-              }
-            }
-            if (steps.length > 0) {
-              parsed.steps = steps;
-              parsed.todos = steps;
-            }
-          } catch {}
-        }
-        return parsed;
-      }
-    } catch {}
-
-    // 2. Try .andromity/PLAN.md
-    try {
-      const mdUri = vscode.Uri.joinPath(rootUri, ".andromity", "PLAN.md");
-      const bytes = await vscode.workspace.fs.readFile(mdUri);
-      const text = new TextDecoder().decode(bytes);
-      if (text) {
-        return {
-          title: "Implementation Plan",
-          body: text,
-          status: "approved"
-        };
-      }
-    } catch {}
-
-    return null;
   }
 
   private _getHtmlForWebview(webview: vscode.Webview): string {

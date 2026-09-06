@@ -113,6 +113,7 @@ tests/test_server_rpc.py
 tests/test_session.py
 tests/test_session_allowlist.py
 tests/test_session_bus.py
+tests/test_session_coordination.py
 tests/test_session_status.py
 tests/test_settings_mcp.py
 tests/test_shared_state.py

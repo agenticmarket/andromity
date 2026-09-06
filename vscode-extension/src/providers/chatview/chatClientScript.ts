@@ -2831,6 +2831,78 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     }
 
+    function appendSessionMessageCard(fromSession, content, messageType) {
+      hideZeroState();
+      const card = document.createElement('div');
+      card.className = 'session-coagent-card';
+      card.innerHTML = '<div class="session-card-header">' +
+        '<span class="session-card-icon">✉</span>' +
+        '<span class="session-card-sender">Co-Agent [' + escapeHtml(fromSession || 'Agent') + ']</span>' +
+        '<span class="session-card-badge">' + escapeHtml(messageType || 'message') + '</span>' +
+        '</div>' +
+        '<div class="session-card-content">' + renderMarkdown(content || '') + '</div>';
+      chatContainer.appendChild(card);
+      scrollToBottomIfNeeded();
+    }
+
+    function appendSessionQuestionCard(fromSession, question, questionId) {
+      hideZeroState();
+      const card = document.createElement('div');
+      card.className = 'session-question-card';
+      card.id = 'session-q-' + (questionId || '');
+      card.innerHTML = '<div class="session-card-header question">' +
+        '<span class="session-card-icon">❓</span>' +
+        '<span class="session-card-sender">Question from [' + escapeHtml(fromSession || 'Agent') + ']</span>' +
+        (questionId ? '<span class="session-card-badge">ID: ' + escapeHtml(questionId) + '</span>' : '') +
+        '</div>' +
+        '<div class="session-card-content">' + renderMarkdown(question || '') + '</div>';
+      chatContainer.appendChild(card);
+      scrollToBottomIfNeeded();
+    }
+
+    function appendSessionAnswerCard(fromSession, answer, questionId) {
+      hideZeroState();
+      const card = document.createElement('div');
+      card.className = 'session-answer-card';
+      card.innerHTML = '<div class="session-card-header answer">' +
+        '<span class="session-card-icon">✔</span>' +
+        '<span class="session-card-sender">Answer from [' + escapeHtml(fromSession || 'Agent') + ']</span>' +
+        (questionId ? '<span class="session-card-badge">for ' + escapeHtml(questionId) + '</span>' : '') +
+        '</div>' +
+        '<div class="session-card-content">' + renderMarkdown(answer || '') + '</div>';
+      chatContainer.appendChild(card);
+      scrollToBottomIfNeeded();
+    }
+
+    function appendSharedStateCard(authorSession, key, value) {
+      hideZeroState();
+      const card = document.createElement('div');
+      card.className = 'session-state-card';
+      const valStr = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+      card.innerHTML = '<div class="session-card-header">' +
+        '<span class="session-card-icon">⚡</span>' +
+        '<span class="session-card-sender">Shared State [' + escapeHtml(authorSession || 'Agent') + ']</span>' +
+        '<span class="session-card-badge">' + escapeHtml(key || '') + '</span>' +
+        '</div>' +
+        '<div class="session-card-content"><code>' + escapeHtml(valStr) + '</code></div>';
+      chatContainer.appendChild(card);
+      scrollToBottomIfNeeded();
+    }
+
+    function appendHandoffCard(fromSession, toSession, taskSummary, handoffId) {
+      hideZeroState();
+      const card = document.createElement('div');
+      card.className = 'session-coagent-card';
+      card.innerHTML = '<div class="session-card-header">' +
+        '<span class="session-card-icon">🤝</span>' +
+        '<span class="session-card-sender">Handoff: ' + escapeHtml(fromSession || 'Agent') + ' → ' + escapeHtml(toSession || 'Agent') + '</span>' +
+        (handoffId ? '<span class="session-card-badge">ID: ' + escapeHtml(handoffId) + '</span>' : '') +
+        '</div>' +
+        '<div class="session-card-content">' + renderMarkdown(taskSummary || '') + '</div>';
+      chatContainer.appendChild(card);
+      scrollToBottomIfNeeded();
+    }
+
     function updateSessionActivityIndicator() {
       const dot = document.getElementById('session-activity-dot');
       if (!dot) return;
@@ -3451,6 +3523,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           removeTurnLoader();
           finishCurrentThinking();
           interactiveSlot.innerHTML = '';
+          if (planTrackerStrip) planTrackerStrip.style.display = 'none';
           {
             const sessState = sessionsState[currentSessionId];
             if (sessState && sessState.pendingApproval) {
@@ -4146,6 +4219,34 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
           updateSubagentCard(msg);
           break; }
+
+        case 'session_message_received':
+          if (!currentSessionId || msg.to_session_id === currentSessionId || msg.to_session === currentSessionId || msg.to_session === 'all' || msg.to_session === '*') {
+            appendSessionMessageCard(msg.from_session, msg.content, msg.message_type);
+          }
+          break;
+
+        case 'session_question_received':
+          if (!currentSessionId || msg.to_session_id === currentSessionId || msg.to_session === currentSessionId || msg.to_session === 'all' || msg.to_session === '*') {
+            appendSessionQuestionCard(msg.from_session, msg.question, msg.question_id);
+          }
+          break;
+
+        case 'session_answer_received':
+          if (!currentSessionId || msg.to_session_id === currentSessionId || msg.to_session === currentSessionId || msg.to_session === 'all' || msg.to_session === '*') {
+            appendSessionAnswerCard(msg.from_session, msg.answer, msg.question_id);
+          }
+          break;
+
+        case 'session_shared_state_changed':
+          appendSharedStateCard(msg.author_session, msg.key, msg.value);
+          break;
+
+        case 'session_handoff_written':
+          if (msg.to_session === currentSessionId || msg.from_session === currentSessionId || msg.to_session === 'all' || !currentSessionId) {
+            appendHandoffCard(msg.from_session, msg.to_session, msg.task_summary, msg.handoff_id);
+          }
+          break;
 
         case 'init_queue':
           if (Array.isArray(msg.queue) && msg.queue.length > 0) {

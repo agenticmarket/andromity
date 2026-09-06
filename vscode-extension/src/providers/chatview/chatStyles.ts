@@ -4785,6 +4785,61 @@ export function getChatStyles(): string {
     }
     .session-ghost-empty { font-size: 10px; color: var(--muted); font-style: italic; margin-left: 6px; }
 
+    .session-coagent-card,
+    .session-question-card,
+    .session-answer-card,
+    .session-state-card {
+      margin: 8px 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 12.5px;
+      line-height: 1.5;
+    }
+    .session-coagent-card {
+      border: 1px solid rgba(88, 166, 255, 0.3);
+      background: rgba(88, 166, 255, 0.08);
+      border-left: 3px solid #58a6ff;
+    }
+    .session-question-card {
+      border: 1px solid rgba(210, 168, 255, 0.35);
+      background: rgba(210, 168, 255, 0.08);
+      border-left: 3px solid #d2a8ff;
+    }
+    .session-answer-card {
+      border: 1px solid rgba(63, 185, 80, 0.35);
+      background: rgba(63, 185, 80, 0.08);
+      border-left: 3px solid #3fb950;
+    }
+    .session-state-card {
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      background: rgba(56, 189, 248, 0.08);
+      border-left: 3px solid #38bdf8;
+    }
+    .session-card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      font-size: 11.5px;
+      margin-bottom: 6px;
+    }
+    .session-card-header.question { color: #d2a8ff; }
+    .session-card-header.answer { color: #3fb950; }
+    .session-card-sender { color: var(--fg, #e4e4e7); }
+    .session-card-badge {
+      margin-left: auto;
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--muted, #888);
+      font-family: var(--font-mono);
+    }
+    .session-card-content {
+      color: var(--fg, #e4e4e7);
+      word-break: break-word;
+    }
+
     ${getPromptStyles()}
 `;
 }

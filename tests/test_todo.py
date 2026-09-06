@@ -83,9 +83,23 @@ def test_todo_list_file_format():
         todo_list.add("Write tests")
         todo_list.update("t1", "done")
 
-        content = (Path(tmpdir) / ".andromity" / "todos.md").read_text()
+        content = todo_list.todo_path.read_text(encoding="utf-8")
         assert "- [x] t1. Build auth" in content
         assert "- [ ] t2. Write tests" in content
+        assert not (Path(tmpdir) / ".andromity" / "todos.md").exists()
+
+
+def test_todo_list_session_isolation():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        t1 = TodoList(project_path=tmpdir, session_id="sess-a")
+        t1.add("Session A task")
+        t2 = TodoList(project_path=tmpdir, session_id="sess-b")
+        t2.add("Session B task")
+
+        loaded1 = TodoList.load(tmpdir, session_id="sess-a")
+        loaded2 = TodoList.load(tmpdir, session_id="sess-b")
+        assert loaded1.items[0].title == "Session A task"
+        assert loaded2.items[0].title == "Session B task"
 
 
 def test_todo_list_next_pending():

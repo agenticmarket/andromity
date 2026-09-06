@@ -158,6 +158,8 @@ class SessionMessageReceived(StreamEvent):
     content: str
     message_type: str = "message"
     timestamp: str = ""
+    from_session_id: str = ""
+    to_session_id: str = ""
 
 
 @dataclass
@@ -167,6 +169,8 @@ class SessionQuestionReceived(StreamEvent):
     to_session: str
     question: str
     timestamp: str = ""
+    from_session_id: str = ""
+    to_session_id: str = ""
 
 
 @dataclass
@@ -176,6 +180,8 @@ class SessionAnswerReceived(StreamEvent):
     to_session: str
     answer: str
     timestamp: str = ""
+    from_session_id: str = ""
+    to_session_id: str = ""
 
 
 @dataclass

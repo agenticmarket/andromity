@@ -99,6 +99,10 @@ class Session:
             self._dirty = True
             self.save()
 
+    @property
+    def session_id(self) -> str:
+        return self.id
+
     def allow_domain(self, domain: str) -> None:
         """Allow a web domain for this session."""
         domain = domain.strip().lower()
@@ -318,7 +322,7 @@ class Session:
     def _save_to_db(self):
         """Persist session and messages into SQLite database."""
         try:
-            from andromity.core.db import get_conn, init_schema, j, transaction
+            from andromity.core.db import clean_surrogates, get_conn, init_schema, j, transaction
             init_schema()
             conn = get_conn()
             with transaction(conn):
@@ -353,7 +357,7 @@ class Session:
                         sync_dirty = 1,
                         updated_at = excluded.updated_at
                 """, (
-                    self.id, self.project_hash, self.project_path, self.name, getattr(self, "status", "idle"),
+                    self.id, self.project_hash, self.project_path, clean_surrogates(self.name), getattr(self, "status", "idle"),
                     getattr(self, "provider", ""), getattr(self, "model", ""),
                     self.token_total, self.context_tokens, self.cost_usd, self.cost_source,
                     j(self.usage_breakdown), j(self.plan) if self.plan else None,
@@ -379,12 +383,12 @@ class Session:
                         (
                             self.id,
                             seq,
-                            m.get("role", "user"),
-                            m.get("content"),
+                            clean_surrogates(m.get("role", "user")),
+                            clean_surrogates(m.get("content")),
                             j(m["tool_calls"]) if "tool_calls" in m else None,
-                            m.get("thinking"),
-                            m.get("name"),
-                            m.get("tool_call_id"),
+                            clean_surrogates(m.get("thinking")),
+                            clean_surrogates(m.get("name")),
+                            clean_surrogates(m.get("tool_call_id")),
                             m.get("ts", self.updated_at),
                             j(m["images"]) if "images" in m else None,
                             m.get("duration"),
@@ -433,8 +437,8 @@ class Session:
             pass
         tmp_path = self.file_path.with_suffix(".tmp")
         try:
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=indent, separators=separators)
+            with open(tmp_path, "w", encoding="utf-8", errors="replace") as f:
+                json.dump(data, f, indent=indent, separators=separators, ensure_ascii=False)
                 f.flush()
                 try:
                     os.fsync(f.fileno())

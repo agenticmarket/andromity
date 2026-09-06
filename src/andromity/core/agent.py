@@ -292,6 +292,7 @@ class Agent:
         Accepts either raw ``images`` (paths/PIL objects — will be encoded)
         or pre-encoded ``image_uris`` (data: URIs — used as-is).
         """
+        register_session(self.session)
         self._turn_image_parts = None
         _uris: list | None = None
         if image_uris:          # already-encoded URIs from the TUI paste path
@@ -319,7 +320,22 @@ class Agent:
                 save_and_thumbnail_image(u, storage_dir=getattr(self.session, "storage_dir", None))
                 for u in _uris
             ]
-        self.session.add_message("user", content=user_input, images=thumb_uris)
+        sess_id = getattr(self.session, "id", None)
+        effective_input = user_input
+        if sess_id:
+            from andromity.core.session_bus import SessionBus
+            bus = SessionBus.get_instance()
+            pending_q = bus.get_pending_questions_for(sess_id)
+            unread_cnt = bus.get_unread_count(sess_id)
+            if pending_q or unread_cnt > 0:
+                notices = []
+                if pending_q:
+                    q_list = "; ".join([f"'{q['question']}' (id: {q['question_id']}) from {q['from_session']}" for q in pending_q])
+                    notices.append(f"Pending questions: {q_list}. (Use session_answer_question to answer)")
+                if unread_cnt > 0:
+                    notices.append(f"{unread_cnt} unread message(s) in mailbox. (Use session_read_messages to read)")
+                effective_input += f"\n\n[Co-Agent Mailbox: {'; '.join(notices)}]"
+        self.session.add_message("user", content=effective_input, images=thumb_uris)
         self._turn_count += 1
 
         if not getattr(self.session, "_telemetry_sent", False):
@@ -586,6 +602,7 @@ class Agent:
                 from andromity.core.tools import register_subagent_progress_callback, unregister_subagent_progress_callback
 
                 async def _execute(prep: tuple[dict, str, dict]) -> tuple[str, str, float, bool]:
+                    register_session(self.session)
                     tool_call, tool_name, args = prep
                     t0 = time.time()
                     # Categorise tool for telemetry — counts only, no args stored
@@ -656,8 +673,22 @@ class Agent:
                     unregister_subagent_progress_callback(_on_subagent_prog)
 
 
-            # ── Phase 3: record tool messages into session context in the
-            # original tool-call order (models expect results in call order).
+            sess_id = getattr(self.session, "id", None)
+            if sess_id and other_calls:
+                from andromity.core.session_bus import SessionBus
+                bus = SessionBus.get_instance()
+                unread_cnt = bus.get_unread_count(sess_id)
+                pending_q = bus.get_pending_questions_for(sess_id)
+                if unread_cnt > 0 or pending_q:
+                    last_id = other_calls[-1]["id"]
+                    if last_id in final_results:
+                        notes = []
+                        if pending_q:
+                            notes.append(f"{len(pending_q)} pending question(s) from other agents")
+                        if unread_cnt > 0:
+                            notes.append(f"{unread_cnt} new incoming message(s)")
+                        final_results[last_id] += f"\n\n[Co-Agent Mailbox: {', '.join(notes)}. Use session_read_messages or session_answer_question if relevant.]"
+
             for tool_call in other_calls:
                 if tool_call["id"] in final_results:
                     self.session.add_message(
@@ -671,9 +702,6 @@ class Agent:
             for tool_call, tool_name, args in prepared:
                 if tool_name in ("write_plan", "update_plan_step"):
                     plan = self.session.load_plan_obj()
-                    if not plan and getattr(self.session, "project_path", None):
-                        from andromity.core.planner import Plan
-                        plan = Plan.load(self.session.project_path)
                     if plan:
                         yield PlanUpdated(plan=plan)
                         if tool_name == "write_plan" and plan.status == "pending":

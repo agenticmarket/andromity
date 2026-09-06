@@ -1,15 +1,26 @@
-"""Todo model — reads/writes .andromity/todos.md with checkbox tracking."""
+"""Todo model — stored in OS config storage by session ID."""
+import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
 
+def get_todos_dir(project_path: str = "") -> Path:
+    from andromity.config import get_config_dir
+    base = get_config_dir() / "todos"
+    if project_path:
+        p_hash = hashlib.sha256(str(Path(project_path).resolve()).encode()).hexdigest()[:16]
+        base = base / p_hash
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
 @dataclass
 class TodoItem:
     id: str
     title: str
-    status: str = "pending"  # "pending" | "active" | "done" | "failed" | "skipped"
+    status: str = "pending"
 
     @property
     def checkbox(self) -> str:
@@ -28,34 +39,41 @@ class TodoItem:
 class TodoList:
     items: List[TodoItem] = field(default_factory=list)
     project_path: str = ""
+    session_id: str = ""
 
     @property
     def todo_path(self) -> Path:
-        andromity_dir = Path(self.project_path) / ".andromity"
-        andromity_dir.mkdir(parents=True, exist_ok=True)
-        return andromity_dir / "todos.md"
+        filename = f"{self.session_id}_todos.md" if self.session_id else "todos.md"
+        return get_todos_dir(self.project_path) / filename
 
     def save(self):
         lines = ["# Todos", ""]
         for item in self.items:
             lines.append(f"- {item.checkbox} {item.id}. {item.title}")
         lines.append("")
-        with open(self.todo_path, "w", encoding="utf-8") as f:
+        path = self.todo_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
 
     @classmethod
-    def load(cls, project_path: str) -> "TodoList":
-        path = Path(project_path) / ".andromity" / "todos.md"
+    def load(cls, project_path: str = "", session_id: str = "") -> "TodoList":
+        filename = f"{session_id}_todos.md" if session_id else "todos.md"
+        path = get_todos_dir(project_path) / filename
         if not path.exists():
-            return cls(project_path=project_path)
+            legacy = Path(project_path) / ".andromity" / "todos.md"
+            if legacy.exists():
+                path = legacy
+            else:
+                return cls(project_path=project_path, session_id=session_id)
         try:
-            return cls._parse(path.read_text(encoding="utf-8"), project_path)
+            return cls._parse(path.read_text(encoding="utf-8"), project_path, session_id)
         except Exception:
-            return cls(project_path=project_path)
+            return cls(project_path=project_path, session_id=session_id)
 
     @classmethod
-    def _parse(cls, text: str, project_path: str) -> "TodoList":
-        todo_list = cls(project_path=project_path)
+    def _parse(cls, text: str, project_path: str = "", session_id: str = "") -> "TodoList":
+        todo_list = cls(project_path=project_path, session_id=session_id)
         pattern = re.compile(r"^-\s+(\[[ x/!\-]\])\s+(t\d+)\.\s+(.+)")
         status_map = {"[ ]": "pending", "[x]": "done", "[/]": "active", "[!]": "failed", "[-]": "skipped"}
         for line in text.splitlines():

@@ -36,7 +36,8 @@ PROFILES = {
             "write_plan", "update_plan_step", "ask_questions", "list_tools", "create_todo",
             "update_todo", "list_todos", "web_search", "fetch_url",
             "spawn_subagent", "session_send_message", "session_ask_question", "session_broadcast",
-            "session_list", "shared_state_set", "shared_state_get", "write_handoff", "read_handoff"
+            "session_list", "session_read_messages", "session_answer_question",
+            "shared_state_set", "shared_state_get", "write_handoff", "read_handoff"
         ]
     },
     "coder": {
@@ -44,7 +45,8 @@ PROFILES = {
             "read_file", "grep_search", "find_files", "write_file", "edit_file", "edit_file_multi",
             "shell_exec", "shell_bg", "shell_read", "shell_kill", "shell_list", "list_dir",
             "list_tools", "create_todo", "update_todo", "list_todos", "web_search", "fetch_url",
-            "session_send_message", "session_ask_question", "session_list", "shared_state_set",
+            "session_send_message", "session_ask_question", "session_broadcast", "session_list",
+            "session_read_messages", "session_answer_question", "shared_state_set",
             "shared_state_get", "write_handoff", "read_handoff"
         ]
     },
@@ -52,6 +54,7 @@ PROFILES = {
         "tools": [
             "read_file", "grep_search", "find_files", "list_dir", "list_tools",
             "web_search", "fetch_url", "session_send_message", "session_list",
+            "session_read_messages", "session_answer_question",
             "shared_state_get", "read_handoff"
         ]
     },
@@ -61,6 +64,7 @@ PROFILES = {
             "update_plan_step", "ask_questions", "list_tools", "create_todo",
             "update_todo", "list_todos", "spawn_subagent", "session_send_message",
             "session_ask_question", "session_broadcast", "session_list",
+            "session_read_messages", "session_answer_question",
             "shared_state_set", "shared_state_get", "write_handoff", "read_handoff"
         ]
     },

@@ -2,7 +2,7 @@
 import json
 import pytest
 from pathlib import Path
-from andromity.core.planner import Plan
+from andromity.core.planner import Plan, get_plans_dir
 
 
 def test_plan_requires_project_path():
@@ -13,7 +13,7 @@ def test_plan_requires_project_path():
 
 
 def test_plan_save_and_load(tmp_path):
-    """Round-trip: save then load recovers all fields."""
+    """Round-trip: save then load recovers all fields from OS storage."""
     p = Plan(
         title="Add auth",
         description="JWT-based authentication",
@@ -23,8 +23,8 @@ def test_plan_save_and_load(tmp_path):
     )
     p.save()
 
-    plan_file = tmp_path / ".andromity" / "plan.json"
-    assert plan_file.exists(), "plan.json should exist after save()"
+    assert p.plan_path.exists(), "plan file should exist in OS storage after save()"
+    assert not (tmp_path / ".andromity" / "plan.json").exists(), "plan.json must not be written in project root"
 
     p2 = Plan.load(str(tmp_path))
     assert p2 is not None
@@ -34,50 +34,40 @@ def test_plan_save_and_load(tmp_path):
     assert p2.status == "pending"
 
 
+def test_plan_session_scoped_isolation(tmp_path):
+    """Different sessions have isolated plans."""
+    p1 = Plan(title="Session 1 Plan", project_path=str(tmp_path), session_id="sess-1")
+    p1.save()
+    p2 = Plan(title="Session 2 Plan", project_path=str(tmp_path), session_id="sess-2")
+    p2.save()
+
+    loaded1 = Plan.load(str(tmp_path), session_id="sess-1")
+    loaded2 = Plan.load(str(tmp_path), session_id="sess-2")
+    assert loaded1.title == "Session 1 Plan"
+    assert loaded2.title == "Session 2 Plan"
+
+
 def test_plan_no_steps_in_serialized_dict(tmp_path):
     """Plan.to_dict() must NOT contain a 'steps' key."""
     p = Plan(title="No steps", project_path=str(tmp_path))
     d = p.to_dict()
-    assert "steps" not in d, "steps must not be in Plan dict — use TodoList"
+    assert "steps" not in d, "steps must not be in Plan dict — use TodoList or to_enriched_dict"
 
 
-def test_plan_gitignore_added(tmp_path):
-    """Saving a plan should add .andromity/ to .gitignore."""
-    p = Plan(title="GI test", project_path=str(tmp_path))
+def test_plan_does_not_pollute_project_folder(tmp_path):
+    """Saving a plan must never create or modify files in project .andromity folder."""
+    p = Plan(title="Clean test", project_path=str(tmp_path))
     p.save()
-    gi = tmp_path / ".gitignore"
-    assert gi.exists(), ".gitignore should be created"
-    content = gi.read_text()
-    assert ".andromity/" in content, ".andromity/ must appear in .gitignore"
-
-
-def test_plan_gitignore_not_duplicated(tmp_path):
-    """Saving plan twice must not add .andromity/ to .gitignore twice."""
-    p = Plan(title="Dup test", project_path=str(tmp_path))
-    p.save()
-    p.save()
-    gi = tmp_path / ".gitignore"
-    content = gi.read_text()
-    assert content.count(".andromity/") == 1, ".andromity/ should only appear once"
-
-
-def test_plan_gitignore_respects_existing(tmp_path):
-    """If .gitignore already has .andromity/, it should not be duplicated."""
-    gi = tmp_path / ".gitignore"
-    gi.write_text("node_modules/\n.andromity/\n__pycache__/\n")
-    p = Plan(title="Already there", project_path=str(tmp_path))
-    p.save()
-    content = gi.read_text()
-    assert content.count(".andromity/") == 1
+    assert not (tmp_path / ".andromity").exists(), "Project .andromity folder must not be created"
 
 
 def test_plan_clear(tmp_path):
-    """Plan.clear() should delete the plan.json file."""
+    """Plan.clear() should delete the plan file from OS storage."""
     p = Plan(title="To clear", project_path=str(tmp_path))
     p.save()
-    assert (tmp_path / ".andromity" / "plan.json").exists()
+    assert p.plan_path.exists()
     Plan.clear(str(tmp_path))
-    assert not (tmp_path / ".andromity" / "plan.json").exists()
+    assert not p.plan_path.exists()
 
 
 def test_plan_load_missing_returns_none(tmp_path):
@@ -110,6 +100,7 @@ def test_plan_from_dict_roundtrip():
         questions=["Q1?"],
         status="rejected",
         project_path="/some/path",
+        session_id="sess-xyz",
     )
     d = original.to_dict()
     restored = Plan.from_dict(d, "/some/path")
@@ -118,3 +109,4 @@ def test_plan_from_dict_roundtrip():
     assert restored.questions == original.questions
     assert restored.status == original.status
     assert restored.project_path == original.project_path
+    assert restored.session_id == original.session_id

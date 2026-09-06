@@ -17,6 +17,7 @@ import {
   ToolApprovalEvent,
 } from "../server/types.js";
 import { getChatViewHtml, ChatViewState } from "./chatview/chatHtml.js";
+import { PlanViewProvider } from "./PlanViewProvider.js";
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "andromity.chatView";
@@ -33,6 +34,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _models: ModelInfo[] = [];
   private _providers: ProviderInfo[] = [];
   private _currentPlan: any = null;
+  private _sessionPlans: Map<string, any> = new Map();
+  private _planViewProvider: PlanViewProvider | null = null;
 
   /** workspaceState key persisting the session the user had active last. */
   private static readonly LAST_ACTIVE_SESSION_KEY = "andromity.lastActiveSessionId";
@@ -113,10 +116,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  public updateCurrentPlan(plan: any) {
-    this._currentPlan = plan;
-    if (this._view) {
-      this._view.webview.postMessage({ type: "plan_updated", plan });
+  public setPlanViewProvider(provider: PlanViewProvider) {
+    this._planViewProvider = provider;
+  }
+
+  public updateCurrentPlan(plan: any, sessionId?: string) {
+    if (sessionId) {
+      this._sessionPlans.set(sessionId, plan);
+    }
+    if (!sessionId || sessionId === this._currentSessionId) {
+      this._currentPlan = plan;
+      if (this._view) {
+        this._view.webview.postMessage({ type: "plan_updated", plan, session_id: sessionId });
+      }
+    }
+    if (this._planViewProvider) {
+      this._planViewProvider.updatePlan(plan, sessionId);
     }
   }
 
@@ -403,18 +418,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
 
     bind("agent/planApproval", (params: any) => {
-      this._currentPlan = params.plan;
-      this._postToWebview({ type: "plan_approval", plan: params.plan, session_id: params.session_id });
-      const cfg = vscode.workspace.getConfiguration("andromity");
-      if (cfg.get<boolean>("soundNotifications", true)) {
-        this._postToWebview({ type: "play_sound", kind: "attention" });
+      const sid = params.session_id;
+      if (sid) {
+        this._sessionPlans.set(sid, params.plan);
       }
+      if (!sid || sid === this._currentSessionId) {
+        this._currentPlan = params.plan;
+        this._postToWebview({ type: "plan_approval", plan: params.plan, session_id: sid });
+        const cfg = vscode.workspace.getConfiguration("andromity");
+        if (cfg.get<boolean>("soundNotifications", true)) {
+          this._postToWebview({ type: "play_sound", kind: "attention" });
+        }
+      }
+      this._planViewProvider?.updatePlan(params.plan, sid);
     });
 
     bind("agent/planUpdated", (params: any) => {
       if (params.plan) {
-        this._currentPlan = params.plan;
-        this._postToWebview({ type: "plan_updated", plan: params.plan, session_id: params.session_id });
+        const sid = params.session_id;
+        if (sid) {
+          this._sessionPlans.set(sid, params.plan);
+        }
+        if (!sid || sid === this._currentSessionId) {
+          this._currentPlan = params.plan;
+          this._postToWebview({ type: "plan_updated", plan: params.plan, session_id: sid });
+        }
+        this._planViewProvider?.updatePlan(params.plan, sid);
       }
     });
 
@@ -429,6 +458,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         cost_usd: params.cost_usd,
       });
       vscode.commands.executeCommand("andromity.refreshSessions");
+    });
+
+    bind("session/messageReceived", (params: any) => {
+      this._postToWebview({ type: "session_message_received", ...params });
+    });
+    bind("session/questionReceived", (params: any) => {
+      this._postToWebview({ type: "session_question_received", ...params });
+    });
+    bind("session/answerReceived", (params: any) => {
+      this._postToWebview({ type: "session_answer_received", ...params });
+    });
+    bind("session/sharedStateChanged", (params: any) => {
+      this._postToWebview({ type: "session_shared_state_changed", ...params });
+    });
+    bind("session/handoffWritten", (params: any) => {
+      this._postToWebview({ type: "session_handoff_written", ...params });
     });
 
     bind("cron/run_started", (params: any) => {
@@ -626,63 +671,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async _loadPlanFromWorkspace(): Promise<any | null> {
-    try {
-      const folders = vscode.workspace.workspaceFolders;
-      if (!folders || folders.length === 0) return null;
-      const rootUri = folders[0].uri;
-
-      let planObj: any = null;
-      try {
-        const jsonUri = vscode.Uri.joinPath(rootUri, ".andromity", "plan.json");
-        const bytes = await vscode.workspace.fs.readFile(jsonUri);
-        planObj = JSON.parse(new TextDecoder().decode(bytes));
-      } catch {}
-
-      // Try reading todos.md if steps missing
-      let steps: any[] = planObj?.steps || planObj?.todos || [];
-      if (steps.length === 0) {
-        try {
-          const todosUri = vscode.Uri.joinPath(rootUri, ".andromity", "todos.md");
-          const mdBytes = await vscode.workspace.fs.readFile(todosUri);
-          const mdText = new TextDecoder().decode(mdBytes);
-          const lines = mdText.split("\n");
-          for (const line of lines) {
-            const m = line.match(/^-\s+(\[[ x/!\-]\])\s+(t\d+)\.\s+(.+)/);
-            if (m) {
-              const statusMap: Record<string, string> = {
-                "[ ]": "pending",
-                "[x]": "done",
-                "[/]": "active",
-                "[!]": "failed",
-                "[-]": "skipped",
-              };
-              steps.push({
-                id: m[2],
-                title: m[3].trim(),
-                status: statusMap[m[1]] || "pending",
-              });
-            }
-          }
-        } catch {}
-      }
-
-      if (planObj) {
-        planObj.steps = steps;
-        planObj.todos = steps;
-        return planObj;
-      } else if (steps.length > 0) {
-        return {
-          title: "Current Tasks",
-          status: "approved",
-          steps,
-          todos: steps,
-        };
-      }
-    } catch {}
-    return null;
-  }
-
   private _formatModelDisplayName(id?: string): string {
     if (!id || id === "Loading model...") return "Claude 3.7 Sonnet";
     const found = this._models.find((m) => m.id === id);
@@ -710,11 +698,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       } else {
         this._currentPlan = null;
       }
+      this._sessionPlans.set(sessionId, this._currentPlan);
       this._postToWebview({
         type: "plan_updated",
         plan: this._currentPlan,
         session_id: sessionId,
       });
+      this._planViewProvider?.updatePlan(this._currentPlan, sessionId);
       this._postToWebview({
         type: "session_loaded",
         session: sessionData,
@@ -1098,6 +1088,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             name: message.name || `Session ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
             project_path: workspaceFolder,
           });
+          this._currentPlan = null;
+          this._sessionPlans.set(r.id, null);
+          this._postToWebview({
+            type: "plan_updated",
+            plan: null,
+            session_id: r.id,
+          });
+          this._planViewProvider?.updatePlan(null, r.id);
           this.setCurrentSessionId(r.id);
           await this.fetchAndPostSessions();
           vscode.commands.executeCommand("andromity.refreshSessions");

@@ -50,7 +50,6 @@ class SessionBus:
         self._registrations: Dict[str, SessionRegistration] = {}
         # session_id -> asyncio.Queue of BusMessage
         self._mailboxes: Dict[str, asyncio.Queue] = {}
-        # question_id -> asyncio.Future
         self._pending_questions: Dict[str, asyncio.Future] = {}
         # question_id -> BusMessage (metadata)
         self._question_records: Dict[str, BusMessage] = {}
@@ -245,6 +244,8 @@ class SessionBus:
                 content=content,
                 message_type=message_type,
                 timestamp=msg.created_at,
+                from_session_id=from_session_id,
+                to_session_id=to_session_id,
             ))
 
         if mailbox is not None:
@@ -302,6 +303,8 @@ class SessionBus:
                 to_session=to_name,
                 question=question,
                 timestamp=msg.created_at,
+                from_session_id=from_session_id,
+                to_session_id=to_session_id,
             ))
 
         # Wait for answer with timeout
@@ -334,7 +337,11 @@ class SessionBus:
                 log.warning("SessionBus: No active question future found for id %s", question_id)
                 return False
 
-            future.set_result(answer)
+            loop = getattr(future, "get_loop", lambda: None)()
+            if loop and loop.is_running():
+                loop.call_soon_threadsafe(future.set_result, answer)
+            else:
+                future.set_result(answer)
 
             from_reg = self._registrations.get(from_session_id)
             from_name = from_reg.name if from_reg else from_session_id
@@ -351,6 +358,8 @@ class SessionBus:
                 to_session=record.from_session_name,
                 answer=answer,
                 timestamp=datetime.now(timezone.utc).isoformat(),
+                from_session_id=from_session_id,
+                to_session_id=record.from_session_id,
             ))
             return True
 
@@ -392,10 +401,11 @@ class SessionBus:
             return self._mailboxes.get(session_id)
 
     def get_pending_questions_for(self, session_id: str) -> List[Dict[str, Any]]:
+        resolved_id = self.resolve_session_id(session_id) or session_id
         with self._lock:
             res = []
             for qid, record in self._question_records.items():
-                if record.to_session_id == session_id:
+                if record.to_session_id == resolved_id:
                     res.append({
                         "question_id": qid,
                         "from_session": record.from_session_name,
@@ -403,3 +413,23 @@ class SessionBus:
                         "timestamp": record.created_at,
                     })
             return res
+
+    def drain_mailbox(self, session_id: str, max_count: int = 5) -> List[BusMessage]:
+        resolved_id = self.resolve_session_id(session_id) or session_id
+        with self._lock:
+            mailbox = self._mailboxes.get(resolved_id)
+            if not mailbox:
+                return []
+            messages = []
+            while not mailbox.empty() and len(messages) < max_count:
+                try:
+                    messages.append(mailbox.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+            return messages
+
+    def get_unread_count(self, session_id: str) -> int:
+        resolved_id = self.resolve_session_id(session_id) or session_id
+        with self._lock:
+            mailbox = self._mailboxes.get(resolved_id)
+            return mailbox.qsize() if mailbox else 0

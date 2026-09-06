@@ -94,7 +94,7 @@ export function getWaterfallHtml(
   </header>
 
   <!-- Views -->
-  <main class="wf-view-container">
+  <main class="wf-view-container" id="wf-view-container">
     <!-- Timeline Waterfall View -->
     <div class="wf-timeline-view" id="wf-timeline-container">
       <div class="wf-empty-state" id="wf-empty-state">

@@ -267,6 +267,12 @@ class AndromityApp(App):
         except Exception:
             pass
 
+        try:
+            from andromity.core.session_bus import SessionBus
+            SessionBus.get_instance().subscribe(self._on_session_bus_event)
+        except Exception:
+            pass
+
         self.focus_input()
         provider = config.get("default", "provider", "")
         model = config.get("default", "model", "")
@@ -356,6 +362,52 @@ class AndromityApp(App):
                 self.session.flush()
             except Exception:
                 pass
+
+    def _on_session_bus_event(self, event):
+        try:
+            self.call_from_thread(self._handle_session_bus_event_ui, event)
+        except Exception:
+            pass
+
+    def _handle_session_bus_event_ui(self, event):
+        try:
+            from andromity.core.events import (
+                SessionMessageReceived,
+                SessionQuestionReceived,
+                SessionAnswerReceived,
+                SharedStateChanged,
+                HandoffWritten,
+            )
+            chat = self.query_one(ChatPanel)
+            cur_id = getattr(self.session, "id", None)
+            cur_name = getattr(self.session, "name", None)
+
+            def _is_for_us(evt):
+                to_id = getattr(evt, "to_session_id", "")
+                to_target = getattr(evt, "to_session", "")
+                return to_id == cur_id or to_target in (cur_id, cur_name, "all", "*")
+
+            if isinstance(event, SessionMessageReceived):
+                if _is_for_us(event):
+                    chat.add_session_message(event.from_session, event.content, event.message_type)
+                else:
+                    self.notify(f"✉ {event.from_session} → {event.to_session}: {event.content[:40]}")
+            elif isinstance(event, SessionQuestionReceived):
+                if _is_for_us(event):
+                    chat.add_session_question(event.from_session, event.question, event.question_id)
+                else:
+                    self.notify(f"❓ {event.from_session} asked {event.to_session}")
+            elif isinstance(event, SessionAnswerReceived):
+                if _is_for_us(event):
+                    chat.add_session_answer(event.from_session, event.answer, event.question_id)
+                else:
+                    self.notify(f"✔ {event.from_session} answered {event.to_session}")
+            elif isinstance(event, SharedStateChanged):
+                chat.add_shared_state_notification(event.author_session, event.key, event.value)
+            elif isinstance(event, HandoffWritten):
+                chat.add_handoff_notification(event.from_session, event.task_summary, event.handoff_id)
+        except Exception:
+            pass
 
     def _ensure_git_tracking(self):
         """Initialize git repo in the project folder if one doesn't exist.
@@ -1081,10 +1133,9 @@ class AndromityApp(App):
             # Keep status bar todo progress in sync with session plan
             plan = self.session.load_plan_obj() if hasattr(self, "session") and self.session else None
             if plan:
-                from andromity.core.todo import TodoList
-                todo_list = TodoList.load(self._project_path)
-                done, total = todo_list.progress()
-                self.query_one(StatusBar).update_todo_progress(done, total)
+                steps = getattr(plan, "steps", None) or []
+                done = sum(1 for s in steps if s.get("status") in ("done", "skipped"))
+                self.query_one(StatusBar).update_todo_progress(done, len(steps))
             else:
                 self.query_one(StatusBar).update_todo_progress(0, 0)
         except Exception:
@@ -1115,8 +1166,6 @@ class AndromityApp(App):
         try:
             self.query_one(PlanPanel).clear_plan()
             self.query_one(StatusBar).update_todo_progress(0, 0)
-            from andromity.core.todo import TodoList
-            TodoList(project_path=self._project_path).save()
         except Exception:
             pass
         chat.add_system_message("[green]New session started.[/] Previous session saved.")
@@ -1203,10 +1252,9 @@ class AndromityApp(App):
             panel = self.query_one(PlanPanel)
             if plan:
                 panel.load_plan(plan)
-                from andromity.core.todo import TodoList
-                todo_list = TodoList.load(self._project_path)
-                done, total = todo_list.progress()
-                self.query_one(StatusBar).update_todo_progress(done, total)
+                steps = getattr(plan, "steps", None) or []
+                done = sum(1 for s in steps if s.get("status") in ("done", "skipped"))
+                self.query_one(StatusBar).update_todo_progress(done, len(steps))
             else:
                 panel.clear_plan()
                 self.query_one(StatusBar).update_todo_progress(0, 0)

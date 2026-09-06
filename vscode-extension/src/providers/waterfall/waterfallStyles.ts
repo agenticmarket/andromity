@@ -219,7 +219,7 @@ export function getWaterfallStyles(): string {
       border-radius: var(--radius);
       font-size: 12px;
       font-weight: 500;
-      color: var(--muted);
+      color: ;
       cursor: pointer;
       border: 1px solid transparent;
       transition: all 0.15s ease;
@@ -482,6 +482,12 @@ export function getWaterfallStyles(): string {
       border: 1px solid rgba(63, 185, 80, 0.3);
     }
 
+    .wf-span-badge.coordination {
+      background: rgba(168, 85, 247, 0.15);
+      color: #c084fc;
+      border: 1px solid rgba(168, 85, 247, 0.35);
+    }
+
     .wf-span-name {
       font-size: 12px;
       font-family: var(--font-mono);
@@ -530,6 +536,12 @@ export function getWaterfallStyles(): string {
     .wf-bar.subagent {
       background: linear-gradient(90deg, rgba(63, 185, 80, 0.7), rgba(63, 185, 80, 0.9));
       border: 1px solid var(--green);
+      color: #fff;
+    }
+
+    .wf-bar.coordination {
+      background: linear-gradient(90deg, rgba(168, 85, 247, 0.75), rgba(99, 102, 241, 0.9));
+      border: 1px solid #a855f7;
       color: #fff;
     }
 
@@ -690,6 +702,12 @@ export function getWaterfallStyles(): string {
       background: rgba(248, 81, 73, 0.15);
       color: var(--red);
       border: 1px solid rgba(248, 81, 73, 0.3);
+    }
+
+    .wf-badge-pill.coordination {
+      background: rgba(168, 85, 247, 0.15);
+      color: #c084fc;
+      border: 1px solid rgba(168, 85, 247, 0.3);
     }
 
     .wf-thinking-box {
@@ -856,6 +874,7 @@ export function getWaterfallStyles(): string {
     .wf-log-tag.tool { color: var(--blue); background: rgba(88, 166, 255, 0.1); }
     .wf-log-tag.subagent { color: var(--green); background: rgba(63, 185, 80, 0.1); }
     .wf-log-tag.done { color: var(--cyan); background: rgba(56, 189, 248, 0.1); }
+    .wf-log-tag.coordination { color: #c084fc; background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.3); }
 
     .wf-log-msg {
       color: var(--fg);

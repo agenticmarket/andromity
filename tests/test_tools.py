@@ -338,12 +338,9 @@ def test_write_plan_syncs_todo(tmp_path):
         assert todo_list.items[0].title == "Create database interface"
         assert todo_list.items[1].title == "Implement sqlite adapter"
 
-        # PLAN.md mirror must live inside .andromity/, never the project root
-        assert (tmp_path / ".andromity" / "PLAN.md").exists()
+        # Ensure project root is NOT polluted by plan files
+        assert not (tmp_path / ".andromity" / "PLAN.md").exists()
         assert not (tmp_path / "PLAN.md").exists()
-        # .andromity/ gets gitignored so internal state never pollutes the repo
-        gitignore = tmp_path / ".gitignore"
-        assert gitignore.exists() and ".andromity/" in gitignore.read_text()
 
 
 def test_write_plan_rich_md_body(tmp_path):
@@ -366,7 +363,8 @@ def test_write_plan_rich_md_body(tmp_path):
     with patch("andromity.core.tools._get_project_root", return_value=tmp_path):
         res = write_plan(**plan_data)
         assert "Storage Rewrite" in res
-        md = (tmp_path / ".andromity" / "PLAN.md").read_text(encoding="utf-8")
+        from andromity.core.planner import Plan, get_plans_dir
+        md = (get_plans_dir(str(tmp_path)) / "plan.md").read_text(encoding="utf-8")
         # AI-written body is preserved verbatim
         assert "## Architecture" in md
         assert "- `src/db.py`: new adapter interface" in md
@@ -375,8 +373,7 @@ def test_write_plan_rich_md_body(tmp_path):
         assert "## Progress" in md
         assert "- [ ] Create interface" in md
         assert "- [ ] Implement sqlite adapter" in md
-        # Body is persisted in plan.json so later re-syncs don't lose it
-        from andromity.core.planner import Plan
+        # Body is persisted in OS storage so later re-syncs don't lose it
         p = Plan.load(str(tmp_path))
         assert p is not None and p.body == plan_md.strip()
 
@@ -388,7 +385,8 @@ def test_update_plan_step_preserves_plan_body(tmp_path):
         write_plan(title="Arch", plan_md=plan_md, steps=["Step A", "Step B"])
         res = update_plan_step(1, "done")
         assert "Updated Step 1" in res
-        md = (tmp_path / ".andromity" / "PLAN.md").read_text(encoding="utf-8")
+        from andromity.core.planner import get_plans_dir
+        md = (get_plans_dir(str(tmp_path)) / "plan.md").read_text(encoding="utf-8")
         assert "## Architecture" in md
         assert "- module A" in md
         assert "- [x] Step A" in md   # checkbox updated

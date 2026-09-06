@@ -27,6 +27,7 @@ export function getWaterfallScript(sessionId: string): string {
 
       // DOM Elements
       const els = {
+        viewContainer: document.getElementById('wf-view-container') || document.querySelector('.wf-view-container'),
         liveDot: document.getElementById('wf-live-dot'),
         liveText: document.getElementById('wf-live-text'),
         totalDuration: document.getElementById('wf-total-duration'),
@@ -45,6 +46,36 @@ export function getWaterfallScript(sessionId: string): string {
         guideModal: document.getElementById('wf-guide-modal'),
         guideClose: document.getElementById('wf-guide-close')
       };
+
+      let _scrollRaf = null;
+      function scrollToBottomIfNeeded() {
+        if (!state.autoScroll) return;
+        if (_scrollRaf) return;
+        _scrollRaf = requestAnimationFrame(() => {
+          _scrollRaf = null;
+          if (!state.autoScroll) return;
+
+          const vc = els.viewContainer || document.getElementById('wf-view-container') || document.querySelector('.wf-view-container');
+          if (state.activeTab === 'timeline') {
+            if (vc) {
+              vc.scrollTop = vc.scrollHeight;
+            }
+            if (document.documentElement) {
+              document.documentElement.scrollTop = document.documentElement.scrollHeight;
+            }
+            if (document.body) {
+              document.body.scrollTop = document.body.scrollHeight;
+            }
+          } else if (state.activeTab === 'log') {
+            if (els.logContainer) {
+              els.logContainer.scrollTop = els.logContainer.scrollHeight;
+            }
+            if (vc) {
+              vc.scrollTop = vc.scrollHeight;
+            }
+          }
+        });
+      }
 
       function formatMs(ms) {
         if (!ms || isNaN(ms)) return '0.00s';
@@ -136,9 +167,7 @@ export function getWaterfallScript(sessionId: string): string {
         turn.element = group;
         els.timelineContainer.appendChild(group);
 
-        if (state.autoScroll) {
-          group.scrollIntoView({ behavior: 'smooth', block: 'end' });
-        }
+        scrollToBottomIfNeeded();
       }
 
       function renderSpanRow(span) {
@@ -154,8 +183,8 @@ export function getWaterfallScript(sessionId: string): string {
         row.dataset.type = span.type;
         row.dataset.name = span.name.toLowerCase();
 
-        const badgeClass = span.type === 'llm' ? 'llm' : span.type === 'subagent' ? 'subagent' : 'tool';
-        const badgeLabel = span.type === 'llm' ? 'LLM' : span.type === 'subagent' ? 'AGENT' : 'TOOL';
+        const badgeClass = span.type === 'llm' ? 'llm' : span.type === 'subagent' ? 'subagent' : span.type === 'coordination' ? 'coordination' : 'tool';
+        const badgeLabel = span.type === 'llm' ? 'LLM' : span.type === 'subagent' ? 'AGENT' : span.type === 'coordination' ? 'COORD' : 'TOOL';
 
         row.innerHTML = \`
           <div class="wf-span-main">
@@ -184,6 +213,7 @@ export function getWaterfallScript(sessionId: string): string {
 
         span.element = row;
         container.appendChild(row);
+        scrollToBottomIfNeeded();
       }
 
       function updateSpanDetailsContent(span) {
@@ -479,16 +509,15 @@ export function getWaterfallScript(sessionId: string): string {
         if (els.logContainer) {
           const line = document.createElement('div');
           line.className = 'wf-log-line';
-          const tagClass = tag.toLowerCase().includes('llm') ? 'llm' : tag.toLowerCase().includes('tool') ? 'tool' : tag.toLowerCase().includes('sub') ? 'subagent' : 'done';
+          const lower = tag.toLowerCase();
+          const tagClass = lower.includes('llm') ? 'llm' : lower.includes('coord') || lower.includes('session') || lower.includes('shared') || lower.includes('handoff') ? 'coordination' : lower.includes('tool') ? 'tool' : lower.includes('sub') ? 'subagent' : 'done';
           line.innerHTML = \`
             <span class="wf-log-time">\${time}</span>
             <span class="wf-log-tag \${tagClass}">[\${tag}]</span>
             <span class="wf-log-msg">\${escapeHtml(msg)}</span>
           \`;
           els.logContainer.appendChild(line);
-          if (state.autoScroll) {
-            line.scrollIntoView({ behavior: 'smooth', block: 'end' });
-          }
+          scrollToBottomIfNeeded();
         }
       }
 
@@ -781,8 +810,8 @@ export function getWaterfallScript(sessionId: string): string {
               span.promptTokens = msg.prompt_tokens || span.promptTokens;
               span.completionTokens = msg.completion_tokens || 0;
               span.totalTokens = msg.total_tokens || (span.promptTokens + span.completionTokens);
-              span.response = msg.response || '';
-              span.thinking = msg.thinking || '';
+              span.response = msg.response || span.response || '';
+              span.thinking = msg.thinking || span.thinking || '';
               span.toolCalls = msg.tool_calls || [];
               span.args = '';
 
@@ -806,22 +835,23 @@ export function getWaterfallScript(sessionId: string): string {
             state.isRunning = true;
             const turn = ensureTurn(state.currentTurnId);
             const spanId = msg.tool_id || ('tool_' + Date.now());
+            const isCoord = (msg.tool_name || '').startsWith('session_') || (msg.tool_name || '').startsWith('shared_state_');
             const span = {
               id: spanId,
               turnId: turn.id,
-              type: 'tool',
+              type: isCoord ? 'coordination' : 'tool',
               name: msg.tool_name || 'tool_call',
               startTime: msg.ts ? msg.ts * 1000 : Date.now(),
               endTime: null,
               durationMs: 0,
-              status: 'running',
+              status: (msg.tool_name === 'session_ask_question') ? 'waiting' : 'running',
               args: '',
               result: ''
             };
             state.spans.set(spanId, span);
             turn.spans.push(span);
             renderSpanRow(span);
-            addLog('TOOL-START', \`Executing \${span.name} (id: \${span.id})\`);
+            addLog(isCoord ? 'COORD-START' : 'TOOL-START', \`Executing \${span.name} (id: \${span.id})\`);
             updateTimingBars(turn.id);
             updateSummaryStats();
             break;
@@ -1048,6 +1078,31 @@ export function getWaterfallScript(sessionId: string): string {
             break;
           }
 
+          case 'session_message_received': {
+            addLog('SESSION-MSG', \`✉ Message from \${msg.from_session || 'agent'}: \${(msg.content || '').slice(0, 100)}\`);
+            break;
+          }
+
+          case 'session_question_received': {
+            addLog('SESSION-Q', \`❓ Question from \${msg.from_session || 'agent'} (ID: \${msg.question_id || ''}): \${(msg.question || '').slice(0, 100)}\`);
+            break;
+          }
+
+          case 'session_answer_received': {
+            addLog('SESSION-ANS', \`✔ Answer from \${msg.from_session || 'agent'} for \${msg.question_id || ''}: \${(msg.answer || '').slice(0, 100)}\`);
+            break;
+          }
+
+          case 'session_shared_state_changed': {
+            addLog('SHARED-STATE', \`⚡ \${msg.author_session || 'agent'} set \${msg.key || ''} = \${JSON.stringify(msg.value || '').slice(0, 80)}\`);
+            break;
+          }
+
+          case 'session_handoff_written': {
+            addLog('HANDOFF', \`🤝 Handoff from \${msg.from_session || 'agent'} to \${msg.to_session || 'agent'}: \${(msg.task_summary || '').slice(0, 80)}\`);
+            break;
+          }
+
           case 'agent_done': {
             state.isRunning = false;
             const turn = state.turns.get(state.currentTurnId);
@@ -1177,7 +1232,11 @@ export function getWaterfallScript(sessionId: string): string {
                 span.thinking = (span.thinking || '') + (msg.text || '');
                 if (span.element && span.element.classList.contains('expanded')) {
                   const cotEl = document.getElementById('wf-cot-' + span.id);
-                  if (cotEl) cotEl.textContent = span.thinking;
+                  if (cotEl) {
+                    cotEl.textContent = span.thinking;
+                  } else {
+                    updateSpanDetailsContent(span);
+                  }
                 }
                 break;
               }
@@ -1197,6 +1256,8 @@ export function getWaterfallScript(sessionId: string): string {
                     } else {
                       respEl.textContent = span.response;
                     }
+                  } else {
+                    updateSpanDetailsContent(span);
                   }
                 }
                 break;
@@ -1343,6 +1404,8 @@ export function getWaterfallScript(sessionId: string): string {
             break;
           }
         }
+
+        scrollToBottomIfNeeded();
       });
 
       // Filter & Search Handling
@@ -1390,6 +1453,9 @@ export function getWaterfallScript(sessionId: string): string {
           els.statsContainer.classList.toggle('active', target === 'stats');
 
           if (target === 'stats') renderStatsTab();
+          if (state.autoScroll) {
+            scrollToBottomIfNeeded();
+          }
         });
       });
 
@@ -1398,6 +1464,9 @@ export function getWaterfallScript(sessionId: string): string {
         els.btnAutoScroll.addEventListener('click', () => {
           state.autoScroll = !state.autoScroll;
           els.btnAutoScroll.classList.toggle('active', state.autoScroll);
+          if (state.autoScroll) {
+            scrollToBottomIfNeeded();
+          }
         });
       }
 
