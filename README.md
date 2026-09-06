@@ -16,7 +16,7 @@
 </div>
 
 <div align="center">
-  <img src="vscode-extension/walkthroughs/assets/partner.webp" alt="Andromity AI Coding Partner in VS Code" width="100%" />
+  <img src="with_waterfall.webp" alt="Andromity AI Coding Agent with Live Waterfall Trace in VS Code" width="100%" />
 </div>
 
 ---
