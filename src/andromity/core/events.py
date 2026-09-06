@@ -43,6 +43,33 @@ class Done(StreamEvent):
 class ToolResult(StreamEvent):
     tool_id: str
     result: str
+    duration_ms: float = 0.0
+    success: bool = True
+    ts: float = 0.0
+
+
+@dataclass
+class LLMCallStart(StreamEvent):
+    turn_id: str
+    model: str = ""
+    provider: str = ""
+    prompt_tokens_est: int = 0
+    ts: float = 0.0
+
+
+@dataclass
+class LLMCallEnd(StreamEvent):
+    turn_id: str
+    ttfb_ms: float = 0.0
+    duration_ms: float = 0.0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    model: str = ""
+    ts: float = 0.0
+    response: str = ""
+    thinking: str = ""
+    tool_calls: Optional[Any] = None
 
 
 @dataclass
@@ -56,8 +83,7 @@ class PlanUpdated(StreamEvent):
 
 
 
-# ── Sub-Agent Orchestration Events ───────────────────────────────────────────
-
+# ── Sub-Agent Orchestration Events 
 @dataclass
 class SubAgentSpawned(StreamEvent):
     agent_id: str
@@ -82,6 +108,7 @@ class SubAgentProgress(StreamEvent):
     model: Optional[str] = None
     provider: Optional[str] = None
     task: Optional[str] = None
+    duration_ms: float = 0.0
 
 
 

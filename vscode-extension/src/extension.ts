@@ -9,6 +9,7 @@ import { PlanViewProvider } from "./providers/PlanViewProvider.js";
 import { SessionTreeProvider } from "./providers/SessionTreeProvider.js";
 import { SettingsPanel } from "./panels/SettingsPanel.js";
 import { PlanEditorPanel } from "./panels/PlanEditorPanel.js";
+import { WaterfallPanel } from "./panels/WaterfallPanel.js";
 import { PythonBridge, formatTimestamp } from "./server/PythonBridge.js";
 import { RpcClient } from "./server/RpcClient.js";
 
@@ -443,6 +444,22 @@ export async function activate(context: vscode.ExtensionContext) {
       const sessionId = item?.session?.id || item?.id;
       const sessionName = item?.session?.name || item?.name;
       chatProvider.openSessionInTab(sessionId, sessionName);
+    }),
+
+    vscode.commands.registerCommand("andromity.openWaterfall", (item?: any) => {
+      const sessionId = item?.session?.id || item?.id || chatProvider.getCurrentSessionId();
+      const sessionName = item?.session?.name || item?.name || "Chat Session";
+      if (sessionId) {
+        WaterfallPanel.createOrShow(
+          context.extensionUri,
+          sessionId,
+          sessionName,
+          pythonBridge?.getClient() || null,
+          context
+        );
+      } else {
+        vscode.window.showInformationMessage("No active session to open waterfall trace for.");
+      }
     }),
 
     vscode.commands.registerCommand("andromity.refreshCrons", () => {

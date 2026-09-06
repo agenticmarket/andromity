@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+import time
 import traceback
 import uuid
 from pathlib import Path
@@ -23,6 +24,8 @@ READ_ONLY_TOOLS = {
 from andromity.core.events import (
     Done,
     HandoffWritten,
+    LLMCallEnd,
+    LLMCallStart,
     PlanApprovalRequired,
     PlanUpdated,
     SessionAnswerReceived,
@@ -80,6 +83,7 @@ class JsonRpcHandler:
         self._pending_questions: Dict[str, asyncio.Future] = {}
         self._pending_plan_approvals: Dict[str, asyncio.Future] = {}
         self._cron_schedulers: Dict[str, Any] = {}
+        self._active_agents: Dict[str, Any] = {}
         self._mcp_manager: Optional[Any] = None
         self._mcp_started: bool = False
 
@@ -699,6 +703,7 @@ class JsonRpcHandler:
             provider=provider,
             model=model,
         )
+        self._active_agents[session_id] = agent
 
         async def _run_stream():
             try:
@@ -719,7 +724,10 @@ class JsonRpcHandler:
 
                 images = params.get("images")
                 image_uris = params.get("image_uris")
-                self.notify("agent/started", {"session_id": session_id})
+                self.notify("agent/started", {
+                    "session_id": session_id,
+                    "prompt": prompt,
+                })
                 session.set_status("running")
                 async for event in agent.run(prompt, images=images, image_uris=image_uris):
                     if isinstance(event, TextDelta):
@@ -731,28 +739,58 @@ class JsonRpcHandler:
                         self.notify("agent/textDelta", {"session_id": session_id, "text": event.text})
                     elif isinstance(event, ThinkingDelta):
                         self.notify("agent/thinkingDelta", {"session_id": session_id, "text": event.text})
+                    elif isinstance(event, LLMCallStart):
+                        self.notify("waterfall/llmStart", {
+                            "session_id": session_id,
+                            "turn_id": event.turn_id,
+                            "model": event.model,
+                            "provider": event.provider,
+                            "prompt_tokens_est": event.prompt_tokens_est,
+                            "ts": getattr(event, "ts", 0.0) or time.time(),
+                        })
+                    elif isinstance(event, LLMCallEnd):
+                        self.notify("waterfall/llmEnd", {
+                            "session_id": session_id,
+                            "turn_id": event.turn_id,
+                            "ttfb_ms": event.ttfb_ms,
+                            "duration_ms": event.duration_ms,
+                            "prompt_tokens": event.prompt_tokens,
+                            "completion_tokens": event.completion_tokens,
+                            "total_tokens": event.total_tokens,
+                            "model": event.model,
+                            "ts": getattr(event, "ts", 0.0) or time.time(),
+                            "response": getattr(event, "response", "") or "",
+                            "thinking": getattr(event, "thinking", "") or "",
+                            "tool_calls": getattr(event, "tool_calls", []) or [],
+                        })
                     elif isinstance(event, ToolCallStart):
                         self.notify("agent/toolStart", {
                             "session_id": session_id,
                             "tool_id": event.tool_id,
                             "tool_name": event.tool_name,
+                            "ts": time.time(),
                         })
                     elif isinstance(event, ToolCallDelta):
                         self.notify("agent/toolDelta", {
                             "session_id": session_id,
                             "tool_id": event.tool_id,
                             "chunk": event.args_json_chunk,
+                            "ts": time.time(),
                         })
                     elif isinstance(event, ToolCallEnd):
                         self.notify("agent/toolEnd", {
                             "session_id": session_id,
                             "tool_id": event.tool_id,
+                            "ts": time.time(),
                         })
                     elif isinstance(event, ToolResult):
                         self.notify("agent/toolResult", {
                             "session_id": session_id,
                             "tool_id": event.tool_id,
                             "result": event.result,
+                            "duration_ms": getattr(event, "duration_ms", 0.0),
+                            "success": getattr(event, "success", True),
+                            "ts": getattr(event, "ts", 0.0) or time.time(),
                         })
                         try:
                             from andromity.core.planner import Plan
@@ -807,6 +845,22 @@ class JsonRpcHandler:
                                 "provider": event.provider,
                                 "task": event.task,
                             })
+                        elif event.event_type in ("completed", "done"):
+                            self.notify("subagent/done", {
+                                "session_id": session_id,
+                                "agent_id": event.agent_id,
+                                "role": event.role,
+                                "result": event.detail or "",
+                                "duration_ms": getattr(event, "duration_ms", 0.0),
+                            })
+                        elif event.event_type in ("failed", "error", "killed", "timeout"):
+                            self.notify("subagent/failed", {
+                                "session_id": session_id,
+                                "agent_id": event.agent_id,
+                                "role": event.role,
+                                "error": event.detail or "Subagent execution failed",
+                                "duration_ms": getattr(event, "duration_ms", 0.0),
+                            })
                         self.notify("subagent/progress", {
                             "session_id": session_id,
                             "agent_id": event.agent_id,
@@ -822,6 +876,7 @@ class JsonRpcHandler:
                             "model": event.model,
                             "provider": event.provider,
                             "task": event.task,
+                            "duration_ms": getattr(event, "duration_ms", 0.0),
                         })
                     elif isinstance(event, SubAgentDone):
                         self.notify("subagent/done", {
@@ -872,6 +927,10 @@ class JsonRpcHandler:
                 session.set_status("idle")
                 session.save()
             except asyncio.CancelledError:
+                try:
+                    agent.kill_subagents("cancelled")
+                except Exception:
+                    pass
                 session.set_status("cancelled")
                 self.notify("agent/cancelled", {
                     "session_id": session_id,
@@ -887,6 +946,8 @@ class JsonRpcHandler:
                     "session_id": session_id,
                     "error": str(e),
                 })
+            finally:
+                self._active_agents.pop(session_id, None)
 
         task = asyncio.create_task(_run_stream())
         self._running_tasks[session_id] = task
@@ -1063,6 +1124,12 @@ class JsonRpcHandler:
             raise ValueError("session_id is required")
 
         cancelled = False
+        if session_id in self._active_agents:
+            try:
+                self._active_agents[session_id].kill_subagents("cancelled")
+            except Exception:
+                pass
+
         if session_id in self._running_tasks:
             task = self._running_tasks[session_id]
             if not task.done():
@@ -1706,6 +1773,7 @@ class JsonRpcHandler:
         accumulated_text = []
         tools_used = []
         tool_executions = []
+        active_tool_calls: dict = {}  # tool_id -> tool_name
         start_time = time.time()
         error_msg = None
 
@@ -1717,11 +1785,14 @@ class JsonRpcHandler:
                         accumulated_text.append(event.text)
                     elif isinstance(event, ToolCallStart):
                         tools_used.append(event.tool_name)
+                        active_tool_calls[event.tool_id] = event.tool_name
                     elif isinstance(event, ToolResult):
+                        tool_name = active_tool_calls.pop(event.tool_id, "tool")
+                        res_str = str(event.result)[:1000] if event.result is not None else ""
                         tool_executions.append({
-                            "tool_name": event.tool_name,
-                            "result": str(event.result)[:1000] if event.result else "",
-                            "success": event.success,
+                            "tool_name": tool_name,
+                            "result": res_str,
+                            "success": "[Rejected by User]" not in res_str,
                         })
         except asyncio.TimeoutError:
             error_msg = f"Execution timed out after {job.timeout_seconds}s"

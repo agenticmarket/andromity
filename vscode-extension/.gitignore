@@ -26,3 +26,6 @@ bin/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Waterfall Trace Exports
+waterfall-*.json

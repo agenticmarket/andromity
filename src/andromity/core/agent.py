@@ -8,7 +8,8 @@ from andromity.core.session import Session
 from andromity.core.profiles import get_system_prompt, filter_tools_for_profile
 from andromity.core.tools import CORE_TOOLS, ToolRegistry, execute_tool, register_session
 from andromity.core.events import (
-    StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired, PlanUpdated
+    StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired, PlanUpdated,
+    LLMCallStart, LLMCallEnd
 )
 from andromity.core.debug_log import get_logger
 from andromity.config import config
@@ -111,7 +112,7 @@ class Agent:
         except Exception:
             pass
 
-        sys_prompt = get_system_prompt(self.profile)
+        sys_prompt = get_system_prompt(self.profile, project_path=self.session.project_path)
 
         deferred_catalog = ToolRegistry.get_instance().get_deferred_prompt_catalog()
         if deferred_catalog:
@@ -340,7 +341,10 @@ class Agent:
         async for event in self._compact_context():
             yield event
 
+        iteration_idx = 0
         while True:
+            iteration_idx += 1
+            turn_id = f"{self._turn_count}_{iteration_idx}_{int(time.time()*1000)}"
             pending_tool_calls: Dict[str, Dict[str, str]] = {}
             tool_calls_to_execute = []
             assistant_content = ""
@@ -355,10 +359,23 @@ class Agent:
             if self.reasoning_effort and self.reasoning_effort != "off":
                 stream_kwargs["reasoning_effort"] = self.reasoning_effort
 
+            llm_start_time = time.time()
+            first_token_time = None
+            yield LLMCallStart(
+                turn_id=turn_id,
+                model=self.model or config.get("default", "model", ""),
+                provider=self.provider or config.get("default", "provider", ""),
+                prompt_tokens_est=_estimate_tokens(self.session.messages),
+                ts=llm_start_time,
+            )
+
             async for event in stream_completion(
                 self._messages_for_api(),
                 **stream_kwargs,
             ):
+                if first_token_time is None and isinstance(event, (TextDelta, ThinkingDelta, ToolCallStart)):
+                    first_token_time = time.time()
+
                 if isinstance(event, Done):
                     last_usage = event.usage
                 else:
@@ -382,6 +399,10 @@ class Agent:
                             "id": event.tool_id, "type": "function",
                             "function": {"name": call_info["name"], "arguments": call_info["args"]},
                         })
+
+            llm_end_time = time.time()
+            ttfb_ms = round(((first_token_time or llm_end_time) - llm_start_time) * 1000, 2)
+            llm_duration_ms = round((llm_end_time - llm_start_time) * 1000, 2)
 
             # Flush any unclosed tool calls in case provider ended stream before ToolCallEnd
             for tid, call_info in list(pending_tool_calls.items()):
@@ -418,15 +439,33 @@ class Agent:
             model_id = f"{current_p}/{current_m}"
             if last_usage:
                 self.session.update_usage(last_usage, model=model_id)
+                prompt_tokens = last_usage.get("prompt_tokens", 0) if isinstance(last_usage, dict) else (getattr(last_usage, "prompt_tokens", 0) or 0)
+                completion_tokens = last_usage.get("completion_tokens", 0) if isinstance(last_usage, dict) else (getattr(last_usage, "completion_tokens", 0) or 0)
+                total_tokens = last_usage.get("total_tokens", prompt_tokens + completion_tokens) if isinstance(last_usage, dict) else (getattr(last_usage, "total_tokens", 0) or (prompt_tokens + completion_tokens))
             else:
                 prompt_tokens = _estimate_tokens(self.session.messages)
                 completion_tokens = len(assistant_content) // 4 + len(assistant_thinking) // 4
+                total_tokens = prompt_tokens + completion_tokens
                 self.session.update_usage({
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
-                    "total_tokens": prompt_tokens + completion_tokens,
+                    "total_tokens": total_tokens,
                     "usage_source": "estimate",
                 }, model=model_id)
+
+            yield LLMCallEnd(
+                turn_id=turn_id,
+                ttfb_ms=ttfb_ms,
+                duration_ms=llm_duration_ms,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                model=self.model or config.get("default", "model", ""),
+                ts=llm_end_time,
+                response=assistant_content or "",
+                thinking=assistant_thinking or "",
+                tool_calls=tool_calls_to_execute or [],
+            )
 
             turn_duration = round(time.time() - turn_start_time, 2)
             self.session.add_message(
@@ -481,6 +520,7 @@ class Agent:
             for tc in ask_calls:
                 fn_dict = tc.get("function") or {} if isinstance(tc, dict) else {}
                 tool_name = fn_dict.get("name", "ask_questions")
+                t_ask = time.time()
                 try:
                     qargs = json.loads(fn_dict.get("arguments") or "{}")
                 except json.JSONDecodeError:
@@ -508,9 +548,8 @@ class Agent:
                 self.session.add_message(
                     "tool", content=result, name=tool_name, tool_call_id=tc["id"],
                 )
-                # Mark the UI indicator done so the tool doesn't stay "running"
-                # forever after the user answers.
-                yield ToolResult(tool_id=tc["id"], result=result)
+                dur_ask = round((time.time() - t_ask) * 1000, 2)
+                yield ToolResult(tool_id=tc["id"], result=result, duration_ms=dur_ask, success=True, ts=time.time())
 
             # ── Phase 1: approvals — kept sequential (each one can show an
             # interactive prompt in the UI; a single approval future can't be
@@ -534,7 +573,7 @@ class Agent:
                             f"Acknowledge the rejection, then ask the user how they would like to proceed."
                         )
                         final_results[tool_call["id"]] = rejection
-                        yield ToolResult(tool_id=tool_call["id"], result="[Rejected by User]")
+                        yield ToolResult(tool_id=tool_call["id"], result="[Rejected by User]", duration_ms=0.0, success=False, ts=time.time())
                         continue
                 prepared.append((tool_call, tool_name, args))
 
@@ -546,8 +585,9 @@ class Agent:
                 import asyncio
                 from andromity.core.tools import register_subagent_progress_callback, unregister_subagent_progress_callback
 
-                async def _execute(prep: tuple[dict, str, dict]) -> tuple[str, str]:
+                async def _execute(prep: tuple[dict, str, dict]) -> tuple[str, str, float, bool]:
                     tool_call, tool_name, args = prep
+                    t0 = time.time()
                     # Categorise tool for telemetry — counts only, no args stored
                     _BASH_TOOLS = {"run_terminal_cmd", "run_command", "execute_command", "bash"}
                     _WEB_TOOLS  = {"web_search", "read_url", "browser", "search_web", "read_url_content"}
@@ -561,14 +601,18 @@ class Agent:
                     elif tool_name in _FILE_TOOLS:
                         self._tool_usage_counts["file"] += 1
                     if self.dry_run:
-                        return tool_call["id"], f"[DRY RUN] Would execute {tool_name}({json.dumps(args, indent=2)})"
+                        dur = round((time.time() - t0) * 1000, 2)
+                        return tool_call["id"], f"[DRY RUN] Would execute {tool_name}({json.dumps(args, indent=2)})", dur, True
                     try:
                         from andromity.core.tools import execute_tool_async
                         result = await execute_tool_async(tool_name, args, tool_id=tool_call.get("id"))
+                        dur = round((time.time() - t0) * 1000, 2)
+                        success = not str(result).startswith("Error executing")
                     except Exception as e:
+                        dur = round((time.time() - t0) * 1000, 2)
                         result = f"Error executing {tool_name}: {e}"
-                    return tool_call["id"], str(result)
-
+                        success = False
+                    return tool_call["id"], str(result), dur, success
 
                 progress_queue: asyncio.Queue = asyncio.Queue()
 
@@ -595,9 +639,9 @@ class Agent:
                         for t in done:
                             if t in pending_tasks:
                                 pending_tasks.remove(t)
-                                call_id, result = t.result()
+                                call_id, result, dur_ms, succ = t.result()
                                 final_results[call_id] = result
-                                yield ToolResult(tool_id=call_id, result=result)
+                                yield ToolResult(tool_id=call_id, result=result, duration_ms=dur_ms, success=succ, ts=time.time())
 
                         # Flush any backlog in progress queue
                         while not progress_queue.empty():

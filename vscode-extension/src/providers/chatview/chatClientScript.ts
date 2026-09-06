@@ -1729,6 +1729,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'open-plan-tab':
           vscode.postMessage({ type: 'open_plan_tab' });
           break;
+        case 'open-waterfall': {
+          const sNameEl = document.getElementById('active-session-name');
+          vscode.postMessage({
+            type: 'open_waterfall',
+            sessionId: currentSessionId,
+            sessionName: sNameEl?.textContent?.trim() || 'Session'
+          });
+          break;
+        }
         case 'open-file-diff': {
           const fPath = target.getAttribute('data-file-path') || target.closest('.file-edited-chip')?.getAttribute('data-file-path');
           if (fPath) {

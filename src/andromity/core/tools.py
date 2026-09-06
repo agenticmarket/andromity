@@ -1822,7 +1822,8 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
     elif name == "shell_list":
         return shell_list()
     elif name == "list_dir":
-        return list_dir(**args)
+        _ld_valid = {"path", "show_hidden"}
+        return list_dir(**{k: v for k, v in args.items() if k in _ld_valid})
     elif name == "write_plan":
         return write_plan(**args)
     elif name == "update_plan_step":

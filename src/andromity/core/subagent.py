@@ -24,12 +24,13 @@ log = get_logger("subagent")
 class SubAgentResult:
     agent_id: str
     role: str
-    status: str  # "completed" | "failed" | "killed" | "timeout"
+    status: str
     summary: str
     tokens_used: Dict[str, int] = field(default_factory=dict)
     cost_usd: float = 0.0
     duration_ms: float = 0.0
     error: Optional[str] = None
+    tools_called: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -41,6 +42,7 @@ class SubAgentResult:
             "cost_usd": self.cost_usd,
             "duration_ms": self.duration_ms,
             "error": self.error,
+            "tools_called": self.tools_called,
         }
 
 
@@ -173,17 +175,19 @@ class SubAgent:
         self.status = "pending"
         self._killed = False
         self._task_handle: Optional[asyncio.Task] = None
+        self.tools_executed: List[Dict[str, Any]] = []
 
     def _notify_progress(
         self,
         event_type: str = "progress",
         detail: Optional[str] = None,
         delta_text: Optional[str] = None,
+        tool_id: Optional[str] = None,
         tool_name: Optional[str] = None,
         tool_args: Optional[str] = None,
         tool_result: Optional[str] = None,
+        duration_ms: float = 0.0,
     ):
-        """Emit live SubAgentProgress event to the registered callback."""
         if not self.progress_callback:
             return
         try:
@@ -192,7 +196,7 @@ class SubAgent:
                 role=self.role,
                 status=self.status,
                 event_type=event_type,
-                tool_id=self.tool_id,
+                tool_id=tool_id or self.tool_id,
                 delta_text=delta_text,
                 tool_name=tool_name,
                 tool_args=tool_args,
@@ -201,6 +205,7 @@ class SubAgent:
                 model=self.model,
                 provider=self.provider,
                 task=self.task,
+                duration_ms=duration_ms,
             )
             import inspect
             if inspect.iscoroutinefunction(self.progress_callback):
@@ -208,7 +213,6 @@ class SubAgent:
             else:
                 self.progress_callback(evt)
         except Exception:
-
             pass
 
     async def execute(self) -> SubAgentResult:
@@ -255,8 +259,9 @@ class SubAgent:
         # tool path (orchestrator.spawn -> execute never emits SubAgentDone).
         try:
             self._notify_progress(
-                event_type="completed",
+                event_type="completed" if self.status == "completed" else "failed",
                 detail=compressed_summary,
+                duration_ms=duration_ms,
             )
         except Exception:
             pass
@@ -273,6 +278,7 @@ class SubAgent:
             cost_usd=self.session.cost_usd,
             duration_ms=duration_ms,
             error=error_msg,
+            tools_called=self.tools_executed,
         )
 
 
@@ -367,10 +373,10 @@ class SubAgent:
                             "type": "function",
                             "function": {"name": call_info["name"], "arguments": call_info["args"]},
                         })
-                        # Emit once with full args — this is the single display entry
                         act_desc = _format_tool_activity(call_info["name"], call_info["args"])
                         self._notify_progress(
                             event_type="tool_call",
+                            tool_id=event.tool_id,
                             tool_name=call_info["name"],
                             tool_args=call_info["args"],
                             detail=act_desc,
@@ -378,7 +384,6 @@ class SubAgent:
                 elif isinstance(event, Done):
                     last_usage = event.usage
 
-            # Flush any unclosed tool calls in case provider ended stream before ToolCallEnd
             for tid, call_info in list(pending_tool_calls.items()):
                 tool_calls_to_execute.append({
                     "id": tid,
@@ -388,6 +393,7 @@ class SubAgent:
                 act_desc = _format_tool_activity(call_info["name"], call_info["args"])
                 self._notify_progress(
                     event_type="tool_call",
+                    tool_id=tid,
                     tool_name=call_info["name"],
                     tool_args=call_info["args"],
                     detail=act_desc,
@@ -415,20 +421,16 @@ class SubAgent:
             )
 
             if not tool_calls_to_execute:
-                # Finished execution (model produced final text response)
                 self._notify_progress(event_type="text", detail="Task execution finished.")
                 break
 
-            # After the last tool round, append a reminder to produce a text summary
-            # so the model doesn't silently stop after its last tool call.
-            if turn == max_turns - 2:  # second-to-last turn
+            if turn == max_turns - 2:
                 self.session.add_message(
                     "user",
                     content="You have used the available tools. NOW write your final summary as plain text prose "
                             "in your response — no more tool calls. Be concise and factual."
                 )
 
-            # Execute tool calls concurrently
             async def _exec_tool(tc: dict) -> tuple[str, str, str]:
                 fn = tc.get("function", {})
                 tname = fn.get("name", "")
@@ -460,19 +462,32 @@ class SubAgent:
                     if dom and _is_private_ip(dom):
                         res_str = f"SECURITY BLOCKED: Fetching internal/private network addresses is blocked ({dom})."
 
+                t_start = time.time()
                 if res_str is None:
                     try:
                         res_str = await execute_tool_async(tname, targs)
                     except Exception as ex:
                         res_str = f"Error: Tool {tname} failed: {ex}"
+                tool_dur_ms = (time.time() - t_start) * 1000.0
                 act_desc = _format_tool_activity(tname, targs)
+                tool_status = "error" if ("Error:" in res_str or "BLOCKED" in res_str) else "done"
                 self._notify_progress(
                     event_type="tool_result",
+                    tool_id=tcall_id,
                     tool_name=tname,
                     tool_args=json.dumps(targs),
-                    tool_result=res_str[:200],
+                    tool_result=res_str[:5000],
                     detail=act_desc,
+                    duration_ms=tool_dur_ms,
                 )
+                self.tools_executed.append({
+                    "id": tcall_id,
+                    "name": tname,
+                    "args": targs,
+                    "result": res_str[:2000],
+                    "duration_ms": tool_dur_ms,
+                    "status": tool_status,
+                })
                 return tcall_id, tname, res_str
 
             tasks = [_exec_tool(tc) for tc in tool_calls_to_execute]

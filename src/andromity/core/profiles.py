@@ -9,10 +9,7 @@ from andromity.config import get_shell
 _git_branch_cache: str | None = None
 
 
-def _get_git_branch() -> str:
-    global _git_branch_cache
-    if _git_branch_cache is not None:
-        return _git_branch_cache
+def _get_git_branch(cwd: Path | None = None) -> str:
     try:
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         result = subprocess.run(
@@ -22,15 +19,14 @@ def _get_git_branch() -> str:
             timeout=1,
             stdin=subprocess.DEVNULL,
             creationflags=flags,
+            cwd=str(cwd) if cwd else None,
             close_fds=True,  # frozen-build safety: see core/tools.py shell_exec
         )
         if result.returncode == 0 and result.stdout.strip():
-            _git_branch_cache = result.stdout.strip()
-            return _git_branch_cache
+            return result.stdout.strip()
     except Exception:
         pass
-    _git_branch_cache = "unknown"
-    return _git_branch_cache
+    return "unknown"
 
 PROFILES = {
     "builder": {
@@ -72,14 +68,14 @@ PROFILES = {
 
 
 
-def get_system_prompt(profile: str) -> str:
-    cwd = Path.cwd()
+def get_system_prompt(profile: str, project_path: str | None = None) -> str:
+    cwd = Path(project_path).resolve() if project_path else Path.cwd()
     os_name = platform.system()
     shell = get_shell()
     
     python_ver = sys.version.split()[0]
     home_dir = str(Path.home())
-    git_branch = _get_git_branch()
+    git_branch = _get_git_branch(cwd)
     venv = os.environ.get("VIRTUAL_ENV") or os.environ.get("CONDA_DEFAULT_ENV") or "none"
     is_wsl = "WSL" in platform.uname().release if os_name == "Linux" else False
     

@@ -22,6 +22,8 @@ Module.prototype.require = function (reqPath: string) {
 
 import { ChatViewState, getChatViewHtml } from "../src/providers/chatview/chatHtml.js";
 import { getChatClientScript } from "../src/providers/chatview/chatClientScript.js";
+import { getWaterfallHtml } from "../src/providers/waterfall/waterfallHtml.js";
+import { getWaterfallScript } from "../src/providers/waterfall/waterfallScript.js";
 
 describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
   it("ChatViewProvider client script should compile with 0 syntax errors", () => {
@@ -174,5 +176,34 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.doesNotThrow(() => {
       vm.runInContext(scriptCode, sandbox);
     }, "Script execution in mock DOM environment should not throw");
+  });
+
+  it("Waterfall client script should compile with 0 syntax errors", () => {
+    const scriptCode = getWaterfallScript("test-session-123");
+    assert.ok(scriptCode.length > 500, "Waterfall script should be non-empty");
+
+    assert.doesNotThrow(() => {
+      new vm.Script(scriptCode, { filename: "waterfallScript.js" });
+    }, "waterfallScript.js must parse with 0 syntax errors");
+  });
+
+  it("Waterfall HTML should contain valid CSP, nonce, and script structure", () => {
+    const mockWebview: any = {
+      cspSource: "vscode-webview:",
+      asWebviewUri: (u: any) => "vscode-resource://" + (u.fsPath || u.path || String(u)),
+    };
+
+    const html = getWaterfallHtml(mockWebview, "test-sess", "Test Session");
+    assert.ok(html.includes("<!DOCTYPE html>"), "Must be a full HTML document");
+    assert.ok(html.includes("Content-Security-Policy"), "Must declare strict CSP");
+    assert.ok(html.includes("nonce-"), "Must have script nonce in CSP");
+    assert.ok(html.includes('<script nonce="'), "Script tags must be nonce-protected");
+
+    const scriptMatch = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/);
+    assert.ok(scriptMatch && scriptMatch[1], "Should extract script body");
+
+    assert.doesNotThrow(() => {
+      new vm.Script(scriptMatch[1], { filename: "extractedWaterfallScript.js" });
+    }, "Extracted waterfall script must parse with 0 syntax errors");
   });
 });

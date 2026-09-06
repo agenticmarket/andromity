@@ -6,6 +6,7 @@ import { ModelInfo, ProviderInfo, SessionInfo } from "../server/types.js";
 import { EditorBridge } from "../integrations/EditorBridge.js";
 import { SettingsPanel } from "./SettingsPanel.js";
 import { PlanEditorPanel } from "./PlanEditorPanel.js";
+import { WaterfallPanel } from "./WaterfallPanel.js";
 
 /**
  * SessionTabPanel allows opening any Andromity session in a dedicated editor tab
@@ -345,6 +346,21 @@ export class SessionTabPanel {
           this._rpcClient,
           this._context,
           this._viewProvider
+        );
+      }
+      return;
+    }
+
+    if (message.type === "open_waterfall") {
+      const sid = message.sessionId || this._sessionId;
+      const sname = message.sessionName || this._sessionName || "Chat Session";
+      if (sid) {
+        WaterfallPanel.createOrShow(
+          this._extensionUri,
+          sid,
+          sname,
+          this._rpcClient,
+          this._context
         );
       }
       return;

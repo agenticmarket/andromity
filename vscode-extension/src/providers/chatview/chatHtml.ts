@@ -97,6 +97,13 @@ ${styles}
           <polyline points="12 6 12 12 16 14"></polyline>
         </svg>
       </button>
+      <button class="top-bar-icon-btn" id="btn-top-waterfall" title="Waterfall — Live Execution Trace" data-action="open-waterfall">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
+          <path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"></path>
+          <path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"></path>
+          <path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"></path>
+        </svg>
+      </button>
       <button class="top-bar-icon-btn" id="btn-top-compact" title="Compact context window" data-action="compact-session">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <polyline points="4 14 10 14 10 20"></polyline>

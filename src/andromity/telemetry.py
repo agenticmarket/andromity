@@ -52,7 +52,12 @@ def _should_send_telemetry() -> bool:
         return False
     if os.environ.get("ANDROMITY_NO_TELEMETRY") in ("1", "true", "True", "TRUE"):
         return False
+    if os.environ.get("CI") in ("1", "true", "True", "TRUE"):
+        return False
+    if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
     return bool(config.get("default", "telemetry", True))
+
 
 
 # ─────────────────────────────────────────────────────────────────────

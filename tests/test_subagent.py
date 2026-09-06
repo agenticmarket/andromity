@@ -140,3 +140,60 @@ async def test_subagent_progress_callback():
     assert "RELEVANT CONTEXT SNAPSHOT" in agent.session.messages[0]["content"]
     assert "pytest" in agent.session.messages[0]["content"]
 
+
+@pytest.mark.asyncio
+async def test_subagent_tool_progress_and_history():
+    from andromity.core.events import ToolCallStart, ToolCallDelta, ToolCallEnd
+    progress_events = []
+
+    def on_prog(evt):
+        progress_events.append(evt)
+
+    agent = SubAgent(
+        parent_session_id="parent-tools",
+        role="coder",
+        task="Test multiple tool calls",
+        progress_callback=on_prog,
+    )
+
+    call_count = 0
+
+    async def mock_stream(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield ToolCallStart(tool_id="call_101", tool_name="read_file")
+            yield ToolCallDelta(tool_id="call_101", args_json_chunk='{"path": "a.txt"}')
+            yield ToolCallEnd(tool_id="call_101")
+            yield ToolCallStart(tool_id="call_102", tool_name="list_dir")
+            yield ToolCallDelta(tool_id="call_102", args_json_chunk='{"path": "."}')
+            yield ToolCallEnd(tool_id="call_102")
+            yield Done()
+        else:
+            yield TextDelta(text="Done processing files.")
+            yield Done()
+
+    async def mock_exec(name, args):
+        return f"result of {name}"
+
+    with patch("andromity.core.subagent.stream_completion", side_effect=mock_stream), \
+         patch("andromity.core.subagent.execute_tool_async", side_effect=mock_exec):
+        res = await agent.execute()
+
+    tool_call_events = [e for e in progress_events if e.event_type == "tool_call"]
+    tool_res_events = [e for e in progress_events if e.event_type == "tool_result"]
+
+    assert len(tool_call_events) == 2
+    assert tool_call_events[0].tool_id == "call_101"
+    assert tool_call_events[1].tool_id == "call_102"
+
+    assert len(tool_res_events) == 2
+    assert tool_res_events[0].tool_id == "call_101"
+    assert tool_res_events[1].tool_id == "call_102"
+    assert tool_res_events[0].duration_ms >= 0.0
+
+    assert len(res.tools_called) == 2
+    assert res.tools_called[0]["id"] == "call_101"
+    assert res.tools_called[1]["id"] == "call_102"
+    assert "tools_called" in res.to_dict()
+

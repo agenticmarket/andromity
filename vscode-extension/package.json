@@ -178,6 +178,12 @@
         "icon": "$(split-horizontal)"
       },
       {
+        "command": "andromity.openWaterfall",
+        "title": "Open Live Execution Waterfall",
+        "category": "Andromity",
+        "icon": "$(pulse)"
+      },
+      {
         "command": "andromity.deleteSession",
         "title": "Delete Session",
         "category": "Andromity",

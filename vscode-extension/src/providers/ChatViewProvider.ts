@@ -5,6 +5,7 @@ import { DiffManager } from "../integrations/DiffManager.js";
 import { EditorBridge } from "../integrations/EditorBridge.js";
 import { SettingsPanel } from "../panels/SettingsPanel.js";
 import { SessionTabPanel } from "../panels/SessionTabPanel.js";
+import { WaterfallPanel } from "../panels/WaterfallPanel.js";
 import { PythonBridge } from "../server/PythonBridge.js";
 import { RpcClient } from "../server/RpcClient.js";
 import {
@@ -1165,6 +1166,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               }
             }
           }
+        }
+        break;
+      }
+
+      case "open_waterfall": {
+        const sid = message.sessionId || this._currentSessionId;
+        const sname = message.sessionName || "Chat Session";
+        if (sid) {
+          WaterfallPanel.createOrShow(
+            this._extensionUri,
+            sid,
+            sname,
+            this._rpcClient,
+            this._context!
+          );
         }
         break;
       }
