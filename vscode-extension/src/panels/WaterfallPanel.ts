@@ -2,6 +2,83 @@ import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
 import { getWaterfallHtml } from "../providers/waterfall/waterfallHtml.js";
 
+export class WaterfallTraceStore {
+  private static _buffers = new Map<string, any[]>();
+  private static _client: RpcClient | null = null;
+  private static _disposables: Array<() => void> = [];
+
+  public static init(client: RpcClient) {
+    if (WaterfallTraceStore._client === client) return;
+    WaterfallTraceStore.dispose();
+    WaterfallTraceStore._client = client;
+
+    const record = (sessionId: string, msg: any) => {
+      if (!sessionId) return;
+      let buf = WaterfallTraceStore._buffers.get(sessionId);
+      if (!buf) {
+        buf = [];
+        WaterfallTraceStore._buffers.set(sessionId, buf);
+      }
+      buf.push(msg);
+      if (buf.length > 500) {
+        buf.shift();
+      }
+    };
+
+    const bind = (event: string, msgType: string, getSid?: (p: any) => string) => {
+      const handler = (params: any) => {
+        const sid = getSid ? getSid(params) : (params?.session_id || "");
+        if (sid) {
+          record(sid, { type: msgType, ...params });
+        }
+      };
+      client.on(event, handler);
+      WaterfallTraceStore._disposables.push(() => client.off(event, handler));
+    };
+
+    bind("agent/started", "agent_started");
+    bind("waterfall/llmStart", "waterfall_llm_start");
+    bind("waterfall/llmEnd", "waterfall_llm_end");
+    bind("agent/toolStart", "tool_start");
+    bind("agent/toolDelta", "tool_delta");
+    bind("agent/toolResult", "tool_result");
+    bind("agent/done", "agent_done");
+    bind("agent/cancelled", "agent_cancelled");
+    bind("agent/error", "agent_error");
+    bind("agent/toolApprovalRequired", "tool_approval_required");
+    bind("agent/askQuestions", "agent_ask_questions");
+    bind("agent/thinkingDelta", "thinking_delta");
+    bind("agent/textDelta", "text_delta");
+    bind("session/compacting", "session_compacting");
+    bind("session/compacted", "session_compacted");
+    bind("subagent/spawned", "subagent_spawned");
+    bind("subagent/progress", "subagent_progress");
+    bind("subagent/done", "subagent_done");
+    bind("subagent/failed", "subagent_failed");
+    bind("session/messageReceived", "session_message_received", (p) => p?.to_session_id || p?.from_session_id);
+    bind("session/questionReceived", "session_question_received", (p) => p?.to_session_id || p?.from_session_id);
+    bind("session/answerReceived", "session_answer_received", (p) => p?.to_session_id || p?.from_session_id);
+    bind("session/sharedStateChanged", "session_shared_state_changed");
+    bind("session/handoffWritten", "session_handoff_written", (p) => p?.to_session_id || p?.from_session_id);
+  }
+
+  public static getEvents(sessionId: string): any[] {
+    return WaterfallTraceStore._buffers.get(sessionId) || [];
+  }
+
+  public static clearSession(sessionId: string) {
+    WaterfallTraceStore._buffers.delete(sessionId);
+  }
+
+  public static dispose() {
+    for (const d of WaterfallTraceStore._disposables) {
+      try { d(); } catch {}
+    }
+    WaterfallTraceStore._disposables = [];
+    WaterfallTraceStore._client = null;
+  }
+}
+
 export class WaterfallPanel {
   public static readonly viewType = "andromity.waterfall";
   private static _panels = new Map<string, WaterfallPanel>();
@@ -22,6 +99,9 @@ export class WaterfallPanel {
     rpcClient: RpcClient | null,
     context: vscode.ExtensionContext
   ): WaterfallPanel {
+    if (rpcClient) {
+      WaterfallTraceStore.init(rpcClient);
+    }
     if (WaterfallPanel._panels.has(sessionId)) {
       const existing = WaterfallPanel._panels.get(sessionId)!;
       if (rpcClient && existing._rpcClient !== rpcClient) {
@@ -105,6 +185,7 @@ export class WaterfallPanel {
   public setRpcClient(client: RpcClient) {
     this._disposeRpcEvents();
     this._rpcClient = client;
+    WaterfallTraceStore.init(client);
     this._bindRpcEvents();
   }
 
@@ -250,7 +331,12 @@ export class WaterfallPanel {
         break;
       }
       case "waterfall_ready": {
-        if (this._rpcClient) {
+        const bufferedEvents = WaterfallTraceStore.getEvents(this._sessionId);
+        if (bufferedEvents && bufferedEvents.length > 0) {
+          for (const ev of bufferedEvents) {
+            this._postMessage(ev);
+          }
+        } else if (this._rpcClient) {
           try {
             const sessionData = await this._rpcClient.call<any>("session.get", {
               session_id: this._sessionId,

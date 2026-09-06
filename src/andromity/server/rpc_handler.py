@@ -382,6 +382,8 @@ class JsonRpcHandler:
             "usage_breakdown": getattr(session, "usage_breakdown", {}),
             "plan": getattr(session, "plan", None),
             "compacted_history": getattr(session, "compacted_history", []),
+            "model": getattr(session, "model", None) or getattr(getattr(self, "agent", None), "model_name", None) or getattr(getattr(self, "config", None), "model", None),
+            "provider": getattr(session, "provider", None) or getattr(getattr(self, "agent", None), "provider_name", None) or getattr(getattr(self, "config", None), "provider", None),
         }
 
     async def rpc_session_delete(self, params: Dict[str, Any]) -> Dict[str, Any]:

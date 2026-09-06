@@ -9,7 +9,7 @@ import { PlanViewProvider } from "./providers/PlanViewProvider.js";
 import { SessionTreeProvider } from "./providers/SessionTreeProvider.js";
 import { SettingsPanel } from "./panels/SettingsPanel.js";
 import { PlanEditorPanel } from "./panels/PlanEditorPanel.js";
-import { WaterfallPanel } from "./panels/WaterfallPanel.js";
+import { WaterfallPanel, WaterfallTraceStore } from "./panels/WaterfallPanel.js";
 import { PythonBridge, formatTimestamp } from "./server/PythonBridge.js";
 import { RpcClient } from "./server/RpcClient.js";
 
@@ -138,6 +138,7 @@ export async function activate(context: vscode.ExtensionContext) {
     changesTreeProvider.setRpcClient(rpcClient);
     SettingsPanel.currentPanel?.setRpcClient(rpcClient);
     PlanEditorPanel.currentPanel?.setRpcClient(rpcClient);
+    WaterfallTraceStore.init(rpcClient);
     bindStatusBarEvents(rpcClient);
 
     // Engine is warm — show the idle logo. (If a turn is already streaming
