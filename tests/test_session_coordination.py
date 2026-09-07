@@ -9,7 +9,8 @@ from andromity.core.session import Session
 def clean_bus(tmp_path):
     bus = SessionBus.reset_instance()
     bus.set_audit_log_path(tmp_path / "test_bus.jsonl")
-    return bus
+    yield bus
+    _current_session_var.set(None)
 
 
 @pytest.mark.asyncio

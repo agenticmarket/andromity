@@ -22,7 +22,7 @@
 Connect your preferred AI model (**Claude 3.7 Sonnet, GPT-4o, Gemini 2.5 Pro, DeepSeek R1 & V3, Groq, OpenRouter**) or run **100% locally and free with Ollama**.
 
 <div align="center">
-  <img src="https://cdn.agenticmarket.dev/andromity/git/with_waterfall.webp" alt="Andromity AI Coding Agent with Live Waterfall Trace in VS Code" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+  <img src="https://cdn.agenticmarket.dev/andromity/git/with_waterfall.webp?v=0.2.8" alt="Andromity AI Coding Agent with Live Waterfall Trace in VS Code" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
 </div>
 
 ---
@@ -53,7 +53,7 @@ Click **Install** on this Marketplace page. That's it!
    - **Ollama (Free / Local)**: No API key required! Just have Ollama running locally on your machine.
 
 <div align="center">
-  <img src="https://cdn.agenticmarket.dev/andromity/git/models.webp" alt="Model Hub and Local AI Support" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+  <img src="https://cdn.agenticmarket.dev/andromity/git/models.webp?v=0.2.8" alt="Model Hub and Local AI Support" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
 </div>
 
 ### 3. Start Coding!

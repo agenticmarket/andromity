@@ -10,7 +10,8 @@ from andromity.core.events import Done, TextDelta
 def setup_session(tmp_path):
     session = Session(name="main-session", project_path=str(tmp_path))
     register_session(session)
-    return session
+    yield session
+    register_session(None)
 
 
 @pytest.mark.asyncio

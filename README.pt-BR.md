@@ -16,7 +16,7 @@
 </div>
 
 <div align="center">
-  <img src="https://cdn.agenticmarket.dev/andromity/git/with_waterfall.webp" alt="Andromity AI Coding Agent with Live Waterfall Trace in VS Code" width="100%" />
+  <img src="https://cdn.agenticmarket.dev/andromity/git/with_waterfall.webp?v=0.2.8" alt="Andromity AI Coding Agent with Live Waterfall Trace in VS Code" width="100%" />
 </div>
 
 ---
@@ -73,7 +73,7 @@ O Andromity analisa sua base de código, cria um plano de implementação intera
 ---
 
 <div align="center">
-  <img src="https://cdn.agenticmarket.dev/andromity/git/models.webp" alt="Suporte a 396+ Modelos incluindo Ollama local gratuito" width="100%" />
+  <img src="https://cdn.agenticmarket.dev/andromity/git/models.webp?v=0.2.8" alt="Suporte a 396+ Modelos incluindo Ollama local gratuito" width="100%" />
 </div>
 
 ### 🤖 Suporte a 396+ Modelos — Incluindo Ollama Local Gratuito
