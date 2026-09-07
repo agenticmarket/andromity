@@ -558,6 +558,18 @@ export class PythonBridge {
     env: Record<string, string>,
     totalStartTime?: number
   ): RpcClient {
+    // Respect user privacy: check VS Code global telemetry & andromity.telemetry setting
+    try {
+      const vscodeConfig = vscode.workspace.getConfiguration("andromity");
+      const telemetryAllowed = (vscode.env.isTelemetryEnabled ?? true) && vscodeConfig.get<boolean>("telemetry", true);
+      if (!telemetryAllowed) {
+        env.DO_NOT_TRACK = "1";
+        env.ANDROMITY_NO_TELEMETRY = "1";
+      }
+    } catch {
+      // In tests or environments where vscode config is mocked
+    }
+
     // Ensure any previously running daemon process is cleanly terminated before spawning a new one
     if (this._process) {
       try {

@@ -1,5 +1,4 @@
 import * as path from "path";
-import { exec } from "child_process";
 import * as vscode from "vscode";
 import { DiffManager } from "../integrations/DiffManager.js";
 import { EditorBridge } from "../integrations/EditorBridge.js";
@@ -52,7 +51,44 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly _extensionUri: vscode.Uri,
     private readonly _context?: vscode.ExtensionContext
-  ) {}
+  ) {
+    if (this._context) {
+      this._context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration((e) => {
+          if (e.affectsConfiguration("andromity.wallpaper")) {
+            this.broadcastWallpaperConfig();
+          }
+        })
+      );
+    }
+  }
+
+  public getWallpaperConfig(_webview?: vscode.Webview) {
+    const cfg = vscode.workspace.getConfiguration("andromity.wallpaper");
+    return {
+      enabled: cfg.get<boolean>("enabled", false),
+      rippleIntensity: cfg.get<"off" | "light" | "medium" | "strong">("rippleIntensity", "medium"),
+      floatingAsterisks: cfg.get<boolean>("floatingAsterisks", true),
+      cursorLightAura: cfg.get<boolean>("cursorLightAura", true),
+    };
+  }
+
+  public broadcastWallpaperConfig() {
+    if (this._view) {
+      this._postToWebview({
+        type: "wallpaper_config_changed",
+        wallpaper: this.getWallpaperConfig(this._view.webview),
+      });
+    }
+    for (const tab of SessionTabPanel.getAllPanels()) {
+      try {
+        tab.postMessage({
+          type: "wallpaper_config_changed",
+          wallpaper: this.getWallpaperConfig(tab.webview),
+        });
+      } catch {}
+    }
+  }
 
   public setPythonBridge(bridge: PythonBridge) {
     this._pythonBridge = bridge;
@@ -681,6 +717,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         workspaceName: workspaceFolder ? path.basename(workspaceFolder) : "Workspace Ready",
         currentPlan: this._currentPlan,
         waterfallFirstSessionShown: this._context?.globalState.get<boolean>("andromity.waterfallFirstSessionShown", false) || false,
+        wallpaper: this.getWallpaperConfig(this._view?.webview),
       });
     } catch (e: any) {
       console.error("[Andromity Chat] Initial config load failed:", e);
@@ -763,6 +800,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this._rpcClient,
         "keys",
         () => this.refreshConfig()
+      );
+      return;
+    }
+
+    if (message.type === "open_personalisation") {
+      SettingsPanel.createOrShow(
+        this._extensionUri,
+        this._rpcClient,
+        "personalisation",
+        () => this.broadcastWallpaperConfig()
       );
       return;
     }
@@ -960,7 +1007,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "cycle_mode": {
         const modes = ["safe", "trust", "full", "yolo"];
         const nextIdx = (modes.indexOf(this._currentMode) + 1) % modes.length;
-        this._currentMode = modes[nextIdx];
+        let nextMode = modes[nextIdx];
+
+        if (nextMode === "yolo") {
+          const confirm = await vscode.window.showWarningMessage(
+            "⚠️ Enter YOLO Mode? Autonomous agent will execute shell commands and edit files without confirmation.",
+            { modal: true },
+            "Enable YOLO Mode",
+            "Keep Safe Mode"
+          );
+          if (confirm !== "Enable YOLO Mode") {
+            nextMode = "safe";
+          }
+        }
+
+        this._currentMode = nextMode;
         const config = vscode.workspace.getConfiguration("andromity");
         await config.update("permissionMode", this._currentMode, vscode.ConfigurationTarget.Global);
         await this._rpcClient?.call("config.set", {
@@ -1513,6 +1574,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       currentProfile: customState?.currentProfile ?? this._currentProfile,
       currentReasoning: customState?.currentReasoning ?? this._currentReasoning,
       models: customState?.models ?? this._models,
+      wallpaperConfig: customState?.wallpaperConfig ?? this.getWallpaperConfig(webview),
+      defaultWallpaperUri: customState?.defaultWallpaperUri ?? webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, "media", "wildcat-panther-dusk.jpg")).toString(),
     });
   }
 }

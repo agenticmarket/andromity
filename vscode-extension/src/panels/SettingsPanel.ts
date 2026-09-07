@@ -16,7 +16,7 @@ export class SettingsPanel {
   public static createOrShow(
     extensionUri: vscode.Uri,
     rpcClient: RpcClient | null,
-    initialTab: "models" | "skills" | "mcp" | "usage" | "keys" | "general" | "trust" | "about" | "crons" = "models",
+    initialTab: "models" | "skills" | "mcp" | "usage" | "keys" | "general" | "trust" | "about" | "crons" | "personalisation" = "models",
     onConfigChange?: () => void
   ) {
     const column = vscode.window.activeTextEditor
@@ -130,7 +130,13 @@ export class SettingsPanel {
         currentWorkspace: workspaceFolder || "",
         startupSession: vscodeConfig.get<string>("startupSession", "last"),
         soundNotifications: vscodeConfig.get<boolean>("soundNotifications", true) && configData?.sound_done !== false,
-        telemetry: vscodeConfig.get<boolean>("telemetry", true) && configData?.telemetry !== false,
+        telemetry: (vscode.env.isTelemetryEnabled ?? true) && vscodeConfig.get<boolean>("telemetry", true) && configData?.telemetry !== false,
+        wallpaper: {
+          enabled: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("enabled", false),
+          rippleIntensity: vscode.workspace.getConfiguration("andromity.wallpaper").get<string>("rippleIntensity", "medium"),
+          floatingAsterisks: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("floatingAsterisks", true),
+          cursorLightAura: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("cursorLightAura", true),
+        },
       });
 
       // Background-fetch remote skills registry from GitHub without blocking initial UI
@@ -342,6 +348,18 @@ export class SettingsPanel {
         this._panel.webview.postMessage({
           type: "setting_updated",
           key: "telemetry",
+          value: message.value,
+        });
+        this._onConfigChangeCallback?.();
+        break;
+      }
+
+      case "update_wallpaper_setting": {
+        const config = vscode.workspace.getConfiguration("andromity.wallpaper");
+        await config.update(message.key, message.value, vscode.ConfigurationTarget.Global);
+        this._panel.webview.postMessage({
+          type: "wallpaper_setting_updated",
+          key: message.key,
           value: message.value,
         });
         this._onConfigChangeCallback?.();
@@ -1691,6 +1709,10 @@ export class SettingsPanel {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
         Preferences
       </button>
+      <button class="nav-tab" data-tab="personalisation" id="tab-btn-personalisation">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"></circle><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"></circle><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"></circle><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"></circle><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.563-2.512 5.563-5.563C22 6.5 17.5 2 12 2z"></path></svg>
+        Personalisation
+      </button>
       <button class="nav-tab" data-tab="about" id="tab-btn-about">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
         About & Diagnostics
@@ -2139,6 +2161,83 @@ export class SettingsPanel {
       </div>
     </div>
 
+    <!-- ── TAB: PERSONALISATION ───────────────────────────────────── -->
+    <div class="tab-pane" id="pane-personalisation">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">Personalisation & Visual Atmosphere</h2>
+          <p class="section-desc">Customize ambient background atmosphere, real-time fluid ripple dynamics, retro matrix dither, and cursor spotlight aura.</p>
+        </div>
+      </div>
+
+      <div class="settings-list">
+        <!-- 1. Ambient Wallpaper Atmosphere -->
+        <div class="settings-card">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;">
+            <div>
+              <div class="setting-label">Wallpaper Atmosphere</div>
+              <div class="setting-desc">Enables an interactive ambient backdrop behind the editor sidebar using the bundled Wildcat Panther Dusk artwork with real-time fluid simulation.</div>
+            </div>
+            <span class="badge" id="wallpaper-status-badge">Disabled</span>
+          </div>
+          <div style="margin-top: 10px;">
+            <label class="checkbox-row">
+              <input type="checkbox" id="setting-wallpaper-enabled">
+              <div>
+                <div class="setting-label" style="font-weight: 500;">Enable Ambient Wallpaper</div>
+                <div class="setting-desc">Toggle wallpaper and particle physics on/off. (⚠️ Note: May increase battery consumption on portable devices).</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- 2. Water Ripple Physics -->
+        <div class="settings-card">
+          <div class="setting-label">Water Ripple Wave Dynamics</div>
+          <div class="setting-desc">Simulates interactive 2D fluid wave equations reacting dynamically to mouse movement across the viewport.</div>
+          <select class="setting-select" id="setting-wallpaper-ripple" style="margin-top: 6px;">
+            <option value="off">Off — Still water (Zero ripple computation)</option>
+            <option value="light">Light — Gentle, subtle ripples</option>
+            <option value="medium">Medium — Balanced organic fluid ripples (Default)</option>
+            <option value="strong">Strong — Energetic, high-amplitude wake waves</option>
+          </select>
+        </div>
+
+        <!-- 3. Floating Retro Asterisks -->
+        <div class="settings-card">
+          <label class="checkbox-row">
+            <input type="checkbox" id="setting-wallpaper-asterisks">
+            <div>
+              <div class="setting-label">Floating Asterisk Particles</div>
+              <div class="setting-desc">Subtle retro matrix glyphs drifting through the viewport that deflect away from the cursor.</div>
+            </div>
+          </label>
+        </div>
+
+        <!-- 4. Cursor Spotlight Aura -->
+        <div class="settings-card">
+          <label class="checkbox-row">
+            <input type="checkbox" id="setting-wallpaper-aura">
+            <div>
+              <div class="setting-label">Cursor Radial Spotlight</div>
+              <div class="setting-desc">Soft atmospheric spotlight aura that follows your mouse cursor across the editor window.</div>
+            </div>
+          </label>
+        </div>
+
+        <!-- 5. Accessibility & Motion Safety Notice -->
+        <div class="settings-card" style="border-left: 3px solid var(--tag-blue-fg); background: rgba(56, 139, 253, 0.04);">
+          <div class="setting-label" style="display: flex; align-items: center; gap: 6px; color: var(--tag-blue-fg);">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+            Accessibility & Motion Safety
+          </div>
+          <div class="setting-desc" style="margin-top: 4px;">
+            Andromity automatically honors your operating system's <code>prefers-reduced-motion</code> setting. When reduced motion is enabled, ripple physics and floating particles are automatically paused to prevent discomfort.
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ── TAB 8: ABOUT & DIAGNOSTICS ───────────────────────────────── -->
     <div class="tab-pane" id="pane-about">
       <div class="section-header">
@@ -2356,6 +2455,46 @@ export class SettingsPanel {
       });
     }
 
+    const checkWpEnabled = document.getElementById("setting-wallpaper-enabled");
+    const selectWpRipple = document.getElementById("setting-wallpaper-ripple");
+    const checkWpAsterisks = document.getElementById("setting-wallpaper-asterisks");
+    const checkWpAura = document.getElementById("setting-wallpaper-aura");
+    const wpStatusBadge = document.getElementById("wallpaper-status-badge");
+
+    function updateWpStatusBadge(enabled) {
+      if (wpStatusBadge) {
+        if (enabled) {
+          wpStatusBadge.className = "badge green";
+          wpStatusBadge.textContent = "Active";
+        } else {
+          wpStatusBadge.className = "badge";
+          wpStatusBadge.textContent = "Disabled (Off)";
+        }
+      }
+    }
+
+    if (checkWpEnabled) {
+      checkWpEnabled.addEventListener("change", () => {
+        updateWpStatusBadge(checkWpEnabled.checked);
+        vscode.postMessage({ type: "update_wallpaper_setting", key: "enabled", value: checkWpEnabled.checked });
+      });
+    }
+    if (selectWpRipple) {
+      selectWpRipple.addEventListener("change", () => {
+        vscode.postMessage({ type: "update_wallpaper_setting", key: "rippleIntensity", value: selectWpRipple.value });
+      });
+    }
+    if (checkWpAsterisks) {
+      checkWpAsterisks.addEventListener("change", () => {
+        vscode.postMessage({ type: "update_wallpaper_setting", key: "floatingAsterisks", value: checkWpAsterisks.checked });
+      });
+    }
+    if (checkWpAura) {
+      checkWpAura.addEventListener("change", () => {
+        vscode.postMessage({ type: "update_wallpaper_setting", key: "cursorLightAura", value: checkWpAura.checked });
+      });
+    }
+
     // Delegated actions
     document.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-action]");
@@ -2478,6 +2617,15 @@ export class SettingsPanel {
           if (checkAutoCompact) checkAutoCompact.checked = currentConfig.auto_compact !== false;
           if (checkSound) checkSound.checked = msg.soundNotifications !== false;
           if (checkTelemetry) checkTelemetry.checked = msg.telemetry !== false;
+
+          const wp = msg.wallpaper || {};
+          if (checkWpEnabled) {
+            checkWpEnabled.checked = !!wp.enabled;
+            updateWpStatusBadge(checkWpEnabled.checked);
+          }
+          if (selectWpRipple && wp.rippleIntensity) selectWpRipple.value = wp.rippleIntensity;
+          if (checkWpAsterisks) checkWpAsterisks.checked = wp.floatingAsterisks !== false;
+          if (checkWpAura) checkWpAura.checked = wp.cursorLightAura !== false;
 
           const sys = msg.systemInfo || {};
           if (sys.version) setEl("diag-version", "v" + sys.version);

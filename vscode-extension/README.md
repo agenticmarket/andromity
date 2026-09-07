@@ -5,7 +5,7 @@
 
   **The only AI coding agent with trust governance, subagents, live plans, native diffs & one-click rollback.**
 
-  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.7-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.8-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![VS Code](https://img.shields.io/badge/VS_Code-%5E1.85.0-blue?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-informational)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![Tests](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml/badge.svg)](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml)
@@ -22,7 +22,7 @@
 Connect your preferred AI model (**Claude 3.7 Sonnet, GPT-4o, Gemini 2.5 Pro, DeepSeek R1 & V3, Groq, OpenRouter**) or run **100% locally and free with Ollama**.
 
 <div align="center">
-  <img src="walkthroughs/assets/with_waterfall.webp" alt="Andromity AI Coding Agent with Live Waterfall Trace in VS Code" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+  <img src="https://cdn.agenticmarket.dev/andromity/git/with_waterfall.webp" alt="Andromity AI Coding Agent with Live Waterfall Trace in VS Code" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
 </div>
 
 ---
@@ -53,7 +53,7 @@ Click **Install** on this Marketplace page. That's it!
    - **Ollama (Free / Local)**: No API key required! Just have Ollama running locally on your machine.
 
 <div align="center">
-  <img src="walkthroughs/assets/models.webp" alt="Model Hub and Local AI Support" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+  <img src="https://cdn.agenticmarket.dev/andromity/git/models.webp" alt="Model Hub and Local AI Support" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
 </div>
 
 ### 3. Start Coding!
@@ -75,7 +75,7 @@ When tackling complex tasks, Andromity creates an interactive implementation pla
 - Watch real-time execution status for each task.
 
 <div align="center">
-  <img src="walkthroughs/assets/planning.webp" alt="Live Task Planner and Step Blueprints" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+  <img src="https://cdn.agenticmarket.dev/andromity/git/planning.webp" alt="Live Task Planner and Step Blueprints" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
 </div>
 
 ### 🔍 3. Side-by-Side Diff Review
@@ -102,6 +102,12 @@ Highlight any snippet in your code editor, right-click, and choose:
 ### ✍️ 8. AI Git Commit Messages
 Click the **Andromity icon** directly in the Source Control panel title bar to generate a clean, descriptive commit message based on your staged changes.
 
+### 🌊 9. Live Execution Waterfall & Profiler
+Inspect your AI agent's execution under the hood in real-time.
+- Click the 🌊 **Waterfall** icon in the chat header, run `/waterfall`, or use the Command Palette (`Andromity: Open Live Execution Waterfall`).
+- View chronological timeline spans for reasoning turns, terminal commands, file edits, web search, and parallel subagent forks.
+- Inspect execution latencies, status codes, and input/output payloads with millisecond precision.
+
 ---
 
 ## 🔐 Trust Governance (Permission Modes)
@@ -116,7 +122,7 @@ You are always in control of what the agent does in your workspace:
 | **YOLO** | Auto-runs silently | Silent | Silent |
 
 <div align="center">
-  <img src="walkthroughs/assets/trusted.webp" alt="Trust and Workspace Governance" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+  <img src="https://cdn.agenticmarket.dev/andromity/git/trusted.webp" alt="Trust and Workspace Governance" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
 </div>
 
 Switch modes anytime by clicking the permission badge in the top bar or via `Andromity: Switch Permission Mode`.

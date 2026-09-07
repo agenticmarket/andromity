@@ -1,47 +1,52 @@
 <div align="center">
-  <img src="andromity.png" alt="Andromity" width="60" height="60" />
+  <img src="https://raw.githubusercontent.com/agenticmarket/andromity/main/andromity.png" alt="Andromity" width="70" height="70" />
 
-  # Andromity
+  # Andromity — VS Code & ターミナル向け AI コーディングエージェント
 
-  **ターミナルAIコーディングエージェント。選べる自律性、信頼による制御。**
+  **信頼ガバナンス、BYOK、サブエージェント、ライブ計画、ネイティブ差分、ワンクリックロールバックを備えた自律型コーディングエージェント。**
 
-  <video src="https://github.com/user-attachments/assets/5203a1d8-9c6d-4d8f-bee3-7b4316f6fb22" autoplay loop muted playsinline width="100%"></video>
-
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.8-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![PyPI](https://img.shields.io/pypi/v/andromity)](https://pypi.org/project/andromity/)
-  ![Version](https://img.shields.io/badge/version-0.2.3-blueviolet)
   ![Python](https://img.shields.io/badge/python-3.11+-blue)
+  [![Tests](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml/badge.svg)](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml)
   [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
   [English](README.md) | [简体中文](README.zh-CN.md) | [Русский](README.ru.md) | [Português (Brasil)](README.pt-BR.md) | 日本語 | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [हिन्दी](README.hi.md)
 
 </div>
 
----
-
-Andromityは、AIエージェントを内蔵したターミナルワークスペースです。チャットウィンドウではありません。プラグインでもありません。セッション、差分（diff）、ファイルビューア、cronスケジューラ、プロファイルなど、すべてがターミナル内にある適切なワークスペースであり、AIエージェントが実際に作業を行います。
-
-他のツールとの違い：**あなたがフォルダを信頼すると言うまで、何も実行されません。**
+<div align="center">
+  <img src="https://cdn.agenticmarket.dev/andromity/git/with_waterfall.webp" alt="Andromity AI Coding Agent with Live Waterfall Trace in VS Code" width="100%" />
+</div>
 
 ---
 
-## 信頼モデルの仕組み
+**Andromity** は、プライベートかつ BYOK（API キー持ち込み）の自律型 AI コーディングエージェントです。VS Code 内で公式拡張機能として利用することも、単体のターミナルワークスペースとして実行することも可能です。複雑なタスクの計画、並列サブエージェントの管理、ステップごとの実行ブループリントの表示、適用前の差分（diff）レビュー、ワンクリックでの即時ロールバックを提供します。
 
-フォルダを開くと、Andromityはそのフォルダを信頼するかどうかを尋ねます。この回答がすべてを制御します。パーミッションモードでも、APIキーでも、設定でもありません。「いいえ」と答えた場合、エージェントはファイルを書き込んだり、コマンドを実行したり、何かに触れたりすることはできません。それでおしまいです。
-
-「はい」と答えた場合、エージェントにどの程度の自由を与えるかを選択します。
-
-| モード | 計画 | ファイル書き込み | Shell コマンド |
-|------|-------|-------------|----------------|
-| **SAFE** | 毎回承認 | 毎回承認 | 毎回承認 |
-| **TRUST** | 承認済み | 直接 — レビューなし | 直接 — レビューなし |
-| **FULL** | 自動 | 直接 | 直接 |
-| **YOLO** | 自動 (参考として表示) | サイレント | サイレント |
-
-まずはSAFEから始めましょう。エージェントがコードベースで何をするかが分かったら、YOLOに移行してください。いつでも `/trust` と `/untrust` を使用できます。
+お好みの AI モデル（**Claude 3.7 Sonnet、GPT-4o、Gemini 2.5 Pro、DeepSeek R1 & V3、Groq、OpenRouter**）に接続することも、**Ollama を使って 100% ローカルかつ完全無料** で実行することも可能です。
 
 ---
 
-## インストール
+## ⚡ クイックインストールと開始方法
+
+### 🚀 オプション A: VS Code 拡張機能 (推奨)
+
+<div align="left">
+  <a href="https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent">
+    <img src="https://img.shields.io/badge/Install%20in%20VS%20Code-Marketplace-007ACC?style=for-the-badge&logo=visualstudiocode&logoColor=white" alt="VS Code にインストール" />
+  </a>
+</div>
+
+👉 **推奨:** マーケットプレイスから直接インストール:  
+🔗 **[Andromity AI Coding Agent for VS Code - Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)**
+
+またはターミナルからワンクリックでインストール:
+
+```bash
+code --install-extension agenticmarket.andromity-agent
+```
+
+### 💻 オプション B: ターミナル CLI
 
 ```bash
 # Linux / macOS
@@ -50,94 +55,155 @@ curl -fsSL https://raw.githubusercontent.com/agenticmarket/andromity/main/instal
 # Windows (PowerShell)
 irm https://raw.githubusercontent.com/agenticmarket/andromity/main/install.ps1 | iex
 
-# または pipx を使用
+# または pipx でインストール
 pipx install andromity
 ```
 
-Python 3.11+が必要です。pipxがない場合はインストーラーが処理します。
+---
+
+## ✨ 主な機能
+
+<div align="center">
+  <img src="https://cdn.agenticmarket.dev/andromity/git/planning.webp" alt="ライブタスクプランナーと実行ブループリント" width="100%" />
+</div>
+
+### 📝 ライブタスクプランナーと実行ブループリント
+Andromity はコードベースを分析し、インタラクティブなステップごとの実装計画を作成し、コードを書く前に承認を待ちます。各ステップを個別に確認、承認、スキップできます。
 
 ---
 
-## 使い方
+<div align="center">
+  <img src="https://cdn.agenticmarket.dev/andromity/git/models.webp" alt="無料のローカル Ollama を含む 396+ モデル対応" width="100%" />
+</div>
+
+### 🤖 396+ モデル対応 — 無料のローカル Ollama を含む
+Claude 3.7、GPT-4o、Gemini 2.5 Pro、DeepSeek R1、Groq に接続、または Ollama で完全オフライン実行可能。セッション中に `Ctrl+L` でモデルを切り替えられます。
+
+---
+
+<div align="center">
+  <img src="https://cdn.agenticmarket.dev/andromity/git/trusted.webp" alt="信頼ガバナンス" width="100%" />
+</div>
+
+### 🔐 信頼ガバナンス — 常にあなたがコントロール
+
+| モード | プラン | ファイル書き込み | ターミナルコマンド |
+|------|-------|-------------|-------------------|
+| **SAFE** *(デフォルト)* | 毎回承認 | 毎回承認 | 毎回承認 |
+| **TRUST** | 承認 | 直接実行（確認なし） | 直接実行（確認なし） |
+| **FULL** | 自動 | 直接実行 | 直接実行 |
+| **YOLO** | 自動 | サイレント実行 | サイレント実行 |
+
+フォルダを信頼済みとして宣言するまで、エージェントは一切ファイルやコマンドを実行しません。SAFE モードから始めて、動作を把握したら YOLO モードに移行できます。
+
+---
+
+## 他ツールとの比較
+
+| 機能 | Andromity | Aider | Cursor | Claude Code |
+|------|-----------|-------|--------|-------------|
+| フォルダ信頼ガバナンスモデル | ✅ | ❌ | ❌ | ❌ |
+| 権限レベル (SAFE → YOLO) | ✅ | ❌ | 一部対応 | ❌ |
+| **リアルタイム実行ウォーターフォールプロファイラ** | ✅ | ❌ | ❌ | ❌ |
+| **内蔵 Cron スケジューラ** | ✅ | ❌ | ❌ | ❌ |
+| **並列セッションとサブエージェント** | ✅ | ❌ | ❌ | 一部対応 |
+| インラインネイティブ差分ビューア | ✅ | ✅ | ✅ | ✅ |
+| セッション管理と `/undo` ロールバック | ✅ | ❌ | 一部対応 | ❌ |
+| エージェントプロファイル (Profiles) | ✅ | ❌ | ❌ | 一部対応 |
+| ローカル優先 / Ollama / BYOK | ✅ | ✅ | ❌ | ❌ |
+| MCP プロトコル対応 | ✅ | ❌ | 一部対応 | ✅ |
+| VS Code 公式拡張機能 | ✅ | ❌ | ✅ | ✅ |
+
+---
+
+## ⏰ Cron スケジューラ — 寝ている間に動く AI
+
+他の AI コーディングエージェントにはない機能です。Andromity 内で `/cron` を開き、タスクを書いてスケジュールを設定するだけで、不在の間もタイマーで自律実行されます。
 
 ```bash
-andromity
+# 例: 毎晩深夜 2 時にテストを実行し、失敗した箇所を自動修正してコミット
+/cron  →  "run pytest, fix any failing tests, commit the fix"  →  0 2 * * *
 ```
 
-これでワークスペースが開きます。フォルダを指定し、信頼のプロンプトに答え、モデルを選択します。それで完了です。開始するために設定ファイルは必要ありません。
+ジョブはプロジェクトごとに `.andromity/crons.json` に保存されます。FULL または YOLO モードを使用すれば、完全な夜間無人実行が可能です。
 
+---
+
+## 🤖 並列セッションとサブエージェント
+
+メインセッションを中断することなく、並行して作業を進めるバックグラウンドサブエージェントを生成できます。例：1つのサブエージェントが新しいライブラリを調査している間に、別のサブエージェントが機能を実装し、あなた自身はメインセッションで全体計画をレビューする — すべて同時に進行できます。
+
+```
+メインセッション    → 機能 A の計画と実装
+サブエージェント 1  → 最適な認証ライブラリの調査
+サブエージェント 2  → 機能 B の単体テスト作成
+```
+
+すべてのセッションは `Ctrl+O` で簡単に切り替えられます。各セッションは独自のコンテキスト、履歴、変更ログを持ちます。`/undo` は現在のセッションの変更のみを元に戻します。
+
+---
+
+## ターミナルワークスペースの機能
+
+> VS Code 拡張機能とターミナルは同じエージェントコアを共有しています。ターミナルワークスペースは圧倒的なスピードと柔軟性を提供します。
+
+<div align="center">
+  <video src="https://github.com/user-attachments/assets/5203a1d8-9c6d-4d8f-bee3-7b4316f6fb22" autoplay loop muted playsinline width="100%"></video>
+</div>
+
+**プロファイル (Profiles)。** セッションの途中でエージェントの目的を切り替えます：
+- `builder` — 最初に計画を立て、その後実装
+- `coder` — 計画フェーズをスキップして直接実装
+- `reviewer` — 読み取り専用で、コードレビューやセキュリティ監査レポートを作成
+- `planner` — コードを変更せず、仕様と計画のみを作成
+
+**MCP 対応。** プロジェクトに `mcp.json` を配置します。ツールのスキーマはオンデマンドで遅延ロードされ、50以上のツールを接続してもトークン消費を最小限に抑えます。
+
+**セッション。** すべて自動保存されます。`/sessions` または `Ctrl+O` で切り替え。コンテキストが大きくなった場合は `/compact` を実行。直前のターンの変更をすべて戻すには `/undo` を使用します。
+
+**ヘッドレス / スクリプト実行：**
 ```bash
-# ヘッドレス / スクリプトでの実行
-andromity run "auth.py にエラー処理を追加して"
-andromity run "これを非同期 (async) にリファクタリングして" --yes      # すべて自動承認
-andromity run "session.py をレビューして" --dry-run       # 何をするかを確認
+andromity run "auth.py にエラーハンドリングを追加"
+andromity run "これを async にリファクタリング" --yes      # 全アクションを自動承認
+andromity run "session.py をレビュー" --dry-run       # 実行内容をシミュレーション
 ```
 
----
-
-<!-- Replace with GIF showing trust prompt → diff → approval flow -->
-![Andromity diff and approval flow](vscode-extension/walkthroughs/assets/trusted.webp)
+**モデル非依存。** 内部で LiteLLM を採用。Anthropic、OpenAI、Gemini、Groq、OpenRouter、Ollama、NVIDIA NIM に対応。`Ctrl+L` でいつでも切り替え可能。
 
 ---
 
-## 主な機能
+## プライバシーとセキュリティ
 
-**スケジューラー (Scheduler)。** 寝ている間にタイマーでエージェントを実行します。`/cron` でスケジューラーを開きます。ジョブはプロジェクトごとに `.andromity/crons.json` に保存されます。どのパーミッションモードでも機能します — 完全に無人で実行する場合は YOLO を使用してください。
+あなたのコードは、設定した LLM プロバイダーとの間でのみ送受信されます。私たちがコードやプロンプトを収集することはありません。
 
-**プロファイル (Profiles)。** エージェントが実行しようとする内容を切り替えます。
-- `builder` — 計画してから実装する
-- `coder` — 計画フェーズなしで直接実装する
-- `reviewer` — 読み取り専用で、調査結果を生成する
-- `planner` — 計画のみで、何も変更しない
-
-**MCPサポート。** プロジェクトに `mcp.json` を配置します。ツールは遅延ロードされます — スキーマが最初にインデックス付けされ、エージェントが実際に必要としたときにのみフルペイロードがロードされます。50以上のツールを接続しても、トークン使用量を妥当なレベルに保ちます。
-
-**セッション。** すべてが保存されます。`/sessions` または `Ctrl+O` でセッションを切り替えます。コンテキストが重くなった場合は `/compact` を使用します。`/undo` で最後のアクションとすべてのファイル変更を元に戻します。
-
-**サウンド通知。** エージェントが承認を必要とする場合や、ターンを完了した場合に通知音が鳴ります。`Ctrl+E → Advanced → Sounds` で独立して切り替えることができます。
-
-**モデルに依存しない。** 内部でLiteLLMを使用しています。Anthropic, OpenAI, Gemini, Groq, OpenRouter, Ollama, NVIDIA NIMに対応。セッションの途中で `Ctrl+L` を使用して切り替えることができます。
+- API キーはローカルの `~/.andromity/config.toml` に暗号化して保存
+- セッションはローカルの `~/.andromity/sessions/` に保存
+- テレメトリの無効化: `export DO_NOT_TRACK=1`
 
 ---
 
-## 比較
+## スター履歴 (Star History)
 
-> ⚠️ **公開前に確認** — 競合他社の列が現在のドキュメントと一致しているか確認してください。
-
-| | Andromity | Aider | OpenCode |
-|--|-----------|-------|----------|
-| フォルダ信頼モデル | ✅ | ❌ | ❌ |
-| パーミッションレベル (SAFE → YOLO) | ✅ | ❌ | 部分的 |
-| 内蔵cronスケジューラー | ✅ | ❌ | ❌ |
-| インラインdiffビューア | ✅ | ✅ | ✅ |
-| セッション管理 | ✅ | ❌ | ✅ |
-| エージェントプロファイル | ✅ | ❌ | 部分的 |
-| ローカルファースト, BYOK | ✅ | ✅ | ✅ |
-| MCPサポート | ✅ | ❌ | ✅ |
+<a href="https://www.star-history.com/?repos=agenticmarket%2Fandromity&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ---
 
-## プライバシー
+## 更新履歴
 
-あなたのコードは、あなたが設定したLLMプロバイダーの1か所のみに送信されます。私たちには送信されません。
-
-- APIキーは `~/.andromity/config.toml` に保存されます
-- セッションはローカルの `~/.andromity/sessions/` に保存されます
-- 初回起動時の匿名Ping — コード、パス、キーは含まれません。詳細は [telemetry-worker/README.md](telemetry-worker/README.md) にあります
-- オプトアウト: `export DO_NOT_TRACK=1` 、設定で `telemetry = false` 、または `Ctrl+E → Advanced → Telemetry`
-
----
-
-> ✦ *すべてのコマンドがここにドキュメント化されているわけではありません。発見することも体験の一部です。*
+詳細は [CHANGELOG.md](CHANGELOG.md) をご覧ください。
 
 ---
 
 ## コントリビューション
 
-IssueまたはPRを作成してください。現時点では、機能の要望よりも、率直なフィードバックやバグ報告の方が役立ちます。
+Issue や Pull Request を歓迎します！
 
-プロジェクトのレイアウトや開発のセットアップについては [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
+プロジェクト構成や開発環境については [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
 
-**MIT** — [LICENSE](LICENSE) を参照してください。
-
-
+**MIT** — 詳細は [LICENSE](LICENSE) を参照してください。

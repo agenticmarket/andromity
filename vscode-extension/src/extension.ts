@@ -221,8 +221,37 @@ export async function activate(context: vscode.ExtensionContext) {
           promptSetupGuide(err.message);
         }
       }
+
+      if (e.affectsConfiguration("andromity.telemetry")) {
+        const isEnabled = (vscode.env.isTelemetryEnabled ?? true) && vscode.workspace.getConfiguration("andromity").get<boolean>("telemetry", true);
+        try {
+          await pythonBridge?.getClient()?.call("config.set", {
+            section: "default",
+            key: "telemetry",
+            value: isEnabled,
+          });
+          log(`[Andromity] Telemetry configuration synced to daemon: ${isEnabled ? "ON" : "OFF"}`);
+        } catch {}
+      }
     })
   );
+
+  // Sync VS Code global telemetry setting changes to the daemon
+  if (vscode.env.onDidChangeTelemetryEnabled) {
+    context.subscriptions.push(
+      vscode.env.onDidChangeTelemetryEnabled(async (enabled) => {
+        const isEnabled = enabled && vscode.workspace.getConfiguration("andromity").get<boolean>("telemetry", true);
+        try {
+          await pythonBridge?.getClient()?.call("config.set", {
+            section: "default",
+            key: "telemetry",
+            value: isEnabled,
+          });
+          log(`[Andromity] Global VS Code telemetry state changed: ${isEnabled ? "ON" : "OFF"}`);
+        } catch {}
+      })
+    );
+  }
 
   // 6. Register Commands
   context.subscriptions.push(
@@ -430,6 +459,15 @@ export async function activate(context: vscode.ExtensionContext) {
         pythonBridge?.getClient() || null,
         "crons",
         () => chatProvider.refreshConfig()
+      );
+    }),
+
+    vscode.commands.registerCommand("andromity.openPersonalisation", () => {
+      SettingsPanel.createOrShow(
+        context.extensionUri,
+        pythonBridge?.getClient() || null,
+        "personalisation",
+        () => chatProvider.broadcastWallpaperConfig()
       );
     }),
 

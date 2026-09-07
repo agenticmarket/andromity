@@ -2,7 +2,7 @@
   "name": "andromity-agent",
   "displayName": "Andromity AI Coding Agent for VS Code",
   "description": "Autonomous AI coding agent with subagents, live plans & diffs. BYOK support for Claude 3.7, GPT-4o, DeepSeek R1, Gemini & free local Ollama. MCP & Multi-Agent ready.",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "publisher": "agenticmarket",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -12,6 +12,12 @@
   },
   "engines": {
     "vscode": "^1.85.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Andromity requires workspace trust to edit files and execute terminal commands."
+    }
   },
   "categories": [
     "AI",
@@ -147,6 +153,12 @@
         "title": "Settings & API Keys",
         "category": "Andromity",
         "icon": "$(gear)"
+      },
+      {
+        "command": "andromity.openPersonalisation",
+        "title": "Personalisation & Atmosphere",
+        "category": "Andromity",
+        "icon": "$(paintcan)"
       },
       {
         "command": "andromity.checkSetup",
@@ -434,6 +446,27 @@
           "type": "number",
           "default": 0,
           "description": "TCP port to connect to an external Andromity daemon (0 for embedded stdio process)."
+        },
+        "andromity.wallpaper.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable background wallpaper atmosphere with water ripples and floating asterisks. (⚠️ Note: May increase battery usage on portable devices)."
+        },
+        "andromity.wallpaper.rippleIntensity": {
+          "type": "string",
+          "default": "medium",
+          "enum": ["off", "light", "medium", "strong"],
+          "description": "Intensity of the environmental water ripple effect on mouse hover."
+        },
+        "andromity.wallpaper.floatingAsterisks": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show subtle floating asterisks that react to mouse movement."
+        },
+        "andromity.wallpaper.cursorLightAura": {
+          "type": "boolean",
+          "default": true,
+          "description": "Soft radial cursor spotlight aura on the background."
         }
       }
     },

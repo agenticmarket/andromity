@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { getChatStyles } from "./chatStyles.js";
 import { getChatClientScript } from "./chatClientScript.js";
+import { getChatAmbientScript, WallpaperConfig } from "./chatAmbientScript.js";
 
 export interface ChatViewState {
   currentSessionId: string;
@@ -10,6 +11,8 @@ export interface ChatViewState {
   currentProfile: string;
   currentReasoning: string;
   models?: { id: string; name: string }[];
+  wallpaperConfig?: WallpaperConfig;
+  defaultWallpaperUri?: string;
 }
 
 export function formatModelDisplayName(id?: string, models?: { id: string; name: string }[]): string {
@@ -40,8 +43,10 @@ export function getChatViewHtml(webview: vscode.Webview, extensionUri: vscode.Ur
   const doneAudioUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "done.wav"));
   const sidebarIconUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "sidebar-icon.svg"));
   const markedScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "marked.min.js"));
+  const defaultWallpaperUri = state.defaultWallpaperUri || webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "wildcat-panther-dusk.jpg")).toString();
   const styles = getChatStyles();
   const clientScript = getChatClientScript(sidebarIconUri.toString(), state);
+  const ambientScript = getChatAmbientScript(defaultWallpaperUri, state.wallpaperConfig);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -58,6 +63,15 @@ ${styles}
   </style>
 </head>
 <body class="loading">
+  <!-- Ambient Environmental Wallpaper & Particles Canvas -->
+  <div id="andromity-ambient-container" class="andromity-ambient-container" aria-hidden="true">
+    <canvas id="andromity-water-canvas"></canvas>
+    <canvas id="andromity-fx-canvas"></canvas>
+    <div id="andromity-cursor-light"></div>
+    <div id="andromity-dither-overlay"></div>
+    <div id="andromity-gradient-fade"></div>
+  </div>
+
   <audio id="audio-done" preload="auto" src="${doneAudioUri}"></audio>
 
 
@@ -65,7 +79,7 @@ ${styles}
   <div id="image-lightbox-overlay" class="image-lightbox-overlay" style="display:none;" role="dialog" aria-modal="true" aria-label="Image preview">
     <div class="image-lightbox-header">
       <span class="image-lightbox-title" id="image-lightbox-title">Image Preview</span>
-      <button class="image-lightbox-close" id="btn-lightbox-close" title="Close (Esc)">&times;</button>
+      <button class="image-lightbox-close" id="btn-lightbox-close" aria-label="Close image preview" title="Close (Esc)">&times;</button>
     </div>
     <div class="image-lightbox-container">
       <img id="image-lightbox-img" class="image-lightbox-img" src="" alt="Image Preview">
@@ -75,7 +89,7 @@ ${styles}
   <!-- Top Bar (Clean Session Header, No Duplicate Buttons) -->
   <div class="top-bar">
     <div class="top-bar-left">
-      <div class="session-badge-btn" id="btn-session-picker" title="Sessions (Click to switch or manage sessions)">
+      <div class="session-badge-btn" id="btn-session-picker" role="button" tabindex="0" aria-label="Current session, click to switch or manage sessions" title="Sessions (Click to switch or manage sessions)">
         <span class="session-badge-text skeleton skeleton-session" id="active-session-name" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
         <span class="session-activity-dot" id="session-activity-dot" style="display:none;" title="Background session activity"></span>
         <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -84,27 +98,27 @@ ${styles}
       </div>
     </div>
     <div class="top-bar-right">
-      <button class="top-bar-icon-btn" id="btn-top-open-tab" title="Open Session in New Editor Tab (Side-by-Side)" data-action="open-current-tab">
+      <button class="top-bar-icon-btn" id="btn-top-open-tab" aria-label="Open Session in New Editor Tab (Side-by-Side)" title="Open Session in New Editor Tab (Side-by-Side)" data-action="open-current-tab">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
           <polyline points="15 3 21 3 21 9"></polyline>
           <line x1="10" y1="14" x2="21" y2="3"></line>
         </svg>
       </button>
-      <button class="top-bar-icon-btn" id="btn-top-timeline" title="Conversation Timeline & Milestones" data-action="toggle-timeline">
+      <button class="top-bar-icon-btn" id="btn-top-timeline" style="display:none;" title="Conversation Timeline & Milestones" data-action="toggle-timeline">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <circle cx="12" cy="12" r="10"></circle>
           <polyline points="12 6 12 12 16 14"></polyline>
         </svg>
       </button>
-      <button class="top-bar-icon-btn" id="btn-top-waterfall" title="Waterfall — Live Execution Trace" data-action="open-waterfall">
+      <button class="top-bar-icon-btn" id="btn-top-waterfall" aria-label="Waterfall — Live Execution Trace" title="Waterfall — Live Execution Trace" data-action="open-waterfall">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"></path>
           <path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"></path>
           <path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"></path>
         </svg>
       </button>
-      <button class="top-bar-icon-btn" id="btn-top-compact" title="Compact context window" data-action="compact-session">
+      <button class="top-bar-icon-btn" id="btn-top-compact" style="display:none;" title="Compact context window" data-action="compact-session">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <polyline points="4 14 10 14 10 20"></polyline>
           <polyline points="20 10 14 10 14 4"></polyline>
@@ -118,7 +132,7 @@ ${styles}
         <div class="popover-arrow"></div>
         <div class="popover-header">
           <div class="popover-badge">🌊 Live Waterfall</div>
-          <button class="popover-close-btn" id="btn-dismiss-wf-callout" title="Dismiss">&times;</button>
+          <button class="popover-close-btn" id="btn-dismiss-wf-callout" aria-label="Dismiss waterfall callout" title="Dismiss">&times;</button>
         </div>
         <div class="popover-body">
           Watch real-time execution tracks, TTFB latency, LLM reasoning, and tool calls as your agent runs.
@@ -165,7 +179,7 @@ ${styles}
         <button class="crons-action-hdr-btn" id="btn-crons-manage" title="Configure in Settings">
           <span>⚙ Settings</span>
         </button>
-        <button class="crons-close-btn" id="btn-crons-close" title="Close">
+        <button class="crons-close-btn" id="btn-crons-close" aria-label="Close scheduled tasks drawer" title="Close">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
       </div>
@@ -184,13 +198,13 @@ ${styles}
         <span class="timeline-count-badge" id="timeline-turn-count">0 turns</span>
       </div>
       <div class="timeline-header-actions">
-        <button class="timeline-action-btn" id="btn-timeline-jump-first" title="Jump to First Turn">
+        <button class="timeline-action-btn" id="btn-timeline-jump-first" aria-label="Jump to first turn" title="Jump to First Turn">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg>
         </button>
-        <button class="timeline-action-btn" id="btn-timeline-jump-latest" title="Jump to Latest Turn">
+        <button class="timeline-action-btn" id="btn-timeline-jump-latest" aria-label="Jump to latest turn" title="Jump to Latest Turn">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
         </button>
-        <button class="timeline-header-close" id="btn-timeline-close" title="Close (Esc)">&times;</button>
+        <button class="timeline-header-close" id="btn-timeline-close" aria-label="Close conversation timeline" title="Close (Esc)">&times;</button>
       </div>
     </div>
     <div class="timeline-toolbar">
@@ -474,11 +488,11 @@ ${styles}
         <span class="tracker-count" id="tracker-count">0/0 done</span>
       </div>
       <div class="tracker-actions">
-        <button class="btn-tracker-open" id="btn-tracker-open" title="Open Full Plan in Editor Tab">
+        <button class="btn-tracker-open" id="btn-tracker-open" aria-label="Open full plan in editor tab" title="Open Full Plan in Editor Tab">
           <span>View Plan</span>
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
         </button>
-        <button class="btn-tracker-close" id="btn-tracker-close" title="Dismiss tracker">
+        <button class="btn-tracker-close" id="btn-tracker-close" aria-label="Dismiss plan tracker" title="Dismiss tracker">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
       </div>
@@ -496,7 +510,7 @@ ${styles}
     <div class="slash-palette" id="slash-palette" style="display:none;" role="listbox" aria-label="Slash commands">
       <div class="slash-palette-header">
         <span>Commands (Click or press Enter)</span>
-        <button class="palette-close-btn" id="btn-slash-close" title="Close (Esc)">&times;</button>
+        <button class="palette-close-btn" id="btn-slash-close" aria-label="Close slash commands" title="Close (Esc)">&times;</button>
       </div>
       <div class="slash-palette-list" id="slash-palette-list"></div>
     </div>
@@ -504,7 +518,7 @@ ${styles}
     <div class="slash-palette" id="mention-palette" style="display:none;" role="listbox" aria-label="Skills and tools">
       <div class="slash-palette-header" style="color:#c084fc;">
         <span>Skills & Tools (Click to mention)</span>
-        <button class="palette-close-btn" id="btn-mention-close" title="Close (Esc)">&times;</button>
+        <button class="palette-close-btn" id="btn-mention-close" aria-label="Close skills palette" title="Close (Esc)">&times;</button>
       </div>
       <div class="slash-palette-list" id="mention-palette-list"></div>
     </div>
@@ -613,6 +627,9 @@ ${styles}
 
 
   <script nonce="${nonce}" src="${markedScriptUri}"></script>
+  <script nonce="${nonce}">
+${ambientScript}
+  </script>
   <script nonce="${nonce}">
 ${clientScript}
   </script>

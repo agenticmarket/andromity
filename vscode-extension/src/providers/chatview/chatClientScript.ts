@@ -151,6 +151,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       { cmd: '/clear', desc: 'Clear current chat history view', action: 'clear' },
       { cmd: '/sessions', desc: 'Open sessions browser', action: 'sessions' },
       { cmd: '/settings', desc: 'Open Settings, Model Catalog & MCP Hub', action: 'settings' },
+      { cmd: '/personalisation', desc: 'Open Personalisation & Wallpaper Atmosphere settings', action: 'personalisation' },
+      { cmd: '/wallpaper', desc: 'Configure background wallpaper atmosphere & ripples', action: 'personalisation' },
       { cmd: '/model', desc: 'Switch AI model', action: 'model' },
       { cmd: '/mode', desc: 'Cycle permission mode (safe / trust / full / yolo)', action: 'mode' },
       { cmd: '/plan', desc: 'Open Implementation Plan editor tab', action: 'plan' },
@@ -335,6 +337,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         e.stopPropagation();
         tokenWidgetEl.classList.toggle('active');
       });
+      tokenWidgetEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          e.stopPropagation();
+          tokenWidgetEl.classList.toggle('active');
+        }
+      });
       document.addEventListener('click', (e) => {
         if (!tokenWidgetEl.contains(e.target)) {
           tokenWidgetEl.classList.remove('active');
@@ -377,6 +386,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let allModels = [...DEFAULT_POPULAR_MODELS];
     let isRunning = false;
     const promptQueue = [];
+    const sentPromptsHistory = [];
+    let promptHistoryIndex = 0;
+    let tempPromptDraft = '';
     let lastAppendedUserText = '';
     let lastAppendedUserTime = 0;
     let currentTurnStartTime = 0;
@@ -659,6 +671,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'settings':
           vscode.postMessage({ type: 'open_settings' });
           break;
+        case 'personalisation':
+        case 'wallpaper':
+          vscode.postMessage({ type: 'open_personalisation' });
+          break;
         case 'model':
           toggleModelFlyout();
           break;
@@ -727,6 +743,50 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (e.key === 'Escape') {
             e.preventDefault();
             hideSlashPalette();
+            return;
+          }
+        }
+
+        // CJK IME composition guard (Postel's Law): do not intercept Enter while user is actively composing characters
+        if (e.isComposing || e.keyCode === 229) {
+          return;
+        }
+
+        // Prompt history navigation (Jakob's Law)
+        if (e.key === 'ArrowUp') {
+          const isAtStart = promptInput.selectionStart === 0 && promptInput.selectionEnd === 0;
+          if (isAtStart && sentPromptsHistory.length > 0 && promptHistoryIndex > 0) {
+            e.preventDefault();
+            if (promptHistoryIndex === sentPromptsHistory.length) {
+              tempPromptDraft = promptInput.value;
+            }
+            promptHistoryIndex--;
+            promptInput.value = sentPromptsHistory[promptHistoryIndex];
+            promptInput.style.height = 'auto';
+            promptInput.style.height = Math.min(promptInput.scrollHeight, 160) + 'px';
+            promptInput.selectionStart = promptInput.selectionEnd = promptInput.value.length;
+            if (sendBtn) {
+              sendBtn.classList.toggle('has-text', promptInput.value.trim().length > 0);
+            }
+            return;
+          }
+        }
+
+        if (e.key === 'ArrowDown') {
+          if (promptHistoryIndex < sentPromptsHistory.length) {
+            e.preventDefault();
+            promptHistoryIndex++;
+            if (promptHistoryIndex === sentPromptsHistory.length) {
+              promptInput.value = tempPromptDraft;
+            } else {
+              promptInput.value = sentPromptsHistory[promptHistoryIndex];
+            }
+            promptInput.style.height = 'auto';
+            promptInput.style.height = Math.min(promptInput.scrollHeight, 160) + 'px';
+            promptInput.selectionStart = promptInput.selectionEnd = promptInput.value.length;
+            if (sendBtn) {
+              sendBtn.classList.toggle('has-text', promptInput.value.trim().length > 0);
+            }
             return;
           }
         }
@@ -810,10 +870,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       });
     }
 
-    document.getElementById('btn-session-picker')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      toggleSessionsFlyout();
-    });
+    const sessionPickerBtn = document.getElementById('btn-session-picker');
+    if (sessionPickerBtn) {
+      sessionPickerBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleSessionsFlyout();
+      });
+      sessionPickerBtn.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          e.stopPropagation();
+          toggleSessionsFlyout();
+        }
+      });
+    }
 
     sessionsSearch?.addEventListener('input', (e) => {
       sessionDisplayLimit = 10;
@@ -2286,6 +2356,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const text = promptInput.value.trim();
       const imagesToSend = [...attachedImages];
       if (!text && imagesToSend.length === 0) return;
+
+      if (text) {
+        if (sentPromptsHistory.length === 0 || sentPromptsHistory[sentPromptsHistory.length - 1] !== text) {
+          sentPromptsHistory.push(text);
+        }
+        promptHistoryIndex = sentPromptsHistory.length;
+        tempPromptDraft = '';
+      }
+
       promptInput.value = '';
       promptInput.style.height = 'auto';
       sendBtn.classList.remove('has-text');

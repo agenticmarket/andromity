@@ -1,47 +1,52 @@
 <div align="center">
-  <img src="andromity.png" alt="Andromity" width="60" height="60" />
+  <img src="https://raw.githubusercontent.com/agenticmarket/andromity/main/andromity.png" alt="Andromity" width="70" height="70" />
 
-  # Andromity
+  # Andromity — Agente de IA para VS Code e Terminal
 
-  **Um agente de IA para codificação no terminal. Autônomo por escolha, delimitado por confiança.**
+  **Agente de codificação autônomo com governança de confiança, BYOK, subagentes, planos ao vivo, diffs nativos e reversão em um clique.**
 
-  <video src="https://github.com/user-attachments/assets/5203a1d8-9c6d-4d8f-bee3-7b4316f6fb22" autoplay loop muted playsinline width="100%"></video>
-
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.8-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![PyPI](https://img.shields.io/pypi/v/andromity)](https://pypi.org/project/andromity/)
-  ![Version](https://img.shields.io/badge/version-0.2.3-blueviolet)
   ![Python](https://img.shields.io/badge/python-3.11+-blue)
+  [![Tests](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml/badge.svg)](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml)
   [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
   [English](README.md) | [简体中文](README.zh-CN.md) | [Русский](README.ru.md) | Português (Brasil) | [日本語](README.ja.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [हिन्दी](README.hi.md)
 
 </div>
 
----
-
-Andromity é um espaço de trabalho no terminal com um agente de IA integrado. Não é uma janela de chat. Não é um plugin. Um espaço de trabalho adequado — sessões, diffs, visualizador de arquivos, agendador cron, perfis — tudo no seu terminal, com um agente de IA que realmente faz as coisas.
-
-A coisa que o torna diferente: **nada é executado até que você diga que a pasta é confiável.**
+<div align="center">
+  <img src="https://cdn.agenticmarket.dev/andromity/git/with_waterfall.webp" alt="Andromity AI Coding Agent with Live Waterfall Trace in VS Code" width="100%" />
+</div>
 
 ---
 
-## Como funciona o modelo de confiança
+**Andromity** é um agente autônomo de codificação com IA privativo e BYOK (Bring Your Own Key). Use-o dentro do VS Code com a extensão oficial ou execute-o como um ambiente de trabalho autônomo no terminal. Ele planeja tarefas complexas, gerencia subagentes em paralelo, exibe etapas e projetos ao vivo, permite revisar diffs antes de aplicar e oferece reversão instantânea em um clique.
 
-Quando você abre uma pasta, o Andromity pergunta se você confia nela. Essa resposta controla tudo — não o seu modo de permissão, não a sua chave de API, não as suas configurações. Se você disser não, o agente não pode gravar um arquivo, executar um comando ou tocar em nada. Ponto final.
-
-Se você disser sim, você escolhe o quanto de liberdade o agente tem:
-
-| Modo | Planos | Gravação de arquivos | Comandos de shell |
-|------|-------|-------------|----------------|
-| **SAFE** | Aprovar cada um | Aprovar cada um | Aprovar cada um |
-| **TRUST** | Aprovar | Direto — sem revisão | Direto — sem revisão |
-| **FULL** | Automático | Direto | Direto |
-| **YOLO** | Automático (exibido apenas para informação) | Silencioso | Silencioso |
-
-Comece no SAFE. Mude para o YOLO quando souber o que o agente faz na sua base de código. `/trust` e `/untrust` a qualquer momento.
+Conecte seu modelo de IA favorito (**Claude 3.7 Sonnet, GPT-4o, Gemini 2.5 Pro, DeepSeek R1 & V3, Groq, OpenRouter**) ou execute **100% localmente e de graça com o Ollama**.
 
 ---
 
-## Instalação
+## ⚡ Instalação Rápida e Primeiros Passos
+
+### 🚀 Opção A: Extensão para VS Code (Recomendado)
+
+<div align="left">
+  <a href="https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent">
+    <img src="https://img.shields.io/badge/Install%20in%20VS%20Code-Marketplace-007ACC?style=for-the-badge&logo=visualstudiocode&logoColor=white" alt="Instalar no VS Code" />
+  </a>
+</div>
+
+👉 **Recomendado:** Instale a extensão diretamente pelo marketplace:  
+🔗 **[Andromity AI Coding Agent for VS Code - Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)**
+
+Ou instale instantaneamente via terminal:
+
+```bash
+code --install-extension agenticmarket.andromity-agent
+```
+
+### 💻 Opção B: Terminal CLI
 
 ```bash
 # Linux / macOS
@@ -54,90 +59,151 @@ irm https://raw.githubusercontent.com/agenticmarket/andromity/main/install.ps1 |
 pipx install andromity
 ```
 
-Requer Python 3.11+. O instalador lida com o pipx se você não tiver.
+---
+
+## ✨ Principais Recursos
+
+<div align="center">
+  <img src="https://cdn.agenticmarket.dev/andromity/git/planning.webp" alt="Planejador de Tarefas ao Vivo e Projetos" width="100%" />
+</div>
+
+### 📝 Planejador de Tarefas ao Vivo e Projetos
+O Andromity analisa sua base de código, cria um plano de implementação interativo passo a passo e aguarda sua aprovação antes de escrever uma única linha de código. Revise, aprove ou pule qualquer etapa.
 
 ---
 
-## Início
+<div align="center">
+  <img src="https://cdn.agenticmarket.dev/andromity/git/models.webp" alt="Suporte a 396+ Modelos incluindo Ollama local gratuito" width="100%" />
+</div>
+
+### 🤖 Suporte a 396+ Modelos — Incluindo Ollama Local Gratuito
+Conecte Claude 3.7, GPT-4o, Gemini 2.5 Pro, DeepSeek R1, Groq ou execute 100% offline com Ollama. Troque de modelo no meio da sessão com `Ctrl+L`.
+
+---
+
+<div align="center">
+  <img src="https://cdn.agenticmarket.dev/andromity/git/trusted.webp" alt="Governança de Confiança" width="100%" />
+</div>
+
+### 🔐 Governança de Confiança — Você Sempre no Controle
+
+| Modo | Planos | Gravação de Arquivos | Comandos de Terminal |
+|------|-------|-------------|-------------------|
+| **SAFE** *(padrão)* | Aprovar cada um | Aprovar cada um | Aprovar cada um |
+| **TRUST** | Aprovar | Direto | Direto |
+| **FULL** | Automático | Direto | Direto |
+| **YOLO** | Automático | Silencioso | Silencioso |
+
+Nada é executado até que você confirme que a pasta é confiável. Comece no modo SAFE e mude para YOLO quando já souber como o agente trabalha.
+
+---
+
+## Comparativo com Alternativas
+
+| Recurso | Andromity | Aider | Cursor | Claude Code |
+|------|-----------|-------|--------|-------------|
+| Modelo de confiança de pasta | ✅ | ❌ | ❌ | ❌ |
+| Níveis de permissão (SAFE → YOLO) | ✅ | ❌ | Parcial | ❌ |
+| **Profiler visual de execução em cascata (Waterfall)** | ✅ | ❌ | ❌ | ❌ |
+| **Agendador Cron Integrado** | ✅ | ❌ | ❌ | ❌ |
+| **Sessões paralelas e subagentes** | ✅ | ❌ | ❌ | Parcial |
+| Visualizador de diffs nativo | ✅ | ✅ | ✅ | ✅ |
+| Gerenciamento de sessões e `/undo` | ✅ | ❌ | Parcial | ❌ |
+| Perfis de agente (Profiles) | ✅ | ❌ | ❌ | Parcial |
+| Modo local / Ollama / BYOK | ✅ | ✅ | ❌ | ❌ |
+| Suporte ao protocolo MCP | ✅ | ❌ | Parcial | ✅ |
+| Extensão oficial para VS Code | ✅ | ❌ | ✅ | ✅ |
+
+---
+
+## ⏰ Agendador Cron — A IA que Trabalha Enquanto Você Dorme
+
+Nenhum outro agente de codificação possui isso. Abra `/cron` no Andromity, escreva sua tarefa e defina um agendamento — o agente executará tudo com autonomia por temporizador enquanto você estiver ausente.
 
 ```bash
-andromity
+# Exemplo: rodar suite de testes e corrigir falhas todas as noites às 2h
+/cron  →  "run pytest, fix any failing tests, commit the fix"  →  0 2 * * *
 ```
 
-Isso abre o espaço de trabalho. Aponte-o para uma pasta, responda ao prompt de confiança, escolha um modelo — pronto. Nenhum arquivo de configuração é necessário para começar.
+As tarefas persistem em `.andromity/crons.json` por projeto. Use o modo FULL ou YOLO para execuções totalmente autônomas durante a noite.
 
+---
+
+## 🤖 Sessões Paralelas e Subagentes
+
+Gere subagentes em segundo plano para fluxos de trabalho simultâneos sem interromper sua sessão principal. Exemplo: enquanto um subagente pesquisa uma biblioteca nova, outro implementa uma funcionalidade e você revisa o plano na sessão principal — tudo ao mesmo tempo.
+
+```
+Sessão principal  → Planejar e implementar a Funcionalidade A
+Subagente 1       → Pesquisar a melhor biblioteca de autenticação
+Subagente 2       → Escrever testes unitários para a Funcionalidade B
+```
+
+Alterne entre todas as sessões com `Ctrl+O`. Cada sessão possui contexto, histórico e registro de alterações de arquivos próprios. O `/undo` reverte apenas as alterações da sessão atual.
+
+---
+
+## Recursos do Ambiente de Trabalho no Terminal
+
+> A extensão do VS Code e o terminal compartilham o mesmo núcleo de agente. O terminal oferece máxima velocidade e controle.
+
+<div align="center">
+  <video src="https://github.com/user-attachments/assets/5203a1d8-9c6d-4d8f-bee3-7b4316f6fb22" autoplay loop muted playsinline width="100%"></video>
+</div>
+
+**Perfis (Profiles).** Alterne o que o agente deve priorizar na sessão:
+- `builder` — planeja primeiro, depois implementa
+- `coder` — implementa diretamente, sem etapa de planejamento
+- `reviewer` — somente leitura, produz relatórios de análise e auditoria
+- `planner` — apenas cria especificações e planos, sem alterar arquivos
+
+**Suporte MCP.** Adicione um `mcp.json` ao seu projeto. Os esquemas de ferramentas são carregados sob demanda — mantendo o consumo de tokens sob controle mesmo com mais de 50 ferramentas conectadas.
+
+**Sessões.** Tudo é salvo. Use `/sessions` ou `Ctrl+O` para alternar. Use `/compact` quando o contexto ficar extenso. Use `/undo` para reverter o último turno e todas as suas alterações em arquivos.
+
+**Modo Headless / Scripts:**
 ```bash
-# Headless / via script
-andromity run "adicionar tratamento de erro no auth.py"
-andromity run "refatorar isso para async" --yes      # aprovar tudo automaticamente
-andromity run "revisar session.py" --dry-run       # ver o que ele faria
+andromity run "adicionar tratamento de erros em auth.py"
+andromity run "refatorar para async" --yes      # aprova tudo automaticamente
+andromity run "revisar session.py" --dry-run       # simula o que seria feito
 ```
 
----
-
-<!-- Replace with GIF showing trust prompt → diff → approval flow -->
-![Andromity diff and approval flow](vscode-extension/walkthroughs/assets/trusted.webp)
+**Independência de Provedor.** Baseado em LiteLLM. Suporta Anthropic, OpenAI, Gemini, Groq, OpenRouter, Ollama, NVIDIA NIM. Troque de modelo com `Ctrl+L`.
 
 ---
 
-## O que tem dentro
+## Privacidade e Segurança
 
-**Agendador (Scheduler).** Execute o agente em um cronômetro enquanto você dorme. `/cron` abre o agendador. Os jobs persistem por projeto em `.andromity/crons.json`. Funciona com qualquer modo de permissão — use YOLO para execuções totalmente autônomas.
+Seu código vai para apenas um lugar: o provedor de LLM que você configurar. Não armazenamos seus códigos ou prompts.
 
-**Perfis.** Alterne o que o agente está tentando fazer.
-- `builder` — planeja e depois implementa
-- `coder` — implementa diretamente, sem fase de planejamento
-- `reviewer` — somente leitura, produz descobertas
-- `planner` — apenas planeja, não toca em nada
-
-**Suporte MCP.** Coloque um `mcp.json` no seu projeto. As ferramentas carregam lentamente — os esquemas são indexados primeiro, as cargas úteis completas são carregadas apenas quando o agente realmente precisa delas. Mantém o uso de tokens são com mais de 50 ferramentas conectadas.
-
-**Sessões.** Tudo é salvo. Alterne entre sessões com `/sessions` ou `Ctrl+O`. `/compact` quando o contexto ficar pesado. `/undo` para reverter a última rodada e todas as suas alterações de arquivo.
-
-**Notificações sonoras.** O agente avisa quando precisa de aprovação ou termina uma rodada. Alterne-os de forma independente em `Ctrl+E → Advanced → Sounds`.
-
-**Agnóstico de Modelo.** LiteLLM nos bastidores. Anthropic, OpenAI, Gemini, Groq, OpenRouter, Ollama, NVIDIA NIM. Alterne no meio da sessão com `Ctrl+L`.
+- As chaves de API ficam salvas em `~/.andromity/config.toml` — criptografadas localmente
+- Sessões salvas localmente em `~/.andromity/sessions/`
+- Desativar telemetria: `export DO_NOT_TRACK=1`
 
 ---
 
-## Como se compara
+## Histórico de Estrelas
 
-> ⚠️ **Verifique antes de publicar** — confirme se as colunas da concorrência são precisas com base em suas documentações atuais.
-
-| | Andromity | Aider | OpenCode |
-|--|-----------|-------|----------|
-| Modelo de confiança de pasta | ✅ | ❌ | ❌ |
-| Níveis de permissão (SAFE → YOLO) | ✅ | ❌ | Parcial |
-| Agendador cron integrado | ✅ | ❌ | ❌ |
-| Visualizador de diff inline | ✅ | ✅ | ✅ |
-| Gerenciamento de sessão | ✅ | ❌ | ✅ |
-| Perfis de agentes | ✅ | ❌ | Parcial |
-| Local-first, BYOK | ✅ | ✅ | ✅ |
-| Suporte MCP | ✅ | ❌ | ✅ |
+<a href="https://www.star-history.com/?repos=agenticmarket%2Fandromity&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ---
 
-## Privacidade
+## Registro de Alterações
 
-Seu código vai para um único lugar: o provedor LLM que você configurar. Não para nós.
-
-- Chaves de API ficam em `~/.andromity/config.toml`
-- Sessões armazenadas localmente em `~/.andromity/sessions/`
-- Ping anônimo no primeiro lançamento — sem código, sem caminhos, sem chaves. Detalhes completos em [telemetry-worker/README.md](telemetry-worker/README.md)
-- Opt-out: `export DO_NOT_TRACK=1`, ou `telemetry = false` na configuração, ou `Ctrl+E → Advanced → Telemetry`
-
----
-
-> ✦ *Nem todos os comandos estão documentados aqui. A descoberta faz parte da experiência.*
+Consulte [CHANGELOG.md](CHANGELOG.md) para detalhes de versão.
 
 ---
 
 ## Contribuindo
 
-Abra uma issue ou PR. Feedback honesto e relatórios de bugs são mais úteis do que solicitações de recursos no momento.
+Abra uma issue ou pull request!
 
-Veja [CONTRIBUTING.md](CONTRIBUTING.md) para layout do projeto e configuração de desenvolvimento.
+Consulte [CONTRIBUTING.md](CONTRIBUTING.md) para estrutura de projeto e ambiente de desenvolvimento.
 
-**MIT** — veja [LICENSE](LICENSE).
-
-
+**Licença MIT** — consulte [LICENSE](LICENSE).

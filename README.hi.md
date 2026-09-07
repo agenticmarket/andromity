@@ -1,47 +1,52 @@
 <div align="center">
-  <img src="andromity.png" alt="Andromity" width="60" height="60" />
+  <img src="https://raw.githubusercontent.com/agenticmarket/andromity/main/andromity.png" alt="Andromity" width="70" height="70" />
 
-  # Andromity
+  # Andromity — VS Code और टर्मिनल के लिए AI कोडिंग एजेंट
 
-  **टर्मिनल AI कोडिंग एजेंट। स्वायत्तता आपकी पसंद से, सुरक्षा विश्वास की सीमा में।**
+  **विश्वास-शासित, BYOK, सब-एजेंट्स, लाइव प्लान, नेटिव डिफ्स और एक-क्लिक रोलबैक के साथ स्वायत्त कोडिंग एजेंट।**
 
-  <video src="https://github.com/user-attachments/assets/5203a1d8-9c6d-4d8f-bee3-7b4316f6fb22" autoplay loop muted playsinline width="100%"></video>
-
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.8-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![PyPI](https://img.shields.io/pypi/v/andromity)](https://pypi.org/project/andromity/)
-  ![Version](https://img.shields.io/badge/version-0.2.3-blueviolet)
   ![Python](https://img.shields.io/badge/python-3.11+-blue)
+  [![Tests](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml/badge.svg)](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml)
   [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
   [English](README.md) | [简体中文](README.zh-CN.md) | [Русский](README.ru.md) | [Português (Brasil)](README.pt-BR.md) | [日本語](README.ja.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | हिन्दी
 
 </div>
 
----
-
-Andromity एक टर्मिनल वर्कस्पेस है जिसमें एक AI एजेंट बिल्ट-इन है। यह कोई चैट विंडो नहीं है। कोई प्लगइन नहीं है। एक उचित वर्कस्पेस — सेशन, डिफ्स, फाइल व्यूअर, क्रॉन शेड्यूलर, प्रोफाइल्स — सब कुछ आपके टर्मिनल में, एक ऐसे AI एजेंट के साथ जो वास्तव में काम करता है।
-
-जो बात इसे अलग बनाती है: **जब तक आप यह नहीं कहते कि फोल्डर भरोसेमंद है, तब तक कुछ भी रन नहीं होता।**
+<div align="center">
+  <img src="https://cdn.agenticmarket.dev/andromity/git/with_waterfall.webp" alt="Andromity AI Coding Agent with Live Waterfall Trace in VS Code" width="100%" />
+</div>
 
 ---
 
-## ट्रस्ट मॉडल कैसे काम करता है
+**Andromity** एक निजी, BYOK (अपनी स्वयं की API कुंजी) स्वायत्त AI कोडिंग एजेंट है। इसे VS Code में आधिकारिक एक्सटेंशन के साथ उपयोग करें, या एक स्टैंडअलोन टर्मिनल वर्कस्पेस के रूप में चलाएं। यह जटिल कार्यों की योजना बनाता है, समानांतर सब-एजेंट्स का प्रबंधन करता है, लाइव चरण-दर-चरण ब्लूप्रिंट दिखाता है, कोड लागू करने से पहले डिफ्स की समीक्षा करने देता है, और तत्काल एक-क्लिक रोलबैक प्रदान करता है।
 
-जब आप कोई फोल्डर खोलते हैं, तो Andromity पूछता है कि क्या आप उस पर भरोसा करते हैं। यह जवाब सब कुछ कंट्रोल करता है — न कि आपका परमिशन मोड, न आपकी API की, न ही आपकी सेटिंग्स। यदि आप नहीं कहते हैं, तो एजेंट न कोई फाइल लिख सकता है, न कोई कमांड रन कर सकता है, और न ही किसी चीज को छू सकता है। बस।
-
-यदि आप हाँ कहते हैं, तो आप चुनते हैं कि एजेंट को कितनी छूट मिलती है:
-
-| मोड | प्लान्स | फाइल राइट्स | शेल कमांड्स |
-|------|-------|-------------|----------------|
-| **SAFE** | हर एक को अप्रूव करें | हर एक को अप्रूव करें | हर एक को अप्रूव करें |
-| **TRUST** | अप्रूव | सीधा — कोई रिव्यू नहीं | सीधा — कोई रिव्यू नहीं |
-| **FULL** | ऑटो | सीधा | सीधा |
-| **YOLO** | ऑटो (सिर्फ इन्फो के लिए दिखाया गया) | साइलेंट | साइलेंट |
-
-SAFE से शुरू करें। जब आपको पता चल जाए कि एजेंट आपके कोडबेस में क्या करता है, तो YOLO पर जाएँ। किसी भी समय `/trust` और `/untrust` का उपयोग करें।
+अपने पसंदीदा AI मॉडल (**Claude 3.7 Sonnet, GPT-4o, Gemini 2.5 Pro, DeepSeek R1 & V3, Groq, OpenRouter**) को कनेक्ट करें या **Ollama के साथ 100% स्थानीय और मुफ़्त** चलाएं।
 
 ---
 
-## इंस्टॉलेशन
+## ⚡ त्वरित इंस्टॉलेशन और शुरुआत
+
+### 🚀 विकल्प A: VS Code एक्सटेंशन (अनुशंसित)
+
+<div align="left">
+  <a href="https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent">
+    <img src="https://img.shields.io/badge/Install%20in%20VS%20Code-Marketplace-007ACC?style=for-the-badge&logo=visualstudiocode&logoColor=white" alt="VS Code में इंस्टॉल करें" />
+  </a>
+</div>
+
+👉 **अनुशंसित:** सीधे मार्केटप्लेस से एक्सटेंशन इंस्टॉल करें:  
+🔗 **[Andromity AI Coding Agent for VS Code - Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)**
+
+या टर्मिनल से तुरंत इंस्टॉल करें:
+
+```bash
+code --install-extension agenticmarket.andromity-agent
+```
+
+### 💻 विकल्प B: टर्मिनल CLI
 
 ```bash
 # Linux / macOS
@@ -50,94 +55,155 @@ curl -fsSL https://raw.githubusercontent.com/agenticmarket/andromity/main/instal
 # Windows (PowerShell)
 irm https://raw.githubusercontent.com/agenticmarket/andromity/main/install.ps1 | iex
 
-# या pipx के साथ
+# या pipx के माध्यम से
 pipx install andromity
 ```
 
-Python 3.11+ की आवश्यकता है। यदि आपके पास pipx नहीं है, तो इंस्टॉलर इसे संभाल लेगा।
+---
+
+## ✨ मुख्य विशेषताएं
+
+<div align="center">
+  <img src="https://cdn.agenticmarket.dev/andromity/git/planning.webp" alt="लाइव टास्क प्लानर और ब्लूप्रिंट" width="100%" />
+</div>
+
+### 📝 लाइव टास्क प्लानर और ब्लूप्रिंट
+Andromity आपके कोडबेस का विश्लेषण करता है, एक इंटरैक्टिव चरण-दर-चरण योजना बनाता है, और कोई भी कोड लिखने से पहले आपकी मंज़ूरी की प्रतीक्षा करता है। किसी भी चरण की समीक्षा करें, स्वीकृत करें या छोड़ें।
 
 ---
 
-## शुरू करें
+<div align="center">
+  <img src="https://cdn.agenticmarket.dev/andromity/git/models.webp" alt="स्थानीय मुफ्त Ollama सहित 396+ मॉडल समर्थन" width="100%" />
+</div>
+
+### 🤖 396+ मॉडल समर्थन — स्थानीय मुफ़्त Ollama सहित
+Claude 3.7, GPT-4o, Gemini 2.5 Pro, DeepSeek R1, Groq को कनेक्ट करें या Ollama के साथ 100% ऑफ़लाइन चलाएं। सत्र के बीच में `Ctrl+L` के साथ मॉडल बदलें।
+
+---
+
+<div align="center">
+  <img src="https://cdn.agenticmarket.dev/andromity/git/trusted.webp" alt="विश्वास और वर्कस्पेस गवर्नेंस" width="100%" />
+</div>
+
+### 🔐 विश्वास गवर्नेंस — आप हमेशा नियंत्रण में हैं
+
+| मोड | योजनाएं | फाइल राइट्स | टर्मिनल कमांड्स |
+|------|-------|-------------|-------------------|
+| **SAFE** *(डिफ़ॉल्ट)* | प्रत्येक को स्वीकृत करें | प्रत्येक को स्वीकृत करें | प्रत्येक को स्वीकृत करें |
+| **TRUST** | स्वीकृत | सीधे लागू | सीधे लागू |
+| **FULL** | स्वचालित | सीधे लागू | सीधे लागू |
+| **YOLO** | स्वचालित | शांत (साइलेंट) | शांत (साइलेंट) |
+
+जब तक आप किसी फ़ोल्डर को विश्वसनीय घोषित नहीं करते, एजेंट कुछ भी निष्पादित नहीं करता। SAFE मोड से शुरू करें, और जब आप आश्वस्त हों तो YOLO में बदलें।
+
+---
+
+## तुलनात्मक विवरण
+
+| सुविधा | Andromity | Aider | Cursor | Claude Code |
+|------|-----------|-------|--------|-------------|
+| फ़ोल्डर विश्वास मॉडल | ✅ | ❌ | ❌ | ❌ |
+| अनुमति स्तर (SAFE → YOLO) | ✅ | ❌ | आंशिक | ❌ |
+| **लाइव एक्ज़ीक्यूशन वॉटरफॉल ट्रेस और प्रोफाइलर** | ✅ | ❌ | ❌ | ❌ |
+| **अंतर्निहित Cron शेड्यूलर** | ✅ | ❌ | ❌ | ❌ |
+| **समानांतर सत्र और सब-एजेंट्स** | ✅ | ❌ | ❌ | आंशिक |
+| इनलाइन नेटिव डिफ व्यूअर | ✅ | ✅ | ✅ | ✅ |
+| सत्र प्रबंधन और `/undo` रोलबैक | ✅ | ❌ | आंशिक | ❌ |
+| एजेंट प्रोफाइल (Profiles) | ✅ | ❌ | ❌ | आंशिक |
+| स्थानीय प्राथमिकता / Ollama / BYOK | ✅ | ✅ | ❌ | ❌ |
+| MCP प्रोटोकॉल समर्थन | ✅ | ❌ | आंशिक | ✅ |
+| आधिकारिक VS Code एक्सटेंशन | ✅ | ❌ | ✅ | ✅ |
+
+---
+
+## ⏰ Cron शेड्यूलर — जब आप सो रहे हों तब काम करने वाला AI
+
+किसी अन्य AI कोडिंग एजेंट में यह सुविधा नहीं है। Andromity के भीतर `/cron` खोलें, अपना कार्य लिखें, समय सारिणी निर्धारित करें — और एजेंट आपके दूर रहने पर भी टाइमर पर स्वायत्त रूप से कार्य निष्पादित करेगा।
 
 ```bash
-andromity
+# उदाहरण: हर रात 2 बजे टेस्ट सुइट चलाएं और असफल परीक्षणों को ठीक करके कमिट करें
+/cron  →  "run pytest, fix any failing tests, commit the fix"  →  0 2 * * *
 ```
 
-यह वर्कस्पेस खोलता है। इसे एक फोल्डर पर पॉइंट करें, ट्रस्ट प्रॉम्ट का जवाब दें, एक मॉडल चुनें — हो गया। शुरू करने के लिए किसी कॉन्फ़िग फाइल की आवश्यकता नहीं है।
+जॉब्स प्रोजेक्ट के अनुसार `.andromity/crons.json` में सुरक्षित रहते हैं। पूरी तरह से स्वायत्त रातों-रात रन के लिए FULL या YOLO मोड का उपयोग करें।
 
+---
+
+## 🤖 समानांतर सत्र और सब-एजेंट्स
+
+अपने मुख्य सत्र को बाधित किए बिना समानांतर कार्यप्रवाहों के लिए बैकग्राउंड सब-एजेंट्स बनाएं। उदाहरण: जब एक सब-एजेंट लाइब्रेरी पर शोध कर रहा हो, दूसरा कार्य कार्यान्वित कर रहा हो, और आप मुख्य सत्र में योजना की समीक्षा कर रहे हों — यह सब एक साथ संभव है।
+
+```
+मुख्य सत्र      → फीचर A की योजना और निर्माण
+सब-एजेंट 1     → सर्वश्रेष्ठ ऑथेंटिकेशन लाइब्रेरी पर शोध
+सब-एजेंट 2     → फीचर B के लिए यूनिट टेस्ट तैयार करना
+```
+
+`Ctrl+O` के साथ सभी सत्रों के बीच स्विच करें। प्रत्येक सत्र का अपना संदर्भ, इतिहास और फ़ाइल परिवर्तन लॉग होता है। `/undo` केवल वर्तमान सत्र के परिवर्तनों को वापस लेता है।
+
+---
+
+## टर्मिनल वर्कस्पेस की सुविधाएं
+
+> VS Code एक्सटेंशन और टर्मिनल एक ही एजेंट कोर साझा करते हैं। टर्मिनल वर्कस्पेस आपको अधिकतम गति और नियंत्रण देता है।
+
+<div align="center">
+  <video src="https://github.com/user-attachments/assets/5203a1d8-9c6d-4d8f-bee3-7b4316f6fb22" autoplay loop muted playsinline width="100%"></video>
+</div>
+
+**प्रोफाइल (Profiles)।** सत्र के दौरान एजेंट के उद्देश्य को बदलें:
+- `builder` — पहले योजना बनाता है, फिर कार्यान्वित करता है
+- `coder` — बिना योजना के सीधे कोड लिखता है
+- `reviewer` — केवल पढ़ने के लिए, ऑडिट और समीक्षा रिपोर्ट तैयार करता है
+- `planner` — केवल आर्किटेक्चर योजना बनाता है, फाइलों को नहीं बदलता
+
+**MCP समर्थन।** अपने प्रोजेक्ट में `mcp.json` जोड़ें। टूल स्कीमा ऑन-डिमांड लोड होते हैं — जिससे 50+ टूल कनेक्ट होने पर भी टोकन उपयोग न्यूनतम रहता है।
+
+**सत्र (Sessions)।** सब कुछ सहेजा जाता है। बदलने के लिए `/sessions` या `Ctrl+O` का उपयोग करें। जब संदर्भ भारी हो जाए तो `/compact` करें। पिछले टर्न और उसके सभी फ़ाइल परिवर्तनों को वापस लेने के लिए `/undo` का उपयोग करें।
+
+**हेडलेस / स्क्रिप्टेड रन:**
 ```bash
-# हेडलेस / स्क्रिप्टेड
 andromity run "auth.py में एरर हैंडलिंग जोड़ें"
-andromity run "इसे async में रिफैक्टर करें" --yes      # सब कुछ ऑटो-अप्रूव करें
-andromity run "session.py को रिव्यू करें" --dry-run       # देखें कि यह क्या करेगा
+andromity run "इसे async में रिफैक्टर करें" --yes      # सभी कार्यों को स्वतः स्वीकृत करें
+andromity run "session.py की समीक्षा करें" --dry-run       # देखें कि यह क्या करेगा
 ```
 
----
-
-<!-- Replace with GIF showing trust prompt → diff → approval flow -->
-![Andromity diff and approval flow](vscode-extension/walkthroughs/assets/trusted.webp)
+**मॉडल-स्वतंत्र।** इसके मूल में LiteLLM है। Anthropic, OpenAI, Gemini, Groq, OpenRouter, Ollama, NVIDIA NIM समर्थित हैं। `Ctrl+L` के साथ कभी भी बदलें।
 
 ---
 
-## अंदर क्या है
+## गोपनीयता और सुरक्षा
 
-**शेड्यूलर (Scheduler)।** जब आप सोते हैं तो एजेंट को टाइमर पर रन करें। `/cron` शेड्यूलर खोलता है। जॉब्स `.andromity/crons.json` में प्रति प्रोजेक्ट बने रहते हैं। किसी भी परमिशन मोड के साथ काम करता है — पूरी तरह से अनअटेंडेड रन के लिए YOLO का उपयोग करें।
+आपका कोड केवल आपके द्वारा कॉन्फ़िगर किए गए LLM प्रदाता के पास जाता है। हम आपका कोड कभी एकत्र नहीं करते।
 
-**प्रोफाइल्स (Profiles)।** स्विच करें कि एजेंट क्या करने की कोशिश कर रहा है।
-- `builder` — प्लान करता है, फिर इम्प्लीमेंट करता है
-- `coder` — सीधे इम्प्लीमेंट करता है, कोई प्लानिंग फेज़ नहीं
-- `reviewer` — केवल पढ़ने के लिए, फाइंडिंग्स प्रोड्यूस करता है
-- `planner` — केवल प्लान करता है, कुछ भी टच नहीं करता
-
-**MCP सपोर्ट।** अपने प्रोजेक्ट में एक `mcp.json` ड्रॉप करें। टूल्स लेज़ी लोड होते हैं — स्कीमा पहले इंडेक्स होते हैं, फुल पेलोड तभी लोड होते हैं जब एजेंट को वास्तव में उनकी आवश्यकता होती है। 50+ कनेक्टेड टूल्स के साथ टोकन के उपयोग को समझदारी से मैनेज करता है।
-
-**सेशंस (Sessions)।** सब कुछ सेव हो जाता है। `/sessions` या `Ctrl+O` के साथ सेशंस के बीच स्विच करें। जब कॉन्टेक्स्ट हैवी हो जाए तो `/compact` का उपयोग करें। पिछले टर्न और उसके सभी फाइल बदलावों को रिवर्ट करने के लिए `/undo`।
-
-**साउंड नोटिफिकेशन्स।** जब एजेंट को अप्रूवल की आवश्यकता होती है, या वह एक टर्न पूरा करता है, तो वह आपको पिंग करता है। इन्हें `Ctrl+E → Advanced → Sounds` के तहत इंडिपेंडेंटली टॉगल करें।
-
-**मॉडल-एग्नोस्टिक।** हुड के नीचे LiteLLM। Anthropic, OpenAI, Gemini, Groq, OpenRouter, Ollama, NVIDIA NIM। सेशन के बीच में `Ctrl+L` के साथ स्विच करें।
+- API कुंजियाँ स्थानीय रूप से `~/.andromity/config.toml` में एन्क्रिप्टेड रहती हैं
+- सत्र स्थानीय रूप से `~/.andromity/sessions/` में संग्रहीत होते हैं
+- टेलीमेट्री से बाहर निकलें: `export DO_NOT_TRACK=1`
 
 ---
 
-## यह कैसे तुलना करता है
+## स्टार इतिहास (Star History)
 
-> ⚠️ **पब्लिश करने से पहले वेरीफाई करें** — कन्फर्म करें कि कॉम्पिटिटर कॉलम उनके वर्तमान डॉक्स के मुकाबले सटीक हैं।
-
-| | Andromity | Aider | OpenCode |
-|--|-----------|-------|----------|
-| फोल्डर ट्रस्ट मॉडल | ✅ | ❌ | ❌ |
-| परमिशन लेवल्स (SAFE → YOLO) | ✅ | ❌ | पार्शियल |
-| बिल्ट-इन क्रॉन शेड्यूलर | ✅ | ❌ | ❌ |
-| इनलाइन डिफ व्यूअर | ✅ | ✅ | ✅ |
-| सेशन मैनेजमेंट | ✅ | ❌ | ✅ |
-| एजेंट प्रोफाइल्स | ✅ | ❌ | पार्शियल |
-| लोकल-फर्स्ट, BYOK | ✅ | ✅ | ✅ |
-| MCP सपोर्ट | ✅ | ❌ | ✅ |
+<a href="https://www.star-history.com/?repos=agenticmarket%2Fandromity&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ---
 
-## प्राइवेसी
+## अपडेट इतिहास
 
-आपका कोड केवल एक जगह जाता है: जो LLM प्रोवाइडर आप कॉन्फ़िगर करते हैं। हमारे पास नहीं।
-
-- API कीज़ `~/.andromity/config.toml` में रहती हैं
-- सेशंस `~/.andromity/sessions/` में लोकली स्टोर होते हैं
-- पहले लॉन्च पर एनोनिमस पिंग — कोई कोड नहीं, कोई पाथ नहीं, कोई कीज़ नहीं। पूरी डिटेल्स [telemetry-worker/README.md](telemetry-worker/README.md) में
-- ऑप्ट आउट: `export DO_NOT_TRACK=1`, या कॉन्फ़िग में `telemetry = false`, या `Ctrl+E → Advanced → Telemetry`
+विस्तृत संस्करण विवरण के लिए [CHANGELOG.md](CHANGELOG.md) देखें।
 
 ---
 
-> ✦ *हर कमांड यहाँ डॉक्यूमेंटेड नहीं है। डिस्कवरी एक्सपीरियंस का हिस्सा है।*
+## योगदान दें
 
----
+इश्यू या पुल रिक्वेस्ट का स्वागत है!
 
-## कॉन्ट्रिब्यूटिंग
+प्रोजेक्ट संरचना और डेवलपमेंट सेटअप के लिए [CONTRIBUTING.md](CONTRIBUTING.md) देखें।
 
-एक इश्यू या PR खोलें। ईमानदार फीडबैक और बग रिपोर्ट्स इस समय फीचर रिक्वेस्ट्स से अधिक उपयोगी हैं।
-
-प्रोजेक्ट लेआउट और डेव सेटअप के लिए [CONTRIBUTING.md](CONTRIBUTING.md) देखें।
-
-**MIT** — [LICENSE](LICENSE) देखें।
-
-
+**MIT लाइसेंस** — [LICENSE](LICENSE) देखें।

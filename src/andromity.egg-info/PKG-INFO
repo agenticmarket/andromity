@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: andromity
-Version: 0.2.7
+Version: 0.2.8
 Summary: AI coding agent with a beautiful terminal UI. Works with Claude, Gemini, GPT, Ollama and more.
 Author-email: Agentic Market <hello@agenticmarket.dev>
 License: MIT
@@ -42,13 +42,13 @@ Requires-Dist: pytest-asyncio>=0.21; extra == "dev"
 Dynamic: license-file
 
 <div align="center">
-  <img src="andromity.png" alt="Andromity" width="70" height="70" />
+  <img src="https://raw.githubusercontent.com/agenticmarket/andromity/main/andromity.png" alt="Andromity" width="70" height="70" />
 
   # Andromity — AI Coding Agent for VS Code & Terminal
 
   **Trust-governed, BYOK, autonomous coding agent with subagents, live plans, native diffs & one-click rollback.**
 
-  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.6-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.8-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![PyPI](https://img.shields.io/pypi/v/andromity)](https://pypi.org/project/andromity/)
   ![Python](https://img.shields.io/badge/python-3.11+-blue)
   [![Tests](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml/badge.svg)](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml)
@@ -59,7 +59,7 @@ Dynamic: license-file
 </div>
 
 <div align="center">
-  <img src="vscode-extension/walkthroughs/assets/partner.webp" alt="Andromity AI Coding Partner in VS Code" width="100%" />
+  <img src="https://cdn.agenticmarket.dev/andromity/git/with_waterfall.webp" alt="Andromity AI Coding Agent with Live Waterfall Trace in VS Code" width="100%" />
 </div>
 
 ---
@@ -70,17 +70,26 @@ Connect your preferred AI model (**Claude 3.7 Sonnet, GPT-4o, Gemini 2.5 Pro, De
 
 ---
 
-## ⚡ Get Started
+## ⚡ Quick Install & Get Started
 
-### Option A: VS Code Extension (Recommended)
+### 🚀 Option A: VS Code Extension (Recommended)
 
-Install directly from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent):
+<div align="left">
+  <a href="https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent">
+    <img src="https://img.shields.io/badge/Install%20in%20VS%20Code-Marketplace-007ACC?style=for-the-badge&logo=visualstudiocode&logoColor=white" alt="Install in VS Code" />
+  </a>
+</div>
+
+👉 **Recommended:** Install directly from the marketplace:  
+🔗 **[Andromity AI Coding Agent for VS Code - Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)**
+
+Or install instantly via terminal:
 
 ```bash
 code --install-extension agenticmarket.andromity-agent
 ```
 
-### Option B: Terminal CLI
+### 💻 Option B: Terminal CLI
 
 ```bash
 # Linux / macOS
@@ -98,16 +107,19 @@ pipx install andromity
 ## ✨ Key Features
 
 <div align="center">
-  <img src="vscode-extension/walkthroughs/assets/planning.webp" alt="Live Task Planner & Blueprints" width="100%" />
+  <img src="https://cdn.agenticmarket.dev/andromity/git/planning.webp" alt="Live Task Planner & Blueprints" width="100%" />
 </div>
 
 ### 📝 Live Task Planner & Blueprints
 Andromity analyzes your codebase, creates an interactive step-by-step implementation plan, and waits for your approval before writing a single line of code. Review, approve, or skip any step.
 
+### 🌊 Live Execution Waterfall Profiler
+Inspect agent reasoning turns, tool execution latencies (bash commands, file operations, web queries), and parallel subagents in real time on an interactive chronological timeline grid directly inside VS Code (`/waterfall`).
+
 ---
 
 <div align="center">
-  <img src="vscode-extension/walkthroughs/assets/models.webp" alt="396+ Model Support including local Ollama" width="100%" />
+  <img src="https://cdn.agenticmarket.dev/andromity/git/models.webp" alt="396+ Model Support including local Ollama" width="100%" />
 </div>
 
 ### 🤖 396+ Models — Including Free Local Ollama
@@ -116,7 +128,7 @@ Connect Claude 3.7, GPT-4o, Gemini 2.5 Pro, DeepSeek R1, Groq, or run 100% offli
 ---
 
 <div align="center">
-  <img src="vscode-extension/walkthroughs/assets/trusted.webp" alt="Trust and Workspace Governance" width="100%" />
+  <img src="https://cdn.agenticmarket.dev/andromity/git/trusted.webp" alt="Trust and Workspace Governance" width="100%" />
 </div>
 
 ### 🔐 Trust Governance — You Are Always in Control
@@ -138,6 +150,7 @@ Nothing runs until you say a folder is trusted. Start in SAFE, move to YOLO when
 |--|-----------|-------|--------|-------------|
 | Folder trust model | ✅ | ❌ | ❌ | ❌ |
 | Permission levels (SAFE → YOLO) | ✅ | ❌ | Partial | ❌ |
+| **Live execution waterfall profiler** | ✅ | ❌ | ❌ | ❌ |
 | **Built-in cron scheduler** | ✅ | ❌ | ❌ | ❌ |
 | **Parallel sessions & subagents** | ✅ | ❌ | ❌ | Partial |
 | Inline diff viewer | ✅ | ✅ | ✅ | ✅ |

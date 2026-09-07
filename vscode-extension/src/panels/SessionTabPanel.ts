@@ -173,6 +173,14 @@ export class SessionTabPanel {
     this._rpcDisposables = [];
   }
 
+  public get webview(): vscode.Webview {
+    return this._panel.webview;
+  }
+
+  public postMessage(msg: any) {
+    this._postMessage(msg);
+  }
+
   private _postMessage(msg: any) {
     try {
       this._panel.webview.postMessage(msg);
@@ -318,6 +326,11 @@ export class SessionTabPanel {
 
     if (message.type === "open_settings") {
       SettingsPanel.createOrShow(this._extensionUri, this._rpcClient, "keys");
+      return;
+    }
+
+    if (message.type === "open_personalisation") {
+      SettingsPanel.createOrShow(this._extensionUri, this._rpcClient, "personalisation");
       return;
     }
 

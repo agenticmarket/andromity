@@ -2,6 +2,33 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
+## [0.2.8] — 2026-09-07
+
+### 🌊 Waterfall Live Execution Trace & Profiler
+- **Live Visual Waterfall (`WaterfallPanel`)**: Real-time visual waterfall profiling that maps agent reasoning steps, tool call latencies (terminal commands, file operations, web lookups), and subagent lifecycles across a chronological timeline grid.
+- **Trace Buffer & Latency Inspection**: Inspect exact duration, status, execution timing, and input/output parameters per span directly inside a dedicated editor panel.
+- **Header Action & First-Session Tour**: Direct access via the 🌊 Waterfall icon in the chat header, `/waterfall` slash command, and a non-intrusive onboarding callout.
+
+### VS Code Extension Polish & UX
+- **Personalisation & Ambient Wallpaper Engine**: Added comprehensive personalisation controls in Settings with on/off toggles, `/personalisation` and `/wallpaper` slash commands, custom aura intensity, and live particle background modes.
+- **Accessible & Aesthetic Focus States**: Refined keyboard focus styling across all custom dropdowns, pill selectors, and input controls to match native VS Code `:focus-visible` aesthetics without intrusive outlines.
+- **CJK IME Composition Guard**: Fixed enter-key submission issues during East Asian IME composition (Japanese, Chinese, Korean), preventing premature message sends.
+- **WCAG 2.1 Accessibility**: Elevated link contrast ratios, keyboard navigation rings, and ARIA role labeling across all webview elements.
+- **Untrusted Workspace Support**: Declared limited untrusted workspace support for secure, sandboxed editing.
+
+### Telemetry & Privacy Hardening
+- **Real-Time Privacy Synchronization**: Added real-time event listeners in VS Code (`onDidChangeTelemetryEnabled`, `onDidChangeConfiguration`) to dynamically synchronize telemetry opt-out state to the daemon without restarting.
+- **Zero-Bypass Privacy Enforcement**: Strict bypass when `DO_NOT_TRACK=1`, `ANDROMITY_NO_TELEMETRY=1`, `CI=1`, or when telemetry is disabled in VS Code settings. Automatically injects opt-out flags into child daemon environments.
+- **Edge Worker Production Deployment**: Live Cloudflare D1 worker endpoints (`/ping`, `/event`) with zero-PII guarantees, strict rate limiting, and automated health checks.
+- **Automated Telemetry Test Suite**: Added dedicated automated unit tests (`tests/test_telemetry.py`) covering all 9 opt-out and toggle conditions.
+
+### Documentation & Global Marketplace Assets
+- **Global CDN Asset Migration**: Replaced local walkthrough images in all READMEs with ultra-fast CDN URLs (`https://cdn.agenticmarket.dev/andromity/git/`), ensuring flawless rendering across VS Code Marketplace, Open VSX, GitHub, and PyPI.
+- **Multilingual Alignment**: Synchronized all 8 international translations (`zh-CN`, `ru`, `pt-BR`, `ja`, `hi`, `es`, `fr`, `de`) with the updated VS Code & Terminal feature showcase and comparison matrix.
+- **High-Converting Quick Install Action**: Standardized clickable Marketplace install badges, direct links, and terminal install commands across all documentation.
+
+---
+
 ## [0.2.7] — 2026-09-05
 
 ### Git Diff & Staging Integration

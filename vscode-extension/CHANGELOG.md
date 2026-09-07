@@ -2,6 +2,22 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [0.2.8] - 2026-09-07
+
+### Added & Improved
+- **🌊 Waterfall Live Execution Trace & Profiler:**
+  - **Visual Timeline Profiler (`WaterfallPanel`):** Real-time execution waterfall mapping reasoning phases, tool invocations (terminal commands, file edits/reads, web search, MCP calls), and subagent lifecycles across a chronological timeline grid.
+  - **Trace Buffer & Latency Inspection:** Inspect exact duration, execution timing, status codes, and input/output parameters per span directly inside a dedicated editor panel.
+  - **Quick Header Access & Slash Command:** Launch the waterfall view anytime using the 🌊 Waterfall icon in the chat header, the `/waterfall` slash command, or the `Andromity: Open Live Execution Waterfall` command.
+  - **First-Session Onboarding Callout:** Introduces new developers to live visual execution tracing with an interactive, dismissible callout popover.
+- **Personalisation & Ambient Wallpaper Engine:** Added dedicated personalisation controls in Settings with on/off toggles, `/personalisation` and `/wallpaper` slash commands, custom aura intensity, and live particle background modes.
+- **Accessible & Aesthetic Focus Rings:** Replaced heavy focus outlines with sleek, accessible focus-visible styles that harmoniously integrate with VS Code workbench themes.
+- **CJK IME Composition Protection:** Fixed enter-key submission issues during East Asian IME input composition (Japanese, Chinese, Korean), preventing accidental message firing.
+- **WCAG 2.1 Contrast & Accessibility:** Elevated link contrast ratios, keyboard navigation rings, and ARIA role labeling across all webview elements.
+- **Real-Time Telemetry Sync & Strict Opt-Out:** Synced VS Code's global telemetry settings directly to the daemon in real time, automatically injecting `DO_NOT_TRACK=1` and `ANDROMITY_NO_TELEMETRY=1` on opt-out.
+- **Global CDN Asset Migration:** Replaced local walkthrough image paths with ultra-fast CDN URLs (`https://cdn.agenticmarket.dev/andromity/git/`), ensuring reliable rendering on the VS Code Marketplace and Open VSX.
+- **Untrusted Workspace Support:** Declared limited untrusted workspace support for secure, sandboxed editing.
+
 ## [0.2.7] - 2026-09-05
 
 ### Added & Improved

@@ -1,47 +1,52 @@
 <div align="center">
-  <img src="andromity.png" alt="Andromity" width="60" height="60" />
+  <img src="https://raw.githubusercontent.com/agenticmarket/andromity/main/andromity.png" alt="Andromity" width="70" height="70" />
 
-  # Andromity
+  # Andromity — VS Code 与终端的 AI 编程智能体
 
-  **终端 AI 编程智能体。自主随心，信任把关。**
+  **信任把关、BYOK、具备子智能体、实时计划、原生差异对比与一键回滚的自主编程智能体。**
 
-  <video src="https://github.com/user-attachments/assets/5203a1d8-9c6d-4d8f-bee3-7b4316f6fb22" autoplay loop muted playsinline width="100%"></video>
-
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.8-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![PyPI](https://img.shields.io/pypi/v/andromity)](https://pypi.org/project/andromity/)
-  ![Version](https://img.shields.io/badge/version-0.2.3-blueviolet)
   ![Python](https://img.shields.io/badge/python-3.11+-blue)
+  [![Tests](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml/badge.svg)](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml)
   [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
   [English](README.md) | 简体中文 | [Русский](README.ru.md) | [Português (Brasil)](README.pt-BR.md) | [日本語](README.ja.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [हिन्दी](README.hi.md)
 
 </div>
 
----
-
-Andromity 是一个内置 AI 智能体的终端工作空间。它不是一个聊天窗口，也不是一个插件，而是一个真正的工作空间 —— 会话、差异对比 (diff)、文件查看器、cron 调度器、配置文件 —— 全部都在你的终端中，并配备了一个真正能干活的 AI 智能体。
-
-与众不同之处在于：**除非你声明该文件夹是受信任的，否则什么都不会运行。**
+<div align="center">
+  <img src="https://cdn.agenticmarket.dev/andromity/git/with_waterfall.webp" alt="Andromity AI Coding Agent with Live Waterfall Trace in VS Code" width="100%" />
+</div>
 
 ---
 
-## 信任模型的工作原理
+**Andromity** 是一个私密、BYOK（自带 API 密钥）的自主 AI 编程智能体。您可以在 VS Code 中搭配扩展使用，也可以作为独立的终端工作空间运行。它可以规划复杂任务、管理并行子智能体、展示实时分步蓝图、允许在应用前审查差异对比 (diff)，并提供即时的一键回滚。
 
-当你打开一个文件夹时，Andromity 会询问你是否信任它。这个回答决定了一切 —— 不是你的权限模式，不是你的 API 密钥，也不是你的设置。如果你选择“不”，智能体将无法写入文件、运行命令或触碰任何东西。就是这么绝对。
-
-如果你选择“是”，你可以选择给予智能体多大的权限：
-
-| 模式 | 计划 | 文件写入 | Shell 命令 |
-|------|-------|-------------|----------------|
-| **SAFE (安全)** | 逐个批准 | 逐个批准 | 逐个批准 |
-| **TRUST (信任)** | 自动批准 | 直接执行 — 无需审查 | 直接执行 — 无需审查 |
-| **FULL (完全)** | 自动 | 直接执行 | 直接执行 |
-| **YOLO (放飞自我)** | 自动 (仅供参考) | 静默执行 | 静默执行 |
-
-建议从 SAFE 模式开始。当你了解智能体在代码库中的行为后，可以切换到 YOLO 模式。你随时可以通过 `/trust` 和 `/untrust` 调整信任状态。
+连接您喜爱的 AI 模型（**Claude 3.7 Sonnet、GPT-4o、Gemini 2.5 Pro、DeepSeek R1 & V3、Groq、OpenRouter**），或者通过 **Ollama 100% 本地免费运行**。
 
 ---
 
-## 安装
+## ⚡ 快速安装与开始
+
+### 🚀 方案 A: VS Code 插件 (推荐)
+
+<div align="left">
+  <a href="https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent">
+    <img src="https://img.shields.io/badge/Install%20in%20VS%20Code-Marketplace-007ACC?style=for-the-badge&logo=visualstudiocode&logoColor=white" alt="在 VS Code 中安装" />
+  </a>
+</div>
+
+👉 **推荐操作：** 直接在官方插件市场中安装：  
+🔗 **[Andromity AI Coding Agent for VS Code - Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)**
+
+或在终端中一键安装：
+
+```bash
+code --install-extension agenticmarket.andromity-agent
+```
+
+### 💻 方案 B: 终端命令行 (CLI)
 
 ```bash
 # Linux / macOS
@@ -54,90 +59,151 @@ irm https://raw.githubusercontent.com/agenticmarket/andromity/main/install.ps1 |
 pipx install andromity
 ```
 
-需要 Python 3.11+。如果你没有安装 pipx，安装程序会自动处理。
+---
+
+## ✨ 核心特性
+
+<div align="center">
+  <img src="https://cdn.agenticmarket.dev/andromity/git/planning.webp" alt="实时任务规划器与执行蓝图" width="100%" />
+</div>
+
+### 📝 实时任务规划器与执行蓝图
+Andromity 深入分析代码库，制定可交互的分步实施计划，并在编写任何代码前等待您的确认。您可以独立审查、批准或跳过任何步骤。
 
 ---
 
-## 快速开始
+<div align="center">
+  <img src="https://cdn.agenticmarket.dev/andromity/git/models.webp" alt="支持 396+ 款模型，包括本地免费 Ollama" width="100%" />
+</div>
+
+### 🤖 396+ 款模型支持 — 包括完全免费的本地 Ollama
+连接 Claude 3.7、GPT-4o、Gemini 2.5 Pro、DeepSeek R1、Groq，或通过 Ollama 100% 离线运行。随时使用 `Ctrl+L` 在会话中切换模型。
+
+---
+
+<div align="center">
+  <img src="https://cdn.agenticmarket.dev/andromity/git/trusted.webp" alt="信任与工作区治理" width="100%" />
+</div>
+
+### 🔐 信任治理 — 一切尽在您的掌控之中
+
+| 模式 | 计划 | 文件写入 | 终端命令 |
+|------|-------|-------------|-------------------|
+| **SAFE** *(默认)* | 逐项批准 | 逐项批准 | 逐项批准 |
+| **TRUST** | 自动批准 | 直接写入 | 直接执行 |
+| **FULL** | 自动 | 直接写入 | 直接执行 |
+| **YOLO** | 自动 | 静默执行 | 静默执行 |
+
+在您明确将文件夹声明为受信任之前，智能体不会运行任何操作。从 SAFE 模式开始，熟悉后再进入 YOLO 模式。
+
+---
+
+## 竞品对比
+
+| 功能 | Andromity | Aider | Cursor | Claude Code |
+|------|-----------|-------|--------|-------------|
+| 文件夹信任治理模型 | ✅ | ❌ | ❌ | ❌ |
+| 权限级别 (SAFE → YOLO) | ✅ | ❌ | 部分支持 | ❌ |
+| **实时执行瀑布追踪分析器 (Waterfall)** | ✅ | ❌ | ❌ | ❌ |
+| **内置 Cron 定时调度器** | ✅ | ❌ | ❌ | ❌ |
+| **并行会话与子智能体** | ✅ | ❌ | ❌ | 部分支持 |
+| 内联原生差异对比 (Diff) | ✅ | ✅ | ✅ | ✅ |
+| 会话管理与一键撤销 `/undo` | ✅ | ❌ | 部分支持 | ❌ |
+| 智能体角色配置 (Profiles) | ✅ | ❌ | ❌ | 部分支持 |
+| 本地优先 / Ollama / BYOK | ✅ | ✅ | ❌ | ❌ |
+| MCP 协议支持 | ✅ | ❌ | 部分支持 | ✅ |
+| VS Code 官方插件 | ✅ | ❌ | ✅ | ✅ |
+
+---
+
+## ⏰ Cron 定时调度器 — 在您入睡时自动工作的 AI
+
+其他任何 AI 编程工具都不具备此功能。在 Andromity 中输入 `/cron`，编写任务并设定定时计划 —— 智能体将在后台按时自动执行。
 
 ```bash
-andromity
+# 示例：每天凌晨 2 点自动运行测试套件并修复失败项
+/cron  →  "run pytest, fix any failing tests, commit the fix"  →  0 2 * * *
 ```
 
-这将打开工作空间。将其指向一个文件夹，回答信任提示，选择一个模型 —— 就这么简单。开始之前无需任何配置文件。
+任务保存在每个项目的 `.andromity/crons.json` 中。使用 FULL 或 YOLO 模式实现完全无人值守的通宵运行。醒来时，提交已经就绪。
 
+---
+
+## 🤖 并行会话与子智能体
+
+在不中断主会话的前提下生成后台子智能体以开展并行工作流。例如：当一个子智能体调研新库时，另一个子智能体编写功能代码，而您在主会话中审查规划 —— 全部同时进行。
+
+```
+主会话        → 规划并实现功能 A
+子智能体 1    → 调研最适合的认证库
+子智能体 2    → 为功能 B 编写单元测试
+```
+
+使用 `Ctrl+O` 在所有会话之间随时切换。每个会话都有自己独立的上下文、历史记录和文件修改日志。`/undo` 仅撤销当前会话的更改。
+
+---
+
+## 终端工作区特性
+
+> VS Code 插件与终端工作区共享相同的智能体核心引擎。终端工作区为您带来极致的极客掌控感。
+
+<div align="center">
+  <video src="https://github.com/user-attachments/assets/5203a1d8-9c6d-4d8f-bee3-7b4316f6fb22" autoplay loop muted playsinline width="100%"></video>
+</div>
+
+**角色配置 (Profiles)。** 在会话中切换智能体的工作目标：
+- `builder` — 先制定计划，再动手实现
+- `coder` — 直接编写代码，跳过规划阶段
+- `reviewer` — 只读模式，输出审查建议与安全审计报告
+- `planner` — 仅做架构设计与规划，不修改任何文件
+
+**MCP 支持。** 在项目中放置 `mcp.json`。工具模式 (schemas) 按需惰性加载 —— 即使连接 50+ 个工具也能保持极低 Token 消耗。
+
+**会话管理。** 一切皆自动保存。使用 `/sessions` 或 `Ctrl+O` 切换。上下文较长时使用 `/compact` 压缩。使用 `/undo` 撤销上一个回合及其所有的文件修改。
+
+**无头模式 / 脚本执行：**
 ```bash
-# 无头模式 / 脚本执行
 andromity run "在 auth.py 中添加错误处理"
 andromity run "将其重构为异步" --yes      # 自动批准所有操作
 andromity run "审查 session.py" --dry-run       # 演练模式，查看它将做什么
 ```
 
----
-
-<!-- 替换为显示信任提示 → diff → 审批流程的 GIF -->
-![Andromity 差异对比和审批流程](vscode-extension/walkthroughs/assets/trusted.webp)
+**模型中立。** 底层由 LiteLLM 驱动。支持 Anthropic、OpenAI、Gemini、Groq、OpenRouter、Ollama、NVIDIA NIM。使用 `Ctrl+L` 即可在会话中随时切换。
 
 ---
 
-## 功能特性
+## 隐私安全
 
-**调度器 (Scheduler)。** 在你睡觉时定时运行智能体。输入 `/cron` 打开调度器。作业按项目保存在 `.andromity/crons.json` 中。适用于任何权限模式 —— 使用 YOLO 模式实现完全无人值守运行。
+您的代码只会发送给您配置的 LLM 服务商。我们绝不收集任何代码或提示词。
 
-**配置文件 (Profiles)。** 切换智能体尝试执行的任务。
-- `builder` (构建者) — 先计划，后实施
-- `coder` (编码者) — 直接实施，没有计划阶段
-- `reviewer` (审查者) — 只读，生成发现报告
-- `planner` (计划者) — 仅计划，不修改任何内容
-
-**MCP 支持。** 在你的项目中放置一个 `mcp.json`。工具会被懒加载 —— 模式(schemas)优先索引，完整的有效载荷(payloads)仅在智能体实际需要时才加载。即使连接了 50 多个工具，也能保持合理的 token 消耗。
-
-**会话 (Sessions)。** 所有内容都会被保存。使用 `/sessions` 或 `Ctrl+O` 在会话之间切换。当上下文变得沉重时使用 `/compact`。使用 `/undo` 撤销上一个回合及其所有文件更改。
-
-**声音通知 (Sound notifications)。** 当智能体需要审批或完成回合时，会通过声音提醒你。在 `Ctrl+E → Advanced → Sounds` 中可独立切换。
-
-**模型不可知 (Model-agnostic)。** 底层使用 LiteLLM。支持 Anthropic, OpenAI, Gemini, Groq, OpenRouter, Ollama, NVIDIA NIM。使用 `Ctrl+L` 在会话中途切换。
+- API 密钥存储在本地 `~/.andromity/config.toml` 中 — 本地加密存储
+- 会话保存在本地 `~/.andromity/sessions/`
+- 退出遥测：`export DO_NOT_TRACK=1`
 
 ---
 
-## 对比
+## 历史标星
 
-> ⚠️ **发布前验证** — 确认竞争对手的列与他们当前的文档是否相符。
-
-| | Andromity | Aider | OpenCode |
-|--|-----------|-------|----------|
-| 文件夹信任模型 | ✅ | ❌ | ❌ |
-| 权限级别 (SAFE → YOLO) | ✅ | ❌ | 部分 |
-| 内置 cron 调度器 | ✅ | ❌ | ❌ |
-| 内联差异对比 (diff) 视图 | ✅ | ✅ | ✅ |
-| 会话管理 | ✅ | ❌ | ✅ |
-| 智能体配置文件 (Profiles) | ✅ | ❌ | 部分 |
-| 优先本地、自带密钥 (BYOK) | ✅ | ✅ | ✅ |
-| MCP 支持 | ✅ | ❌ | ✅ |
+<a href="https://www.star-history.com/?repos=agenticmarket%2Fandromity&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=agenticmarket/andromity&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ---
 
-## 隐私
+## 更新日志
 
-你的代码只会去到一个地方：你配置的 LLM 提供商。而不是我们这里。
-
-- API 密钥保存在 `~/.andromity/config.toml` 中
-- 会话保存在本地的 `~/.andromity/sessions/` 中
-- 首次启动时的匿名 Ping —— 不包含代码、路径或密钥。详细信息请参阅 [telemetry-worker/README.md](telemetry-worker/README.md)
-- 选择退出：`export DO_NOT_TRACK=1`，或在配置中设置 `telemetry = false`，或通过 `Ctrl+E → Advanced → Telemetry`
-
----
-
-> ✦ *这里并没有记录每一个命令。探索发现也是体验的一部分。*
+详情参见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
 ## 参与贡献
 
-欢迎提交 Issue 或 PR。目前，真实的反馈和 bug 报告比功能请求更有用。
+欢迎提交 Issue 或 Pull Request！
 
-项目结构和开发设置请参阅 [CONTRIBUTING.md](CONTRIBUTING.md)。
+请参阅 [CONTRIBUTING.md](CONTRIBUTING.md) 了解项目结构与开发环境配置。
 
-**MIT** 协议 — 详见 [LICENSE](LICENSE)。
-
-
+**MIT** — 详见 [LICENSE](LICENSE)。

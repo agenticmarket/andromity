@@ -125,6 +125,7 @@ tests/test_subagent_config.py
 tests/test_subagent_orchestrator.py
 tests/test_subagent_permissions_and_filtering.py
 tests/test_subagent_tools.py
+tests/test_telemetry.py
 tests/test_todo.py
 tests/test_tools.py
 tests/test_undo.py

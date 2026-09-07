@@ -38,3 +38,11 @@ sqlite_migration_plan.md
 *.vsix
 pannel/
 knownbug.md
+
+.session_cache/
+temp_asset.jpg
+debug_snap.png
+scripts/sync_agent.py
+scripts/browser_runner.py
+wallpaper-ambient-test.html
+/wildcat-panther-dusk.jpg
