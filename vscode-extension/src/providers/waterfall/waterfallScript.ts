@@ -93,12 +93,13 @@ export function getWaterfallScript(sessionId: string): string {
 
       function ensureTurn(turnId, userQuery, startTimeMs) {
         if (!turnId) {
-          turnId = state.currentTurnId || ('turn_' + (state.turns.size + 1));
+          turnId = state.currentTurnId || (state.turns.size > 0 ? ('turn_' + state.turns.size) : 'turn_1');
         }
         state.currentTurnId = turnId;
 
         if (!state.turns.has(turnId)) {
-          const turnNumber = state.turns.size + 1;
+          const parsedNum = parseInt(String(turnId).replace('turn_', ''), 10);
+          const turnNumber = !isNaN(parsedNum) && parsedNum > 0 ? parsedNum : (state.turns.size + 1);
           const t = {
             id: turnId,
             number: turnNumber,
@@ -115,7 +116,7 @@ export function getWaterfallScript(sessionId: string): string {
           renderTurn(t);
         } else if (userQuery && userQuery !== 'Agent Turn') {
           const t = state.turns.get(turnId);
-          if (t && t.query === 'Agent Turn') {
+          if (t && (t.query === 'Agent Turn' || t.query.startsWith('Turn #'))) {
             t.query = userQuery;
             const qEl = t.element ? t.element.querySelector('.wf-turn-query') : null;
             if (qEl) {
@@ -1407,36 +1408,50 @@ export function getWaterfallScript(sessionId: string): string {
             let skipUsers = state.turns.size === 0 ? 0 : state.historyUserCount;
             {
               let currentTurn = null;
-              let turnCounter = state.turns.size;
+              let userTurnIndex = 0;
               let turnCursor = 0;
               let prevCumulativeDurMs = 0;
 
               for (let i = 0; i < messages.length; i++) {
                 const m = messages[i];
                 if (m.role === 'user') {
+                  userTurnIndex++;
                   if (skipUsers > 0) { skipUsers--; continue; }
-                  turnCounter++;
-                  // Stable id: history turn N == live replay turn N, so a
-                  // late-arriving live tail can find and upgrade its turn.
-                  const tId = 'turn_' + turnCounter;
+                  // Deterministic turn id: user message N is always turn N
+                  const turnNum = userTurnIndex;
+                  const tId = 'turn_' + turnNum;
                   const tStart = m.ts ? new Date(m.ts).getTime() : Date.now();
-                  currentTurn = {
-                    id: tId,
-                    number: turnCounter,
-                    query: m.content || ('Turn #' + turnCounter),
-                    startTime: tStart,
-                    endTime: null,
-                    durationMs: 0,
-                    tokens: 0,
-                    spans: [],
-                    isExpanded: true,
-                    element: null
-                  };
-                  state.turns.set(tId, currentTurn);
+                  const turnQuery = m.content || ('Turn #' + turnNum);
+
+                  if (state.turns.has(tId)) {
+                    currentTurn = state.turns.get(tId);
+                    currentTurn.number = turnNum;
+                    currentTurn.query = turnQuery;
+                    currentTurn.startTime = tStart;
+                    const qEl = currentTurn.element ? currentTurn.element.querySelector('.wf-turn-query') : null;
+                    if (qEl) {
+                      qEl.textContent = turnQuery;
+                      qEl.title = turnQuery;
+                    }
+                  } else {
+                    currentTurn = {
+                      id: tId,
+                      number: turnNum,
+                      query: turnQuery,
+                      startTime: tStart,
+                      endTime: null,
+                      durationMs: 0,
+                      tokens: 0,
+                      spans: [],
+                      isExpanded: true,
+                      element: null
+                    };
+                    state.turns.set(tId, currentTurn);
+                    renderTurn(currentTurn);
+                  }
                   state.currentTurnId = tId;
                   turnCursor = tStart;
                   prevCumulativeDurMs = 0;
-                  renderTurn(currentTurn);
                 } else if (m.role === 'assistant' && currentTurn) {
                   const spanId = 'llm_' + currentTurn.id + '_' + currentTurn.spans.length;
                   
@@ -1619,9 +1634,9 @@ export function getWaterfallScript(sessionId: string): string {
               // Duplicate session_history payloads skip everything at/below it.
               // History turn ids are stable ('turn_N') so late live-tail
               // events can locate & upgrade their turn instead of cloning it.
-              state.historyUserCount = turnCounter;
+              state.historyUserCount = userTurnIndex;
 
-              addLog('INIT', 'Loaded session history: ' + turnCounter + ' turns, ' + state.spans.size + ' spans');
+              addLog('INIT', 'Loaded session history: ' + userTurnIndex + ' turns, ' + state.spans.size + ' spans');
               updateSummaryStats();
             }
             break;

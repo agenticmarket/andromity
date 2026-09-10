@@ -114,6 +114,8 @@ export class WaterfallPanel {
   private _sessionName: string;
   private _disposables: vscode.Disposable[] = [];
   private _rpcDisposables: Array<() => void> = [];
+  private _isReady: boolean = false;
+  private _pendingLiveEvents: any[] = [];
 
   public static createOrShow(
     extensionUri: vscode.Uri,
@@ -220,7 +222,11 @@ export class WaterfallPanel {
     this._rpcDisposables = [];
   }
 
-  private _postMessage(msg: any) {
+  private _postMessage(msg: any, bypassQueue = false) {
+    if (!this._isReady && !bypassQueue) {
+      this._pendingLiveEvents.push(msg);
+      return;
+    }
     try {
       this._panel.webview.postMessage(msg);
     } catch {}
@@ -378,6 +384,8 @@ export class WaterfallPanel {
         //    replay the active turn's buffered background events (waterfall_llm_start, tool_start, etc.)
         //    so mid-turn opening shows running spans immediately without waiting for reopen.
         // 3. If session.get fails (RPC failure / no client), fall back to the full buffer.
+        // 4. Live events are strictly queued until session_history has been dispatched so
+        //    no live event can ever execute against an uninitialized empty webview.
         const buffered = WaterfallTraceStore.getEvents(this._sessionId) || [];
         let historyOk = false;
         if (this._rpcClient) {
@@ -389,7 +397,7 @@ export class WaterfallPanel {
               this._postMessage({
                 type: "session_history",
                 session: sessionData,
-              });
+              }, true);
               historyOk = true;
             }
           } catch (err: any) {
@@ -398,15 +406,23 @@ export class WaterfallPanel {
         }
         if (!historyOk) {
           for (const ev of buffered) {
-            this._postMessage(ev);
+            this._postMessage(ev, true);
           }
         } else {
           // Replay the in-flight background events for the currently running turn
           const activeTurnEvents = WaterfallTraceStore.getActiveTurnEvents(this._sessionId);
           for (const ev of activeTurnEvents) {
-            this._postMessage(ev);
+            this._postMessage(ev, true);
           }
         }
+
+        // Webview base history is now established. Mark ready and flush any queued live events
+        this._isReady = true;
+        while (this._pendingLiveEvents.length > 0) {
+          const pending = this._pendingLiveEvents.shift();
+          this._postMessage(pending, true);
+        }
+
         // Always close orphan running spans based on authoritative session status.
         this._postReplayComplete();
         break;
