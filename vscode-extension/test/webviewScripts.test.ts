@@ -466,7 +466,40 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
 
     assert.ok(script.includes("cmd: '/personalisation'"), "Must include /personalisation command");
     assert.ok(script.includes("cmd: '/wallpaper'"), "Must include /wallpaper command");
+    assert.ok(script.includes("cmd: '/pet'"), "Must include /pet command");
     assert.ok(script.includes("open_personalisation"), "Must post open_personalisation message");
+  });
+
+  it("ChatViewProvider generated HTML should include animated pixel-art companion element", () => {
+    const html = getChatViewHtml(
+      { asWebviewUri: (uri: any) => uri, cspSource: "'self'" } as any,
+      { fsPath: "/mock/path" } as any,
+      {
+        currentSessionId: "test-sess",
+        currentModel: "anthropic/claude-3.7-sonnet",
+        currentProvider: "anthropic",
+        currentMode: "safe",
+        currentProfile: "builder",
+        currentReasoning: "medium",
+      }
+    );
+
+    assert.ok(html.includes('id="chat-mascot-home-slot"'), "HTML must include chat-mascot-home-slot container");
+    assert.ok(html.includes('id="chat-mascot"'), "HTML must include chat-mascot container");
+    assert.ok(html.includes('id="mascot-bubble"'), "HTML must include mascot-bubble");
+    assert.ok(html.includes('class="mascot-svg"'), "HTML must include inline SVG pixel-art sprite");
+
+    const script = getChatClientScript("vscode-resource://icon.svg", {
+      currentSessionId: "test-sess",
+      currentModel: "claude-3.7-sonnet",
+      currentProvider: "anthropic",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "medium",
+    });
+    assert.ok(script.includes('function hopMascotTo('), "Client script must implement hopMascotTo");
+    assert.ok(script.includes('tool-seq-mascot-perch'), "Client script must manage tool-seq-mascot-perch");
+    assert.ok(script.includes('assistant-mascot-perch'), "Client script must manage assistant-mascot-perch");
   });
 });
 

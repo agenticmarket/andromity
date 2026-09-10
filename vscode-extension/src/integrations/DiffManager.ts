@@ -20,6 +20,9 @@ export class GitRefContentProvider implements vscode.TextDocumentContentProvider
     // uri: andromity-head:/abs/path/to/file?ref=HEAD#projectPath
     const filePath = uri.fsPath || uri.path;
     const ref = uri.query.replace(/^ref=/, "") || "HEAD";
+    if (ref === "EMPTY") {
+      return Promise.resolve("");
+    }
     const projectPath = uri.fragment || undefined;
     return this._rpcClient
       .call<{ content: string }>("git.show_file", {
@@ -122,9 +125,18 @@ export class DiffManager {
     try {
       const headContent = await this._provider.provideTextDocumentContent(leftUri);
       if (!headContent) {
-        await vscode.commands.executeCommand("vscode.open", rightUri);
-        vscode.window.showInformationMessage(
-          `'${fileName}' has no git history yet. Opened file directly.`
+        const emptyLeftUri = vscode.Uri.from({
+          scheme: HEAD_SCHEME,
+          path: absPath,
+          query: "ref=EMPTY",
+          fragment: ws.uri.fsPath,
+        });
+        await vscode.commands.executeCommand(
+          "vscode.diff",
+          emptyLeftUri,
+          rightUri,
+          `${fileName} (New File ↔ Working Tree)`,
+          { preview: true }
         );
         return;
       }

@@ -504,6 +504,13 @@ export class SettingsPanel {
         break;
       }
 
+      case "update_mascot_setting": {
+        const config = vscode.workspace.getConfiguration("andromity");
+        await config.update("mascotEnabled", message.enabled, vscode.ConfigurationTarget.Global);
+        this._onConfigChangeCallback?.();
+        break;
+      }
+
       case "open_url": {
         if (message.url && typeof message.url === "string" && message.url.startsWith("https://")) {
           vscode.env.openExternal(vscode.Uri.parse(message.url));
@@ -608,11 +615,47 @@ export class SettingsPanel {
             project_path: workspaceFolder,
           });
           await this.loadData();
-          if (message.prompt) {
-            await vscode.commands.executeCommand("andromity.sendPrompt", message.prompt);
-          }
         } catch (e: any) {
           vscode.window.showErrorMessage(`Failed to trigger cron job: ${e.message}`);
+        }
+        break;
+      }
+
+      case "refresh_crons": {
+        try {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          const crons = await this._rpcClient.call<any[]>("cron.list", {
+            project_path: workspaceFolder,
+          });
+          if (SettingsPanel._cachedState) {
+            SettingsPanel._cachedState.crons = crons || [];
+          }
+          this._panel.webview.postMessage({
+            type: "crons_refreshed",
+            crons: crons || [],
+          });
+        } catch (err: any) {
+          vscode.window.showErrorMessage(`Failed to refresh cron jobs: ${err.message}`);
+        }
+        break;
+      }
+
+      case "open_cron_session": {
+        if (message.sessionId) {
+          if (message.target === "tab") {
+            await vscode.commands.executeCommand("andromity.openSessionInTab", {
+              session: { id: message.sessionId, name: message.sessionName || "Cron Session" }
+            });
+          } else {
+            await vscode.commands.executeCommand("andromity.switchSessionById", message.sessionId);
+          }
+        }
+        break;
+      }
+
+      case "show_info": {
+        if (message.text) {
+          vscode.window.showInformationMessage(message.text);
         }
         break;
       }
@@ -2323,6 +2366,26 @@ export class SettingsPanel {
       </div>
 
       <div class="settings-list">
+        <!-- 0. Mascot Companion ("Andro-Pet") -->
+        <div class="settings-card">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;">
+            <div>
+              <div class="setting-label">Mascot Companion ("Andro-Pet")</div>
+              <div class="setting-desc">An interactive pixel-art companion that perches on your prompt box, hops between chat turns, and reacts to agent thinking and tool execution.</div>
+            </div>
+            <span class="badge green" id="mascot-status-badge">Active</span>
+          </div>
+          <div style="margin-top: 10px;">
+            <label class="checkbox-row">
+              <input type="checkbox" id="setting-mascot-enabled" checked>
+              <div>
+                <div class="setting-label" style="font-weight: 500;">Enable Mascot Companion</div>
+                <div class="setting-desc">Toggle the animated pixel-art pet on/off in the chat sidebar. Click the pet in chat to interact with it! (Shortcut: type <code>/pet</code> in chat).</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
         <!-- 1. Ambient Wallpaper Atmosphere -->
         <div class="settings-card">
           <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;">
@@ -2609,6 +2672,37 @@ export class SettingsPanel {
       });
     }
 
+    const checkMascotEnabled = document.getElementById("setting-mascot-enabled");
+    const mascotStatusBadge = document.getElementById("mascot-status-badge");
+
+    function updateMascotStatusBadge(enabled) {
+      if (mascotStatusBadge) {
+        if (enabled) {
+          mascotStatusBadge.className = "badge green";
+          mascotStatusBadge.textContent = "Active";
+        } else {
+          mascotStatusBadge.className = "badge";
+          mascotStatusBadge.textContent = "Disabled (Off)";
+        }
+      }
+    }
+
+    try {
+      const isMascotOn = localStorage.getItem("andromity_mascot_enabled") !== "false";
+      if (checkMascotEnabled) checkMascotEnabled.checked = isMascotOn;
+      updateMascotStatusBadge(isMascotOn);
+    } catch {}
+
+    if (checkMascotEnabled) {
+      checkMascotEnabled.addEventListener("change", () => {
+        updateMascotStatusBadge(checkMascotEnabled.checked);
+        try {
+          localStorage.setItem("andromity_mascot_enabled", checkMascotEnabled.checked ? "true" : "false");
+        } catch {}
+        vscode.postMessage({ type: "update_mascot_setting", enabled: checkMascotEnabled.checked });
+      });
+    }
+
     const checkWpEnabled = document.getElementById("setting-wallpaper-enabled");
     const selectWpRipple = document.getElementById("setting-wallpaper-ripple");
     const checkWpAsterisks = document.getElementById("setting-wallpaper-asterisks");
@@ -2688,8 +2782,22 @@ export class SettingsPanel {
         btn.disabled = true;
         btn.innerHTML = '<span class="spinning-loader"></span> Installing...';
         vscode.postMessage({ type: "install_skill", name, sourceId });
-      } else if (action === "history") {
-        vscode.postMessage({ type: "cron_run_history", id: btn.dataset.id });
+      } else if (action === "open-session") {
+        const sId = btn.dataset.sessionId;
+        const sName = btn.dataset.sessionName || "Cron Session";
+        if (!sId) {
+          vscode.postMessage({ type: "show_info", text: "This cron job has not run yet. Click 'Run Now' to execute it and create a session." });
+        } else {
+          vscode.postMessage({ type: "open_cron_session", sessionId: sId, sessionName: sName, target: "sidebar" });
+        }
+      } else if (action === "open-session-tab") {
+        const sId = btn.dataset.sessionId;
+        const sName = btn.dataset.sessionName || "Cron Session";
+        if (!sId) {
+          vscode.postMessage({ type: "show_info", text: "This cron job has not run yet. Click 'Run Now' to execute it and create a session." });
+        } else {
+          vscode.postMessage({ type: "open_cron_session", sessionId: sId, sessionName: sName, target: "tab" });
+        }
       } else if (action === "mcp_restart") {
         btn.disabled = true;
         btn.innerHTML = '<span class="spinning-loader"></span> Restarting...';
@@ -2899,6 +3007,16 @@ export class SettingsPanel {
           const remoteNumEl = document.getElementById("remote-skills-num");
           if (remoteNumEl) remoteNumEl.textContent = allRemoteSkills.length;
           renderSkills();
+          break;
+        }
+        case "crons_refreshed": {
+          allCrons = msg.crons || [];
+          renderCrons();
+          const btn = document.getElementById("btn-refresh-crons");
+          if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg><span>Refresh</span>';
+          }
           break;
         }
         case "cron_runs_loaded": {
@@ -3747,7 +3865,14 @@ export class SettingsPanel {
 
     if (btnRefreshCrons) {
       btnRefreshCrons.addEventListener("click", () => {
-        vscode.postMessage({ type: "ready" });
+        btnRefreshCrons.disabled = true;
+        const orig = btnRefreshCrons.innerHTML;
+        btnRefreshCrons.innerHTML = '<span style="display:inline-block; width:9px; height:9px; border:1.5px solid currentColor; border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite; margin-right:4px;"></span> Refreshing...';
+        vscode.postMessage({ type: "refresh_crons" });
+        setTimeout(() => {
+          btnRefreshCrons.disabled = false;
+          btnRefreshCrons.innerHTML = orig;
+        }, 3000);
       });
     }
 
@@ -3779,16 +3904,21 @@ export class SettingsPanel {
           vscode.postMessage({ type: "cron_run_now", id, name, prompt });
         } else if (action === "delete") {
           vscode.postMessage({ type: "cron_delete", id });
-        } else if (action === "history") {
-          const runsDiv = document.getElementById("cron-runs-" + id);
-          if (runsDiv) {
-            if (runsDiv.style.display === "block") {
-              runsDiv.style.display = "none";
-            } else {
-              runsDiv.style.display = "block";
-              runsDiv.innerHTML = '<div style="padding:6px; color:var(--text-muted); font-size:11px;">Loading execution history...</div>';
-              vscode.postMessage({ type: "fetch_cron_runs", id: id });
-            }
+        } else if (action === "open-session") {
+          const sId = btn.dataset.sessionId;
+          const sName = btn.dataset.sessionName || "Cron Session";
+          if (!sId) {
+            vscode.postMessage({ type: "show_info", text: "This cron job has not run yet. Click 'Run Now' to execute it and create a session." });
+          } else {
+            vscode.postMessage({ type: "open_cron_session", sessionId: sId, sessionName: sName, target: "sidebar" });
+          }
+        } else if (action === "open-session-tab") {
+          const sId = btn.dataset.sessionId;
+          const sName = btn.dataset.sessionName || "Cron Session";
+          if (!sId) {
+            vscode.postMessage({ type: "show_info", text: "This cron job has not run yet. Click 'Run Now' to execute it and create a session." });
+          } else {
+            vscode.postMessage({ type: "open_cron_session", sessionId: sId, sessionName: sName, target: "tab" });
           }
         }
       });
@@ -3850,6 +3980,15 @@ export class SettingsPanel {
         const cmds = job.allowed_commands && job.allowed_commands.length > 0
           ? (Array.isArray(job.allowed_commands) ? job.allowed_commands.join(", ") : String(job.allowed_commands))
           : "";
+        const latestSessionId = job.latest_session_id || "";
+        const sessionName = "Cron: " + (job.name || job.id);
+        const hasSession = !!latestSessionId;
+        const sessionTitle = hasSession
+          ? "Open latest execution session in Chat sidebar"
+          : "Never run yet — click 'Run Now' to execute and create a session";
+        const tabTitle = hasSession
+          ? "Open latest execution session in side-by-side Editor Tab"
+          : "Never run yet — click 'Run Now' to execute and create a session";
 
         return '<div class="cron-card">' +
           '<div class="cron-card-left">' +
@@ -3864,13 +4003,18 @@ export class SettingsPanel {
             '<div class="cron-card-meta">' +
               '<span>Runs: ' + (job.run_count || 0) + '</span>' +
               '<span>Last: ' + escapeHtml(lastRun) + ' (' + escapeHtml(lastStatus) + ')</span>' +
+              (hasSession ? ('<span style="color:var(--accent); font-family:monospace; font-size:10.5px;">Session: ' + escapeHtml(latestSessionId.slice(0, 18)) + '…</span>') : '') +
             '</div>' +
-            '<div id="cron-runs-' + escapeHtml(job.id) + '" class="cron-runs-container" style="display:none; margin-top:8px; padding-top:8px; border-top:1px solid var(--border);"></div>' +
           '</div>' +
           '<div class="cron-card-actions">' +
             '<button class="btn btn-secondary" data-action="toggle" data-id="' + escapeHtml(job.id) + '">' + (isEnabled ? 'Pause' : 'Enable') + '</button>' +
             '<button class="btn" data-action="run" data-id="' + escapeHtml(job.id) + '" data-name="' + escapeHtml(job.name || '') + '" data-prompt="' + promptEnc + '">Run Now</button>' +
-            '<button class="btn btn-secondary" data-action="history" data-id="' + escapeHtml(job.id) + '">History</button>' +
+            '<button class="btn btn-secondary" data-action="open-session" data-session-id="' + escapeHtml(latestSessionId) + '" data-session-name="' + escapeHtml(sessionName) + '" title="' + escapeHtml(sessionTitle) + '" style="' + (!hasSession ? 'opacity:0.55;' : '') + '">' +
+              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="margin-right:4px; vertical-align:-1.5px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>Session' +
+            '</button>' +
+            '<button class="btn btn-secondary" data-action="open-session-tab" data-session-id="' + escapeHtml(latestSessionId) + '" data-session-name="' + escapeHtml(sessionName) + '" title="' + escapeHtml(tabTitle) + '" style="padding:5px 8px;' + (!hasSession ? 'opacity:0.55;' : '') + '">' +
+              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="vertical-align:-1.5px;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="12" y1="3" x2="12" y2="21"></line></svg>' +
+            '</button>' +
             '<button class="btn btn-danger" data-action="delete" data-id="' + escapeHtml(job.id) + '">✕</button>' +
           '</div>' +
         '</div>';

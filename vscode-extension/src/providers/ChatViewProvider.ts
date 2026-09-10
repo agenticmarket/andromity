@@ -58,8 +58,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (e.affectsConfiguration("andromity.wallpaper")) {
             this.broadcastWallpaperConfig();
           }
+          if (e.affectsConfiguration("andromity.mascotEnabled")) {
+            this.broadcastMascotConfig();
+          }
         })
       );
+    }
+  }
+
+  public broadcastMascotConfig() {
+    const enabled = vscode.workspace.getConfiguration("andromity").get<boolean>("mascotEnabled", true);
+    if (this._view) {
+      this._postToWebview({
+        type: "set_mascot_enabled",
+        enabled: enabled,
+      });
+    }
+    for (const tab of SessionTabPanel.getAllPanels()) {
+      try {
+        tab.postMessage({
+          type: "set_mascot_enabled",
+          enabled: enabled,
+        });
+      } catch {}
     }
   }
 
@@ -553,12 +574,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     bind("cron/run_started", (params: any) => {
       this.fetchAndPostCrons();
-      this._postToWebview({
-        type: "cron_event",
-        event: "run_started",
-        job_id: params.job_id,
-        run: params.run,
-      });
     });
 
     bind("cron/run_completed", (params: any) => {
@@ -566,19 +581,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const jobName = params.job?.name || "Scheduled Job";
       const status = params.run?.status || "completed";
       const durSec = params.run?.duration_ms ? (params.run.duration_ms / 1000).toFixed(1) : "0";
+      const sessionId = params.run?.session_id;
 
       if (status === "success") {
-        vscode.window.showInformationMessage(`⏱ Cron "${jobName}" completed in ${durSec}s.`);
+        const msgPromise = sessionId
+          ? vscode.window.showInformationMessage(`⏱ Cron "${jobName}" completed in ${durSec}s.`, "Open Session")
+          : vscode.window.showInformationMessage(`⏱ Cron "${jobName}" completed in ${durSec}s.`);
+        msgPromise.then((choice) => {
+          if (choice === "Open Session" && sessionId) {
+            vscode.commands.executeCommand("andromity.switchSessionById", sessionId);
+          }
+        });
       } else if (status === "failed") {
-        vscode.window.showWarningMessage(`⏱ Cron "${jobName}" failed: ${params.run?.error || "Error during execution"}`);
+        const msgPromise = sessionId
+          ? vscode.window.showWarningMessage(`⏱ Cron "${jobName}" failed: ${params.run?.error || "Error during execution"}`, "Open Session")
+          : vscode.window.showWarningMessage(`⏱ Cron "${jobName}" failed: ${params.run?.error || "Error during execution"}`);
+        msgPromise.then((choice) => {
+          if (choice === "Open Session" && sessionId) {
+            vscode.commands.executeCommand("andromity.switchSessionById", sessionId);
+          }
+        });
       }
-
-      this._postToWebview({
-        type: "cron_event",
-        event: "run_completed",
-        job: params.job,
-        run: params.run,
-      });
     });
 
     bind("subagent/spawned", (params: SubAgentEvent) => {
@@ -833,7 +856,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this._extensionUri,
         this._rpcClient,
         "personalisation",
-        () => this.broadcastWallpaperConfig()
+        () => {
+          this.broadcastWallpaperConfig();
+          this.broadcastMascotConfig();
+        }
       );
       return;
     }

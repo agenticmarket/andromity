@@ -1060,9 +1060,8 @@ export function getChatStyles(): string {
     .tracker-todos-list {
       display: flex;
       flex-direction: column;
-      gap: 4px;
-      margin-top: 3px;
-      max-height: 140px;
+      margin-top: 4px;
+      max-height: 180px;
       overflow-y: auto;
       padding-right: 2px;
     }
@@ -1072,45 +1071,45 @@ export function getChatStyles(): string {
     .tracker-todo-item {
       display: flex;
       align-items: flex-start;
-      gap: 7px;
-      font-size: 11px;
-      line-height: 1.35;
+      gap: 10px;
+      padding: 7px 8px;
+      font-size: 12px;
+      line-height: 1.4;
       color: var(--fg, #e4e4e7);
-      padding: 1px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      border-radius: 4px;
+      transition: background 0.12s ease;
+    }
+    .tracker-todo-item:last-child {
+      border-bottom: none;
+    }
+    .tracker-todo-item:hover {
+      background: rgba(255, 255, 255, 0.02);
     }
     .tracker-todo-item.is-done {
       color: var(--muted, #71717a);
+    }
+    .tracker-todo-item.is-done .tracker-todo-text {
       text-decoration: line-through;
+      opacity: 0.75;
     }
     .tracker-todo-item.is-active {
+      background: rgba(6, 182, 212, 0.08);
       color: #38bdf8;
       font-weight: 500;
     }
-    .tracker-todo-bullet {
-      width: 14px;
-      height: 14px;
-      border-radius: 50%;
-      background: rgba(255, 255, 255, 0.08);
-      color: var(--muted, #a1a1aa);
-      display: inline-flex;
+    .tracker-todo-item.is-failed {
+      background: rgba(239, 68, 68, 0.08);
+      color: #ef4444;
+    }
+    .tracker-todo-icon-wrap {
+      margin-top: 2px;
+      flex-shrink: 0;
+      display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 8.5px;
-      font-weight: 600;
-      flex-shrink: 0;
-      margin-top: 1px;
-    }
-    .tracker-todo-item.is-done .tracker-todo-bullet {
-      background: rgba(16, 185, 129, 0.2);
-      color: #34d399;
-    }
-    .tracker-todo-item.is-active .tracker-todo-bullet {
-      background: rgba(6, 182, 212, 0.2);
-      color: #38bdf8;
-    }
-    .tracker-todo-item.is-failed .tracker-todo-bullet {
-      background: rgba(239, 68, 68, 0.2);
-      color: #ef4444;
+      width: 16px;
+      height: 16px;
     }
     .tracker-todo-text {
       flex: 1;
@@ -2894,6 +2893,9 @@ export function getChatStyles(): string {
       border-radius: 6px;
       margin: 6px 0;
       overflow: hidden;
+      max-width: 100%;
+      box-sizing: border-box;
+      min-width: 0;
     }
     .tool-seq-header {
       display: flex;
@@ -2906,14 +2908,17 @@ export function getChatStyles(): string {
       cursor: pointer;
       user-select: none;
       background: rgba(255,255,255,0.02);
+      max-width: 100%;
+      box-sizing: border-box;
+      min-width: 0;
     }
     .tool-seq-header:hover { background: rgba(255,255,255,0.05); color: var(--fg); }
     .tool-seq-icon { font-size: 12px; }
-    .tool-seq-title { flex: 1; font-weight: 600; }
+    .tool-seq-title { flex: 1; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .tool-seq-chevron { width: 12px; height: 12px; color: var(--muted); transition: transform 0.15s; }
     .tool-sequence.collapsed .tool-seq-chevron { transform: rotate(90deg); }
     .tool-sequence.collapsed .tool-seq-body { display: none; }
-    .tool-seq-body { padding: 4px 6px; display: flex; flex-direction: column; gap: 4px; }
+    .tool-seq-body { padding: 4px 6px; display: flex; flex-direction: column; gap: 4px; max-width: 100%; overflow-x: hidden; box-sizing: border-box; min-width: 0; }
     .tool-seq-copy {
       font-size: 10px;
       padding: 2px 7px;
@@ -3499,6 +3504,239 @@ export function getChatStyles(): string {
 
     .queue-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .queue-remove { background: transparent; border: none; color: var(--muted); cursor: pointer; }
+
+    /* ─── Animated Pixel-Art Mascot Companion ("Andro-Pet") ─────────────── */
+    .chat-mascot-home-slot {
+      position: absolute;
+      top: -22px;
+      left: 24px;
+      width: 32px;
+      height: 32px;
+      z-index: 120;
+      pointer-events: none;
+    }
+
+    .assistant-mascot-perch {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      margin-left: 8px;
+      vertical-align: middle;
+      pointer-events: auto;
+    }
+    .assistant-mascot-perch:empty {
+      display: none;
+    }
+
+    .tool-sequence-wrap {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
+      margin: 6px 0;
+      position: relative;
+    }
+    .tool-sequence-wrap .tool-sequence {
+      flex: 1;
+      min-width: 0;
+      margin: 0;
+    }
+    .tool-seq-mascot-perch {
+      width: 34px;
+      min-width: 34px;
+      height: 34px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      position: sticky;
+      top: 12px;
+      z-index: 15;
+      padding-top: 2px;
+      pointer-events: auto;
+    }
+    .tool-seq-mascot-perch:empty {
+      display: none;
+    }
+
+    .chat-mascot {
+      position: relative;
+      width: 32px;
+      height: 32px;
+      z-index: 120;
+      cursor: pointer;
+      user-select: none;
+      pointer-events: auto;
+      transform-origin: bottom center;
+      outline: none;
+      display: inline-block;
+    }
+    .chat-mascot.is-jumping {
+      z-index: 999;
+      pointer-events: none;
+    }
+    .chat-mascot:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+    .chat-mascot.hidden {
+      display: none !important;
+    }
+
+    /* Pixel art SVG rendering */
+    .mascot-svg {
+      width: 32px;
+      height: 32px;
+      image-rendering: pixelated;
+      shape-rendering: crispEdges;
+      transition: transform 0.2s ease;
+    }
+
+    /* Idle Breathing & Bobbing */
+    .chat-mascot:not(.is-jumping):not(.is-walking) .mascot-svg {
+      animation: mascotBreathe 3s ease-in-out infinite alternate;
+    }
+    @keyframes mascotBreathe {
+      0% { transform: scale(1, 1); }
+      100% { transform: scale(1.04, 0.96) translateY(0.5px); }
+    }
+
+    /* Blinking Eyes */
+    .chat-mascot .mascot-eyes {
+      transform-origin: 15px 19px;
+      animation: mascotBlink 4.5s ease-in-out infinite;
+    }
+    @keyframes mascotBlink {
+      0%, 94%, 100% { transform: scaleY(1); }
+      96%, 98% { transform: scaleY(0.1); }
+    }
+
+    /* Looking down when user is typing in prompt */
+    .chat-mascot.looking-down .mascot-svg {
+      transform: translateY(1.5px) rotate(-3deg);
+    }
+    .chat-mascot.looking-down .mascot-eyes {
+      transform: translateY(1.5px);
+      animation: none;
+    }
+
+    /* Antennae gentle sway */
+    .chat-mascot .antenna-bulb {
+      animation: antennaPulse 2s ease-in-out infinite alternate;
+    }
+    @keyframes antennaPulse {
+      0% { fill: #38bdf8; filter: drop-shadow(0 0 1px #38bdf8); }
+      100% { fill: #7dd3fc; filter: drop-shadow(0 0 4px #06b6d4); }
+    }
+
+    /* Working / Generating state */
+    .chat-mascot.is-working .mascot-svg {
+      animation: mascotWorking 0.6s ease-in-out infinite alternate;
+    }
+    @keyframes mascotWorking {
+      0% { transform: translateY(0) rotate(-2deg); }
+      100% { transform: translateY(-3px) rotate(2deg); }
+    }
+    .chat-mascot.is-working .antenna-bulb {
+      fill: #22d3ee;
+      filter: drop-shadow(0 0 6px #06b6d4);
+    }
+
+    /* Jumping Animation */
+    .chat-mascot.is-jumping .mascot-svg {
+      animation: mascotHopArc 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    @keyframes mascotHopArc {
+      0% { transform: scale(1, 1); }
+      25% { transform: scale(1.15, 0.85) translateY(2px); }
+      60% { transform: scale(0.88, 1.15) translateY(-8px); }
+      85% { transform: scale(1.1, 0.9) translateY(1px); }
+      100% { transform: scale(1, 1); }
+    }
+
+    /* Interactive Click Bounce */
+    .chat-mascot.is-petted .mascot-svg {
+      animation: mascotPetted 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    @keyframes mascotPetted {
+      0% { transform: scale(1, 1); }
+      30% { transform: scale(1.25, 0.75) translateY(3px); }
+      60% { transform: scale(0.85, 1.2) translateY(-14px) rotate(5deg); }
+      80% { transform: scale(1.1, 0.9) translateY(2px) rotate(-2deg); }
+      100% { transform: scale(1, 1); }
+    }
+
+    /* Celebration Spin */
+    .chat-mascot.is-celebrating .mascot-svg {
+      animation: mascotCelebrate 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    @keyframes mascotCelebrate {
+      0% { transform: scale(1, 1) translateY(0); }
+      30% { transform: scale(0.9, 1.2) translateY(-18px) rotate(180deg); }
+      70% { transform: scale(1.1, 0.9) translateY(-6px) rotate(360deg); }
+      100% { transform: scale(1, 1) translateY(0) rotate(360deg); }
+    }
+
+    /* Subtle Idle Walking along prompt box */
+    .chat-mascot.is-walking .mascot-svg {
+      animation: mascotWaddle 0.25s linear infinite alternate;
+    }
+    @keyframes mascotWaddle {
+      0% { transform: rotate(-5deg) translateY(-1px); }
+      100% { transform: rotate(5deg) translateY(-1px); }
+    }
+
+    /* Floating Thought / Reaction Bubble */
+    .mascot-bubble {
+      position: absolute;
+      bottom: calc(100% + 4px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.92);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      border-radius: 8px;
+      padding: 2px 7px;
+      font-size: 11px;
+      color: #e0f2fe;
+      white-space: nowrap;
+      pointer-events: none;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      animation: mascotBubblePop 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 130;
+    }
+    .mascot-bubble::after {
+      content: '';
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 4px solid transparent;
+      border-top-color: rgba(15, 23, 42, 0.92);
+    }
+    @keyframes mascotBubblePop {
+      0% { opacity: 0; transform: translateX(-50%) scale(0.7) translateY(4px); }
+      100% { opacity: 1; transform: translateX(-50%) scale(1) translateY(0); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .chat-mascot:not(.is-jumping):not(.is-walking) .mascot-svg,
+      .chat-mascot .mascot-eyes,
+      .chat-mascot.is-working .mascot-svg,
+      .chat-mascot.is-jumping .mascot-svg,
+      .chat-mascot.is-petted .mascot-svg,
+      .chat-mascot.is-celebrating .mascot-svg,
+      .chat-mascot.is-walking .mascot-svg {
+        animation: none !important;
+      }
+    }
 
     /* Input Section (Codex-style prompt card) */
     .input-section {
@@ -4264,41 +4502,61 @@ export function getChatStyles(): string {
     .plan-steps-preview {
       display: flex;
       flex-direction: column;
-      gap: 5px;
+      margin: 4px 0;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.15);
+      overflow: hidden;
     }
 
     .plan-step-item {
       display: flex;
       align-items: flex-start;
-      gap: 8px;
-      font-size: 11.5px;
+      gap: 10px;
+      padding: 7px 10px;
+      font-size: 12px;
       line-height: 1.4;
-      color: #e4e4e7;
+      color: var(--fg, #e4e4e7);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      transition: background 0.12s ease;
+    }
+
+    .plan-step-item:last-child {
+      border-bottom: none;
+    }
+
+    .plan-step-item:hover {
+      background: rgba(255, 255, 255, 0.02);
     }
 
     .plan-step-item.is-done {
       color: var(--muted, #71717a);
-      text-decoration: line-through;
     }
 
-    .plan-step-bullet {
-      width: 16px;
-      height: 16px;
-      border-radius: 50%;
-      background: rgba(255, 255, 255, 0.08);
-      color: var(--muted, #a1a1aa);
-      display: inline-flex;
+    .plan-step-item.is-done .plan-step-txt {
+      text-decoration: line-through;
+      opacity: 0.75;
+    }
+
+    .plan-step-item.is-active {
+      background: rgba(6, 182, 212, 0.08);
+      color: #38bdf8;
+      font-weight: 500;
+    }
+
+    .plan-step-item.is-failed {
+      background: rgba(239, 68, 68, 0.08);
+      color: #ef4444;
+    }
+
+    .plan-step-icon-wrap {
+      margin-top: 2px;
+      flex-shrink: 0;
+      display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 9.5px;
-      font-weight: 600;
-      flex-shrink: 0;
-      margin-top: 1px;
-    }
-
-    .plan-step-item.is-done .plan-step-bullet {
-      background: rgba(16, 185, 129, 0.2);
-      color: #34d399;
+      width: 16px;
+      height: 16px;
     }
 
     .plan-step-txt {

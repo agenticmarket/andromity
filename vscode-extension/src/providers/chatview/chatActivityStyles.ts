@@ -237,7 +237,11 @@ export function getChatActivityStyles(): string {
     /* ── Command Activity Row (Ran <cmd> ›) ── */
     .activity-cmd-wrap {
       width: 100%;
+      max-width: 100%;
+      min-width: 0;
       margin: 2px 0;
+      box-sizing: border-box;
+      overflow: hidden;
     }
 
     .activity-cmd-text {
@@ -247,8 +251,10 @@ export function getChatActivityStyles(): string {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      flex: 1;
+      flex: 1 1 0%;
       min-width: 0;
+      max-width: 100%;
+      display: block;
     }
 
     .activity-chevron {

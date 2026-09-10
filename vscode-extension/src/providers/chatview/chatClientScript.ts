@@ -154,6 +154,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       { cmd: '/settings', desc: 'Open Settings, Model Catalog & MCP Hub', action: 'settings' },
       { cmd: '/personalisation', desc: 'Open Personalisation & Wallpaper Atmosphere settings', action: 'personalisation' },
       { cmd: '/wallpaper', desc: 'Configure background wallpaper atmosphere & ripples', action: 'personalisation' },
+      { cmd: '/pet', desc: 'Interact with or toggle Andro-Pet companion', action: 'pet' },
+      { cmd: '/companion', desc: 'Interact with or toggle Andro-Pet companion', action: 'pet' },
       { cmd: '/model', desc: 'Switch AI model', action: 'model' },
       { cmd: '/mode', desc: 'Cycle permission mode (safe / trust / full / yolo)', action: 'mode' },
       { cmd: '/plan', desc: 'Open Implementation Plan editor tab', action: 'plan' },
@@ -488,8 +490,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         });
       }
 
+      const seqWrap = document.createElement('div');
+      seqWrap.className = 'tool-sequence-wrap';
+      seqWrap.appendChild(thisSeq);
+
+      const mascotPerch = document.createElement('div');
+      mascotPerch.className = 'tool-seq-mascot-perch';
+      seqWrap.appendChild(mascotPerch);
+
       if (currentTurnAssistantDiv) {
-        currentTurnAssistantDiv.appendChild(thisSeq);
+        currentTurnAssistantDiv.appendChild(seqWrap);
+      }
+
+      if (typeof hopMascotTo === 'function') {
+        hopMascotTo(mascotPerch);
       }
 
       // Reset currentAssistantContent so any subsequent text creates a new text block below this tool sequence
@@ -688,6 +702,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'personalisation':
         case 'wallpaper':
           vscode.postMessage({ type: 'open_personalisation' });
+          break;
+        case 'pet':
+        case 'companion':
+          toggleOrInteractMascot();
           break;
         case 'model':
           toggleModelFlyout();
@@ -969,6 +987,200 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       e.stopPropagation();
       if (planTrackerStrip) planTrackerStrip.style.display = 'none';
     });
+
+    // ─── Mascot Companion Controller ("Andro-Pet") ─────────────────────────────
+    const chatMascotEl = document.getElementById('chat-mascot');
+    const mascotBubbleEl = document.getElementById('mascot-bubble');
+    let mascotBubbleTimer = null;
+    let mascotIdleTimer = null;
+    let mascotTypingTimer = null;
+    let isMascotOnTurn = false;
+    let mascotTargetWrap = null;
+
+    function getMascotEnabled() {
+      try {
+        return localStorage.getItem('andromity_mascot_enabled') !== 'false';
+      } catch {
+        return true;
+      }
+    }
+
+    function setMascotEnabled(enabled) {
+      try {
+        localStorage.setItem('andromity_mascot_enabled', enabled ? 'true' : 'false');
+      } catch {}
+      if (chatMascotEl) {
+        if (enabled) {
+          chatMascotEl.classList.remove('hidden');
+        } else {
+          chatMascotEl.classList.add('hidden');
+        }
+      }
+    }
+
+    function toggleOrInteractMascot() {
+      if (!chatMascotEl) return;
+      if (chatMascotEl.classList.contains('hidden')) {
+        setMascotEnabled(true);
+        showMascotBubble('👋 Hello!', 2000);
+        petMascot();
+      } else {
+        petMascot();
+      }
+    }
+
+    function showMascotBubble(text, durationMs) {
+      if (!chatMascotEl || !mascotBubbleEl || chatMascotEl.classList.contains('hidden')) return;
+      durationMs = durationMs || 2200;
+      if (mascotBubbleTimer) {
+        clearTimeout(mascotBubbleTimer);
+        mascotBubbleTimer = null;
+      }
+      mascotBubbleEl.textContent = text;
+      mascotBubbleEl.style.display = 'flex';
+      mascotBubbleTimer = setTimeout(() => {
+        if (mascotBubbleEl) mascotBubbleEl.style.display = 'none';
+        mascotBubbleTimer = null;
+      }, durationMs);
+    }
+
+    function petMascot() {
+      if (!chatMascotEl || chatMascotEl.classList.contains('hidden')) return;
+      chatMascotEl.classList.remove('is-petted', 'is-jumping');
+      void chatMascotEl.offsetWidth; // trigger reflow
+      chatMascotEl.classList.add('is-petted');
+      
+      const reactions = ['❤️', '✨', '⚡', '^o^', '👀', '🤖', '👾'];
+      const pick = reactions[Math.floor(Math.random() * reactions.length)];
+      showMascotBubble(pick, 1800);
+      
+      setTimeout(() => {
+        chatMascotEl?.classList.remove('is-petted');
+      }, 500);
+    }
+
+    function hopMascotTo(targetPerchEl) {
+      if (!chatMascotEl || chatMascotEl.classList.contains('hidden') || !targetPerchEl) return;
+      if (chatMascotEl.parentElement === targetPerchEl) return;
+
+      const firstRect = chatMascotEl.getBoundingClientRect();
+      targetPerchEl.appendChild(chatMascotEl);
+      const lastRect = chatMascotEl.getBoundingClientRect();
+
+      const deltaX = firstRect.left - lastRect.left;
+      const deltaY = firstRect.top - lastRect.top;
+
+      chatMascotEl.classList.remove('is-walking', 'looking-down');
+      chatMascotEl.classList.add('is-jumping', 'is-working');
+      chatMascotEl.style.transition = 'none';
+      chatMascotEl.style.transform = 'translate3d(' + Math.round(deltaX) + 'px, ' + Math.round(deltaY) + 'px, 0)';
+
+      void chatMascotEl.offsetWidth; // Force reflow
+
+      chatMascotEl.style.transition = 'transform 0.45s cubic-bezier(0.34, 1.25, 0.64, 1)';
+      chatMascotEl.style.transform = 'translate3d(0, 0, 0)';
+
+      setTimeout(() => {
+        if (chatMascotEl) {
+          chatMascotEl.classList.remove('is-jumping');
+          chatMascotEl.style.transition = '';
+          chatMascotEl.style.transform = '';
+          const homeSlot = document.getElementById('chat-mascot-home-slot');
+          isMascotOnTurn = (chatMascotEl.parentElement !== homeSlot);
+          if (!isMascotOnTurn) {
+            chatMascotEl.classList.remove('is-working', 'on-turn');
+          } else {
+            chatMascotEl.classList.add('on-turn');
+          }
+        }
+      }, 460);
+    }
+
+    function returnMascotHome() {
+      const homeSlot = document.getElementById('chat-mascot-home-slot');
+      if (!homeSlot || !chatMascotEl) return;
+      hopMascotTo(homeSlot);
+    }
+
+    function hopMascotToTurn(wrapEl) {
+      if (!wrapEl) return;
+      const perch = wrapEl.querySelector('.tool-seq-mascot-perch') || wrapEl.querySelector('.assistant-mascot-perch');
+      if (perch) {
+        hopMascotTo(perch);
+      }
+    }
+
+    function celebrateMascot() {
+      if (!chatMascotEl || chatMascotEl.classList.contains('hidden')) return;
+      chatMascotEl.classList.remove('is-working');
+      chatMascotEl.classList.add('is-celebrating');
+      showMascotBubble('✨ Done!', 2000);
+      
+      setTimeout(() => {
+        chatMascotEl?.classList.remove('is-celebrating');
+        returnMascotHome();
+      }, 850);
+    }
+
+    function runMascotIdleRoam() {
+      const homeSlot = document.getElementById('chat-mascot-home-slot');
+      if (!chatMascotEl || isRunning || isMascotOnTurn || chatMascotEl.classList.contains('hidden') || (homeSlot && chatMascotEl.parentElement !== homeSlot)) {
+        return;
+      }
+      const randomOffset = Math.floor(Math.random() * 25) + 12; // 12px to 37px
+      chatMascotEl.classList.add('is-walking');
+      chatMascotEl.style.transition = 'transform 0.35s ease';
+      chatMascotEl.style.transform = 'translate3d(' + randomOffset + 'px, 0, 0)';
+      
+      setTimeout(() => {
+        chatMascotEl?.classList.remove('is-walking');
+        setTimeout(() => {
+          if (!isRunning && !isMascotOnTurn && chatMascotEl && (!homeSlot || chatMascotEl.parentElement === homeSlot)) {
+            chatMascotEl.classList.add('is-walking');
+            chatMascotEl.style.transform = 'translate3d(0, 0, 0)';
+            setTimeout(() => {
+              chatMascotEl?.classList.remove('is-walking');
+              chatMascotEl.style.transition = '';
+            }, 350);
+          }
+        }, 1800);
+      }, 350);
+    }
+
+    function initChatMascot() {
+      if (!chatMascotEl) return;
+      if (!getMascotEnabled()) {
+        chatMascotEl.classList.add('hidden');
+      } else {
+        chatMascotEl.classList.remove('hidden');
+      }
+
+      chatMascotEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        petMascot();
+      });
+
+      chatMascotEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          petMascot();
+        }
+      });
+
+      if (promptInput) {
+        promptInput.addEventListener('input', () => {
+          if (isMascotOnTurn || isRunning || chatMascotEl.classList.contains('hidden')) return;
+          chatMascotEl.classList.add('looking-down');
+          if (mascotTypingTimer) clearTimeout(mascotTypingTimer);
+          mascotTypingTimer = setTimeout(() => {
+            chatMascotEl?.classList.remove('looking-down');
+          }, 1500);
+        });
+      }
+
+      if (mascotIdleTimer) clearInterval(mascotIdleTimer);
+      mascotIdleTimer = setInterval(runMascotIdleRoam, 30000);
+    }
 
     function updateOnboardingVisibility() {
       if (!onboardingSection || !readyHeroSection) return;
@@ -1523,21 +1735,25 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (isDone) completed++;
         if (isActive && activeIdx === -1) activeIdx = idx;
 
-        let bulletContent = '' + (idx + 1);
-        let bulletClass = '';
+        let iconSvg = '';
+        let itemClass = 'tracker-todo-item';
+
         if (isDone) {
-          bulletContent = '&#x2713;';
-          bulletClass = 'is-done';
+          itemClass += ' is-done';
+          iconSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>';
         } else if (isActive) {
-          bulletContent = '&#x27F3;';
-          bulletClass = 'is-active';
+          itemClass += ' is-active';
+          iconSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>';
         } else if (isFailed) {
-          bulletContent = '&#x2715;';
-          bulletClass = 'is-failed';
+          itemClass += ' is-failed';
+          iconSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+        } else {
+          itemClass += ' is-pending';
+          iconSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"></rect></svg>';
         }
 
-        return '<div class="tracker-todo-item ' + bulletClass + '">' +
-          '<span class="tracker-todo-bullet">' + bulletContent + '</span>' +
+        return '<div class="' + itemClass + '">' +
+          '<div class="tracker-todo-icon-wrap">' + iconSvg + '</div>' +
           '<span class="tracker-todo-text">' + escapeHtml(sText) + '</span>' +
         '</div>';
       }).join('');
@@ -1875,7 +2091,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         }
         case 'open-file-diff': {
-          const fPath = target.getAttribute('data-file-path') || target.closest('.file-edited-chip')?.getAttribute('data-file-path') || target.closest('.activity-diff-btn')?.getAttribute('data-file-path');
+          const fPath = target.getAttribute('data-file-path') || target.closest('[data-file-path]')?.getAttribute('data-file-path') || target.closest('.file-edited-chip')?.getAttribute('data-file-path') || target.closest('.activity-diff-btn')?.getAttribute('data-file-path');
           if (fPath) {
             vscode.postMessage({ type: 'open_file_diff', filePath: fPath });
           }
@@ -3322,14 +3538,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const wrap = document.createElement('div');
       wrap.className = 'message-wrap assistant';
       currentTurnAssistantDiv = wrap;
-
       const header = document.createElement('div');
       header.className = 'assistant-header';
       header.innerHTML = '<div class="assistant-avatar">' +
         '<img class="" src="' + sidebarIconUri + '" width="48" alt="Andromity" />' +
       '</div>' +
-      '<span class="assistant-name">Andromity</span>';
+      '<span class="assistant-name">Andromity</span>' +
+      '<div class="assistant-mascot-perch"></div>';
       wrap.appendChild(header);
+
+      if (typeof hopMascotTo === 'function') {
+        const headerPerch = header.querySelector('.assistant-mascot-perch');
+        if (headerPerch) hopMascotTo(headerPerch);
+      }
 
       const loader = document.createElement('div');
       loader.className = 'andromity-turn-loader';
@@ -3373,7 +3594,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const seen = new Map();
       Array.from(filePathsSet).forEach(filePath => {
         if (!filePath || typeof filePath !== 'string') return;
-        const norm = filePath.split('\\\\').join('/').trim();
+        const norm = filePath.replace(/\\\\/g, '/').trim();
         const base = norm.split('/').pop().toLowerCase();
         if (!seen.has(base) || norm.length > seen.get(base).length) {
           seen.set(base, norm);
@@ -3403,13 +3624,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         row.setAttribute('data-file-path', filePath);
         row.setAttribute('title', 'Click to view diff for ' + filePath);
 
-        const normalizedKey = filePath.split('\\\\').join('/');
+        const normalizedKey = filePath.replace(/\\\\/g, '/').trim();
         const filename = normalizedKey.split('/').pop() || filePath;
 
         let stat = globalDiffStats[normalizedKey];
         if (!stat) {
           for (const k in globalDiffStats) {
-            if (normalizedKey.endsWith(k) || k.endsWith(normalizedKey)) {
+            const normK = k.replace(/\\\\/g, '/');
+            if (normalizedKey.endsWith(normK) || normK.endsWith(normalizedKey) || normalizedKey.endsWith('/' + normK) || normK.endsWith('/' + normalizedKey)) {
               stat = globalDiffStats[k];
               break;
             }
@@ -3510,6 +3732,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       currentThinkingContent = null;
       currentAssistantContent = null;
       accumulatedAssistantText = '';
+      if (typeof celebrateMascot === 'function') {
+        celebrateMascot();
+      }
       renderConversationTimeline();
     }
 
@@ -3533,17 +3758,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     window.addEventListener('message', event => {
       const msg = event.data;
       switch (msg.type) {
+        case 'set_mascot_enabled': {
+          setMascotEnabled(msg.enabled !== false);
+          break;
+        }
         case 'file_diff_stats_result': {
           if (msg.stats) {
             globalDiffStats = Object.assign(globalDiffStats || {}, msg.stats);
             document.querySelectorAll('.files-changed-row').forEach(row => {
               const fPath = row.getAttribute('data-file-path');
               if (!fPath) return;
-              const normalized = fPath.split('\\\\').join('/');
+              const normalized = fPath.replace(/\\\\/g, '/').trim();
               let s = globalDiffStats[normalized];
               if (!s) {
                 for (const k in globalDiffStats) {
-                  if (normalized.endsWith(k) || k.endsWith(normalized)) {
+                  const normK = k.replace(/\\\\/g, '/');
+                  if (normalized.endsWith(normK) || normK.endsWith(normalized) || normalized.endsWith('/' + normK) || normK.endsWith('/' + normalized)) {
                     s = globalDiffStats[k];
                     break;
                   }
@@ -4249,7 +4479,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               const labelEl = document.getElementById('label-' + msg.tool_id);
               if (labelEl) {
                 if (fileMatch && fileMatch[1]) {
-                  const fname = fileMatch[1].split('\\\\').join('/').split('/').pop() || fileMatch[1];
+                  const fname = fileMatch[1].replace(/\\\\/g, '/').split('/').pop() || fileMatch[1];
                   labelEl.textContent = fname;
                   labelEl.title = fileMatch[1];
                   toolRow.setAttribute('data-label-resolved', '1');
@@ -4697,9 +4927,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
 
         case 'cron_event':
-          if (msg.event === 'run_completed' && msg.run) {
-            renderCronEventCard(msg.job, msg.run);
-          }
+          // Cron completion notifications are delivered via VS Code toast notification;
+          // do not inject event cards into the active conversation chat.
           break;
 
         case 'plan_updated':
@@ -5144,10 +5373,31 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (steps.length > 0) {
         stepsHtml = '<div class="plan-steps-preview">' +
           steps.map(function(s, idx) {
-            const txt = typeof s === 'string' ? s : (s.title || s.description || s.text || '');
-            const isDone = (s.status || '').toLowerCase() === 'done';
-            return '<div class="plan-step-item' + (isDone ? ' is-done' : '') + '">' +
-              '<span class="plan-step-bullet">' + (isDone ? '✓' : (idx + 1)) + '</span>' +
+            const txt = typeof s === 'string' ? s : (s.title || s.description || s.text || ('Step ' + (idx + 1)));
+            const sStatus = (typeof s === 'string' ? 'pending' : (s.status || 'pending')).toLowerCase();
+            const isDone = (sStatus === 'done' || sStatus === 'completed');
+            const isActive = (sStatus === 'active' || sStatus === 'in_progress' || sStatus === 'running');
+            const isFailed = (sStatus === 'failed' || sStatus === 'error');
+
+            let iconSvg = '';
+            let itemClass = 'plan-step-item';
+
+            if (isDone) {
+              itemClass += ' is-done';
+              iconSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+            } else if (isActive) {
+              itemClass += ' is-active';
+              iconSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>';
+            } else if (isFailed) {
+              itemClass += ' is-failed';
+              iconSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+            } else {
+              itemClass += ' is-pending';
+              iconSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"></rect></svg>';
+            }
+
+            return '<div class="' + itemClass + '">' +
+              '<div class="plan-step-icon-wrap">' + iconSvg + '</div>' +
               '<span class="plan-step-txt">' + escapeHtml(txt) + '</span>' +
             '</div>';
           }).join('') +
@@ -5515,6 +5765,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       });
     }, 1000);
 
+    initChatMascot();
     setRandomStatement();
     vscode.postMessage({ type: 'ready' });
     vscode.postMessage({ type: 'webview_ready' });

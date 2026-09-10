@@ -1,0 +1,12 @@
+{
+  "name": "andromity-workspace",
+  "version": "0.2.8",
+  "private": true,
+  "description": "Andromity Agent Workspace",
+  "scripts": {
+    "compile": "npm run compile --prefix vscode-extension",
+    "build": "npm run build --prefix vscode-extension",
+    "watch": "npm run watch --prefix vscode-extension",
+    "test": "npm run test:build --prefix vscode-extension"
+  }
+}

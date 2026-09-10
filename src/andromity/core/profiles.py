@@ -4,7 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import List
-from andromity.config import get_shell
+from andromity.config import config, get_shell
 
 _git_branch_cache: str | None = None
 
@@ -82,6 +82,15 @@ def get_system_prompt(profile: str, project_path: str | None = None) -> str:
     git_branch = _get_git_branch(cwd)
     venv = os.environ.get("VIRTUAL_ENV") or os.environ.get("CONDA_DEFAULT_ENV") or "none"
     is_wsl = "WSL" in platform.uname().release if os_name == "Linux" else False
+    is_trusted = config.is_trusted(str(cwd))
+    trust_guardrail = ""
+    if not is_trusted:
+        trust_guardrail = f"""
+# Workspace Trust Warning [RESTRICTED]
+- The current workspace ({cwd}) is UNTRUSTED.
+- File modifications (`write_file`, `edit_file`, `edit_file_multi`, `patch_file`, `delete_file`) and shell execution (`shell_exec`, `shell_bg`) are BLOCKED by policy.
+- When file edits or commands are needed, explicitly inform the user that the folder is untrusted and they must enable trust in Andromity Hub (Trust & Security) or type `/trust`. Do NOT blindly retry blocked write/exec tools.
+"""
     
     base = f"""You are Andromity, an elite AI coding assistant operating on the user's machine inside terminal.
 
@@ -101,8 +110,9 @@ def get_system_prompt(profile: str, project_path: str | None = None) -> str:
 - OS: {os_name}{" (WSL)" if is_wsl else ""}
 - Shell: {shell}
 - CWD: {cwd}
+- Workspace Trust: {"Trusted" if is_trusted else "UNTRUSTED (Restricted Mode)"}
 - Git Branch: {git_branch}
-
+{trust_guardrail}
 # Safety & Guardrails
 - Always use valid syntax for {shell} on {os_name}. Never assume Unix paths on Windows unless in WSL.
 - NEVER run destructive commands or overwrite files without verifying current content first via `read_file`.

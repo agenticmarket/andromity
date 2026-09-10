@@ -171,7 +171,7 @@ export function getChatActivityScript(): string {
         if (!isWrite) return null;
 
         var filePath = parsedArgs.TargetFile || parsedArgs.path || parsedArgs.file || parsedArgs.target_file || parsedArgs.filePath || '';
-        var normalizedKey = filePath.split('\\\\').join('/');
+        var normalizedKey = filePath.replace(/\\\\/g, '/');
         var filename = normalizedKey.split('/').pop() || filePath || 'file';
 
         var extMatch = filename.match(/\\.([a-zA-Z0-9]+)$/);

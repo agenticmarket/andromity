@@ -681,7 +681,7 @@ class JsonRpcHandler:
             if not is_trusted_workspace and mode not in ("full", "yolo"):
                 if tool_name in ("write_file", "edit_file", "edit_file_multi", "patch_file", "delete_file", "shell_exec", "shell_bg", "shell_kill"):
                     log.warning("Tool '%s' blocked — workspace %s is untrusted", tool_name, session.project_path)
-                    return False
+                    return (False, "TOOL BLOCKED: Workspace is untrusted. Grant trust in Andromity Hub (Trust & Security) to permit file edits or terminal commands.")
 
             # 2. YOLO / FULL mode auto-approves all actions
             if auto_approve or mode in ("full", "yolo"):
@@ -1877,6 +1877,12 @@ class JsonRpcHandler:
         run_store = CronRunStore(project_path)
         store = CronStore(project_path)
 
+        cron_session = Session(
+            session_id=f"cron-{job.id}-{int(time.time())}",
+            name=f"Cron: {job.name}",
+            project_path=project_path,
+        )
+
         run = CronRun(
             id=str(uuid.uuid4())[:12],
             job_id=job.id,
@@ -1885,6 +1891,7 @@ class JsonRpcHandler:
             prompt=job.prompt,
             model=job.model,
             provider=job.provider,
+            session_id=cron_session.id,
             status="running",
         )
         run_store.save_run(run)
@@ -1903,13 +1910,6 @@ class JsonRpcHandler:
                 run_store.save_run(run)
                 self.notify("cron/run_completed", {"job_id": job.id, "run": run.to_dict(), "job": job.to_dict()})
                 return run.to_dict()
-
-        # Create dedicated cron session
-        cron_session = Session(
-            session_id=f"cron-{job.id}-{int(time.time())}",
-            name=f"Cron: {job.name}",
-            project_path=project_path,
-        )
 
         def _make_cron_approval(cron_job):
             async def _approval(tool_name: str, args: dict) -> bool:
@@ -1968,6 +1968,11 @@ class JsonRpcHandler:
         duration_ms = int((time.time() - start_time) * 1000)
         full_output = "".join(accumulated_text).strip()
 
+        try:
+            cron_session.flush()
+        except Exception:
+            pass
+
         run.finished_at = finished_at
         run.duration_ms = duration_ms
         run.output = full_output
@@ -1977,6 +1982,7 @@ class JsonRpcHandler:
         run.status = "success" if not error_msg else ("timeout" if "timed out" in str(error_msg).lower() else "failed")
         run.error = error_msg
         run.cost_usd = cron_session.cost_usd if hasattr(cron_session, "cost_usd") else 0.0
+        run.session_id = cron_session.id
 
         run_store.save_run(run)
 
@@ -2044,6 +2050,12 @@ class JsonRpcHandler:
         for j in jobs:
             jd = j.to_dict()
             jd["next_run_in"] = j.next_run_in()
+            try:
+                latest_runs = scheduler.list_runs(j.id, limit=1)
+                if latest_runs and latest_runs[0].session_id:
+                    jd["latest_session_id"] = latest_runs[0].session_id
+            except Exception:
+                pass
             results.append(jd)
         return results
 

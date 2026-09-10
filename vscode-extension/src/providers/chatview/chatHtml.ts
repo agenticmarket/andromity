@@ -526,6 +526,70 @@ ${styles}
       <div class="slash-palette-list" id="mention-palette-list"></div>
     </div>
 
+    <!-- Animated Mascot Companion ("Andro-Pet") Home Slot -->
+    <div class="chat-mascot-home-slot" id="chat-mascot-home-slot">
+      <div class="chat-mascot" id="chat-mascot" title="Andro-Pet (Click to interact, /pet to toggle)" role="button" tabindex="0" aria-label="Andro-Pet mascot companion">
+        <div class="mascot-bubble" id="mascot-bubble" style="display:none;"></div>
+        <div class="mascot-sprite" id="mascot-sprite">
+          <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" class="mascot-svg" shape-rendering="crispEdges">
+            <!-- Antennae -->
+            <g class="mascot-antennae">
+              <rect x="7" y="2" width="3" height="3" fill="#38bdf8" class="antenna-bulb left" />
+              <rect x="8" y="3" width="1" height="1" fill="#e0f2fe" />
+              <rect x="9" y="5" width="2" height="2" fill="#0284c7" />
+              <rect x="10" y="7" width="2" height="2" fill="#0284c7" />
+              <rect x="11" y="9" width="2" height="2" fill="#0369a1" />
+
+              <rect x="22" y="2" width="3" height="3" fill="#38bdf8" class="antenna-bulb right" />
+              <rect x="23" y="3" width="1" height="1" fill="#e0f2fe" />
+              <rect x="21" y="5" width="2" height="2" fill="#0284c7" />
+              <rect x="20" y="7" width="2" height="2" fill="#0284c7" />
+              <rect x="19" y="9" width="2" height="2" fill="#0369a1" />
+            </g>
+
+            <!-- Mascot Body -->
+            <g class="mascot-body">
+              <rect x="14" y="9" width="4" height="2" fill="#38bdf8" />
+              <rect x="12" y="11" width="8" height="2" fill="#38bdf8" />
+              <rect x="10" y="13" width="12" height="2" fill="#0ea5e9" />
+              <rect x="10" y="13" width="2" height="2" fill="#38bdf8" />
+              
+              <rect x="8" y="15" width="16" height="3" fill="#0284c7" />
+              <rect x="8" y="15" width="2" height="3" fill="#38bdf8" />
+              <rect x="22" y="15" width="2" height="3" fill="#0369a1" />
+              
+              <rect x="7" y="18" width="18" height="4" fill="#0284c7" />
+              <rect x="7" y="18" width="2" height="4" fill="#38bdf8" />
+              <rect x="23" y="18" width="2" height="4" fill="#0369a1" />
+
+              <rect x="6" y="22" width="20" height="4" fill="#0284c7" />
+              <rect x="6" y="22" width="2" height="4" fill="#38bdf8" />
+              <rect x="24" y="22" width="2" height="4" fill="#0369a1" />
+
+              <rect x="5" y="26" width="22" height="3" fill="#0369a1" />
+              <rect x="5" y="26" width="2" height="3" fill="#0284c7" />
+              <rect x="25" y="26" width="2" height="3" fill="#075985" />
+              
+              <rect x="6" y="29" width="7" height="2" fill="#075985" class="mascot-foot left" />
+              <rect x="19" y="29" width="7" height="2" fill="#075985" class="mascot-foot right" />
+              <rect x="13" y="29" width="6" height="1" fill="#0369a1" />
+            </g>
+
+            <!-- Eyes Layer -->
+            <g class="mascot-eyes" id="mascot-eyes-group">
+              <rect x="12" y="17" width="2" height="5" fill="#0f172a" class="eye-pixel eye-left" />
+              <rect x="18" y="17" width="2" height="5" fill="#0f172a" class="eye-pixel eye-right" />
+              <rect x="12" y="17" width="1" height="2" fill="#e0f2fe" class="eye-pupil pupil-left" />
+              <rect x="18" y="17" width="1" height="2" fill="#e0f2fe" class="eye-pupil pupil-right" />
+            </g>
+            
+            <rect x="9" y="21" width="2" height="1" fill="#f472b6" opacity="0.6" class="mascot-blush" />
+            <rect x="21" y="21" width="2" height="1" fill="#f472b6" opacity="0.6" class="mascot-blush" />
+          </svg>
+        </div>
+      </div>
+    </div>
+
     <div class="prompt-box">
       <div class="image-attachments-container" id="image-attachments-container" style="display:none;"></div>
       <textarea id="prompt-input" autofocus placeholder="Ask Andromity or type / for commands, @ for skills..." rows="1" aria-label="Ask Andromity or type slash for commands, @ for skills"></textarea>

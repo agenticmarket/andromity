@@ -583,15 +583,36 @@ class Agent:
 
                 if not self.auto_approve and self.on_tool_approval:
                     import inspect
-                    is_approved = await self.on_tool_approval(tool_name, args) if inspect.iscoroutinefunction(self.on_tool_approval) else self.on_tool_approval(tool_name, args)
+                    approval_res = await self.on_tool_approval(tool_name, args) if inspect.iscoroutinefunction(self.on_tool_approval) else self.on_tool_approval(tool_name, args)
+                    is_approved = True
+                    rejection_reason: str | None = None
+                    if isinstance(approval_res, tuple):
+                        is_approved = bool(approval_res[0])
+                        if len(approval_res) > 1 and approval_res[1]:
+                            rejection_reason = str(approval_res[1])
+                    elif isinstance(approval_res, dict):
+                        is_approved = bool(approval_res.get("approved", False))
+                        rejection_reason = approval_res.get("reason")
+                    else:
+                        is_approved = bool(approval_res)
+
                     if not is_approved:
-                        rejection = (
-                            f"TOOL REJECTED BY USER: '{tool_name}' was explicitly declined.\n"
-                            f"Do NOT retry this tool call.\n"
-                            f"Acknowledge the rejection, then ask the user how they would like to proceed."
-                        )
+                        if rejection_reason:
+                            rejection = (
+                                f"{rejection_reason}\n"
+                                f"Do NOT retry this tool call.\n"
+                                f"Acknowledge the restriction/rejection, then inform the user or ask how they would like to proceed."
+                            )
+                            ui_label = f"[{rejection_reason}]" if len(rejection_reason) <= 40 else "[Tool Blocked]"
+                        else:
+                            rejection = (
+                                f"TOOL REJECTED BY USER: '{tool_name}' was explicitly declined.\n"
+                                f"Do NOT retry this tool call.\n"
+                                f"Acknowledge the rejection, then ask the user how they would like to proceed."
+                            )
+                            ui_label = "[Rejected by User]"
                         final_results[tool_call["id"]] = rejection
-                        yield ToolResult(tool_id=tool_call["id"], result="[Rejected by User]", duration_ms=0.0, success=False, ts=time.time())
+                        yield ToolResult(tool_id=tool_call["id"], result=ui_label, duration_ms=0.0, success=False, ts=time.time())
                         continue
                 prepared.append((tool_call, tool_name, args))
 
