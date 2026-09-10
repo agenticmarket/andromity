@@ -1,13 +1,16 @@
 """Tests for search module (grep_search, find_files, auto-ignores)."""
 import os
 import tempfile
+import time
 from pathlib import Path
+from unittest.mock import patch
 from andromity.core.search import (
     grep_search,
     find_files,
     _python_grep,
     _truncate_line,
     _is_excluded_path,
+    find_ripgrep_path,
 )
 
 
@@ -163,3 +166,61 @@ def test_find_files_no_matches():
         (Path(tmpdir) / "test.txt").write_text("hello")
         res = find_files("*.rs", path=tmpdir)
         assert "No files found matching pattern" in res
+
+
+@patch("shutil.which", return_value=None)
+def test_grep_search_no_rg_falls_back_to_python(mock_which):
+    """grep_search must complete via the Python fallback when rg (and git) are absent."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "file.py").write_text("hello world\n")
+        res = grep_search("hello", path=tmpdir)
+        assert "file.py" in res
+        assert "hello world" in res
+
+
+@patch("shutil.which", return_value=None)
+def test_grep_search_no_tools_completes_quickly(mock_which):
+    """Python fallback must finish a small tree well under its 8s timeout."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "f.py").write_text("x = 1\n" * 1000)
+        t0 = time.monotonic()
+        res = grep_search("x", path=tmpdir)
+        elapsed = time.monotonic() - t0
+        assert "f.py" in res
+        assert elapsed < 8.0
+
+
+@patch("shutil.which", return_value=None)
+def test_grep_search_python_fallback_regex_alternation(mock_which):
+    """Alternation regex queries must work in the Python fallback when rg/git are absent."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "a.txt").write_text("United States\n")
+        (Path(tmpdir) / "b.txt").write_text("Germany\n")
+        (Path(tmpdir) / "c.txt").write_text("France\n")
+        res = grep_search("United States|Germany", path=tmpdir)
+        assert "a.txt" in res
+        assert "b.txt" in res
+        assert "c.txt" not in res
+
+
+def test_python_grep_timeout_returns_gracefully():
+    """An expired timeout must produce the timed-out message instead of hanging."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for i in range(20):
+            sub = Path(tmpdir) / f"dir_{i}"
+            sub.mkdir()
+            (sub / "f.txt").write_text("needle here\n")
+        res = _python_grep(
+            "needle", Path(tmpdir), case_sensitive=False,
+            patterns=None, max_results=10, timeout_s=0.0,
+        )
+        assert "timed out" in res
+
+
+def test_find_ripgrep_path():
+    """Verify find_ripgrep_path returns a valid executable path or None."""
+    rg = find_ripgrep_path()
+    if rg:
+        assert os.path.isfile(rg)
+        assert "rg" in Path(rg).name.lower()
+

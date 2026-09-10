@@ -24,6 +24,9 @@ export function getWaterfallScript(sessionId: string): string {
           totalTokens: 0
         }
       };
+      if (typeof window !== 'undefined') {
+        window.__waterfallState = state;
+      }
 
       // DOM Elements
       const els = {
@@ -88,7 +91,7 @@ export function getWaterfallScript(sessionId: string): string {
         return d.toTimeString().split(' ')[0] + '.' + String(d.getMilliseconds()).padStart(3, '0');
       }
 
-      function ensureTurn(turnId, userQuery) {
+      function ensureTurn(turnId, userQuery, startTimeMs) {
         if (!turnId) {
           turnId = state.currentTurnId || ('turn_' + (state.turns.size + 1));
         }
@@ -100,7 +103,7 @@ export function getWaterfallScript(sessionId: string): string {
             id: turnId,
             number: turnNumber,
             query: userQuery || 'Agent Turn',
-            startTime: Date.now(),
+            startTime: startTimeMs || Date.now(),
             endTime: null,
             durationMs: 0,
             tokens: 0,
@@ -434,10 +437,18 @@ export function getWaterfallScript(sessionId: string): string {
         if (!turn) return;
 
         const now = Date.now();
+        // Completed spans lock to endTime. Active running spans dynamically grow
+        // with the live clock (now) so bars expand and elapsed labels tick continuously.
+        // Waiting/unclosed historical spans fall back to argsEndTime or now.
+        const spanLiveEnd = (span) => {
+          if (span.endTime) return span.endTime;
+          if (span.status === 'running') return now;
+          return span.argsEndTime || now;
+        };
         let turnMaxElapsed = 100;
 
         for (const span of turn.spans) {
-          const end = span.endTime || now;
+          const end = spanLiveEnd(span);
           const elapsed = end - turn.startTime;
           if (elapsed > turnMaxElapsed) turnMaxElapsed = elapsed;
         }
@@ -461,7 +472,7 @@ export function getWaterfallScript(sessionId: string): string {
           if (!bar) continue;
 
           const startOffset = Math.max(0, span.startTime - turn.startTime);
-          const currentDuration = (span.endTime || now) - span.startTime;
+          const currentDuration = spanLiveEnd(span) - span.startTime;
 
           const leftPercent = Math.min(96, Math.max(0, (startOffset / turnMaxElapsed) * 100));
           const widthPercent = Math.min(100 - leftPercent, Math.max(2, (currentDuration / turnMaxElapsed) * 100));
@@ -522,9 +533,16 @@ export function getWaterfallScript(sessionId: string): string {
       }
 
       function updateSummaryStats() {
-        if (els.totalDuration) els.totalDuration.textContent = formatMs(state.totals.durationMs);
+        const now = Date.now();
+        let runningExtraMs = 0;
+        for (const span of state.spans.values()) {
+          if (span.status === 'running' && !span.endTime && span.startTime) {
+            runningExtraMs += Math.max(0, now - span.startTime);
+          }
+        }
+        if (els.totalDuration) els.totalDuration.textContent = formatMs(state.totals.durationMs + runningExtraMs);
         if (els.totalLlm) els.totalLlm.textContent = formatMs(state.totals.llmMs);
-        if (els.totalTools) els.totalTools.textContent = formatMs(state.totals.toolMs);
+        if (els.totalTools) els.totalTools.textContent = formatMs(state.totals.toolMs + runningExtraMs);
         if (els.totalTokens) els.totalTokens.textContent = state.totals.totalTokens.toLocaleString();
 
         if (els.liveDot) {
@@ -721,10 +739,25 @@ export function getWaterfallScript(sessionId: string): string {
       });
 
       // Animation Loop for live running spans
+      let lastSummaryUpdate = 0;
       function animLoop() {
-        if (state.isRunning) {
+        let hasRunning = state.isRunning;
+        if (!hasRunning) {
+          for (const span of state.spans.values()) {
+            if (span.status === 'running' || span.status === 'waiting') {
+              hasRunning = true;
+              break;
+            }
+          }
+        }
+        if (hasRunning) {
           for (const turn of state.turns.values()) {
             updateTimingBars(turn.id);
+          }
+          const now = Date.now();
+          if (now - lastSummaryUpdate > 500) {
+            lastSummaryUpdate = now;
+            updateSummaryStats();
           }
         }
         requestAnimationFrame(animLoop);
@@ -744,7 +777,9 @@ export function getWaterfallScript(sessionId: string): string {
             if (!activeTurn || activeTurn.endTime) {
               const turnId = 'turn_' + (state.turns.size + 1);
               state.currentTurnId = turnId;
-              ensureTurn(turnId, query || ('Turn #' + (state.turns.size + 1)));
+              // Use the server event ts when present: buffered replays carry
+              // past epoch timestamps, and Date.now() here would corrupt offsets.
+              ensureTurn(turnId, query || ('Turn #' + (state.turns.size + 1)), msg.ts ? msg.ts * 1000 : undefined);
             } else if (query && query !== 'Agent Turn') {
               activeTurn.query = query;
               const qEl = activeTurn.element ? activeTurn.element.querySelector('.wf-turn-query') : null;
@@ -760,32 +795,42 @@ export function getWaterfallScript(sessionId: string): string {
 
           case 'waterfall_llm_start': {
             state.isRunning = true;
-            const turn = ensureTurn(state.currentTurnId);
+            const turn = ensureTurn(state.currentTurnId, undefined, msg.ts ? msg.ts * 1000 : undefined);
             const spanId = 'llm_' + (msg.turn_id || Date.now());
-            const span = {
-              id: spanId,
-              turnId: turn.id,
-              type: 'llm',
-              name: msg.model || 'Model Inference',
-              model: msg.model,
-              provider: msg.provider,
-              startTime: msg.ts ? msg.ts * 1000 : Date.now(),
-              endTime: null,
-              durationMs: 0,
-              ttfbMs: 0,
-              status: 'running',
-              promptTokens: msg.prompt_tokens_est || 0,
-              completionTokens: 0,
-              totalTokens: 0,
-              response: '',
-              thinking: '',
-              toolCalls: [],
-              args: ''
-            };
-            state.spans.set(spanId, span);
-            turn.spans.push(span);
-            renderSpanRow(span);
-            addLog('LLM-START', \`\${msg.provider || ''}/\${msg.model || 'model'} inference stream started\`);
+            let span = state.spans.get(spanId);
+            if (!span) {
+              span = {
+                id: spanId,
+                turnId: turn.id,
+                type: 'llm',
+                name: msg.model || 'Model Inference',
+                model: msg.model,
+                provider: msg.provider,
+                startTime: msg.ts ? msg.ts * 1000 : Date.now(),
+                endTime: null,
+                durationMs: 0,
+                ttfbMs: 0,
+                status: 'running',
+                promptTokens: msg.prompt_tokens_est || 0,
+                completionTokens: 0,
+                totalTokens: 0,
+                response: '',
+                thinking: '',
+                toolCalls: [],
+                args: ''
+              };
+              state.spans.set(spanId, span);
+              turn.spans.push(span);
+              renderSpanRow(span);
+              addLog('LLM-START', (msg.provider || '') + '/' + (msg.model || 'model') + ' inference stream started');
+            } else {
+              span.status = 'running';
+              if (msg.model) {
+                span.name = msg.model;
+                span.model = msg.model;
+              }
+              if (msg.provider) span.provider = msg.provider;
+            }
             updateTimingBars(turn.id);
             updateSummaryStats();
             break;
@@ -802,7 +847,35 @@ export function getWaterfallScript(sessionId: string): string {
               }
             }
 
-            if (span) {
+            if (!span) {
+              // Synthesize missing LLM span from end event so trace is never dropped
+              const turn = state.turns.get(state.currentTurnId) || ensureTurn(state.currentTurnId);
+              const dur = msg.duration_ms || 1000;
+              const end = msg.ts ? msg.ts * 1000 : Date.now();
+              span = {
+                id: spanId,
+                turnId: turn.id,
+                type: 'llm',
+                name: msg.model || 'Model Inference',
+                model: msg.model,
+                provider: '',
+                startTime: end - dur,
+                endTime: end,
+                durationMs: dur,
+                ttfbMs: msg.ttfb_ms || 0,
+                status: 'done',
+                promptTokens: msg.prompt_tokens || 0,
+                completionTokens: msg.completion_tokens || 0,
+                totalTokens: msg.total_tokens || 0,
+                response: msg.response || '',
+                thinking: msg.thinking || '',
+                toolCalls: msg.tool_calls || [],
+                args: ''
+              };
+              state.spans.set(spanId, span);
+              turn.spans.push(span);
+              renderSpanRow(span);
+            } else {
               span.status = 'done';
               span.endTime = msg.ts ? msg.ts * 1000 : Date.now();
               span.durationMs = msg.duration_ms || (span.endTime - span.startTime);
@@ -814,44 +887,49 @@ export function getWaterfallScript(sessionId: string): string {
               span.thinking = msg.thinking || span.thinking || '';
               span.toolCalls = msg.tool_calls || [];
               span.args = '';
-
-              state.totals.llmMs += span.durationMs;
-              state.totals.durationMs += span.durationMs;
-              state.totals.promptTokens += span.promptTokens;
-              state.totals.completionTokens += span.completionTokens;
-              state.totals.totalTokens += span.totalTokens;
-
-              updateTimingBars(span.turnId);
-              if (span.element && span.element.classList.contains('expanded')) {
-                updateSpanDetailsContent(span);
-              }
-              addLog('LLM-END', \`Completed in \${formatMs(span.durationMs)} (TTFB \${formatMs(span.ttfbMs)}), tokens: \${span.totalTokens}\`);
-              updateSummaryStats();
             }
+
+            state.totals.llmMs += span.durationMs;
+            state.totals.durationMs += span.durationMs;
+            state.totals.promptTokens += span.promptTokens;
+            state.totals.completionTokens += span.completionTokens;
+            state.totals.totalTokens += span.totalTokens;
+
+            updateTimingBars(span.turnId);
+            if (span.element && span.element.classList.contains('expanded')) {
+              updateSpanDetailsContent(span);
+            }
+            addLog('LLM-END', 'Completed in ' + formatMs(span.durationMs) + ' (TTFB ' + formatMs(span.ttfbMs) + '), tokens: ' + span.totalTokens);
+            updateSummaryStats();
             break;
           }
 
           case 'tool_start': {
             state.isRunning = true;
-            const turn = ensureTurn(state.currentTurnId);
+            const turn = ensureTurn(state.currentTurnId, undefined, msg.ts ? msg.ts * 1000 : undefined);
             const spanId = msg.tool_id || ('tool_' + Date.now());
             const isCoord = (msg.tool_name || '').startsWith('session_') || (msg.tool_name || '').startsWith('shared_state_');
-            const span = {
-              id: spanId,
-              turnId: turn.id,
-              type: isCoord ? 'coordination' : 'tool',
-              name: msg.tool_name || 'tool_call',
-              startTime: msg.ts ? msg.ts * 1000 : Date.now(),
-              endTime: null,
-              durationMs: 0,
-              status: (msg.tool_name === 'session_ask_question') ? 'waiting' : 'running',
-              args: '',
-              result: ''
-            };
-            state.spans.set(spanId, span);
-            turn.spans.push(span);
-            renderSpanRow(span);
-            addLog(isCoord ? 'COORD-START' : 'TOOL-START', \`Executing \${span.name} (id: \${span.id})\`);
+            let span = state.spans.get(spanId);
+            if (!span) {
+              span = {
+                id: spanId,
+                turnId: turn.id,
+                type: isCoord ? 'coordination' : 'tool',
+                name: msg.tool_name || 'tool_call',
+                startTime: msg.ts ? msg.ts * 1000 : Date.now(),
+                endTime: null,
+                durationMs: 0,
+                status: (msg.tool_name === 'session_ask_question' || msg.tool_name === 'session_ask_questions') ? 'waiting' : 'running',
+                args: '',
+                result: ''
+              };
+              state.spans.set(spanId, span);
+              turn.spans.push(span);
+              renderSpanRow(span);
+              addLog(isCoord ? 'COORD-START' : 'TOOL-START', 'Tool call streaming: ' + span.name + ' (id: ' + span.id + ')');
+            } else {
+              span.status = (msg.tool_name === 'session_ask_question' || msg.tool_name === 'session_ask_questions') ? 'waiting' : 'running';
+            }
             updateTimingBars(turn.id);
             updateSummaryStats();
             break;
@@ -865,64 +943,102 @@ export function getWaterfallScript(sessionId: string): string {
             break;
           }
 
-          case 'tool_result': {
+          case 'tool_end': {
+            // Args streaming finished (ToolCallEnd): the tool is still
+            // executing, so keep the span open but freeze the growing bar
+            // at the args-complete timestamp instead of drifting with Date.now().
             const span = state.spans.get(msg.tool_id);
-            if (span) {
-              span.endTime = msg.ts ? msg.ts * 1000 : Date.now();
-              span.durationMs = msg.duration_ms || (span.endTime - span.startTime);
-              span.status = msg.success === false ? 'error' : 'done';
-              span.result = msg.result || '';
-
-              if (span.name === 'spawn_subagent' && msg.result) {
-                try {
-                  const parsed = typeof msg.result === 'string' ? JSON.parse(msg.result) : msg.result;
-                  if (parsed && parsed.agent_id) {
-                    const subSpan = state.spans.get(parsed.agent_id);
-                    if (subSpan) {
-                      subSpan.endTime = Date.now();
-                      subSpan.durationMs = parsed.duration_ms || (subSpan.endTime - subSpan.startTime);
-                      subSpan.status = (parsed.status === 'completed' || parsed.status === 'done') ? 'done' : 'error';
-                      if (parsed.summary) subSpan.result = parsed.summary;
-                      if (parsed.tools_called && Array.isArray(parsed.tools_called) && parsed.tools_called.length > 0) {
-                        if (!subSpan.toolSteps || subSpan.toolSteps.length < parsed.tools_called.length) {
-                          subSpan.toolSteps = parsed.tools_called.map((tc, idx) => ({
-                            id: tc.id || ('step_' + idx),
-                            name: tc.name,
-                            args: tc.args,
-                            detail: tc.name,
-                            startTime: subSpan.startTime,
-                            endTime: subSpan.startTime + (tc.duration_ms || 100),
-                            durationMs: tc.duration_ms || 100,
-                            status: tc.status || 'done',
-                            result: tc.result || ''
-                          }));
-                        }
-                      }
-                      updateTimingBars(subSpan.turnId);
-                      if (subSpan.element && subSpan.element.classList.contains('expanded')) {
-                        updateSpanDetailsContent(subSpan);
-                      }
-                    }
-                  }
-                } catch (e) {}
-              }
-
-              state.totals.toolMs += span.durationMs;
-              state.totals.durationMs += span.durationMs;
-
+            if (span && !span.endTime) {
+              span.argsEndTime = msg.ts ? msg.ts * 1000 : (span.argsEndTime || Date.now());
+              if (span.status === 'waiting') span.status = 'running';
               updateTimingBars(span.turnId);
               if (span.element && span.element.classList.contains('expanded')) {
                 updateSpanDetailsContent(span);
               }
-              addLog('TOOL-END', \`\${span.name} finished in \${formatMs(span.durationMs)} (\${span.status})\`);
-              updateSummaryStats();
+              addLog('TOOL-ARGS', 'Arguments received for ' + span.name + ', executing');
             }
+            break;
+          }
+
+          case 'tool_result': {
+            let span = state.spans.get(msg.tool_id);
+            if (!span) {
+              const turn = state.turns.get(state.currentTurnId) || ensureTurn(state.currentTurnId);
+              const dur = msg.duration_ms || 400;
+              const end = msg.ts ? msg.ts * 1000 : Date.now();
+              const isSub = (msg.tool_name === 'spawn_subagent');
+              span = {
+                id: msg.tool_id,
+                turnId: turn.id,
+                type: isSub ? 'subagent' : 'tool',
+                name: msg.tool_name || 'tool',
+                startTime: end - dur,
+                endTime: end,
+                durationMs: dur,
+                status: msg.success === false ? 'error' : 'done',
+                args: '',
+                result: msg.result || '',
+                toolSteps: []
+              };
+              state.spans.set(msg.tool_id, span);
+              turn.spans.push(span);
+              renderSpanRow(span);
+            } else {
+              span.endTime = msg.ts ? msg.ts * 1000 : Date.now();
+              span.durationMs = msg.duration_ms || (span.endTime - span.startTime);
+              span.status = msg.success === false ? 'error' : 'done';
+              span.result = msg.result || '';
+            }
+
+            if (span.name === 'spawn_subagent' && msg.result) {
+              try {
+                const parsed = typeof msg.result === 'string' ? JSON.parse(msg.result) : msg.result;
+                if (parsed && parsed.agent_id) {
+                  const subSpan = state.spans.get(parsed.agent_id);
+                  if (subSpan) {
+                    subSpan.endTime = Date.now();
+                    subSpan.durationMs = parsed.duration_ms || (subSpan.endTime - subSpan.startTime);
+                    subSpan.status = (parsed.status === 'completed' || parsed.status === 'done') ? 'done' : 'error';
+                    if (parsed.summary) subSpan.result = parsed.summary;
+                    if (parsed.tools_called && Array.isArray(parsed.tools_called) && parsed.tools_called.length > 0) {
+                      if (!subSpan.toolSteps || subSpan.toolSteps.length < parsed.tools_called.length) {
+                        subSpan.toolSteps = parsed.tools_called.map((tc, idx) => ({
+                          id: tc.id || ('step_' + idx),
+                          name: tc.name,
+                          args: tc.args,
+                          detail: tc.name,
+                          startTime: subSpan.startTime,
+                          endTime: subSpan.startTime + (tc.duration_ms || 100),
+                          durationMs: tc.duration_ms || 100,
+                          status: tc.status || 'done',
+                          result: tc.result || ''
+                        }));
+                      }
+                    }
+                    updateTimingBars(subSpan.turnId);
+                    if (subSpan.element && subSpan.element.classList.contains('expanded')) {
+                      updateSpanDetailsContent(subSpan);
+                    }
+                  }
+                }
+              } catch (e) {}
+            }
+
+            state.totals.toolMs += span.durationMs;
+            state.totals.durationMs += span.durationMs;
+
+            updateTimingBars(span.turnId);
+            if (span.element && span.element.classList.contains('expanded')) {
+              updateSpanDetailsContent(span);
+            }
+            addLog('TOOL-END', span.name + ' finished in ' + formatMs(span.durationMs) + ' (' + span.status + ')');
+            updateSummaryStats();
             break;
           }
 
           case 'subagent_spawned': {
             state.isRunning = true;
-            const turn = ensureTurn(state.currentTurnId);
+            const turn = ensureTurn(state.currentTurnId, undefined, msg.ts ? msg.ts * 1000 : undefined);
             const spanId = msg.agent_id || ('subagent_' + Date.now());
             const span = {
               id: spanId,
@@ -932,7 +1048,7 @@ export function getWaterfallScript(sessionId: string): string {
               role: msg.role || '',
               model: msg.model,
               provider: msg.provider,
-              startTime: Date.now(),
+              startTime: msg.ts ? msg.ts * 1000 : Date.now(),
               endTime: null,
               durationMs: 0,
               status: 'running',
@@ -951,7 +1067,7 @@ export function getWaterfallScript(sessionId: string): string {
           case 'subagent_progress': {
             let span = state.spans.get(msg.agent_id);
             if (!span) {
-              const turn = ensureTurn(state.currentTurnId);
+              const turn = ensureTurn(state.currentTurnId, undefined, msg.ts ? msg.ts * 1000 : undefined);
               span = {
                 id: msg.agent_id || ('subagent_' + Date.now()),
                 turnId: turn.id,
@@ -960,7 +1076,7 @@ export function getWaterfallScript(sessionId: string): string {
                 role: msg.role || '',
                 model: msg.model,
                 provider: msg.provider,
-                startTime: Date.now(),
+                startTime: msg.ts ? msg.ts * 1000 : Date.now(),
                 endTime: null,
                 durationMs: 0,
                 status: 'running',
@@ -981,7 +1097,7 @@ export function getWaterfallScript(sessionId: string): string {
                   name: msg.tool_name || 'tool_call',
                   args: msg.tool_args || '',
                   detail: msg.detail || '',
-                  startTime: Date.now(),
+                  startTime: msg.ts ? msg.ts * 1000 : Date.now(),
                   endTime: null,
                   durationMs: 0,
                   status: 'running',
@@ -1001,8 +1117,8 @@ export function getWaterfallScript(sessionId: string): string {
                   name: msg.tool_name || 'tool_call',
                   args: msg.tool_args || '',
                   detail: msg.detail || '',
-                  startTime: Date.now() - (msg.duration_ms || 0),
-                  endTime: Date.now(),
+                  startTime: (msg.ts ? msg.ts * 1000 : Date.now()) - (msg.duration_ms || 0),
+                  endTime: msg.ts ? msg.ts * 1000 : Date.now(),
                   durationMs: msg.duration_ms || 0,
                   status: isError ? 'error' : 'done',
                   result: msg.tool_result || ''
@@ -1011,14 +1127,14 @@ export function getWaterfallScript(sessionId: string): string {
               } else {
                 step.status = isError ? 'error' : 'done';
                 step.result = msg.tool_result || '';
-                step.endTime = Date.now();
+                step.endTime = msg.ts ? msg.ts * 1000 : Date.now();
                 step.durationMs = msg.duration_ms || Math.max(0, step.endTime - step.startTime);
                 if (msg.tool_args && !step.args) step.args = msg.tool_args;
               }
               addLog('SUBAGENT-TOOL', \`[\${span.name}] Finished \${msg.tool_name || 'tool'} (\${formatMs(step.durationMs)})\`);
             } else if (msg.event_type === 'completed' || msg.event_type === 'done') {
               if (span.status !== 'done') {
-                span.endTime = Date.now();
+                span.endTime = msg.ts ? msg.ts * 1000 : Date.now();
                 span.durationMs = msg.duration_ms || (span.endTime - span.startTime);
                 span.status = 'done';
                 if (msg.detail) span.result = msg.detail;
@@ -1028,7 +1144,7 @@ export function getWaterfallScript(sessionId: string): string {
               }
             } else if (msg.event_type === 'failed' || msg.event_type === 'error' || msg.event_type === 'killed' || msg.event_type === 'timeout') {
               if (span.status !== 'error') {
-                span.endTime = Date.now();
+                span.endTime = msg.ts ? msg.ts * 1000 : Date.now();
                 span.durationMs = msg.duration_ms || (span.endTime - span.startTime);
                 span.status = 'error';
                 span.result = msg.detail || msg.error || 'Subagent execution failed';
@@ -1047,7 +1163,7 @@ export function getWaterfallScript(sessionId: string): string {
           case 'subagent_done': {
             const span = state.spans.get(msg.agent_id);
             if (span && span.status !== 'done') {
-              span.endTime = Date.now();
+              span.endTime = msg.ts ? msg.ts * 1000 : Date.now();
               span.durationMs = msg.duration_ms || (span.endTime - span.startTime);
               span.status = 'done';
               if (msg.result) span.result = msg.result;
@@ -1064,7 +1180,7 @@ export function getWaterfallScript(sessionId: string): string {
           case 'subagent_failed': {
             const span = state.spans.get(msg.agent_id);
             if (span && span.status !== 'error') {
-              span.endTime = Date.now();
+              span.endTime = msg.ts ? msg.ts * 1000 : Date.now();
               span.durationMs = msg.duration_ms || (span.endTime - span.startTime);
               span.status = 'error';
               span.result = msg.error || msg.result || 'Subagent execution failed';
@@ -1107,7 +1223,9 @@ export function getWaterfallScript(sessionId: string): string {
             state.isRunning = false;
             const turn = state.turns.get(state.currentTurnId);
             if (turn) {
-              turn.endTime = Date.now();
+              // Prefer the event ts (absolute) so buffered replays don't
+              // stamp the turn end with wall-clock now.
+              turn.endTime = msg.ts ? msg.ts * 1000 : Date.now();
               turn.durationMs = turn.endTime - turn.startTime;
               updateTimingBars(turn.id);
             }
@@ -1118,7 +1236,7 @@ export function getWaterfallScript(sessionId: string): string {
 
           case 'agent_cancelled': {
             state.isRunning = false;
-            const now = Date.now();
+            const now = msg.ts ? msg.ts * 1000 : Date.now();
             const turn = state.turns.get(state.currentTurnId);
             if (turn) {
               turn.endTime = now;
@@ -1159,7 +1277,7 @@ export function getWaterfallScript(sessionId: string): string {
 
           case 'agent_error': {
             state.isRunning = false;
-            const now = Date.now();
+            const now = msg.ts ? msg.ts * 1000 : Date.now();
             const turn = state.turns.get(state.currentTurnId);
             if (turn) {
               turn.endTime = now;
@@ -1270,20 +1388,43 @@ export function getWaterfallScript(sessionId: string): string {
             const sData = msg.session;
             if (!sData) break;
 
-            if (state.turns.size === 0 && sData.messages && sData.messages.length > 0) {
+            // Idempotent history load (fixes reload vs close/reopen split):
+            // the panel now always sends session.get first, possibly twice
+            // (hidden-webview reveal + retainContextWhenHidden). Track how
+            // many user-messages are already materialised; skip those.
+            if (typeof state.historyUserCount !== 'number') state.historyUserCount = 0;
+            const messages = (sData.messages && sData.messages.length > 0) ? sData.messages : null;
+            if (!messages) break;
+            // Count user messages in this payload; skip the ones already built.
+            let payloadUserCount = 0;
+            for (let i = 0; i < messages.length; i++) {
+              if (messages[i] && messages[i].role === 'user') payloadUserCount++;
+            }
+            if (payloadUserCount <= state.historyUserCount && state.turns.size > 0) break;
+            // When the webview was freshly created (empty) the old fast path:
+            // build everything. When turns already exist (retained webview),
+            // only materialise the NEW user-messages beyond the watermark.
+            let skipUsers = state.turns.size === 0 ? 0 : state.historyUserCount;
+            {
               let currentTurn = null;
-              let turnCounter = 0;
+              let turnCounter = state.turns.size;
+              let turnCursor = 0;
+              let prevCumulativeDurMs = 0;
 
-              for (let i = 0; i < sData.messages.length; i++) {
-                const m = sData.messages[i];
+              for (let i = 0; i < messages.length; i++) {
+                const m = messages[i];
                 if (m.role === 'user') {
+                  if (skipUsers > 0) { skipUsers--; continue; }
                   turnCounter++;
+                  // Stable id: history turn N == live replay turn N, so a
+                  // late-arriving live tail can find and upgrade its turn.
                   const tId = 'turn_' + turnCounter;
+                  const tStart = m.ts ? new Date(m.ts).getTime() : Date.now();
                   currentTurn = {
                     id: tId,
                     number: turnCounter,
                     query: m.content || ('Turn #' + turnCounter),
-                    startTime: m.ts ? new Date(m.ts).getTime() : Date.now(),
+                    startTime: tStart,
                     endTime: null,
                     durationMs: 0,
                     tokens: 0,
@@ -1293,10 +1434,37 @@ export function getWaterfallScript(sessionId: string): string {
                   };
                   state.turns.set(tId, currentTurn);
                   state.currentTurnId = tId;
+                  turnCursor = tStart;
+                  prevCumulativeDurMs = 0;
                   renderTurn(currentTurn);
                 } else if (m.role === 'assistant' && currentTurn) {
                   const spanId = 'llm_' + currentTurn.id + '_' + currentTurn.spans.length;
-                  const durMs = m.duration ? Math.round(m.duration * 1000) : 1000;
+                  
+                  // Compute LLM duration
+                  let llmDurMs = 1000;
+                  if (m.ts) {
+                    const msgTs = new Date(m.ts).getTime();
+                    if (msgTs > turnCursor) {
+                      llmDurMs = msgTs - turnCursor;
+                    } else if (m.duration) {
+                      const cumMs = Math.round(m.duration * 1000);
+                      llmDurMs = cumMs > prevCumulativeDurMs ? (cumMs - prevCumulativeDurMs) : cumMs;
+                    }
+                  } else if (m.duration) {
+                    const cumMs = Math.round(m.duration * 1000);
+                    llmDurMs = cumMs > prevCumulativeDurMs ? (cumMs - prevCumulativeDurMs) : cumMs;
+                  }
+                  llmDurMs = Math.max(100, Math.min(600000, llmDurMs));
+
+                  const spanStart = turnCursor;
+                  const spanEnd = turnCursor + llmDurMs;
+                  turnCursor = spanEnd;
+                  if (m.duration) {
+                    prevCumulativeDurMs = Math.round(m.duration * 1000);
+                  } else {
+                    prevCumulativeDurMs += llmDurMs;
+                  }
+
                   const span = {
                     id: spanId,
                     turnId: currentTurn.id,
@@ -1304,10 +1472,10 @@ export function getWaterfallScript(sessionId: string): string {
                     name: sData.model || 'Model Inference',
                     model: sData.model,
                     provider: sData.provider,
-                    startTime: currentTurn.startTime,
-                    endTime: currentTurn.startTime + durMs,
-                    durationMs: durMs,
-                    ttfbMs: 250,
+                    startTime: spanStart,
+                    endTime: spanEnd,
+                    durationMs: llmDurMs,
+                    ttfbMs: Math.min(250, llmDurMs),
                     status: 'done',
                     promptTokens: 0,
                     completionTokens: 0,
@@ -1321,70 +1489,105 @@ export function getWaterfallScript(sessionId: string): string {
                   currentTurn.spans.push(span);
                   renderSpanRow(span);
 
-                  state.totals.llmMs += durMs;
-                  state.totals.durationMs += durMs;
-
+                  // Process tool calls emitted by this assistant turn
                   if (m.tool_calls && Array.isArray(m.tool_calls)) {
                     m.tool_calls.forEach((tc, tcIdx) => {
                       const tName = tc.function ? tc.function.name : (tc.name || 'tool');
                       const tArgs = tc.function ? tc.function.arguments : (tc.arguments || '');
                       const tSpanId = tc.id || ('tool_' + currentTurn.id + '_' + tcIdx);
                       const isSub = tName === 'spawn_subagent';
+
+                      // Look for the matching tool result message in subsequent messages
+                      const toolResultMsg = messages.slice(i + 1).find(tm => tm.role === 'tool' && tm.tool_call_id === tc.id);
+                      let toolResultContent = toolResultMsg ? (toolResultMsg.content || '') : '';
+                      let toolDur = 400;
+
+                      if (toolResultMsg && toolResultMsg.ts) {
+                        const toolEndTs = new Date(toolResultMsg.ts).getTime();
+                        if (toolEndTs > turnCursor) {
+                          toolDur = toolEndTs - turnCursor;
+                        }
+                      } else {
+                        // Estimate duration from gap to next assistant message
+                        const nextAsst = messages.slice(i + 1).find(tm => tm.role === 'assistant');
+                        if (nextAsst && nextAsst.ts) {
+                          const nextTs = new Date(nextAsst.ts).getTime();
+                          const gap = nextTs > turnCursor ? (nextTs - turnCursor) : 0;
+                          const estLlm = nextAsst.duration ? Math.round(nextAsst.duration * 1000) - prevCumulativeDurMs : 1000;
+                          toolDur = Math.max(100, Math.round((gap - Math.max(100, estLlm)) / (m.tool_calls.length || 1)));
+                        }
+                      }
+
+                      toolDur = Math.max(50, Math.min(600000, toolDur));
+
+                      let subRole = null;
+                      let subToolSteps = [];
+                      if (isSub && toolResultContent) {
+                        try {
+                          const parsed = typeof toolResultContent === 'string' ? JSON.parse(toolResultContent) : toolResultContent;
+                          if (parsed && parsed.duration_ms) {
+                            toolDur = Math.max(toolDur, Math.round(parsed.duration_ms));
+                          }
+                          if (parsed && parsed.role) {
+                            subRole = parsed.role;
+                          }
+                          if (parsed && Array.isArray(parsed.tools_called) && parsed.tools_called.length > 0) {
+                            subToolSteps = parsed.tools_called.map((step, idx) => ({
+                              id: step.id || ('step_' + idx),
+                              name: step.name,
+                              args: step.args,
+                              detail: step.name,
+                              startTime: turnCursor,
+                              endTime: turnCursor + (step.duration_ms || 100),
+                              durationMs: step.duration_ms || 100,
+                              status: step.status || 'done',
+                              result: step.result || ''
+                            }));
+                          }
+                        } catch (e) {}
+                      }
+
+                      const tStart = turnCursor;
+                      const tEnd = turnCursor + toolDur;
+                      turnCursor = tEnd;
+
                       const tSpan = {
                         id: tSpanId,
                         turnId: currentTurn.id,
                         type: isSub ? 'subagent' : 'tool',
-                        name: isSub ? 'Subagent' : tName,
-                        startTime: currentTurn.startTime + durMs + (tcIdx * 400),
-                        endTime: currentTurn.startTime + durMs + (tcIdx * 400) + 400,
-                        durationMs: 400,
+                        name: isSub ? (subRole ? 'Subagent: ' + subRole : 'Subagent') : tName,
+                        startTime: tStart,
+                        endTime: tEnd,
+                        durationMs: toolDur,
                         status: 'done',
                         args: tArgs,
-                        result: '',
-                        toolSteps: []
+                        result: toolResultContent,
+                        toolSteps: subToolSteps
                       };
                       state.spans.set(tSpanId, tSpan);
                       currentTurn.spans.push(tSpan);
                       renderSpanRow(tSpan);
-                      state.totals.toolMs += 400;
-                      state.totals.durationMs += 400;
                     });
                   }
                 } else if (m.role === 'tool' && currentTurn) {
                   let tSpan = m.tool_call_id ? state.spans.get(m.tool_call_id) : null;
-                  if (tSpan) {
-                    tSpan.result = m.content || '';
-                    if (tSpan.name === 'spawn_subagent' || tSpan.type === 'subagent') {
-                      try {
-                        const parsed = typeof m.content === 'string' ? JSON.parse(m.content) : m.content;
-                        if (parsed && parsed.duration_ms) {
-                          tSpan.durationMs = Math.round(parsed.duration_ms);
-                          tSpan.endTime = tSpan.startTime + tSpan.durationMs;
-                        }
-                        if (parsed && parsed.role) {
-                          tSpan.name = 'Subagent: ' + parsed.role;
-                          tSpan.role = parsed.role;
-                        }
-                        if (parsed && Array.isArray(parsed.tools_called) && parsed.tools_called.length > 0) {
-                          tSpan.toolSteps = parsed.tools_called.map((tc, idx) => ({
-                            id: tc.id || ('step_' + idx),
-                            name: tc.name,
-                            args: tc.args,
-                            detail: tc.name,
-                            startTime: tSpan.startTime,
-                            endTime: tSpan.startTime + (tc.duration_ms || 100),
-                            durationMs: tc.duration_ms || 100,
-                            status: tc.status || 'done',
-                            result: tc.result || ''
-                          }));
-                        }
-                      } catch (e) {}
-                    }
+                  if (tSpan && !tSpan.result && m.content) {
+                    tSpan.result = m.content;
                   }
                 }
               }
 
+              const isSessionRunning = sData.status === 'running';
               for (const turn of state.turns.values()) {
+                const isLatestTurn = (turn.id === state.currentTurnId);
+                if (isLatestTurn && isSessionRunning) {
+                  // Do not freeze the active in-progress turn! Leave turn.endTime null
+                  // so incoming live spans or replayed background events attach cleanly and animLoop ticks dynamically.
+                  turn.endTime = null;
+                  turn.durationMs = Math.max(0, Date.now() - turn.startTime);
+                  updateTimingBars(turn.id);
+                  continue;
+                }
                 let maxEnd = turn.startTime;
                 for (const s of turn.spans) {
                   if (s.endTime && s.endTime > maxEnd) maxEnd = s.endTime;
@@ -1394,13 +1597,75 @@ export function getWaterfallScript(sessionId: string): string {
                 updateTimingBars(turn.id);
               }
 
+              // Recalculate true totals from reconstructed sequential spans
+              state.totals.llmMs = 0;
+              state.totals.toolMs = 0;
+              state.totals.durationMs = 0;
+              for (const turn of state.turns.values()) {
+                state.totals.durationMs += turn.durationMs;
+                for (const s of turn.spans) {
+                  if (s.type === 'llm') state.totals.llmMs += (s.durationMs || 0);
+                  else if (s.type === 'tool' || s.type === 'subagent' || s.type === 'coordination') {
+                    state.totals.toolMs += (s.durationMs || 0);
+                  }
+                }
+              }
+
               state.totals.totalTokens = sData.token_total || 0;
               state.totals.promptTokens = sData.context_tokens || 0;
               state.isRunning = sData.status === 'running';
 
-              addLog('INIT', \`Loaded session history: \${turnCounter} turns, \${state.spans.size} spans\`);
+              // Watermark: number of user-turns materialised from history.
+              // Duplicate session_history payloads skip everything at/below it.
+              // History turn ids are stable ('turn_N') so late live-tail
+              // events can locate & upgrade their turn instead of cloning it.
+              state.historyUserCount = turnCounter;
+
+              addLog('INIT', 'Loaded session history: ' + turnCounter + ' turns, ' + state.spans.size + ' spans');
               updateSummaryStats();
             }
+            break;
+          }
+
+          case 'replay_complete': {
+            // Buffered event replay finished. If the session is no longer
+            // running, any span still marked 'running' missed its completion
+            // event (e.g. a closed tool whose tool_end was never bound) —
+            // freeze it at the turn's latest known end so it stops growing.
+            if (msg.is_running === true) break;
+            state.isRunning = false;
+            for (const turn of state.turns.values()) {
+              let latestEnd = 0;
+              for (const span of turn.spans) {
+                if (span.status !== 'running' && span.status !== 'waiting_approval' && span.status !== 'waiting' && span.endTime && span.endTime > latestEnd) {
+                  latestEnd = span.endTime;
+                }
+              }
+              let changed = false;
+              for (const span of turn.spans) {
+                if (span.status === 'running') {
+                  span.endTime = latestEnd || span.startTime;
+                  span.durationMs = Math.max(0, span.endTime - span.startTime);
+                  span.status = 'done';
+                  if (!span.result) span.result = '[Replay: completion event missing]';
+                  if (span.element && span.element.classList.contains('expanded')) {
+                    updateSpanDetailsContent(span);
+                  }
+                  changed = true;
+                }
+              }
+              if (changed) updateTimingBars(turn.id);
+              if (!turn.endTime && turn.spans.length > 0) {
+                let maxEnd = turn.startTime;
+                for (const span of turn.spans) {
+                  if (span.endTime && span.endTime > maxEnd) maxEnd = span.endTime;
+                }
+                turn.endTime = maxEnd;
+                turn.durationMs = Math.max(0, turn.endTime - turn.startTime);
+              }
+            }
+            addLog('REPLAY', 'Buffered trace replay complete');
+            updateSummaryStats();
             break;
           }
         }

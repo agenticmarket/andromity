@@ -11,7 +11,9 @@ const mockVscode = {
     file: (p) => ({ fsPath: p })
   },
   window: {},
-  workspace: {},
+  workspace: {
+    getConfiguration: () => ({ get: () => undefined }),
+  },
   commands: {},
   EventEmitter: class { event() {} fire() {} }
 };
@@ -40,7 +42,7 @@ if (scriptMatches.length === 0) {
   process.exit(1);
 }
 
-const js = scriptMatches[0];
+const js = scriptMatches.find(s => s.includes('acquireVsCodeApi') && s.includes('chatLog')) || scriptMatches[scriptMatches.length - 1];
 console.log(`Extracted JS length: ${js.length}`);
 
 // Create realistic DOM environment
@@ -150,6 +152,7 @@ function createMockElement(tagName, id) {
         el.parentElement.children = el.parentElement.children.filter(c => c !== el);
       }
     },
+    getContext: () => ({ fillRect: () => {}, clearRect: () => {}, fillStyle: '' }),
     querySelectorAll: (sel) => {
       const results = [];
       function walk(node) {

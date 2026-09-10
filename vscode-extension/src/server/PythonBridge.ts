@@ -58,22 +58,22 @@ export class PythonBridge {
     const arch = process.arch;           // 'x64' | 'arm64'
     const exeName = platform === "win32" ? "andromity-server.exe" : "andromity-server";
 
-    // Locate extension root directory by walking up from __dirname
+    // Locate binary: check workspace folders first (so local development uses fresh build), then walk up from __dirname
     const searchDirs: string[] = [];
     
-    // 1. Walk up from __dirname looking for folder with bin/
+    // 1. Check workspace folders first
+    for (const wf of vscode.workspace.workspaceFolders ?? []) {
+      searchDirs.push(path.join(wf.uri.fsPath, "vscode-extension"));
+      searchDirs.push(wf.uri.fsPath);
+    }
+
+    // 2. Walk up from __dirname looking for folder with bin/
     let curr = __dirname;
     for (let i = 0; i < 5; i++) {
       searchDirs.push(curr);
       const parent = path.dirname(curr);
       if (parent === curr) break;
       curr = parent;
-    }
-
-    // 2. Check workspace folders
-    for (const wf of vscode.workspace.workspaceFolders ?? []) {
-      searchDirs.push(wf.uri.fsPath);
-      searchDirs.push(path.join(wf.uri.fsPath, "vscode-extension"));
     }
 
     for (const base of searchDirs) {
@@ -550,6 +550,34 @@ export class PythonBridge {
     return this._spawnDaemon(pythonPath, args, projectRoot || cwd, env, startAttemptTime);
   }
 
+  /**
+   * Locate VS Code's internal bundled ripgrep binary (packaged with VS Code core).
+   */
+  private _findVsCodeRipgrep(): string | null {
+    try {
+      const appRoot = vscode.env.appRoot;
+      if (!appRoot) return null;
+      const isWin = process.platform === "win32";
+      const exeName = isWin ? "rg.exe" : "rg";
+      const platformArch = `${process.platform}-${process.arch}`;
+      const candidates = [
+        path.join(appRoot, "node_modules.asar.unpacked", "@vscode", "ripgrep-universal", "bin", platformArch, exeName),
+        path.join(appRoot, "node_modules.asar.unpacked", "@vscode", "ripgrep", "bin", exeName),
+        path.join(appRoot, "node_modules.asar.unpacked", "@vscode", "ripgrep", "bin", platformArch, exeName),
+        path.join(appRoot, "node_modules", "@vscode", "ripgrep-universal", "bin", platformArch, exeName),
+        path.join(appRoot, "node_modules", "@vscode", "ripgrep", "bin", exeName),
+      ];
+      for (const cand of candidates) {
+        if (fs.existsSync(cand)) {
+          return cand;
+        }
+      }
+    } catch {
+      // In test environments or mock setups
+    }
+    return null;
+  }
+
   /** Shared daemon spawn logic used by both binary and Python paths. */
   private _spawnDaemon(
     execPath: string,
@@ -568,6 +596,12 @@ export class PythonBridge {
       }
     } catch {
       // In tests or environments where vscode config is mocked
+    }
+
+    const rgPath = this._findVsCodeRipgrep();
+    if (rgPath) {
+      env.ANDROMITY_RG_PATH = rgPath;
+      this._log(`[Andromity] ✓ Bundled ripgrep found: ${rgPath}`);
     }
 
     // Ensure any previously running daemon process is cleanly terminated before spawning a new one

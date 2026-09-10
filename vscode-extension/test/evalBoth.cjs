@@ -9,7 +9,11 @@ const mockVscode = {
     file: (p) => ({ fsPath: p })
   },
   window: {},
-  workspace: {},
+  workspace: {
+    getConfiguration: () => ({
+      get: (k, d) => d
+    })
+  },
   commands: {},
   EventEmitter: class { event() {} fire() {} }
 };
@@ -145,3 +149,17 @@ testProvider(
     return provider._getHtmlForWebview(mockWebview);
   }
 );
+
+// 5. WaterfallView
+testProvider(
+  'WaterfallView',
+  '../dist-test/src/providers/waterfall/waterfallHtml.js',
+  (mod) => {
+    const mockWebview = {
+      cspSource: 'vscode-webview:',
+      asWebviewUri: (u) => 'vscode-resource://' + (u.fsPath || u)
+    };
+    return mod.getWaterfallHtml(mockWebview, 'test-sess', 'Waterfall Title');
+  }
+);
+

@@ -4,6 +4,7 @@ import { getWaterfallHtml } from "../providers/waterfall/waterfallHtml.js";
 
 export class WaterfallTraceStore {
   private static _buffers = new Map<string, any[]>();
+  private static _activeTurnEvents = new Map<string, any[]>();
   private static _client: RpcClient | null = null;
   private static _disposables: Array<() => void> = [];
 
@@ -23,6 +24,20 @@ export class WaterfallTraceStore {
       if (buf.length > 500) {
         buf.shift();
       }
+
+      // Track active in-progress turn events
+      if (msg.type === "agent_started") {
+        WaterfallTraceStore._activeTurnEvents.set(sessionId, [msg]);
+      } else if (msg.type === "agent_done" || msg.type === "agent_cancelled" || msg.type === "agent_error") {
+        // Turn finished: clear active turn buffer
+        WaterfallTraceStore._activeTurnEvents.delete(sessionId);
+      } else {
+        let active = WaterfallTraceStore._activeTurnEvents.get(sessionId);
+        if (active) {
+          active.push(msg);
+          if (active.length > 200) active.shift();
+        }
+      }
     };
 
     const bind = (event: string, msgType: string, getSid?: (p: any) => string) => {
@@ -41,6 +56,7 @@ export class WaterfallTraceStore {
     bind("waterfall/llmEnd", "waterfall_llm_end");
     bind("agent/toolStart", "tool_start");
     bind("agent/toolDelta", "tool_delta");
+    bind("agent/toolEnd", "tool_end");
     bind("agent/toolResult", "tool_result");
     bind("agent/done", "agent_done");
     bind("agent/cancelled", "agent_cancelled");
@@ -66,8 +82,13 @@ export class WaterfallTraceStore {
     return WaterfallTraceStore._buffers.get(sessionId) || [];
   }
 
+  public static getActiveTurnEvents(sessionId: string): any[] {
+    return WaterfallTraceStore._activeTurnEvents.get(sessionId) || [];
+  }
+
   public static clearSession(sessionId: string) {
     WaterfallTraceStore._buffers.delete(sessionId);
+    WaterfallTraceStore._activeTurnEvents.delete(sessionId);
   }
 
   public static dispose() {
@@ -76,6 +97,8 @@ export class WaterfallTraceStore {
     }
     WaterfallTraceStore._disposables = [];
     WaterfallTraceStore._client = null;
+    WaterfallTraceStore._buffers.clear();
+    WaterfallTraceStore._activeTurnEvents.clear();
   }
 }
 
@@ -101,6 +124,7 @@ export class WaterfallPanel {
   ): WaterfallPanel {
     if (rpcClient) {
       WaterfallTraceStore.init(rpcClient);
+      void rpcClient.call("telemetry.recordFeature", { feature: "waterfall", session_id: sessionId }).catch(() => {});
     }
     if (WaterfallPanel._panels.has(sessionId)) {
       const existing = WaterfallPanel._panels.get(sessionId)!;
@@ -232,6 +256,9 @@ export class WaterfallPanel {
     bind("agent/toolDelta", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "tool_delta", ...params });
     });
+    bind("agent/toolEnd", (params: any) => {
+      if (isMatch(params)) this._postMessage({ type: "tool_end", ...params });
+    });
     bind("agent/toolResult", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "tool_result", ...params });
     });
@@ -300,6 +327,20 @@ export class WaterfallPanel {
     });
   }
 
+  private _postReplayComplete() {
+    const finish = (isRunning: boolean) => {
+      this._postMessage({ type: "replay_complete", session_id: this._sessionId, is_running: isRunning });
+    };
+    if (!this._rpcClient) {
+      finish(false);
+      return;
+    }
+    this._rpcClient.call<any>("session.get", { session_id: this._sessionId }).then(
+      (sData) => finish(sData?.status === "running" || sData?.status === "compacting"),
+      () => finish(false)
+    );
+  }
+
   private async _handleMessage(message: any) {
     if (!message || !message.type) return;
 
@@ -331,12 +372,15 @@ export class WaterfallPanel {
         break;
       }
       case "waterfall_ready": {
-        const bufferedEvents = WaterfallTraceStore.getEvents(this._sessionId);
-        if (bufferedEvents && bufferedEvents.length > 0) {
-          for (const ev of bufferedEvents) {
-            this._postMessage(ev);
-          }
-        } else if (this._rpcClient) {
+        // Multi-tier initialization:
+        // 1. session.get history is the single source of truth for all completed turns.
+        // 2. If session.get succeeds AND an active turn is currently in-flight,
+        //    replay the active turn's buffered background events (waterfall_llm_start, tool_start, etc.)
+        //    so mid-turn opening shows running spans immediately without waiting for reopen.
+        // 3. If session.get fails (RPC failure / no client), fall back to the full buffer.
+        const buffered = WaterfallTraceStore.getEvents(this._sessionId) || [];
+        let historyOk = false;
+        if (this._rpcClient) {
           try {
             const sessionData = await this._rpcClient.call<any>("session.get", {
               session_id: this._sessionId,
@@ -346,11 +390,25 @@ export class WaterfallPanel {
                 type: "session_history",
                 session: sessionData,
               });
+              historyOk = true;
             }
           } catch (err: any) {
             console.error("[WaterfallPanel] Failed to fetch session history:", err);
           }
         }
+        if (!historyOk) {
+          for (const ev of buffered) {
+            this._postMessage(ev);
+          }
+        } else {
+          // Replay the in-flight background events for the currently running turn
+          const activeTurnEvents = WaterfallTraceStore.getActiveTurnEvents(this._sessionId);
+          for (const ev of activeTurnEvents) {
+            this._postMessage(ev);
+          }
+        }
+        // Always close orphan running spans based on authoritative session status.
+        this._postReplayComplete();
         break;
       }
     }
