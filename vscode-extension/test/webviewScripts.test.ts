@@ -488,6 +488,9 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(html.includes('id="chat-mascot"'), "HTML must include chat-mascot container");
     assert.ok(html.includes('id="mascot-bubble"'), "HTML must include mascot-bubble");
     assert.ok(html.includes('class="mascot-svg"'), "HTML must include inline SVG pixel-art sprite");
+    assert.ok(html.includes('id="profile-mascot-perch"'), "HTML must include profile-mascot-perch");
+    assert.ok(html.includes('id="top-header-mascot-perch"'), "HTML must include top-header-mascot-perch");
+    assert.ok(html.includes('id="edge-mascot-perch"'), "HTML must include edge-mascot-perch");
 
     const script = getChatClientScript("vscode-resource://icon.svg", {
       currentSessionId: "test-sess",
@@ -500,6 +503,7 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(script.includes('function hopMascotTo('), "Client script must implement hopMascotTo");
     assert.ok(script.includes('tool-seq-mascot-perch'), "Client script must manage tool-seq-mascot-perch");
     assert.ok(script.includes('assistant-mascot-perch'), "Client script must manage assistant-mascot-perch");
+    assert.ok(script.includes('interruptMascotToWork'), "Client script must implement interruptMascotToWork");
   });
 });
 

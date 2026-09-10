@@ -294,6 +294,10 @@ ${styles}
 
   <!-- Chat Viewport Wrapper with Floating Controls -->
   <div class="chat-viewport-wrapper" style="position:relative; flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:0; width:100%;">
+    <!-- Playful Mascot Exploration Perches -->
+    <div class="top-header-mascot-perch" id="top-header-mascot-perch"></div>
+    <div class="edge-mascot-perch" id="edge-mascot-perch"></div>
+
     <!-- Floating Scroll-To-Bottom Button -->
     <button class="scroll-bottom-btn" id="btn-scroll-bottom" title="Scroll to bottom" aria-label="Scroll to bottom">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
@@ -642,6 +646,7 @@ ${styles}
           <circle cx="12" cy="7" r="4"></circle>
         </svg>
         <span id="prompt-profile-label" class="skeleton skeleton-text" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
+        <span class="profile-mascot-perch" id="profile-mascot-perch"></span>
       </button>
       <div class="token-capacity-widget" id="token-capacity-widget" tabindex="0" role="button" aria-label="Token Usage & Model Capacity">
         <svg class="token-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>

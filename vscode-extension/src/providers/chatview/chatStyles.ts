@@ -3563,6 +3563,47 @@ export function getChatStyles(): string {
       display: none;
     }
 
+    /* Playful Roamer Additional Perches */
+    .profile-mascot-perch {
+      display: inline-flex;
+      position: absolute;
+      top: -26px;
+      left: 6px;
+      width: 32px;
+      height: 32px;
+      pointer-events: auto;
+      z-index: 125;
+    }
+    .profile-mascot-perch:empty {
+      display: none;
+    }
+
+    .top-header-mascot-perch {
+      position: absolute;
+      top: 8px;
+      right: 36px;
+      width: 32px;
+      height: 32px;
+      z-index: 130;
+      pointer-events: auto;
+    }
+    .top-header-mascot-perch:empty {
+      display: none;
+    }
+
+    .edge-mascot-perch {
+      position: absolute;
+      top: 38%;
+      right: -14px;
+      width: 32px;
+      height: 32px;
+      z-index: 130;
+      pointer-events: auto;
+    }
+    .edge-mascot-perch:empty {
+      display: none;
+    }
+
     .chat-mascot {
       position: relative;
       width: 32px;
@@ -3689,6 +3730,36 @@ export function getChatStyles(): string {
     @keyframes mascotWaddle {
       0% { transform: rotate(-5deg) translateY(-1px); }
       100% { transform: rotate(5deg) translateY(-1px); }
+    }
+
+    /* Peeking State (Screen Edge Peek) */
+    .chat-mascot.is-peeking .mascot-svg {
+      transform: translateX(10px) rotate(-10deg);
+      animation: mascotPeekWiggle 2.5s ease-in-out infinite alternate;
+    }
+    @keyframes mascotPeekWiggle {
+      0% { transform: translateX(10px) rotate(-12deg); }
+      50% { transform: translateX(4px) rotate(-4deg); }
+      100% { transform: translateX(14px) rotate(-14deg); }
+    }
+
+    /* Catnap Sleeping State */
+    .chat-mascot.is-sleeping .mascot-svg {
+      animation: mascotSleep 3.5s ease-in-out infinite alternate;
+      filter: brightness(0.85);
+    }
+    .chat-mascot.is-sleeping .mascot-eyes {
+      transform: scaleY(0.15) translateY(10px);
+      animation: none !important;
+    }
+    .chat-mascot.is-sleeping .antenna-bulb {
+      animation: none !important;
+      fill: #0284c7 !important;
+      filter: none !important;
+    }
+    @keyframes mascotSleep {
+      0% { transform: scale(1, 0.96) translateY(2px); }
+      100% { transform: scale(1.04, 0.92) translateY(3px); }
     }
 
     /* Floating Thought / Reaction Bubble */

@@ -502,6 +502,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         currentTurnAssistantDiv.appendChild(seqWrap);
       }
 
+      if (typeof interruptMascotToWork === 'function') {
+        interruptMascotToWork();
+      }
       if (typeof hopMascotTo === 'function') {
         hopMascotTo(mascotPerch);
       }
@@ -1046,17 +1049,43 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function petMascot() {
       if (!chatMascotEl || chatMascotEl.classList.contains('hidden')) return;
-      chatMascotEl.classList.remove('is-petted', 'is-jumping');
+      lastMascotActivityTime = Date.now();
+      const wasSleeping = chatMascotEl.classList.contains('is-sleeping');
+      const wasPeeking = chatMascotEl.classList.contains('is-peeking');
+      chatMascotEl.classList.remove('is-sleeping', 'is-peeking', 'is-petted', 'is-jumping');
       void chatMascotEl.offsetWidth; // trigger reflow
       chatMascotEl.classList.add('is-petted');
       
-      const reactions = ['❤️', '✨', '⚡', '^o^', '👀', '🤖', '👾'];
-      const pick = reactions[Math.floor(Math.random() * reactions.length)];
-      showMascotBubble(pick, 1800);
+      if (wasSleeping) {
+        showMascotBubble('! ^o^', 2000);
+      } else if (wasPeeking) {
+        showMascotBubble('👋 Heehee!', 2000);
+      } else {
+        const reactions = ['❤️', '✨', '⚡', '^o^', '👀', '🤖', '👾'];
+        const pick = reactions[Math.floor(Math.random() * reactions.length)];
+        showMascotBubble(pick, 1800);
+      }
       
       setTimeout(() => {
         chatMascotEl?.classList.remove('is-petted');
       }, 500);
+    }
+
+    let lastMascotActivityTime = Date.now();
+    let mascotRoamStep = 0;
+    let isMascotRoaming = false;
+
+    function interruptMascotToWork() {
+      lastMascotActivityTime = Date.now();
+      if (!chatMascotEl || chatMascotEl.classList.contains('hidden')) return;
+      chatMascotEl.classList.remove('is-sleeping', 'is-peeking', 'is-walking');
+      const homeSlot = document.getElementById('chat-mascot-home-slot');
+      if (isMascotRoaming && chatMascotEl.parentElement !== homeSlot && !isMascotOnTurn) {
+        isMascotRoaming = false;
+        returnMascotHome();
+      } else {
+        isMascotRoaming = false;
+      }
     }
 
     function hopMascotTo(targetPerchEl) {
@@ -1124,27 +1153,91 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function runMascotIdleRoam() {
       const homeSlot = document.getElementById('chat-mascot-home-slot');
-      if (!chatMascotEl || isRunning || isMascotOnTurn || chatMascotEl.classList.contains('hidden') || (homeSlot && chatMascotEl.parentElement !== homeSlot)) {
+      if (!chatMascotEl || isRunning || isMascotOnTurn || chatMascotEl.classList.contains('hidden')) {
         return;
       }
-      const randomOffset = Math.floor(Math.random() * 25) + 12; // 12px to 37px
-      chatMascotEl.classList.add('is-walking');
-      chatMascotEl.style.transition = 'transform 0.35s ease';
-      chatMascotEl.style.transform = 'translate3d(' + randomOffset + 'px, 0, 0)';
+
+      const idleSeconds = (Date.now() - lastMascotActivityTime) / 1000;
       
-      setTimeout(() => {
-        chatMascotEl?.classList.remove('is-walking');
+      // Catnap if inactive for over 70s
+      if (idleSeconds > 70 && !chatMascotEl.classList.contains('is-sleeping')) {
+        chatMascotEl.classList.add('is-sleeping');
+        showMascotBubble('💤', 2500);
+        return;
+      }
+      if (chatMascotEl.classList.contains('is-sleeping')) {
+        return;
+      }
+
+      // If mascot was out roaming on an exploration perch, hop back home
+      if (isMascotRoaming && chatMascotEl.parentElement !== homeSlot) {
+        isMascotRoaming = false;
+        chatMascotEl.classList.remove('is-peeking');
+        returnMascotHome();
+        return;
+      }
+
+      mascotRoamStep = (mascotRoamStep + 1) % 4;
+      const profilePerch = document.getElementById('profile-mascot-perch');
+      const edgePerch = document.getElementById('edge-mascot-perch');
+      const topPerch = document.getElementById('top-header-mascot-perch');
+
+      if (mascotRoamStep === 1 && profilePerch) {
+        // 1. Visit BUILDER profile pill
+        isMascotRoaming = true;
+        hopMascotTo(profilePerch);
+        showMascotBubble('🛠️', 1800);
         setTimeout(() => {
-          if (!isRunning && !isMascotOnTurn && chatMascotEl && (!homeSlot || chatMascotEl.parentElement === homeSlot)) {
-            chatMascotEl.classList.add('is-walking');
-            chatMascotEl.style.transform = 'translate3d(0, 0, 0)';
-            setTimeout(() => {
-              chatMascotEl?.classList.remove('is-walking');
-              chatMascotEl.style.transition = '';
-            }, 350);
+          if (!isRunning && !isMascotOnTurn && isMascotRoaming) {
+            isMascotRoaming = false;
+            returnMascotHome();
           }
-        }, 1800);
-      }, 350);
+        }, 3000);
+      } else if (mascotRoamStep === 2 && edgePerch) {
+        // 2. Peek playfully from screen edge
+        isMascotRoaming = true;
+        hopMascotTo(edgePerch);
+        chatMascotEl.classList.add('is-peeking');
+        showMascotBubble('👀', 2000);
+        setTimeout(() => {
+          if (!isRunning && !isMascotOnTurn && isMascotRoaming) {
+            isMascotRoaming = false;
+            chatMascotEl.classList.remove('is-peeking');
+            returnMascotHome();
+          }
+        }, 3200);
+      } else if (mascotRoamStep === 3 && topPerch) {
+        // 3. Jump to top view header
+        isMascotRoaming = true;
+        hopMascotTo(topPerch);
+        showMascotBubble('✨', 1800);
+        setTimeout(() => {
+          if (!isRunning && !isMascotOnTurn && isMascotRoaming) {
+            isMascotRoaming = false;
+            returnMascotHome();
+          }
+        }, 3000);
+      } else {
+        // 0. Prompt ledge patrol
+        const randomOffset = Math.floor(Math.random() * 25) + 12; // 12px to 37px
+        chatMascotEl.classList.add('is-walking');
+        chatMascotEl.style.transition = 'transform 0.35s ease';
+        chatMascotEl.style.transform = 'translate3d(' + randomOffset + 'px, 0, 0)';
+        
+        setTimeout(() => {
+          chatMascotEl?.classList.remove('is-walking');
+          setTimeout(() => {
+            if (!isRunning && !isMascotOnTurn && chatMascotEl && (!homeSlot || chatMascotEl.parentElement === homeSlot)) {
+              chatMascotEl.classList.add('is-walking');
+              chatMascotEl.style.transform = 'translate3d(0, 0, 0)';
+              setTimeout(() => {
+                chatMascotEl?.classList.remove('is-walking');
+                chatMascotEl.style.transition = '';
+              }, 350);
+            }
+          }, 1800);
+        }, 350);
+      }
     }
 
     function initChatMascot() {
@@ -1168,7 +1261,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       });
 
       if (promptInput) {
+        promptInput.addEventListener('focus', interruptMascotToWork);
         promptInput.addEventListener('input', () => {
+          interruptMascotToWork();
           if (isMascotOnTurn || isRunning || chatMascotEl.classList.contains('hidden')) return;
           chatMascotEl.classList.add('looking-down');
           if (mascotTypingTimer) clearTimeout(mascotTypingTimer);
@@ -1179,7 +1274,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
 
       if (mascotIdleTimer) clearInterval(mascotIdleTimer);
-      mascotIdleTimer = setInterval(runMascotIdleRoam, 30000);
+      mascotIdleTimer = setInterval(runMascotIdleRoam, 16000);
     }
 
     function updateOnboardingVisibility() {
@@ -3547,6 +3642,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       '<div class="assistant-mascot-perch"></div>';
       wrap.appendChild(header);
 
+      if (typeof interruptMascotToWork === 'function') {
+        interruptMascotToWork();
+      }
       if (typeof hopMascotTo === 'function') {
         const headerPerch = header.querySelector('.assistant-mascot-perch');
         if (headerPerch) hopMascotTo(headerPerch);
