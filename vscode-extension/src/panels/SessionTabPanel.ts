@@ -50,6 +50,10 @@ export class SessionTabPanel {
     initialQueue?: any[],
     tabState?: { draft?: string; images?: string[]; seedMessages?: any[] }
   ): SessionTabPanel {
+    if (rpcClient) {
+      void rpcClient.call("telemetry.recordFeature", { feature: "side_by_side", session_id: sessionId }).catch(() => {});
+    }
+
     // If a tab for this session is already open, reveal it
     if (SessionTabPanel._panels.has(sessionId)) {
       const existing = SessionTabPanel._panels.get(sessionId)!;
@@ -336,6 +340,13 @@ export class SessionTabPanel {
 
     if (message.type === "open_plan_tab") {
       PlanEditorPanel.createOrShow(this._extensionUri, null, this._rpcClient);
+      return;
+    }
+
+    if (message.type === "open_file") {
+      if (message.filePath) {
+        await this._viewProvider.openFile(message.filePath, message.line);
+      }
       return;
     }
 

@@ -1318,6 +1318,19 @@ class JsonRpcHandler:
         }
         return [{"id": k, "name": k.capitalize(), "description": descs.get(k, ""), "tools": v.get("tools", [])} for k, v in PROFILES.items()]
 
+    async def rpc_telemetry_recordFeature(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Record anonymous feature usage telemetry (Zero-PII)."""
+        params = params or {}
+        feature = params.get("feature") or params.get("feature_name") or ""
+        session_id = params.get("session_id")
+        if feature:
+            try:
+                from andromity.telemetry import send_feature_used
+                send_feature_used(feature, session_id=session_id)
+            except Exception:
+                pass
+        return {"success": True}
+
     async def rpc_config_set(self, params: Dict[str, Any]) -> Dict[str, Any]:
         section = params.get("section", "default")
         key = params.get("key")

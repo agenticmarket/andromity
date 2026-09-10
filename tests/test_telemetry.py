@@ -91,3 +91,34 @@ def test_sanitization_helpers():
     assert _safe_str("claude-3.7-sonnet") == "claude-3.7-sonnet"
     # Strips disallowed characters
     assert _safe_str("malicious!@#payload$%^&*()") == "maliciouspayload"
+
+
+def test_send_feature_used_and_session_update(monkeypatch):
+    """Test send_feature_used and send_session_update payloads when enabled."""
+    from andromity.telemetry import send_feature_used, send_session_update
+
+    captured_posts = []
+
+    def mock_post(endpoint, payload):
+        captured_posts.append((endpoint, payload))
+
+    monkeypatch.setattr("andromity.telemetry._should_send_telemetry", lambda: True)
+    monkeypatch.setattr("andromity.telemetry._post", mock_post)
+
+    send_feature_used("waterfall", session_id="sess-123")
+    send_session_update("sess-123", turn_count=5, duration_sec=120)
+
+    # Wait briefly for background threads
+    import time
+    time.sleep(0.1)
+
+    assert len(captured_posts) == 2
+    feat_endpoint, feat_payload = captured_posts[0]
+    assert feat_payload["event"] == "feature_use"
+    assert feat_payload["feature_name"] == "waterfall"
+    assert feat_payload["session_id"] == "sess-123"
+
+    up_endpoint, up_payload = captured_posts[1]
+    assert up_payload["event"] == "session_update"
+    assert up_payload["turn_count"] == 5
+    assert up_payload["duration_seconds"] == 120

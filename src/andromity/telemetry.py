@@ -156,13 +156,15 @@ def send_session_start(
     model: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
     mcp_tools_count: int = 0,
+    profile: Optional[str] = "builder",
+    duration_sec: float = 0,
 ) -> None:
     """
     Fire once per session (deduplicated by session_id).
     Sends anonymous session metadata — never any content.
 
     NOTE: Existing callers using positional session_id still work.
-    New callers should pass provider/model as keyword args.
+    New callers should pass provider/model/profile as keyword args.
     """
     if not _should_send_telemetry():
         return
@@ -176,6 +178,7 @@ def send_session_start(
 
     _prov = _safe_str(provider or "unknown", 32)
     _mod  = _safe_str(model    or "unknown", 64)
+    _prof = _safe_str(profile  or "builder", 32)
     _re   = (reasoning_effort or "off")
     if _re not in ("off", "low", "medium", "high"):
         _re = "off"
@@ -194,8 +197,66 @@ def send_session_start(
         "provider_type":    _provider_type(_prov),
         "reasoning_effort": _re,
         "mcp_tools_count":  min(int(mcp_tools_count or 0), 999),
+        # v3 fields
+        "profile":          _prof,
+        "duration_seconds": max(0, int(duration_sec or 0)),
+        "turn_count":       1,
     }
     threading.Thread(target=_post, args=(_PING_ENDPOINT, payload), daemon=True).start()
+
+
+def send_session_update(
+    session_id: str,
+    *,
+    turn_count: int = 1,
+    duration_sec: float = 0,
+) -> None:
+    """
+    Update live in-progress session turn count and duration.
+    Called after turn completion so active sessions show current progress.
+    """
+    if not _should_send_telemetry():
+        return
+
+    sid = str(session_id).strip() if session_id else ""
+    if not sid:
+        return
+
+    payload = {
+        "event":            "session_update",
+        "user_id":          _get_or_create_user_id(),
+        "session_id":       sid,
+        "client":           _detect_client(),
+        "os":               platform.system().lower(),
+        "version":          __version__,
+        "turn_count":       min(int(turn_count or 1), 9999),
+        "duration_seconds": max(0, int(duration_sec or 0)),
+    }
+    threading.Thread(target=_post, args=(_EVENT_ENDPOINT, payload), daemon=True).start()
+
+
+def send_feature_used(
+    feature_name: str,
+    session_id: Optional[str] = None,
+) -> None:
+    """
+    Fire when an anonymous user interacts with a feature (e.g. 'waterfall', 'side_by_side').
+    Strictly Zero-PII: only the sanitized feature name, never arguments, code, or paths.
+    """
+    if not _should_send_telemetry():
+        return
+
+    safe_feat = _safe_str(feature_name or "unknown", 64, r"a-zA-Z0-9_-")
+    payload = {
+        "event":        "feature_use",
+        "user_id":      _get_or_create_user_id(),
+        "session_id":   _safe_str(session_id or "", 64, r"a-zA-Z0-9_-"),
+        "feature_name": safe_feat,
+        "client":       _detect_client(),
+        "os":           platform.system().lower(),
+        "version":      __version__,
+    }
+    threading.Thread(target=_post, args=(_EVENT_ENDPOINT, payload), daemon=True).start()
 
 
 def send_session_end(
@@ -209,7 +270,7 @@ def send_session_end(
     tool_counts: Optional[dict] = None,
 ) -> None:
     """
-    Fire once when a session ends.
+    Fire once when a session ends or completes a run.
     Sends coarse, aggregate stats — no content, no paths.
 
     tool_counts: dict with optional keys 'bash', 'file', 'web' (integer call counts).
@@ -234,6 +295,7 @@ def send_session_end(
         "turn_count":       min(int(turn_count or 0), 9999),
         "had_error":        1 if had_error else 0,
         "duration_bucket":  _duration_bucket(float(duration_sec or 0)),
+        "duration_seconds": max(0, int(duration_sec or 0)),
         "tool_bash_count":  min(int(tc.get("bash", 0)), 9999),
         "tool_file_count":  min(int(tc.get("file", 0)), 9999),
         "tool_web_count":   min(int(tc.get("web",  0)), 9999),

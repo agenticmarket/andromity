@@ -15,6 +15,9 @@ export function getWaterfallScript(sessionId: string): string {
         autoScroll: true,
         isRunning: false,
         logs: [],
+        llmTurnIdToSpanId: new Map(),
+        committedToolCallIds: new Set(),
+        committedLlmTurnIds: new Set(),
         totals: {
           durationMs: 0,
           llmMs: 0,
@@ -533,6 +536,24 @@ export function getWaterfallScript(sessionId: string): string {
         }
       }
 
+      function recalcTotals() {
+        let durMs = 0;
+        let llmMs = 0;
+        let toolMs = 0;
+        for (const turn of state.turns.values()) {
+          durMs += (turn.durationMs || 0);
+          for (const s of turn.spans) {
+            if (s.type === 'llm') llmMs += (s.durationMs || 0);
+            else if (s.type === 'tool' || s.type === 'subagent' || s.type === 'coordination') {
+              toolMs += (s.durationMs || 0);
+            }
+          }
+        }
+        state.totals.durationMs = durMs;
+        state.totals.llmMs = llmMs;
+        state.totals.toolMs = toolMs;
+      }
+
       function updateSummaryStats() {
         const now = Date.now();
         let runningExtraMs = 0;
@@ -799,6 +820,19 @@ export function getWaterfallScript(sessionId: string): string {
             const turn = ensureTurn(state.currentTurnId, undefined, msg.ts ? msg.ts * 1000 : undefined);
             const spanId = 'llm_' + (msg.turn_id || Date.now());
             let span = state.spans.get(spanId);
+            if (!span && msg.turn_id && state.llmTurnIdToSpanId.has(msg.turn_id)) {
+              span = state.spans.get(state.llmTurnIdToSpanId.get(msg.turn_id));
+            }
+            if (!span && msg.turn_id && state.committedLlmTurnIds.has(msg.turn_id)) {
+              break;
+            }
+            if (!span && turn && turn.spans.length > 0 && msg.ts) {
+              const lastSpan = turn.spans[turn.spans.length - 1];
+              if (lastSpan.endTime && (msg.ts * 1000) < (lastSpan.endTime - 500)) {
+                break;
+              }
+            }
+
             if (!span) {
               span = {
                 id: spanId,
@@ -821,10 +855,14 @@ export function getWaterfallScript(sessionId: string): string {
                 args: ''
               };
               state.spans.set(spanId, span);
+              if (msg.turn_id) state.llmTurnIdToSpanId.set(msg.turn_id, spanId);
               turn.spans.push(span);
               renderSpanRow(span);
               addLog('LLM-START', (msg.provider || '') + '/' + (msg.model || 'model') + ' inference stream started');
             } else {
+              if (span.status === 'done' || span.status === 'error' || span.status === 'cancelled') {
+                break;
+              }
               span.status = 'running';
               if (msg.model) {
                 span.name = msg.model;
@@ -840,6 +878,9 @@ export function getWaterfallScript(sessionId: string): string {
           case 'waterfall_llm_end': {
             const spanId = 'llm_' + (msg.turn_id || '');
             let span = state.spans.get(spanId);
+            if (!span && msg.turn_id && state.llmTurnIdToSpanId.has(msg.turn_id)) {
+              span = state.spans.get(state.llmTurnIdToSpanId.get(msg.turn_id));
+            }
             if (!span) {
               // Match any active running LLM span in current turn
               const turn = state.turns.get(state.currentTurnId);
@@ -848,7 +889,33 @@ export function getWaterfallScript(sessionId: string): string {
               }
             }
 
+            // Check if this end event corresponds to an already completed LLM call in current turn via tool_calls
+            if (msg.tool_calls && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+              const tcIds = new Set(msg.tool_calls.map(tc => tc.id).filter(Boolean));
+              const turn = state.turns.get(state.currentTurnId);
+              if (turn) {
+                const existingOwner = turn.spans.find(s => s.type === 'llm' && Array.isArray(s.toolCalls) && s.toolCalls.some(tc => tcIds.has(tc.id)));
+                if (existingOwner) {
+                  // If a temporary unlinked span was created by waterfall_llm_start, remove it
+                  if (span && span !== existingOwner) {
+                    const idx = turn.spans.indexOf(span);
+                    if (idx !== -1) turn.spans.splice(idx, 1);
+                    state.spans.delete(span.id);
+                    if (span.element && span.element.parentNode) {
+                      span.element.parentNode.removeChild(span.element);
+                    }
+                  }
+                  span = existingOwner;
+                  state.spans.set(spanId, span);
+                  if (msg.turn_id) state.llmTurnIdToSpanId.set(msg.turn_id, span.id);
+                }
+              }
+            }
+
             if (!span) {
+              if (msg.turn_id && state.committedLlmTurnIds.has(msg.turn_id)) {
+                break;
+              }
               // Synthesize missing LLM span from end event so trace is never dropped
               const turn = state.turns.get(state.currentTurnId) || ensureTurn(state.currentTurnId);
               const dur = msg.duration_ms || 1000;
@@ -874,8 +941,15 @@ export function getWaterfallScript(sessionId: string): string {
                 args: ''
               };
               state.spans.set(spanId, span);
+              if (msg.turn_id) state.llmTurnIdToSpanId.set(msg.turn_id, spanId);
               turn.spans.push(span);
               renderSpanRow(span);
+            } else if (span.status === 'done') {
+              if (!span.response && msg.response) span.response = msg.response;
+              if (!span.thinking && msg.thinking) span.thinking = msg.thinking;
+              if ((!span.toolCalls || span.toolCalls.length === 0) && msg.tool_calls) span.toolCalls = msg.tool_calls;
+              if (!span.totalTokens && msg.total_tokens) span.totalTokens = msg.total_tokens;
+              break;
             } else {
               span.status = 'done';
               span.endTime = msg.ts ? msg.ts * 1000 : Date.now();
@@ -890,11 +964,7 @@ export function getWaterfallScript(sessionId: string): string {
               span.args = '';
             }
 
-            state.totals.llmMs += span.durationMs;
-            state.totals.durationMs += span.durationMs;
-            state.totals.promptTokens += span.promptTokens;
-            state.totals.completionTokens += span.completionTokens;
-            state.totals.totalTokens += span.totalTokens;
+            recalcTotals();
 
             updateTimingBars(span.turnId);
             if (span.element && span.element.classList.contains('expanded')) {
@@ -912,6 +982,9 @@ export function getWaterfallScript(sessionId: string): string {
             const isCoord = (msg.tool_name || '').startsWith('session_') || (msg.tool_name || '').startsWith('shared_state_');
             let span = state.spans.get(spanId);
             if (!span) {
+              if (msg.tool_id && state.committedToolCallIds.has(msg.tool_id)) {
+                break;
+              }
               span = {
                 id: spanId,
                 turnId: turn.id,
@@ -929,7 +1002,9 @@ export function getWaterfallScript(sessionId: string): string {
               renderSpanRow(span);
               addLog(isCoord ? 'COORD-START' : 'TOOL-START', 'Tool call streaming: ' + span.name + ' (id: ' + span.id + ')');
             } else {
-              span.status = (msg.tool_name === 'session_ask_question' || msg.tool_name === 'session_ask_questions') ? 'waiting' : 'running';
+              if (span.status !== 'done') {
+                span.status = (msg.tool_name === 'session_ask_question' || msg.tool_name === 'session_ask_questions') ? 'waiting' : 'running';
+              }
             }
             updateTimingBars(turn.id);
             updateSummaryStats();
@@ -984,6 +1059,9 @@ export function getWaterfallScript(sessionId: string): string {
               state.spans.set(msg.tool_id, span);
               turn.spans.push(span);
               renderSpanRow(span);
+            } else if (span.status === 'done') {
+              if (!span.result && msg.result) span.result = msg.result;
+              break;
             } else {
               span.endTime = msg.ts ? msg.ts * 1000 : Date.now();
               span.durationMs = msg.duration_ms || (span.endTime - span.startTime);
@@ -1025,8 +1103,7 @@ export function getWaterfallScript(sessionId: string): string {
               } catch (e) {}
             }
 
-            state.totals.toolMs += span.durationMs;
-            state.totals.durationMs += span.durationMs;
+            recalcTotals();
 
             updateTimingBars(span.turnId);
             if (span.element && span.element.classList.contains('expanded')) {
@@ -1453,7 +1530,11 @@ export function getWaterfallScript(sessionId: string): string {
                   turnCursor = tStart;
                   prevCumulativeDurMs = 0;
                 } else if (m.role === 'assistant' && currentTurn) {
-                  const spanId = 'llm_' + currentTurn.id + '_' + currentTurn.spans.length;
+                  const spanId = m.turn_id ? ('llm_' + m.turn_id) : ('llm_' + currentTurn.id + '_' + currentTurn.spans.length);
+                  if (m.turn_id) {
+                    state.llmTurnIdToSpanId.set(m.turn_id, spanId);
+                    state.committedLlmTurnIds.add(m.turn_id);
+                  }
                   
                   // Compute LLM duration
                   let llmDurMs = 1000;
@@ -1507,6 +1588,7 @@ export function getWaterfallScript(sessionId: string): string {
                   // Process tool calls emitted by this assistant turn
                   if (m.tool_calls && Array.isArray(m.tool_calls)) {
                     m.tool_calls.forEach((tc, tcIdx) => {
+                      if (tc.id) state.committedToolCallIds.add(tc.id);
                       const tName = tc.function ? tc.function.name : (tc.name || 'tool');
                       const tArgs = tc.function ? tc.function.arguments : (tc.arguments || '');
                       const tSpanId = tc.id || ('tool_' + currentTurn.id + '_' + tcIdx);
@@ -1585,6 +1667,7 @@ export function getWaterfallScript(sessionId: string): string {
                     });
                   }
                 } else if (m.role === 'tool' && currentTurn) {
+                  if (m.tool_call_id) state.committedToolCallIds.add(m.tool_call_id);
                   let tSpan = m.tool_call_id ? state.spans.get(m.tool_call_id) : null;
                   if (tSpan && !tSpan.result && m.content) {
                     tSpan.result = m.content;
@@ -1754,6 +1837,9 @@ export function getWaterfallScript(sessionId: string): string {
         els.btnClear.addEventListener('click', () => {
           state.turns.clear();
           state.spans.clear();
+          state.llmTurnIdToSpanId.clear();
+          state.committedToolCallIds.clear();
+          state.committedLlmTurnIds.clear();
           state.logs = [];
           state.totals = { durationMs: 0, llmMs: 0, toolMs: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 };
           els.timelineContainer.innerHTML = '';

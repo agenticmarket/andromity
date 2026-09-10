@@ -204,9 +204,15 @@ class Session:
                     name: Optional[str] = None, tool_call_id: Optional[str] = None,
                     thinking: Optional[str] = None,
                     images: Optional[List[str]] = None,
-                    duration: Optional[float] = None):
+                    duration: Optional[float] = None,
+                    turn_id: Optional[str] = None):
         msg: Dict[str, Any] = {"role": role, "ts": datetime.now(timezone.utc).isoformat()}
-        if content is not None:
+        if role == "tool":
+            # Tool messages MUST always have a non-empty content string for LLM providers
+            if content is None or not str(content).strip():
+                content = "(no output)"
+            msg["content"] = str(content)
+        elif content is not None:
             msg["content"] = content
         if tool_calls is not None:
             msg["tool_calls"] = tool_calls
@@ -220,6 +226,8 @@ class Session:
             msg["images"] = images
         if duration is not None:
             msg["duration"] = duration
+        if turn_id is not None:
+            msg["turn_id"] = turn_id
         with self._save_lock:
             self.messages.append(msg)
             need_save = not self.file_path.exists()

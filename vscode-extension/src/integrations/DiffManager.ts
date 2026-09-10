@@ -103,48 +103,44 @@ export class DiffManager {
     const rightUri = vscode.Uri.file(absPath);
     const fileName = path.basename(absPath);
 
-    // 1. First attempt: use VS Code's native git.openChange command.
-    // This automatically compares Working Tree vs Index (Staged) or vs HEAD,
-    // exactly matching what VS Code Source Control panel opens.
     if (!isUntracked) {
       try {
         await vscode.commands.executeCommand("git.openChange", rightUri);
         return;
       } catch {
-        // Fallback to custom GitRefContentProvider below
+        // git extension unavailable or file not tracked — fall through
       }
-    }
-
-    if (isUntracked) {
-      const leftUri = vscode.Uri.from({
-        scheme: HEAD_SCHEME,
-        path: absPath,
-        query: "ref=SNAPSHOT",
-        fragment: ws.uri.fsPath,
-      });
-      await vscode.commands.executeCommand(
-        "vscode.diff",
-        leftUri,
-        rightUri,
-        `${fileName} (Working Tree)`,
-        { preview: true }
-      );
-      return;
     }
 
     const leftUri = vscode.Uri.from({
       scheme: HEAD_SCHEME,
       path: absPath,
-      query: "ref=HEAD",
+      query: isUntracked ? "ref=SNAPSHOT" : "ref=HEAD",
       fragment: ws.uri.fsPath,
     });
-    await vscode.commands.executeCommand(
-      "vscode.diff",
-      leftUri,
-      rightUri,
-      `${fileName} (Working Tree)`,
-      { preview: true }
-    );
+
+    try {
+      const headContent = await this._provider.provideTextDocumentContent(leftUri);
+      if (!headContent) {
+        await vscode.commands.executeCommand("vscode.open", rightUri);
+        vscode.window.showInformationMessage(
+          `'${fileName}' has no git history yet. Opened file directly.`
+        );
+        return;
+      }
+      await vscode.commands.executeCommand(
+        "vscode.diff",
+        leftUri,
+        rightUri,
+        `${fileName} (HEAD ↔ Working Tree)`,
+        { preview: true }
+      );
+    } catch {
+      await vscode.commands.executeCommand("vscode.open", rightUri);
+      vscode.window.showInformationMessage(
+        `Could not compute diff for '${fileName}'. Opened file directly.`
+      );
+    }
   }
 
   /** QuickPick letting the user choose a changed file to diff. */

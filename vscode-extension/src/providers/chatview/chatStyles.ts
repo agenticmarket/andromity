@@ -1664,7 +1664,7 @@ export function getChatStyles(): string {
     }
     .onboarding-portal-link {
       font-size: 10.5px;
-      color: #60a5fa;
+      color: var(--accent-cyan, #38bdf8);
       text-decoration: none;
       display: inline-flex;
       align-items: center;
@@ -1673,7 +1673,7 @@ export function getChatStyles(): string {
       transition: color 0.12s;
     }
     .onboarding-portal-link:hover {
-      color: #93c5fd;
+      color: #7dd3fc;
       text-decoration: underline;
     }
     .onboarding-input-wrap {
@@ -1684,11 +1684,11 @@ export function getChatStyles(): string {
     }
     .onboarding-key-input {
       width: 100%;
-      background: rgba(0, 0, 0, 0.25);
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+      background: var(--vscode-input-background, #252526);
+      border: 1px solid var(--vscode-input-border, rgba(255, 255, 255, 0.12));
       border-radius: 6px;
       padding: 8px 30px 8px 10px;
-      color: #ffffff;
+      color: var(--vscode-input-foreground, #ffffff);
       font-size: 12px;
       font-family: var(--vscode-editor-font-family, monospace);
       outline: none;
@@ -1744,8 +1744,8 @@ export function getChatStyles(): string {
       gap: 10px;
       padding: 10px;
       border-radius: 6px;
-      background: rgba(236, 72, 153, 0.08);
-      border: 1px solid rgba(236, 72, 153, 0.2);
+      background: rgba(56, 189, 248, 0.08);
+      border: 1px solid rgba(56, 189, 248, 0.25);
     }
     .ollama-info-icon {
       font-size: 18px;
@@ -1758,7 +1758,7 @@ export function getChatStyles(): string {
     .ollama-info-title {
       font-size: 11.5px;
       font-weight: 600;
-      color: #f472b6;
+      color: #38bdf8;
     }
     .ollama-info-desc {
       font-size: 10.5px;

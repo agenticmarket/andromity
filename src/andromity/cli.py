@@ -119,6 +119,21 @@ def server_cmd(stdio, port, host):
 
 
 
+def _maybe_show_feedback_hint():
+    try:
+        from andromity.config import get_config_dir
+        cfg_dir = get_config_dir()
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        flag_file = cfg_dir / ".feedback_shown"
+        if flag_file.exists():
+            return
+        flag_file.touch()
+        print("\033[2m----------------------------------------------------\033[0m")
+        print("\033[2m  Found a bug or have a suggestion? -> https://github.com/agenticmarket/andromity/issues\033[0m")
+    except Exception:
+        pass
+
+
 async def _run_async(prompt, yes, dry_run, profile):
     import os
     os.environ.setdefault("ANDROMITY_CLIENT", "cli")
@@ -166,7 +181,9 @@ async def _run_async(prompt, yes, dry_run, profile):
         elif isinstance(event, ToolCallEnd):
             print("[Done]", end=" ", flush=True)
     print(f"\n\nTokens: {session.token_total} | Cost: ${session.cost_usd:.4f}")
+    _maybe_show_feedback_hint()
 
 
 if __name__ == "__main__":
     main()
+

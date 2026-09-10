@@ -1869,112 +1869,138 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
     """Execute any tool (Core, Web, Coordination, or MCP) with logging and error handling."""
     log.debug("TOOL CALL: %s(%s)", name, {k: (str(v)[:80] + '...' if isinstance(v, str) and len(v) > 80 else v) for k, v in args.items()})
 
-    # 1. Core Built-in Tools
-    if name == "read_file":
-        return read_file(**args)
-    elif name == "grep_search":
-        return grep_search(**args)
-    elif name == "find_files":
-        return find_files(**args)
-    elif name == "write_file":
-        return write_file(**args)
-    elif name == "edit_file":
-        return edit_file(**args)
-    elif name == "edit_file_multi":
-        return edit_file_multi(**args)
-    elif name == "shell_exec":
-        return shell_exec(**args)
-    elif name == "shell_bg":
-        return shell_bg(**args)
-    elif name == "shell_read":
-        return shell_read(**args)
-    elif name == "shell_kill":
-        return shell_kill(**args)
-    elif name == "shell_list":
-        return shell_list()
-    elif name == "list_dir":
-        _ld_valid = {"path", "show_hidden"}
-        return list_dir(**{k: v for k, v in args.items() if k in _ld_valid})
-    elif name == "write_plan":
-        return write_plan(**args)
-    elif name == "update_plan_step":
-        return update_plan_step(**args)
-    elif name == "list_tools":
-        return list_tools(**args)
-    elif name in ("ask_questions", "ask_question"):
-        return "Error: ask_questions is handled interactively by the agent loop and cannot be executed directly."
+    try:
+        # 1. Core Built-in Tools
+        if name == "read_file":
+            res = read_file(**args)
+        elif name == "grep_search":
+            res = grep_search(**args)
+        elif name == "find_files":
+            res = find_files(**args)
+        elif name == "write_file":
+            res = write_file(**args)
+        elif name == "edit_file":
+            res = edit_file(**args)
+        elif name == "edit_file_multi":
+            res = edit_file_multi(**args)
+        elif name == "shell_exec":
+            res = shell_exec(**args)
+        elif name == "shell_bg":
+            res = shell_bg(**args)
+        elif name == "shell_read":
+            res = shell_read(**args)
+        elif name == "shell_kill":
+            res = shell_kill(**args)
+        elif name == "shell_list":
+            res = shell_list()
+        elif name == "list_dir":
+            _ld_valid = {"path", "show_hidden"}
+            res = list_dir(**{k: v for k, v in args.items() if k in _ld_valid})
+        elif name == "write_plan":
+            res = write_plan(**args)
+        elif name == "update_plan_step":
+            res = update_plan_step(**args)
+        elif name == "list_tools":
+            res = list_tools(**args)
+        elif name in ("ask_questions", "ask_question"):
+            res = "Error: ask_questions is handled interactively by the agent loop and cannot be executed directly."
 
-    # 2. Sub-Agent and Session Coordination Tools
-    elif name == "spawn_subagent":
-        return _run_coro_sync(spawn_subagent_async(**args))
-    elif name == "session_send_message":
-        return _run_coro_sync(session_send_message_async(**args))
-    elif name == "session_ask_question":
-        return _run_coro_sync(session_ask_question_async(**args))
-    elif name == "session_broadcast":
-        return _run_coro_sync(session_broadcast_async(**args))
-    elif name == "session_list":
-        return session_list()
-    elif name == "session_read_messages":
-        return session_read_messages(**args)
-    elif name == "session_answer_question":
-        return session_answer_question(**args)
-    elif name == "shared_state_set":
-        return shared_state_set(**args)
-    elif name == "shared_state_get":
-        return shared_state_get(**args)
-    elif name == "write_handoff":
-        return write_handoff_tool(**args)
-    elif name == "read_handoff":
-        return read_handoff_tool(**args)
+        # 2. Sub-Agent and Session Coordination Tools
+        elif name == "spawn_subagent":
+            res = _run_coro_sync(spawn_subagent_async(**args))
+        elif name == "session_send_message":
+            res = _run_coro_sync(session_send_message_async(**args))
+        elif name == "session_ask_question":
+            res = _run_coro_sync(session_ask_question_async(**args))
+        elif name == "session_broadcast":
+            res = _run_coro_sync(session_broadcast_async(**args))
+        elif name == "session_list":
+            res = session_list()
+        elif name == "session_read_messages":
+            res = session_read_messages(**args)
+        elif name == "session_answer_question":
+            res = session_answer_question(**args)
+        elif name == "shared_state_set":
+            res = shared_state_set(**args)
+        elif name == "shared_state_get":
+            res = shared_state_get(**args)
+        elif name == "write_handoff":
+            res = write_handoff_tool(**args)
+        elif name == "read_handoff":
+            res = read_handoff_tool(**args)
 
-    # 3. Web Tools
-    elif name == "web_search":
-        from andromity.core.web import web_search
-        return web_search(**args)
-    elif name == "fetch_url":
-        from andromity.core.web import fetch_url
-        return fetch_url(**args)
+        # 3. Web Tools
+        elif name == "web_search":
+            from andromity.core.web import web_search
+            res = web_search(**args)
+        elif name == "fetch_url":
+            from andromity.core.web import fetch_url
+            res = fetch_url(**args)
 
-    # 4. Model Context Protocol (MCP) Tools
-    elif name.startswith("mcp__"):
-        if _mcp_manager:
-            import asyncio
-            try:
-                loop = asyncio.get_running_loop()
-                if loop.is_running():
-                    return f"Error: MCP tool '{name}' must be awaited via execute_tool_async."
-            except RuntimeError:
-                pass
-            return asyncio.run(_mcp_manager.execute_mcp_tool(name, args))
-        return f"Error: MCP tool '{name}' called but no MCPClientManager is active."
+        # 4. Model Context Protocol (MCP) Tools
+        elif name.startswith("mcp__"):
+            if _mcp_manager:
+                import asyncio
+                try:
+                    loop = asyncio.get_running_loop()
+                    if loop.is_running():
+                        res = f"Error: MCP tool '{name}' must be awaited via execute_tool_async."
+                    else:
+                        res = asyncio.run(_mcp_manager.execute_mcp_tool(name, args))
+                except RuntimeError:
+                    res = asyncio.run(_mcp_manager.execute_mcp_tool(name, args))
+            else:
+                res = f"Error: MCP tool '{name}' called but no MCPClientManager is active."
+        else:
+            res = f"Error: Unknown tool '{name}'"
 
-    return f"Error: Unknown tool '{name}'"
+    except Exception as e:
+        log.exception("Exception executing tool %s: %s", name, e)
+        return f"Error executing {name}: {e}"
+
+    # GUARANTEE: Never return empty, whitespace-only, or None to LLM
+    res_str = str(res) if res is not None else ""
+    if not res_str.strip():
+        return f"Tool '{name}' executed successfully with no output."
+    return res_str
 
 
-async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[str] = None) -> str:
+async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[str] = None, timeout: float = 120.0) -> str:
     """Asynchronous tool execution (natively awaits MCP tools and async coordination tools, dispatches core tools)."""
-    if name.startswith("mcp__"):
-        if _mcp_manager:
-            return await _mcp_manager.execute_mcp_tool(name, args)
-        return f"Error: MCP tool '{name}' called but no MCPClientManager is active."
+    try:
+        async with asyncio.timeout(timeout):
+            if name.startswith("mcp__"):
+                if _mcp_manager:
+                    res = await _mcp_manager.execute_mcp_tool(name, args)
+                else:
+                    res = f"Error: MCP tool '{name}' called but no MCPClientManager is active."
+            elif name == "spawn_subagent":
+                res = await spawn_subagent_async(tool_id=tool_id, **args)
+            elif name == "session_send_message":
+                res = await session_send_message_async(**args)
+            elif name == "session_ask_question":
+                res = await session_ask_question_async(**args)
+            elif name == "session_broadcast":
+                res = await session_broadcast_async(**args)
+            elif name == "session_list":
+                res = session_list()
+            elif name == "session_read_messages":
+                res = session_read_messages(**args)
+            elif name == "session_answer_question":
+                res = session_answer_question(**args)
+            else:
+                # Run blocking core tools in a background thread to prevent freezing the Textual UI
+                res = await asyncio.to_thread(execute_tool, name, args)
+    except asyncio.TimeoutError:
+        log.warning("Tool %s timed out after %ss", name, timeout)
+        return f"Error: Tool '{name}' timed out after {timeout:.0f} seconds."
+    except Exception as e:
+        log.exception("Error in execute_tool_async for %s: %s", name, e)
+        return f"Error executing {name}: {e}"
 
-    # Sub-agent and session coordination async tools
-    if name == "spawn_subagent":
-        return await spawn_subagent_async(tool_id=tool_id, **args)
-    elif name == "session_send_message":
-        return await session_send_message_async(**args)
-    elif name == "session_ask_question":
-        return await session_ask_question_async(**args)
-    elif name == "session_broadcast":
-        return await session_broadcast_async(**args)
-    elif name == "session_list":
-        return session_list()
-    elif name == "session_read_messages":
-        return session_read_messages(**args)
-    elif name == "session_answer_question":
-        return session_answer_question(**args)
-    
-    # Run blocking core tools in a background thread to prevent freezing the Textual UI
-    return await asyncio.to_thread(execute_tool, name, args)
+    # GUARANTEE: Never return empty, whitespace-only, or None to LLM
+    res_str = str(res) if res is not None else ""
+    if not res_str.strip():
+        return f"Tool '{name}' executed successfully with no output."
+    return res_str
 

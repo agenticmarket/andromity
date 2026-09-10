@@ -348,6 +348,7 @@ class Agent:
                     self.session.id,
                     provider=_prov,
                     model=_mod,
+                    profile=self.profile,
                     reasoning_effort=getattr(self, "reasoning_effort", None),
                     mcp_tools_count=len(self.allowed_tools or []),
                 )
@@ -490,6 +491,7 @@ class Agent:
                 tool_calls=tool_calls_to_execute if tool_calls_to_execute else None,
                 thinking=assistant_thinking if assistant_thinking else None,
                 duration=turn_duration,
+                turn_id=turn_id,
             )
 
             if not assistant_content and not tool_calls_to_execute:
@@ -707,22 +709,39 @@ class Agent:
                         if tool_name == "write_plan" and plan.status == "pending":
                             yield PlanApprovalRequired(plan=plan)
 
-    def _fire_session_end(self, had_error: bool = False) -> None:
-        """Fire send_session_end once per agent lifetime (idempotent)."""
-        if getattr(self, "_session_end_sent", False):
-            return
-        self._session_end_sent = True
+    def _get_turn_count(self) -> int:
+        if not self.session or not self.session.messages:
+            return max(1, self._turn_count)
+        cnt = sum(1 for m in self.session.messages if m.get("role") == "user")
+        return max(1, cnt, self._turn_count)
+
+    def _get_session_duration(self) -> float:
         try:
-            from andromity.telemetry import send_session_end
+            from datetime import datetime, timezone
+            created_dt = datetime.fromisoformat(self.session.created_at)
+            now_dt = datetime.now(timezone.utc)
+            return max(0.0, (now_dt - created_dt).total_seconds())
+        except Exception:
+            return max(0.0, time.time() - self._session_start_time)
+
+    def _fire_session_end(self, had_error: bool = False) -> None:
+        """Send live session update and session outcome telemetry."""
+        try:
+            from andromity.telemetry import send_session_update, send_session_end
             _prov = self.provider or config.get("default", "provider", "")
             _mod  = self.model  or config.get("default", "model", "")
+            turns = self._get_turn_count()
+            duration = self._get_session_duration()
+            # Send live session update so in-progress sessions reflect actual progress
+            send_session_update(self.session.id, turn_count=turns, duration_sec=duration)
+            # Update session end / event record
             send_session_end(
                 self.session.id,
                 provider=_prov,
                 model=_mod,
-                turn_count=self._turn_count,
+                turn_count=turns,
                 had_error=had_error,
-                duration_sec=time.time() - self._session_start_time,
+                duration_sec=duration,
                 tool_counts=dict(self._tool_usage_counts),
             )
         except Exception:

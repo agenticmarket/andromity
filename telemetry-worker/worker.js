@@ -178,6 +178,13 @@ export default {
       const reasoningEffort = ['off', 'low', 'medium', 'high'].includes(data.reasoning_effort) ? data.reasoning_effort : 'off';
       const mcpToolsCount   = Math.min(Math.max(0, parseInt(data.mcp_tools_count || 0, 10)), 999);
 
+      // v3 — profile & session progress
+      const ALLOWED_PROFILES = ['builder', 'coder', 'planner', 'reviewer', 'architect', 'tester'];
+      const rawProfile      = typeof data.profile === 'string' ? data.profile.toLowerCase().trim() : 'builder';
+      const profile         = ALLOWED_PROFILES.includes(rawProfile) ? rawProfile : 'builder';
+      const durationSeconds = Math.max(0, parseInt(data.duration_seconds || data.duration_sec || 0, 10));
+      const turnCountInput  = Math.min(Math.max(1, parseInt(data.turn_count || 1, 10)), 9999);
+
       const now     = new Date().toISOString();
       const date    = now.split('T')[0];
       const sessionId = rawSessionId || `sess-${date}-${rawUserId.slice(0, 8)}`;
@@ -196,16 +203,23 @@ export default {
                   session_count = users.session_count + 1
               `).bind(rawUserId, now, now, country),
               env.DB.prepare(`
-                INSERT OR IGNORE INTO sessions
+                INSERT INTO sessions
                   (session_id, user_id, client, country, os, version,
                    provider, model, provider_type, reasoning_effort, mcp_tools_count,
+                   profile, duration_seconds, turn_count,
                    created_at, date)
                 VALUES (?, ?, ?, ?, ?, ?,
                         ?, ?, ?, ?, ?,
+                        ?, ?, ?,
                         ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                  duration_seconds = MAX(sessions.duration_seconds, excluded.duration_seconds),
+                  turn_count       = MAX(sessions.turn_count, excluded.turn_count),
+                  profile          = COALESCE(excluded.profile, sessions.profile)
               `).bind(
                 sessionId, rawUserId, client, country, os, version,
                 provider, model, providerType, reasoningEffort, mcpToolsCount,
+                profile, durationSeconds, turnCountInput,
                 now, date
               ),
             ]).catch((err) => console.error('D1 /ping Write Failed:', err))
@@ -214,9 +228,9 @@ export default {
         return new Response('OK', { status: 202, headers: securityHeaders });
       }
 
-      // ── /event  →  session_end | weekly_summary ────────────────────────────
+      // ── /event  →  session_end | weekly_summary | feature_use | session_update ──
       if (url.pathname === '/event') {
-        const ALLOWED_EVENTS = ['session_end', 'weekly_summary', 'compact_triggered'];
+        const ALLOWED_EVENTS = ['session_end', 'weekly_summary', 'compact_triggered', 'feature_use', 'session_update'];
         const eventType = ALLOWED_EVENTS.includes(data.event) ? data.event : null;
         if (!eventType) {
           return new Response(JSON.stringify({ error: 'Unknown event type' }), {
@@ -226,6 +240,34 @@ export default {
         }
 
         if (env.DB) {
+          // feature_use
+          if (eventType === 'feature_use') {
+            const featureRaw = typeof data.feature === 'string' ? data.feature.toLowerCase().trim() : (typeof data.feature_name === 'string' ? data.feature_name.toLowerCase().trim() : 'unknown');
+            const featureName = featureRaw.slice(0, 64).replace(/[^a-z0-9_-]/g, '') || 'unknown';
+
+            ctx.waitUntil(
+              env.DB.prepare(`
+                INSERT INTO feature_events
+                  (feature_name, user_id, session_id, client, os, version, created_at, date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              `).bind(
+                featureName, rawUserId, sessionId, client, os, version, now, date
+              ).run().catch((err) => console.error('D1 feature_use Write Failed:', err))
+            );
+          }
+
+          // session_update (in-progress turn update)
+          if (eventType === 'session_update') {
+            ctx.waitUntil(
+              env.DB.prepare(`
+                UPDATE sessions SET
+                  turn_count       = MAX(turn_count, ?),
+                  duration_seconds = MAX(duration_seconds, ?)
+                WHERE session_id = ?
+              `).bind(turnCountInput, durationSeconds, sessionId).run().catch((err) => console.error('D1 session_update Write Failed:', err))
+            );
+          }
+
           // session_end / compact_triggered
           if (eventType === 'session_end' || eventType === 'compact_triggered') {
             const turnCount      = Math.min(Math.max(0, parseInt(data.turn_count       || 0, 10)), 9999);
@@ -237,25 +279,33 @@ export default {
             const toolWeb   = Math.min(Math.max(0, parseInt(data.tool_web_count  || 0, 10)), 9999);
 
             ctx.waitUntil(
-              env.DB.prepare(`
-                INSERT INTO events
-                  (event, user_id, session_id, client, os, version,
-                   provider, model, provider_type,
-                   turn_count, had_error, duration_bucket,
-                   tool_bash_count, tool_file_count, tool_web_count,
-                   created_at, date)
-                VALUES (?, ?, ?, ?, ?, ?,
-                        ?, ?, ?,
-                        ?, ?, ?,
-                        ?, ?, ?,
-                        ?, ?)
-              `).bind(
-                eventType, rawUserId, sessionId, client, os, version,
-                provider, model, providerType,
-                turnCount, hadError, durationBucket,
-                toolBash, toolFile, toolWeb,
-                now, date
-              ).run().catch((err) => console.error('D1 /event Write Failed:', err))
+              env.DB.batch([
+                env.DB.prepare(`
+                  INSERT INTO events
+                    (event, user_id, session_id, client, os, version,
+                     provider, model, provider_type,
+                     turn_count, had_error, duration_bucket,
+                     tool_bash_count, tool_file_count, tool_web_count,
+                     created_at, date)
+                  VALUES (?, ?, ?, ?, ?, ?,
+                          ?, ?, ?,
+                          ?, ?, ?,
+                          ?, ?, ?,
+                          ?, ?)
+                `).bind(
+                  eventType, rawUserId, sessionId, client, os, version,
+                  provider, model, providerType,
+                  turnCount, hadError, durationBucket,
+                  toolBash, toolFile, toolWeb,
+                  now, date
+                ),
+                env.DB.prepare(`
+                  UPDATE sessions SET
+                    turn_count       = MAX(turn_count, ?),
+                    duration_seconds = MAX(duration_seconds, ?)
+                  WHERE session_id = ?
+                `).bind(turnCount, durationSeconds, sessionId),
+              ]).catch((err) => console.error('D1 /event Write Failed:', err))
             );
           }
 
@@ -328,6 +378,9 @@ async function getD1Stats(env) {
     providerTypesRes,
     reasoningRes,
     durationRes,
+    // v3
+    profilesRes,
+    featuresRes,
   ] = await env.DB.batch([
     env.DB.prepare(`SELECT COUNT(*) AS count FROM users`),
     env.DB.prepare(`SELECT COUNT(*) AS count FROM sessions`),
@@ -386,15 +439,47 @@ async function getD1Stats(env) {
       ORDER BY hour ASC
     `),
     env.DB.prepare(`
-      SELECT session_id, substr(user_id, 1, 8) AS user_prefix, client,
-             COALESCE(os, 'unknown') AS os, COALESCE(version, '0.0.0') AS version,
-             COALESCE(country, 'XX') AS country,
-             COALESCE(provider, 'unknown') AS provider,
-             COALESCE(model, 'unknown') AS model,
-             created_at
-      FROM sessions
-      ORDER BY created_at DESC
-      LIMIT 30
+      SELECT
+        s.session_id,
+        substr(s.user_id, 1, 8) AS user_prefix,
+        s.user_id,
+        s.client,
+        COALESCE(s.os, 'unknown') AS os,
+        COALESCE(s.version, '0.0.0') AS version,
+        COALESCE(s.country, 'XX') AS country,
+        COALESCE(s.provider, 'unknown') AS provider,
+        COALESCE(s.model, 'unknown') AS model,
+        COALESCE(s.provider_type, 'cloud') AS provider_type,
+        COALESCE(s.reasoning_effort, 'off') AS reasoning_effort,
+        COALESCE(s.mcp_tools_count, 0) AS mcp_tools_count,
+        COALESCE(s.profile, 'builder') AS profile,
+        COALESCE(s.duration_seconds, 0) AS duration_seconds,
+        COALESCE(e.turn_count, s.turn_count, 1) AS turn_count,
+        COALESCE(e.had_error, 0) AS had_error,
+        COALESCE(
+          e.duration_bucket,
+          CASE
+            WHEN s.duration_seconds > 0 AND s.duration_seconds < 300 THEN '0-5min'
+            WHEN s.duration_seconds >= 300 AND s.duration_seconds < 900 THEN '5-15min'
+            WHEN s.duration_seconds >= 900 AND s.duration_seconds < 1800 THEN '15-30min'
+            WHEN s.duration_seconds >= 1800 THEN '30min+'
+            ELSE '0-5min'
+          END
+        ) AS duration_bucket,
+        COALESCE(e.tool_bash_count, 0) AS tool_bash_count,
+        COALESCE(e.tool_file_count, 0) AS tool_file_count,
+        COALESCE(e.tool_web_count, 0) AS tool_web_count,
+        s.created_at
+      FROM sessions s
+      LEFT JOIN (
+        SELECT session_id, turn_count, had_error, duration_bucket,
+               tool_bash_count, tool_file_count, tool_web_count,
+               ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY id DESC) as rn
+        FROM events
+        WHERE event = 'session_end'
+      ) e ON s.session_id = e.session_id AND e.rn = 1
+      ORDER BY s.created_at DESC
+      LIMIT 50
     `),
     env.DB.prepare(`
       SELECT
@@ -463,6 +548,25 @@ async function getD1Stats(env) {
         ELSE 5
       END
     `),
+    // v3 — profiles distribution
+    env.DB.prepare(`
+      SELECT COALESCE(profile, 'builder') AS profile,
+             COUNT(DISTINCT user_id) AS users,
+             COUNT(*) AS sessions
+      FROM sessions
+      GROUP BY profile
+      ORDER BY sessions DESC
+    `),
+    // v3 — feature adoption
+    env.DB.prepare(`
+      SELECT feature_name AS feature,
+             COUNT(DISTINCT user_id) AS users,
+             COUNT(*) AS count
+      FROM feature_events
+      GROUP BY feature_name
+      ORDER BY count DESC
+      LIMIT 20
+    `),
   ]);
 
   const totalUsers      = totalUsersRes.results?.[0]?.count ?? 0;
@@ -500,6 +604,9 @@ async function getD1Stats(env) {
     provider_types:    providerTypesRes.results ?? [],
     reasoning_efforts: reasoningRes.results ?? [],
     duration_buckets:  durationRes.results ?? [],
+    // v3
+    profiles:          profilesRes.results ?? [],
+    features:          featuresRes.results ?? [],
     updated_at: new Date().toISOString(),
   };
 }

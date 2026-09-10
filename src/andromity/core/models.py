@@ -128,6 +128,29 @@ _CTX_SIZE_MAP = {
 }
 
 
+_MEM_CONTEXT_CACHE: dict = {}
+_MEM_CONTEXT_CACHE_MTIME: float = 0.0
+
+def _load_mem_context_cache() -> dict:
+    global _MEM_CONTEXT_CACHE, _MEM_CONTEXT_CACHE_MTIME
+    cache_path = _get_context_cache_path()
+    if not cache_path.exists():
+        _MEM_CONTEXT_CACHE = {}
+        _MEM_CONTEXT_CACHE_MTIME = 0.0
+        return _MEM_CONTEXT_CACHE
+    try:
+        mtime = cache_path.stat().st_mtime
+        if _MEM_CONTEXT_CACHE and mtime <= _MEM_CONTEXT_CACHE_MTIME:
+            return _MEM_CONTEXT_CACHE
+        import json
+        with open(cache_path, "r", encoding="utf-8") as f:
+            _MEM_CONTEXT_CACHE = json.load(f)
+        _MEM_CONTEXT_CACHE_MTIME = mtime
+    except Exception:
+        if _MEM_CONTEXT_CACHE is None:
+            _MEM_CONTEXT_CACHE = {}
+    return _MEM_CONTEXT_CACHE or {}
+
 def _get_context_cache_path() -> Path:
     from andromity.config import get_config_dir
     return get_config_dir() / "model_context_cache.json"
@@ -137,18 +160,11 @@ def get_context_limit_for_model(provider_key: str, model_id: str) -> int:
     Checks live cache first, then falls back to catalog and Ollama live query.
     Returns 32768 if unknown.
     """
-    # 1. Check live cache from recent API fetches
-    cache_path = _get_context_cache_path()
-    if cache_path.exists():
-        try:
-            import json
-            with open(cache_path, "r", encoding="utf-8") as f:
-                cache = json.load(f)
-            cached_ctx = cache.get(provider_key, {}).get(model_id)
-            if cached_ctx:
-                return cached_ctx
-        except Exception:
-            pass
+    # 1. Check live cache from memory (super-fast, avoiding disk I/O in loops)
+    cache = _load_mem_context_cache()
+    cached_ctx = cache.get(provider_key, {}).get(model_id)
+    if cached_ctx:
+        return cached_ctx
 
     # 2. Check hardcoded catalog
     provider = MODEL_CATALOG.get(provider_key, {})
@@ -162,7 +178,7 @@ def get_context_limit_for_model(provider_key: str, model_id: str) -> int:
                 pass
             # Parse shorthand (e.g. "128K", "1M")
             return _CTX_SIZE_MAP.get(ctx_str.strip(), 32768)
-    # Unknown model — try Ollama live query
+    # Unknown model — try Ollama live query (with strict 300ms timeout)
     if provider_key == "ollama":
         return get_ollama_num_ctx(model_id)
     # Unknown cloud model — assume 128K (safe minimum for modern cloud models)
@@ -178,7 +194,7 @@ def get_ollama_num_ctx(model: str, base_url: str = "http://localhost:11434") -> 
             f"{base_url.rstrip('/')}/api/show",
             data=data, headers={"Content-Type": "application/json"}, method="POST"
         )
-        with urllib.request.urlopen(req, timeout=2.0) as resp:
+        with urllib.request.urlopen(req, timeout=0.3) as resp:
             result = json.loads(resp.read())
         
         ctx = (
@@ -483,20 +499,39 @@ def _get_live_catalog_cache_path() -> Path:
     from andromity.config import get_config_dir
     return get_config_dir() / "model_live_catalog_cache.json"
 
-def get_cached_live_models(provider_key: str = None) -> list[dict]:
-    """Retrieve cached live models from disk cache."""
+_MEM_CATALOG_CACHE: dict = {}
+_MEM_CATALOG_CACHE_MTIME: float = 0.0
+
+def _load_mem_catalog_cache() -> dict:
+    global _MEM_CATALOG_CACHE, _MEM_CATALOG_CACHE_MTIME
+    cache_path = _get_live_catalog_cache_path()
+    if not cache_path.exists():
+        _MEM_CATALOG_CACHE = {}
+        _MEM_CATALOG_CACHE_MTIME = 0.0
+        return _MEM_CATALOG_CACHE
     try:
+        mtime = cache_path.stat().st_mtime
+        if _MEM_CATALOG_CACHE and mtime <= _MEM_CATALOG_CACHE_MTIME:
+            return _MEM_CATALOG_CACHE
         import json
-        cache_path = _get_live_catalog_cache_path()
-        if cache_path.exists():
-            with open(cache_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if provider_key:
-                return data.get(provider_key, [])
-            all_m = []
-            for p, p_models in data.items():
-                all_m.extend(p_models)
-            return all_m
+        with open(cache_path, "r", encoding="utf-8") as f:
+            _MEM_CATALOG_CACHE = json.load(f)
+        _MEM_CATALOG_CACHE_MTIME = mtime
+    except Exception:
+        if _MEM_CATALOG_CACHE is None:
+            _MEM_CATALOG_CACHE = {}
+    return _MEM_CATALOG_CACHE or {}
+
+def get_cached_live_models(provider_key: str = None) -> list[dict]:
+    """Retrieve cached live models from memory cache (synced with disk)."""
+    try:
+        data = _load_mem_catalog_cache()
+        if provider_key:
+            return data.get(provider_key, [])
+        all_m = []
+        for p, p_models in data.items():
+            all_m.extend(p_models)
+        return all_m
     except Exception:
         pass
     return []
@@ -524,6 +559,12 @@ def _cache_and_return(provider_key: str, models: list[dict]) -> list[dict]:
                 cache[provider_key][m["id"]] = tokens
         with open(cache_path, "w", encoding="utf-8") as f:
             json.dump(cache, f, indent=2)
+        global _MEM_CONTEXT_CACHE, _MEM_CONTEXT_CACHE_MTIME
+        _MEM_CONTEXT_CACHE = cache
+        try:
+            _MEM_CONTEXT_CACHE_MTIME = cache_path.stat().st_mtime
+        except Exception:
+            pass
 
         # 2. Save full live catalog cache
         cat_path = _get_live_catalog_cache_path()

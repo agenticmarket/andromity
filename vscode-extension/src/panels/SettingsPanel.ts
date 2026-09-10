@@ -12,6 +12,70 @@ export class SettingsPanel {
   private _disposables: vscode.Disposable[] = [];
   private _rpcClient: RpcClient | null = null;
   private _onConfigChangeCallback?: () => void;
+  private _initialTab: string = "models";
+  private _loadingPromise: Promise<void> | null = null;
+
+  public static _cachedState: any = null;
+  private static _prewarmPromise: Promise<void> | null = null;
+
+  public static async prewarm(rpcClient: RpcClient | null): Promise<void> {
+    if (!rpcClient) return;
+    if (SettingsPanel._prewarmPromise) return SettingsPanel._prewarmPromise;
+
+    SettingsPanel._prewarmPromise = (async () => {
+      try {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const [configData, models, providers, skills, mcpServers, usage, systemInfo, trustData, crons] = await Promise.all([
+          rpcClient.call<any>("config.get", { project_path: workspaceFolder }, 8000).catch(() => ({})),
+          rpcClient.call<ModelInfo[]>("config.list_models", {}, 8000).catch(() => []),
+          rpcClient.call<ProviderInfo[]>("config.list_providers", {}, 8000).catch(() => []),
+          rpcClient.call<any[]>("skills.list", { project_path: workspaceFolder }, 8000).catch(() => []),
+          rpcClient.call<any[]>("mcp.list", { project_path: workspaceFolder }, 8000).catch(() => []),
+          rpcClient.call<any>("usage.get", { project_path: null, time_range: "all" }, 8000).catch(() => ({})),
+          rpcClient.call<any>("system.info", {}, 8000).catch(() => ({})),
+          rpcClient.call<any>("trust.status", { project_path: workspaceFolder }, 8000).catch(() => ({ is_trusted: true, trusted_projects: [] })),
+          rpcClient.call<any[]>("cron.list", { project_path: workspaceFolder }, 8000).catch(() => []),
+        ]);
+
+        const vscodeConfig = vscode.workspace.getConfiguration("andromity");
+        const permissionMode = vscodeConfig.get<string>("permissionMode", configData?.permission_mode || "safe");
+
+        SettingsPanel._cachedState = {
+          type: "state_loaded",
+          config: { ...configData, permission_mode: permissionMode },
+          models: models || [],
+          providers: providers || [],
+          skills: skills || [],
+          remoteSkills: SettingsPanel._cachedState?.remoteSkills || [],
+          mcpServers: mcpServers || [],
+          usage: usage || {},
+          systemInfo: systemInfo || {},
+          trustData: trustData || { is_trusted: true, trusted_projects: [] },
+          crons: crons || [],
+          currentWorkspace: workspaceFolder || "",
+          startupSession: vscodeConfig.get<string>("startupSession", "last"),
+          soundNotifications: vscodeConfig.get<boolean>("soundNotifications", true) && configData?.sound_done !== false,
+          telemetry: (vscode.env.isTelemetryEnabled ?? true) && vscodeConfig.get<boolean>("telemetry", true) && configData?.telemetry !== false,
+          wallpaper: {
+            enabled: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("enabled", false),
+            rippleIntensity: vscode.workspace.getConfiguration("andromity.wallpaper").get<string>("rippleIntensity", "medium"),
+            floatingAsterisks: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("floatingAsterisks", true),
+            cursorLightAura: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("cursorLightAura", true),
+          },
+        };
+
+        if (SettingsPanel.currentPanel) {
+          SettingsPanel.currentPanel._panel.webview.postMessage(SettingsPanel._cachedState);
+        }
+      } catch (err: any) {
+        console.warn("[SettingsPanel] Pre-warm notice:", err?.message || err);
+      } finally {
+        SettingsPanel._prewarmPromise = null;
+      }
+    })();
+
+    return SettingsPanel._prewarmPromise;
+  }
 
   public static createOrShow(
     extensionUri: vscode.Uri,
@@ -28,6 +92,9 @@ export class SettingsPanel {
       SettingsPanel.currentPanel._rpcClient = rpcClient;
       SettingsPanel.currentPanel._onConfigChangeCallback = onConfigChange;
       SettingsPanel.currentPanel.setInitialTab(initialTab);
+      if (SettingsPanel._cachedState) {
+        SettingsPanel.currentPanel._panel.webview.postMessage(SettingsPanel._cachedState);
+      }
       SettingsPanel.currentPanel.loadData();
       return;
     }
@@ -63,6 +130,7 @@ export class SettingsPanel {
     this._extensionUri = extensionUri;
     this._rpcClient = rpcClient;
     this._onConfigChangeCallback = onConfigChange;
+    this._initialTab = initialTab;
 
     this._panel.iconPath = {
       light: vscode.Uri.joinPath(this._extensionUri, "media", "icon.svg"),
@@ -80,11 +148,6 @@ export class SettingsPanel {
       null,
       this._disposables
     );
-
-    setTimeout(() => {
-      this.setInitialTab(initialTab);
-      this.loadData();
-    }, 50);
   }
 
   public setRpcClient(client: RpcClient) {
@@ -93,77 +156,152 @@ export class SettingsPanel {
   }
 
   public setInitialTab(tab: string) {
+    this._initialTab = tab;
     this._panel.webview.postMessage({ type: "switch_tab", tab });
   }
 
-  public async loadData() {
-    if (!this._rpcClient) return;
-    try {
-      const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      const [configData, models, providers, skills, mcpServers, usage, systemInfo, trustData, crons] = await Promise.all([
-        this._rpcClient.call<any>("config.get", { project_path: workspaceFolder }, 15000).catch(() => ({})),
-        this._rpcClient.call<ModelInfo[]>("config.list_models", {}, 15000).catch(() => []),
-        this._rpcClient.call<ProviderInfo[]>("config.list_providers", {}, 15000).catch(() => []),
-        this._rpcClient.call<any[]>("skills.list", { project_path: workspaceFolder }, 15000).catch(() => []),
-        this._rpcClient.call<any[]>("mcp.list", { project_path: workspaceFolder }, 15000).catch(() => []),
-        this._rpcClient.call<any>("usage.get", { project_path: null, time_range: "all" }, 15000).catch(() => ({})),
-        this._rpcClient.call<any>("system.info", {}, 15000).catch(() => ({})),
-        this._rpcClient.call<any>("trust.status", { project_path: workspaceFolder }, 15000).catch(() => ({ is_trusted: true, trusted_projects: [] })),
-        this._rpcClient.call<any[]>("cron.list", { project_path: workspaceFolder }, 15000).catch(() => []),
-      ]);
-
-      const vscodeConfig = vscode.workspace.getConfiguration("andromity");
-      const permissionMode = vscodeConfig.get<string>("permissionMode", configData?.permission_mode || "safe");
-
-      this._panel.webview.postMessage({
-        type: "state_loaded",
-        config: { ...configData, permission_mode: permissionMode },
-        models: models || [],
-        providers: providers || [],
-        skills: skills || [],
-        remoteSkills: [],
-        mcpServers: mcpServers || [],
-        usage: usage || {},
-        systemInfo: systemInfo || {},
-        trustData: trustData || { is_trusted: true, trusted_projects: [] },
-        crons: crons || [],
-        currentWorkspace: workspaceFolder || "",
-        startupSession: vscodeConfig.get<string>("startupSession", "last"),
-        soundNotifications: vscodeConfig.get<boolean>("soundNotifications", true) && configData?.sound_done !== false,
-        telemetry: (vscode.env.isTelemetryEnabled ?? true) && vscodeConfig.get<boolean>("telemetry", true) && configData?.telemetry !== false,
-        wallpaper: {
-          enabled: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("enabled", false),
-          rippleIntensity: vscode.workspace.getConfiguration("andromity.wallpaper").get<string>("rippleIntensity", "medium"),
-          floatingAsterisks: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("floatingAsterisks", true),
-          cursorLightAura: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("cursorLightAura", true),
-        },
-      });
-
-      // Background-fetch remote skills registry from GitHub without blocking initial UI
-      this._rpcClient.call<any[]>("skills.browse", {}, 15000)
-        .then((remoteSkills) => {
-          if (this._panel && remoteSkills) {
-            this._panel.webview.postMessage({
-              type: "remote_skills_loaded",
-              remoteSkills: remoteSkills || [],
-            });
-          }
-        })
-        .catch(() => {});
-    } catch (err: any) {
-      console.error("[SettingsPanel] Failed to load data:", err);
+  public async loadData(force: boolean = false): Promise<void> {
+    if (!this._rpcClient) {
+      if (SettingsPanel._cachedState) {
+        this._panel.webview.postMessage(SettingsPanel._cachedState);
+      } else {
+        this._panel.webview.postMessage({ type: "daemon_status", connected: false });
+      }
+      return;
     }
+
+    if (this._loadingPromise && !force) {
+      return this._loadingPromise;
+    }
+
+    this._loadingPromise = (async () => {
+      try {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+        // 1. FAST PATH (instant diagnostics & configuration, renders within < 25ms)
+        const fastPromise = Promise.all([
+          this._rpcClient!.call<any>("config.get", { project_path: workspaceFolder }, 6000).catch(() => ({})),
+          this._rpcClient!.call<ProviderInfo[]>("config.list_providers", {}, 6000).catch(() => []),
+          this._rpcClient!.call<any>("system.info", {}, 6000).catch(() => ({})),
+          this._rpcClient!.call<any>("trust.status", { project_path: workspaceFolder }, 6000).catch(() => ({ is_trusted: true, trusted_projects: [] })),
+        ]).then(([configData, providers, systemInfo, trustData]) => {
+          const vscodeConfig = vscode.workspace.getConfiguration("andromity");
+          const permissionMode = vscodeConfig.get<string>("permissionMode", configData?.permission_mode || "safe");
+
+          this._panel.webview.postMessage({
+            type: "fast_state_loaded",
+            config: { ...configData, permission_mode: permissionMode },
+            providers: providers || [],
+            systemInfo: systemInfo || {},
+            trustData: trustData || { is_trusted: true, trusted_projects: [] },
+            currentWorkspace: workspaceFolder || "",
+            startupSession: vscodeConfig.get<string>("startupSession", "last"),
+            soundNotifications: vscodeConfig.get<boolean>("soundNotifications", true) && configData?.sound_done !== false,
+            telemetry: (vscode.env.isTelemetryEnabled ?? true) && vscodeConfig.get<boolean>("telemetry", true) && configData?.telemetry !== false,
+            wallpaper: {
+              enabled: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("enabled", false),
+              rippleIntensity: vscode.workspace.getConfiguration("andromity.wallpaper").get<string>("rippleIntensity", "medium"),
+              floatingAsterisks: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("floatingAsterisks", true),
+              cursorLightAura: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("cursorLightAura", true),
+            },
+          });
+
+          return { configData, providers, systemInfo, trustData, permissionMode, vscodeConfig };
+        });
+
+        // 2. HEAVY PATH (models, skills, mcpServers, usage, crons)
+        const heavyPromise = Promise.all([
+          this._rpcClient!.call<ModelInfo[]>("config.list_models", {}, 10000).catch(() => []),
+          this._rpcClient!.call<any[]>("skills.list", { project_path: workspaceFolder }, 10000).catch(() => []),
+          this._rpcClient!.call<any[]>("mcp.list", { project_path: workspaceFolder }, 10000).catch(() => []),
+          this._rpcClient!.call<any>("usage.get", { project_path: null, time_range: "all" }, 10000).catch(() => ({})),
+          this._rpcClient!.call<any[]>("cron.list", { project_path: workspaceFolder }, 10000).catch(() => []),
+        ]);
+
+        const [fastRes, [models, skills, mcpServers, usage, crons]] = await Promise.all([fastPromise, heavyPromise]);
+
+        const fullState = {
+          type: "state_loaded",
+          config: { ...fastRes.configData, permission_mode: fastRes.permissionMode },
+          models: models || [],
+          providers: fastRes.providers || [],
+          skills: skills || [],
+          remoteSkills: SettingsPanel._cachedState?.remoteSkills || [],
+          mcpServers: mcpServers || [],
+          usage: usage || {},
+          systemInfo: fastRes.systemInfo || {},
+          trustData: fastRes.trustData || { is_trusted: true, trusted_projects: [] },
+          crons: crons || [],
+          currentWorkspace: workspaceFolder || "",
+          startupSession: fastRes.vscodeConfig.get<string>("startupSession", "last"),
+          soundNotifications: fastRes.vscodeConfig.get<boolean>("soundNotifications", true) && fastRes.configData?.sound_done !== false,
+          telemetry: (vscode.env.isTelemetryEnabled ?? true) && fastRes.vscodeConfig.get<boolean>("telemetry", true) && fastRes.configData?.telemetry !== false,
+          wallpaper: {
+            enabled: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("enabled", false),
+            rippleIntensity: vscode.workspace.getConfiguration("andromity.wallpaper").get<string>("rippleIntensity", "medium"),
+            floatingAsterisks: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("floatingAsterisks", true),
+            cursorLightAura: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("cursorLightAura", true),
+          },
+        };
+
+        SettingsPanel._cachedState = fullState;
+        this._panel.webview.postMessage(fullState);
+
+        // Background-fetch remote skills registry from GitHub without blocking initial UI
+        this._rpcClient!.call<any[]>("skills.browse", {}, 10000)
+          .then((remoteSkills) => {
+            if (this._panel && remoteSkills) {
+              if (SettingsPanel._cachedState) {
+                SettingsPanel._cachedState.remoteSkills = remoteSkills;
+              }
+              this._panel.webview.postMessage({
+                type: "remote_skills_loaded",
+                remoteSkills: remoteSkills || [],
+              });
+            }
+          })
+          .catch(() => {});
+      } catch (err: any) {
+        console.error("[SettingsPanel] Failed to load data:", err);
+      } finally {
+        this._loadingPromise = null;
+      }
+    })();
+
+    return this._loadingPromise;
   }
 
   private async _handleMessage(message: any) {
     if (!this._rpcClient) {
+      if (message.type === "ready") {
+        this.setInitialTab(this._initialTab);
+        if (SettingsPanel._cachedState) {
+          this._panel.webview.postMessage(SettingsPanel._cachedState);
+        } else {
+          this._panel.webview.postMessage({ type: "daemon_status", connected: false });
+        }
+        return;
+      }
+      if (message.type === "webview_error") {
+        console.error("[SettingsPanel Webview Error]", message);
+        return;
+      }
       vscode.window.showErrorMessage("Andromity daemon is not connected.");
       return;
     }
 
     switch (message.type) {
       case "ready": {
+        this.setInitialTab(this._initialTab);
+        if (SettingsPanel._cachedState) {
+          this._panel.webview.postMessage(SettingsPanel._cachedState);
+        }
         await this.loadData();
+        break;
+      }
+
+      case "webview_error": {
+        console.error("[SettingsPanel Webview Error]", message);
         break;
       }
 
@@ -1640,6 +1778,20 @@ export class SettingsPanel {
       color: var(--text);
     }
 
+    .shimmer-text {
+      color: var(--text-muted, #71717a);
+      font-size: 11.5px;
+      font-style: italic;
+      opacity: 0.8;
+      display: inline-block;
+      animation: pulseShimmer 1.8s ease-in-out infinite alternate;
+    }
+
+    @keyframes pulseShimmer {
+      from { opacity: 0.35; }
+      to { opacity: 0.85; }
+    }
+
     .tools-tag-list {
       display: flex;
       flex-wrap: wrap;
@@ -2256,38 +2408,40 @@ export class SettingsPanel {
         <table class="diag-table">
           <tr>
             <td>Andromity Version</td>
-            <td id="diag-version">v0.2.3</td>
+            <td id="diag-version"><span class="shimmer-text">Detecting version...</span></td>
           </tr>
           <tr>
             <td>Engine Mode</td>
-            <td id="diag-engine-mode">Loading...</td>
+            <td id="diag-engine-mode"><span class="shimmer-text">Detecting engine mode...</span></td>
           </tr>
           <tr>
             <td>Runtime Version</td>
-            <td id="diag-py-ver">Loading...</td>
+            <td id="diag-py-ver"><span class="shimmer-text">Detecting runtime...</span></td>
           </tr>
           <tr>
             <td>AI Engine Executable</td>
-            <td id="diag-py-exe" style="font-size:11px; word-break:break-all;">Loading...</td>
+            <td id="diag-py-exe" style="font-size:11px; word-break:break-all;"><span class="shimmer-text">Detecting executable...</span></td>
           </tr>
           <tr>
             <td>Operating System</td>
-            <td id="diag-os">Loading...</td>
+            <td id="diag-os"><span class="shimmer-text">Detecting OS...</span></td>
           </tr>
           <tr>
             <td>Daemon PID</td>
-            <td id="diag-pid">Loading...</td>
+            <td id="diag-pid"><span class="shimmer-text">Detecting PID...</span></td>
           </tr>
           <tr>
             <td>Available Core Tools</td>
-            <td id="diag-tools-count">27 Tools Active</td>
+            <td id="diag-tools-count"><span class="shimmer-text">Detecting active tools...</span></td>
           </tr>
         </table>
       </div>
 
       <div class="settings-card" style="max-width: 800px;">
         <div class="setting-label">Registered Native Tools</div>
-        <div class="tools-tag-list" id="diag-tools-list"></div>
+        <div class="tools-tag-list" id="diag-tools-list">
+          <span class="shimmer-text">Loading tool capabilities...</span>
+        </div>
       </div>
     </div>
 
@@ -2577,6 +2731,64 @@ export class SettingsPanel {
       });
     }
 
+    function applySystemAndConfig(msg) {
+      if (msg.config) currentConfig = msg.config;
+      if (msg.providers) allProviders = msg.providers;
+      if (msg.trustData) trustInfo = msg.trustData;
+      if (msg.currentWorkspace || trustInfo.project_path) currentWorkspacePath = msg.currentWorkspace || trustInfo.project_path || "";
+      if (currentConfig.default_model) activeModelId = currentConfig.default_model;
+      if (currentConfig.default_provider) activeModelProvider = (currentConfig.default_provider || "").toLowerCase();
+
+      const setEl = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val;
+      };
+
+      if (currentConfig.default_profile && selectProfile) selectProfile.value = currentConfig.default_profile;
+      if (currentConfig.permission_mode && selectMode) selectMode.value = currentConfig.permission_mode.toLowerCase();
+      if (msg.startupSession && selectStartupSession) selectStartupSession.value = msg.startupSession;
+      if (currentConfig.reasoning_effort && selectReasoning) selectReasoning.value = currentConfig.reasoning_effort;
+      if (currentConfig.user_name && inputUserName) inputUserName.value = currentConfig.user_name;
+      if (currentConfig.user_email && inputUserEmail) inputUserEmail.value = currentConfig.user_email;
+      if (currentConfig.max_subagents && selectMaxSubagents) selectMaxSubagents.value = String(currentConfig.max_subagents);
+      if (checkAutoCompact) checkAutoCompact.checked = currentConfig.auto_compact !== false;
+      if (checkSound) checkSound.checked = msg.soundNotifications !== false;
+      if (checkTelemetry) checkTelemetry.checked = msg.telemetry !== false;
+
+      const wp = msg.wallpaper || {};
+      if (checkWpEnabled) {
+        checkWpEnabled.checked = !!wp.enabled;
+        updateWpStatusBadge(checkWpEnabled.checked);
+      }
+      if (selectWpRipple && wp.rippleIntensity) selectWpRipple.value = wp.rippleIntensity;
+      if (checkWpAsterisks) checkWpAsterisks.checked = wp.floatingAsterisks !== false;
+      if (checkWpAura) checkWpAura.checked = wp.cursorLightAura !== false;
+
+      const sys = msg.systemInfo || {};
+      if (sys.version) setEl("diag-version", "v" + sys.version);
+
+      if (sys.engine_mode) {
+        const modeEl = document.getElementById("diag-engine-mode");
+        if (modeEl) {
+          const isBundled = sys.is_bundled;
+          modeEl.innerHTML = isBundled
+            ? '<span style="color:#09f994;font-weight:600;">⚡ ' + escapeHtml(sys.engine_mode) + ' (Zero-Python)</span>'
+            : '<span style="color:#38bdf8;font-weight:600;">' + escapeHtml(sys.engine_mode) + '</span>';
+        }
+      }
+
+      if (sys.python_version) setEl("diag-py-ver", sys.python_version);
+      if (sys.python_executable) setEl("diag-py-exe", sys.python_executable);
+      if (sys.os) setEl("diag-os", sys.os);
+      if (sys.pid) setEl("diag-pid", sys.pid);
+      if (sys.tools_count) setEl("diag-tools-count", sys.tools_count + " Tools Active");
+
+      const diagTools = document.getElementById("diag-tools-list");
+      if (diagTools && sys.tools && sys.tools.length) {
+        diagTools.innerHTML = sys.tools.map(t => '<span class="badge blue">' + escapeHtml(t) + '</span>').join('');
+      }
+    }
+
     window.addEventListener("message", (event) => {
       const msg = event.data;
       switch (msg.type) {
@@ -2584,18 +2796,31 @@ export class SettingsPanel {
           switchTab(msg.tab);
           break;
         }
+        case "daemon_status": {
+          if (!msg.connected) {
+            const modeEl = document.getElementById("diag-engine-mode");
+            if (modeEl) {
+              modeEl.innerHTML = '<span style="color:#d29922;font-weight:600;">⚡ Connecting to Andromity Engine...</span>';
+            }
+          }
+          break;
+        }
+        case "fast_state_loaded": {
+          applySystemAndConfig(msg);
+          renderProviders();
+          renderTrust();
+          break;
+        }
         case "state_loaded": {
-          currentConfig = msg.config || {};
           allModels = msg.models || [];
           allProviders = msg.providers || [];
           allSkills = msg.skills || [];
           allRemoteSkills = msg.remoteSkills || [];
           allMcpServers = msg.mcpServers || [];
-          trustInfo = msg.trustData || {};
           usageData = msg.usage || {};
-          currentWorkspacePath = msg.currentWorkspace || trustInfo.project_path || "";
-          activeModelId = currentConfig.default_model || "";
-          activeModelProvider = (currentConfig.default_provider || "").toLowerCase();
+          allCrons = msg.crons || [];
+
+          applySystemAndConfig(msg);
 
           const setEl = (id, val) => {
             const el = document.getElementById(id);
@@ -2607,58 +2832,12 @@ export class SettingsPanel {
           setEl("installed-skills-num", allSkills.length);
           setEl("remote-skills-num", allRemoteSkills.length);
 
-          if (currentConfig.default_profile && selectProfile) selectProfile.value = currentConfig.default_profile;
-          if (currentConfig.permission_mode && selectMode) selectMode.value = currentConfig.permission_mode.toLowerCase();
-          if (msg.startupSession && selectStartupSession) selectStartupSession.value = msg.startupSession;
-          if (currentConfig.reasoning_effort && selectReasoning) selectReasoning.value = currentConfig.reasoning_effort;
-          if (currentConfig.user_name && inputUserName) inputUserName.value = currentConfig.user_name;
-          if (currentConfig.user_email && inputUserEmail) inputUserEmail.value = currentConfig.user_email;
-          if (currentConfig.max_subagents && selectMaxSubagents) selectMaxSubagents.value = String(currentConfig.max_subagents);
-          if (checkAutoCompact) checkAutoCompact.checked = currentConfig.auto_compact !== false;
-          if (checkSound) checkSound.checked = msg.soundNotifications !== false;
-          if (checkTelemetry) checkTelemetry.checked = msg.telemetry !== false;
-
-          const wp = msg.wallpaper || {};
-          if (checkWpEnabled) {
-            checkWpEnabled.checked = !!wp.enabled;
-            updateWpStatusBadge(checkWpEnabled.checked);
-          }
-          if (selectWpRipple && wp.rippleIntensity) selectWpRipple.value = wp.rippleIntensity;
-          if (checkWpAsterisks) checkWpAsterisks.checked = wp.floatingAsterisks !== false;
-          if (checkWpAura) checkWpAura.checked = wp.cursorLightAura !== false;
-
-          const sys = msg.systemInfo || {};
-          if (sys.version) setEl("diag-version", "v" + sys.version);
-
-          // Engine mode: show badge style
-          if (sys.engine_mode) {
-            const modeEl = document.getElementById("diag-engine-mode");
-            if (modeEl) {
-              const isBundled = sys.is_bundled;
-              modeEl.innerHTML = isBundled
-                ? '<span style="color:#4ade80;font-weight:600;">⚡ ' + sys.engine_mode + ' (Zero-Python)</span>'
-                : '<span style="color:#60a5fa;">' + sys.engine_mode + '</span>';
-            }
-          }
-
-          if (sys.python_version) setEl("diag-py-ver", sys.python_version);
-          if (sys.python_executable) setEl("diag-py-exe", sys.python_executable);
-          if (sys.os) setEl("diag-os", sys.os);
-          if (sys.pid) setEl("diag-pid", sys.pid);
-          if (sys.tools_count) setEl("diag-tools-count", sys.tools_count + " Tools Active");
-
-          const diagTools = document.getElementById("diag-tools-list");
-          if (diagTools && sys.tools && sys.tools.length) {
-            diagTools.innerHTML = sys.tools.map(t => '<span class="badge blue">' + escapeHtml(t) + '</span>').join('');
-          }
-
           const cronModelSel = document.getElementById("cron-model-select");
           if (cronModelSel && allModels && allModels.length > 0) {
             cronModelSel.innerHTML = '<option value="">Default Active Model (' + escapeHtml(activeModelId) + ')</option>' +
               allModels.map(m => '<option value="' + escapeHtml(m.id) + '">' + escapeHtml(m.name || m.id) + ' (' + escapeHtml(m.provider || '') + ')</option>').join('');
           }
 
-          allCrons = msg.crons || [];
           renderModels();
           renderProviders();
           renderSkills();

@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import { getChatStyles } from "./chatStyles.js";
+import { getChatActivityStyles } from "./chatActivityStyles.js";
 import { getChatClientScript } from "./chatClientScript.js";
+import { getChatActivityScript } from "./chatActivityRow.js";
 import { getChatAmbientScript, WallpaperConfig } from "./chatAmbientScript.js";
 
 export interface ChatViewState {
@@ -44,7 +46,8 @@ export function getChatViewHtml(webview: vscode.Webview, extensionUri: vscode.Ur
   const sidebarIconUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "sidebar-icon.svg"));
   const markedScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "marked.min.js"));
   const defaultWallpaperUri = state.defaultWallpaperUri || webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "wildcat-panther-dusk.jpg")).toString();
-  const styles = getChatStyles();
+  const styles = getChatStyles() + "\n" + getChatActivityStyles();
+  const activityScript = getChatActivityScript();
   const clientScript = getChatClientScript(sidebarIconUri.toString(), state);
   const ambientScript = getChatAmbientScript(defaultWallpaperUri, state.wallpaperConfig);
 
@@ -346,7 +349,7 @@ ${styles}
               <span class="provider-chip-badge">396+ Models</span>
             </button>
             <button class="onboarding-provider-chip" data-provider="ollama" data-model="llama3.2:latest" data-portal="https://ollama.com" data-name="Ollama (Local)">
-              <span class="provider-color-dot" style="background:#ec4899;"></span>
+              <span class="provider-color-dot" style="background:#38bdf8;"></span>
               <span class="provider-chip-name">Ollama</span>
               <span class="provider-chip-badge">100% Free / Local</span>
             </button>
@@ -629,6 +632,9 @@ ${styles}
   <script nonce="${nonce}" src="${markedScriptUri}"></script>
   <script nonce="${nonce}">
 ${ambientScript}
+  </script>
+  <script nonce="${nonce}">
+${activityScript}
   </script>
   <script nonce="${nonce}">
 ${clientScript}

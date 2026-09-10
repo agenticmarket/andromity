@@ -388,9 +388,10 @@ export class WaterfallPanel {
         //    no live event can ever execute against an uninitialized empty webview.
         const buffered = WaterfallTraceStore.getEvents(this._sessionId) || [];
         let historyOk = false;
+        let sessionData: any = null;
         if (this._rpcClient) {
           try {
-            const sessionData = await this._rpcClient.call<any>("session.get", {
+            sessionData = await this._rpcClient.call<any>("session.get", {
               session_id: this._sessionId,
             });
             if (sessionData) {
@@ -409,9 +410,41 @@ export class WaterfallPanel {
             this._postMessage(ev, true);
           }
         } else {
-          // Replay the in-flight background events for the currently running turn
+          // Replay only the in-flight background events for the currently running turn.
+          // Build index of events already committed to the session to prevent duplicate spans.
+          const committedToolIds = new Set<string>();
+          const committedTurnIds = new Set<string>();
+          if (sessionData && Array.isArray(sessionData.messages)) {
+            for (const m of sessionData.messages) {
+              if (m.tool_call_id) committedToolIds.add(m.tool_call_id);
+              if (m.turn_id) committedTurnIds.add(m.turn_id);
+              if (Array.isArray(m.tool_calls)) {
+                for (const tc of m.tool_calls) {
+                  if (tc && tc.id) committedToolIds.add(tc.id);
+                }
+              }
+            }
+          }
+
           const activeTurnEvents = WaterfallTraceStore.getActiveTurnEvents(this._sessionId);
           for (const ev of activeTurnEvents) {
+            if (!ev) continue;
+            // Skip agent_started as session_history already created the turn
+            if (ev.type === "agent_started") continue;
+
+            // Skip LLM events if this LLM call is already in committed history
+            if (ev.type === "waterfall_llm_start" || ev.type === "waterfall_llm_end") {
+              if (ev.turn_id && committedTurnIds.has(ev.turn_id)) continue;
+              if (Array.isArray(ev.tool_calls) && ev.tool_calls.some((tc: any) => tc && tc.id && committedToolIds.has(tc.id))) {
+                continue;
+              }
+            }
+
+            // Skip tool events if this tool was already executed and saved in history
+            if (ev.type === "tool_start" || ev.type === "tool_delta" || ev.type === "tool_end" || ev.type === "tool_result") {
+              if (ev.tool_id && committedToolIds.has(ev.tool_id)) continue;
+            }
+
             this._postMessage(ev, true);
           }
         }

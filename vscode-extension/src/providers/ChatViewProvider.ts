@@ -276,6 +276,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /** Open a file directly in VS Code's editor, optionally jumping to a specific line. */
+  public async openFile(filePath: string, line?: number): Promise<void> {
+    try {
+      const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      let cleanPath = filePath;
+      const match = cleanPath.match(/^(.+?):(\d+)(?::\d+)?$/);
+      if (match) {
+        cleanPath = match[1];
+        if (!line) line = parseInt(match[2], 10);
+      }
+      const absPath = path.isAbsolute(cleanPath) ? cleanPath : (ws ? path.join(ws, cleanPath) : cleanPath);
+      const uri = vscode.Uri.file(absPath);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const editor = await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
+      if (line && line > 0) {
+        const pos = new vscode.Position(line - 1, 0);
+        editor.selection = new vscode.Selection(pos, pos);
+        editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+      }
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Failed to open file: ${err.message}`);
+    }
+  }
+
   /** Open a session in a dedicated editor tab (side-by-side parallel view). */
   public openSessionInTab(sessionId?: string, sessionName?: string) {
     const sid = sessionId || this._currentSessionId;
@@ -1182,8 +1206,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "open_file": {
+        if (message.filePath) {
+          await this.openFile(message.filePath, message.line);
+        }
+        break;
+      }
+
       case "open_file_diff": {
         if (message.filePath) {
+          void this._rpcClient?.call("telemetry.recordFeature", { feature: "side_by_side_diff", session_id: this._currentSessionId }).catch(() => {});
           await this.openFileDiff(message.filePath, false);
         }
         break;
@@ -1249,6 +1281,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const sid = message.sessionId || this._currentSessionId;
         const sname = message.sessionName || "Chat Session";
         if (sid) {
+          void this._rpcClient?.call("telemetry.recordFeature", { feature: "waterfall", session_id: sid }).catch(() => {});
           if (this._context) {
             void this._context.globalState.update("andromity.waterfallFirstSessionShown", true);
           }

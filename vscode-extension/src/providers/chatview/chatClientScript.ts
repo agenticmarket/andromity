@@ -3,6 +3,7 @@ import { ChatViewState } from "./chatHtml.js";
 export function getChatClientScript(sidebarIconUri: string, state: ChatViewState): string {
   return `
     const vscode = acquireVsCodeApi();
+    window.__vscodeApi = vscode;
     const sidebarIconUri = "${sidebarIconUri}";
 
     window.onerror = function(msg, url, lineNo, columnNo, error) {
@@ -507,8 +508,21 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const label = toolSeqCount + (toolSeqCount === 1 ? ' tool' : ' tools');
       const doneCount = toolSeqDoneTools.size;
 
+      // Update live elapsed counter on each active tool card
+      currentToolSequence.querySelectorAll('.tool-card[data-start-ts], .activity-row.running[data-start-ts]').forEach(card => {
+        const startTs = parseInt(card.getAttribute('data-start-ts') || '0', 10);
+        const toolId = card.id ? card.id.replace('tool-', '') : '';
+        const elapsedEl = card.querySelector('#elapsed-' + toolId) || card.querySelector('.tool-elapsed');
+        if (elapsedEl && startTs > 0) {
+          const s = Math.max(0, Math.floor((Date.now() - startTs) / 1000));
+          elapsedEl.textContent = s + 's';
+        }
+      });
+
       if (toolSeqFinished) {
         el.textContent = label + ' · ' + (elapsed < 1 ? 'complete' : 'worked for ' + elapsed + 's');
+      } else if (doneCount > 0 && doneCount >= toolSeqCount) {
+        el.textContent = label + ' · all done · waiting for model... (' + elapsed + 's)';
       } else if (lastToolRunning && lastToolName) {
         el.textContent = label + ' · ' + lastToolName + ' working... (' + elapsed + 's)';
       } else if (doneCount > 0) {
@@ -1852,8 +1866,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           });
           break;
         }
+        case 'open-file': {
+          const fPath = target.getAttribute('data-file-path') || target.closest('[data-file-path]')?.getAttribute('data-file-path');
+          const lineStr = target.getAttribute('data-line') || target.closest('[data-line]')?.getAttribute('data-line');
+          if (fPath) {
+            vscode.postMessage({ type: 'open_file', filePath: fPath, line: lineStr ? parseInt(lineStr, 10) : undefined });
+          }
+          break;
+        }
         case 'open-file-diff': {
-          const fPath = target.getAttribute('data-file-path') || target.closest('.file-edited-chip')?.getAttribute('data-file-path');
+          const fPath = target.getAttribute('data-file-path') || target.closest('.file-edited-chip')?.getAttribute('data-file-path') || target.closest('.activity-diff-btn')?.getAttribute('data-file-path');
           if (fPath) {
             vscode.postMessage({ type: 'open_file_diff', filePath: fPath });
           }
@@ -2501,6 +2523,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             const href = token && typeof token === 'object' ? (token.href || '#') : String(token || '#');
             const title = token && typeof token === 'object' ? token.title : '';
             const text = token && typeof token === 'object' ? (token.text || href) : href;
+            if (href.startsWith('file://')) {
+              var fpath = href.startsWith('file:///') ? href.slice(8) : href.slice(7);
+              var line = 0;
+              var hashMatch = href.match(/#L(\d+)/i);
+              if (hashMatch) line = parseInt(hashMatch[1], 10);
+              return '<a href="#" class="md-file-link" data-action="open-file" data-file-path="' + escapeHtml(fpath) + '"' + (line ? (' data-line="' + line + '"') : '') + ' style="color:var(--accent); text-decoration:underline;"' + (title ? (' title="' + escapeHtml(title) + '"') : '') + '>' + text + '</a>';
+            }
             return '<a href="' + escapeHtml(href) + '" target="_blank" style="color:var(--accent); text-decoration:underline;"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + text + '</a>';
           },
           image(token) {
@@ -2680,7 +2709,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function copyToClipboard(text) {
       if (!text) return;
-      if (navigator.clipboard && navigator.clipboard.writeText) {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(text).catch(() => {
           fallbackCopyText(text);
         });
@@ -3865,21 +3894,33 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                       } catch {}
                     }
 
-                    const tDiv = document.createElement('div');
-                    tDiv.className = 'tool-card';
-                    tDiv.innerHTML = '<div class="tool-header">' +
-                      '<div class="tool-title-group">' +
-                        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>' +
-                        '<span>' + escapeHtml(toolName) + '</span>' +
+                    var renderedActivity = null;
+                    if (typeof window.renderAntigravityActivityRow === 'function') {
+                      renderedActivity = window.renderAntigravityActivityRow(toolName, toolArgs, 'done');
+                    }
+                    if (!renderedActivity && typeof window.renderCommandActivityRow === 'function' && /^(shell_exec|run_command|bash|exec|cmd)$/i.test(toolName)) {
+                      renderedActivity = window.renderCommandActivityRow(toolName, toolArgs, 'done');
+                    }
+
+                    if (renderedActivity) {
+                      currentTurnToolBody.appendChild(renderedActivity);
+                    } else {
+                      const tDiv = document.createElement('div');
+                      tDiv.className = 'tool-card';
+                      tDiv.innerHTML = '<div class="tool-header">' +
+                        '<div class="tool-title-group">' +
+                          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>' +
+                          '<span>' + escapeHtml(toolName) + '</span>' +
+                        '</div>' +
+                        '<div style="display:flex; align-items:center;">' +
+                          '<span class="tool-tag" style="background:rgba(63,185,80,0.2); color:var(--green);">DONE</span>' +
+                          '<svg class="tool-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
+                        '</div>' +
                       '</div>' +
-                      '<div style="display:flex; align-items:center;">' +
-                        '<span class="tool-tag" style="background:rgba(63,185,80,0.2); color:var(--green);">DONE</span>' +
-                        '<svg class="tool-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
-                      '</div>' +
-                    '</div>' +
-                    '<div class="tool-body">' + escapeHtml(toolArgs) + '</div>';
-                    // Delegated listener handles tool-header click without double toggle
-                    currentTurnToolBody.appendChild(tDiv);
+                      '<div class="tool-body">' + escapeHtml(toolArgs) + '</div>';
+                      // Delegated listener handles tool-header click without double toggle
+                      currentTurnToolBody.appendChild(tDiv);
+                    }
                   }
 
                   const titleSpan = currentTurnToolSeq.querySelector('.tool-seq-title');
@@ -4153,20 +4194,37 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             planToolCalledInTurn = true;
           }
           updateToolSeqHeader();
+          const isWriteOrCmd = /^(write_file|write_to_file|edit_file|edit_file_multi|multi_replace_file_content|replace_file_content|patch_file|create_file|shell_exec|run_command|bash|exec|cmd)$/i.test(msg.tool_name);
           const toolDiv = document.createElement('div');
-          toolDiv.className = 'tool-card expanded';
           toolDiv.id = 'tool-' + msg.tool_id;
-          toolDiv.innerHTML = '<div class="tool-header">' +
-            '<div class="tool-title-group">' +
-              '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>' +
-              '<span>' + escapeHtml(msg.tool_name) + '</span>' +
+          toolDiv.setAttribute('data-tool-name', msg.tool_name);
+
+          if (isWriteOrCmd && typeof window.renderAntigravityActivityRow === 'function') {
+            const isCmd = /^(shell_exec|run_command|bash|exec|cmd)$/i.test(msg.tool_name);
+            toolDiv.className = 'activity-row running';
+            toolDiv.setAttribute('data-start-ts', String(Date.now()));
+            toolDiv.setAttribute('data-label-resolved', '0');
+            toolDiv.innerHTML = '<span class="activity-action">' + (isCmd ? 'Running' : 'Editing') + '</span>' +
+              '<span class="activity-filename" id="label-' + msg.tool_id + '">' + escapeHtml(msg.tool_name) + '…</span>' +
+              '<span class="tool-elapsed" id="elapsed-' + msg.tool_id + '">0s</span>' +
+              '<span class="activity-running-dot"></span>' +
+              '<div class="tool-body" id="args-' + msg.tool_id + '" style="display:none;"></div>';
+          } else {
+            toolDiv.className = 'tool-card expanded';
+            toolDiv.setAttribute('data-start-ts', String(Date.now()));
+            toolDiv.innerHTML = '<div class="tool-header">' +
+              '<div class="tool-title-group">' +
+                '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>' +
+                '<span>' + escapeHtml(msg.tool_name) + '</span>' +
+              '</div>' +
+              '<div style="display:flex; align-items:center; gap:6px;">' +
+                '<span class="tool-elapsed" id="elapsed-' + msg.tool_id + '">0s</span>' +
+                '<span class="tool-tag">RUNNING</span>' +
+                '<svg class="tool-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
+              '</div>' +
             '</div>' +
-            '<div style="display:flex; align-items:center;">' +
-              '<span class="tool-tag">RUNNING</span>' +
-              '<svg class="tool-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
-            '</div>' +
-          '</div>' +
-          '<div class="tool-body" id="args-' + msg.tool_id + '"></div>';
+            '<div class="tool-body" id="args-' + msg.tool_id + '"></div>';
+          }
           seq.querySelector('.tool-seq-body').appendChild(toolDiv);
           scrollToBottomIfNeeded();
           break; }
@@ -4181,11 +4239,61 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             break;
           }
           const argsEl = document.getElementById('args-' + msg.tool_id);
-          if (argsEl) argsEl.textContent += msg.chunk;
+          if (argsEl) {
+            argsEl.textContent += msg.chunk;
+            const toolRow = document.getElementById('tool-' + msg.tool_id);
+            if (toolRow && toolRow.getAttribute('data-label-resolved') === '0') {
+              const partial = argsEl.textContent;
+              const fileMatch = partial.match(/"(?:TargetFile|file_path|target_file|path)"\\s*:\\s*"([^"]+)"/);
+              const cmdMatch = partial.match(/"(?:CommandLine|command|cmd)"\\s*:\\s*"([^"]+)"/);
+              const labelEl = document.getElementById('label-' + msg.tool_id);
+              if (labelEl) {
+                if (fileMatch && fileMatch[1]) {
+                  const fname = fileMatch[1].split('\\\\').join('/').split('/').pop() || fileMatch[1];
+                  labelEl.textContent = fname;
+                  labelEl.title = fileMatch[1];
+                  toolRow.setAttribute('data-label-resolved', '1');
+                } else if (cmdMatch && cmdMatch[1] && cmdMatch[1].length > 3) {
+                  labelEl.textContent = cmdMatch[1];
+                  labelEl.title = cmdMatch[1];
+                  toolRow.setAttribute('data-label-resolved', '1');
+                }
+              }
+            }
+          }
           break; }
 
-        case 'tool_result':
         case 'tool_end': {
+          // tool_end arrives when the LLM finishes generating argument chunks.
+          // The tool has NOT finished executing yet — it is now running in the backend.
+          // Keep status as RUNNING, do not mark as DONE.
+          const targetTool = document.getElementById('tool-' + msg.tool_id);
+          if (targetTool) {
+            const argsEl = document.getElementById('args-' + msg.tool_id);
+            const rawArgs = argsEl ? argsEl.textContent : '';
+            if (rawArgs && targetTool.getAttribute('data-label-resolved') === '0') {
+              try {
+                const parsed = JSON.parse(rawArgs);
+                const p = parsed.path || parsed.target_path || parsed.target_file || parsed.file_path || parsed.TargetFile;
+                const c = parsed.CommandLine || parsed.command || parsed.cmd || parsed.query;
+                const labelEl = document.getElementById('label-' + msg.tool_id);
+                if (labelEl) {
+                  if (p) {
+                    labelEl.textContent = p.split(String.fromCharCode(92)).join('/').split('/').pop() || p;
+                    labelEl.title = p;
+                    targetTool.setAttribute('data-label-resolved', '1');
+                  } else if (c) {
+                    labelEl.textContent = c;
+                    labelEl.title = c;
+                    targetTool.setAttribute('data-label-resolved', '1');
+                  }
+                }
+              } catch {}
+            }
+          }
+          break; }
+
+        case 'tool_result': {
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
             const buf = sessionLiveBuffer.get(msg.session_id) || [];
             buf.push({ t:'tool_result', tool_id: msg.tool_id, result: msg.result });
@@ -4195,17 +4303,30 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           const targetTool = document.getElementById('tool-' + msg.tool_id);
           if (targetTool) {
             const argsEl = document.getElementById('args-' + msg.tool_id);
-            if (argsEl && argsEl.textContent) {
-              // Only track file paths for tools that actually mutate files
-              const toolNameEl = targetTool.querySelector('.tool-title-group span');
-              const toolName = toolNameEl ? toolNameEl.textContent.trim() : '';
+            const toolNameEl = targetTool.querySelector('.tool-title-group span');
+            const toolName = (toolNameEl ? toolNameEl.textContent.trim() : '') || targetTool.getAttribute('data-tool-name') || '';
+            const rawArgs = argsEl ? argsEl.textContent : '';
+
+            // Update duration display with actual execution time
+            const elapsedEl = document.getElementById('elapsed-' + msg.tool_id) || targetTool.querySelector('.tool-elapsed');
+            if (elapsedEl) {
+              if (typeof msg.duration_ms === 'number' && msg.duration_ms > 0) {
+                elapsedEl.textContent = (msg.duration_ms / 1000).toFixed(1) + 's';
+              } else {
+                const startTs = parseInt(targetTool.getAttribute('data-start-ts') || '0', 10);
+                if (startTs > 0) {
+                  elapsedEl.textContent = Math.max(0, Math.floor((Date.now() - startTs) / 1000)) + 's';
+                }
+              }
+            }
+
+            if (rawArgs) {
               const isWriteTool = /^(write_file|write_to_file|edit_file|edit_file_multi|multi_replace_file_content|replace_file_content|patch_file|create_file|delete_file|move_file|rename_file|save_file)$/.test(toolName);
               if (isWriteTool) {
                 try {
-                  const parsed = JSON.parse(argsEl.textContent);
-                  const p = parsed.path || parsed.target_path || parsed.target_file || parsed.file_path;
+                  const parsed = JSON.parse(rawArgs);
+                  const p = parsed.path || parsed.target_path || parsed.target_file || parsed.file_path || parsed.TargetFile;
                   if (p) turnEditedFiles.add(p);
-                  // edit_file_multi may contain edits array with multiple files
                   if (Array.isArray(parsed.edits)) {
                     for (const e of parsed.edits) {
                       const ep = e.path || e.target_path || e.file_path;
@@ -4214,19 +4335,46 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   }
                 } catch {}
               }
+
+              let activityEl = null;
+              if (typeof window.renderAntigravityActivityRow === 'function') {
+                activityEl = window.renderAntigravityActivityRow(toolName, rawArgs, msg.success === false ? 'error' : 'done');
+              }
+              if (!activityEl && typeof window.renderCommandActivityRow === 'function' && /^(shell_exec|run_command|bash|exec|cmd)$/i.test(toolName)) {
+                activityEl = window.renderCommandActivityRow(toolName, rawArgs, msg.success === false ? 'error' : 'done', msg.result);
+              }
+
+              if (activityEl) {
+                activityEl.id = 'tool-' + msg.tool_id;
+                targetTool.removeAttribute('data-start-ts');
+                targetTool.replaceWith(activityEl);
+              } else {
+                const tag = targetTool.querySelector('.tool-tag');
+                if (tag) {
+                  tag.textContent = msg.success === false ? 'FAILED' : 'DONE';
+                  tag.style.background = msg.success === false ? 'rgba(248, 81, 73, 0.2)' : 'rgba(63, 185, 80, 0.2)';
+                  tag.style.color = msg.success === false ? 'var(--red)' : 'var(--green)';
+                }
+                targetTool.removeAttribute('data-start-ts');
+                targetTool.classList.remove('expanded', 'stuck');
+              }
+            } else {
+              const tag = targetTool.querySelector('.tool-tag');
+              if (tag) {
+                tag.textContent = msg.success === false ? 'FAILED' : 'DONE';
+                tag.style.background = msg.success === false ? 'rgba(248, 81, 73, 0.2)' : 'rgba(63, 185, 80, 0.2)';
+                tag.style.color = msg.success === false ? 'var(--red)' : 'var(--green)';
+              }
+              targetTool.removeAttribute('data-start-ts');
+              targetTool.classList.remove('expanded', 'stuck');
             }
-            const tag = targetTool.querySelector('.tool-tag');
-            if (tag) {
-              tag.textContent = 'DONE';
-              tag.style.background = 'rgba(63, 185, 80, 0.2)';
-              tag.style.color = 'var(--green)';
-            }
-            targetTool.classList.remove('expanded');
           }
           if (msg.tool_id) {
             toolSeqDoneTools.add(msg.tool_id);
           }
-          lastToolRunning = false;
+          if (toolSeqDoneTools.size >= toolSeqCount) {
+            lastToolRunning = false;
+          }
           updateToolSeqHeader();
           // Tool-path spawns never emit subagent/done (orchestrator.spawn doesn't
           // use run_stream). The tool result IS the SubAgentResult JSON — use it as
@@ -4584,7 +4732,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           updateModelBadge();
           setTimeout(() => {
             updateOnboardingVisibility();
-            if (chatInput) chatInput.focus();
+            if (promptInput) promptInput.focus();
           }, 350);
           break;
         }
@@ -4859,7 +5007,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         iconClass = 'command';
         iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>';
         const cmd = toolArgs.command || toolArgs.cmd || toolArgs.CommandLine || '';
-        const shellName = (navigator.platform && navigator.platform.indexOf('Win') > -1) ? 'powershell' : 'bash';
+        const isWin = typeof navigator !== 'undefined' && ((navigator.platform && navigator.platform.indexOf('Win') > -1) || (navigator.userAgent && /win/i.test(navigator.userAgent)));
+        const shellName = isWin ? 'powershell' : 'bash';
         codeDisplay = (shellName + ': ' + cmd).trim();
         subPath = toolArgs.cwd || toolArgs.Cwd || (zeroWorkspaceLabel ? zeroWorkspaceLabel.textContent : '') || '';
       } else if (lowerTool === 'edit_file' || lowerTool === 'write_to_file' || lowerTool === 'replace_file_content' || lowerTool === 'multi_replace_file_content' || lowerTool === 'create_file') {
@@ -5351,6 +5500,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       _origEndAssistantTurn();
       scheduleFocus();
     };
+
+    setInterval(function() {
+      document.querySelectorAll('[data-start-ts]').forEach(function(el) {
+        var ts = parseInt(el.getAttribute('data-start-ts') || '0', 10);
+        if (!ts) return;
+        var elapsed = Math.floor((Date.now() - ts) / 1000);
+        var elapsedEl = el.querySelector('.tool-elapsed');
+        if (elapsedEl) elapsedEl.textContent = elapsed + 's';
+        if (elapsed >= 45 && !el.classList.contains('stuck')) {
+          el.classList.add('stuck');
+          el.classList.remove('running');
+        }
+      });
+    }, 1000);
 
     setRandomStatement();
     vscode.postMessage({ type: 'ready' });

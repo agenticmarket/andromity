@@ -71,6 +71,7 @@ HelpScreen {
                 yield Static("\n[dim]✦  Not all commands are listed here. Discovery is part of the experience.[/dim]", id="help-lore-hint")
             yield Static("[dim]↑↓ navigate · Enter run · click a command to run it · Esc close[/dim]", id="help-hint")
             with Horizontal(id="help-footer"):
+                yield Button("Report Issue", id="help-issue")
                 yield Button("Close", variant="primary", id="help-close")
 
     def on_mount(self):
@@ -118,6 +119,10 @@ HelpScreen {
     def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "help-close":
             self.dismiss()
+        elif event.button.id == "help-issue":
+            import webbrowser
+            webbrowser.open("https://github.com/agenticmarket/andromity/issues")
+
 
     def on_key(self, event):
         if event.key == "escape":

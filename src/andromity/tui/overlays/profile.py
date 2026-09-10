@@ -156,6 +156,11 @@ ProfilePickerOverlay {
                 app = self.app
                 if hasattr(app, '_apply_profile'):
                     app._apply_profile(self._selected)
+                    try:
+                        from andromity.telemetry import send_feature_used
+                        send_feature_used(f"profile_{self._selected}")
+                    except Exception:
+                        pass
             self.dismiss()
             try:
                 self.app.query_one("#input-field").focus()

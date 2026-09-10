@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     provider_type    TEXT,
     reasoning_effort TEXT,
     mcp_tools_count  INTEGER,
+    -- v3 profile & session progress --
+    profile          TEXT DEFAULT 'builder',
+    duration_seconds INTEGER DEFAULT 0,
+    turn_count       INTEGER DEFAULT 1,
     -- timestamps --
     created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
     date             TEXT    NOT NULL
@@ -43,6 +47,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_country     ON sessions(country);
 CREATE INDEX IF NOT EXISTS idx_sessions_provider    ON sessions(provider);
 CREATE INDEX IF NOT EXISTS idx_sessions_model       ON sessions(model);
 CREATE INDEX IF NOT EXISTS idx_sessions_ptype       ON sessions(provider_type);
+CREATE INDEX IF NOT EXISTS idx_sessions_profile     ON sessions(profile);
 
 -- -----------------------------------------------------------------------
 -- events: lifecycle events (session_end, compact_triggered)
@@ -69,10 +74,30 @@ CREATE TABLE IF NOT EXISTS events (
     date             TEXT    NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_events_date     ON events(date);
-CREATE INDEX IF NOT EXISTS idx_events_event    ON events(event);
-CREATE INDEX IF NOT EXISTS idx_events_provider ON events(provider);
-CREATE INDEX IF NOT EXISTS idx_events_model    ON events(model);
+CREATE INDEX IF NOT EXISTS idx_events_date       ON events(date);
+CREATE INDEX IF NOT EXISTS idx_events_event      ON events(event);
+CREATE INDEX IF NOT EXISTS idx_events_session_id ON events(session_id);
+CREATE INDEX IF NOT EXISTS idx_events_provider   ON events(provider);
+CREATE INDEX IF NOT EXISTS idx_events_model      ON events(model);
+
+-- -----------------------------------------------------------------------
+-- feature_events: user interaction with key features (waterfall, side_by_side, etc.)
+-- Zero PII: only aggregate counts & features
+-- -----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS feature_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    feature_name TEXT    NOT NULL,
+    user_id      TEXT    NOT NULL,
+    session_id   TEXT,
+    client       TEXT,
+    os           TEXT,
+    version      TEXT,
+    created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+    date         TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_feature_events_name ON feature_events(feature_name);
+CREATE INDEX IF NOT EXISTS idx_feature_events_date ON feature_events(date);
 
 -- -----------------------------------------------------------------------
 -- Migration (run on existing D1 databases):
@@ -81,4 +106,7 @@ CREATE INDEX IF NOT EXISTS idx_events_model    ON events(model);
 -- ALTER TABLE sessions ADD COLUMN provider_type    TEXT;
 -- ALTER TABLE sessions ADD COLUMN reasoning_effort TEXT;
 -- ALTER TABLE sessions ADD COLUMN mcp_tools_count  INTEGER;
+-- ALTER TABLE sessions ADD COLUMN profile          TEXT DEFAULT 'builder';
+-- ALTER TABLE sessions ADD COLUMN duration_seconds INTEGER DEFAULT 0;
+-- ALTER TABLE sessions ADD COLUMN turn_count       INTEGER DEFAULT 1;
 -- -----------------------------------------------------------------------

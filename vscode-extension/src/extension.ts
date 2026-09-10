@@ -136,6 +136,7 @@ export async function activate(context: vscode.ExtensionContext) {
     sessionTreeProvider.setRpcClient(rpcClient);
     cronTreeProvider.setRpcClient(rpcClient);
     changesTreeProvider.setRpcClient(rpcClient);
+    SettingsPanel.prewarm(rpcClient);
     SettingsPanel.currentPanel?.setRpcClient(rpcClient);
     PlanEditorPanel.currentPanel?.setRpcClient(rpcClient);
     WaterfallTraceStore.init(rpcClient);
@@ -169,6 +170,25 @@ export async function activate(context: vscode.ExtensionContext) {
         chatProvider.updateCurrentPlan(params.plan, params.session_id);
         planProvider.updatePlan(params.plan, params.session_id);
         PlanEditorPanel.currentPanel?.updatePlan(params.plan);
+      }
+    });
+
+    rpcClient.on("agent/done", async () => {
+      const feedbackKey = "andromity.feedbackPromptShown";
+      const counterKey = "andromity.completedTurnsCount";
+      if (context.globalState.get<boolean>(feedbackKey, false)) return;
+      const count = (context.globalState.get<number>(counterKey, 0) || 0) + 1;
+      await context.globalState.update(counterKey, count);
+      if (count >= 3) {
+        await context.globalState.update(feedbackKey, true);
+        const choice = await vscode.window.showInformationMessage(
+          "Enjoying Andromity? Share feedback or report issues on GitHub.",
+          "Open GitHub Issues",
+          "Dismiss"
+        );
+        if (choice === "Open GitHub Issues") {
+          vscode.env.openExternal(vscode.Uri.parse("https://github.com/agenticmarket/andromity/issues"));
+        }
       }
     });
 
