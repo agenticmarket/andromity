@@ -2671,7 +2671,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid var(--border);">' +
           '<div style="display:flex; align-items:center; gap:8px; font-weight:600; color:var(--fg); font-size:12.5px;">' +
             '<span style="color:var(--accent); font-weight:700;">Andromity AI Coding Agent</span>' +
-            '<span style="background:rgba(16,185,129,0.18); color:#10b981; font-size:10.5px; padding:1px 6px; border-radius:10px;">v0.2.8</span>' +
+            '<span style="background:rgba(16,185,129,0.18); color:#10b981; font-size:10.5px; padding:1px 6px; border-radius:10px;">v0.2.9</span>' +
           '</div>' +
           '<button class="skills-card-close-btn" data-action="close-about-card" title="Close">&times;</button>' +
         '</div>' +

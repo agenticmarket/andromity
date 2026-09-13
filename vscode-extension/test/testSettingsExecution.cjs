@@ -280,7 +280,7 @@ sandbox.window.postMessage({
     { id: 'openai', name: 'OpenAI', has_key: true }
   ],
   systemInfo: {
-    version: '0.2.8',
+    version: '0.2.9',
     engine_mode: 'Bundled Standalone Binary',
     is_bundled: true,
     python_version: '3.14.7',
@@ -303,7 +303,7 @@ const pidEl = elementsById.get('diag-pid');
 const toolsCountEl = elementsById.get('diag-tools-count');
 const toolsListEl = elementsById.get('diag-tools-list');
 
-assert(verEl && verEl.textContent === 'v0.2.8', `Expected version v0.2.8, got: ${verEl?.textContent}`);
+assert(verEl && verEl.textContent === 'v0.2.9', `Expected version v0.2.9, got: ${verEl?.textContent}`);
 assert(modeEl && modeEl.innerHTML.includes('Bundled Standalone Binary'), `Expected bundled mode, got: ${modeEl?.innerHTML}`);
 assert(modeEl && modeEl.innerHTML.includes('Zero-Python'), `Expected Zero-Python badge, got: ${modeEl?.innerHTML}`);
 assert(pyVerEl && pyVerEl.textContent === '3.14.7', `Expected py-ver 3.14.7, got: ${pyVerEl?.textContent}`);

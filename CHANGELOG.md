@@ -2,6 +2,24 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
+## [0.2.9] — 2026-09-13
+
+### 🐾 Pixel Mascot Companion & Interactive ChatView
+- **Smart Adaptive Pixel Mascot (`ChatViewProvider`)**: Added playful idle roaming, edge peeking animations, and active task priority interrupt for the mascot companion.
+- **Sticky Tool-Flank Docking & Checklist Styling**: Refined mascot docking behavior when tools are executing, accompanied by rich checklist status styling for multi-step agent actions.
+
+### 🌊 Waterfall Profiler Synchronization & Stability
+- **Real-Time Mid-Turn Trace Sync**: Added live event queueing until the history baseline is initialized, preventing split turns and dropped execution spans.
+- **Race Condition & Sequence Resolution**: Resolved mid-turn span duplication and race conditions during fast subagent and tool execution.
+- **Multi-Tier Ripgrep Integration**: Optimized file pattern and content searches with fallback cascades for sub-millisecond workspace traversal.
+
+### Core Backend & Extension Scaffolding
+- **Message Sanitizer**: Added comprehensive message content sanitation (`tests/test_message_sanitizer.py`) protecting against malformed RPC payloads and prompt injections.
+- **Settings & Diagnostic Stability**: Enhanced pre-warming, caching, and progressive fast-path rendering for instant diagnostics display (<1ms).
+- **CI & Docs Optimization**: Reduced animated WebP assets under 5MB for marketplace compliance and hardened test session isolation.
+
+---
+
 ## [0.2.8] — 2026-09-07
 
 ### 🌊 Waterfall Live Execution Trace & Profiler

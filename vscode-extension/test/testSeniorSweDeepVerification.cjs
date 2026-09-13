@@ -415,7 +415,7 @@ settingsDom.dispatchMessage({
     { id: 'anthropic', name: 'Anthropic (Claude)', has_key: true }
   ],
   systemInfo: {
-    version: '0.2.8',
+    version: '0.2.9',
     engine_mode: 'Bundled Standalone Binary',
     is_bundled: true,
     python_version: '3.14.7',
@@ -433,7 +433,7 @@ const diagMode = settingsDom.elementsById.get('diag-engine-mode');
 const diagPyVer = settingsDom.elementsById.get('diag-py-ver');
 const diagToolsCount = settingsDom.elementsById.get('diag-tools-count');
 
-assert(diagVersion && diagVersion.textContent === 'v0.2.8', `Expected v0.2.8, got ${diagVersion?.textContent}`);
+assert(diagVersion && diagVersion.textContent === 'v0.2.9', `Expected v0.2.9, got ${diagVersion?.textContent}`);
 assert(diagMode && diagMode.innerHTML.includes('Bundled Standalone Binary'), "Expected bundled mode");
 assert(diagPyVer && diagPyVer.textContent === '3.14.7', "Expected Python 3.14.7");
 assert(diagToolsCount && diagToolsCount.textContent === '29 Tools Active', "Expected 29 Tools Active");

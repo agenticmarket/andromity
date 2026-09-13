@@ -2491,7 +2491,7 @@ export class SettingsPanel {
             <div>
               <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                 <span style="font-size: 16px; font-weight: 700; color: var(--text); letter-spacing: -0.2px;">Andromity AI Coding Agent</span>
-                <span class="badge green" style="font-weight: 600;">v0.2.8</span>
+                <span class="badge green" style="font-weight: 600;">v0.2.9</span>
                 <span class="badge blue">Production Build</span>
               </div>
               <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">

@@ -2,6 +2,19 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [0.2.9] - 2026-09-13
+
+### Added & Improved
+- **🐾 Pixel Mascot Companion & Interactive ChatView:**
+  - **Playful Pixel Mascot (`ChatViewProvider`):** Added idle roaming across the webview, edge peeking animations, and priority interrupts when active tasks begin.
+  - **Sticky Tool-Flank Docking:** Mascot docks dynamically alongside running tools with real-time checklist indicators.
+- **🌊 Waterfall Live Trace Sync & Profiler Stability:**
+  - **Live Mid-Turn Sync:** Prevented split turns by holding live trace events in queue until the baseline history payload is fully established.
+  - **Race Condition Resolution:** Eliminated duplicate spans and timeline jitter during concurrent subagent tool invocations.
+- **Diagnostics & Webview Performance:**
+  - **Instant Diagnostic Loading (<1ms):** Implemented fast-path pre-warmed state rendering in SettingsPanel.
+  - **Zero-Python & Bundled Mode Hardening:** Refined mode detection and visual status badges for zero-setup workflows.
+
 ## [0.2.8] - 2026-09-07
 
 ### Added & Improved
