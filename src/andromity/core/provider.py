@@ -99,6 +99,96 @@ def _ensure_litellm_stub():
 _ensure_litellm_stub()
 
 
+def sanitize_messages_for_api(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Sanitize and repair a chat message sequence to ensure full compliance with
+    OpenAI / OpenRouter API requirements.
+
+    1. Strips non-standard keys (e.g. 'thinking', 'duration', 'images', 'turn_id').
+    2. Ensures every 'tool' message directly follows the 'assistant' message that called it.
+    3. Drops orphaned 'tool' messages that have no preceding assistant tool_calls.
+    4. Re-orders tool responses if displaced, and synthesizes tool responses for any
+       unfulfilled tool_calls (e.g. if a turn was cancelled mid-execution).
+    5. Ensures assistant message content is not None when tool_calls is absent.
+    """
+    if not messages:
+        return []
+
+    allowed_keys = {"role", "content", "tool_calls", "tool_call_id", "name"}
+    cleaned: List[Dict[str, Any]] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        c = {k: v for k, v in m.items() if k in allowed_keys}
+        if "role" not in c:
+            continue
+        cleaned.append(c)
+
+    sanitized: List[Dict[str, Any]] = []
+    i = 0
+    n = len(cleaned)
+
+    while i < n:
+        msg = cleaned[i]
+        role = msg.get("role")
+
+        if role == "assistant":
+            tcalls = msg.get("tool_calls")
+            if not tcalls:
+                if msg.get("content") is None:
+                    msg["content"] = ""
+                sanitized.append(msg)
+                i += 1
+            else:
+                call_ids = [
+                    tc.get("id")
+                    for tc in tcalls
+                    if isinstance(tc, dict) and tc.get("id")
+                ]
+                sanitized.append(msg)
+                i += 1
+
+                found_tools: Dict[str, Dict[str, Any]] = {}
+
+                # Check contiguous following tool messages
+                while i < n and cleaned[i].get("role") == "tool":
+                    tid = cleaned[i].get("tool_call_id")
+                    if tid in call_ids and tid not in found_tools:
+                        found_tools[tid] = cleaned[i]
+                    else:
+                        log.warning("Dropping orphaned or duplicate tool message (id=%s)", tid)
+                    i += 1
+
+                # Search small window ahead in case tool responses were displaced
+                remaining_cids = [cid for cid in call_ids if cid not in found_tools]
+                for cid in remaining_cids:
+                    for j in range(i, min(i + 10, len(cleaned))):
+                        if cleaned[j].get("role") == "tool" and cleaned[j].get("tool_call_id") == cid:
+                            found_tools[cid] = cleaned.pop(j)
+                            n -= 1
+                            break
+
+                for cid in call_ids:
+                    if cid in found_tools:
+                        sanitized.append(found_tools[cid])
+                    else:
+                        log.warning("Synthesizing missing tool response for call_id=%s", cid)
+                        sanitized.append({
+                            "role": "tool",
+                            "tool_call_id": cid,
+                            "content": "[Tool execution cancelled or interrupted]",
+                        })
+
+        elif role == "tool":
+            log.warning("Dropping orphaned tool message (id=%s) not preceded by assistant tool_calls", msg.get("tool_call_id"))
+            i += 1
+
+        else:
+            sanitized.append(msg)
+            i += 1
+
+    return sanitized
+
+
 async def stream_completion(
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]] = None,
@@ -115,7 +205,7 @@ async def stream_completion(
     litellm.drop_params = True
     litellm.suppress_debug_info = True
 
-
+    sanitized_messages = sanitize_messages_for_api(messages)
 
     if provider_name is None:
         provider_name = config.get("default", "provider", "anthropic")
@@ -153,7 +243,7 @@ async def stream_completion(
 
     kwargs: Dict[str, Any] = {
         "model": litellm_model,
-        "messages": messages,
+        "messages": sanitized_messages,
         "stream": True,
         "stream_options": {"include_usage": True},
         "timeout": 90,

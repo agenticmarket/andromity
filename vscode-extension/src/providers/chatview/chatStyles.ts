@@ -943,17 +943,20 @@ export function getChatStyles(): string {
     /* ─── Collapsible Todo / Plan Tracker (Above Input Section) ─────────────── */
     .plan-tracker-strip {
       margin: 0 10px 8px 10px;
-      padding: 7px 11px;
-      background: var(--card-bg, #18181b);
-      border: 1px solid var(--card-border, rgba(255, 255, 255, 0.08));
-      border-radius: 8px;
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+      padding: 6px 10px 8px 10px;
+      background: var(--vscode-editorWidget-background, var(--card-bg, #18181b));
+      border: 1px solid var(--vscode-widget-border, var(--card-border, rgba(255, 255, 255, 0.08)));
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
       flex-shrink: 0;
       display: flex;
       flex-direction: column;
       gap: 6px;
-      transition: all 0.2s ease;
+      transition: border-color 0.15s ease, background 0.15s ease;
       animation: bannerSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .plan-tracker-strip:hover {
+      border-color: var(--vscode-focusBorder, rgba(255, 255, 255, 0.15));
     }
     .tracker-row {
       display: flex;
@@ -964,98 +967,119 @@ export function getChatStyles(): string {
     .tracker-info {
       display: flex;
       align-items: center;
-      gap: 6px;
-      font-size: 11.5px;
-      color: var(--fg, #f4f4f5);
+      gap: 7px;
+      font-size: 12px;
+      color: var(--vscode-foreground, #e4e4e7);
       min-width: 0;
       flex: 1;
       cursor: pointer;
     }
     .tracker-chevron {
-      color: var(--muted, #a1a1aa);
+      color: var(--vscode-descriptionForeground, #a1a1aa);
       display: inline-flex;
       align-items: center;
       justify-content: center;
       transition: transform 0.2s ease;
       flex-shrink: 0;
+      opacity: 0.7;
     }
     .plan-tracker-strip.collapsed .tracker-chevron {
       transform: rotate(-90deg);
     }
     .tracker-icon {
-      color: #c084fc;
+      color: var(--vscode-symbolIcon-classForeground, #38bdf8);
       flex-shrink: 0;
       display: inline-flex;
       align-items: center;
+      opacity: 0.85;
+      transition: color 0.15s ease;
+    }
+    .plan-tracker-strip.is-complete .tracker-icon {
+      color: #10b981;
     }
     .tracker-title {
-      font-weight: 600;
+      font-weight: 500;
       letter-spacing: -0.01em;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      color: var(--vscode-foreground, #e4e4e7);
     }
     .tracker-count {
-      color: var(--muted, #a1a1aa);
-      font-size: 10.5px;
+      color: var(--vscode-descriptionForeground, #a1a1aa);
+      font-size: 11px;
       font-family: var(--font-mono);
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.06);
       padding: 1px 6px;
-      border-radius: 10px;
+      border-radius: 4px;
       white-space: nowrap;
+      transition: all 0.15s ease;
+    }
+    .plan-tracker-strip.is-complete .tracker-count {
+      color: #10b981;
+      background: rgba(16, 185, 129, 0.08);
+      border-color: rgba(16, 185, 129, 0.18);
     }
     .tracker-actions {
       display: flex;
       align-items: center;
-      gap: 4px;
+      gap: 6px;
       flex-shrink: 0;
     }
     .btn-tracker-open {
       display: inline-flex;
       align-items: center;
       gap: 4px;
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      color: var(--fg, #f4f4f5);
-      font-size: 10.5px;
+      background: transparent;
+      border: 1px solid var(--vscode-button-secondaryBorder, rgba(255, 255, 255, 0.1));
+      color: var(--vscode-descriptionForeground, #a1a1aa);
+      font-size: 11px;
       font-weight: 500;
-      padding: 2px 7px;
+      padding: 2px 8px;
       border-radius: 4px;
       cursor: pointer;
       transition: all 0.12s ease;
     }
     .btn-tracker-open:hover {
-      background: rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.06);
       border-color: rgba(255, 255, 255, 0.2);
+      color: var(--vscode-foreground, #ffffff);
     }
     .btn-tracker-close {
       background: transparent;
       border: none;
-      color: var(--muted, #71717a);
+      color: var(--vscode-descriptionForeground, #71717a);
       cursor: pointer;
       padding: 2px 3px;
       border-radius: 4px;
       display: flex;
       align-items: center;
       justify-content: center;
+      opacity: 0.65;
       transition: all 0.12s ease;
     }
     .btn-tracker-close:hover {
-      color: var(--fg, #f4f4f5);
+      color: var(--vscode-foreground, #f4f4f5);
       background: rgba(255, 255, 255, 0.08);
+      opacity: 1;
     }
     .tracker-progress-track {
       width: 100%;
-      height: 3.5px;
-      background: rgba(255, 255, 255, 0.08);
-      border-radius: 2px;
+      height: 2px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 1px;
       overflow: hidden;
+      margin-top: 1px;
     }
     .tracker-progress-bar {
       height: 100%;
-      background: linear-gradient(90deg, #c084fc, #38bdf8);
-      border-radius: 2px;
-      transition: width 0.3s ease;
+      background: var(--vscode-progressBar-background, #38bdf8);
+      border-radius: 1px;
+      transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.2s ease;
+    }
+    .plan-tracker-strip.is-complete .tracker-progress-bar {
+      background: #10b981;
     }
     .tracker-todos-list {
       display: flex;
@@ -1071,12 +1095,12 @@ export function getChatStyles(): string {
     .tracker-todo-item {
       display: flex;
       align-items: flex-start;
-      gap: 10px;
-      padding: 7px 8px;
-      font-size: 12px;
+      gap: 8px;
+      padding: 5px 6px;
+      font-size: 11.5px;
       line-height: 1.4;
-      color: var(--fg, #e4e4e7);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      color: var(--vscode-foreground, #e4e4e7);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
       border-radius: 4px;
       transition: background 0.12s ease;
     }
@@ -1084,32 +1108,32 @@ export function getChatStyles(): string {
       border-bottom: none;
     }
     .tracker-todo-item:hover {
-      background: rgba(255, 255, 255, 0.02);
+      background: rgba(255, 255, 255, 0.03);
     }
     .tracker-todo-item.is-done {
-      color: var(--muted, #71717a);
+      color: var(--vscode-descriptionForeground, #71717a);
     }
     .tracker-todo-item.is-done .tracker-todo-text {
       text-decoration: line-through;
-      opacity: 0.75;
+      opacity: 0.65;
     }
     .tracker-todo-item.is-active {
-      background: rgba(6, 182, 212, 0.08);
+      background: rgba(56, 189, 248, 0.05);
       color: #38bdf8;
       font-weight: 500;
     }
     .tracker-todo-item.is-failed {
-      background: rgba(239, 68, 68, 0.08);
+      background: rgba(239, 68, 68, 0.06);
       color: #ef4444;
     }
     .tracker-todo-icon-wrap {
-      margin-top: 2px;
+      margin-top: 1px;
       flex-shrink: 0;
       display: flex;
       align-items: center;
       justify-content: center;
-      width: 16px;
-      height: 16px;
+      width: 15px;
+      height: 15px;
     }
     .tracker-todo-text {
       flex: 1;
@@ -2240,6 +2264,8 @@ export function getChatStyles(): string {
       min-width: 0;
       box-sizing: border-box;
       position: relative;
+      content-visibility: auto;
+      contain-intrinsic-size: 0 80px;
     }
 
     .message-wrap.assistant {
@@ -2747,39 +2773,39 @@ export function getChatStyles(): string {
     .plan-ready-pill {
       display: flex;
       align-items: center;
-      gap: 10px;
-      margin: 10px 0 4px;
-      padding: 8px 12px;
-      background: var(--card-bg, #18181b);
-      border: 1px solid var(--card-border, rgba(255, 255, 255, 0.08));
-      border-radius: 8px;
+      gap: 9px;
+      margin: 8px 0 4px;
+      padding: 7px 11px;
+      background: var(--vscode-editorWidget-background, var(--card-bg, #18181b));
+      border: 1px solid var(--vscode-widget-border, var(--card-border, rgba(255, 255, 255, 0.08)));
+      border-radius: 6px;
       font-size: 12px;
-      color: var(--fg, #f4f4f5);
+      color: var(--vscode-foreground, #f4f4f5);
       width: 100%;
       box-sizing: border-box;
-      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
       transition: all 0.15s ease;
     }
     .plan-ready-pill:hover {
       background: rgba(255, 255, 255, 0.04);
-      border-color: rgba(255, 255, 255, 0.14);
+      border-color: rgba(255, 255, 255, 0.16);
     }
     .plan-ready-pill .pill-icon {
       display: flex;
       align-items: center;
       justify-content: center;
-      width: 22px;
-      height: 22px;
-      border-radius: 5px;
-      background: rgba(168, 85, 247, 0.15);
-      color: #c084fc;
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+      background: rgba(56, 189, 248, 0.1);
+      color: #38bdf8;
       flex-shrink: 0;
     }
     .plan-ready-pill .pill-title {
       flex: 1;
       min-width: 0;
       font-weight: 500;
-      color: var(--fg, #f4f4f5);
+      color: var(--vscode-foreground, #f4f4f5);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -2788,29 +2814,29 @@ export function getChatStyles(): string {
     .plan-ready-pill .pill-progress {
       font-size: 11px;
       font-family: var(--font-mono);
-      color: var(--muted, #a1a1aa);
+      color: var(--vscode-descriptionForeground, #a1a1aa);
       margin-left: 6px;
       font-weight: 400;
     }
     .plan-ready-pill .pill-btn {
-      background: rgba(255, 255, 255, 0.06);
-      color: var(--fg, #f4f4f5);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      border-radius: 5px;
-      padding: 4px 9px;
+      background: transparent;
+      color: var(--vscode-descriptionForeground, #a1a1aa);
+      border: 1px solid var(--vscode-button-secondaryBorder, rgba(255, 255, 255, 0.1));
+      border-radius: 4px;
+      padding: 3px 8px;
       font-size: 11px;
       font-weight: 500;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
-      gap: 5px;
-      transition: all 0.15s ease;
+      gap: 4px;
+      transition: all 0.12s ease;
       font-family: var(--font-ui);
     }
     .plan-ready-pill .pill-btn:hover {
-      background: rgba(255, 255, 255, 0.12);
-      border-color: rgba(255, 255, 255, 0.22);
-      color: #ffffff;
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.2);
+      color: var(--vscode-foreground, #ffffff);
     }
 
     /* Tool Card -- TUI parity: expand while running, collapse when done, toggle on click */

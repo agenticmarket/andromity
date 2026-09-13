@@ -424,13 +424,6 @@ class SubAgent:
                 self._notify_progress(event_type="text", detail="Task execution finished.")
                 break
 
-            if turn == max_turns - 2:
-                self.session.add_message(
-                    "user",
-                    content="You have used the available tools. NOW write your final summary as plain text prose "
-                            "in your response — no more tool calls. Be concise and factual."
-                )
-
             async def _exec_tool(tc: dict) -> tuple[str, str, str]:
                 fn = tc.get("function", {})
                 tname = fn.get("name", "")
@@ -493,11 +486,24 @@ class SubAgent:
             tasks = [_exec_tool(tc) for tc in tool_calls_to_execute]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            for item in results:
+            for i, item in enumerate(results):
+                tc = tool_calls_to_execute[i] if i < len(tool_calls_to_execute) else {}
+                fallback_id = tc.get("id", "")
+                fallback_name = (tc.get("function") or {}).get("name", "")
                 if isinstance(item, Exception):
-                    continue
-                tcall_id, tname, res_str = item
+                    tcall_id = fallback_id
+                    tname = fallback_name
+                    res_str = f"Error: Tool execution failed: {item}"
+                else:
+                    tcall_id, tname, res_str = item
                 self.session.add_message("tool", content=res_str, name=tname, tool_call_id=tcall_id)
+
+            if turn == max_turns - 2:
+                self.session.add_message(
+                    "user",
+                    content="You have used the available tools. NOW write your final summary as plain text prose "
+                            "in your response — no more tool calls. Be concise and factual."
+                )
 
 
     def _extract_final_result(self) -> str:

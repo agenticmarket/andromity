@@ -867,6 +867,12 @@ class JsonRpcHandler:
                                 "session_id": session_id,
                                 "reason": "Auto-compacting: context limit reached",
                             })
+                        elif "*Context compacted successfully" in event.text:
+                            self.notify("session/compacted", {
+                                "session_id": session_id,
+                                "message_count": len(session.messages),
+                                "compacted_history": getattr(session, "compacted_history", []),
+                            })
                         self.notify("agent/textDelta", {"session_id": session_id, "text": event.text})
                     elif isinstance(event, ThinkingDelta):
                         self.notify("agent/thinkingDelta", {"session_id": session_id, "text": event.text})
@@ -1510,6 +1516,7 @@ class JsonRpcHandler:
                 "total_tokens": summary.total_tokens,
                 "total_cost_usd": summary.total_cost_usd,
                 "total_sessions": summary.total_sessions,
+                "daily_activity": summary.daily_activity,
                 "sessions": [
                     {
                         "id": s.session_id,
@@ -1522,7 +1529,7 @@ class JsonRpcHandler:
                         "updated_at": s.updated_at,
                         "project_path": s.project_path,
                     }
-                    for s in summary.sessions[:50]
+                    for s in summary.sessions[:100]
                 ],
                 "by_model": summary.by_model,
                 "by_provider": summary.by_provider,

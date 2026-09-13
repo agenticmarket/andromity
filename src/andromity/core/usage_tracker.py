@@ -27,6 +27,7 @@ class UsageSummary:
     sessions: list[SessionStat] = field(default_factory=list)
     by_model: dict[str, dict] = field(default_factory=dict)    # model → {tokens, cost, count, provider}
     by_provider: dict[str, dict] = field(default_factory=dict) # provider → {tokens, cost, count}
+    daily_activity: dict[str, dict] = field(default_factory=dict) # YYYY-MM-DD → {tokens, cost, count}
 
 class UsageTracker:
     """Aggregates usage data from all persisted session JSON files."""
@@ -47,13 +48,23 @@ class UsageTracker:
         summary = UsageSummary()
 
         for s in sessions:
-            if cutoff and s.created_at < cutoff:
+            session_time = s.updated_at or s.created_at
+            if cutoff and session_time and session_time < cutoff:
                 continue
             summary.total_sessions += 1
             summary.total_tokens += s.tokens
             summary.total_cost_usd += s.cost_usd
             summary.sessions.append(s)
             
+            # Aggregate daily activity
+            day = (s.updated_at or s.created_at or "")[:10]
+            if day:
+                if day not in summary.daily_activity:
+                    summary.daily_activity[day] = {"tokens": 0, "cost": 0.0, "count": 0}
+                summary.daily_activity[day]["tokens"] += s.tokens
+                summary.daily_activity[day]["cost"]   += s.cost_usd
+                summary.daily_activity[day]["count"]  += 1
+
             # Aggregate per-model
             m = s.model or "unknown"
             if m not in summary.by_model:

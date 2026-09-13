@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
 import { ModelInfo, ProviderInfo } from "../server/types.js";
 import { join } from "path";
+import { existsSync } from "fs";
 
 export class SettingsPanel {
   public static currentPanel: SettingsPanel | undefined;
@@ -204,6 +205,7 @@ export class SettingsPanel {
               floatingAsterisks: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("floatingAsterisks", true),
               cursorLightAura: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("cursorLightAura", true),
             },
+            mascotEnabled: vscodeConfig.get<boolean>("mascotEnabled", true),
           });
 
           return { configData, providers, systemInfo, trustData, permissionMode, vscodeConfig };
@@ -242,6 +244,7 @@ export class SettingsPanel {
             floatingAsterisks: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("floatingAsterisks", true),
             cursorLightAura: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("cursorLightAura", true),
           },
+          mascotEnabled: fastRes.vscodeConfig.get<boolean>("mascotEnabled", true),
         };
 
         SettingsPanel._cachedState = fullState;
@@ -506,14 +509,30 @@ export class SettingsPanel {
 
       case "update_mascot_setting": {
         const config = vscode.workspace.getConfiguration("andromity");
-        await config.update("mascotEnabled", message.enabled, vscode.ConfigurationTarget.Global);
+        await config.update("mascotEnabled", !!message.enabled, vscode.ConfigurationTarget.Global);
         this._onConfigChangeCallback?.();
+        try {
+          const { ChatViewProvider } = await import("../providers/ChatViewProvider.js");
+          ChatViewProvider.currentProvider?.broadcastMascotConfig();
+        } catch {}
         break;
       }
 
       case "open_url": {
         if (message.url && typeof message.url === "string" && message.url.startsWith("https://")) {
           vscode.env.openExternal(vscode.Uri.parse(message.url));
+        }
+        break;
+      }
+
+      case "open_license_file": {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const localLicense = workspaceFolder ? join(workspaceFolder, "LICENSE") : null;
+        if (localLicense && existsSync(localLicense)) {
+          const uri = vscode.Uri.file(localLicense);
+          vscode.commands.executeCommand("vscode.open", uri);
+        } else {
+          vscode.env.openExternal(vscode.Uri.parse("https://github.com/agenticmarket/andromity/blob/main/LICENSE"));
         }
         break;
       }
@@ -542,7 +561,7 @@ export class SettingsPanel {
           const usage = await this._rpcClient.call<any>("usage.get", {
             time_range: message.timeRange || "all",
             project_path: projectPath,
-          }, 3000).catch(() => ({}));
+          }, 15000).catch(() => ({}));
           this._panel.webview.postMessage({
             type: "usage_loaded",
             usage: usage || {},
@@ -2457,8 +2476,191 @@ export class SettingsPanel {
     <div class="tab-pane" id="pane-about">
       <div class="section-header">
         <div>
-          <h2 class="section-title">About & System Diagnostics</h2>
-          <p class="section-desc">AI Engine runtime details, environment paths, and registered tool capabilities.</p>
+          <h2 class="section-title">About Andromity</h2>
+          <p class="section-desc">Open-source software license, Git repository information, and AI Engine runtime diagnostics.</p>
+        </div>
+      </div>
+
+      <!-- 1. Hero Software Branding Card -->
+      <div class="settings-card" style="max-width: 800px; margin-bottom: 16px; background: linear-gradient(135deg, rgba(9, 249, 148, 0.04) 0%, rgba(6, 182, 212, 0.05) 50%, rgba(168, 85, 247, 0.04) 100%), var(--card-bg); border-color: rgba(9, 249, 148, 0.18);">
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 8px;">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <div style="width: 44px; height: 44px; border-radius: 10px; background: rgba(9, 249, 148, 0.1); border: 1px solid rgba(9, 249, 148, 0.25); display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0;">
+              <img src="${iconUri}" alt="Andromity Logo" style="width: 32px; height: 32px; object-fit: contain;" />
+            </div>
+            <div>
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <span style="font-size: 16px; font-weight: 700; color: var(--text); letter-spacing: -0.2px;">Andromity AI Coding Agent</span>
+                <span class="badge green" style="font-weight: 600;">v0.2.8</span>
+                <span class="badge blue">Production Build</span>
+              </div>
+              <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+                Autonomous multi-agent pair programmer for VS Code • Built by AgenticMarket
+              </div>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <button class="btn" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity" title="Open GitHub Repository">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path></svg>
+              GitHub Repo
+            </button>
+          </div>
+        </div>
+
+        <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5; padding-top: 6px; border-top: 1px solid var(--card-border);">
+          Andromity is a professional autonomous coding agent engineered with background subagents, live plans &amp; diffs, full Model Context Protocol (MCP) integrations, and Bring-Your-Own-Key (BYOK) support for Claude 3.7 Sonnet, GPT-4o, DeepSeek R1, Gemini 2.0 Flash, and local Ollama.
+        </div>
+      </div>
+
+      <!-- 2. Software License Card -->
+      <div class="settings-card" style="max-width: 800px; margin-bottom: 16px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; flex-wrap: wrap; gap: 8px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#09F994" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+            <span class="setting-label" style="font-size: 13.5px;">Open Source Software License</span>
+          </div>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+            <span class="badge green">MIT License</span>
+            <span class="badge blue">OSI Approved</span>
+            <span class="badge purple">Free &amp; Commercial Use</span>
+          </div>
+        </div>
+
+        <table class="diag-table" style="margin-top: 4px; margin-bottom: 10px;">
+          <tr>
+            <td>License Name</td>
+            <td>MIT License (The Massachusetts Institute of Technology)</td>
+          </tr>
+          <tr>
+            <td>SPDX Identifier</td>
+            <td><code>MIT</code></td>
+          </tr>
+          <tr>
+            <td>Copyright Notice</td>
+            <td>Copyright &copy; 2026 Andromity Contributors &amp; AgenticMarket</td>
+          </tr>
+          <tr>
+            <td>Permissions</td>
+            <td><span style="color:var(--tag-green-fg); font-weight:600;">✓ Commercial use</span> &nbsp;&bull;&nbsp; <span style="color:var(--tag-green-fg); font-weight:600;">✓ Modification</span> &nbsp;&bull;&nbsp; <span style="color:var(--tag-green-fg); font-weight:600;">✓ Distribution</span> &nbsp;&bull;&nbsp; <span style="color:var(--tag-green-fg); font-weight:600;">✓ Private use</span></td>
+          </tr>
+          <tr>
+            <td>Conditions &amp; Limits</td>
+            <td>License and copyright notice must be included in all copies. No warranty or liability is assumed by authors.</td>
+          </tr>
+        </table>
+
+        <!-- Collapsible Full License Text -->
+        <details style="background: rgba(0, 0, 0, 0.2); border: 1px solid var(--card-border); border-radius: 6px; padding: 8px 12px;">
+          <summary style="font-size: 12px; font-weight: 600; color: var(--accent); cursor: pointer; user-select: none; display: flex; align-items: center; justify-content: space-between;">
+            <span>View Full MIT License Text</span>
+            <span style="font-size: 11px; color: var(--text-muted); font-weight: normal;">Click to expand</span>
+          </summary>
+          <pre style="margin-top: 10px; margin-bottom: 4px; font-family: var(--font-mono); font-size: 11px; line-height: 1.5; color: var(--text); white-space: pre-wrap; background: rgba(0,0,0,0.15); padding: 10px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05); user-select: text;">MIT License
+
+Copyright (c) 2026 Andromity Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.</pre>
+          <div style="display: flex; gap: 8px; margin-top: 8px;">
+            <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 11px;" data-action="open-license-file">Open Local LICENSE File</button>
+            <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 11px;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity/blob/main/LICENSE">View on GitHub</button>
+          </div>
+        </details>
+      </div>
+
+      <!-- 3. Git Repository & Community Links Card -->
+      <div class="settings-card" style="max-width: 800px; margin-bottom: 16px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; flex-wrap: wrap; gap: 8px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#38bdf8" stroke-width="2"><circle cx="12" cy="12" r="4"></circle><line x1="1.05" y1="12" x2="7" y2="12"></line><line x1="17.01" y1="12" x2="22.96" y2="12"></line></svg>
+            <span class="setting-label" style="font-size: 13.5px;">Git Repository &amp; Community Resources</span>
+          </div>
+          <span class="badge blue">Public Open Source</span>
+        </div>
+
+        <table class="diag-table" style="margin-top: 4px; margin-bottom: 12px;">
+          <tr>
+            <td>Git Repository</td>
+            <td>
+              <a href="#" style="color:var(--accent); text-decoration:none; font-weight:500;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity">
+                https://github.com/agenticmarket/andromity
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td>Default Branch</td>
+            <td><code>main</code></td>
+          </tr>
+          <tr>
+            <td>Issue Tracker</td>
+            <td>
+              <a href="#" style="color:var(--accent); text-decoration:none;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity/issues">
+                github.com/agenticmarket/andromity/issues (Bug reports &amp; feature proposals)
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td>Documentation</td>
+            <td>
+              <a href="#" style="color:var(--accent); text-decoration:none;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity#readme">
+                README Architecture, MCP Setup &amp; Custom Skills Guide
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td>Release Changelog</td>
+            <td>
+              <a href="#" style="color:var(--accent); text-decoration:none;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity/blob/main/CHANGELOG.md">
+                CHANGELOG.md (Full version history &amp; release notes)
+              </a>
+            </td>
+          </tr>
+          <tr>
+            <td>Contributing</td>
+            <td>
+              <a href="#" style="color:var(--accent); text-decoration:none;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity/blob/main/CONTRIBUTING.md">
+                CONTRIBUTING.md (Pair-programming guidelines &amp; PR process)
+              </a>
+            </td>
+          </tr>
+        </table>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+          <button class="btn btn-secondary" style="font-size: 11.5px; padding: 5px 12px;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px;"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path></svg>
+            Open on GitHub
+          </button>
+          <button class="btn btn-secondary" style="font-size: 11.5px; padding: 5px 12px;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity/issues/new/choose">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+            Submit Bug Report
+          </button>
+          <button class="btn btn-secondary" style="font-size: 11.5px; padding: 5px 12px;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity/discussions">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+            Community Discussions
+          </button>
+        </div>
+      </div>
+
+      <!-- 4. System Diagnostics & AI Engine Runtime Details -->
+      <div class="section-header" style="margin-top: 24px;">
+        <div>
+          <h2 class="section-title" style="font-size: 15px;">AI Engine Diagnostics &amp; Runtime</h2>
+          <p class="section-desc">Active daemon status, execution environment, and registered capabilities.</p>
         </div>
       </div>
 
@@ -2753,8 +2955,10 @@ export class SettingsPanel {
         selectModel(btn.dataset.id, btn.dataset.provider);
       } else if (action === "save-key") {
         saveKey(btn.dataset.id);
-      } else if (action === "open-portal") {
+      } else if (action === "open-portal" || action === "open-url") {
         openExternalUrl(btn.dataset.url);
+      } else if (action === "open-license-file") {
+        vscode.postMessage({ type: "open_license_file" });
       } else if (action === "revoke-trust") {
         revokeTrustPath(btn.dataset.path);
       } else if (action === "toggle-current-trust") {
@@ -2871,6 +3075,11 @@ export class SettingsPanel {
       if (selectWpRipple && wp.rippleIntensity) selectWpRipple.value = wp.rippleIntensity;
       if (checkWpAsterisks) checkWpAsterisks.checked = wp.floatingAsterisks !== false;
       if (checkWpAura) checkWpAura.checked = wp.cursorLightAura !== false;
+
+      if (typeof msg.mascotEnabled === 'boolean' && checkMascotEnabled) {
+        checkMascotEnabled.checked = msg.mascotEnabled;
+        updateMascotStatusBadge(msg.mascotEnabled);
+      }
 
       const sys = msg.systemInfo || {};
       if (sys.version) setEl("diag-version", "v" + sys.version);
@@ -3024,9 +3233,9 @@ export class SettingsPanel {
           if (runsDiv) {
             const runs = msg.runs || [];
             if (runs.length === 0) {
-              runsDiv.innerHTML = '<div style="font-size:11px; color:var(--text-muted); padding:4px 0;">No recorded runs yet for this job. Click "Run Now" to trigger.</div>';
+              runsDiv.innerHTML = '<div style="font-size:11px; color:var(--text-muted); padding:6px 0;">No recorded runs yet for this job. Click "Run Now" to trigger.</div>';
             } else {
-              runsDiv.innerHTML = '<div style="font-size:11px; font-weight:600; margin-bottom:8px; color:var(--fg); display:flex; justify-content:space-between; align-items:center;"><span>Execution History (' + runs.length + ' runs):</span><button class="btn btn-secondary" style="padding:1px 6px; font-size:10px;" data-action="history" data-id="' + escapeHtml(msg.jobId) + '">Refresh</button></div>' +
+              runsDiv.innerHTML = '<div style="font-size:11px; font-weight:600; margin-bottom:8px; color:var(--fg); display:flex; justify-content:space-between; align-items:center;"><span>Execution History (' + runs.length + ' runs):</span><button class="btn btn-secondary" style="padding:2px 8px; font-size:10.5px;" data-action="refresh-history" data-id="' + escapeHtml(msg.jobId) + '">↻ Refresh</button></div>' +
                 runs.map(r => {
                   const runTime = r.started_at ? new Date(r.started_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Unknown time';
                   const isOk = r.status === 'success';
@@ -3034,8 +3243,11 @@ export class SettingsPanel {
                   const dur = r.duration_ms ? ((r.duration_ms / 1000).toFixed(1) + 's') : '';
                   const toolsStr = r.tools_used && r.tools_used.length > 0 ? r.tools_used.join(', ') : '';
                   const outText = r.output || r.output_preview || '';
+                  const sId = r.session_id || '';
+                  const hasRunSession = !!sId;
+                  const runSessionName = "Cron Run: " + (r.job_name || "Task") + " (" + runTime + ")";
 
-                  return '<div style="display:flex; flex-direction:column; gap:4px; padding:8px 10px; background:rgba(255,255,255,0.03); margin-bottom:6px; font-size:11.5px; border:1px solid var(--border); border-radius:6px;">' +
+                  return '<div style="display:flex; flex-direction:column; gap:5px; padding:9px 11px; background:rgba(255,255,255,0.025); margin-bottom:7px; font-size:11.5px; border:1px solid var(--card-border); border-radius:6px;">' +
                     '<div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">' +
                       '<div style="display:flex; align-items:center; gap:6px;">' +
                         '<span class="cron-status-pill ' + stClass + '" style="font-size:9.5px; padding:2px 6px;">' + escapeHtml((r.status || 'unknown').toUpperCase()) + '</span>' +
@@ -3054,6 +3266,21 @@ export class SettingsPanel {
                       '</details>'
                     ) : '') +
                     (r.error ? ('<div style="color:var(--red); font-size:11px; margin-top:2px; padding:4px 6px; background:rgba(239,68,68,0.1); border-radius:4px; border:1px solid rgba(239,68,68,0.25);">Error: ' + escapeHtml(r.error) + '</div>') : '') +
+                    '<div style="display:flex; align-items:center; justify-content:space-between; gap:6px; margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,0.05);">' +
+                      (hasRunSession ? (
+                        '<div style="display:flex; align-items:center; gap:6px;">' +
+                          '<button class="btn btn-secondary" data-action="open-session" data-session-id="' + escapeHtml(sId) + '" data-session-name="' + escapeHtml(runSessionName) + '" style="font-size:10.5px; padding:2px 8px;" title="Open this run session in chat sidebar">' +
+                            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11" style="margin-right:4px; vertical-align:-1.5px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>Show Session' +
+                          '</button>' +
+                          '<button class="btn btn-secondary" data-action="open-session-tab" data-session-id="' + escapeHtml(sId) + '" data-session-name="' + escapeHtml(runSessionName) + '" style="padding:2px 6px; font-size:10.5px;" title="Open this run session in side-by-side editor tab">' +
+                            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11" style="vertical-align:-1.5px;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="12" y1="3" x2="12" y2="21"></line></svg>' +
+                          '</button>' +
+                          '<span style="font-family:var(--font-mono); font-size:10px; color:var(--text-muted);">' + escapeHtml(sId.slice(0, 18)) + '…</span>' +
+                        '</div>'
+                      ) : (
+                        '<span style="font-size:10.5px; color:var(--text-muted); font-style:italic;">No session recorded for this run</span>'
+                      )) +
+                    '</div>' +
                   '</div>';
                 }).join('');
             }
@@ -3334,11 +3561,21 @@ export class SettingsPanel {
 
     function renderUsage() {
       const allSessionsList = usageData.sessions || [];
-      const filteredSessions = getFilteredSessions(allSessionsList, currentUsageRange);
+      const isAllRange = currentUsageRange === "all";
+      const filteredSessions = isAllRange ? allSessionsList : getFilteredSessions(allSessionsList, currentUsageRange);
 
-      const totalTokens = filteredSessions.reduce((acc, s) => acc + (s.token_total || s.tokens || 0), 0) || (currentUsageRange === "all" ? (usageData.total_tokens || 0) : 0);
-      const totalCost = filteredSessions.reduce((acc, s) => acc + (s.cost_usd || 0), 0) || (currentUsageRange === "all" ? (usageData.total_cost_usd || 0) : 0);
-      const totalSessions = filteredSessions.length || (currentUsageRange === "all" ? (usageData.total_sessions || 0) : 0);
+      const totalTokens = (isAllRange && typeof usageData.total_tokens === "number" && usageData.total_tokens > 0)
+        ? usageData.total_tokens
+        : filteredSessions.reduce((acc, s) => acc + (s.token_total || s.tokens || 0), 0);
+
+      const totalCost = (isAllRange && typeof usageData.total_cost_usd === "number")
+        ? usageData.total_cost_usd
+        : filteredSessions.reduce((acc, s) => acc + (s.cost_usd || 0), 0.0);
+
+      const totalSessions = (isAllRange && typeof usageData.total_sessions === "number" && usageData.total_sessions > 0)
+        ? usageData.total_sessions
+        : filteredSessions.length;
+
       const avgTokens = totalSessions > 0 ? Math.round(totalTokens / totalSessions) : 0;
 
       const tokensEl = document.getElementById("stat-usage-tokens");
@@ -3380,7 +3617,7 @@ export class SettingsPanel {
         }
         if (Array.isArray(sessions)) {
           sessions.forEach(s => {
-            const d = new Date(s.created_at || s.updated_at || 0);
+            const d = new Date(s.updated_at || s.created_at || 0);
             if (d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()) {
               const hour = d.getHours();
               const slotIdx = Math.min(11, Math.floor(hour / 2));
@@ -3412,9 +3649,18 @@ export class SettingsPanel {
           dailyMap[iso] = slot;
         }
 
-        if (Array.isArray(sessions)) {
+        // If backend provided complete daily_activity aggregated across ALL sessions, populate chart from it
+        if (usageData.daily_activity && Object.keys(usageData.daily_activity).length > 0) {
+          for (const [dayIso, dayData] of Object.entries(usageData.daily_activity)) {
+            if (dailyMap[dayIso]) {
+              dailyMap[dayIso].tokens += (dayData.tokens || 0);
+              dailyMap[dayIso].cost += (dayData.cost || 0);
+              dailyMap[dayIso].count += (dayData.count || 0);
+            }
+          }
+        } else if (Array.isArray(sessions)) {
           sessions.forEach(s => {
-            const sDate = (s.created_at || s.updated_at || "").slice(0, 10);
+            const sDate = (s.updated_at || s.created_at || "").slice(0, 10);
             if (dailyMap[sDate]) {
               dailyMap[sDate].tokens += (s.token_total || s.tokens || 0);
               dailyMap[sDate].cost += (s.cost_usd || 0);
@@ -3904,6 +4150,17 @@ export class SettingsPanel {
           vscode.postMessage({ type: "cron_run_now", id, name, prompt });
         } else if (action === "delete") {
           vscode.postMessage({ type: "cron_delete", id });
+        } else if (action === "history" || action === "refresh-history") {
+          const runsDiv = document.getElementById("cron-runs-" + id);
+          if (runsDiv) {
+            if (action === "history" && runsDiv.style.display === "block") {
+              runsDiv.style.display = "none";
+            } else {
+              runsDiv.style.display = "block";
+              runsDiv.innerHTML = '<div style="padding:10px; color:var(--text-muted); font-size:11.5px; display:flex; align-items:center; gap:6px;"><span style="display:inline-block; width:10px; height:10px; border:1.5px solid currentColor; border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite;"></span> Loading execution history...</div>';
+              vscode.postMessage({ type: "fetch_cron_runs", id: id });
+            }
+          }
         } else if (action === "open-session") {
           const sId = btn.dataset.sessionId;
           const sName = btn.dataset.sessionName || "Cron Session";
@@ -3980,15 +4237,6 @@ export class SettingsPanel {
         const cmds = job.allowed_commands && job.allowed_commands.length > 0
           ? (Array.isArray(job.allowed_commands) ? job.allowed_commands.join(", ") : String(job.allowed_commands))
           : "";
-        const latestSessionId = job.latest_session_id || "";
-        const sessionName = "Cron: " + (job.name || job.id);
-        const hasSession = !!latestSessionId;
-        const sessionTitle = hasSession
-          ? "Open latest execution session in Chat sidebar"
-          : "Never run yet — click 'Run Now' to execute and create a session";
-        const tabTitle = hasSession
-          ? "Open latest execution session in side-by-side Editor Tab"
-          : "Never run yet — click 'Run Now' to execute and create a session";
 
         return '<div class="cron-card">' +
           '<div class="cron-card-left">' +
@@ -4003,17 +4251,14 @@ export class SettingsPanel {
             '<div class="cron-card-meta">' +
               '<span>Runs: ' + (job.run_count || 0) + '</span>' +
               '<span>Last: ' + escapeHtml(lastRun) + ' (' + escapeHtml(lastStatus) + ')</span>' +
-              (hasSession ? ('<span style="color:var(--accent); font-family:monospace; font-size:10.5px;">Session: ' + escapeHtml(latestSessionId.slice(0, 18)) + '…</span>') : '') +
             '</div>' +
+            '<div id="cron-runs-' + escapeHtml(job.id) + '" class="cron-runs-container" style="display:none; margin-top:8px; padding-top:8px; border-top:1px solid var(--border);"></div>' +
           '</div>' +
           '<div class="cron-card-actions">' +
             '<button class="btn btn-secondary" data-action="toggle" data-id="' + escapeHtml(job.id) + '">' + (isEnabled ? 'Pause' : 'Enable') + '</button>' +
             '<button class="btn" data-action="run" data-id="' + escapeHtml(job.id) + '" data-name="' + escapeHtml(job.name || '') + '" data-prompt="' + promptEnc + '">Run Now</button>' +
-            '<button class="btn btn-secondary" data-action="open-session" data-session-id="' + escapeHtml(latestSessionId) + '" data-session-name="' + escapeHtml(sessionName) + '" title="' + escapeHtml(sessionTitle) + '" style="' + (!hasSession ? 'opacity:0.55;' : '') + '">' +
-              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="margin-right:4px; vertical-align:-1.5px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>Session' +
-            '</button>' +
-            '<button class="btn btn-secondary" data-action="open-session-tab" data-session-id="' + escapeHtml(latestSessionId) + '" data-session-name="' + escapeHtml(sessionName) + '" title="' + escapeHtml(tabTitle) + '" style="padding:5px 8px;' + (!hasSession ? 'opacity:0.55;' : '') + '">' +
-              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="vertical-align:-1.5px;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="12" y1="3" x2="12" y2="21"></line></svg>' +
+            '<button class="btn btn-secondary" data-action="history" data-id="' + escapeHtml(job.id) + '" title="View execution history runs for this job">' +
+              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="margin-right:4px; vertical-align:-1.5px;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>History' + ((job.run_count && job.run_count > 0) ? ' (' + job.run_count + ')' : '') +
             '</button>' +
             '<button class="btn btn-danger" data-action="delete" data-id="' + escapeHtml(job.id) + '">✕</button>' +
           '</div>' +

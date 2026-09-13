@@ -329,12 +329,24 @@ export class SessionTabPanel {
     }
 
     if (message.type === "open_settings") {
-      SettingsPanel.createOrShow(this._extensionUri, this._rpcClient, "keys");
+      SettingsPanel.createOrShow(this._extensionUri, this._rpcClient, message.tab || "keys");
+      return;
+    }
+
+    if (message.type === "open_about") {
+      SettingsPanel.createOrShow(this._extensionUri, this._rpcClient, "about");
       return;
     }
 
     if (message.type === "open_personalisation") {
       SettingsPanel.createOrShow(this._extensionUri, this._rpcClient, "personalisation");
+      return;
+    }
+
+    if (message.type === "update_mascot_setting") {
+      const config = vscode.workspace.getConfiguration("andromity");
+      await config.update("mascotEnabled", !!message.enabled, vscode.ConfigurationTarget.Global);
+      this._viewProvider.broadcastMascotConfig();
       return;
     }
 

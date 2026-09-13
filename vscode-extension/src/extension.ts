@@ -487,7 +487,10 @@ export async function activate(context: vscode.ExtensionContext) {
         context.extensionUri,
         pythonBridge?.getClient() || null,
         "personalisation",
-        () => chatProvider.broadcastWallpaperConfig()
+        () => {
+          chatProvider.broadcastWallpaperConfig();
+          chatProvider.broadcastMascotConfig();
+        }
       );
     }),
 
@@ -645,6 +648,15 @@ export async function activate(context: vscode.ExtensionContext) {
         context.extensionUri,
         pythonBridge?.getClient() || null,
         initialTab || "keys",
+        () => chatProvider.refreshConfig()
+      );
+    }),
+
+    vscode.commands.registerCommand("andromity.openAbout", () => {
+      SettingsPanel.createOrShow(
+        context.extensionUri,
+        pythonBridge?.getClient() || null,
+        "about",
         () => chatProvider.refreshConfig()
       );
     }),

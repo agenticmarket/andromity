@@ -505,5 +505,37 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(script.includes('assistant-mascot-perch'), "Client script must manage assistant-mascot-perch");
     assert.ok(script.includes('interruptMascotToWork'), "Client script must implement interruptMascotToWork");
   });
+
+  it("PlanEditorPanel generated HTML should contain valid JS in all script tags", () => {
+    // @ts-ignore
+    const { PlanEditorPanel } = require("../src/panels/PlanEditorPanel.js");
+    const mockWebview: any = {
+      cspSource: "vscode-webview:",
+      asWebviewUri: (u: any) => "vscode-resource://" + (u.fsPath || u.path || String(u)),
+    };
+    const extensionUri: any = {
+      fsPath: "d:/saas/agent/vscode-extension",
+    };
+
+    const panelObj = Object.create(PlanEditorPanel.prototype);
+    panelObj._extensionUri = extensionUri;
+    panelObj._currentPlan = { title: "Test Plan", status: "pending", steps: [] };
+
+    const html = panelObj._getHtmlForWebview(mockWebview);
+    assert.ok(html.length > 500, "HTML should be generated");
+
+    const scriptMatches = [...html.matchAll(/<script(?:\s+[^>]*)?>([\s\S]*?)<\/script>/gi)]
+      .map(m => m[1])
+      .filter(s => s.trim().length > 0);
+
+    assert.ok(scriptMatches.length > 0, "Should find at least one inline script in PlanEditorPanel");
+
+    for (let i = 0; i < scriptMatches.length; i++) {
+      const code = scriptMatches[i];
+      assert.doesNotThrow(() => {
+        new vm.Script(code, { filename: `plan-editor-script-${i}.js` });
+      }, `PlanEditorPanel script #${i} must have valid syntax`);
+    }
+  });
 });
 

@@ -27,6 +27,8 @@
     "Snippets"
   ],
   "keywords": [
+    "gpt6",
+    "astra",
     "ai agent",
     "coding agent",
     "copilot",
@@ -46,7 +48,8 @@
     "groq",
     "openrouter",
     "pair programming",
-    "unit tests"
+    "unit tests",
+    "language-models"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -155,6 +158,12 @@
         "icon": "$(gear)"
       },
       {
+        "command": "andromity.openAbout",
+        "title": "About & System Diagnostics",
+        "category": "Andromity",
+        "icon": "$(info)"
+      },
+      {
         "command": "andromity.openPersonalisation",
         "title": "Personalisation & Atmosphere",
         "category": "Andromity",
@@ -247,6 +256,26 @@
         },
         {
           "command": "andromity.deleteSession",
+          "when": "false"
+        },
+        {
+          "command": "andromity.openSessionInTab",
+          "when": "false"
+        },
+        {
+          "command": "andromity.showSessions",
+          "when": "false"
+        },
+        {
+          "command": "andromity.compactSession",
+          "when": "false"
+        },
+        {
+          "command": "andromity.undoTurn",
+          "when": "false"
+        },
+        {
+          "command": "andromity.welcome",
           "when": "false"
         }
       ],
@@ -391,7 +420,7 @@
         },
         "andromity.startupSession": {
           "type": "string",
-          "default": "last",
+          "default": "fresh",
           "enum": ["last", "fresh"],
           "enumDescriptions": [
             "Resume the session that was active when the panel/window was last closed.",
@@ -446,6 +475,11 @@
           "type": "number",
           "default": 0,
           "description": "TCP port to connect to an external Andromity daemon (0 for embedded stdio process)."
+        },
+        "andromity.mascotEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable or disable the animated mascot companion (Andro-Pet) in the chat sidebar."
         },
         "andromity.wallpaper.enabled": {
           "type": "boolean",

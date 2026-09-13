@@ -3,7 +3,7 @@ import sys
 import time
 from typing import AsyncGenerator, Dict, Any, Optional, Callable
 
-from andromity.core.provider import stream_completion
+from andromity.core.provider import stream_completion, sanitize_messages_for_api
 from andromity.core.session import Session
 from andromity.core.profiles import get_system_prompt, filter_tools_for_profile
 from andromity.core.tools import CORE_TOOLS, ToolRegistry, execute_tool, register_session
@@ -74,6 +74,14 @@ class Agent:
         self.auto_approve = auto_approve
         self.on_tool_approval = on_tool_approval
         self.on_questions = on_questions
+        if not ctx_limit:
+            try:
+                from andromity.core.models import get_context_limit_for_model
+                p = provider or config.get("default", "provider", "")
+                m = model or config.get("default", "model", "")
+                ctx_limit = get_context_limit_for_model(p, m) if (p and m) else 0
+            except Exception:
+                ctx_limit = 0
         self.ctx_limit = ctx_limit
         self.reasoning_effort = reasoning_effort if reasoning_effort is not None else config.get("default", "reasoning_effort", "medium")
         self.provider = provider
@@ -141,17 +149,17 @@ class Agent:
         replay stay clean and compact.
         """
         msgs = [
-            {k: v for k, v in m.items() if k in ("role", "content", "tool_calls", "name", "tool_call_id", "thinking")}
+            {k: v for k, v in m.items() if k in ("role", "content", "tool_calls", "name", "tool_call_id")}
             for m in self.session.messages
         ]
         if not self._turn_image_parts:
-            return msgs
+            return sanitize_messages_for_api(msgs)
         # The most recent user message is the one just added for this turn.
         for i in range(len(msgs) - 1, -1, -1):
             if msgs[i].get("role") == "user" and isinstance(msgs[i].get("content"), str):
                 msgs[i]["content"] = self._turn_image_parts
                 break
-        return msgs
+        return sanitize_messages_for_api(msgs)
 
     def _model_supports_vision(self) -> bool:
         """Best-effort check that the active model accepts images.
@@ -181,7 +189,20 @@ class Agent:
             return True
 
     async def _compact_context(self, force: bool = False) -> AsyncGenerator[StreamEvent, None]:
+        if not force and not config.get("advanced", "auto_compact", True):
+            return
+
         limit = self.ctx_limit
+        if not limit:
+            try:
+                from andromity.core.models import get_context_limit_for_model
+                p = self.provider or config.get("default", "provider", "")
+                m = self.model or config.get("default", "model", "")
+                limit = get_context_limit_for_model(p, m) if (p and m) else 0
+                self.ctx_limit = limit
+            except Exception:
+                limit = 0
+
         msg_count = len(self.session.messages)
 
         # ── Decide whether compaction is needed ──────────────────────────
@@ -206,12 +227,29 @@ class Agent:
 
         old_count = len(self.session.messages)
         non_system = [m for m in self.session.messages if m.get("role") != "system"]
-        if force and len(non_system) > 2 and len(non_system) <= 6:
-            keep_turns = non_system[-2:]
-            to_compact = non_system[:-2]
+
+        # Find clean conversation turn boundaries (start of user turns)
+        user_indices = [i for i, m in enumerate(non_system) if m.get("role") == "user"]
+
+        if len(user_indices) >= 2:
+            # Keep the last 1 or 2 complete user turns
+            keep_user_turns = 1 if (force or len(user_indices) <= 3) else 2
+            split_idx = user_indices[-keep_user_turns]
+            to_compact = non_system[:split_idx]
+            keep_turns = non_system[split_idx:]
+        elif len(non_system) > 2:
+            split_idx = len(non_system) // 2
+            while split_idx < len(non_system) and non_system[split_idx].get("role") == "tool":
+                split_idx += 1
+            to_compact = non_system[:split_idx]
+            keep_turns = non_system[split_idx:]
         else:
-            keep_turns = non_system[-6:] if len(non_system) > 6 else []
-            to_compact = non_system[:-6] if len(non_system) > 6 else non_system
+            to_compact = []
+            keep_turns = non_system
+
+        # Extra guard: keep_turns must never start with a 'tool' role message
+        while keep_turns and keep_turns[0].get("role") == "tool":
+            to_compact.append(keep_turns.pop(0))
 
         if not to_compact:
             yield TextDelta(text="*[Context compaction skipped — not enough history to compact]*\n\n")
@@ -281,7 +319,7 @@ class Agent:
         })
         new_messages.extend(keep_turns)
 
-        self.session.messages = new_messages
+        self.session.messages = sanitize_messages_for_api(new_messages)
         self.session.context_tokens = 0
         self.session.save()
         yield TextDelta(text=f"*Context compacted successfully ({old_count} → {len(new_messages)} messages).*\n\n")
@@ -713,13 +751,13 @@ class Agent:
                         final_results[last_id] += f"\n\n[Co-Agent Mailbox: {', '.join(notes)}. Use session_read_messages or session_answer_question if relevant.]"
 
             for tool_call in other_calls:
-                if tool_call["id"] in final_results:
-                    self.session.add_message(
-                        "tool",
-                        content=final_results[tool_call["id"]],
-                        name=tool_call["function"]["name"],
-                        tool_call_id=tool_call["id"],
-                    )
+                res = final_results.get(tool_call["id"], "[Error: Tool execution did not return a result]")
+                self.session.add_message(
+                    "tool",
+                    content=res,
+                    name=tool_call["function"]["name"],
+                    tool_call_id=tool_call["id"],
+                )
 
             # ── Phase 4: plan updates and approvals
             for tool_call, tool_name, args in prepared:

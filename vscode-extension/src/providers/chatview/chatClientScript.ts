@@ -152,6 +152,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       { cmd: '/clear', desc: 'Clear current chat history view', action: 'clear' },
       { cmd: '/sessions', desc: 'Open sessions browser', action: 'sessions' },
       { cmd: '/settings', desc: 'Open Settings, Model Catalog & MCP Hub', action: 'settings' },
+      { cmd: '/about', desc: 'About Andromity, license & repository information', action: 'about' },
       { cmd: '/personalisation', desc: 'Open Personalisation & Wallpaper Atmosphere settings', action: 'personalisation' },
       { cmd: '/wallpaper', desc: 'Configure background wallpaper atmosphere & ripples', action: 'personalisation' },
       { cmd: '/pet', desc: 'Interact with or toggle Andro-Pet companion', action: 'pet' },
@@ -365,6 +366,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         zeroState.style.display = 'flex';
         updateOnboardingVisibility();
         setRandomStatement();
+        if (Array.isArray(allSessions) && allSessions.length > 0) {
+          renderHomeRecentSessions(allSessions.filter(s => !s.parent_session));
+        }
       }
     }
 
@@ -694,13 +698,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         case 'clear':
           chatContainer.innerHTML = '';
-          hideZeroState();
+          showZeroState();
           break;
         case 'sessions':
           toggleSessionsFlyout();
           break;
         case 'settings':
           vscode.postMessage({ type: 'open_settings' });
+          break;
+        case 'about':
+          appendAboutCard();
           break;
         case 'personalisation':
         case 'wallpaper':
@@ -1017,17 +1024,32 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           chatMascotEl.classList.remove('hidden');
         } else {
           chatMascotEl.classList.add('hidden');
+          chatMascotEl.classList.remove('is-sleeping', 'is-peeking', 'is-petted', 'is-jumping', 'is-walking', 'is-working', 'is-celebrating');
+          if (mascotBubbleEl) {
+            mascotBubbleEl.style.display = 'none';
+          }
+          if (mascotBubbleTimer) {
+            clearTimeout(mascotBubbleTimer);
+            mascotBubbleTimer = null;
+          }
+          const homeSlot = document.getElementById('chat-mascot-home-slot');
+          if (homeSlot && chatMascotEl.parentElement !== homeSlot) {
+            homeSlot.appendChild(chatMascotEl);
+          }
+          isMascotRoaming = false;
+          isMascotOnTurn = false;
         }
       }
     }
 
-    function toggleOrInteractMascot() {
+    function toggleOrInteractMascot(forceState) {
       if (!chatMascotEl) return;
-      if (chatMascotEl.classList.contains('hidden')) {
-        setMascotEnabled(true);
+      const isCurrentlyHidden = chatMascotEl.classList.contains('hidden');
+      const newState = typeof forceState === 'boolean' ? forceState : isCurrentlyHidden;
+      setMascotEnabled(newState);
+      vscode.postMessage({ type: 'update_mascot_setting', enabled: newState });
+      if (newState) {
         showMascotBubble('👋 Hello!', 2000);
-        petMascot();
-      } else {
         petMascot();
       }
     }
@@ -1855,11 +1877,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       const totalSteps = steps.length;
       const pct = totalSteps > 0 ? Math.round((completed / totalSteps) * 100) : 0;
+      const isAllDone = totalSteps > 0 && completed === totalSteps;
       if (trackerCount) {
         trackerCount.textContent = totalSteps > 0 ? (completed + '/' + totalSteps + ' done') : 'in progress';
       }
       if (trackerProgressBar) {
         trackerProgressBar.style.width = pct + '%';
+      }
+      if (planTrackerStrip) {
+        if (isAllDone) {
+          planTrackerStrip.classList.add('is-complete');
+        } else {
+          planTrackerStrip.classList.remove('is-complete');
+        }
       }
       if (trackerTodosList) {
         trackerTodosList.innerHTML = stepItemsHtml || '<div style="color:var(--muted);font-size:11px;padding:2px 0;">No steps listed.</div>';
@@ -2282,6 +2312,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           break;
         }
+        case 'close-about-card': {
+          const card = target.closest('.about-card');
+          if (card) {
+            card.remove();
+          }
+          break;
+        }
+        case 'open-about-tab':
+          vscode.postMessage({ type: 'open_about' });
+          break;
         case 'open-settings':
         case 'open-full-settings':
           vscode.postMessage({ type: 'open_settings' });
@@ -2622,6 +2662,45 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       scrollToBottomIfNeeded();
     }
 
+    function appendAboutCard() {
+      const card = document.createElement('div');
+      card.className = 'about-card';
+      card.style.cssText = 'background:var(--card-bg); border:1px solid var(--border); border-radius:8px; padding:12px; margin:8px 0; font-size:12px; box-shadow: 0 4px 14px rgba(0,0,0,0.3);';
+
+      card.innerHTML = 
+        '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid var(--border);">' +
+          '<div style="display:flex; align-items:center; gap:8px; font-weight:600; color:var(--fg); font-size:12.5px;">' +
+            '<span style="color:var(--accent); font-weight:700;">Andromity AI Coding Agent</span>' +
+            '<span style="background:rgba(16,185,129,0.18); color:#10b981; font-size:10.5px; padding:1px 6px; border-radius:10px;">v0.2.8</span>' +
+          '</div>' +
+          '<button class="skills-card-close-btn" data-action="close-about-card" title="Close">&times;</button>' +
+        '</div>' +
+        '<div style="font-size:11.5px; color:var(--muted); line-height:1.4; margin-bottom:8px;">' +
+          'Autonomous AI coding agent with subagents, live plans &amp; diffs. Free and open-source software under the MIT License.' +
+        '</div>' +
+        '<div style="display:flex; flex-direction:column; gap:4px; margin-bottom:10px; font-size:11.5px;">' +
+          '<div style="display:flex; justify-content:space-between;">' +
+            '<span style="color:var(--muted);">License:</span>' +
+            '<span style="font-weight:600; color:var(--fg);">MIT License (Open Source)</span>' +
+          '</div>' +
+          '<div style="display:flex; justify-content:space-between;">' +
+            '<span style="color:var(--muted);">Repository:</span>' +
+            '<a href="#" style="color:var(--accent); text-decoration:none;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity">github.com/agenticmarket/andromity</a>' +
+          '</div>' +
+          '<div style="display:flex; justify-content:space-between;">' +
+            '<span style="color:var(--muted);">Publisher:</span>' +
+            '<span style="color:var(--fg);">AgenticMarket</span>' +
+          '</div>' +
+        '</div>' +
+        '<div style="display:flex; gap:6px; flex-wrap:wrap;">' +
+          '<button class="prompt-pill-btn" style="font-size:11px; padding:3px 10px;" data-action="open-about-tab">Open Full About &amp; Diagnostics</button>' +
+          '<button class="prompt-pill-btn" style="font-size:11px; padding:3px 8px;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity">GitHub</button>' +
+          '<button class="prompt-pill-btn" style="font-size:11px; padding:3px 8px;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity/issues">Report Issue</button>' +
+        '</div>';
+      chatContainer.appendChild(card);
+      scrollToBottomIfNeeded();
+    }
+
     function appendSkillsCard() {
       const card = document.createElement('div');
       card.className = 'skills-card';
@@ -2746,10 +2825,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         console.error('[Andromity webview] dispatchPrompt failed', e);
         appendSystemNote('Webview error: ' + (e.message||String(e)));
       }
-    }
-
-    function hideZeroState() {
-      if (zeroState) zeroState.style.display = 'none';
     }
 
     function flushQueue() {
@@ -3905,6 +3980,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           if (msg.profile) currentProfile = msg.profile;
           if (msg.reasoningEffort) currentReasoning = msg.reasoningEffort;
+          if (typeof msg.mascotEnabled === 'boolean') {
+            setMascotEnabled(msg.mascotEnabled);
+          }
           if (msg.isTrusted === false) {
             trustBanner.style.display = 'flex';
           } else {
@@ -4325,8 +4403,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               }
             }
           } else {
-            chatContainer.appendChild(zeroState);
-            zeroState.style.display = 'flex';
+            showZeroState();
           }
           applyTabComposerState(msg.draft, msg.images);
           if (msg.session) {

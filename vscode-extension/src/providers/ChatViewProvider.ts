@@ -20,6 +20,7 @@ import { PlanViewProvider } from "./PlanViewProvider.js";
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "andromity.chatView";
+  public static currentProvider: ChatViewProvider | null = null;
   private _view?: vscode.WebviewView;
   private _rpcClient: RpcClient | null = null;
   private _pythonBridge: PythonBridge | null = null;
@@ -52,6 +53,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private readonly _extensionUri: vscode.Uri,
     private readonly _context?: vscode.ExtensionContext
   ) {
+    ChatViewProvider.currentProvider = this;
     if (this._context) {
       this._context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration((e) => {
@@ -440,6 +442,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       await this._handleWebviewMessage(message);
     });
 
+    this.broadcastMascotConfig();
     if (this._rpcClient) {
       this._loadInitialConfig(true);
     }
@@ -765,6 +768,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         currentPlan: this._currentPlan,
         waterfallFirstSessionShown: this._context?.globalState.get<boolean>("andromity.waterfallFirstSessionShown", false) || false,
         wallpaper: this.getWallpaperConfig(this._view?.webview),
+        mascotEnabled: vscode.workspace.getConfiguration("andromity").get<boolean>("mascotEnabled", true),
       });
     } catch (e: any) {
       console.error("[Andromity Chat] Initial config load failed:", e);
@@ -845,7 +849,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       SettingsPanel.createOrShow(
         this._extensionUri,
         this._rpcClient,
-        "keys",
+        message.tab || "keys",
+        () => this.refreshConfig()
+      );
+      return;
+    }
+
+    if (message.type === "open_about") {
+      SettingsPanel.createOrShow(
+        this._extensionUri,
+        this._rpcClient,
+        "about",
         () => this.refreshConfig()
       );
       return;
@@ -861,6 +875,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.broadcastMascotConfig();
         }
       );
+      return;
+    }
+
+    if (message.type === "update_mascot_setting") {
+      const config = vscode.workspace.getConfiguration("andromity");
+      await config.update("mascotEnabled", !!message.enabled, vscode.ConfigurationTarget.Global);
+      this.broadcastMascotConfig();
       return;
     }
 

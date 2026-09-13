@@ -81,7 +81,7 @@ import secrets
 from pathlib import Path
 from andromity.config import get_config_dir
 
-MAX_LINE_LENGTH = 1024 * 1024  # 1MB max line size
+MAX_LINE_LENGTH = 64 * 1024 * 1024  # 64MB max line size (supports massive 1M+ token context & rich sessions)
 
 
 def _get_or_create_daemon_token() -> str:
@@ -124,6 +124,11 @@ async def start_stdio_server():
                     break
                 if len(line) > MAX_LINE_LENGTH:
                     log.warning("Line exceeded max length limit (%d bytes), dropping", MAX_LINE_LENGTH)
+                    # Drain the remainder of this oversized line to avoid corrupting subsequent frames
+                    while not line.endswith("\n"):
+                        chunk = sys.stdin.readline(MAX_LINE_LENGTH + 1)
+                        if not chunk or chunk.endswith("\n"):
+                            break
                     continue
                 loop.call_soon_threadsafe(input_queue.put_nowait, line)
         except Exception as e:
@@ -284,7 +289,7 @@ async def start_tcp_server(host: str = "127.0.0.1", port: int = 8765, allow_remo
             except Exception:
                 pass
 
-    server = await asyncio.start_server(handle_client, host, port)
+    server = await asyncio.start_server(handle_client, host, port, limit=MAX_LINE_LENGTH)
     async with server:
         await server.serve_forever()
 
