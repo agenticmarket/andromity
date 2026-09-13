@@ -5,15 +5,17 @@ All notable changes to the "andromity" extension will be documented in this file
 ## [0.2.9] - 2026-09-13
 
 ### Added & Improved
-- **🐾 Pixel Mascot Companion & Interactive ChatView:**
-  - **Playful Pixel Mascot (`ChatViewProvider`):** Added idle roaming across the webview, edge peeking animations, and priority interrupts when active tasks begin.
-  - **Sticky Tool-Flank Docking:** Mascot docks dynamically alongside running tools with real-time checklist indicators.
+- **🐾 Pixel Mascot Companion & Interactive Pet:**
+  - **Playful Pixel Pet (`ChatViewProvider`):** Added idle roaming across the webview, edge peeking animations, and priority interrupts when active tasks begin.
+  - **Sticky Tool-Flank Docking:** Mascot docks dynamically alongside running tools with real-time checklist status indicators.
+- **🎨 UI Improvements & Webview Polishing:**
+  - **Enhanced Activity Rows:** High-contrast, theme-adaptive cards with live execution badges and fluid state animations.
+  - **Settings Diagnostics Fast-Path:** Instant pre-warmed diagnostics rendering (<1ms) in Andromity Hub, avoiding loading flashes.
+  - **Refined Theme Styling:** WCAG-compliant focus rings, polished scrollbars, and seamless integration with light and dark themes.
 - **🌊 Waterfall Live Trace Sync & Profiler Stability:**
   - **Live Mid-Turn Sync:** Prevented split turns by holding live trace events in queue until the baseline history payload is fully established.
   - **Race Condition Resolution:** Eliminated duplicate spans and timeline jitter during concurrent subagent tool invocations.
-- **Diagnostics & Webview Performance:**
-  - **Instant Diagnostic Loading (<1ms):** Implemented fast-path pre-warmed state rendering in SettingsPanel.
-  - **Zero-Python & Bundled Mode Hardening:** Refined mode detection and visual status badges for zero-setup workflows.
+  - **Ripgrep Cascading:** Sub-millisecond workspace search performance across multi-project workspaces.
 
 ## [0.2.8] - 2026-09-07
 

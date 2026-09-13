@@ -4,19 +4,25 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 
 ## [0.2.9] — 2026-09-13
 
-### 🐾 Pixel Mascot Companion & Interactive ChatView
-- **Smart Adaptive Pixel Mascot (`ChatViewProvider`)**: Added playful idle roaming, edge peeking animations, and active task priority interrupt for the mascot companion.
-- **Sticky Tool-Flank Docking & Checklist Styling**: Refined mascot docking behavior when tools are executing, accompanied by rich checklist status styling for multi-step agent actions.
+### 🐾 Pixel Mascot Companion & Interactive Pet
+- **Smart Adaptive Pixel Pet (`ChatViewProvider`)**: Introduced a playful pixel mascot companion that roams idly across the webview, performs adorable edge peeking animations, and reacts in real-time to agent actions.
+- **Task Priority Interrupt & Tool Docking**: Companion dynamically responds to live activity, docking alongside executing tools and updating state during complex reasoning phases.
+- **Checklist Styling & Step Visualizer**: Added dynamic checklist styling and tool-flank indicators for clear visual tracking of multi-step agent plans.
+
+### 🎨 UI Improvements & Webview Polishing
+- **Modern Activity Rows & Live Status**: Streamlined chat activity displays with high-contrast, theme-adaptive cards, smooth state transitions, and clean typography.
+- **Settings & Diagnostic Fast-Path**: Instant pre-warmed diagnostics rendering (<1ms) in Andromity Hub, eliminating layout shifts and loading flashes.
+- **Aesthetic Token & Contrast Harmony**: Full WCAG compliance with refined focus rings, polished scrollbars, and seamless dark/light VS Code theme integration.
 
 ### 🌊 Waterfall Profiler Synchronization & Stability
-- **Real-Time Mid-Turn Trace Sync**: Added live event queueing until the history baseline is initialized, preventing split turns and dropped execution spans.
-- **Race Condition & Sequence Resolution**: Resolved mid-turn span duplication and race conditions during fast subagent and tool execution.
-- **Multi-Tier Ripgrep Integration**: Optimized file pattern and content searches with fallback cascades for sub-millisecond workspace traversal.
+- **Real-Time Mid-Turn Trace Sync**: Live event queueing ensures trace events are preserved during initial connection, preventing split turns and dropped spans.
+- **Sequence Race Condition Resolution**: Completely resolved mid-turn span duplication and timeline jitter during rapid multi-tool execution.
+- **Multi-Tier Search Integration**: Optimized file pattern matching and ripgrep cascading for sub-millisecond workspace exploration.
 
-### Core Backend & Extension Scaffolding
-- **Message Sanitizer**: Added comprehensive message content sanitation (`tests/test_message_sanitizer.py`) protecting against malformed RPC payloads and prompt injections.
-- **Settings & Diagnostic Stability**: Enhanced pre-warming, caching, and progressive fast-path rendering for instant diagnostics display (<1ms).
-- **CI & Docs Optimization**: Reduced animated WebP assets under 5MB for marketplace compliance and hardened test session isolation.
+### 🛠️ Core Agent & CI Reliability
+- **Message Content Sanitization**: Enhanced API message formatting and role sequencing to guarantee robust turn boundaries across all supported LLMs.
+- **Asset Optimization**: Streamlined documentation and extension WebP assets under 5MB for marketplace compliance.
+- **Cross-Platform Test Reliability**: Hardened CI test suites and session teardown across Windows, macOS, and Linux runners.
 
 ---
 

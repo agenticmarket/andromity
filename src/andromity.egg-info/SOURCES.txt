@@ -96,7 +96,6 @@ tests/test_help_screen.py
 tests/test_images.py
 tests/test_lore.py
 tests/test_mcp.py
-tests/test_message_sanitizer.py
 tests/test_migration_compat.py
 tests/test_modal_esc.py
 tests/test_model_picker_key.py
