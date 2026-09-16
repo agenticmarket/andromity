@@ -4903,9 +4903,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'config_updated':
           if (msg.key === 'mode') {
             updateModeBadge(msg.value);
-            // If switched from SAFE to TRUST/FULL/YOLO, auto-dismiss any pending tool approval card
             if (msg.value !== 'safe') {
-              const appCard = interactiveSlot.querySelector('.approval-card');
+              const appCard = interactiveSlot.querySelector('.permission-card, .approval-card');
               if (appCard) {
                 interactiveSlot.innerHTML = '';
                 appendSystemNote('Mode switched to ' + msg.value.toUpperCase() + ' -- pending tool auto-approved.');

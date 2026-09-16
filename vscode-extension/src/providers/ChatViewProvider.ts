@@ -1322,8 +1322,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "approve_tool": {
         await this._rpcClient.call("agent.approve_tool", {
           approval_id: message.approvalId,
+          session_id: this._currentSessionId,
           approved: true,
           scope: message.scope || "once",
+          tool_name: message.toolName,
         });
         if (message.scope === "session") {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -1344,6 +1346,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "reject_tool": {
         await this._rpcClient.call("agent.reject_tool", {
           approval_id: message.approvalId,
+          session_id: this._currentSessionId,
         });
         break;
       }
@@ -1361,6 +1364,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "answer_question": {
         await this._rpcClient.call("agent.answer_question", {
           question_id: message.questionId,
+          session_id: this._currentSessionId,
           answers: message.answers,
         });
         break;
