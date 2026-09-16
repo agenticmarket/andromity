@@ -220,7 +220,6 @@ async def test_rpc_cron_lifecycle(tmp_path):
     assert runs_resp.error is None
     assert isinstance(runs_resp.result, list)
 
-    # 5. Delete the cron job
     del_req = JsonRpcRequest(
         id=305,
         method="cron.delete",
@@ -229,4 +228,15 @@ async def test_rpc_cron_lifecycle(tmp_path):
     del_resp = await handler.handle_request(del_req)
     assert del_resp.error is None
     assert del_resp.result["deleted"] is True
+
+    curr_list = await handler.handle_request(JsonRpcRequest(id=306, method="cron.list", params={"project_path": str(tmp_path)}))
+    assert curr_list.error is None
+    for j in curr_list.result:
+        del_job_resp = await handler.handle_request(JsonRpcRequest(id=307, method="cron.delete", params={"project_path": str(tmp_path), "id": j["id"]}))
+        assert del_job_resp.error is None
+
+    empty_list = await handler.handle_request(JsonRpcRequest(id=308, method="cron.list", params={"project_path": str(tmp_path)}))
+    assert empty_list.error is None
+    assert empty_list.result == []
+
 

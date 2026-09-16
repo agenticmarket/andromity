@@ -3007,6 +3007,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           const sId = target.getAttribute('data-session-id');
           if (sId) {
             sessionsFlyout.style.display = 'none';
+            if (sId === currentSessionId) {
+              break;
+            }
             if (planTrackerStrip) planTrackerStrip.style.display = 'none';
             vscode.postMessage({ type: 'switch_session', sessionId: sId });
           }
@@ -4989,23 +4992,26 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.session && msg.session.id) {
             currentSessionId = msg.session.id;
           }
-          {
-            const sessState = sessionsState[currentSessionId];
-            if (sessState && sessState.isRunning) {
-              isRunning = true;
-              cancelBtn.style.display = 'flex';
-              sendBtn.style.display = 'none';
-              document.querySelector('.prompt-box')?.classList.add('is-generating');
-            } else {
-              isRunning = false;
-              cancelBtn.style.display = 'none';
-              sendBtn.style.display = 'flex';
-              document.querySelector('.prompt-box')?.classList.remove('is-generating');
-            }
-            if (promptInput && !msg.draft) {
-              promptInput.value = (sessState && sessState.draftInput) || '';
-              promptInput.style.height = 'auto';
-            }
+          const sessionIsRunning = Boolean(
+            (msg.session && (msg.session.status === 'running' || msg.session.is_running)) ||
+            (sessionsState[currentSessionId] && sessionsState[currentSessionId].isRunning)
+          );
+          sessionsState[currentSessionId] = sessionsState[currentSessionId] || {};
+          sessionsState[currentSessionId].isRunning = sessionIsRunning;
+          if (sessionIsRunning) {
+            isRunning = true;
+            cancelBtn.style.display = 'flex';
+            sendBtn.style.display = 'none';
+            document.querySelector('.prompt-box')?.classList.add('is-generating');
+          } else {
+            isRunning = false;
+            cancelBtn.style.display = 'none';
+            sendBtn.style.display = 'flex';
+            document.querySelector('.prompt-box')?.classList.remove('is-generating');
+          }
+          if (promptInput && !msg.draft) {
+            promptInput.value = (sessionsState[currentSessionId] && sessionsState[currentSessionId].draftInput) || '';
+            promptInput.style.height = 'auto';
           }
           const activeSessName = document.getElementById('active-session-name');
           if (activeSessName && msg.session) {
@@ -5032,7 +5038,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           lastAppendedUserText = '';
           lastAppendedUserTime = 0;
 
-          if (allMessages.length > 0) {
+          if (allMessages.length > 0 || sessionIsRunning) {
             hideZeroState();
             if (hasCompactedHistory) {
               appendCompactedHistoryBanner(msg.session.compacted_history.length);
@@ -5354,6 +5360,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               sessionLiveBuffer.delete(currentSessionId);
               scrollToBottomIfNeeded();
             }
+          }
+          if (sessionIsRunning && (!currentTurnAssistantDiv || !chatContainer.contains(currentTurnAssistantDiv))) {
+            startAssistantTurn();
           }
           renderConversationTimeline();
           break;
@@ -5863,7 +5872,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             updateSessionActivityIndicator();
           }
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
-          if (!currentTurnAssistantDiv) startAssistantTurn();
+          if (msg.prompt && lastAppendedUserText !== msg.prompt) {
+            hideZeroState();
+            appendUserMessage(msg.prompt, msg.images || [], Date.now(), { skipDedupe: true });
+          }
+          if (!currentTurnAssistantDiv || !chatContainer.contains(currentTurnAssistantDiv)) {
+            startAssistantTurn();
+          }
           break;
 
         case 'session_compacting':

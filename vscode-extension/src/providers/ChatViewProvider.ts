@@ -262,9 +262,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  public setCurrentSessionId(sessionId: string) {
+  public setCurrentSessionId(sessionId: string, forceReload: boolean = false) {
+    if (!forceReload && this._currentSessionId === sessionId) {
+      return;
+    }
     this._currentSessionId = sessionId;
-    // Explicit switch abandons whatever fresh startup session this cycle made.
     if (sessionId !== this._freshSessionId) {
       this._freshSessionId = undefined;
     }
@@ -1401,7 +1403,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             project_path: workspaceFolder,
           }).catch(() => null);
           if (currentSess && (!currentSess.messages || currentSess.messages.length === 0)) {
-            this.setCurrentSessionId(this._currentSessionId);
+            this.setCurrentSessionId(this._currentSessionId, true);
             await this.fetchAndPostSessions();
             break;
           }

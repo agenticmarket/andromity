@@ -2020,8 +2020,7 @@ class JsonRpcHandler:
         scheduler = self._get_or_create_cron_scheduler(project_path)
         jobs = scheduler.list()
 
-        # Seed default curated cron jobs for new projects so solo devs have instant value
-        if not jobs:
+        if not jobs and not scheduler._store._path.exists():
             default_presets = [
                 {
                     "name": "Run Tests & Verify Build",
