@@ -2041,7 +2041,7 @@ export class SettingsPanel {
             <input type="text" id="cron-name-input" placeholder="e.g. Daily Health & Test Suite">
           </div>
           <div class="cron-form-col">
-            <label>Schedule Interval</label>
+            <label>Schedule / Date & Time</label>
             <select id="cron-schedule-select">
               <option value="every 15m">Every 15 minutes (every 15m)</option>
               <option value="every 30m">Every 30 minutes (every 30m)</option>
@@ -2050,9 +2050,11 @@ export class SettingsPanel {
               <option value="every 6h">Every 6 hours (every 6h)</option>
               <option value="every 12h">Every 12 hours (every 12h)</option>
               <option value="every 1d">Every 1 day (every 1d)</option>
-              <option value="custom">Custom Schedule Expression...</option>
+              <option value="daily at 09:00">Daily at 9:00 AM (daily at 09:00)</option>
+              <option value="daily at 18:00">Daily at 6:00 PM (daily at 18:00)</option>
+              <option value="custom">Custom Date, Time, or Cron...</option>
             </select>
-            <input type="text" id="cron-custom-schedule" style="display:none; margin-top:6px;" placeholder="e.g. every 45m or every 3h">
+            <input type="text" id="cron-custom-schedule" style="display:none; margin-top:6px;" placeholder="e.g. daily at 09:00, 2026-09-20 14:00, or 0 9 * * *">
           </div>
         </div>
         <div class="cron-form-row">

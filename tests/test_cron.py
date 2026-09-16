@@ -348,3 +348,45 @@ def test_modal_history_view_and_full_view_modal():
 
     asyncio.run(_run())
 
+
+def test_cron_date_time_and_syntax():
+    from datetime import datetime, timezone, timedelta
+    from andromity.core.cron import (
+        CronJob,
+        parse_daily_time,
+        parse_exact_datetime,
+        is_cron_expression,
+        matches_cron,
+        parse_interval_seconds,
+    )
+
+    assert parse_daily_time("daily at 09:00") == (9, 0)
+    assert parse_daily_time("at 14:30") == (14, 30)
+    assert parse_daily_time("at 9:15pm") == (21, 15)
+    assert parse_daily_time("every 2h") is None
+
+    future_date = (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%d %H:%M")
+    parsed_dt = parse_exact_datetime(future_date)
+    assert parsed_dt is not None
+    assert parse_exact_datetime("not-a-date") is None
+
+    assert is_cron_expression("0 9 * * *") is True
+    assert is_cron_expression("*/15 * * * *") is True
+    assert is_cron_expression("every 1h") is False
+
+    now = datetime(2026, 9, 20, 9, 0, tzinfo=timezone.utc)
+    assert matches_cron("0 9 * * *", now) is True
+    assert matches_cron("0 10 * * *", now) is False
+
+    assert parse_interval_seconds("daily at 09:00") == 86400
+    assert parse_interval_seconds("0 9 * * *") == 3600
+    assert parse_interval_seconds(future_date) == 86400
+
+    past_date = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M")
+    job_past = CronJob(id="dt1", name="ExactDate", prompt="test", schedule=past_date)
+    assert job_past.is_due() is True
+    job_past.mark_run(success=True)
+    assert job_past.enabled is False
+    assert job_past.is_due() is False
+
+

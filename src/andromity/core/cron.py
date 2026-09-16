@@ -15,19 +15,137 @@ log = get_logger("cron")
 
 # ── Cron spec parsing ──────────────────────────────────────────────────────
 
-def parse_interval_seconds(schedule: str) -> int:
-    """Parse a human-readable schedule like 'every 30m', 'every 2h', 'every 1d'."""
-    import re
-    schedule = schedule.strip().lower()
-    m = re.match(r"every\s+(\d+)(s|m|h|d)", schedule)
+def parse_daily_time(schedule: str) -> Optional[tuple[int, int]]:
+    s = schedule.strip().lower()
+    m = re.match(r"^(?:daily\s+)?at\s+(\d{1,2}):(\d{2})(?:\s*(am|pm))?$", s)
     if not m:
-        raise ValueError(f"Invalid schedule: '{schedule}'. Use 'every Ns/Nm/Nh/Nd'.")
-    value, unit = int(m.group(1)), m.group(2)
-    multiplier = {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
-    seconds = value * multiplier
-    if seconds < 60:
-        raise ValueError("Minimum cron interval is 1 minute (60s).")
-    return seconds
+        return None
+    try:
+        h, mins, ampm = int(m.group(1)), int(m.group(2)), m.group(3)
+        if ampm == "pm" and h < 12:
+            h += 12
+        elif ampm == "am" and h == 12:
+            h = 0
+        if 0 <= h <= 23 and 0 <= mins <= 59:
+            return (h, mins)
+    except Exception:
+        pass
+    return None
+
+
+def parse_exact_datetime(schedule: str) -> Optional[datetime]:
+    s = schedule.strip().lower()
+    s = re.sub(r"^(?:on\s+|at\s+)+", "", s)
+    s = s.replace(" at ", " ").replace("t", " ")
+    parts = s.split()
+    if len(parts) >= 2:
+        date_str, time_str = parts[0], parts[1]
+        try:
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
+                dt_str = f"{date_str}T{time_str}"
+                dt = datetime.fromisoformat(dt_str)
+                if dt.tzinfo is None:
+                    local_tz = datetime.now().astimezone().tzinfo
+                    dt = dt.replace(tzinfo=local_tz).astimezone(timezone.utc)
+                else:
+                    dt = dt.astimezone(timezone.utc)
+                return dt
+        except Exception:
+            return None
+    return None
+
+
+def is_cron_expression(schedule: str) -> bool:
+    parts = schedule.strip().split()
+    if len(parts) != 5:
+        return False
+    valid_chars = set("0123456789*,-/")
+    return all(all(c in valid_chars for c in p) for p in parts)
+
+
+def _match_cron_field(field_spec: str, value: int, min_val: int, max_val: int) -> bool:
+    for sub in field_spec.split(","):
+        sub = sub.strip()
+        if not sub:
+            continue
+        if sub == "*":
+            return True
+        try:
+            if "/" in sub:
+                range_part, step_str = sub.split("/", 1)
+                step = int(step_str)
+                if step <= 0:
+                    return False
+                if range_part == "*":
+                    start, end = min_val, max_val
+                elif "-" in range_part:
+                    s_str, e_str = range_part.split("-", 1)
+                    start, end = int(s_str), int(e_str)
+                else:
+                    start, end = int(range_part), max_val
+                if start <= value <= end and (value - start) % step == 0:
+                    return True
+            elif "-" in sub:
+                s_str, e_str = sub.split("-", 1)
+                if int(s_str) <= value <= int(e_str):
+                    return True
+            elif int(sub) == value:
+                return True
+        except ValueError:
+            return False
+    return False
+
+
+def matches_cron(schedule: str, dt: datetime) -> bool:
+    parts = schedule.strip().split()
+    if len(parts) != 5:
+        return False
+    min_spec, hour_spec, dom_spec, month_spec, dow_spec = parts
+    cron_dow = (dt.weekday() + 1) % 7
+    if not _match_cron_field(min_spec, dt.minute, 0, 59):
+        return False
+    if not _match_cron_field(hour_spec, dt.hour, 0, 23):
+        return False
+    if not _match_cron_field(dom_spec, dt.day, 1, 31):
+        return False
+    if not _match_cron_field(month_spec, dt.month, 1, 12):
+        return False
+    dow_match = _match_cron_field(dow_spec, cron_dow, 0, 6) or (cron_dow == 0 and _match_cron_field(dow_spec, 7, 0, 7))
+    return dow_match
+
+
+def _format_remaining_seconds(remaining: float) -> str:
+    if remaining <= 0:
+        return "now"
+    if remaining < 60:
+        return f"{int(remaining)}s"
+    elif remaining < 3600:
+        return f"{int(remaining // 60)}m"
+    elif remaining < 86400:
+        return f"{int(remaining // 3600)}h {int((remaining % 3600) // 60)}m"
+    else:
+        days = int(remaining // 86400)
+        hours = int((remaining % 86400) // 3600)
+        return f"{days}d {hours}h"
+
+
+def parse_interval_seconds(schedule: str) -> int:
+    s = schedule.strip().lower()
+    m = re.match(r"every\s+(\d+)(s|m|h|d)", s)
+    if m:
+        value, unit = int(m.group(1)), m.group(2)
+        multiplier = {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
+        seconds = value * multiplier
+        if seconds < 60:
+            raise ValueError("Minimum cron interval is 1 minute (60s).")
+        return seconds
+    if parse_daily_time(schedule) is not None:
+        return 86400
+    if parse_exact_datetime(schedule) is not None:
+        return 86400
+    if is_cron_expression(schedule):
+        return 3600
+    raise ValueError(f"Invalid schedule: '{schedule}'. Use 'every Ns/Nm/Nh/Nd', 'daily at HH:MM', 'YYYY-MM-DD HH:MM', or cron syntax.")
 
 
 def _parse_iso_utc(ts: str) -> datetime:
@@ -37,27 +155,25 @@ def _parse_iso_utc(ts: str) -> datetime:
     return dt
 
 
-# ── Data model ─────────────────────────────────────────────────────────────
-
 @dataclass
 class CronJob:
     id: str
     name: str
     prompt: str
-    schedule: str = "every 1h"          # e.g. "every 30m"
+    schedule: str = "every 1h"
     interval_seconds: int = 3600
     provider: str = "anthropic"
     model: str = "claude-sonnet-4-6"
-    mode: str = "trust"              # "safe" | "trust" | "yolo"
+    mode: str = "trust"
     allowed_commands: List[str] = field(default_factory=list)
-    on_failure: str = "retry"        # "notify" | "disable" | "retry"
+    on_failure: str = "retry"
     retry_delay_seconds: int = 0
-    timeout_seconds: int = 600  # max wall-clock time per run; 0 = unlimited
+    timeout_seconds: int = 600
     enabled: bool = True
     project_path: Optional[str] = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     last_run: Optional[str] = None
-    last_status: str = "never"   # "never" | "success" | "failed" | "timeout" | "interrupted"
+    last_status: str = "never"
     last_error: Optional[str] = None
     run_count: int = 0
     fail_count: int = 0
@@ -66,12 +182,41 @@ class CronJob:
     def is_due(self) -> bool:
         if not self.enabled:
             return False
+        now_utc = datetime.now(timezone.utc)
+        if self.retry_count > 0 and self.retry_delay_seconds > 0 and self.last_run:
+            last = _parse_iso_utc(self.last_run)
+            return (now_utc - last).total_seconds() >= self.retry_delay_seconds
+
+        exact_dt = parse_exact_datetime(self.schedule)
+        if exact_dt is not None:
+            if self.last_run:
+                return False
+            return now_utc >= exact_dt
+
+        daily_time = parse_daily_time(self.schedule)
+        if daily_time is not None:
+            h, m = daily_time
+            now_local = datetime.now().astimezone()
+            target_today = now_local.replace(hour=h, minute=m, second=0, microsecond=0).astimezone(timezone.utc)
+            if self.last_run:
+                last = _parse_iso_utc(self.last_run)
+                if last >= target_today:
+                    return False
+            return now_utc >= target_today
+
+        if is_cron_expression(self.schedule):
+            now_local = datetime.now().astimezone()
+            if self.last_run:
+                last = _parse_iso_utc(self.last_run)
+                if (now_utc - last).total_seconds() < 60:
+                    return False
+            return matches_cron(self.schedule, now_local)
+
         if not self.last_run:
             return True
         last = _parse_iso_utc(self.last_run)
-        elapsed = (datetime.now(timezone.utc) - last).total_seconds()
-        required_interval = self.retry_delay_seconds if (self.retry_count > 0 and self.retry_delay_seconds > 0) else self.interval_seconds
-        return elapsed >= required_interval
+        elapsed = (now_utc - last).total_seconds()
+        return elapsed >= self.interval_seconds
 
     def mark_run(self, success: bool, error: Optional[str] = None):
         self.run_count += 1
@@ -81,6 +226,8 @@ class CronJob:
             self.retry_count = 0
             self.retry_delay_seconds = 0
             self.last_run = datetime.now(timezone.utc).isoformat()
+            if parse_exact_datetime(self.schedule) is not None:
+                self.enabled = False
         else:
             self.last_status = "failed"
             self.last_error = error
@@ -106,21 +253,37 @@ class CronJob:
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
     def next_run_in(self) -> str:
-        """Human-readable time until next run."""
+        now_utc = datetime.now(timezone.utc)
+        exact_dt = parse_exact_datetime(self.schedule)
+        if exact_dt is not None:
+            if self.last_run:
+                return "completed"
+            diff = (exact_dt - now_utc).total_seconds()
+            return _format_remaining_seconds(diff)
+
+        daily_time = parse_daily_time(self.schedule)
+        if daily_time is not None:
+            from datetime import timedelta
+            h, m = daily_time
+            now_local = datetime.now().astimezone()
+            target_today_local = now_local.replace(hour=h, minute=m, second=0, microsecond=0)
+            target_today_utc = target_today_local.astimezone(timezone.utc)
+            if self.last_run and _parse_iso_utc(self.last_run) >= target_today_utc:
+                target_utc = (target_today_local + timedelta(days=1)).astimezone(timezone.utc)
+            elif now_utc >= target_today_utc:
+                target_utc = target_today_utc
+            else:
+                target_utc = target_today_utc
+            diff = (target_utc - now_utc).total_seconds()
+            return _format_remaining_seconds(diff)
+
         if not self.last_run:
             return "now"
         last = _parse_iso_utc(self.last_run)
-        elapsed = (datetime.now(timezone.utc) - last).total_seconds()
+        elapsed = (now_utc - last).total_seconds()
         interval = self.retry_delay_seconds if (self.retry_count > 0 and self.retry_delay_seconds > 0) else self.interval_seconds
         remaining = max(0, interval - elapsed)
-        if remaining <= 0:
-            return "now"
-        if remaining < 60:
-            return f"{int(remaining)}s"
-        elif remaining < 3600:
-            return f"{int(remaining // 60)}m"
-        else:
-            return f"{int(remaining // 3600)}h {int((remaining % 3600) // 60)}m"
+        return _format_remaining_seconds(remaining)
 
 
 _CRON_ID_RE = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
