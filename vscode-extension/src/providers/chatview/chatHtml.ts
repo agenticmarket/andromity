@@ -75,6 +75,9 @@ ${styles}
     <div id="andromity-gradient-fade"></div>
   </div>
 
+  <!-- Andro-Pet Free Playground Layer (drag, throw, bounce & jump physics) -->
+  <div id="mascot-drag-layer" class="mascot-drag-layer"></div>
+
   <audio id="audio-done" preload="auto" src="${doneAudioUri}"></audio>
 
 
@@ -532,7 +535,7 @@ ${styles}
 
     <!-- Animated Mascot Companion ("Andro-Pet") Home Slot -->
     <div class="chat-mascot-home-slot" id="chat-mascot-home-slot">
-      <div class="chat-mascot" id="chat-mascot" title="Andro-Pet (Click to interact, /pet to toggle)" role="button" tabindex="0" aria-label="Andro-Pet mascot companion">
+      <div class="chat-mascot" id="chat-mascot" title="Andro-Pet — Drag me anywhere, throw me, click to pet, Space / double-click to jump, right-click to call me home (/pet toggles)" role="button" tabindex="0" aria-label="Andro-Pet mascot companion. Drag to toss, click to pet, Space to jump, right-click to return home." aria-keyshortcuts="Enter Space" aria-roledescription="playful pet companion">
         <div class="mascot-bubble" id="mascot-bubble" style="display:none;"></div>
         <div class="mascot-sprite" id="mascot-sprite">
           <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" class="mascot-svg" shape-rendering="crispEdges">
@@ -585,6 +588,20 @@ ${styles}
               <rect x="18" y="17" width="2" height="5" fill="#0f172a" class="eye-pixel eye-right" />
               <rect x="12" y="17" width="1" height="2" fill="#e0f2fe" class="eye-pupil pupil-left" />
               <rect x="18" y="17" width="1" height="2" fill="#e0f2fe" class="eye-pupil pupil-right" />
+            </g>
+
+            <!-- Dizzy X-Eyes Layer (revealed after hard landings) -->
+            <g class="mascot-xeyes">
+              <rect x="12" y="17" width="1" height="1" fill="#0f172a" />
+              <rect x="14" y="17" width="1" height="1" fill="#0f172a" />
+              <rect x="13" y="18" width="1" height="1" fill="#0f172a" />
+              <rect x="12" y="19" width="1" height="1" fill="#0f172a" />
+              <rect x="14" y="19" width="1" height="1" fill="#0f172a" />
+              <rect x="18" y="17" width="1" height="1" fill="#0f172a" />
+              <rect x="20" y="17" width="1" height="1" fill="#0f172a" />
+              <rect x="19" y="18" width="1" height="1" fill="#0f172a" />
+              <rect x="18" y="19" width="1" height="1" fill="#0f172a" />
+              <rect x="20" y="19" width="1" height="1" fill="#0f172a" />
             </g>
             
             <rect x="9" y="21" width="2" height="1" fill="#f472b6" opacity="0.6" class="mascot-blush" />

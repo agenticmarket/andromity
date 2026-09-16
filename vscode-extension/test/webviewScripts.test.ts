@@ -491,6 +491,8 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(html.includes('id="profile-mascot-perch"'), "HTML must include profile-mascot-perch");
     assert.ok(html.includes('id="top-header-mascot-perch"'), "HTML must include top-header-mascot-perch");
     assert.ok(html.includes('id="edge-mascot-perch"'), "HTML must include edge-mascot-perch");
+    assert.ok(html.includes('id="mascot-drag-layer"'), "HTML must include the free-play mascot drag layer");
+    assert.ok(html.includes('class="mascot-xeyes"'), "HTML must include the dizzy pixel X-eyes layer");
 
     const script = getChatClientScript("vscode-resource://icon.svg", {
       currentSessionId: "test-sess",
@@ -504,6 +506,248 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(script.includes('tool-seq-mascot-perch'), "Client script must manage tool-seq-mascot-perch");
     assert.ok(script.includes('assistant-mascot-perch'), "Client script must manage assistant-mascot-perch");
     assert.ok(script.includes('interruptMascotToWork'), "Client script must implement interruptMascotToWork");
+    assert.ok(script.includes('function attachMascotPlayPhysics('), "Client script must wire playground gestures");
+    assert.ok(script.includes('function throwMascot('), "Client script must implement throwMascot");
+    assert.ok(script.includes('function mascotJump('), "Client script must implement mascotJump");
+    assert.ok(script.includes('function recallMascotHome('), "Client script must implement recallMascotHome");
+    assert.ok(script.includes('function spawnMascotParticles('), "Client script must implement mascot particles");
+    assert.ok(script.includes('setPointerCapture'), "Client script must capture the pointer while carrying the pet");
+    assert.ok(script.includes("'pointercancel'"), "Client script must recover from cancelled pointer gestures");
+    assert.ok(script.includes('MASCOT_PHYSICS'), "Client script must expose tunable mascot physics constants");
+    assert.ok(script.includes("cmd: '/play'"), "Client script must expose the /play pet trick command");
+    assert.ok(script.includes("cmd: '/fetch'"), "Client script must expose the /fetch recall command");
+
+    const styles = getChatStyles();
+    assert.ok(styles.includes('.mascot-drag-layer'), "Styles must define the free-play drag layer");
+    assert.ok(styles.includes('mascotDustPuff'), "Styles must define the impact dust puff animation");
+    assert.ok(styles.includes('.chat-mascot.is-dizzy'), "Styles must define the dizzy state");
+    assert.ok(styles.includes('.chat-mascot.is-zooming'), "Styles must define the zoomies state");
+    assert.ok(styles.includes('.mascot-particle'), "Styles must define reaction particles");
+  });
+
+  it("Andro-Pet playground should drag, throw, bounce, jump and settle in a mock DOM", () => {
+    const state: any = {
+      currentSessionId: "test-sess",
+      currentModel: "claude-3.7-sonnet",
+      currentProvider: "anthropic",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "medium",
+    };
+    const fullScript = getChatClientScript("vscode-resource://icon.svg", state);
+    const startIdx = fullScript.indexOf("const MASCOT_SIZE = 32;");
+    const endIdx = fullScript.indexOf("function updateOnboardingVisibility()");
+    assert.ok(startIdx > 0 && endIdx > startIdx, "Playground module must be embedded in the client script");
+    const moduleCode = fullScript.slice(startIdx, endIdx);
+
+    const build = (reducedMotion: boolean) => {
+      const makeEl = (id: string): any => {
+        const el: any = {
+          id,
+          parentElement: null,
+          children: [] as any[],
+          classes: new Set<string>(),
+          listeners: {} as Record<string, Function[]>,
+          rect: { left: 0, top: 468 },
+          style: { setProperty: (k: string, v: string) => { el.style[k] = v; } },
+          appendChild(child: any) {
+            if (child.parentElement && child.parentElement.children) {
+              const at = child.parentElement.children.indexOf(child);
+              if (at >= 0) child.parentElement.children.splice(at, 1);
+            }
+            child.parentElement = el;
+            el.children.push(child);
+            return child;
+          },
+          removeChild(child: any) {
+            const at = el.children.indexOf(child);
+            if (at >= 0) el.children.splice(at, 1);
+            child.parentElement = null;
+            return child;
+          },
+          setAttribute() {},
+          getBoundingClientRect() {
+            return {
+              left: el.rect.left,
+              top: el.rect.top,
+              width: 32,
+              height: 32,
+              right: el.rect.left + 32,
+              bottom: el.rect.top + 32,
+            };
+          },
+          setPointerCapture() {},
+          releasePointerCapture() {},
+          addEventListener(type: string, fn: Function) {
+            (el.listeners[type] = el.listeners[type] || []).push(fn);
+          },
+        };
+        el.classList = {
+          add: (...names: string[]) => names.forEach((c) => el.classes.add(c)),
+          remove: (...names: string[]) => names.forEach((c) => el.classes.delete(c)),
+          contains: (c: string) => el.classes.has(c),
+        };
+        return el;
+      };
+
+      const mascot = makeEl("chat-mascot");
+      const layer = makeEl("mascot-drag-layer");
+      const homeSlot = makeEl("chat-mascot-home-slot");
+      homeSlot.appendChild(mascot);
+
+      const elements: Record<string, any> = {
+        "chat-mascot": mascot,
+        "mascot-drag-layer": layer,
+        "chat-mascot-home-slot": homeSlot,
+      };
+      const timers: Array<{ fn: Function; ms: number }> = [];
+      const frames: Function[] = [];
+      let clock = 0;
+
+      const sandbox: any = {
+        document: {
+          getElementById: (id: string) => elements[id] || null,
+          querySelector: (sel: string) =>
+            sel === ".top-bar"
+              ? { getBoundingClientRect: () => ({ top: 0, bottom: 40, height: 40 }) }
+              : sel === ".input-section"
+                ? { getBoundingClientRect: () => ({ top: 500, bottom: 590, height: 90 }) }
+                : null,
+          createElement: () => makeEl("particle"),
+          addEventListener: () => {},
+          hidden: false,
+        },
+        window: {
+          innerWidth: 800,
+          innerHeight: 600,
+          matchMedia: () => ({ matches: reducedMotion, addEventListener: () => {} }),
+          addEventListener: () => {},
+          removeEventListener: () => {},
+        },
+        Math,
+        Date,
+        Object,
+        JSON,
+        console: { log: () => {}, warn: () => {}, error: () => {} },
+        setTimeout: (fn: Function, ms?: number) => timers.push({ fn, ms: ms || 0 }),
+        clearTimeout: (id: number) => { if (timers[id - 1]) timers[id - 1].fn = () => {}; },
+        requestAnimationFrame: (fn: Function) => frames.push(fn),
+        cancelAnimationFrame: () => {},
+        chatMascotEl: mascot,
+        isRunning: false,
+        isMascotOnTurn: false,
+        isMascotRoaming: false,
+        lastMascotActivityTime: 0,
+        petMascot: () => { sandbox.petted = (sandbox.petted || 0) + 1; },
+        showMascotBubble: () => {},
+        hopMascotTo: (target: any) => { sandbox.hopTarget = target; target.appendChild(mascot); },
+      };
+
+      vm.createContext(sandbox);
+      vm.runInContext(moduleCode, sandbox);
+
+      const pos = () => {
+        const m = /translate3d\((-?[\d.]+)px,\s*(-?[\d.]+)px/.exec(String(mascot.style.transform));
+        return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
+      };
+      const runFrames = (count: number) => {
+        const seen: Array<{ x: number; y: number }> = [];
+        for (let i = 0; i < count; i++) {
+          const pending = frames.splice(0, frames.length);
+          if (!pending.length) break;
+          clock += 16;
+          pending.forEach((fn) => fn(clock));
+          const p = pos();
+          if (p) seen.push(p);
+        }
+        return seen;
+      };
+      const flushTimers = (ms: number) => {
+        const due = timers.splice(0, timers.length).filter((t) => t.ms <= ms);
+        due.forEach((t) => t.fn());
+        return due.map((t) => t.ms);
+      };
+
+      return { sandbox, mascot, layer, homeSlot, timers, pos, runFrames, flushTimers, pendingFrames: () => frames.length };
+    };
+
+    const pet = build(false);
+    const field = pet.sandbox.getMascotPlayField();
+    assert.strictEqual(field.minX, 0, "Left wall must be the viewport edge");
+    assert.strictEqual(field.maxX, 768, "Right wall must keep the 32px pet inside the viewport");
+    assert.strictEqual(field.groundY, 468, "Ground must be the top of the prompt card");
+    assert.strictEqual(field.ceilingY, 42, "Ceiling must sit just below the chat header");
+
+    pet.sandbox.beginMascotGrab({ button: 0, pointerId: 1, clientX: 24, clientY: 470, cancelable: true });
+    assert.ok(pet.mascot.classList.contains("is-grabbed"), "Pointer down must lift the pet into the grabbed state");
+    pet.sandbox.updateMascotGrab({ pointerId: 1, clientX: 26, clientY: 470, cancelable: true });
+    assert.ok(!pet.mascot.classList.contains("is-dragging"), "Movement under the threshold must stay a pet, not a drag");
+    pet.sandbox.endMascotGrab({ pointerId: 1 });
+    assert.strictEqual(pet.sandbox.petted, 1, "A grab without travel must pet the mascot");
+
+    pet.sandbox.beginMascotGrab({ button: 0, pointerId: 2, clientX: 24, clientY: 470, cancelable: true });
+    pet.sandbox.updateMascotGrab({ pointerId: 2, clientX: 400, clientY: 300, cancelable: true });
+    pet.sandbox.updateMascotGrab({ pointerId: 2, clientX: 700, clientY: 120, cancelable: true });
+    assert.strictEqual(
+      pet.pendingFrames(),
+      1,
+      "Pointer events must coalesce into a single animation frame instead of one paint per event"
+    );
+    // Drag painting is coalesced into one animation frame, so flush it before releasing.
+    pet.runFrames(1);
+    assert.strictEqual(pet.pendingFrames(), 0, "The coalesced drag paint must be consumed by the frame");
+    assert.ok(pet.mascot.classList.contains("is-dragging"), "Dragging must promote the pet into the carry state");
+    assert.strictEqual(pet.mascot.parentElement, pet.layer, "A carried pet must move into the playground layer");
+    assert.ok(
+      String(pet.mascot.style.transform).indexOf("translate3d") === 0,
+      "A carried pet must be positioned by transform"
+    );
+
+    pet.sandbox.endMascotGrab({ pointerId: 2 });
+    assert.ok(pet.mascot.classList.contains("is-flying"), "Releasing a carried pet must throw it");
+
+    const trajectory = pet.runFrames(1200);
+    assert.ok(trajectory.length > 5, "A thrown pet must keep moving under physics");
+    assert.ok(
+      Math.min(...trajectory.map((p) => p.x)) >= 0 && Math.max(...trajectory.map((p) => p.x)) <= 768,
+      "A thrown pet must bounce off the walls without escaping the viewport"
+    );
+    assert.ok(Math.min(...trajectory.map((p) => p.y)) < 468, "A thrown pet must bounce upward off the ground line");
+    assert.ok(pet.mascot.classList.contains("is-resting"), "A thrown pet must settle back to rest");
+    assert.strictEqual(pet.pos()!.y, 468, "A settled pet must rest exactly on the ground line");
+    assert.ok(pet.timers.some((t) => t.ms === 30000), "A settled pet must schedule its auto-toddle-home timer");
+    assert.strictEqual(pet.sandbox.hopTarget, undefined, "A settled pet must keep playing until the timer elapses");
+
+    pet.flushTimers(30000);
+    assert.strictEqual(pet.sandbox.hopTarget, pet.homeSlot, "Auto-return must dock the pet back to its home slot");
+
+    pet.sandbox.mascotJump();
+    pet.flushTimers(200);
+    assert.ok(pet.mascot.classList.contains("is-flying"), "A jump must launch the pet through the physics loop");
+    const hopTrajectory = pet.runFrames(1200);
+    assert.ok(hopTrajectory.some((p) => p.y < 400), "A jump must arc above the ground line");
+    assert.ok(pet.mascot.classList.contains("is-resting"), "A jumping pet must land and settle again");
+
+    // Air-drop test: drag high into the air, pause, and release without velocity
+    pet.sandbox.beginMascotGrab({ button: 0, pointerId: 4, clientX: 24, clientY: 470, cancelable: true });
+    pet.sandbox.updateMascotGrab({ pointerId: 4, clientX: 320, clientY: 160, cancelable: true });
+    pet.runFrames(1);
+    assert.ok(pet.mascot.classList.contains("is-dragging"), "Must be dragging in the air");
+    pet.sandbox.endMascotGrab({ pointerId: 4 });
+    assert.ok(pet.mascot.classList.contains("is-flying"), "Releasing in air must drop under gravity");
+    const dropTrajectory = pet.runFrames(1200);
+    assert.ok(dropTrajectory.length > 5, "Air drop must produce a falling physics trajectory");
+    assert.ok(pet.mascot.classList.contains("is-resting"), "Air-dropped pet must bounce and settle back to rest");
+    assert.strictEqual(pet.pos()!.y, 468, "Air-dropped pet must settle cleanly on ground ledge");
+
+    const calm = build(true);
+    calm.sandbox.beginMascotGrab({ button: 0, pointerId: 3, clientX: 10, clientY: 470, cancelable: true });
+    calm.sandbox.updateMascotGrab({ pointerId: 3, clientX: 200, clientY: 260, cancelable: true });
+    calm.sandbox.endMascotGrab({ pointerId: 3 });
+    assert.ok(!calm.mascot.classList.contains("is-flying"), "Reduced motion must skip throw physics");
+    assert.ok(calm.mascot.classList.contains("is-resting"), "Reduced motion must snap the pet straight to rest");
+    calm.sandbox.mascotZoomies();
+    assert.ok(!calm.mascot.classList.contains("is-flying"), "Reduced motion must skip the zoomies trick");
   });
 
   it("PlanEditorPanel generated HTML should contain valid JS in all script tags", () => {

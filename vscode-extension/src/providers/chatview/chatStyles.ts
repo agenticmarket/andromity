@@ -3664,8 +3664,8 @@ export function getChatStyles(): string {
       transition: transform 0.2s ease;
     }
 
-    /* Idle Breathing & Bobbing */
-    .chat-mascot:not(.is-jumping):not(.is-walking) .mascot-svg {
+    /* Idle Breathing & Bobbing (idle-only: every active state owns its own animation) */
+    .chat-mascot:not(.is-jumping):not(.is-walking):not(.is-flying):not(.is-dragging):not(.is-grabbed):not(.is-landing):not(.is-crouch):not(.is-dizzy):not(.is-zooming) .mascot-svg {
       animation: mascotBreathe 3s ease-in-out infinite alternate;
     }
     @keyframes mascotBreathe {
@@ -3822,6 +3822,203 @@ export function getChatStyles(): string {
       0% { opacity: 0; transform: translateX(-50%) scale(0.7) translateY(4px); }
       100% { opacity: 1; transform: translateX(-50%) scale(1) translateY(0); }
     }
+    /* ── Playful Drag, Throw, Bounce & Jump Physics ("Andro-Pet Playground") ─── */
+    .mascot-drag-layer {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      pointer-events: none;
+      z-index: 3000;
+    }
+    .mascot-drag-layer .chat-mascot {
+      position: absolute;
+      left: 0;
+      top: 0;
+      pointer-events: auto;
+    }
+    /* Promote the pet to its own compositor layer only while it is actually moving. */
+    .chat-mascot.is-dragging,
+    .chat-mascot.is-flying {
+      will-change: transform;
+    }
+
+    .chat-mascot {
+      touch-action: none;
+      -webkit-user-drag: none;
+      cursor: grab;
+    }
+    .chat-mascot.is-grabbed,
+    .chat-mascot.is-dragging { cursor: grabbing; }
+
+    /* Grabbed: lifted off the prompt ledge, wide eyes, dangling antennae */
+    .chat-mascot.is-grabbed .mascot-svg {
+      animation: mascotHangWobble 0.9s ease-in-out infinite alternate;
+    }
+    @keyframes mascotHangWobble {
+      0% { transform: rotate(-5deg) scale(1.06, 0.97); }
+      100% { transform: rotate(5deg) scale(1.06, 0.97); }
+    }
+    .chat-mascot.is-grabbed .mascot-eyes {
+      transform: scaleY(1.3);
+      animation: none;
+    }
+    .chat-mascot.is-grabbed .mascot-antennae {
+      transform-origin: 16px 10px;
+      animation: antennaDangle 1.1s ease-in-out infinite alternate;
+    }
+    @keyframes antennaDangle {
+      0% { transform: rotate(-7deg); }
+      100% { transform: rotate(7deg); }
+    }
+
+    /* Carried: squirms in the hand, smear squash while swung around */
+    .chat-mascot.is-dragging .mascot-svg {
+      animation: mascotCarrySmear 0.5s ease-in-out infinite alternate;
+    }
+    @keyframes mascotCarrySmear {
+      0% { transform: scale(0.94, 1.08) rotate(-2deg); }
+      100% { transform: scale(1.06, 0.94) rotate(2deg); }
+    }
+
+    /* Airborne: rotation and stretch are driven inline by the physics loop */
+    .chat-mascot.is-flying .mascot-svg { animation: none; }
+
+    /* In-Air Falling: surprised squirm, wide eyes, streaming antennae */
+    .chat-mascot.is-falling .mascot-svg {
+      animation: mascotFallSquirm 0.28s ease-in-out infinite alternate;
+    }
+    @keyframes mascotFallSquirm {
+      0% { transform: scale(0.9, 1.14) rotate(-3deg); }
+      100% { transform: scale(1.08, 0.94) rotate(3deg); }
+    }
+    .chat-mascot.is-falling .mascot-eyes {
+      transform: scaleY(1.35) translateY(1px);
+    }
+    .chat-mascot.is-falling .mascot-antennae {
+      transform-origin: 16px 10px;
+      animation: mascotAntennaStream 0.25s ease-in-out infinite alternate;
+    }
+    @keyframes mascotAntennaStream {
+      0% { transform: rotate(-12deg) translateY(-2px); }
+      100% { transform: rotate(12deg) translateY(-2px); }
+    }
+
+    /* Bouncing: snappy squash & stretch rebound */
+    .chat-mascot.is-bouncing .mascot-svg {
+      animation: mascotBounceSquish 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    @keyframes mascotBounceSquish {
+      0% { transform: scale(1.38, 0.62) translateY(2px); }
+      35% { transform: scale(0.85, 1.25) translateY(-3px); }
+      70% { transform: scale(1.1, 0.94) translateY(0); }
+      100% { transform: scale(1, 1) translateY(0); }
+    }
+
+    /* Impact squash & stretch */
+    .chat-mascot.is-landing .mascot-svg {
+      animation: mascotLandSquash 0.26s cubic-bezier(0.22, 1.4, 0.36, 1);
+    }
+    @keyframes mascotLandSquash {
+      0% { transform: scale(1.42, 0.58) translateY(3px); }
+      45% { transform: scale(0.86, 1.2) translateY(-2px); }
+      80% { transform: scale(1.06, 0.96) translateY(0); }
+      100% { transform: scale(1, 1) translateY(0); }
+    }
+
+    /* Crouch anticipation before a jump */
+    .chat-mascot.is-crouch .mascot-svg {
+      transform-origin: bottom center;
+      animation: mascotCrouch 0.14s ease-out;
+    }
+    @keyframes mascotCrouch {
+      0% { transform: scale(1, 1); }
+      100% { transform: scale(1.16, 0.72) translateY(4px); }
+    }
+
+    /* Dizzy stars after a hard impact */
+    .chat-mascot.is-dizzy .mascot-svg {
+      animation: mascotDizzySpin 0.9s ease-in-out 2;
+    }
+    .chat-mascot.is-dizzy .mascot-eyes {
+      opacity: 0;
+      animation: none;
+    }
+    .chat-mascot .mascot-xeyes {
+      opacity: 0;
+      transition: opacity 0.08s linear;
+    }
+    .chat-mascot.is-dizzy .mascot-xeyes { opacity: 1; }
+    @keyframes mascotDizzySpin {
+      0% { transform: rotate(0deg) scale(1, 1); }
+      20% { transform: rotate(-16deg) scale(1.08, 0.94); }
+      50% { transform: rotate(14deg) scale(0.96, 1.05); }
+      80% { transform: rotate(-8deg) scale(1.04, 0.98); }
+      100% { transform: rotate(0deg) scale(1, 1); }
+    }
+
+    /* Zoomies trick dash */
+    .chat-mascot.is-zooming .mascot-svg {
+      animation: mascotZoomies 0.36s linear infinite;
+    }
+    @keyframes mascotZoomies {
+      0% { transform: rotate(0deg) scale(1, 1) translateY(0); }
+      25% { transform: rotate(14deg) scale(1.1, 0.9) translateY(-2px); }
+      50% { transform: rotate(0deg) scale(0.94, 1.06) translateY(1px); }
+      75% { transform: rotate(-14deg) scale(1.1, 0.9) translateY(-2px); }
+      100% { transform: rotate(0deg) scale(1, 1) translateY(0); }
+    }
+
+    /* Resting where it landed, until the auto-toddle-home kicks in */
+    .chat-mascot.is-resting .mascot-svg {
+      animation: mascotBreathe 2.4s ease-in-out infinite alternate;
+    }
+
+    /* Impact dust puff & reaction particles (pooled, auto-removed) */
+    .mascot-particle {
+      position: absolute;
+      width: 3px;
+      height: 3px;
+      border-radius: 1px;
+      pointer-events: none;
+      will-change: transform, opacity;
+    }
+    .mascot-particle.dust {
+      background: var(--muted, #94a3b8);
+      animation: mascotDustPuff 0.5s ease-out forwards;
+    }
+    .mascot-particle.sparkle {
+      background: #7dd3fc;
+      box-shadow: 0 0 4px rgba(125, 211, 252, 0.85);
+      animation: mascotSparklePop 0.55s ease-out forwards;
+    }
+    .mascot-particle.heart {
+      background: #f472b6;
+      box-shadow: 0 0 4px rgba(244, 114, 182, 0.7);
+      animation: mascotHeartFloat 0.85s ease-out forwards;
+    }
+    .mascot-particle.star {
+      background: #fbbf24;
+      box-shadow: 0 0 4px rgba(251, 191, 36, 0.75);
+      animation: mascotStarTwinkle 0.7s ease-out forwards;
+    }
+    @keyframes mascotDustPuff {
+      0% { opacity: 0.75; transform: translate(0, 0) scale(1); }
+      100% { opacity: 0; transform: translate(var(--px, 0px), var(--py, -6px)) scale(0.4); }
+    }
+    @keyframes mascotSparklePop {
+      0% { opacity: 0.95; transform: translate(0, 0) scale(0.6); }
+      100% { opacity: 0; transform: translate(var(--px, 0px), var(--py, -10px)) scale(1.25); }
+    }
+    @keyframes mascotHeartFloat {
+      0% { opacity: 0.95; transform: translate(0, 0) scale(0.8); }
+      100% { opacity: 0; transform: translate(var(--px, 0px), var(--py, -18px)) scale(1.2); }
+    }
+    @keyframes mascotStarTwinkle {
+      0% { opacity: 1; transform: translate(0, 0) rotate(0deg) scale(1); }
+      100% { opacity: 0; transform: translate(var(--px, 0px), var(--py, -14px)) rotate(90deg) scale(0.5); }
+    }
 
     @media (prefers-reduced-motion: reduce) {
       .chat-mascot:not(.is-jumping):not(.is-walking) .mascot-svg,
@@ -3830,8 +4027,23 @@ export function getChatStyles(): string {
       .chat-mascot.is-jumping .mascot-svg,
       .chat-mascot.is-petted .mascot-svg,
       .chat-mascot.is-celebrating .mascot-svg,
-      .chat-mascot.is-walking .mascot-svg {
+      .chat-mascot.is-walking .mascot-svg,
+      .chat-mascot.is-resting .mascot-svg,
+      .chat-mascot.is-grabbed .mascot-svg,
+      .chat-mascot.is-grabbed .mascot-eyes,
+      .chat-mascot.is-grabbed .mascot-antennae,
+      .chat-mascot.is-dragging .mascot-svg,
+      .chat-mascot.is-falling .mascot-svg,
+      .chat-mascot.is-falling .mascot-antennae,
+      .chat-mascot.is-bouncing .mascot-svg,
+      .chat-mascot.is-landing .mascot-svg,
+      .chat-mascot.is-crouch .mascot-svg,
+      .chat-mascot.is-dizzy .mascot-svg,
+      .chat-mascot.is-zooming .mascot-svg {
         animation: none !important;
+      }
+      .mascot-particle {
+        display: none !important;
       }
     }
 

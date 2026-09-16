@@ -102,7 +102,7 @@ def _detect_client() -> str:
 # Sanitise helpers
 # ─────────────────────────────────────────────────────────────────────
 
-def _safe_str(value: object, max_len: int = 64, allowed: str = r"a-zA-Z0-9._:-") -> str:
+def _safe_str(value: object, max_len: int = 96, allowed: str = r"a-zA-Z0-9._:/-") -> str:
     s = str(value or "unknown")[:max_len]
     return re.sub(f"[^{allowed}]", "", s) or "unknown"
 

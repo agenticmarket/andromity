@@ -157,6 +157,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       { cmd: '/wallpaper', desc: 'Configure background wallpaper atmosphere & ripples', action: 'personalisation' },
       { cmd: '/pet', desc: 'Interact with or toggle Andro-Pet companion', action: 'pet' },
       { cmd: '/companion', desc: 'Interact with or toggle Andro-Pet companion', action: 'pet' },
+      { cmd: '/play', desc: 'Play a trick with Andro-Pet (zoomies, jumps & spins)', action: 'play' },
+      { cmd: '/fetch', desc: 'Call Andro-Pet back to its home ledge', action: 'fetch' },
       { cmd: '/model', desc: 'Switch AI model', action: 'model' },
       { cmd: '/mode', desc: 'Cycle permission mode (safe / trust / full / yolo)', action: 'mode' },
       { cmd: '/plan', desc: 'Open Implementation Plan editor tab', action: 'plan' },
@@ -717,6 +719,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'companion':
           toggleOrInteractMascot();
           break;
+        case 'play':
+          mascotZoomies();
+          break;
+        case 'fetch':
+          recallMascotHome(true);
+          break;
         case 'model':
           toggleModelFlyout();
           break;
@@ -1024,7 +1032,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           chatMascotEl.classList.remove('hidden');
         } else {
           chatMascotEl.classList.add('hidden');
-          chatMascotEl.classList.remove('is-sleeping', 'is-peeking', 'is-petted', 'is-jumping', 'is-walking', 'is-working', 'is-celebrating');
+          if (typeof recallMascotHome === 'function') recallMascotHome(false);
+          if (typeof releaseAllMascotParticles === 'function') releaseAllMascotParticles();
+          chatMascotEl.classList.remove('is-sleeping', 'is-peeking', 'is-petted', 'is-jumping', 'is-walking', 'is-working', 'is-celebrating', 'is-grabbed', 'is-dragging', 'is-flying', 'is-landing', 'is-crouch', 'is-dizzy', 'is-zooming', 'is-resting');
           if (mascotBubbleEl) {
             mascotBubbleEl.style.display = 'none';
           }
@@ -1088,6 +1098,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         showMascotBubble(pick, 1800);
       }
       
+      if (isMascotFreeFloating()) {
+        // Petting a landed pet keeps it playing where it is and resets its return timer.
+        cancelMascotHomeTimer();
+        scheduleMascotReturnHome();
+        const petRect = chatMascotEl.getBoundingClientRect();
+        spawnMascotParticles('heart', petRect.left + 16, petRect.top, 4);
+      }
+
       setTimeout(() => {
         chatMascotEl?.classList.remove('is-petted');
       }, 500);
@@ -1100,6 +1118,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function interruptMascotToWork() {
       lastMascotActivityTime = Date.now();
       if (!chatMascotEl || chatMascotEl.classList.contains('hidden')) return;
+      if (isMascotFreeFloating()) {
+        if (mascotPlayState === 'grabbed' || mascotPlayState === 'dragging') return;
+        recallMascotHome(false);
+        return;
+      }
       chatMascotEl.classList.remove('is-sleeping', 'is-peeking', 'is-walking');
       const homeSlot = document.getElementById('chat-mascot-home-slot');
       if (isMascotRoaming && chatMascotEl.parentElement !== homeSlot && !isMascotOnTurn) {
@@ -1113,9 +1136,25 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function hopMascotTo(targetPerchEl) {
       if (!chatMascotEl || chatMascotEl.classList.contains('hidden') || !targetPerchEl) return;
       if (chatMascotEl.parentElement === targetPerchEl) return;
+      if (mascotPlayState === 'grabbed' || mascotPlayState === 'dragging') return;
+
+      const fromPlayground = isMascotFreeFloating();
+      if (fromPlayground) {
+        stopMascotPhysics();
+        cancelMascotHomeTimer();
+        mascotPlayState = 'idle';
+        mascotVel = { x: 0, y: 0 };
+        mascotMoveSamples = [];
+        chatMascotEl.classList.remove('is-flying', 'is-resting', 'is-dizzy', 'is-zooming', 'is-crouch', 'is-landing');
+      }
 
       const firstRect = chatMascotEl.getBoundingClientRect();
       targetPerchEl.appendChild(chatMascotEl);
+      if (fromPlayground) {
+        // Free-play coordinates belong to the fixed layer: drop them once docked again.
+        chatMascotEl.style.left = '';
+        chatMascotEl.style.top = '';
+      }
       const lastRect = chatMascotEl.getBoundingClientRect();
 
       const deltaX = firstRect.left - lastRect.left;
@@ -1134,8 +1173,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       setTimeout(() => {
         if (chatMascotEl) {
           chatMascotEl.classList.remove('is-jumping');
-          chatMascotEl.style.transition = '';
-          chatMascotEl.style.transform = '';
+          // A grab, throw or free-play rest may have taken over mid-hop: never clobber it.
+          if (mascotPlayState === 'idle') {
+            chatMascotEl.style.transition = '';
+            chatMascotEl.style.transform = '';
+          }
           const homeSlot = document.getElementById('chat-mascot-home-slot');
           isMascotOnTurn = (chatMascotEl.parentElement !== homeSlot);
           if (!isMascotOnTurn) {
@@ -1174,6 +1216,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function runMascotIdleRoam() {
+      // Free-play physics owns the pet: never roam or nap while it is airborne, held or resting away.
+      if (mascotPlayState === 'grabbed' || mascotPlayState === 'dragging' || mascotPlayState === 'flying') return;
+      if (isMascotFreeFloating()) return;
       const homeSlot = document.getElementById('chat-mascot-home-slot');
       if (!chatMascotEl || isRunning || isMascotOnTurn || chatMascotEl.classList.contains('hidden')) {
         return;
@@ -1270,17 +1315,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         chatMascotEl.classList.remove('hidden');
       }
 
-      chatMascotEl.addEventListener('click', (e) => {
-        e.stopPropagation();
-        petMascot();
-      });
-
-      chatMascotEl.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          petMascot();
-        }
-      });
+      attachMascotPlayPhysics();
 
       if (promptInput) {
         promptInput.addEventListener('focus', interruptMascotToWork);
@@ -1297,6 +1332,828 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       if (mascotIdleTimer) clearInterval(mascotIdleTimer);
       mascotIdleTimer = setInterval(runMascotIdleRoam, 16000);
+    }
+
+    // ─── Playful Drag, Throw, Bounce & Jump Physics ("Andro-Pet Playground") ───
+    const MASCOT_SIZE = 32;
+    const MASCOT_PHYSICS = {
+      gravity: 1550,
+      bounce: 0.38,
+      wallBounce: 0.65,
+      ceilingBounce: 0.40,
+      airDrag: 0.12,
+      groundFriction: 0.88,
+      stopSpeed: 28,
+      throwScale: 1.0,
+      maxSpeed: 1350,
+      jumpImpulse: 820,
+      grabThreshold: 4,
+      dizzySpeed: 850,
+      restHoldMs: 30000,
+      maxParticles: 24
+    };
+    const MASCOT_LAYER = document.getElementById('mascot-drag-layer');
+    let mascotPlayState = 'idle';
+    let mascotPointerId = null;
+    let mascotGrabOrigin = null;
+    let mascotGrabOffset = { x: MASCOT_SIZE / 2, y: MASCOT_SIZE / 2 };
+    let mascotPointerAt = { x: 0, y: 0 };
+    let mascotPos = { x: 0, y: 0 };
+    let mascotVel = { x: 0, y: 0 };
+    let mascotMoveSamples = [];
+    let mascotRafId = null;
+    let mascotLastFrameTs = 0;
+    let mascotHomeTimer = null;
+    let mascotLean = 0;
+    let mascotDragRafId = null;
+    let mascotPendingPointer = null;
+    let mascotDragField = null;
+    let mascotLastSparkleAt = 0;
+    let mascotBounceCount = 0;
+    let mascotLedgeRoamTimer = null;
+    const mascotParticles = [];
+    let mascotFieldCache = null;
+    let mascotFieldStamp = 0;
+
+    function prefersReducedMotion() {
+      try {
+        return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+      } catch (err) {
+        return false;
+      }
+    }
+
+    function pickMascotRandom(list) {
+      return list[Math.floor(Math.random() * list.length)];
+    }
+
+    // The playable world: viewport walls, top bar ceiling, and the input card ledge as ground.
+    function getMascotPlayField() {
+      const now = Date.now();
+      if (mascotFieldCache && (now - mascotFieldStamp) < 250) return mascotFieldCache;
+      const vw = window.innerWidth || document.documentElement.clientWidth || 400;
+      const vh = window.innerHeight || document.documentElement.clientHeight || 600;
+
+      let ceilingY = 6;
+      const topBar = document.querySelector('.top-bar');
+      if (topBar) {
+        const topRect = topBar.getBoundingClientRect();
+        if (topRect.height > 0) ceilingY = Math.round(topRect.bottom) + 2;
+      }
+
+      let groundY = vh - MASCOT_SIZE;
+      const inputSection = document.querySelector('.input-section');
+      if (inputSection) {
+        const inputRect = inputSection.getBoundingClientRect();
+        if (inputRect.height > 0 && inputRect.top > ceilingY + MASCOT_SIZE) {
+          groundY = Math.round(inputRect.top) - MASCOT_SIZE;
+        }
+      }
+
+      mascotFieldCache = {
+        width: vw,
+        height: vh,
+        minX: 0,
+        maxX: Math.max(0, vw - MASCOT_SIZE),
+        ceilingY: ceilingY,
+        groundY: Math.max(ceilingY + MASCOT_SIZE, groundY)
+      };
+      mascotFieldStamp = now;
+      return mascotFieldCache;
+    }
+
+    function isMascotFreeFloating() {
+      return !!(chatMascotEl && MASCOT_LAYER && chatMascotEl.parentElement === MASCOT_LAYER);
+    }
+
+    // Sub-pixel friendly formatting: rounding every frame quantises slow drags into visible 1px steps.
+    function formatMascotPx(value) {
+      return (Math.round(value * 100) / 100) + 'px';
+    }
+
+    // Smooth the body lean so the sprite hangs behind the motion instead of snapping per event.
+    function updateMascotLean(target) {
+      const clamped = Math.max(-20, Math.min(20, target));
+      mascotLean += (clamped - mascotLean) * 0.28;
+      if (Math.abs(mascotLean) < 0.05) mascotLean = 0;
+    }
+
+    function paintMascotFrame() {
+      if (!chatMascotEl) return;
+      let angle = 0;
+      if (!prefersReducedMotion() && (mascotPlayState === 'flying' || mascotPlayState === 'dragging')) {
+        angle = mascotLean;
+      }
+      const spin = angle ? ' rotate(' + angle.toFixed(2) + 'deg)' : '';
+      chatMascotEl.style.transform =
+        'translate3d(' + formatMascotPx(mascotPos.x) + ', ' + formatMascotPx(mascotPos.y) + ', 0)' + spin;
+    }
+
+    function parkMascotInLayer(x, y) {
+      if (!chatMascotEl || !MASCOT_LAYER) return false;
+      if (chatMascotEl.parentElement !== MASCOT_LAYER) MASCOT_LAYER.appendChild(chatMascotEl);
+      // Playground motion must track the pointer 1:1: never inherit a dock/patrol easing transition.
+      chatMascotEl.style.transition = 'none';
+      mascotPos.x = x;
+      mascotPos.y = y;
+      paintMascotFrame();
+      return true;
+    }
+
+    function cancelMascotDragFrame() {
+      mascotPendingPointer = null;
+      if (mascotDragRafId !== null) {
+        cancelAnimationFrame(mascotDragRafId);
+        mascotDragRafId = null;
+      }
+    }
+
+    // Coalesces high-frequency pointer events into exactly one paint per frame.
+    function commitMascotDragPaint() {
+      mascotDragRafId = null;
+      const pointer = mascotPendingPointer;
+      mascotPendingPointer = null;
+      if (!pointer || !chatMascotEl || mascotPlayState !== 'dragging') return;
+
+      const field = mascotDragField || getMascotPlayField();
+      const nx = pointer.x - mascotGrabOffset.x;
+      const ny = pointer.y - mascotGrabOffset.y;
+      mascotPos.x = Math.max(field.minX, Math.min(field.maxX, nx));
+      mascotPos.y = Math.max(field.ceilingY, Math.min(field.groundY + 12, ny));
+
+      const now = Date.now();
+      mascotMoveSamples.push({ x: pointer.x, y: pointer.y, t: now });
+      while (mascotMoveSamples.length > 8 || (mascotMoveSamples.length > 1 && (now - mascotMoveSamples[0].t) > 150)) {
+        mascotMoveSamples.shift();
+      }
+
+      // Time-normalised velocity (px/s) keeps the lean identical at any pointer polling rate.
+      const travel = computeMascotThrowVelocity();
+      updateMascotLean(travel.x * 0.007);
+      paintMascotFrame();
+
+      if ((Math.abs(travel.x) + Math.abs(travel.y)) > 260 && (now - mascotLastSparkleAt) > 75) {
+        mascotLastSparkleAt = now;
+        spawnMascotParticles('sparkle', mascotPos.x + MASCOT_SIZE / 2, mascotPos.y + MASCOT_SIZE - 4, 1);
+      }
+    }
+
+    function clearMascotFreeStyles() {
+      if (!chatMascotEl) return;
+      chatMascotEl.style.left = '';
+      chatMascotEl.style.top = '';
+      chatMascotEl.style.transform = '';
+      chatMascotEl.style.transition = '';
+    }
+
+    function flashMascotClass(cls, ms) {
+      if (!chatMascotEl) return;
+      chatMascotEl.classList.add(cls);
+      setTimeout(() => {
+        if (chatMascotEl) chatMascotEl.classList.remove(cls);
+      }, ms);
+    }
+
+    function acquireMascotParticle(kind) {
+      if (!MASCOT_LAYER) return null;
+      for (let i = 0; i < mascotParticles.length; i++) {
+        const pooled = mascotParticles[i];
+        if (pooled.__mascotFree && pooled.__mascotKind === kind) {
+          pooled.__mascotFree = false;
+          pooled.className = 'mascot-particle ' + kind;
+          return pooled;
+        }
+      }
+      if (mascotParticles.length >= MASCOT_PHYSICS.maxParticles) return null;
+      const node = document.createElement('div');
+      node.className = 'mascot-particle ' + kind;
+      node.setAttribute('aria-hidden', 'true');
+      node.__mascotKind = kind;
+      node.__mascotFree = false;
+      MASCOT_LAYER.appendChild(node);
+      mascotParticles.push(node);
+      return node;
+    }
+
+    function releaseMascotParticle(node) {
+      if (!node || node.__mascotFree) return;
+      node.__mascotFree = true;
+      node.__mascotKind = '';
+      node.className = 'mascot-particle';
+    }
+
+    function releaseAllMascotParticles() {
+      for (let i = 0; i < mascotParticles.length; i++) releaseMascotParticle(mascotParticles[i]);
+    }
+
+    // Pooled reaction particles: reusing nodes keeps the drag path completely free of DOM churn.
+    function spawnMascotParticles(kind, x, y, count) {
+      if (!MASCOT_LAYER || prefersReducedMotion()) return;
+      const total = Math.max(1, Math.min(6, count || 3));
+      for (let i = 0; i < total; i++) {
+        const node = acquireMascotParticle(kind);
+        if (!node) break;
+        node.style.left = Math.round(x) + 'px';
+        node.style.top = Math.round(y) + 'px';
+        node.style.setProperty('--px', Math.round((Math.random() - 0.5) * 34) + 'px');
+        node.style.setProperty('--py', Math.round(-6 - Math.random() * 16) + 'px');
+        // Guaranteed release even if animationend never fires (e.g. animations disabled).
+        setTimeout(() => releaseMascotParticle(node), 1200);
+      }
+    }
+
+    function stopMascotPhysics() {
+      if (mascotRafId !== null) {
+        cancelAnimationFrame(mascotRafId);
+        mascotRafId = null;
+      }
+      mascotLastFrameTs = 0;
+    }
+
+    function cancelMascotHomeTimer() {
+      if (mascotHomeTimer) {
+        clearTimeout(mascotHomeTimer);
+        mascotHomeTimer = null;
+      }
+    }
+
+    function scheduleMascotReturnHome() {
+      cancelMascotHomeTimer();
+      mascotHomeTimer = setTimeout(() => {
+        mascotHomeTimer = null;
+        recallMascotHome(true);
+      }, MASCOT_PHYSICS.restHoldMs);
+    }
+
+    // Window listeners ensure the pet NEVER loses track of the cursor during fast movements.
+    function onWindowMascotMove(e) {
+      updateMascotGrab(e);
+    }
+    function onWindowMascotUp(e) {
+      endMascotGrab(e);
+    }
+    function onWindowMascotCancel() {
+      cancelMascotGrab();
+    }
+
+    function detachWindowMascotListeners() {
+      window.removeEventListener('pointermove', onWindowMascotMove);
+      window.removeEventListener('pointerup', onWindowMascotUp);
+      window.removeEventListener('pointercancel', onWindowMascotCancel);
+    }
+
+    function beginMascotGrab(e) {
+      if (!chatMascotEl || chatMascotEl.classList.contains('hidden')) return;
+      if (typeof e.button === 'number' && e.button !== 0) return;
+      if (mascotPlayState === 'grabbed' || mascotPlayState === 'dragging') return;
+
+      const rect = chatMascotEl.getBoundingClientRect();
+      mascotPointerId = e.pointerId;
+      try { chatMascotEl.setPointerCapture(e.pointerId); } catch (err) {}
+      stopMascotPhysics();
+      cancelMascotHomeTimer();
+      cancelMascotDragFrame();
+      stopLedgeRoam();
+      lastMascotActivityTime = Date.now();
+      chatMascotEl.style.transition = 'none';
+      mascotDragField = null;
+      mascotLean = 0;
+      mascotLastSparkleAt = 0;
+      mascotBounceCount = 0;
+      mascotGrabOffset = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      mascotPointerAt = { x: e.clientX, y: e.clientY };
+      mascotPos = { x: rect.left, y: rect.top };
+      mascotVel = { x: 0, y: 0 };
+      mascotMoveSamples = [{ x: e.clientX, y: e.clientY, t: Date.now() }];
+      mascotGrabOrigin = { x: rect.left, y: rect.top, parent: chatMascotEl.parentElement };
+      mascotPlayState = 'grabbed';
+      chatMascotEl.classList.remove('is-flying', 'is-falling', 'is-bouncing', 'is-resting', 'is-sleeping', 'is-peeking', 'is-walking', 'is-dizzy', 'is-zooming', 'is-crouch', 'is-celebrating', 'is-petted', 'is-jumping', 'is-landing');
+      chatMascotEl.classList.add('is-grabbed');
+
+      window.addEventListener('pointermove', onWindowMascotMove, { passive: false });
+      window.addEventListener('pointerup', onWindowMascotUp);
+      window.addEventListener('pointercancel', onWindowMascotCancel);
+
+      if (e.cancelable && e.preventDefault) e.preventDefault();
+    }
+
+    function updateMascotGrab(e) {
+      if (!chatMascotEl || mascotPointerId === null || e.pointerId !== mascotPointerId) return;
+      if (mascotPlayState !== 'grabbed' && mascotPlayState !== 'dragging') return;
+
+      if (mascotPlayState === 'grabbed') {
+        const travel = Math.hypot(e.clientX - mascotPointerAt.x, e.clientY - mascotPointerAt.y);
+        if (travel < MASCOT_PHYSICS.grabThreshold) return;
+        if (!parkMascotInLayer(mascotPos.x, mascotPos.y)) return;
+        mascotPlayState = 'dragging';
+        mascotDragField = getMascotPlayField();
+        mascotMoveSamples = [{ x: e.clientX, y: e.clientY, t: Date.now() }];
+        chatMascotEl.classList.remove('is-grabbed', 'is-sleeping', 'is-peeking', 'is-resting');
+        chatMascotEl.classList.add('is-dragging');
+      }
+
+      if (e.cancelable && e.preventDefault) e.preventDefault();
+
+      // Record the sample and paint once per animation frame instead of once per pointer event.
+      mascotPointerAt = { x: e.clientX, y: e.clientY };
+      mascotPendingPointer = { x: e.clientX, y: e.clientY };
+      if (mascotDragRafId === null) mascotDragRafId = requestAnimationFrame(commitMascotDragPaint);
+    }
+
+    function endMascotGrab(e) {
+      if (mascotPointerId === null) return;
+      if (e && typeof e.pointerId === 'number' && e.pointerId !== mascotPointerId) return;
+      if (chatMascotEl) {
+        try { chatMascotEl.releasePointerCapture(mascotPointerId); } catch (err) {}
+      }
+      detachWindowMascotListeners();
+      mascotPointerId = null;
+      if (!chatMascotEl) return;
+
+      // Commit the final pointer sample so the throw matches the last on-screen position.
+      if (mascotPendingPointer && mascotPlayState === 'dragging') {
+        if (mascotDragRafId !== null) {
+          cancelAnimationFrame(mascotDragRafId);
+          mascotDragRafId = null;
+        }
+        commitMascotDragPaint();
+      } else {
+        cancelMascotDragFrame();
+      }
+      mascotDragField = null;
+
+      const wasDragging = mascotPlayState === 'dragging';
+      chatMascotEl.classList.remove('is-grabbed', 'is-dragging');
+      if (!wasDragging) {
+        if (isMascotFreeFloating()) {
+          mascotPlayState = 'resting';
+          chatMascotEl.classList.add('is-resting');
+          paintMascotFrame();
+          scheduleMascotReturnHome();
+        } else {
+          mascotPlayState = 'idle';
+        }
+        petMascot();
+        return;
+      }
+      throwMascot();
+    }
+
+    function cancelMascotGrab() {
+      if (chatMascotEl && mascotPointerId !== null) {
+        try { chatMascotEl.releasePointerCapture(mascotPointerId); } catch (err) {}
+      }
+      detachWindowMascotListeners();
+      stopLedgeRoam();
+      if (mascotPlayState !== 'grabbed' && mascotPlayState !== 'dragging') return;
+      const wasDragging = mascotPlayState === 'dragging';
+      cancelMascotDragFrame();
+      mascotDragField = null;
+      mascotPointerId = null;
+      if (!chatMascotEl) return;
+      chatMascotEl.classList.remove('is-grabbed', 'is-dragging');
+
+      const origin = mascotGrabOrigin;
+      mascotGrabOrigin = null;
+      const originParent = origin && origin.parent;
+      if (wasDragging && originParent && originParent !== MASCOT_LAYER && originParent.parentNode) {
+        mascotPlayState = 'idle';
+        hopMascotTo(originParent);
+        return;
+      }
+      if (wasDragging) {
+        mascotPlayState = 'resting';
+        chatMascotEl.classList.add('is-resting');
+        paintMascotFrame();
+        scheduleMascotReturnHome();
+        startLedgeRoam();
+        return;
+      }
+      mascotPlayState = 'idle';
+    }
+
+    function computeMascotThrowVelocity() {
+      const samples = mascotMoveSamples;
+      if (!samples.length) return { x: 0, y: 0 };
+      const now = Date.now();
+      const last = samples[samples.length - 1];
+
+      if (now - last.t > 80) {
+        return { x: 0, y: 0 };
+      }
+
+      let first = samples[0];
+      for (let i = samples.length - 1; i >= 0; i--) {
+        if (last.t - samples[i].t <= 120) {
+          first = samples[i];
+          break;
+        }
+      }
+      const dt = Math.max(16, last.t - first.t) / 1000;
+      return { x: (last.x - first.x) / dt, y: (last.y - first.y) / dt };
+    }
+
+    function throwMascot() {
+      if (!chatMascotEl) return;
+      const launch = computeMascotThrowVelocity();
+      mascotMoveSamples = [];
+      mascotBounceCount = 0;
+      const speed = Math.hypot(launch.x, launch.y);
+      const isGentleAirDrop = speed < 80;
+
+      if (prefersReducedMotion()) {
+        const field = getMascotPlayField();
+        mascotPos.y = field.groundY;
+        finishMascotRest();
+        return;
+      }
+
+      if (isGentleAirDrop) {
+        mascotVel.x = 0;
+        mascotVel.y = 40;
+        mascotPlayState = 'flying';
+        chatMascotEl.classList.add('is-flying', 'is-falling');
+        showMascotBubble(pickMascotRandom(['Wheee!', 'Whoa!', 'Down we go!', 'Catch me! ✨']), 1100);
+        startMascotPhysics();
+        return;
+      }
+
+      let vx = launch.x * MASCOT_PHYSICS.throwScale;
+      let vy = launch.y * MASCOT_PHYSICS.throwScale;
+      const throwSpeed = Math.hypot(vx, vy);
+      if (throwSpeed > MASCOT_PHYSICS.maxSpeed) {
+        const clamp = MASCOT_PHYSICS.maxSpeed / throwSpeed;
+        vx *= clamp;
+        vy *= clamp;
+      }
+      mascotVel.x = vx;
+      mascotVel.y = vy;
+
+      mascotPlayState = 'flying';
+      chatMascotEl.classList.add('is-flying');
+      if (throwSpeed > 600) {
+        showMascotBubble(pickMascotRandom(['Wheee!!', 'Woohoo!', 'Nyoom!', 'Boing!']), 1200);
+      }
+      startMascotPhysics();
+    }
+
+    function startMascotPhysics() {
+      if (mascotRafId !== null) return;
+      mascotLastFrameTs = 0;
+      mascotRafId = requestAnimationFrame(mascotPhysicsStep);
+    }
+
+    function mascotPhysicsStep(ts) {
+      mascotRafId = null;
+      if (!chatMascotEl || mascotPlayState !== 'flying') return;
+      if (!mascotLastFrameTs) mascotLastFrameTs = ts;
+      let dt = (ts - mascotLastFrameTs) / 1000;
+      mascotLastFrameTs = ts;
+      if (!(dt > 0)) dt = 1 / 60;
+      if (dt > 0.032) dt = 0.032;
+
+      const p = MASCOT_PHYSICS;
+      const field = getMascotPlayField();
+      const airDamp = Math.pow(Math.max(0.001, 1 - p.airDrag), dt * 60);
+      mascotVel.x *= airDamp;
+      mascotVel.y += p.gravity * dt;
+      mascotPos.x += mascotVel.x * dt;
+      mascotPos.y += mascotVel.y * dt;
+
+      let hitGround = false;
+      let impactVy = 0;
+
+      if (mascotPos.x <= field.minX) {
+        mascotPos.x = field.minX;
+        mascotVel.x = Math.abs(mascotVel.x) * p.wallBounce;
+        spawnMascotParticles('sparkle', field.minX + 4, mascotPos.y + MASCOT_SIZE / 2, 2);
+      } else if (mascotPos.x >= field.maxX) {
+        mascotPos.x = field.maxX;
+        mascotVel.x = -Math.abs(mascotVel.x) * p.wallBounce;
+        spawnMascotParticles('sparkle', field.maxX + MASCOT_SIZE - 4, mascotPos.y + MASCOT_SIZE / 2, 2);
+      }
+
+      if (mascotPos.y <= field.ceilingY) {
+        mascotPos.y = field.ceilingY;
+        mascotVel.y = Math.abs(mascotVel.y) * p.ceilingBounce;
+      }
+
+      if (mascotPos.y >= field.groundY) {
+        mascotPos.y = field.groundY;
+        hitGround = true;
+        impactVy = mascotVel.y;
+
+        if (mascotVel.y > 0) {
+          mascotBounceCount++;
+          if (mascotBounceCount >= 2 || mascotVel.y < 130) {
+            mascotVel.y = 0;
+          } else {
+            mascotVel.y = -mascotVel.y * 0.32;
+          }
+        }
+
+        mascotVel.x *= Math.pow(p.groundFriction, dt * 60);
+        if (Math.abs(mascotVel.x) < 14) mascotVel.x = 0;
+      }
+
+      updateMascotLean(mascotVel.x * 0.009);
+
+      if (hitGround && impactVy > 110) {
+        onMascotBounceImpact(impactVy, mascotBounceCount);
+      }
+
+      paintMascotFrame();
+
+      const speed = Math.hypot(mascotVel.x, mascotVel.y);
+      if (hitGround && mascotVel.y === 0 && speed < p.stopSpeed) {
+        finishMascotRest();
+        return;
+      }
+
+      mascotRafId = requestAnimationFrame(mascotPhysicsStep);
+    }
+
+    function onMascotBounceImpact(impactVy, bounceNum) {
+      if (!chatMascotEl || prefersReducedMotion()) return;
+      const centerX = mascotPos.x + MASCOT_SIZE / 2;
+      const feetY = mascotPos.y + MASCOT_SIZE - 2;
+
+      chatMascotEl.classList.remove('is-falling');
+
+      if (bounceNum === 1) {
+        flashMascotClass('is-landing', 220);
+        spawnMascotParticles('dust', centerX, feetY, impactVy > 600 ? 4 : 2);
+        showMascotBubble(pickMascotRandom(['Boing!', 'Ta-da!', 'Oof! 😄', 'Bounce!', 'Hehe!']), 900);
+      }
+
+      if (impactVy > MASCOT_PHYSICS.dizzySpeed) {
+        spawnMascotParticles('star', centerX, mascotPos.y, 4);
+        flashMascotClass('is-dizzy', 1400);
+        showMascotBubble('😵 Whoa...', 1200);
+      }
+    }
+
+    function finishMascotRest() {
+      stopMascotPhysics();
+      if (!chatMascotEl) return;
+      cancelMascotDragFrame();
+      mascotVel = { x: 0, y: 0 };
+      mascotLean = 0;
+      mascotBounceCount = 0;
+      chatMascotEl.classList.remove('is-flying', 'is-falling', 'is-bouncing', 'is-dizzy', 'is-zooming', 'is-crouch', 'is-landing');
+      mascotPlayState = 'resting';
+      chatMascotEl.classList.add('is-resting');
+      paintMascotFrame();
+
+      const centerX = mascotPos.x + MASCOT_SIZE / 2;
+      spawnMascotParticles('heart', centerX, mascotPos.y + 2, 3);
+      showMascotBubble(pickMascotRandom(['Ta-da! ✨', 'Safe landing! 🐾', 'Hehe! ✨', 'Resting here!']), 1800);
+
+      scheduleMascotReturnHome();
+      startLedgeRoam();
+    }
+
+    function stopLedgeRoam() {
+      if (mascotLedgeRoamTimer) {
+        clearTimeout(mascotLedgeRoamTimer);
+        mascotLedgeRoamTimer = null;
+      }
+      if (chatMascotEl) {
+        chatMascotEl.classList.remove('is-walking');
+        chatMascotEl.style.transition = '';
+      }
+    }
+
+    function startLedgeRoam() {
+      stopLedgeRoam();
+      if (!chatMascotEl || prefersReducedMotion() || mascotPlayState !== 'resting') return;
+      mascotLedgeRoamTimer = setTimeout(stepLedgeRoam, 2600 + Math.random() * 2200);
+    }
+
+    function stepLedgeRoam() {
+      mascotLedgeRoamTimer = null;
+      if (!chatMascotEl || mascotPlayState !== 'resting' || prefersReducedMotion()) return;
+      const field = getMascotPlayField();
+      const dir = Math.random() < 0.5 ? -1 : 1;
+      const stepDist = 12 + Math.random() * 16;
+      let nextX = mascotPos.x + dir * stepDist;
+      if (nextX < field.minX + 6) nextX = mascotPos.x + stepDist;
+      if (nextX > field.maxX - 6) nextX = mascotPos.x - stepDist;
+      nextX = Math.max(field.minX, Math.min(field.maxX, nextX));
+
+      chatMascotEl.classList.add('is-walking');
+      chatMascotEl.style.transition = 'transform 0.45s ease-out';
+      mascotPos.x = nextX;
+      paintMascotFrame();
+
+      setTimeout(() => {
+        if (!chatMascotEl) return;
+        chatMascotEl.classList.remove('is-walking');
+        chatMascotEl.style.transition = '';
+        if (mascotPlayState === 'resting') {
+          mascotLedgeRoamTimer = setTimeout(stepLedgeRoam, 3200 + Math.random() * 2600);
+        }
+      }, 460);
+    }
+
+    function mascotJump(scale, lateral, silent) {
+      if (!chatMascotEl || chatMascotEl.classList.contains('hidden')) return;
+      if (mascotPlayState === 'grabbed' || mascotPlayState === 'dragging' || mascotPlayState === 'flying') return;
+
+      if (prefersReducedMotion()) {
+        if (!silent) showMascotBubble(pickMascotRandom(['Hop!', 'Yip!']), 900);
+        return;
+      }
+
+      stopLedgeRoam();
+
+      if (!isMascotFreeFloating()) {
+        const rect = chatMascotEl.getBoundingClientRect();
+        if (!parkMascotInLayer(rect.left, rect.top)) return;
+        isMascotRoaming = false;
+        isMascotOnTurn = false;
+        cancelMascotHomeTimer();
+      }
+      chatMascotEl.classList.remove('is-sleeping', 'is-peeking', 'is-walking', 'is-resting', 'is-dizzy');
+      lastMascotActivityTime = Date.now();
+
+      const power = typeof scale === 'number' ? scale : 1;
+      const side = typeof lateral === 'number' ? lateral : (Math.random() < 0.5 ? -1 : 1) * 30;
+
+      flashMascotClass('is-crouch', 130);
+      if (!silent) showMascotBubble(pickMascotRandom(['Hop!', 'Wheee!', 'Yip!', 'Boing!']), 900);
+
+      setTimeout(() => {
+        if (!chatMascotEl || mascotPlayState === 'grabbed' || mascotPlayState === 'dragging') return;
+        chatMascotEl.classList.remove('is-crouch', 'is-resting');
+        mascotPlayState = 'flying';
+        chatMascotEl.classList.add('is-flying');
+        mascotVel.x = side;
+        mascotVel.y = -MASCOT_PHYSICS.jumpImpulse * power;
+        startMascotPhysics();
+      }, 120);
+    }
+
+    function nudgeMascot(dx) {
+      if (!chatMascotEl || mascotPlayState === 'grabbed' || mascotPlayState === 'dragging' || mascotPlayState === 'flying') return;
+      if (prefersReducedMotion()) return;
+      const rect = chatMascotEl.getBoundingClientRect();
+      const field = getMascotPlayField();
+      const nx = Math.max(field.minX, Math.min(field.maxX, rect.left + dx));
+      if (!parkMascotInLayer(nx, rect.top)) return;
+      stopMascotPhysics();
+      stopLedgeRoam();
+      cancelMascotHomeTimer();
+      isMascotRoaming = false;
+      isMascotOnTurn = false;
+      mascotPlayState = 'resting';
+      chatMascotEl.classList.remove('is-flying', 'is-dizzy', 'is-sleeping', 'is-peeking', 'is-walking');
+      chatMascotEl.classList.add('is-resting');
+      paintMascotFrame();
+      flashMascotClass('is-walking', 420);
+      lastMascotActivityTime = Date.now();
+      scheduleMascotReturnHome();
+      startLedgeRoam();
+    }
+
+    function mascotZoomies() {
+      if (!chatMascotEl || chatMascotEl.classList.contains('hidden')) return;
+      if (mascotPlayState === 'grabbed' || mascotPlayState === 'dragging') return;
+
+      if (prefersReducedMotion()) {
+        showMascotBubble(pickMascotRandom(['Zoomies!', 'Ta-da!']), 1200);
+        return;
+      }
+
+      stopLedgeRoam();
+
+      if (!isMascotFreeFloating()) {
+        const rect = chatMascotEl.getBoundingClientRect();
+        if (!parkMascotInLayer(rect.left, rect.top)) return;
+        isMascotRoaming = false;
+        isMascotOnTurn = false;
+      }
+
+      const field = getMascotPlayField();
+      stopMascotPhysics();
+      cancelMascotHomeTimer();
+      chatMascotEl.classList.remove('is-sleeping', 'is-peeking', 'is-resting', 'is-dizzy', 'is-crouch');
+      mascotPlayState = 'flying';
+      chatMascotEl.classList.add('is-flying');
+      const dir = mascotPos.x > field.width / 2 ? -1 : 1;
+      mascotVel.x = dir * 900;
+      mascotVel.y = -280;
+      flashMascotClass('is-zooming', 900);
+      spawnMascotParticles('sparkle', mascotPos.x + MASCOT_SIZE / 2, mascotPos.y + MASCOT_SIZE - 4, 5);
+      showMascotBubble(pickMascotRandom(['Zoomies!', 'Weeee!', '⚡⚡', 'Ta-da!']), 1400);
+      lastMascotActivityTime = Date.now();
+      startMascotPhysics();
+    }
+
+    function recallMascotHome(playful) {
+      stopLedgeRoam();
+      cancelMascotHomeTimer();
+      stopMascotPhysics();
+      cancelMascotDragFrame();
+      if (!chatMascotEl) return;
+      const wasFloating = isMascotFreeFloating();
+      mascotPlayState = 'idle';
+      mascotVel = { x: 0, y: 0 };
+      mascotLean = 0;
+      mascotDragField = null;
+      mascotMoveSamples = [];
+      mascotGrabOrigin = null;
+      mascotBounceCount = 0;
+      chatMascotEl.classList.remove('is-flying', 'is-falling', 'is-bouncing', 'is-resting', 'is-dizzy', 'is-zooming', 'is-crouch', 'is-landing', 'is-grabbed', 'is-dragging', 'is-sleeping', 'is-peeking');
+      isMascotOnTurn = false;
+      isMascotRoaming = false;
+
+      const homeSlot = document.getElementById('chat-mascot-home-slot');
+      if (!homeSlot) return;
+      if (chatMascotEl.parentElement === homeSlot) {
+        clearMascotFreeStyles();
+        return;
+      }
+      if (playful && wasFloating) showMascotBubble('🏠 Back home!', 1300);
+      hopMascotTo(homeSlot);
+    }
+
+    function clampMascotToField() {
+      if (!chatMascotEl || !isMascotFreeFloating()) return;
+      if (mascotPlayState === 'flying' || mascotPlayState === 'dragging') return;
+      const field = getMascotPlayField();
+      mascotPos.x = Math.max(field.minX, Math.min(field.maxX, mascotPos.x));
+      mascotPos.y = Math.max(field.ceilingY, Math.min(field.groundY, mascotPos.y));
+      paintMascotFrame();
+    }
+
+    function attachMascotPlayPhysics() {
+      if (!chatMascotEl) return;
+
+      chatMascotEl.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        beginMascotGrab(e);
+      });
+      chatMascotEl.addEventListener('pointermove', (e) => {
+        updateMascotGrab(e);
+      });
+      chatMascotEl.addEventListener('pointerup', (e) => {
+        e.stopPropagation();
+        endMascotGrab(e);
+      });
+      chatMascotEl.addEventListener('pointercancel', () => {
+        cancelMascotGrab();
+      });
+      chatMascotEl.addEventListener('lostpointercapture', () => {
+        if (mascotPointerId === null) cancelMascotGrab();
+      });
+      chatMascotEl.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        mascotJump();
+      });
+      chatMascotEl.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        recallMascotHome(true);
+      });
+      chatMascotEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          petMascot();
+        } else if (e.key === ' ' || e.key === 'Spacebar') {
+          e.preventDefault();
+          mascotJump();
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          nudgeMascot(-16);
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          nudgeMascot(16);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          cancelMascotGrab();
+        }
+      });
+
+      window.addEventListener('blur', () => {
+        if (mascotPlayState === 'grabbed' || mascotPlayState === 'dragging') endMascotGrab();
+      });
+      window.addEventListener('focus', () => {
+        mascotLastFrameTs = 0;
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+          if (mascotPlayState === 'grabbed' || mascotPlayState === 'dragging') endMascotGrab();
+        } else {
+          mascotLastFrameTs = 0;
+        }
+      });
+      window.addEventListener('resize', () => {
+        mascotFieldCache = null;
+        mascotDragField = null;
+        clampMascotToField();
+      });
     }
 
     function updateOnboardingVisibility() {
@@ -3812,10 +4669,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
 
         let statsHtml = '';
-        if (stat) {
+        if (stat && (stat.additions > 0 || stat.deletions > 0)) {
           if (stat.additions > 0) statsHtml += '<span class="files-stat-add">+' + stat.additions + '</span>';
           if (stat.deletions > 0) statsHtml += '<span class="files-stat-del">-' + stat.deletions + '</span>';
-          if (stat.additions === 0 && stat.deletions === 0) statsHtml += '<span class="chip-diff-label">Diff</span>';
+          statsHtml += '<span class="chip-diff-label" style="margin-left:4px;">Diff</span>';
         } else {
           statsHtml = '<span class="chip-diff-label">Diff</span>';
         }
@@ -3958,7 +4815,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   let html = '';
                   if (s.additions > 0) html += '<span class="files-stat-add">+' + s.additions + '</span>';
                   if (s.deletions > 0) html += '<span class="files-stat-del">-' + s.deletions + '</span>';
-                  if (s.additions === 0 && s.deletions === 0) html += '<span class="chip-diff-label">Diff</span>';
+                  if (s.additions > 0 || s.deletions > 0) {
+                    html += '<span class="chip-diff-label" style="margin-left:4px;">Diff</span>';
+                  } else {
+                    html += '<span class="chip-diff-label">Diff</span>';
+                  }
                   if (html) statsEl.innerHTML = html;
                 }
               }
@@ -4284,20 +5145,30 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     const toolName = fn.name || 'tool';
                     const toolArgs = fn.arguments || '';
 
-                    // ONLY track actual mutating tools for DIFF chips!
                     const isWriteTool = /^(write_file|write_to_file|edit_file|edit_file_multi|multi_replace_file_content|replace_file_content|patch_file|create_file|delete_file|move_file|rename_file|save_file)$/.test(toolName);
                     if (isWriteTool) {
                       try {
                         const parsedArgs = JSON.parse(toolArgs);
-                        const p = parsedArgs.path || parsedArgs.target_path || parsedArgs.target_file || parsedArgs.file_path;
+                        const p = parsedArgs.path || parsedArgs.target_path || parsedArgs.target_file || parsedArgs.file_path || parsedArgs.TargetFile;
                         if (p) turnEditedFilesForLoad.add(p);
                         if (Array.isArray(parsedArgs.edits)) {
                           for (const e of parsedArgs.edits) {
-                            const ep = e.path || e.target_path || e.file_path;
+                            const ep = e.path || e.target_path || e.file_path || e.TargetFile;
                             if (ep) turnEditedFilesForLoad.add(ep);
                           }
                         }
                       } catch {}
+                      if (typeof window.parseFileEditStats === 'function') {
+                        const es = window.parseFileEditStats(toolName, toolArgs);
+                        if (es && es.filePath) {
+                          const nKey = es.filePath.replace(/\\\\/g, '/').trim();
+                          if (!globalDiffStats[nKey]) {
+                            globalDiffStats[nKey] = { additions: 0, deletions: 0 };
+                          }
+                          globalDiffStats[nKey].additions += (es.additions || 0);
+                          globalDiffStats[nKey].deletions += (es.deletions || 0);
+                        }
+                      }
                     }
 
                     var renderedActivity = null;
@@ -4734,11 +5605,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   if (p) turnEditedFiles.add(p);
                   if (Array.isArray(parsed.edits)) {
                     for (const e of parsed.edits) {
-                      const ep = e.path || e.target_path || e.file_path;
+                      const ep = e.path || e.target_path || e.file_path || e.TargetFile;
                       if (ep) turnEditedFiles.add(ep);
                     }
                   }
                 } catch {}
+                if (typeof window.parseFileEditStats === 'function') {
+                  const es = window.parseFileEditStats(toolName, rawArgs);
+                  if (es && es.filePath) {
+                    const nKey = es.filePath.replace(/\\\\/g, '/').trim();
+                    if (!globalDiffStats[nKey]) {
+                      globalDiffStats[nKey] = { additions: 0, deletions: 0 };
+                    }
+                    globalDiffStats[nKey].additions += (es.additions || 0);
+                    globalDiffStats[nKey].deletions += (es.deletions || 0);
+                  }
+                }
               }
 
               let activityEl = null;
@@ -5191,28 +6073,25 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
 
         case 'external_prompt': {
-          // Sent by extension commands: Explain Code, Ask About Selection, Generate Tests
           const extPrompt = msg.prompt || '';
           const extCtx = msg.context || null;
           if (!extPrompt) break;
 
-          // Focus the chat view and make sure chat is visible
           hideZeroState();
 
-          // Build user message with context snippet if provided
           let fullUserMsg = extPrompt;
-          if (extCtx && extCtx.selectedText) {
+          const codeSnippet = extCtx ? (extCtx.selectedText || extCtx.fileText) : null;
+          if (codeSnippet) {
             const lang = extCtx.languageId || '';
             const filePath = extCtx.relativePath || extCtx.filePath || '';
-            const lineInfo = extCtx.selectionRange
+            const lineInfo = extCtx.selectedText && extCtx.selectionRange
               ? ' (lines ' + extCtx.selectionRange.startLine + '-' + extCtx.selectionRange.endLine + ')'
-              : '';
+              : (extCtx.selectedText ? '' : ' (entire file)');
             const bt = String.fromCharCode(96); const fence = bt+bt+bt;
             const nl = String.fromCharCode(10);
-            fullUserMsg = extPrompt + nl + nl + fence + lang + (filePath ? '  // ' + filePath + lineInfo : '') + nl + extCtx.selectedText + nl + fence;
+            fullUserMsg = extPrompt + nl + nl + fence + lang + (filePath ? '  // ' + filePath + lineInfo : '') + nl + codeSnippet + nl + fence;
           }
 
-          // Cleanly send via dispatchPrompt (creates UI bubbles, starts turn loader, and sends send_prompt RPC)
           if (promptInput) promptInput.value = '';
           dispatchPrompt(fullUserMsg, false, []);
           break;

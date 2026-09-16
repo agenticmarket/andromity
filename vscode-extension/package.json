@@ -20,15 +20,17 @@
     }
   },
   "categories": [
-    "AI",
-    "Chat",
     "Programming Languages",
+    "Machine Learning",
     "Testing",
-    "Snippets"
+    "Snippets",
+    "Education"
   ],
   "keywords": [
-    "gpt6",
-    "astra",
+    "waterfall",
+    "jupyter",
+    "notebook",
+    "cursor",
     "ai agent",
     "coding agent",
     "copilot",
@@ -42,14 +44,11 @@
     "multi agent",
     "subagents",
     "local ai",
-    "cursor",
     "model context protocol",
     "task planner",
-    "groq",
     "openrouter",
     "pair programming",
-    "unit tests",
-    "language-models"
+    "unit tests"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -200,9 +199,12 @@
       },
       {
         "command": "andromity.openWaterfall",
-        "title": "Open Live Execution Waterfall",
+        "title": "🌊 Waterfall",
         "category": "Andromity",
-        "icon": "$(pulse)"
+        "icon": {
+          "light": "media/waterfall.svg",
+          "dark": "media/waterfall.svg"
+        }
       },
       {
         "command": "andromity.deleteSession",
@@ -215,6 +217,24 @@
         "title": "Welcome / Getting Started",
         "category": "Andromity",
         "icon": "$(rocket)"
+      },
+      {
+        "command": "andromity.fixNotebookCell",
+        "title": "Fix Cell Error with Andromity",
+        "category": "Andromity",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "andromity.explainNotebookCell",
+        "title": "Explain Notebook Cell",
+        "category": "Andromity",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "andromity.fixTerminalError",
+        "title": "Fix Terminal Error with Andromity",
+        "category": "Andromity",
+        "icon": "$(tools)"
       }
     ],
     "keybindings": [
@@ -317,7 +337,36 @@
         {
           "command": "andromity.openChat",
           "group": "navigation@1",
-          "when": "!editorReadonly"
+          "when": "!andromity.isAgentRunning && !editorReadonly"
+        },
+        {
+          "command": "andromity.openWaterfall",
+          "group": "navigation@1",
+          "when": "andromity.isAgentRunning && !editorReadonly"
+        }
+      ],
+      "notebook/cell/title": [
+        {
+          "command": "andromity.fixNotebookCell",
+          "group": "inline@1",
+          "when": "notebookCellType == code"
+        },
+        {
+          "command": "andromity.explainNotebookCell",
+          "group": "inline@2",
+          "when": "notebookCellType == code"
+        }
+      ],
+      "terminal/context": [
+        {
+          "command": "andromity.fixTerminalError",
+          "group": "navigation@1"
+        }
+      ],
+      "terminal/title/context": [
+        {
+          "command": "andromity.fixTerminalError",
+          "group": "1_actions"
         }
       ],
       "explorer/context": [

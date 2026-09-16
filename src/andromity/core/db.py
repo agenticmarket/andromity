@@ -182,7 +182,19 @@ def transaction(conn: Optional[sqlite3.Connection] = None) -> Generator[sqlite3.
         yield connection
         return
 
-    connection.execute("BEGIN IMMEDIATE;")
+    # Retry BEGIN IMMEDIATE with backoff if another thread is momentarily finishing a write
+    import time
+    for attempt in range(15):
+        try:
+            connection.execute("BEGIN IMMEDIATE;")
+            break
+        except sqlite3.OperationalError as e:
+            err_msg = str(e).lower()
+            if ("locked" in err_msg or "busy" in err_msg) and attempt < 14:
+                time.sleep(0.01 * (attempt + 1))
+            else:
+                raise
+
     try:
         yield connection
         connection.execute("COMMIT;")

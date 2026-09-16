@@ -26,6 +26,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _pythonBridge: PythonBridge | null = null;
   private _diffManager: DiffManager | null = null;
   private _currentSessionId: string = "";
+  private _isExecuting: boolean = false;
+  private _runningSessions: Set<string> = new Set<string>();
+  private _sessionNames: Map<string, string> = new Map<string, string>();
   private _currentProfile: string = "builder";
   private _currentModel: string = "claude-sonnet-4-6";
   private _currentProvider: string = "anthropic";
@@ -151,6 +154,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this._rpcDisposables = [];
     this._boundClient = null;
+    this._isExecuting = false;
+    this._runningSessions.clear();
+    void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+  }
+
+  public isSessionRunning(sessionId?: string): boolean {
+    const sid = sessionId || this._currentSessionId;
+    if (!sid) return this._isExecuting;
+    return this._runningSessions.has(sid) || (sid === this._currentSessionId && this._isExecuting);
   }
 
   public async showGitDiff(): Promise<void> {
@@ -206,6 +218,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         project_path: workspaceFolder,
         include_subagents: true,
       }).catch(() => []) || [];
+      for (const s of sessions) {
+        if (s.id && s.name) {
+          this._sessionNames.set(s.id, s.name);
+        }
+        if (s.status === "running") {
+          this._runningSessions.add(s.id);
+        }
+      }
       this._postToWebview({
         type: "sessions_data",
         sessions,
@@ -255,7 +275,76 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  public async sendPromptFromExternal(prompt: string, context?: any) {
+  public async sendPromptFromExternal(
+    prompt: string,
+    context?: any,
+    options?: { taskName?: string; forceNewSession?: boolean; forkSessionIfBusy?: boolean }
+  ) {
+    if (!this._view) {
+      await vscode.commands.executeCommand("andromity.chatView.focus");
+      for (let i = 0; i < 20 && !this._view; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+
+    const forkIfBusy = options?.forkSessionIfBusy ?? true;
+    const isBusy = this.isSessionRunning(this._currentSessionId);
+    const shouldFork = Boolean(options?.forceNewSession || (forkIfBusy && isBusy));
+
+    if (shouldFork && this._rpcClient) {
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const taskTitle = options?.taskName || (
+        prompt.length > 28 ? `${prompt.slice(0, 25).trim()}...` : prompt.trim()
+      );
+      const previousSessionId = this._currentSessionId;
+
+      try {
+        const newSess = await this._rpcClient.call<SessionInfo>("session.create", {
+          name: taskTitle,
+          project_path: workspaceFolder,
+        });
+
+        if (newSess?.id) {
+          this._sessionNames.set(newSess.id, newSess.name || taskTitle);
+          this._currentSessionId = newSess.id;
+          this._persistLastActiveSession(newSess.id);
+
+          if (this._view) {
+            this._view.show?.(true);
+            this._view.webview.postMessage({ type: "session_switched", sessionId: newSess.id });
+            await this._loadSession(newSess.id);
+          }
+
+          void this.fetchAndPostSessions();
+          void vscode.commands.executeCommand("andromity.refreshSessions");
+
+          if (isBusy) {
+            const prevName = this._sessionNames.get(previousSessionId) || "Previous Task";
+            vscode.window.showInformationMessage(
+              `Active session ("${prevName}") is currently running. Started "${taskTitle}" in a parallel session so your work is not interrupted.`,
+              "View Previous Session"
+            ).then((choice) => {
+              if (choice === "View Previous Session" && previousSessionId) {
+                this.setCurrentSessionId(previousSessionId);
+              }
+            });
+          }
+
+          if (this._view) {
+            this._view.webview.postMessage({
+              type: "external_prompt",
+              prompt,
+              context,
+            });
+          }
+          return;
+        }
+      } catch (err: any) {
+        console.warn("[Andromity] Failed to create parallel session, falling back to active session:", err);
+      }
+    }
+
+    // Default / Idle path: Reuse active session so conversation history & context are preserved!
     if (this._view) {
       this._view.show?.(true);
       this._view.webview.postMessage({
@@ -458,18 +547,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
 
     bind("agent/started", (params: any) => {
-      this._postToWebview({ type: "agent_started", ...params });
       const sid = params?.session_id || this._currentSessionId;
+      if (sid) {
+        this._runningSessions.add(sid);
+      }
+      if (!sid || sid === this._currentSessionId) {
+        this._isExecuting = true;
+      }
+      void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", true);
+      this._postToWebview({ type: "agent_started", ...params });
       if (sid && this._context) {
-        const alreadyShown = this._context.globalState.get<boolean>("andromity.waterfallFirstSessionShown", false);
-        if (!alreadyShown) {
+        // Auto-open live Waterfall in an editor tab for the user's first 3 agent sessions
+        const autoOpenCount = this._context.globalState.get<number>("andromity.waterfallAutoOpenCount", 0);
+        if (autoOpenCount < 3) {
+          void this._context.globalState.update("andromity.waterfallAutoOpenCount", autoOpenCount + 1);
           void this._context.globalState.update("andromity.waterfallFirstSessionShown", true);
           WaterfallPanel.createOrShow(
             this._extensionUri,
             sid,
             "Live Session",
             this._rpcClient,
-            this._context
+            this._context,
+            vscode.ViewColumn.Active
           );
           this._postToWebview({ type: "dismiss_waterfall_callout" });
         }
@@ -547,6 +646,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
 
     bind("session/updated", (params: any) => {
+      if (params.session_id && params.name) {
+        this._sessionNames.set(params.session_id, params.name);
+      }
       this._postToWebview({
         type: "session_updated",
         session_id: params.session_id,
@@ -624,20 +726,61 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
 
     bind("agent/done", (params: any) => {
+      const sid = params?.session_id || this._currentSessionId;
+      if (sid) {
+        this._runningSessions.delete(sid);
+      }
+      if (!sid || sid === this._currentSessionId) {
+        this._isExecuting = false;
+      }
+      if (this._runningSessions.size === 0) {
+        void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+      }
       this._postToWebview({ type: "agent_done", ...params });
       const cfg = vscode.workspace.getConfiguration("andromity");
       if (cfg.get<boolean>("soundNotifications", true)) {
         this._postToWebview({ type: "play_sound", kind: "done" });
       }
-      // Files may have changed -- refresh the Changes view and session stats.
       vscode.commands.executeCommand("andromity.refreshChanges");
+
+      if (sid && sid !== this._currentSessionId) {
+        const name = this._sessionNames.get(sid) || "Parallel Task";
+        vscode.window.showInformationMessage(
+          `Parallel task completed in session "${name}".`,
+          "Switch to Session"
+        ).then((choice) => {
+          if (choice === "Switch to Session") {
+            this.setCurrentSessionId(sid);
+          }
+        });
+      }
     });
 
     bind("agent/cancelled", (params: any) => {
+      const sid = params?.session_id || this._currentSessionId;
+      if (sid) {
+        this._runningSessions.delete(sid);
+      }
+      if (!sid || sid === this._currentSessionId) {
+        this._isExecuting = false;
+      }
+      if (this._runningSessions.size === 0) {
+        void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+      }
       this._postToWebview({ type: "agent_cancelled", ...params });
     });
 
     bind("agent/error", (params: any) => {
+      const sid = params?.session_id || this._currentSessionId;
+      if (sid) {
+        this._runningSessions.delete(sid);
+      }
+      if (!sid || sid === this._currentSessionId) {
+        this._isExecuting = false;
+      }
+      if (this._runningSessions.size === 0) {
+        void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+      }
       this._postToWebview({ type: "agent_error", ...params });
     });
 
@@ -797,6 +940,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         session_id: sessionId,
         project_path: workspaceFolder,
       });
+      if (sessionData?.name) {
+        this._sessionNames.set(sessionId, sessionData.name);
+      }
       if (sessionData && sessionData.plan && sessionData.plan.steps && sessionData.plan.steps.length > 0) {
         this._currentPlan = sessionData.plan;
       } else {
@@ -940,8 +1086,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
 
           const cleanModel = (message.model || this._currentModel || "").replace(/^~+/, "");
+          const activeSid = targetSessionId || this._currentSessionId;
+          if (activeSid) {
+            this._runningSessions.add(activeSid);
+            if (activeSid === this._currentSessionId) {
+              this._isExecuting = true;
+            }
+            void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", true);
+          }
           await this._rpcClient.call("agent.prompt", {
-            session_id: targetSessionId || this._currentSessionId,
+            session_id: activeSid,
             prompt: promptText,
             project_path: workspaceFolder,
             profile: message.profile || this._currentProfile,
@@ -952,15 +1106,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             image_uris: message.images || [],
           }, 120000);
         } catch (err: any) {
+          const activeSid = message.sessionId || this._currentSessionId;
           const msg = err.message || String(err);
           if (msg.includes("already running a turn") || msg.includes("-32603") || msg.includes("AGENT_BUSY")) {
             vscode.window.showInformationMessage("Agent is still working on the previous turn. Your message was queued and will send automatically when it finishes.");
             this._postToWebview({ type: "agent_busy", error: msg, queuedPrompt: promptText });
           } else if (msg.includes("RPC timeout")) {
-            // Server actually started but ACK timed out -- keep turn alive, wait for streaming notifications
             vscode.window.showWarningMessage("Agent started but confirmation timed out. Streaming will continue -- check the chat for progress. If stuck, use Cancel.");
             this._postToWebview({ type: "agent_started", session_id: this._currentSessionId });
           } else {
+            if (activeSid) {
+              this._runningSessions.delete(activeSid);
+              if (activeSid === this._currentSessionId) {
+                this._isExecuting = false;
+              }
+              if (this._runningSessions.size === 0) {
+                void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+              }
+            }
             vscode.window.showErrorMessage(`Failed to send prompt: ${msg}`);
             this._postToWebview({ type: "agent_error", error: msg });
           }
@@ -1205,13 +1368,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "cancel_turn": {
         const targetSessionId = message.sessionId || this._currentSessionId;
+        if (targetSessionId) {
+          this._runningSessions.delete(targetSessionId);
+          if (targetSessionId === this._currentSessionId) {
+            this._isExecuting = false;
+          }
+          if (this._runningSessions.size === 0) {
+            void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+          }
+        }
         try {
           await this._rpcClient.call("agent.cancel", {
             session_id: targetSessionId,
           });
         } catch (e: any) {
           console.warn("[Andromity] cancel_turn RPC failed:", e?.message || e);
-          // Still notify webview so fallback can trigger even if daemon is slow/dead
           this._postToWebview({ type: "agent_cancelled", session_id: targetSessionId });
         }
         break;

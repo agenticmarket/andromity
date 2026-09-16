@@ -5,6 +5,7 @@ export interface EditorContext {
   relativePath?: string;
   languageId?: string;
   selectedText?: string;
+  fileText?: string;
   selectionRange?: { startLine: number; endLine: number };
   diagnostics?: Array<{
     line: number;
@@ -40,11 +41,15 @@ export class EditorBridge {
           : ("info" as const),
     }));
 
+    const fullText = doc.getText();
+    const fileText = fullText.length > 50000 ? fullText.slice(0, 50000) : fullText;
+
     return {
       filePath: doc.fileName,
       relativePath,
       languageId: doc.languageId,
       selectedText,
+      fileText,
       selectionRange: !selection.isEmpty
         ? {
             startLine: selection.start.line + 1,
