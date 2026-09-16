@@ -32,24 +32,26 @@ from andromity.tui.markup_utils import escape_textual as escape
 
 
 def parse_quick_add(text: str) -> tuple[str, str]:
-    """Parse 'every 30m: run pytest and report' -> (schedule, prompt)."""
     text = text.strip()
-    if ":" not in text:
-        raise ValueError("Use 'schedule: prompt' — e.g. every 30m: run pytest")
-    schedule, prompt = text.split(":", 1)
-    schedule = schedule.strip().lower()
-    prompt = prompt.strip()
+    if ": " in text:
+        parts = text.rsplit(": ", 1)
+        schedule, prompt = parts[0].strip().lower(), parts[1].strip()
+    elif ":" in text:
+        schedule, prompt = text.split(":", 1)
+        schedule = schedule.strip().lower()
+        prompt = prompt.strip()
+    else:
+        raise ValueError("Use 'schedule: prompt' — e.g. every 30m: run pytest or daily at 09:00: run tests")
     if not prompt:
         raise ValueError("Prompt is empty after the ':'")
-    parse_interval_seconds(schedule)  # raises with a clear message if invalid
+    parse_interval_seconds(schedule)
     return schedule, prompt
 
 
-# Ready-made recipes — click to fill the add form.
 TEMPLATES = {
     "tpl-tests":   {"name": "Run Tests",     "prompt": "Run the project test suite and report any failures or regressions.", "schedule": "every 30m", "mode": "trust"},
     "tpl-backup":  {"name": "Daily Backup",  "prompt": "Back up the project files and verify the backup completed.", "schedule": "every 1d", "mode": "safe"},
-    "tpl-summary": {"name": "Daily Summary", "prompt": "Summarize what changed in this repository today.", "schedule": "every 1d", "mode": "safe"},
+    "tpl-summary": {"name": "Daily Summary", "prompt": "Summarize what changed in this repository today.", "schedule": "daily at 18:00", "mode": "safe"},
     "tpl-todo":    {"name": "Watch TODO",    "prompt": "Scan for new TODO/FIXME comments and report them.", "schedule": "every 1h", "mode": "safe"},
 }
 
@@ -390,7 +392,7 @@ CronManagerOverlay {
                         yield Static("Prompt:", id="lbl-prompt")
                         yield Input(placeholder="e.g. run pytest and report", id="cf-prompt")
                         yield Static("Schedule:", id="lbl-schedule")
-                        yield Input(placeholder="every 30m / every 2h / every 1d", id="cf-schedule")
+                        yield Input(placeholder="every 30m / daily at 09:00 / 0 9 * * *", id="cf-schedule")
                         yield Static("", id="cf-schedule-hint")
                         yield Static("Mode:", id="lbl-mode")
                         yield Input(placeholder="safe / trust / yolo", id="cf-mode", value="trust")
@@ -685,6 +687,19 @@ CronManagerOverlay {
         hint = self.query_one("#cf-schedule-hint", Static)
         if not value:
             hint.update("")
+            return
+        from andromity.core.cron import parse_daily_time, parse_exact_datetime, is_cron_expression
+        daily = parse_daily_time(value)
+        if daily:
+            h, m = daily
+            hint.update(f"[green]✓ runs daily at {h:02d}:{m:02d}[/]")
+            return
+        exact = parse_exact_datetime(value)
+        if exact:
+            hint.update(f"[green]✓ runs once at {exact.strftime('%Y-%m-%d %H:%M UTC')}[/]")
+            return
+        if is_cron_expression(value):
+            hint.update(f"[green]✓ cron expression '{value}'[/]")
             return
         try:
             secs = parse_interval_seconds(value)
