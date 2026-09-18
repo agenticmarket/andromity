@@ -4540,18 +4540,29 @@ export function getChatStyles(): string {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      background: rgba(56, 189, 248, 0.1);
-      border: 1px solid rgba(56, 189, 248, 0.25);
+      background: rgba(56, 189, 248, 0.08);
+      border: 1px solid rgba(56, 189, 248, 0.22);
       color: var(--chip-color, #38bdf8);
       font-size: 11px;
       font-weight: 500;
       padding: 2.5px 8px;
       border-radius: 6px;
       user-select: none;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .user-file-chip:hover {
+      background: rgba(56, 189, 248, 0.16);
+      border-color: rgba(56, 189, 248, 0.42);
+      transform: translateY(-1px);
     }
     .user-file-chip .chip-icon {
       font-size: 11px;
       line-height: 1;
+    }
+    .user-file-chip .chip-line {
+      opacity: 0.7;
+      font-size: 10px;
     }
 
     /* Prompt Drag & Drop Bar (Above Textarea) */

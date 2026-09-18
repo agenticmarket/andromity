@@ -3351,6 +3351,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'open-diff':
           vscode.postMessage({ type: 'open_review_tab' });
           break;
+        case 'remove-attached-file': {
+          const idx = parseInt(target.getAttribute('data-idx') || '0', 10);
+          removeAttachedFile(idx);
+          break;
+        }
+        case 'dismiss-ollama-banner': {
+          const b = document.getElementById('ollama-detected-banner');
+          if (b) b.remove();
+          break;
+        }
         case 'toggle-more-files': {
           e.stopPropagation();
           const card = target.closest('.files-changed-card');
@@ -4635,8 +4645,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           const badgeInfo = getFileIconBadge(f.name || f.path);
           const chip = document.createElement('span');
           chip.className = 'user-file-chip';
+          chip.setAttribute('data-action', 'open-file');
+          chip.setAttribute('data-file-path', f.path || f.name);
+          if (f.line) {
+            chip.setAttribute('data-line', String(f.line));
+          }
           chip.style.setProperty('--chip-color', badgeInfo.color);
-          chip.title = f.path || f.name;
+          chip.title = (f.path || f.name) + (f.line ? ' (Line ' + f.line + ')' : '') + ' · Click to open file';
 
           const iconSpan = document.createElement('span');
           iconSpan.className = 'chip-icon';

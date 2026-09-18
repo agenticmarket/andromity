@@ -1012,6 +1012,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       // only loaded on demand when the Plan tab is opened.
 
       const detectedOllama = await this._checkAndAutoConnectOllama(this._providers);
+      if (detectedOllama) {
+        const existingOllamaModel = (this._models || []).find((m) => m.id === detectedOllama || m.name === detectedOllama);
+        if (!existingOllamaModel) {
+          this._models.push({
+            id: detectedOllama,
+            name: detectedOllama,
+            provider: "ollama",
+            desc: "Local Ollama Model",
+            is_free: true,
+            tags: ["local", "coding"],
+          } as any);
+        }
+      }
 
       this._postToWebview({
         type: "init_state",
