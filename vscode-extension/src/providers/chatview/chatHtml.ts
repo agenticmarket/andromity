@@ -235,6 +235,7 @@ ${styles}
     <div class="flyout-list" id="flyout-list"></div>
   </div>
 
+
   <!-- Trust Banner (shown if workspace not trusted) -->
   <div class="trust-banner" id="trust-banner" style="display:none;">
     <div class="trust-banner-header">
@@ -319,9 +320,9 @@ ${styles}
             <img class="zero-logo-img" src="${sidebarIconUri}" width="34" height="34" alt="Andromity" />
           </div>
           <div class="onboarding-title-wrap">
-            <div class="onboarding-step-pill">
+            <div class="onboarding-step-pill" id="onboarding-step-pill">
               <span class="step-dot"></span>
-              <span>Step 1 of 2 · Quick Setup</span>
+              <span id="onboarding-step-text">Step 1 of 2 · Quick Setup</span>
             </div>
             <h1 class="onboarding-title">Welcome to Andromity</h1>
             <p class="onboarding-subtitle">Connect your favorite AI provider to begin coding autonomously.</p>
@@ -329,87 +330,116 @@ ${styles}
         </div>
 
         <div class="onboarding-card">
-          <div class="onboarding-card-header">
-            <span class="onboarding-label">1. Choose AI Provider</span>
-            <span class="onboarding-sublabel">Select where your models run</span>
-          </div>
-
-          <div class="onboarding-providers-grid" id="onboarding-providers-grid">
-            <button class="onboarding-provider-chip active" data-provider="anthropic" data-model="claude-sonnet-4-6" data-portal="https://console.anthropic.com/settings/keys" data-name="Anthropic (Claude)">
-              <span class="provider-color-dot" style="background:#d97706;"></span>
-              <span class="provider-chip-name">Anthropic</span>
-              <span class="provider-chip-badge">Claude 3.7</span>
-            </button>
-            <button class="onboarding-provider-chip" data-provider="openai" data-model="gpt-4o" data-portal="https://platform.openai.com/api-keys" data-name="OpenAI (GPT-4o)">
-              <span class="provider-color-dot" style="background:#10b981;"></span>
-              <span class="provider-chip-name">OpenAI</span>
-              <span class="provider-chip-badge">GPT-4o</span>
-            </button>
-            <button class="onboarding-provider-chip" data-provider="google" data-model="gemini-2.5-flash" data-portal="https://aistudio.google.com/app/apikey" data-name="Google Gemini">
-              <span class="provider-color-dot" style="background:#3b82f6;"></span>
-              <span class="provider-chip-name">Google</span>
-              <span class="provider-chip-badge">Free Tier</span>
-            </button>
-            <button class="onboarding-provider-chip" data-provider="openrouter" data-model="anthropic/claude-3.7-sonnet" data-portal="https://openrouter.ai/keys" data-name="OpenRouter">
-              <span class="provider-color-dot" style="background:#8b5cf6;"></span>
-              <span class="provider-chip-name">OpenRouter</span>
-              <span class="provider-chip-badge">396+ Models</span>
-            </button>
-            <button class="onboarding-provider-chip" data-provider="ollama" data-model="llama3.2:latest" data-portal="https://ollama.com" data-name="Ollama (Local)">
-              <span class="provider-color-dot" style="background:#38bdf8;"></span>
-              <span class="provider-chip-name">Ollama</span>
-              <span class="provider-chip-badge">100% Free / Local</span>
-            </button>
-            <button class="onboarding-provider-chip" data-provider="deepseek" data-model="deepseek-chat" data-portal="https://platform.deepseek.com/api_keys" data-name="DeepSeek">
-              <span class="provider-color-dot" style="background:#06b6d4;"></span>
-              <span class="provider-chip-name">DeepSeek</span>
-              <span class="provider-chip-badge">V3 / R1</span>
-            </button>
-          </div>
-
-          <!-- Form area for API Key providers -->
-          <div class="onboarding-form-area" id="onboarding-key-form">
-            <div class="onboarding-input-header">
-              <span class="onboarding-label" id="onboarding-key-label">2. Paste API Key</span>
-              <a class="onboarding-portal-link" id="onboarding-portal-link" data-action="open-portal" data-url="https://console.anthropic.com/settings/keys" title="Get API Key from provider console">
-                <span>Get API Key</span>
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
-              </a>
+          <!-- Step 1: Provider selection & key form -->
+          <div class="onboarding-step-view" id="onboarding-step-1">
+            <div class="onboarding-card-header">
+              <span class="onboarding-label">1. Choose AI Provider</span>
+              <span class="onboarding-sublabel">Select where your models run</span>
             </div>
-            <div class="onboarding-input-wrap">
-              <input type="password" class="onboarding-key-input" id="onboarding-key-input" placeholder="Paste your API key here (sk-ant-...)" autocomplete="off" spellcheck="false" />
-              <button class="onboarding-toggle-vis" id="btn-toggle-key-vis" title="Toggle visibility">
-                <svg class="icon-eye-open" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+
+            <div class="onboarding-providers-grid" id="onboarding-providers-grid">
+              <button class="onboarding-provider-chip active" data-provider="anthropic" data-model="claude-sonnet-4-6" data-portal="https://console.anthropic.com/settings/keys" data-name="Anthropic (Claude)">
+                <span class="provider-chip-name">Anthropic</span>
+                <span class="provider-chip-badge">Claude 3.7</span>
+              </button>
+              <button class="onboarding-provider-chip" data-provider="openai" data-model="gpt-4o" data-portal="https://platform.openai.com/api-keys" data-name="OpenAI (GPT-4o)">
+                <span class="provider-chip-name">OpenAI</span>
+                <span class="provider-chip-badge">GPT-4o</span>
+              </button>
+              <button class="onboarding-provider-chip" data-provider="google" data-model="gemini-2.5-flash" data-portal="https://aistudio.google.com/app/apikey" data-name="Google Gemini">
+                <span class="provider-chip-name">Google</span>
+                <span class="provider-chip-badge">Free Tier</span>
+              </button>
+              <button class="onboarding-provider-chip" data-provider="openrouter" data-model="anthropic/claude-3.7-sonnet" data-portal="https://openrouter.ai/keys" data-name="OpenRouter">
+                <span class="provider-chip-name">OpenRouter</span>
+                <span class="provider-chip-badge">396+ Models</span>
+              </button>
+              <button class="onboarding-provider-chip" data-provider="ollama" data-model="llama3.2:latest" data-portal="https://ollama.com" data-name="Ollama (Local)">
+                <span class="provider-chip-name">Ollama</span>
+                <span class="provider-chip-badge">100% Free / Local</span>
+              </button>
+              <button class="onboarding-provider-chip" data-provider="deepseek" data-model="deepseek-chat" data-portal="https://platform.deepseek.com/api_keys" data-name="DeepSeek">
+                <span class="provider-chip-name">DeepSeek</span>
+                <span class="provider-chip-badge">V3 / R1</span>
               </button>
             </div>
-            <div class="onboarding-actions-row">
-              <button class="btn-onboarding-save" id="btn-onboarding-save">
-                <span>Connect & Start Coding</span>
+
+            <!-- Form area for API Key providers -->
+            <div class="onboarding-form-area" id="onboarding-key-form">
+              <div class="onboarding-input-header">
+                <span class="onboarding-label" id="onboarding-key-label">2. Paste API Key</span>
+                <a class="onboarding-portal-link" id="onboarding-portal-link" data-action="open-portal" data-url="https://console.anthropic.com/settings/keys" title="Get API Key from provider console">
+                  <span>Get API Key</span>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                </a>
+              </div>
+              <div class="onboarding-input-wrap">
+                <input type="password" class="onboarding-key-input" id="onboarding-key-input" placeholder="Paste your API key here (sk-ant-...)" autocomplete="off" spellcheck="false" />
+                <button class="onboarding-toggle-vis" id="btn-toggle-key-vis" title="Toggle visibility">
+                  <svg class="icon-eye-open" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                </button>
+              </div>
+              <div class="onboarding-actions-row">
+                <button class="btn-onboarding-save" id="btn-onboarding-save">
+                  <span>Connect & Continue</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- Form area for Ollama (Zero-key local setup) -->
+            <div class="onboarding-ollama-area" id="onboarding-ollama-form" style="display:none;">
+              <div class="ollama-info-box">
+                <div class="ollama-info-icon">💻</div>
+                <div class="ollama-info-content">
+                  <div class="ollama-info-title">Zero-Key Local AI</div>
+                  <div class="ollama-info-desc">Runs entirely on your local GPU/CPU. Fully private, offline, and free forever. Make sure Ollama is running on your machine.</div>
+                </div>
+              </div>
+              <button class="btn-onboarding-save" id="btn-onboarding-ollama-save">
+                <span>Activate Local Ollama</span>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
               </button>
             </div>
-          </div>
 
-          <!-- Form area for Ollama (Zero-key local setup) -->
-          <div class="onboarding-ollama-area" id="onboarding-ollama-form" style="display:none;">
-            <div class="ollama-info-box">
-              <div class="ollama-info-icon">💻</div>
-              <div class="ollama-info-content">
-                <div class="ollama-info-title">Zero-Key Local AI</div>
-                <div class="ollama-info-desc">Runs entirely on your local GPU/CPU. Fully private, offline, and free forever. Make sure Ollama is running on your machine.</div>
-              </div>
+            <div class="onboarding-footer-links">
+              <button class="btn-link-settings" data-action="open-full-settings">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06-.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                <span>Open Full Model Hub & Settings</span>
+              </button>
             </div>
-            <button class="btn-onboarding-save" id="btn-onboarding-ollama-save">
-              <span>Activate Local Ollama</span>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
-            </button>
           </div>
 
-          <div class="onboarding-footer-links">
-            <button class="btn-link-settings" data-action="open-full-settings">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-              <span>Open Full Model Hub & Settings</span>
-            </button>
+          <!-- Step 2: Inline Model Selection (No modal, 100% inside card) -->
+          <div class="onboarding-step-view" id="onboarding-step-2" style="display:none;">
+            <div class="onboarding-card-header">
+              <div class="onboarding-step2-top-bar">
+                <span class="onboarding-step2-badge" id="onboarding-step2-badge">CONNECTED</span>
+                <button class="onboarding-step2-back" id="btn-onboarding-step2-back" title="Back to Provider Setup">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"></polyline></svg>
+                  <span>Change Key</span>
+                </button>
+              </div>
+              <span class="onboarding-label">2. Select Starting Model</span>
+              <span class="onboarding-sublabel">Choose your coding model. You can switch models anytime.</span>
+            </div>
+
+            <div class="onboarding-search-wrap">
+              <svg class="onboarding-search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              <input type="text" class="onboarding-search-input" id="onboarding-step2-search" placeholder="Filter models (e.g. Sonnet, GPT-4o, DeepSeek)..." autocomplete="off" spellcheck="false" />
+            </div>
+
+            <div class="onboarding-models-list" id="onboarding-step2-models-list" role="listbox">
+              <!-- Dynamically rendered live model cards -->
+            </div>
+
+            <div class="onboarding-step2-actions">
+              <button class="btn-step2-skip" id="btn-step2-skip">Use Default</button>
+              <button class="btn-onboarding-save" id="btn-step2-confirm">
+                <span>Start Coding</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -623,6 +653,12 @@ ${styles}
             </svg>
             <span id="prompt-mode-label" class="skeleton skeleton-text" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
           </button>
+
+          <div class="active-file-chip" id="active-file-chip" style="display:none;" title="Ambient IDE context automatically included">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>
+            <span id="active-file-name"></span>
+            <span class="active-file-diag" id="active-file-diag" style="display:none;"></span>
+          </div>
 
         </div>
 

@@ -5,6 +5,7 @@ import { EditorBridge } from "../integrations/EditorBridge.js";
 import { SettingsPanel } from "../panels/SettingsPanel.js";
 import { SessionTabPanel } from "../panels/SessionTabPanel.js";
 import { WaterfallPanel } from "../panels/WaterfallPanel.js";
+import { ChangesReviewPanel } from "../panels/ChangesReviewPanel.js";
 import { PythonBridge } from "../server/PythonBridge.js";
 import { RpcClient } from "../server/RpcClient.js";
 import {
@@ -51,6 +52,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private _boundClient: RpcClient | null = null;
   private _rpcDisposables: Array<() => void> = [];
+  private _latestTurnFiles: Set<string> = new Set<string>();
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -58,6 +60,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ) {
     ChatViewProvider.currentProvider = this;
     if (this._context) {
+      let activeEditorDebounce: NodeJS.Timeout | null = null;
+      const syncActiveEditor = () => {
+        if (activeEditorDebounce) clearTimeout(activeEditorDebounce);
+        activeEditorDebounce = setTimeout(() => {
+          this.broadcastActiveEditorContext();
+        }, 150);
+      };
+
       this._context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration((e) => {
           if (e.affectsConfiguration("andromity.wallpaper")) {
@@ -66,8 +76,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (e.affectsConfiguration("andromity.mascotEnabled")) {
             this.broadcastMascotConfig();
           }
-        })
+        }),
+        vscode.window.onDidChangeActiveTextEditor(syncActiveEditor),
+        vscode.window.onDidChangeTextEditorSelection(syncActiveEditor),
+        vscode.languages.onDidChangeDiagnostics(syncActiveEditor)
       );
+    }
+  }
+
+  public broadcastActiveEditorContext() {
+    const ctx = EditorBridge.getActiveContext();
+    const payload = {
+      type: "active_editor_context",
+      context: {
+        relativePath: ctx.relativePath || null,
+        fileName: ctx.relativePath ? path.basename(ctx.relativePath) : null,
+        languageId: ctx.languageId || null,
+        cursorLine: ctx.cursorLine || null,
+        cursorColumn: ctx.cursorColumn || null,
+        hasSelection: !!ctx.selectedText,
+        errorCount: ctx.diagnostics?.filter((d) => d.severity === "error").length || 0,
+        warningCount: ctx.diagnostics?.filter((d) => d.severity === "warning").length || 0,
+      },
+    };
+    this._postToWebview(payload);
+    for (const tab of SessionTabPanel.getAllPanels()) {
+      try { tab.postMessage(payload); } catch {}
     }
   }
 
@@ -436,6 +470,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /** Open the dedicated Changes Review Webview tab. */
+  public openReviewWebview(filePath?: string, turnFiles?: string[]) {
+    const effectiveTurnFiles = turnFiles ?? (this._latestTurnFiles.size > 0 ? Array.from(this._latestTurnFiles) : undefined);
+    if (this._diffManager) {
+      this._diffManager.openReviewWebview(filePath, effectiveTurnFiles);
+    } else if (this._context) {
+      ChangesReviewPanel.createOrShow(this._extensionUri, this._rpcClient, filePath, effectiveTurnFiles);
+    }
+  }
+
   /** Refresh config and models from daemon without wiping chat messages */
   public async refreshConfig() {
     await this._loadInitialConfig(false);
@@ -448,6 +492,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public async handlePlanApproval(approved: boolean, feedback: string = "") {
     if (!this._rpcClient || !this._currentSessionId) return;
     try {
+      void this._rpcClient.call("telemetry.recordFeature", {
+        feature: approved ? "plan_approved" : "plan_rejected",
+        session_id: this._currentSessionId,
+      }).catch(() => {});
       await this._rpcClient.call(approved ? "plan.approve" : "plan.reject", {
         session_id: this._currentSessionId,
         comment: feedback,
@@ -534,6 +582,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
 
     this.broadcastMascotConfig();
+    this.broadcastActiveEditorContext();
     if (this._rpcClient) {
       this._loadInitialConfig(true);
     }
@@ -556,6 +605,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (!sid || sid === this._currentSessionId) {
         this._isExecuting = true;
       }
+      this._latestTurnFiles.clear();
       void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", true);
       this._postToWebview({ type: "agent_started", ...params });
       if (sid && this._context) {
@@ -738,7 +788,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (this._runningSessions.size === 0) {
         void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
       }
-      this._postToWebview({ type: "agent_done", ...params });
+
+      const turnFiles: string[] | undefined = params?.turn_files;
+      if (Array.isArray(turnFiles)) {
+        this._latestTurnFiles = new Set(turnFiles);
+        if (ChangesReviewPanel.currentPanel) {
+          ChangesReviewPanel.currentPanel.setTurnFiles(turnFiles);
+        }
+      }
+
+      this._postToWebview({ type: "agent_done", ...params, turn_files: turnFiles });
       const cfg = vscode.workspace.getConfiguration("andromity");
       if (cfg.get<boolean>("soundNotifications", true)) {
         this._postToWebview({ type: "play_sound", kind: "done" });
@@ -769,6 +828,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (this._runningSessions.size === 0) {
         void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
       }
+      void this._rpcClient?.call("telemetry.recordFeature", { feature: "turn_cancelled", session_id: sid }).catch(() => {});
       this._postToWebview({ type: "agent_cancelled", ...params });
     });
 
@@ -783,6 +843,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (this._runningSessions.size === 0) {
         void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
       }
+      const errStr = String(params?.error || "").toLowerCase();
+      let cat = "error_generic";
+      if (errStr.includes("401") || errStr.includes("unauthorized") || errStr.includes("invalid api key") || errStr.includes("authentication")) {
+        cat = "error_auth";
+      } else if (errStr.includes("429") || errStr.includes("rate limit") || errStr.includes("quota")) {
+        cat = "error_rate_limit";
+      } else if (errStr.includes("context length") || errStr.includes("maximum context") || errStr.includes("token limit")) {
+        cat = "error_context_length";
+      } else if (errStr.includes("timeout") || errStr.includes("timed out")) {
+        cat = "error_timeout";
+      } else if (errStr.includes("tool") || errStr.includes("command failed")) {
+        cat = "error_tool_execution";
+      }
+      void this._rpcClient?.call("telemetry.recordFeature", { feature: cat, session_id: sid }).catch(() => {});
       this._postToWebview({ type: "agent_error", ...params });
     });
 
@@ -1033,10 +1107,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    if (message.type === "open_diff") {
-      if (this._diffManager) {
-        await this._diffManager.showGitDiff();
-      }
+    if (message.type === "open_diff" || message.type === "open_review_tab" || message.type === "open_changes_review") {
+      this.openReviewWebview(message.filePath, message.turnFiles);
       return;
     }
 
@@ -1070,9 +1142,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         try {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           const editorContext = EditorBridge.getActiveContext();
-          if (message.attachContext && editorContext.selectedText) {
-            promptText += `\n\n--- Context from ${editorContext.relativePath} (lines ${editorContext.selectionRange?.startLine}-${editorContext.selectionRange?.endLine}) ---\n\`\`\`${editorContext.languageId || ""}\n${editorContext.selectedText}\n\`\`\``;
-          }
+          promptText = EditorBridge.formatPromptWithEditorState(
+            promptText,
+            editorContext,
+            message.attachContext !== false
+          );
 
           const targetSessionId = message.sessionId || this._currentSessionId;
           if (!this._currentSessionId && targetSessionId) {
@@ -1096,6 +1170,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             }
             void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", true);
           }
+          void this._rpcClient.call("telemetry.recordFeature", {
+            feature: "prompt_sent",
+            session_id: activeSid,
+          }).catch(() => {});
+
+          const slashMatch = (promptText || "").trim().match(/^\/([a-zA-Z0-9_-]+)/);
+          if (slashMatch) {
+            void this._rpcClient.call("telemetry.recordFeature", {
+              feature: `slash_${slashMatch[1].toLowerCase()}`,
+              session_id: activeSid,
+            }).catch(() => {});
+          }
+
           await this._rpcClient.call("agent.prompt", {
             session_id: activeSid,
             prompt: promptText,
@@ -1110,6 +1197,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         } catch (err: any) {
           const activeSid = message.sessionId || this._currentSessionId;
           const msg = err.message || String(err);
+          const lowerMsg = msg.toLowerCase();
+
+          // Zero-PII error classification
+          let errCategory = "error_generic";
+          if (lowerMsg.includes("already running a turn") || lowerMsg.includes("-32603") || lowerMsg.includes("agent_busy")) {
+            errCategory = "error_agent_busy";
+          } else if (lowerMsg.includes("rpc timeout") || lowerMsg.includes("timed out")) {
+            errCategory = "error_rpc_timeout";
+          } else if (lowerMsg.includes("401") || lowerMsg.includes("unauthorized") || lowerMsg.includes("invalid api key") || lowerMsg.includes("authentication")) {
+            errCategory = "error_auth";
+          } else if (lowerMsg.includes("429") || lowerMsg.includes("rate limit") || lowerMsg.includes("quota")) {
+            errCategory = "error_rate_limit";
+          } else if (lowerMsg.includes("context length") || lowerMsg.includes("maximum context") || lowerMsg.includes("token limit")) {
+            errCategory = "error_context_length";
+          }
+          void this._rpcClient?.call("telemetry.recordFeature", {
+            feature: errCategory,
+            session_id: activeSid,
+          }).catch(() => {});
+
           if (msg.includes("already running a turn") || msg.includes("-32603") || msg.includes("AGENT_BUSY")) {
             vscode.window.showInformationMessage("Agent is still working on the previous turn. Your message was queued and will send automatically when it finishes.");
             this._postToWebview({ type: "agent_busy", error: msg, queuedPrompt: promptText });
@@ -1173,6 +1280,80 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this._currentProvider = provider;
           }
 
+          // Fetch real models live from the provider API using verified key
+          let liveModels: ModelInfo[] = [];
+          try {
+            liveModels = await this._rpcClient.call<ModelInfo[]>("config.refresh_models", {
+              provider,
+            }, 6000);
+          } catch (e) {
+            liveModels = await this._rpcClient.call<ModelInfo[]>("config.list_models", {
+              provider,
+            }, 3000).catch(() => []);
+          }
+
+          const providers = await this._rpcClient.call<ProviderInfo[]>("config.list_providers", {}).catch(() => []);
+          this._providers = providers || [];
+
+          // Filter models for this provider
+          const providerModels = (liveModels || []).filter((m: any) => {
+            if (provider === "openrouter") return m.provider === "openrouter" || m.id?.includes("/");
+            return !m.provider || m.provider === provider;
+          });
+
+          if (providerModels.length > 0) {
+            this._models = liveModels;
+            void this._rpcClient?.call("telemetry.recordFeature", {
+              feature: "onboarding_key_saved",
+              session_id: this._currentSessionId,
+            }).catch(() => {});
+            this._postToWebview({
+              type: "key_configured_select_model",
+              provider,
+              models: providerModels,
+              defaultModel: modelId || providerModels[0].id,
+            });
+          } else {
+            if (modelId) {
+              await this._rpcClient.call("config.set", {
+                section: "default",
+                key: "model",
+                value: modelId,
+              });
+              this._currentModel = modelId;
+            }
+
+            void this._rpcClient?.call("telemetry.recordFeature", {
+              feature: "onboarding_completed",
+              session_id: this._currentSessionId,
+            }).catch(() => {});
+
+            vscode.window.showInformationMessage(
+              `Connected to ${provider || "AI Provider"}! You're ready to code.`
+            );
+
+            await this._loadInitialConfig(false);
+            this._postToWebview({
+              type: "key_configured_success",
+              provider,
+              model: this._currentModel,
+            });
+          }
+        } catch (err: any) {
+          vscode.window.showErrorMessage(`Failed to configure provider: ${err.message}`);
+          this._postToWebview({
+            type: "key_configure_failed",
+            error: err.message,
+          });
+        }
+        break;
+      }
+
+      case "finish_onboarding_model": {
+        try {
+          const provider = message.provider;
+          const modelId = message.modelId;
+
           if (modelId) {
             await this._rpcClient.call("config.set", {
               section: "default",
@@ -1182,11 +1363,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this._currentModel = modelId;
           }
 
-          const providers = await this._rpcClient.call<ProviderInfo[]>("config.list_providers", {}).catch(() => []);
-          this._providers = providers || [];
+          void this._rpcClient?.call("telemetry.recordFeature", {
+            feature: "onboarding_completed",
+            session_id: this._currentSessionId,
+          }).catch(() => {});
 
           vscode.window.showInformationMessage(
-            `Connected to ${provider || "AI Provider"}! You're ready to code.`
+            `Connected to ${provider || "AI Provider"}! Using model ${modelId || "ready"}.`
           );
 
           await this._loadInitialConfig(false);
@@ -1196,10 +1379,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             model: this._currentModel,
           });
         } catch (err: any) {
-          vscode.window.showErrorMessage(`Failed to configure provider: ${err.message}`);
+          vscode.window.showErrorMessage(`Failed to configure model: ${err.message}`);
           this._postToWebview({
-            type: "key_configure_failed",
-            error: err.message,
+            type: "key_configured_success",
+            provider: message.provider,
+            model: this._currentModel,
           });
         }
         break;
@@ -1266,6 +1450,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           value: this._currentMode,
         });
         this._postToWebview({ type: "config_updated", key: "mode", value: this._currentMode });
+        void this._rpcClient?.call("telemetry.recordFeature", { feature: "mode_" + this._currentMode }).catch(() => {});
         SettingsPanel.currentPanel?.loadData();
         vscode.window.showInformationMessage(`Permission Mode: ${this._currentMode.toUpperCase()}`);
         break;
@@ -1384,6 +1569,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
         }
         try {
+          void this._rpcClient?.call("telemetry.recordFeature", { feature: "turn_cancelled", session_id: targetSessionId }).catch(() => {});
           await this._rpcClient.call("agent.cancel", {
             session_id: targetSessionId,
           });
@@ -1414,6 +1600,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             project_path: workspaceFolder,
           });
           this._currentPlan = null;
+          void this._rpcClient?.call("telemetry.recordFeature", { feature: "session_created" }).catch(() => {});
           this._sessionPlans.set(r.id, null);
           this._postToWebview({
             type: "plan_updated",
@@ -1442,6 +1629,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           void this._rpcClient?.call("telemetry.recordFeature", { feature: "side_by_side_diff", session_id: this._currentSessionId }).catch(() => {});
           await this.openFileDiff(message.filePath, false);
         }
+        break;
+      }
+
+      case "open_review_tab":
+      case "open_changes_review": {
+        this.openReviewWebview(message.filePath, message.turnFiles);
         break;
       }
 
@@ -1678,11 +1871,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "undo_turn": {
+        const turnIndex = message.turnIndex;
+        const turnsToUndo = message.turnsToUndo ?? (turnIndex !== undefined && message.totalTurns ? message.totalTurns - turnIndex : 1);
         if (this._diffManager) {
-          const undone = await this._diffManager.undoLastTurn(this._currentSessionId);
+          const undone = await this._diffManager.undoLastTurn(this._currentSessionId, turnIndex, turnsToUndo);
           if (undone) {
             await this._loadSession(this._currentSessionId);
-            this._postToWebview({ type: "turn_undone" });
+            this._postToWebview({ type: "turn_undone", turnsUndone: turnsToUndo, targetTurnIndex: turnIndex });
             try {
               vscode.commands.executeCommand("git.refresh");
               vscode.commands.executeCommand("andromity.refreshChanges");
@@ -1693,17 +1888,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           const res = await this._rpcClient.call<any>("session.undo", {
             session_id: this._currentSessionId,
             project_path: workspaceFolder,
+            turn_index: turnIndex,
+            turns_to_undo: turnsToUndo,
           });
           if (res?.success) {
             try {
               vscode.commands.executeCommand("git.refresh");
               vscode.commands.executeCommand("andromity.refreshChanges");
             } catch {}
-            vscode.window.showInformationMessage(`Turn undone successfully. (${res.popped_messages || 0} messages removed.)`);
+            const countMsg = (res.turns_undone && res.turns_undone > 1) ? `${res.turns_undone} turns undone` : "Turn undone";
+            vscode.window.showInformationMessage(`${countMsg} successfully. (${res.popped_messages || 0} messages removed.)`);
             await this._loadSession(this._currentSessionId);
-            this._postToWebview({ type: "turn_undone" });
+            this._postToWebview({ type: "turn_undone", turnsUndone: res.turns_undone, targetTurnIndex: res.target_turn_index });
           }
         }
+        void this._rpcClient?.call("telemetry.recordFeature", { feature: "turn_undone" }).catch(() => {});
         break;
       }
 
@@ -1752,21 +1951,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "apply_code": {
+        void this._rpcClient?.call("telemetry.recordFeature", { feature: "code_inserted", session_id: this._currentSessionId }).catch(() => {});
         await EditorBridge.applySnippetToEditor(message.code, message.mode || "insert_at_cursor");
         break;
       }
 
       case "copy_clipboard": {
         if (message.text) {
+          void this._rpcClient?.call("telemetry.recordFeature", { feature: "code_copied", session_id: this._currentSessionId }).catch(() => {});
           await vscode.env.clipboard.writeText(message.text);
         }
         break;
       }
 
       case "open_diff": {
-        if (this._diffManager) {
-          await this._diffManager.showGitDiff();
-        }
+        void this._rpcClient?.call("telemetry.recordFeature", { feature: "open_diff", session_id: this._currentSessionId }).catch(() => {});
+        this.openReviewWebview(message.filePath, message.turnFiles);
         break;
       }
 
@@ -1789,6 +1989,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             mode: "permission_mode",
           };
           const daemonKey = keyMap[key] || key;
+          void this._rpcClient?.call("telemetry.recordFeature", { feature: `config_${daemonKey}`, session_id: this._currentSessionId }).catch(() => {});
           await this._rpcClient.call("config.set", {
             section: "default",
             key: daemonKey,
@@ -1811,6 +2012,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
           this._postToWebview({ type: "config_updated", key: key, value: value, provider: this._currentProvider });
           SettingsPanel.currentPanel?.loadData();
+        }
+        break;
+      }
+
+      case "telemetry_feature": {
+        const feature = message.feature;
+        const sid = message.sessionId || this._currentSessionId;
+        if (feature && this._rpcClient) {
+          void this._rpcClient.call("telemetry.recordFeature", {
+            feature,
+            session_id: sid,
+          }).catch(() => {});
         }
         break;
       }

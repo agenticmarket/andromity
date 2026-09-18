@@ -369,8 +369,8 @@ export class SessionTabPanel {
       return;
     }
 
-    if (message.type === "open_diff") {
-      await this._viewProvider.showGitDiff();
+    if (message.type === "open_diff" || message.type === "open_review_tab" || message.type === "open_changes_review") {
+      this._viewProvider.openReviewWebview(message.filePath, message.turnFiles);
       return;
     }
 
@@ -438,9 +438,11 @@ export class SessionTabPanel {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           let promptText = message.prompt || "";
           const editorContext = EditorBridge.getActiveContext();
-          if (message.attachContext && editorContext.selectedText) {
-            promptText += `\n\n--- Context from ${editorContext.relativePath} (lines ${editorContext.selectionRange?.startLine}-${editorContext.selectionRange?.endLine}) ---\n\`\`\`${editorContext.languageId || ""}\n${editorContext.selectedText}\n\`\`\``;
-          }
+          promptText = EditorBridge.formatPromptWithEditorState(
+            promptText,
+            editorContext,
+            message.attachContext !== false
+          );
           const cleanModel = (message.model || this._currentModel || "").replace(/^~+/, "");
           await this._rpcClient.call("agent.prompt", {
             session_id: this._sessionId,
@@ -716,6 +718,8 @@ export class SessionTabPanel {
         const res = await this._rpcClient.call<any>("session.undo", {
           session_id: this._sessionId,
           project_path: workspaceFolder,
+          turn_index: (message as any).turnIndex,
+          turns_to_undo: (message as any).turnsToUndo,
         }).catch(() => null);
         if (res?.success) {
           try {
@@ -723,6 +727,11 @@ export class SessionTabPanel {
             vscode.commands.executeCommand("andromity.refreshChanges");
           } catch {}
           await this._loadSession();
+          this._postMessage({
+            type: "turn_undone",
+            turnsUndone: res.turns_undone,
+            targetTurnIndex: res.target_turn_index,
+          });
         } else if (res?.error) {
           vscode.window.showWarningMessage(res.error);
         }

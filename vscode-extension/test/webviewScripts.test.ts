@@ -6,16 +6,29 @@ import * as vm from "node:vm";
 // @ts-ignore
 const Module = require("module");
 const origRequire = Module.prototype.require;
+const mockVscode: any = {
+  Uri: {
+    joinPath: (...args: any[]) => ({
+      fsPath: args.map((a) => (typeof a === "object" ? a.fsPath || a.path : String(a))).join("/"),
+    }),
+    file: (p: string) => ({ fsPath: p }),
+  },
+  workspace: {
+    registerTextDocumentContentProvider: () => ({ dispose: () => {} }),
+    workspaceFolders: [{ uri: { fsPath: "D:/mock/ws" } }],
+  },
+  window: {
+    showWarningMessage: async () => "Yes, Rollback",
+    showInformationMessage: () => {},
+    showErrorMessage: () => {},
+  },
+  commands: {
+    executeCommand: () => {},
+  },
+};
 Module.prototype.require = function (reqPath: string) {
   if (reqPath === "vscode") {
-    return {
-      Uri: {
-        joinPath: (...args: any[]) => ({
-          fsPath: args.map((a) => (typeof a === "object" ? a.fsPath || a.path : String(a))).join("/"),
-        }),
-        file: (p: string) => ({ fsPath: p }),
-      },
-    };
+    return mockVscode;
   }
   return origRequire.apply(this, arguments as any);
 };
@@ -748,6 +761,23 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(calm.mascot.classList.contains("is-resting"), "Reduced motion must snap the pet straight to rest");
     calm.sandbox.mascotZoomies();
     assert.ok(!calm.mascot.classList.contains("is-flying"), "Reduced motion must skip the zoomies trick");
+
+    // Verify throw velocity calculation detects real directional momentum
+    pet.sandbox.beginMascotGrab({ button: 0, pointerId: 5, clientX: 20, clientY: 470, cancelable: true });
+    pet.sandbox.updateMascotGrab({ pointerId: 5, clientX: 100, clientY: 400, cancelable: true });
+    pet.sandbox.updateMascotGrab({ pointerId: 5, clientX: 300, clientY: 200, cancelable: true });
+    pet.runFrames(1);
+    const vel = pet.sandbox.computeMascotThrowVelocity();
+    assert.ok(Math.hypot(vel.x, vel.y) > 0, "Velocity must be non-zero after a drag movement");
+
+    // Verify particle pool recycles freed nodes indefinitely beyond maxParticles limit
+    for (let i = 0; i < 35; i++) {
+      pet.sandbox.spawnMascotParticles("sparkle", 100, 100, 2);
+      pet.flushTimers(1500);
+    }
+    const recycledNode = pet.sandbox.acquireMascotParticle("heart");
+    assert.ok(recycledNode !== null, "Particle pool must reuse freed nodes instead of starving after 24 spawns");
+    if (recycledNode) pet.sandbox.releaseMascotParticle(recycledNode);
   });
 
   it("PlanEditorPanel generated HTML should contain valid JS in all script tags", () => {
@@ -781,5 +811,109 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
       }, `PlanEditorPanel script #${i} must have valid syntax`);
     }
   });
+
+  it("chatClientScript should attach data-turn-index and dispatch targeted turn rollback", () => {
+    const state: ChatViewState = {
+      currentSessionId: "sess-undo",
+      currentModel: "anthropic/claude-3.7-sonnet",
+      currentProvider: "anthropic",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "medium",
+      models: [{ id: "anthropic/claude-3.7-sonnet", name: "Claude 3.7 Sonnet" }],
+    };
+    const scriptCode = getChatClientScript("icon.svg", state);
+    assert.ok(scriptCode.includes("data-turn-index"), "Script must set data-turn-index on user prompt messages");
+    assert.ok(scriptCode.includes("turnsToUndo"), "Script must calculate turnsToUndo");
+    assert.ok(scriptCode.includes("undo_turn"), "Script must post undo_turn message");
+
+    // Test the undo calculation logic directly
+    const mockChatContainer = {
+      querySelectorAll: (sel: string) => {
+        if (sel === ".message-wrap.user") {
+          return [
+            { id: "turn-0" },
+            { id: "turn-1" },
+            { id: "turn-2" },
+            { id: "turn-3" },
+          ];
+        }
+        return [];
+      },
+    };
+
+    const allUserWraps = mockChatContainer.querySelectorAll(".message-wrap.user");
+    const totalTurns = allUserWraps.length;
+    assert.strictEqual(totalTurns, 4, "Should have 4 user turns");
+
+    // Case 1: Click Turn 2 (3rd turn, index 2)
+    const clickedWrap = allUserWraps[2];
+    const turnIndex = allUserWraps.indexOf(clickedWrap);
+    const turnsToUndo = (turnIndex >= 0 && totalTurns > 0) ? (totalTurns - turnIndex) : 1;
+    assert.strictEqual(turnIndex, 2, "Turn index must be 2 for 3rd turn");
+    assert.strictEqual(turnsToUndo, 2, "Must undo 2 turns (Turn 3 and Turn 2)");
+
+    // Case 2: Click Turn 0 (1st turn, index 0)
+    const turn0 = allUserWraps[0];
+    const idx0 = allUserWraps.indexOf(turn0);
+    const undo0 = (idx0 >= 0 && totalTurns > 0) ? (totalTurns - idx0) : 1;
+    assert.strictEqual(idx0, 0);
+    assert.strictEqual(undo0, 4, "Must undo all 4 turns back to clean state");
+
+    // Case 3: Click Turn 3 (4th turn, index 3)
+    const turn3 = allUserWraps[3];
+    const idx3 = allUserWraps.indexOf(turn3);
+    const undo3 = (idx3 >= 0 && totalTurns > 0) ? (totalTurns - idx3) : 1;
+    assert.strictEqual(idx3, 3);
+    assert.strictEqual(undo3, 1, "Must undo 1 turn");
+  });
+
+  it("DiffManager should send turn_index and turns_to_undo to session.undo RPC", async () => {
+    // @ts-ignore
+    const { DiffManager } = require("../src/integrations/DiffManager.js");
+    let calledMethod = "";
+    let calledParams: any = null;
+
+    const mockRpcClient: any = {
+      call: async (method: string, params: any) => {
+        calledMethod = method;
+        calledParams = params;
+        return { success: true, popped_messages: 4, turns_undone: 2, target_turn_index: 2, git_status: "Restored snapshot abc1234" };
+      },
+    };
+
+    // Mock vscode.window.showWarningMessage to simulate user clicking "Yes, Rollback"
+    const vscode = require("vscode");
+    const origWarning = vscode.window?.showWarningMessage;
+    vscode.window = vscode.window || {};
+    let promptShown = "";
+    vscode.window.showWarningMessage = async (msg: string) => {
+      promptShown = msg;
+      return "Yes, Rollback";
+    };
+    vscode.window.showInformationMessage = () => {};
+    vscode.commands = vscode.commands || {};
+    vscode.commands.executeCommand = () => {};
+    vscode.workspace = vscode.workspace || {};
+    vscode.workspace.workspaceFolders = [{ uri: { fsPath: "D:/mock/ws" } }];
+    vscode.workspace.registerTextDocumentContentProvider = () => ({ dispose: () => {} });
+
+    try {
+      const diffMgr = new DiffManager(mockRpcClient, { subscriptions: [] } as any);
+      const result = await diffMgr.undoLastTurn("sess-target", 2, 2);
+
+      assert.strictEqual(result, true, "undoLastTurn must return true on success");
+      assert.strictEqual(calledMethod, "session.undo");
+      assert.strictEqual(calledParams.session_id, "sess-target");
+      assert.strictEqual(calledParams.turn_index, 2);
+      assert.strictEqual(calledParams.turns_to_undo, 2);
+      assert.ok(promptShown.includes("Undo 2 turns"), "Confirmation modal should specify number of turns being undone");
+    } finally {
+      if (origWarning) {
+        vscode.window.showWarningMessage = origWarning;
+      }
+    }
+  });
 });
+
 

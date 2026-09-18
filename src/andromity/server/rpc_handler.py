@@ -21,6 +21,7 @@ READ_ONLY_TOOLS = {
     "ask_questions", "ask_question", "fetch_context_bundle", "fetch_code_structure",
     "update_plan_step", "create_todo", "update_todo", "list_tools", "write_plan",
 }
+CRON_SEED_PRESET_NAMES = {"Run Tests & Verify Build", "Daily Code Health & TODO Scanner"}
 from andromity.core.events import (
     Done,
     HandoffWritten,
@@ -46,6 +47,7 @@ from andromity.core.events import (
 )
 from andromity.core.git_ops import (
     create_pre_edit_snapshot,
+    ensure_git_tracking,
     get_repo,
     restore_snapshot,
     list_snapshots,
@@ -538,38 +540,61 @@ class JsonRpcHandler:
             return {"success": False, "error": f"Session {session_id} is currently running an active turn. Cancel or wait for it to finish."}
         session = self._get_or_load_session(session_id, params.get("project_path"))
 
+        user_turn_indices = session.get_user_turn_indices()
+        total_turns = len(user_turn_indices)
+        if total_turns == 0:
+            return {
+                "success": True,
+                "turns_undone": 0,
+                "target_turn_index": 0,
+                "popped_messages": 0,
+                "git_status": "No turns to undo in session",
+            }
+
+        target_turn = params.get("turn_index")
+        if target_turn is None:
+            target_turn = params.get("target_turn_index")
+
+        if target_turn is not None:
+            target_turn_idx = max(0, min(int(target_turn), total_turns - 1))
+            turns_to_undo = total_turns - target_turn_idx
+        elif "turns_to_undo" in params:
+            turns_to_undo = max(1, min(int(params["turns_to_undo"]), total_turns))
+            target_turn_idx = total_turns - turns_to_undo
+        else:
+            turns_to_undo = 1
+            target_turn_idx = total_turns - 1
+
+        turns_undone, popped, snap_item = session.rollback_to_turn(target_turn_idx)
+
         # Rollback git snapshot if available
         repo = get_repo(Path(session.project_path))
         rollback_msg = "No git snapshot available"
         if repo:
             try:
-                snap_hash = None
-                if hasattr(session, "undo_stack") and session.undo_stack:
-                    item = session.undo_stack.pop()
-                    snap_hash = item.get("snapshot_hash")
+                snap_hash = snap_item.get("snapshot_hash") if snap_item else None
                 if not snap_hash:
-                    snaps = list_snapshots(repo, limit=2)
-                    if snaps:
-                        snap_hash = snaps[0]["hash"]
+                    # Fallback to list_snapshots from andromity-snapshots branch
+                    snaps = list_snapshots(repo, limit=max(20, turns_undone + 2))
+                    snap_idx = min(turns_undone - 1, len(snaps) - 1)
+                    if snaps and snap_idx >= 0:
+                        snap_hash = snaps[snap_idx]["hash"]
+
                 if snap_hash:
-                    ok = restore_snapshot(repo, snap_hash)
+                    ok = await asyncio.to_thread(restore_snapshot, repo, snap_hash)
                     rollback_msg = f"Restored snapshot {snap_hash[:7]}" if ok else "Failed to restore snapshot"
                 else:
                     rollback_msg = "No snapshots recorded"
             except Exception as e:
                 rollback_msg = f"Git rollback error: {e}"
 
-        # Pop last assistant turn and user turn if present
-        popped = 0
-        while session.messages and session.messages[-1].get("role") != "user":
-            session.messages.pop()
-            popped += 1
-        if session.messages and session.messages[-1].get("role") == "user":
-            session.messages.pop()
-            popped += 1
-        session.save()
-
-        return {"success": True, "popped_messages": popped, "git_status": rollback_msg}
+        return {
+            "success": True,
+            "turns_undone": turns_undone,
+            "target_turn_index": target_turn_idx,
+            "popped_messages": popped,
+            "git_status": rollback_msg,
+        }
 
     async def rpc_session_sendMessage(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from andromity.core.session_bus import SessionBus
@@ -796,8 +821,10 @@ class JsonRpcHandler:
             })
 
             try:
-                answer = await fut
+                answer = await asyncio.wait_for(fut, timeout=900)
                 return str(answer)
+            except asyncio.TimeoutError:
+                return "The user did not answer the questions within 15 minutes. Proceed with reasonable assumptions.If serious question wait to user send next message."
             finally:
                 self._pending_questions.pop(question_id, None)
 
@@ -841,15 +868,20 @@ class JsonRpcHandler:
                 # Reset turn snapshot flag and take pre-turn snapshot
                 session._turn_snapshotted = False
                 try:
-                    snap_hash = await asyncio.to_thread(create_pre_edit_snapshot, Path(session.project_path))
+                    p_path = Path(session.project_path)
+                    await asyncio.to_thread(ensure_git_tracking, p_path)
+                    snap_hash = await asyncio.to_thread(create_pre_edit_snapshot, p_path)
                     if snap_hash:
                         session._turn_snapshotted = True
                         if not hasattr(session, "undo_stack") or session.undo_stack is None:
                             session.undo_stack = []
+                        user_turn_idx = len(session.get_user_turn_indices())
                         session.undo_stack.append({
                             "snapshot_hash": snap_hash,
                             "msg_count": len(session.messages),
+                            "turn_index": user_turn_idx,
                         })
+                        session.save()
                 except Exception as snap_err:
                     log.debug("Pre-edit snapshot skipped: %s", snap_err)
 
@@ -1031,12 +1063,14 @@ class JsonRpcHandler:
                             "error": event.error,
                         })
                     elif isinstance(event, Done):
+                        turn_files = self._extract_turn_files(session)
                         self.notify("agent/done", {
                             "session_id": session_id,
                             "usage": event.usage,
                             "token_total": getattr(session, "token_total", 0),
                             "context_tokens": getattr(session, "context_tokens", 0),
                             "cost_usd": getattr(session, "cost_usd", 0.0),
+                            "turn_files": turn_files,
                         })
 
                 if len(session.messages) <= 3 and (session.name in ("new-session", "Main Session") or session.name.startswith("Session ") or session.name.startswith("session-")):
@@ -1082,6 +1116,25 @@ class JsonRpcHandler:
                     "session_id": session_id,
                     "error": str(e),
                 })
+                # Zero-PII error classification telemetry
+                try:
+                    from andromity.telemetry import send_feature_used
+                    err_lower = str(e).lower()
+                    if any(k in err_lower for k in ("401", "unauthorized", "invalid api key", "authentication", "forbidden", "invalid_api_key")):
+                        cat = "error_auth"
+                    elif any(k in err_lower for k in ("429", "rate limit", "quota", "too many requests", "rate_limit_exceeded")):
+                        cat = "error_rate_limit"
+                    elif any(k in err_lower for k in ("context length", "maximum context", "token limit", "context_length_exceeded")):
+                        cat = "error_context_length"
+                    elif any(k in err_lower for k in ("timeout", "timed out", "deadline")):
+                        cat = "error_timeout"
+                    elif any(k in err_lower for k in ("tool", "command failed", "execution failed")):
+                        cat = "error_tool_execution"
+                    else:
+                        cat = "error_generic"
+                    send_feature_used(cat, session_id=session_id)
+                except Exception:
+                    pass
             finally:
                 self._active_agents.pop(session_id, None)
 
@@ -1693,7 +1746,7 @@ class JsonRpcHandler:
         untracked: List[str] = []
         modified: List[str] = []
         try:
-            raw = repo.git.status("--porcelain", "-unormal")
+            raw = repo.git.status("--porcelain", "-uall")
             for line in raw.splitlines():
                 if len(line) >= 4:
                     code = line[:2]
@@ -1746,7 +1799,14 @@ class JsonRpcHandler:
         if not repo:
             raise ValueError("Not a git repository")
 
-        rel = Path(file_path).resolve().relative_to(project_path.resolve()).as_posix()
+        p = Path(file_path)
+        if p.is_absolute():
+            try:
+                rel = p.resolve().relative_to(project_path.resolve()).as_posix()
+            except ValueError:
+                rel = p.as_posix()
+        else:
+            rel = p.as_posix()
         content = ""
 
         if ref == "EMPTY":
@@ -1787,7 +1847,14 @@ class JsonRpcHandler:
         if not repo:
             return {"diff": ""}
 
-        rel = Path(file_path).resolve().relative_to(project_path.resolve()).as_posix()
+        p = Path(file_path)
+        if p.is_absolute():
+            try:
+                rel = p.resolve().relative_to(project_path.resolve()).as_posix()
+            except ValueError:
+                rel = p.as_posix()
+        else:
+            rel = p.as_posix()
         diff_text = ""
         # 1. Unstaged changes in working tree vs index
         try:
@@ -1844,23 +1911,97 @@ class JsonRpcHandler:
         except Exception:
             pass
 
-        # 3. Untracked files (using -unormal to avoid scanning full subtrees)
+        # 3. Untracked files (using -uall to discover files in subdirectories)
         try:
-            raw_untracked = repo.git.status("--porcelain", "-unormal")
+            raw_untracked = repo.git.status("--porcelain", "-uall")
+            BINARY_EXTENSIONS = {
+                ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".svgz",
+                ".pdf", ".zip", ".tar", ".gz", ".7z", ".rar",
+                ".exe", ".dll", ".so", ".dylib", ".bin", ".dat",
+                ".safetensors", ".gguf", ".onnx", ".pt", ".pth", ".pkl",
+                ".mp3", ".mp4", ".wav", ".avi", ".mov", ".webm",
+                ".woff", ".woff2", ".ttf", ".eot", ".otf"
+            }
             for line in raw_untracked.splitlines():
                 if line.startswith("?? "):
                     untracked_rel = line[3:].strip().replace("\\", "/")
+                    if untracked_rel in files_stats:
+                        continue
                     p = project_path / untracked_rel
                     if p.is_file():
                         try:
-                            line_count = sum(1 for _ in p.open("r", encoding="utf-8", errors="ignore"))
-                            if untracked_rel not in files_stats:
-                                files_stats[untracked_rel] = {"additions": line_count, "deletions": 0}
+                            # Skip known binary extensions immediately
+                            if p.suffix.lower() in BINARY_EXTENSIONS:
+                                files_stats[untracked_rel] = {"additions": 0, "deletions": 0}
+                                continue
+
+                            st = p.stat()
+                            # For files > 500KB, avoid line-by-line reading to prevent freezing
+                            if st.st_size > 500_000:
+                                files_stats[untracked_rel] = {"additions": 1, "deletions": 0}
+                                continue
+
+                            # Quick binary check & fast byte count for text
+                            with p.open("rb") as fb:
+                                chunk = fb.read(4096)
+                                if b"\0" in chunk:
+                                    files_stats[untracked_rel] = {"additions": 0, "deletions": 0}
+                                    continue
+                                rest = fb.read()
+                                line_count = chunk.count(b"\n") + rest.count(b"\n")
+                                files_stats[untracked_rel] = {"additions": max(1, line_count), "deletions": 0}
                         except Exception:
-                            pass
+                            files_stats[untracked_rel] = {"additions": 0, "deletions": 0}
         except Exception:
             pass
         return {"files": files_stats}
+
+    async def rpc_git_revert_file(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Safely revert local changes to a file (untracked or tracked)."""
+        project_path = Path(params.get("project_path") or Path.cwd()).resolve()
+        file_path = params.get("path", "")
+        if not file_path:
+            raise ValueError("path is required")
+
+        repo = get_repo(project_path)
+        p = Path(file_path)
+        if p.is_absolute():
+            abs_path = p.resolve()
+            try:
+                rel = abs_path.relative_to(project_path.resolve()).as_posix()
+            except ValueError:
+                rel = p.as_posix()
+        else:
+            abs_path = (project_path / file_path).resolve()
+            rel = p.as_posix()
+
+        is_tracked = False
+        if repo:
+            try:
+                tracked_out = repo.git.ls_files(rel)
+                is_tracked = bool(tracked_out.strip())
+            except Exception:
+                is_tracked = False
+
+        if is_tracked and repo:
+            try:
+                repo.git.reset("HEAD", "--", rel)
+            except Exception:
+                pass
+            try:
+                repo.git.checkout("HEAD", "--", rel)
+            except Exception:
+                pass
+            return {"success": True, "action": "checkout", "path": rel}
+        else:
+            if abs_path.exists():
+                if abs_path.is_file() or abs_path.is_symlink():
+                    abs_path.unlink()
+                elif abs_path.is_dir():
+                    import shutil
+                    shutil.rmtree(abs_path)
+                return {"success": True, "action": "deleted", "path": rel}
+            return {"success": True, "action": "none", "path": rel}
 
     # ── Cron & Scheduled Jobs ───────────────────────────────────────────────────
 
@@ -1869,13 +2010,13 @@ class JsonRpcHandler:
             from andromity.core.cron import CronScheduler
             scheduler = CronScheduler(
                 project_path,
-                on_trigger=lambda job: asyncio.create_task(self._execute_cron_job(project_path, job))
+                on_trigger=lambda job: asyncio.create_task(self._execute_cron_job(project_path, job, is_manual=False))
             )
             scheduler.start()
             self._cron_schedulers[project_path] = scheduler
         return self._cron_schedulers[project_path]
 
-    async def _execute_cron_job(self, project_path: str, job) -> Dict[str, Any]:
+    async def _execute_cron_job(self, project_path: str, job, is_manual: bool = False) -> Dict[str, Any]:
         from andromity.core.cron import CronStore, CronRunStore, CronRun
         from andromity.core.events import TextDelta, ToolCallStart, ToolResult
         from datetime import datetime, timezone
@@ -1903,6 +2044,17 @@ class JsonRpcHandler:
         )
         run_store.save_run(run)
         self.notify("cron/run_started", {"job_id": job.id, "run": run.to_dict()})
+
+        # Telemetry: track real scheduled execution vs seed preset execution
+        try:
+            from andromity.telemetry import send_feature_used
+            is_seed = getattr(job, "name", "") in CRON_SEED_PRESET_NAMES
+            if is_manual:
+                send_feature_used("cron_seed_run_manual" if is_seed else "cron_user_run_manual")
+            else:
+                send_feature_used("cron_seed_run_auto" if is_seed else "cron_user_run_auto")
+        except Exception:
+            pass
 
         # ── Trust Governance Gate ──────────────────────────────────────────────
         from andromity.core.session import normalize_project_path
@@ -2099,6 +2251,14 @@ class JsonRpcHandler:
         )
         jd = job.to_dict()
         jd["next_run_in"] = job.next_run_in()
+
+        # Telemetry: real custom cron created by user
+        try:
+            from andromity.telemetry import send_feature_used
+            send_feature_used("cron_created")
+        except Exception:
+            pass
+
         return jd
 
     async def rpc_cron_toggle(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -2108,7 +2268,18 @@ class JsonRpcHandler:
         job_id = params.get("id")
         if not job_id:
             raise ValueError("Missing cron job id")
+        
+        job = next((c for c in scheduler.list() if c.id == job_id), None)
         enabled = scheduler.toggle(job_id)
+
+        # Telemetry: differentiate seed vs custom cron toggle
+        try:
+            from andromity.telemetry import send_feature_used
+            is_seed = bool(job and job.name in CRON_SEED_PRESET_NAMES)
+            send_feature_used("cron_seed_toggled" if is_seed else "cron_user_toggled")
+        except Exception:
+            pass
+
         return {"id": job_id, "enabled": enabled}
 
     async def rpc_cron_delete(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -2131,7 +2302,8 @@ class JsonRpcHandler:
         job = next((c for c in scheduler.list() if c.id == job_id), None)
         if not job:
             raise ValueError(f"Cron job {job_id} not found")
-        asyncio.create_task(self._execute_cron_job(project_path, job))
+
+        asyncio.create_task(self._execute_cron_job(project_path, job, is_manual=True))
         return {"id": job_id, "triggered": True}
 
     async def rpc_cron_runs(self, params: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -2144,6 +2316,81 @@ class JsonRpcHandler:
             raise ValueError("Missing cron job id")
         runs = scheduler.list_runs(job_id, limit=limit)
         return [r.to_dict() for r in runs]
+
+    def _extract_turn_files(self, session) -> list[str]:
+        if not session or not getattr(session, "messages", None):
+            return []
+
+        last_user_idx = -1
+        for i in range(len(session.messages) - 1, -1, -1):
+            if session.messages[i].get("role") == "user":
+                last_user_idx = i
+                break
+
+        turn_msgs = session.messages[last_user_idx:] if last_user_idx >= 0 else session.messages
+
+        write_tool_names = {
+            "write_file", "write_to_file", "edit_file", "edit_file_multi",
+            "multi_replace_file_content", "replace_file_content", "patch_file",
+            "create_file", "delete_file", "move_file", "rename_file", "save_file"
+        }
+
+        proj_root = Path(session.project_path).resolve() if getattr(session, "project_path", None) else None
+        edited_files: list[str] = []
+        seen: set[str] = set()
+
+        for msg in turn_msgs:
+            if msg.get("role") != "assistant":
+                continue
+            tool_calls = msg.get("tool_calls") or []
+            for tc in tool_calls:
+                fn = tc.get("function") or {} if isinstance(tc, dict) else {}
+                name = fn.get("name", "")
+                if name not in write_tool_names:
+                    continue
+                args = fn.get("arguments")
+                if isinstance(args, str):
+                    try:
+                        parsed = json.loads(args)
+                    except Exception:
+                        import re
+                        m = re.search(r'"(?:TargetFile|file_path|target_file|target_path|path)"\s*:\s*"([^"]+)"', args)
+                        parsed = {"path": m.group(1)} if m else {}
+                elif isinstance(args, dict):
+                    parsed = args
+                else:
+                    parsed = {}
+
+                candidates = []
+                for key in ("path", "target_path", "target_file", "file_path", "TargetFile"):
+                    val = parsed.get(key)
+                    if val and isinstance(val, str):
+                        candidates.append(val)
+                if isinstance(parsed.get("edits"), list):
+                    for edit in parsed["edits"]:
+                        if isinstance(edit, dict):
+                            for key in ("path", "target_path", "file_path", "TargetFile"):
+                                val = edit.get(key)
+                                if val and isinstance(val, str):
+                                    candidates.append(val)
+
+                for path_str in candidates:
+                    clean_str = path_str.strip()
+                    if not clean_str:
+                        continue
+                    if proj_root:
+                        try:
+                            p = Path(clean_str)
+                            if p.is_absolute():
+                                clean_str = str(p.resolve().relative_to(proj_root))
+                        except Exception:
+                            pass
+                    norm = clean_str.replace("\\", "/").strip().lstrip("./")
+                    if norm and norm not in seen:
+                        seen.add(norm)
+                        edited_files.append(norm)
+
+        return edited_files
 
     async def _generate_ai_session_name(self, session: Session, prompt: str, provider: str, model: str):
         try:

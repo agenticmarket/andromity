@@ -735,7 +735,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           vscode.postMessage({ type: 'open_plan_tab' });
           break;
         case 'diff':
-          vscode.postMessage({ type: 'open_diff' });
+          vscode.postMessage({ type: 'open_review_tab' });
           break;
         case 'cron':
           toggleCronsFlyout();
@@ -1081,6 +1081,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function petMascot() {
       if (!chatMascotEl || chatMascotEl.classList.contains('hidden')) return;
+      try {
+        vscode.postMessage({ type: 'telemetry_feature', feature: 'mascot_petted' });
+      } catch (e) {}
       lastMascotActivityTime = Date.now();
       const wasSleeping = chatMascotEl.classList.contains('is-sleeping');
       const wasPeeking = chatMascotEl.classList.contains('is-peeking');
@@ -1150,6 +1153,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       const firstRect = chatMascotEl.getBoundingClientRect();
       targetPerchEl.appendChild(chatMascotEl);
+      chatMascotEl.style.transition = 'none';
+      chatMascotEl.style.transform = 'none';
       if (fromPlayground) {
         // Free-play coordinates belong to the fixed layer: drop them once docked again.
         chatMascotEl.style.left = '';
@@ -1371,6 +1376,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let mascotLastSparkleAt = 0;
     let mascotBounceCount = 0;
     let mascotLedgeRoamTimer = null;
+    let mascotLedgeStepTimer = null;
+    let mascotJumpTimer = null;
+    let lastMascotTapTime = 0;
     const mascotParticles = [];
     let mascotFieldCache = null;
     let mascotFieldStamp = 0;
@@ -1518,8 +1526,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (!MASCOT_LAYER) return null;
       for (let i = 0; i < mascotParticles.length; i++) {
         const pooled = mascotParticles[i];
-        if (pooled.__mascotFree && pooled.__mascotKind === kind) {
+        if (pooled.__mascotFree) {
           pooled.__mascotFree = false;
+          pooled.__mascotKind = kind;
           pooled.className = 'mascot-particle ' + kind;
           return pooled;
         }
@@ -1614,6 +1623,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       cancelMascotHomeTimer();
       cancelMascotDragFrame();
       stopLedgeRoam();
+      if (mascotJumpTimer) {
+        clearTimeout(mascotJumpTimer);
+        mascotJumpTimer = null;
+      }
       lastMascotActivityTime = Date.now();
       chatMascotEl.style.transition = 'none';
       mascotDragField = null;
@@ -1645,6 +1658,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const travel = Math.hypot(e.clientX - mascotPointerAt.x, e.clientY - mascotPointerAt.y);
         if (travel < MASCOT_PHYSICS.grabThreshold) return;
         if (!parkMascotInLayer(mascotPos.x, mascotPos.y)) return;
+        try { chatMascotEl.setPointerCapture(mascotPointerId); } catch (err) {}
         mascotPlayState = 'dragging';
         mascotDragField = getMascotPlayField();
         mascotMoveSamples = [{ x: e.clientX, y: e.clientY, t: Date.now() }];
@@ -1685,6 +1699,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const wasDragging = mascotPlayState === 'dragging';
       chatMascotEl.classList.remove('is-grabbed', 'is-dragging');
       if (!wasDragging) {
+        const now = Date.now();
+        if (now - lastMascotTapTime < 340) {
+          lastMascotTapTime = 0;
+          mascotJump();
+          return;
+        }
+        lastMascotTapTime = now;
         if (isMascotFreeFloating()) {
           mascotPlayState = 'resting';
           chatMascotEl.classList.add('is-resting');
@@ -1696,6 +1717,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         petMascot();
         return;
       }
+      lastMascotTapTime = 0;
       throwMascot();
     }
 
@@ -1705,6 +1727,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
       detachWindowMascotListeners();
       stopLedgeRoam();
+      if (mascotJumpTimer) {
+        clearTimeout(mascotJumpTimer);
+        mascotJumpTimer = null;
+      }
       if (mascotPlayState !== 'grabbed' && mascotPlayState !== 'dragging') return;
       const wasDragging = mascotPlayState === 'dragging';
       cancelMascotDragFrame();
@@ -1743,7 +1769,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
 
       let first = samples[0];
-      for (let i = samples.length - 1; i >= 0; i--) {
+      for (let i = 0; i < samples.length; i++) {
         if (last.t - samples[i].t <= 120) {
           first = samples[i];
           break;
@@ -1755,6 +1781,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function throwMascot() {
       if (!chatMascotEl) return;
+      try {
+        vscode.postMessage({ type: 'telemetry_feature', feature: 'mascot_tossed' });
+      } catch (e) {}
       const launch = computeMascotThrowVelocity();
       mascotMoveSamples = [];
       mascotBounceCount = 0;
@@ -1848,7 +1877,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (mascotBounceCount >= 2 || mascotVel.y < 130) {
             mascotVel.y = 0;
           } else {
-            mascotVel.y = -mascotVel.y * 0.32;
+            mascotVel.y = -mascotVel.y * p.bounce;
           }
         }
 
@@ -1918,6 +1947,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         clearTimeout(mascotLedgeRoamTimer);
         mascotLedgeRoamTimer = null;
       }
+      if (mascotLedgeStepTimer) {
+        clearTimeout(mascotLedgeStepTimer);
+        mascotLedgeStepTimer = null;
+      }
       if (chatMascotEl) {
         chatMascotEl.classList.remove('is-walking');
         chatMascotEl.style.transition = '';
@@ -1946,7 +1979,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       mascotPos.x = nextX;
       paintMascotFrame();
 
-      setTimeout(() => {
+      mascotLedgeStepTimer = setTimeout(() => {
+        mascotLedgeStepTimer = null;
         if (!chatMascotEl) return;
         chatMascotEl.classList.remove('is-walking');
         chatMascotEl.style.transition = '';
@@ -1983,7 +2017,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       flashMascotClass('is-crouch', 130);
       if (!silent) showMascotBubble(pickMascotRandom(['Hop!', 'Wheee!', 'Yip!', 'Boing!']), 900);
 
-      setTimeout(() => {
+      if (mascotJumpTimer) {
+        clearTimeout(mascotJumpTimer);
+        mascotJumpTimer = null;
+      }
+      mascotJumpTimer = setTimeout(() => {
+        mascotJumpTimer = null;
         if (!chatMascotEl || mascotPlayState === 'grabbed' || mascotPlayState === 'dragging') return;
         chatMascotEl.classList.remove('is-crouch', 'is-resting');
         mascotPlayState = 'flying';
@@ -2055,6 +2094,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       cancelMascotHomeTimer();
       stopMascotPhysics();
       cancelMascotDragFrame();
+      if (mascotJumpTimer) {
+        clearTimeout(mascotJumpTimer);
+        mascotJumpTimer = null;
+      }
       if (!chatMascotEl) return;
       const wasFloating = isMascotFreeFloating();
       mascotPlayState = 'idle';
@@ -2169,6 +2212,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (!hasAnyKey && !isOllamaActive) {
         onboardingSection.style.display = 'flex';
         readyHeroSection.style.display = 'none';
+        if (!window.__onboarding_viewed_tracked) {
+          window.__onboarding_viewed_tracked = true;
+          vscode.postMessage({ type: 'telemetry_feature', feature: 'onboarding_viewed' });
+        }
       } else {
         onboardingSection.style.display = 'none';
         readyHeroSection.style.display = 'flex';
@@ -2181,6 +2228,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         chip.classList.add('active');
         selectedOnboardingProvider = chip.dataset.provider || 'anthropic';
         selectedOnboardingModel = chip.dataset.model || '';
+        vscode.postMessage({ type: 'telemetry_feature', feature: 'onboard_prov_' + selectedOnboardingProvider });
         const name = chip.dataset.name || 'AI Provider';
         const portal = chip.dataset.portal || '';
 
@@ -2242,6 +2290,187 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         apiKey: '',
         modelId: 'llama3.2:latest',
       });
+    });
+
+    let onboardingPendingProvider = '';
+    let onboardingSelectedLiveModel = '';
+    let onboardingLiveModelsList = [];
+
+    const onboardingStep1 = document.getElementById('onboarding-step-1');
+    const onboardingStep2 = document.getElementById('onboarding-step-2');
+    const onboardingStepPill = document.getElementById('onboarding-step-pill');
+    const onboardingStepText = document.getElementById('onboarding-step-text');
+
+    const onboardingStep2Badge = document.getElementById('onboarding-step2-badge');
+    const btnOnboardingStep2Back = document.getElementById('btn-onboarding-step2-back');
+    const onboardingStep2Search = document.getElementById('onboarding-step2-search');
+    const onboardingStep2ModelsList = document.getElementById('onboarding-step2-models-list');
+    const btnStep2Skip = document.getElementById('btn-step2-skip');
+    const btnStep2Confirm = document.getElementById('btn-step2-confirm');
+
+    const ONBOARDING_MODEL_PRIORITIES = [
+      /claude-3[.-]7-sonnet/i,
+      /claude-3[.-]5-sonnet/i,
+      /gpt-4o(?!-mini)/i,
+      /deepseek[/-]r1/i,
+      /deepseek-reasoner/i,
+      /deepseek[/-](chat|v3)/i,
+      /gemini-2[.-]5-flash/i,
+      /gemini-2[.-]5-pro/i,
+      /gemini-2[.-]0-flash/i,
+      /claude-sonnet/i,
+      /gpt-4o-mini/i,
+      /o3-mini/i,
+      /o1(?!-mini)/i,
+      /qwen.*coder/i,
+      /llama-3[.-]3-70b/i,
+      /llama3[.-]2/i,
+    ];
+
+    function getOnboardingModelScore(modelId, modelName) {
+      const target = ((modelId || '') + ' ' + (modelName || '')).toLowerCase();
+      for (let i = 0; i < ONBOARDING_MODEL_PRIORITIES.length; i++) {
+        if (ONBOARDING_MODEL_PRIORITIES[i].test(target)) {
+          return 1000 - i * 10;
+        }
+      }
+      return 0;
+    }
+
+    function showOnboardingModelStep(provider, models, defaultModel) {
+      onboardingPendingProvider = provider || selectedOnboardingProvider || 'anthropic';
+      
+      const rawList = Array.isArray(models) ? models.slice() : [];
+      rawList.sort((a, b) => {
+        if (defaultModel) {
+          if (a.id === defaultModel) return -1;
+          if (b.id === defaultModel) return 1;
+        }
+        const scoreA = getOnboardingModelScore(a.id, a.name);
+        const scoreB = getOnboardingModelScore(b.id, b.name);
+        if (scoreA !== scoreB) return scoreB - scoreA;
+        return (a.name || a.id).localeCompare(b.name || b.id);
+      });
+
+      onboardingLiveModelsList = rawList;
+      onboardingSelectedLiveModel = defaultModel || (onboardingLiveModelsList[0]?.id) || '';
+
+      if (onboardingStep1) onboardingStep1.style.display = 'none';
+      if (onboardingStep2) onboardingStep2.style.display = 'flex';
+      if (onboardingStepText) onboardingStepText.textContent = 'Step 2 of 2 · Choose Starting Model';
+
+      if (onboardingStep2Badge) {
+        const provName = provider ? provider.toUpperCase() : 'AI';
+        onboardingStep2Badge.textContent = provName + ' CONNECTED';
+      }
+
+      if (onboardingStep2Search) onboardingStep2Search.value = '';
+      renderOnboardingStep2Models('');
+      if (onboardingStep2Search) setTimeout(() => onboardingStep2Search.focus(), 60);
+    }
+
+    function showOnboardingKeyStep() {
+      if (onboardingStep2) onboardingStep2.style.display = 'none';
+      if (onboardingStep1) onboardingStep1.style.display = 'flex';
+      if (onboardingStepText) onboardingStepText.textContent = 'Step 1 of 2 · Quick Setup';
+
+      if (btnOnboardingSave) {
+        btnOnboardingSave.disabled = false;
+        btnOnboardingSave.innerHTML = '<span>Connect & Continue</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+      }
+      if (btnOnboardingOllamaSave) {
+        btnOnboardingOllamaSave.disabled = false;
+        btnOnboardingOllamaSave.innerHTML = '<span>Activate Local Ollama</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+      }
+      if (btnStep2Confirm) {
+        btnStep2Confirm.disabled = false;
+        btnStep2Confirm.innerHTML = '<span>Start Coding</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+      }
+    }
+
+    function renderOnboardingStep2Models(filterQuery) {
+      if (!onboardingStep2ModelsList) return;
+      const q = (filterQuery || '').trim().toLowerCase();
+      const filtered = onboardingLiveModelsList.filter(m => {
+        if (!q) return true;
+        const name = (m.name || '').toLowerCase();
+        const id = (m.id || '').toLowerCase();
+        const desc = (m.desc || '').toLowerCase();
+        return name.includes(q) || id.includes(q) || desc.includes(q);
+      });
+
+      if (filtered.length === 0) {
+        onboardingStep2ModelsList.innerHTML = '<div style="padding:16px; text-align:center; color:var(--muted); font-size:11px;">No matching models found.</div>';
+        return;
+      }
+
+      onboardingStep2ModelsList.innerHTML = filtered.map(m => {
+        const isSelected = m.id === onboardingSelectedLiveModel;
+        const isPopular = getOnboardingModelScore(m.id, m.name) >= 800;
+        const popBadge = isPopular ? '<span class="model-badge-rec">Popular</span>' : '';
+        return '<div class="onboarding-model-item ' + (isSelected ? 'active' : '') + '" data-action="select-live-model" data-model-id="' + escapeHtml(m.id) + '" role="option" aria-selected="' + (isSelected ? 'true' : 'false') + '">' +
+          '<div class="onboarding-model-item-info">' +
+            '<div class="onboarding-model-item-name">' + escapeHtml(m.name || m.id) + popBadge + '</div>' +
+            (m.desc ? '<div class="onboarding-model-item-desc">' + escapeHtml(m.desc) + '</div>' : '') +
+          '</div>' +
+          '<div class="onboarding-model-item-meta">' +
+            (m.context ? '<span class="onboarding-model-ctx-pill">' + escapeHtml(m.context) + '</span>' : '') +
+            (m.pricing ? '<span class="onboarding-model-pricing-pill">' + escapeHtml(m.pricing) + '</span>' : '') +
+          '</div>' +
+        '</div>';
+      }).join('');
+    }
+
+    function confirmOnboardingModel(chosenModel) {
+      const modelToUse = chosenModel || onboardingSelectedLiveModel || onboardingLiveModelsList[0]?.id;
+      if (btnStep2Confirm) {
+        btnStep2Confirm.disabled = true;
+        btnStep2Confirm.innerHTML = '<span>Saving...</span>';
+      }
+      vscode.postMessage({
+        type: 'finish_onboarding_model',
+        provider: onboardingPendingProvider,
+        modelId: modelToUse,
+      });
+    }
+
+    onboardingStep2ModelsList?.addEventListener('click', (e) => {
+      const item = e.target.closest('.onboarding-model-item');
+      if (!item) return;
+      onboardingSelectedLiveModel = item.dataset.modelId || '';
+      onboardingStep2ModelsList.querySelectorAll('.onboarding-model-item').forEach(el => el.classList.remove('active'));
+      item.classList.add('active');
+    });
+
+    onboardingStep2ModelsList?.addEventListener('dblclick', (e) => {
+      const item = e.target.closest('.onboarding-model-item');
+      if (!item) return;
+      confirmOnboardingModel(item.dataset.modelId);
+    });
+
+    onboardingStep2Search?.addEventListener('input', () => {
+      renderOnboardingStep2Models(onboardingStep2Search.value);
+    });
+
+    onboardingStep2Search?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const first = onboardingStep2ModelsList?.querySelector('.onboarding-model-item');
+        if (first) {
+          confirmOnboardingModel(first.dataset.modelId);
+        }
+      }
+    });
+
+    btnStep2Confirm?.addEventListener('click', () => {
+      confirmOnboardingModel();
+    });
+
+    btnStep2Skip?.addEventListener('click', () => {
+      confirmOnboardingModel(onboardingLiveModelsList[0]?.id);
+    });
+
+    btnOnboardingStep2Back?.addEventListener('click', () => {
+      showOnboardingKeyStep();
     });
 
     function toggleSessionsFlyout() {
@@ -3082,6 +3311,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           break;
         }
+        case 'open-review-tab':
+        case 'open-changes-review': {
+          const card = target.closest('.files-changed-card');
+          let turnFiles = undefined;
+          if (card && card.getAttribute('data-turn-files')) {
+            try {
+              turnFiles = JSON.parse(card.getAttribute('data-turn-files'));
+            } catch (err) {}
+          }
+          const fPath = target.getAttribute('data-file-path') || target.closest('[data-file-path]')?.getAttribute('data-file-path');
+          vscode.postMessage({ type: 'open_review_tab', filePath: fPath, turnFiles: turnFiles });
+          break;
+        }
         case 'toggle-timeline':
           if (timelineFlyout) {
             const isVis = timelineFlyout.style.display !== 'none';
@@ -3100,7 +3342,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           vscode.postMessage({ type: 'new_session' });
           break;
         case 'open-diff':
-          vscode.postMessage({ type: 'open_diff' });
+          vscode.postMessage({ type: 'open_review_tab' });
           break;
         case 'toggle-more-files': {
           e.stopPropagation();
@@ -3114,9 +3356,26 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           break;
         }
-        case 'undo-turn':
-          vscode.postMessage({ type: 'undo_turn' });
+        case 'undo-turn': {
+          const userWrap = target.closest('.message-wrap.user');
+          const allUserWraps = Array.from(chatContainer.querySelectorAll('.message-wrap.user'));
+          const totalTurns = allUserWraps.length;
+          let turnIndex = -1;
+          if (userWrap) {
+            turnIndex = allUserWraps.indexOf(userWrap);
+          }
+          if (turnIndex < 0 && target.hasAttribute && target.hasAttribute('data-turn-index')) {
+            turnIndex = parseInt(target.getAttribute('data-turn-index'), 10);
+          }
+          const turnsToUndo = (turnIndex >= 0 && totalTurns > 0) ? (totalTurns - turnIndex) : 1;
+          vscode.postMessage({
+            type: 'undo_turn',
+            turnIndex: turnIndex >= 0 ? turnIndex : undefined,
+            totalTurns: totalTurns,
+            turnsToUndo: turnsToUndo,
+          });
           break;
+        }
         case 'carousel-prev': {
           const cWrap = target.closest('.prompt-images-container');
           const carousel = cWrap ? cWrap.querySelector('.prompt-image-carousel') : null;
@@ -4082,10 +4341,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       const wrap = document.createElement('div');
       wrap.className = 'message-wrap user';
+      const existingUserCount = chatContainer.querySelectorAll('.message-wrap.user').length;
+      wrap.setAttribute('data-turn-index', String(existingUserCount));
 
       const actionsDiv = document.createElement('div');
       actionsDiv.className = 'user-prompt-actions';
-      actionsDiv.innerHTML = '<button class="prompt-undo-btn" data-action="undo-turn" title="Undo to here">' +
+      actionsDiv.innerHTML = '<button class="prompt-undo-btn" data-action="undo-turn" data-turn-index="' + existingUserCount + '" title="Undo to here">' +
         '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">' +
           '<path d="M3 7v6h6"></path>' +
           '<path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path>' +
@@ -4638,11 +4899,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       const card = document.createElement('div');
       card.className = 'files-changed-card';
+      try {
+        card.setAttribute('data-turn-files', JSON.stringify(files));
+      } catch (err) {}
 
       const header = document.createElement('div');
       header.className = 'files-changed-header';
       header.innerHTML = '<span class="files-changed-title">' + files.length + ' File' + (files.length > 1 ? 's' : '') + ' Changed</span>' +
-        '<button class="files-changed-review-btn" data-action="open-diff" title="Review All Changes in Git Diff">Review</button>';
+        '<button class="files-changed-review-btn" data-action="open-review-tab" title="Review All Changes in Git Diff">Review</button>';
       card.appendChild(header);
 
       const list = document.createElement('div');
@@ -4653,9 +4917,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const row = document.createElement('div');
         row.className = 'files-changed-row' + (idx >= MAX_PREVIEW ? ' files-changed-extra' : '');
         if (idx >= MAX_PREVIEW) row.style.display = 'none';
-        row.setAttribute('data-action', 'open-file-diff');
+        row.setAttribute('data-action', 'open-review-tab');
         row.setAttribute('data-file-path', filePath);
-        row.setAttribute('title', 'Click to view diff for ' + filePath);
+        row.setAttribute('title', 'Click to review diff for ' + filePath);
 
         const normalizedKey = filePath.replace(/\\\\/g, '/').trim();
         const filename = normalizedKey.split('/').pop() || filePath;
@@ -4745,6 +5009,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           const card = createFilesChangedCard(turnEditedFiles);
           if (card) currentTurnAssistantDiv.appendChild(card);
         }
+        turnEditedFiles.clear();
 
         const elapsedSec = ((Date.now() - currentTurnStartTime) / 1000).toFixed(1);
         currentTurnAssistantDiv._rawMarkdown = accumulatedAssistantText;
@@ -5153,7 +5418,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     const isWriteTool = /^(write_file|write_to_file|edit_file|edit_file_multi|multi_replace_file_content|replace_file_content|patch_file|create_file|delete_file|move_file|rename_file|save_file)$/.test(toolName);
                     if (isWriteTool) {
                       try {
-                        const parsedArgs = JSON.parse(toolArgs);
+                        const parsedArgs = typeof toolArgs === 'object' && toolArgs !== null ? toolArgs : JSON.parse(toolArgs);
                         const p = parsedArgs.path || parsedArgs.target_path || parsedArgs.target_file || parsedArgs.file_path || parsedArgs.TargetFile;
                         if (p) turnEditedFilesForLoad.add(p);
                         if (Array.isArray(parsedArgs.edits)) {
@@ -5162,7 +5427,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                             if (ep) turnEditedFilesForLoad.add(ep);
                           }
                         }
-                      } catch {}
+                      } catch {
+                        const rawStr = String(toolArgs);
+                        const m = rawStr.match(/"(?:TargetFile|file_path|target_file|target_path|path)"\s*:\s*"([^"]+)"/);
+                        if (m && m[1]) {
+                          turnEditedFilesForLoad.add(m[1]);
+                        }
+                      }
                       if (typeof window.parseFileEditStats === 'function') {
                         const es = window.parseFileEditStats(toolName, toolArgs);
                         if (es && es.filePath) {
@@ -5557,7 +5828,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             const rawArgs = argsEl ? argsEl.textContent : '';
             if (rawArgs && targetTool.getAttribute('data-label-resolved') === '0') {
               try {
-                const parsed = JSON.parse(rawArgs);
+                const parsed = typeof rawArgs === 'object' && rawArgs !== null ? rawArgs : JSON.parse(rawArgs);
                 const p = parsed.path || parsed.target_path || parsed.target_file || parsed.file_path || parsed.TargetFile;
                 const c = parsed.CommandLine || parsed.command || parsed.cmd || parsed.query;
                 const labelEl = document.getElementById('label-' + msg.tool_id);
@@ -5572,7 +5843,24 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     targetTool.setAttribute('data-label-resolved', '1');
                   }
                 }
-              } catch {}
+              } catch {
+                const rawStr = String(rawArgs);
+                const fileMatch = rawStr.match(/"(?:TargetFile|file_path|target_file|target_path|path)"\s*:\s*"([^"]+)"/);
+                const cmdMatch = rawStr.match(/"(?:CommandLine|command|cmd)"\s*:\s*"([^"]+)"/);
+                const labelEl = document.getElementById('label-' + msg.tool_id);
+                if (labelEl) {
+                  if (fileMatch && fileMatch[1]) {
+                    const fname = fileMatch[1].split(String.fromCharCode(92)).join('/').split('/').pop() || fileMatch[1];
+                    labelEl.textContent = fname;
+                    labelEl.title = fileMatch[1];
+                    targetTool.setAttribute('data-label-resolved', '1');
+                  } else if (cmdMatch && cmdMatch[1]) {
+                    labelEl.textContent = cmdMatch[1];
+                    labelEl.title = cmdMatch[1];
+                    targetTool.setAttribute('data-label-resolved', '1');
+                  }
+                }
+              }
             }
           }
           break; }
@@ -5608,7 +5896,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               const isWriteTool = /^(write_file|write_to_file|edit_file|edit_file_multi|multi_replace_file_content|replace_file_content|patch_file|create_file|delete_file|move_file|rename_file|save_file)$/.test(toolName);
               if (isWriteTool) {
                 try {
-                  const parsed = JSON.parse(rawArgs);
+                  const parsed = typeof rawArgs === 'object' && rawArgs !== null ? rawArgs : JSON.parse(rawArgs);
                   const p = parsed.path || parsed.target_path || parsed.target_file || parsed.file_path || parsed.TargetFile;
                   if (p) turnEditedFiles.add(p);
                   if (Array.isArray(parsed.edits)) {
@@ -5617,7 +5905,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                       if (ep) turnEditedFiles.add(ep);
                     }
                   }
-                } catch {}
+                } catch {
+                  const rawStr = String(rawArgs);
+                  const m = rawStr.match(/"(?:TargetFile|file_path|target_file|target_path|path)"\s*:\s*"([^"]+)"/);
+                  if (m && m[1]) {
+                    turnEditedFiles.add(m[1]);
+                  }
+                }
                 if (typeof window.parseFileEditStats === 'function') {
                   const es = window.parseFileEditStats(toolName, rawArgs);
                   if (es && es.filePath) {
@@ -5709,7 +6003,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             sessionsState[msg.session_id].pendingQuestions = msg;
             break;
           }
-          const questions = msg.questions || [];
+          let questions = msg.questions || [];
+          if (typeof questions === 'string') {
+            try {
+              questions = JSON.parse(questions);
+            } catch {
+              questions = [{ question: questions, type: 'text', options: [] }];
+            }
+          }
+          if (!Array.isArray(questions)) {
+            questions = [questions];
+          }
           const totalQ = questions.length;
           window.currentQuestionSlide = 0;
           window.totalQuestionSlides = totalQ;
@@ -5863,6 +6167,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
 
         case 'agent_started':
+          turnEditedFiles.clear();
           if (msg.session_id) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
             sessionsState[msg.session_id].isRunning = true;
@@ -5889,9 +6194,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           hideCompactionBannerWithSuccess(msg);
           break;
 
-        case 'turn_undone':
-          appendSystemNote('Last turn undone: file changes rolled back.');
+        case 'turn_undone': {
+          const undoneCount = msg.turnsUndone || 1;
+          appendSystemNote(undoneCount > 1
+            ? (undoneCount + ' turns undone: file changes rolled back.')
+            : 'Last turn undone: file changes rolled back.');
           break;
+        }
 
         case 'agent_busy':
           if (msg.queuedPrompt) {
@@ -5918,6 +6227,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           cancelBtn.disabled = false;
           cancelBtn.style.opacity = '';
           cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
+          if (Array.isArray(msg.turn_files)) {
+            for (const tf of msg.turn_files) {
+              if (tf) turnEditedFiles.add(tf);
+            }
+          }
           endAssistantTurn();
           interactiveSlot.innerHTML = '';
           activePendingApprovalId = null;
@@ -6018,7 +6332,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           break;
 
+        case 'key_configured_select_model': {
+          showOnboardingModelStep(msg.provider, msg.models, msg.defaultModel);
+          break;
+        }
+
         case 'key_configured_success': {
+          showOnboardingKeyStep();
           if (btnOnboardingSave) {
             btnOnboardingSave.disabled = false;
             btnOnboardingSave.innerHTML = '<span>Connected! ✓</span>';
@@ -6038,9 +6358,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
 
         case 'key_configure_failed': {
+          showOnboardingKeyStep();
           if (btnOnboardingSave) {
             btnOnboardingSave.disabled = false;
-            btnOnboardingSave.innerHTML = '<span>Connect & Start Coding</span>';
+            btnOnboardingSave.innerHTML = '<span>Connect & Continue</span>';
           }
           if (btnOnboardingOllamaSave) {
             btnOnboardingOllamaSave.disabled = false;
@@ -6108,6 +6429,39 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
           if (promptInput) promptInput.value = '';
           dispatchPrompt(fullUserMsg, false, []);
+          break;
+        }
+
+        case 'active_editor_context': {
+          const actCtx = msg.context;
+          const chip = document.getElementById('active-file-chip');
+          const nameSpan = document.getElementById('active-file-name');
+          const diagSpan = document.getElementById('active-file-diag');
+          if (chip && nameSpan) {
+            if (actCtx && actCtx.fileName) {
+              chip.style.display = 'inline-flex';
+              const lineStr = actCtx.cursorLine ? ':' + actCtx.cursorLine : '';
+              nameSpan.textContent = actCtx.fileName + lineStr;
+              chip.title = 'Active: ' + (actCtx.relativePath || actCtx.fileName) + (actCtx.cursorLine ? ' (line ' + actCtx.cursorLine + ')' : '') + ' · Ambient IDE context included';
+              if (diagSpan) {
+                if (actCtx.errorCount > 0) {
+                  diagSpan.style.display = 'inline';
+                  diagSpan.textContent = actCtx.errorCount + ' err';
+                  diagSpan.style.background = 'rgba(239, 68, 68, 0.25)';
+                  diagSpan.style.color = '#f87171';
+                } else if (actCtx.warningCount > 0) {
+                  diagSpan.style.display = 'inline';
+                  diagSpan.textContent = actCtx.warningCount + ' warn';
+                  diagSpan.style.background = 'rgba(245, 158, 11, 0.25)';
+                  diagSpan.style.color = '#fbbf24';
+                } else {
+                  diagSpan.style.display = 'none';
+                }
+              }
+            } else {
+              chip.style.display = 'none';
+            }
+          }
           break;
         }
       }

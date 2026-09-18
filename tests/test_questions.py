@@ -260,3 +260,169 @@ async def test_agent_ask_question_singular_tool_name(tmp_path):
     assert len(tool_msgs) == 1
     assert tool_msgs[0]["name"] == "ask_question"
     assert "SQLite" in tool_msgs[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_agent_ask_questions_stringified_json(tmp_path):
+    session = Session(name="test", project_path=str(tmp_path))
+    received_questions = []
+
+    async def mock_on_questions(questions):
+        nonlocal received_questions
+        received_questions = questions
+        return format_question_answers(questions, {"0": "React"})
+
+    agent = Agent(
+        session,
+        profile="builder",
+        auto_approve=True,
+        on_questions=mock_on_questions,
+    )
+
+    call_count = 0
+
+    async def mock_stream(messages, tools=None, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield ToolCallStart(tool_name="ask_questions", tool_id="tc_str_json")
+            stringified = json.dumps([
+                {"question": "Tech stack?", "type": "single", "options": ["React", "Vue"]},
+                {"question": "Storage?", "type": "single", "options": ["SQLite", "Postgres"]}
+            ])
+            yield ToolCallDelta(
+                tool_id="tc_str_json",
+                args_json_chunk=json.dumps({"questions": stringified}),
+            )
+            yield ToolCallEnd(tool_id="tc_str_json")
+            yield Done()
+        else:
+            yield TextDelta(text="Done!")
+            yield Done()
+
+    with patch("andromity.core.agent.stream_completion", side_effect=mock_stream):
+        events = []
+        async for event in agent.run("build app"):
+            events.append(event)
+
+    assert len(received_questions) == 2
+    assert received_questions[0]["question"] == "Tech stack?"
+    assert received_questions[1]["question"] == "Storage?"
+
+
+@pytest.mark.asyncio
+async def test_agent_ask_questions_malformed_informs_llm(tmp_path):
+    session = Session(name="test", project_path=str(tmp_path))
+
+    agent = Agent(
+        session,
+        profile="builder",
+        auto_approve=True,
+    )
+
+    call_count = 0
+
+    async def mock_stream(messages, tools=None, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield ToolCallStart(tool_name="ask_questions", tool_id="tc_malformed")
+            yield ToolCallDelta(
+                tool_id="tc_malformed",
+                args_json_chunk=json.dumps({"questions": ""}),
+            )
+            yield ToolCallEnd(tool_id="tc_malformed")
+            yield Done()
+        else:
+            yield TextDelta(text="Fixed!")
+            yield Done()
+
+    with patch("andromity.core.agent.stream_completion", side_effect=mock_stream):
+        events = []
+        async for event in agent.run("test malformed"):
+            events.append(event)
+
+    tool_msgs = [m for m in session.messages if m["role"] == "tool"]
+    assert len(tool_msgs) == 1
+    assert "Error: 'ask_questions' received malformed" in tool_msgs[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_agent_ask_questions_invalid_json_informs_llm(tmp_path):
+    session = Session(name="test", project_path=str(tmp_path))
+
+    agent = Agent(
+        session,
+        profile="builder",
+        auto_approve=True,
+    )
+
+    call_count = 0
+
+    async def mock_stream(messages, tools=None, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield ToolCallStart(tool_name="ask_questions", tool_id="tc_bad_json")
+            yield ToolCallDelta(
+                tool_id="tc_bad_json",
+                args_json_chunk="{\"questions\": {broken json}",
+            )
+            yield ToolCallEnd(tool_id="tc_bad_json")
+            yield Done()
+        else:
+            yield TextDelta(text="Done!")
+            yield Done()
+
+    with patch("andromity.core.agent.stream_completion", side_effect=mock_stream):
+        async for _ in agent.run("test bad json"):
+            pass
+
+    tool_msgs = [m for m in session.messages if m["role"] == "tool"]
+    assert len(tool_msgs) == 1
+    assert "Error: 'ask_questions' received malformed" in tool_msgs[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_agent_ask_questions_raw_array_arguments(tmp_path):
+    session = Session(name="test", project_path=str(tmp_path))
+    received_questions = []
+
+    async def mock_on_questions(questions):
+        nonlocal received_questions
+        received_questions = questions
+        return format_question_answers(questions, {"0": "Opt A"})
+
+    agent = Agent(
+        session,
+        profile="builder",
+        auto_approve=True,
+        on_questions=mock_on_questions,
+    )
+
+    call_count = 0
+
+    async def mock_stream(messages, tools=None, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield ToolCallStart(tool_name="ask_questions", tool_id="tc_arr")
+            yield ToolCallDelta(
+                tool_id="tc_arr",
+                args_json_chunk=json.dumps([{"question": "Pick option", "options": ["Opt A", "Opt B"]}]),
+            )
+            yield ToolCallEnd(tool_id="tc_arr")
+            yield Done()
+        else:
+            yield TextDelta(text="Done!")
+            yield Done()
+
+    with patch("andromity.core.agent.stream_completion", side_effect=mock_stream):
+        async for _ in agent.run("test raw array"):
+            pass
+
+    assert len(received_questions) == 1
+    assert received_questions[0]["question"] == "Pick option"
+
+
+

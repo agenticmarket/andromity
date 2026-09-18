@@ -139,6 +139,7 @@ export class SettingsPanel {
     };
 
     this._update();
+    void this._rpcClient?.call("telemetry.recordFeature", { feature: "settings_opened" }).catch(() => {});
 
     this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
 
@@ -153,6 +154,7 @@ export class SettingsPanel {
 
   public setRpcClient(client: RpcClient) {
     this._rpcClient = client;
+    void this._rpcClient.call("telemetry.recordFeature", { feature: "settings_opened" }).catch(() => {});
     this.loadData();
   }
 
@@ -495,6 +497,15 @@ export class SettingsPanel {
         break;
       }
 
+      case "tab_switched": {
+        const tab = message.tab;
+        if (tab && typeof tab === "string") {
+          const cleanTab = tab.slice(0, 32).replace(/[^a-z0-9_-]/g, "");
+          void this._rpcClient?.call("telemetry.recordFeature", { feature: `settings_tab_${cleanTab}` }).catch(() => {});
+        }
+        break;
+      }
+
       case "update_wallpaper_setting": {
         const config = vscode.workspace.getConfiguration("andromity.wallpaper");
         await config.update(message.key, message.value, vscode.ConfigurationTarget.Global);
@@ -504,6 +515,16 @@ export class SettingsPanel {
           value: message.value,
         });
         this._onConfigChangeCallback?.();
+        if (message.key === "enabled") {
+          void this._rpcClient?.call("telemetry.recordFeature", {
+            feature: message.value ? "wallpaper_enabled" : "wallpaper_disabled",
+          }).catch(() => {});
+        } else if (message.key === "preset" && typeof message.value === "string") {
+          const cleanPreset = message.value.slice(0, 24).replace(/[^a-z0-9_-]/g, "");
+          void this._rpcClient?.call("telemetry.recordFeature", {
+            feature: `wallpaper_preset_${cleanPreset}`,
+          }).catch(() => {});
+        }
         break;
       }
 
@@ -511,6 +532,9 @@ export class SettingsPanel {
         const config = vscode.workspace.getConfiguration("andromity");
         await config.update("mascotEnabled", !!message.enabled, vscode.ConfigurationTarget.Global);
         this._onConfigChangeCallback?.();
+        void this._rpcClient?.call("telemetry.recordFeature", {
+          feature: message.enabled ? "mascot_enabled" : "mascot_disabled",
+        }).catch(() => {});
         try {
           const { ChatViewProvider } = await import("../providers/ChatViewProvider.js");
           ChatViewProvider.currentProvider?.broadcastMascotConfig();
@@ -2765,6 +2789,9 @@ SOFTWARE.</pre>
     function switchTab(tab) {
       tabButtons.forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
       panes.forEach(p => p.classList.toggle("active", p.id === "pane-" + tab));
+      try {
+        vscode.postMessage({ type: "tab_switched", tab: tab });
+      } catch (e) {}
     }
 
     // Refresh button

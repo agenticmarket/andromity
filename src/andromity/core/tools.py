@@ -1498,7 +1498,7 @@ CORE_TOOLS = [
                 "properties": {
                     "questions": {
                         "type": "array",
-                        "description": "Questions to ask. type='single' uses the options as exclusive choices; type='multi' allows selecting several options; type='text' expects a free-form answer.",
+                        "description": "Direct JSON array of question objects (do not format as a stringified JSON string). type='single' uses options as exclusive choices; type='multi' allows selecting several options; type='text' expects a free-form answer.",
                         "items": {
                             "type": "object",
                             "properties": {

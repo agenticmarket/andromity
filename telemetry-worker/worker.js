@@ -171,8 +171,18 @@ export default {
       const country = /^[A-Z]{2}$/.test(rawCountry) ? rawCountry : 'XX';
 
       // v2 — model/provider fields (safe, bounded)
-      const provider        = String(data.provider || 'unknown').slice(0, 32).replace(/[^a-zA-Z0-9._-]/g, '') || 'unknown';
-      const model           = String(data.model    || 'unknown').slice(0, 64).replace(/[^a-zA-Z0-9._:-]/g, '') || 'unknown';
+      let provider        = String(data.provider || 'unknown').slice(0, 32).replace(/[^a-zA-Z0-9._-]/g, '') || 'unknown';
+      let model           = String(data.model    || 'unknown').slice(0, 64).replace(/[^a-zA-Z0-9._:-]/g, '') || 'unknown';
+
+      // API key scrubbing guard (Zero-PII guarantee)
+      const KEY_REGEX = /(?:sk-[a-zA-Z0-9_\-]{16,}|nvapi-[a-zA-Z0-9_\-]{16,}|gsk_[a-zA-Z0-9_\-]{16,}|AIza[a-zA-Z0-9_\-]{16,}|xai-[a-zA-Z0-9_\-]{16,}|key-[a-zA-Z0-9_\-]{16,})/;
+      if (KEY_REGEX.test(model) || (model.length >= 32 && /^[a-zA-Z0-9_\-]{32,}$/.test(model))) {
+        model = 'scrubbed_api_key';
+      }
+      if (KEY_REGEX.test(provider) || (provider.length >= 32 && /^[a-zA-Z0-9_\-]{32,}$/.test(provider))) {
+        provider = 'scrubbed_api_key';
+      }
+
       const providerTypeRaw = String(data.provider_type || 'cloud').toLowerCase();
       const providerType    = ['cloud', 'local'].includes(providerTypeRaw) ? providerTypeRaw : 'cloud';
       const reasoningEffort = ['off', 'low', 'medium', 'high'].includes(data.reasoning_effort) ? data.reasoning_effort : 'off';
@@ -183,7 +193,7 @@ export default {
       const rawProfile      = typeof data.profile === 'string' ? data.profile.toLowerCase().trim() : 'builder';
       const profile         = ALLOWED_PROFILES.includes(rawProfile) ? rawProfile : 'builder';
       const durationSeconds = Math.max(0, parseInt(data.duration_seconds || data.duration_sec || 0, 10));
-      const turnCountInput  = Math.min(Math.max(1, parseInt(data.turn_count || 1, 10)), 9999);
+      const turnCountInput  = Math.min(Math.max(0, parseInt(data.turn_count || 0, 10)), 9999);
 
       const now     = new Date().toISOString();
       const date    = now.split('T')[0];
@@ -381,6 +391,16 @@ async function getD1Stats(env) {
     // v3
     profilesRes,
     featuresRes,
+    // v4
+    turnDistRes,
+    onboardingRes,
+    // v5 — error health & product adoption
+    errorStatsRes,
+    errorCategoriesRes,
+    cronStatsRes,
+    mascotStatsRes,
+    wallpaperStatsRes,
+    settingsTabsRes,
   ] = await env.DB.batch([
     env.DB.prepare(`SELECT COUNT(*) AS count FROM users`),
     env.DB.prepare(`SELECT COUNT(*) AS count FROM sessions`),
@@ -565,7 +585,96 @@ async function getD1Stats(env) {
       FROM feature_events
       GROUP BY feature_name
       ORDER BY count DESC
-      LIMIT 20
+      LIMIT 25
+    `),
+    // v4 — turn distribution (real turns vs bounces)
+    env.DB.prepare(`
+      SELECT
+        CASE
+          WHEN turn_count = 0 THEN '0 turns (bounce)'
+          WHEN turn_count = 1 THEN '1 turn'
+          WHEN turn_count BETWEEN 2 AND 4 THEN '2-4 turns'
+          ELSE '5+ turns'
+        END AS bucket,
+        COUNT(*) AS sessions,
+        COUNT(DISTINCT user_id) AS users
+      FROM sessions
+      GROUP BY bucket
+      ORDER BY CASE bucket
+        WHEN '0 turns (bounce)' THEN 1
+        WHEN '1 turn' THEN 2
+        WHEN '2-4 turns' THEN 3
+        ELSE 4
+      END
+    `),
+    // v4 — onboarding funnel
+    env.DB.prepare(`
+      SELECT
+        COUNT(DISTINCT CASE WHEN feature_name = 'onboarding_viewed' THEN user_id END) AS viewed_users,
+        COUNT(DISTINCT CASE WHEN feature_name LIKE 'onboard_prov_%' THEN user_id END) AS provider_selected_users,
+        COUNT(DISTINCT CASE WHEN feature_name = 'onboarding_key_saved' THEN user_id END) AS key_saved_users,
+        COUNT(DISTINCT CASE WHEN feature_name = 'onboarding_completed' THEN user_id END) AS completed_users
+      FROM feature_events
+    `),
+    // v5 — error health
+    env.DB.prepare(`
+      SELECT
+        COUNT(DISTINCT user_id) AS affected_users,
+        COUNT(DISTINCT session_id) AS error_sessions,
+        COUNT(*) AS total_errors
+      FROM feature_events
+      WHERE feature_name LIKE 'error_%'
+    `),
+    // v5 — error categories
+    env.DB.prepare(`
+      SELECT feature_name AS category,
+             COUNT(DISTINCT user_id) AS users,
+             COUNT(*) AS count
+      FROM feature_events
+      WHERE feature_name LIKE 'error_%'
+      GROUP BY feature_name
+      ORDER BY count DESC
+    `),
+    // v5 — real crons vs seed presets
+    env.DB.prepare(`
+      SELECT
+        COUNT(CASE WHEN feature_name = 'cron_created' THEN 1 END) AS user_crons_created,
+        COUNT(CASE WHEN feature_name = 'cron_user_run_manual' THEN 1 END) AS user_manual_runs,
+        COUNT(CASE WHEN feature_name = 'cron_user_run_auto' THEN 1 END) AS user_auto_runs,
+        COUNT(CASE WHEN feature_name = 'cron_user_toggled' THEN 1 END) AS user_toggled,
+        COUNT(CASE WHEN feature_name = 'cron_seed_run_manual' THEN 1 END) AS seed_manual_runs,
+        COUNT(CASE WHEN feature_name = 'cron_seed_run_auto' THEN 1 END) AS seed_auto_runs,
+        COUNT(DISTINCT CASE WHEN feature_name LIKE 'cron_user_%' OR feature_name = 'cron_created' THEN user_id END) AS active_cron_users
+      FROM feature_events
+    `),
+    // v5 — mascot interactions
+    env.DB.prepare(`
+      SELECT
+        COUNT(CASE WHEN feature_name = 'mascot_petted' THEN 1 END) AS petted_count,
+        COUNT(CASE WHEN feature_name = 'mascot_tossed' THEN 1 END) AS tossed_count,
+        COUNT(DISTINCT CASE WHEN feature_name IN ('mascot_petted', 'mascot_tossed') THEN user_id END) AS engaged_users,
+        COUNT(CASE WHEN feature_name = 'mascot_enabled' THEN 1 END) AS enabled_count,
+        COUNT(CASE WHEN feature_name = 'mascot_disabled' THEN 1 END) AS disabled_count
+      FROM feature_events
+    `),
+    // v5 — atmospheric wallpaper
+    env.DB.prepare(`
+      SELECT
+        COUNT(CASE WHEN feature_name = 'wallpaper_enabled' THEN 1 END) AS enabled_count,
+        COUNT(CASE WHEN feature_name = 'wallpaper_disabled' THEN 1 END) AS disabled_count,
+        COUNT(DISTINCT CASE WHEN feature_name = 'wallpaper_enabled' THEN user_id END) AS unique_users_enabled
+      FROM feature_events
+    `),
+    // v5 — settings tabs visited
+    env.DB.prepare(`
+      SELECT
+        REPLACE(feature_name, 'settings_tab_', '') AS tab,
+        COUNT(DISTINCT user_id) AS users,
+        COUNT(*) AS visits
+      FROM feature_events
+      WHERE feature_name LIKE 'settings_tab_%'
+      GROUP BY feature_name
+      ORDER BY visits DESC
     `),
   ]);
 
@@ -576,6 +685,11 @@ async function getD1Stats(env) {
   const sessionsToday   = todayStatsRes.results?.[0]?.sessions ?? 0;
   const returningToday  = todayReturningRes.results?.[0]?.count ?? 0;
   const newUsersToday   = Math.max(0, dauToday - returningToday);
+
+  const totalErrors      = errorStatsRes?.results?.[0]?.total_errors ?? 0;
+  const errorSessions    = errorStatsRes?.results?.[0]?.error_sessions ?? 0;
+  const affectedUsers    = errorStatsRes?.results?.[0]?.affected_users ?? 0;
+  const sessionErrorRate = totalSessions > 0 ? Number(((errorSessions / totalSessions) * 100).toFixed(1)) : 0;
 
   return {
     summary: {
@@ -607,6 +721,39 @@ async function getD1Stats(env) {
     // v3
     profiles:          profilesRes.results ?? [],
     features:          featuresRes.results ?? [],
+    // v4
+    turn_distribution: turnDistRes?.results ?? [],
+    onboarding_funnel: onboardingRes?.results?.[0] ?? { viewed_users: 0, provider_selected_users: 0, key_saved_users: 0, completed_users: 0 },
+    // v5
+    error_stats: {
+      total_errors: totalErrors,
+      error_sessions: errorSessions,
+      affected_users: affectedUsers,
+      session_error_rate: sessionErrorRate,
+      categories: errorCategoriesRes?.results ?? [],
+    },
+    cron_stats: cronStatsRes?.results?.[0] ?? {
+      user_crons_created: 0,
+      user_manual_runs: 0,
+      user_auto_runs: 0,
+      user_toggled: 0,
+      seed_manual_runs: 0,
+      seed_auto_runs: 0,
+      active_cron_users: 0,
+    },
+    mascot_stats: mascotStatsRes?.results?.[0] ?? {
+      petted_count: 0,
+      tossed_count: 0,
+      engaged_users: 0,
+      enabled_count: 0,
+      disabled_count: 0,
+    },
+    wallpaper_stats: wallpaperStatsRes?.results?.[0] ?? {
+      enabled_count: 0,
+      disabled_count: 0,
+      unique_users_enabled: 0,
+    },
+    settings_tabs: settingsTabsRes?.results ?? [],
     updated_at: new Date().toISOString(),
   };
 }
@@ -617,6 +764,13 @@ function renderStatsHtml(stats) {
     summary, daily, clients, countries, updated_at,
     providers = [], models = [], provider_types = [],
     reasoning_efforts = [], duration_buckets = [],
+    features = [], turn_distribution = [],
+    onboarding_funnel = { viewed_users: 0, provider_selected_users: 0, key_saved_users: 0, completed_users: 0 },
+    error_stats = { total_errors: 0, error_sessions: 0, affected_users: 0, session_error_rate: 0, categories: [] },
+    cron_stats = { user_crons_created: 0, user_manual_runs: 0, user_auto_runs: 0, user_toggled: 0, seed_manual_runs: 0, seed_auto_runs: 0, active_cron_users: 0 },
+    mascot_stats = { petted_count: 0, tossed_count: 0, engaged_users: 0, enabled_count: 0, disabled_count: 0 },
+    wallpaper_stats = { enabled_count: 0, disabled_count: 0, unique_users_enabled: 0 },
+    settings_tabs = [],
   } = stats;
 
   const cloudSessions = provider_types.find((p) => p.provider_type === 'cloud')?.sessions ?? 0;
@@ -628,6 +782,8 @@ function renderStatsHtml(stats) {
   const thinkingSessions = reasoning_efforts.filter((r) => r.reasoning_effort !== 'off').reduce((s, r) => s + r.sessions, 0);
   const totalRE = reasoning_efforts.reduce((s, r) => s + r.sessions, 0) || 1;
   const thinkingPct = ((thinkingSessions / totalRE) * 100).toFixed(0);
+
+  const onboardingPct = onboarding_funnel.viewed_users > 0 ? Math.round(((onboarding_funnel.completed_users || 0) / onboarding_funnel.viewed_users) * 100) : 0;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -740,6 +896,11 @@ function renderStatsHtml(stats) {
         <div class="card-sub">${summary.total_sessions.toLocaleString()} all-time</div>
       </div>
       <div class="card">
+        <div class="card-label">Onboarding Completed</div>
+        <div class="card-value">${(onboarding_funnel.completed_users || 0).toLocaleString()}</div>
+        <div class="card-sub">${(onboarding_funnel.viewed_users || 0).toLocaleString()} viewed &middot; ${onboardingPct}% completed</div>
+      </div>
+      <div class="card">
         <div class="card-label">Cloud vs Local</div>
         <div class="card-value">${cloudPct}% ☁</div>
         <div class="card-sub">${localPct}% local (Ollama)</div>
@@ -750,6 +911,21 @@ function renderStatsHtml(stats) {
         <div class="card-value">${thinkingPct}%</div>
         <div class="card-sub">${thinkingSessions.toLocaleString()} sessions with reasoning</div>
         <div class="bar-wrap" style="margin-top:10px"><div class="bar bar-green" style="width:${thinkingPct}%"></div></div>
+      </div>
+      <div class="card">
+        <div class="card-label">Global Error Rate</div>
+        <div class="card-value" style="color:${error_stats.session_error_rate > 5 ? '#f87171' : '#34d399'}">${error_stats.session_error_rate}%</div>
+        <div class="card-sub" style="color:var(--subtext)">${(error_stats.total_errors || 0).toLocaleString()} errors &middot; ${(error_stats.affected_users || 0).toLocaleString()} affected users</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Real Cron Jobs</div>
+        <div class="card-value">${(cron_stats.user_crons_created || 0).toLocaleString()} <span style="font-size:14px;font-weight:normal;color:var(--subtext)">custom</span></div>
+        <div class="card-sub">${(cron_stats.user_manual_runs + cron_stats.user_auto_runs).toLocaleString()} runs &middot; ${cron_stats.active_cron_users || 0} active users</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Mascot & Wallpaper</div>
+        <div class="card-value">${(mascot_stats.petted_count + mascot_stats.tossed_count).toLocaleString()} <span style="font-size:14px;font-weight:normal;color:var(--subtext)">pets</span></div>
+        <div class="card-sub">${mascot_stats.engaged_users || 0} pet fans &middot; ${wallpaper_stats.unique_users_enabled || 0} wallpaper users</div>
       </div>
     </div>
 
@@ -813,6 +989,72 @@ function renderStatsHtml(stats) {
         `).join('') : '<tr><td colspan="2" style="color:var(--subtext);text-align:center">No data yet</td></tr>'}
       </tbody>
     </table>
+
+    <div class="tables-row">
+      <div>
+        <div class="section-title">Feature Adoption</div>
+        <table>
+          <thead><tr><th>Feature</th><th>Users</th><th>Interactions</th></tr></thead>
+          <tbody>
+            ${features.length ? features.map((f) => `
+              <tr>
+                <td><span class="tag">${f.feature}</span></td>
+                <td>${f.users.toLocaleString()}</td>
+                <td>${f.count.toLocaleString()}</td>
+              </tr>
+            `).join('') : '<tr><td colspan="3" style="color:var(--subtext);text-align:center">No feature interactions recorded yet</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <div class="section-title">Real Turns & Engagement Depth</div>
+        <table>
+          <thead><tr><th>Engagement Depth</th><th>Users</th><th>Sessions</th></tr></thead>
+          <tbody>
+            ${turn_distribution.length ? turn_distribution.map((t) => `
+              <tr>
+                <td><span class="tag ${t.bucket.includes('0 turns') ? 'tag-orange' : 'tag-green'}">${t.bucket}</span></td>
+                <td>${t.users.toLocaleString()}</td>
+                <td>${t.sessions.toLocaleString()}</td>
+              </tr>
+            `).join('') : '<tr><td colspan="3" style="color:var(--subtext);text-align:center">No turn data yet</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="tables-row">
+      <div>
+        <div class="section-title">Zero-PII Error Diagnostics & Reliability</div>
+        <table>
+          <thead><tr><th>Error Category</th><th>Affected Users</th><th>Total Failures</th></tr></thead>
+          <tbody>
+            ${error_stats.categories.length ? error_stats.categories.map((c) => `
+              <tr>
+                <td><span class="tag tag-orange">${c.category}</span></td>
+                <td>${c.users.toLocaleString()}</td>
+                <td>${c.count.toLocaleString()}</td>
+              </tr>
+            `).join('') : '<tr><td colspan="3" style="color:var(--subtext);text-align:center">100% clean runs — no errors recorded</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <div class="section-title">Settings Tabs Visited</div>
+        <table>
+          <thead><tr><th>Settings Tab</th><th>Unique Users</th><th>Visits</th></tr></thead>
+          <tbody>
+            ${settings_tabs.length ? settings_tabs.map((t) => `
+              <tr>
+                <td><span class="tag">${t.tab.toUpperCase()}</span></td>
+                <td>${t.users.toLocaleString()}</td>
+                <td>${t.visits.toLocaleString()}</td>
+              </tr>
+            `).join('') : '<tr><td colspan="3" style="color:var(--subtext);text-align:center">No tab switches recorded yet</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
 
     <div class="section-title">Clients</div>
     <table>

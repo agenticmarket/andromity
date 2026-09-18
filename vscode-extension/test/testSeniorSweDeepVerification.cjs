@@ -245,6 +245,16 @@ function createDOMEnvironment(htmlContent) {
       el.setAttribute(am[1], am[2]);
       if (am[1].toLowerCase() === 'type') el.type = am[2];
       if (am[1].toLowerCase() === 'value') el.value = am[2];
+      if (am[1].toLowerCase() === 'style') {
+        const parts = am[2].split(';').map(s => s.trim()).filter(Boolean);
+        for (const part of parts) {
+          const [k, ...v] = part.split(':');
+          if (k && v.length) {
+            const camel = k.trim().replace(/-([a-z])/g, (_, l) => l.toUpperCase());
+            el.style[camel] = v.join(':').trim();
+          }
+        }
+      }
     }
   }
 
@@ -682,7 +692,36 @@ assert(saveKeyMsg.apiKey === 'AIzaSyDemoValidGeminiKey1234567890', "Key payload 
 assert(btnSaveKey.disabled === true, "Save button should be disabled during connection");
 console.log("  ✓ Valid API key successfully posted to extension host");
 
-// 2.4 Test Transition on key_configured_success
+// 2.4 Test Live Model Selection Modal on key_configured_select_model
+console.log("  Testing live model selection modal on key_configured_select_model...");
+const onboardingModal = chatDom.elementsById.get('onboarding-model-modal');
+assert(onboardingModal, "DOM Element #onboarding-model-modal missing");
+assert(onboardingModal.style.display === 'none', "Modal should initially be hidden");
+
+chatDom.dispatchMessage({
+  type: 'key_configured_select_model',
+  provider: 'google',
+  models: [
+    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', desc: 'Fast & affordable', context: '1M' },
+    { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', desc: 'Complex reasoning', context: '2M' }
+  ],
+  defaultModel: 'gemini-2.5-flash'
+});
+
+assert(onboardingModal.style.display === 'flex', "Modal must be visible upon key_configured_select_model");
+console.log("  ✓ Real Model Selection Modal emerges smoothly with live models");
+
+const btnConfirmModel = chatDom.elementsById.get('btn-confirm-onboarding-model');
+assert(btnConfirmModel, "#btn-confirm-onboarding-model missing");
+btnConfirmModel.click();
+
+const finishModelMsg = chatDom.postedMessages.find(m => m.type === 'finish_onboarding_model');
+assert(finishModelMsg, "Clicking confirm model must post { type: 'finish_onboarding_model' }");
+assert(finishModelMsg.provider === 'google', "Provider mismatch in finish_onboarding_model");
+assert(finishModelMsg.modelId === 'gemini-2.5-flash', "modelId mismatch in finish_onboarding_model");
+console.log("  ✓ Confirming live model choice posts valid payload to extension host");
+
+// 2.5 Test Transition on key_configured_success
 chatDom.dispatchMessage({
   type: 'key_configured_success',
   provider: 'google',

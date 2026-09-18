@@ -581,25 +581,47 @@ class Agent:
                     qargs = json.loads(fn_dict.get("arguments") or "{}")
                 except json.JSONDecodeError:
                     qargs = {}
-                questions = qargs.get("questions") or qargs.get("question") or qargs or []
-                # Defensive: if the entire args dict leaked in as "questions", wrap it
-                if isinstance(questions, dict):
-                    questions = [questions]
+                if isinstance(qargs, str):
+                    try:
+                        qargs = json.loads(qargs)
+                    except Exception:
+                        pass
+                raw_q = qargs.get("questions") if isinstance(qargs, dict) else None
+                if raw_q is None and isinstance(qargs, dict):
+                    raw_q = qargs.get("question")
+                if raw_q is None:
+                    raw_q = qargs
+
+                if isinstance(raw_q, str):
+                    s = raw_q.strip()
+                    if (s.startswith("[") and s.endswith("]")) or (s.startswith("{") and s.endswith("}")):
+                        try:
+                            raw_q = json.loads(s)
+                        except Exception:
+                            pass
+
+                from andromity.tui.overlays.questions import normalize_questions
+                questions = normalize_questions(raw_q)
+
                 import logging
                 _log = logging.getLogger("andromity")
                 _log.info("ask_questions: got %d question(s), on_questions=%s",
                           len(questions) if isinstance(questions, list) else -1,
                           "SET" if self.on_questions else "NONE")
                 result = ""
-                if questions and self.on_questions:
+                if not questions:
+                    result = (
+                        "Error: 'ask_questions' received malformed or empty arguments. "
+                        "Expected format: {\"questions\": [{\"question\": \"...\", \"type\": \"single\"|\"multi\"|\"text\", \"options\": [...]}]}. "
+                        "Please re-invoke ask_questions with a valid JSON array of question objects."
+                    )
+                elif self.on_questions:
                     try:
                         result = await self.on_questions(questions)
                     except Exception as e:
                         _log.warning("on_questions callback error: %s", e, exc_info=True)
                         result = "The user did not answer the questions. Proceed with reasonable assumptions."
                 else:
-                    _log.warning("ask_questions skipped: questions=%s, on_questions=%s",
-                                 bool(questions), bool(self.on_questions))
                     result = "(No interactive UI available — proceed with reasonable assumptions.)"
                 self.session.add_message(
                     "tool", content=result, name=tool_name, tool_call_id=tc["id"],
@@ -770,9 +792,9 @@ class Agent:
 
     def _get_turn_count(self) -> int:
         if not self.session or not self.session.messages:
-            return max(1, self._turn_count)
+            return max(0, self._turn_count)
         cnt = sum(1 for m in self.session.messages if m.get("role") == "user")
-        return max(1, cnt, self._turn_count)
+        return max(0, cnt, self._turn_count)
 
     def _get_session_duration(self) -> float:
         try:

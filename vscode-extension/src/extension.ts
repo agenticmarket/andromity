@@ -10,6 +10,7 @@ import { SessionTreeProvider } from "./providers/SessionTreeProvider.js";
 import { SettingsPanel } from "./panels/SettingsPanel.js";
 import { PlanEditorPanel } from "./panels/PlanEditorPanel.js";
 import { WaterfallPanel, WaterfallTraceStore } from "./panels/WaterfallPanel.js";
+import { ChangesReviewPanel } from "./panels/ChangesReviewPanel.js";
 import { PythonBridge, formatTimestamp } from "./server/PythonBridge.js";
 import { RpcClient } from "./server/RpcClient.js";
 
@@ -144,6 +145,7 @@ export async function activate(context: vscode.ExtensionContext) {
     SettingsPanel.prewarm(rpcClient);
     SettingsPanel.currentPanel?.setRpcClient(rpcClient);
     PlanEditorPanel.currentPanel?.setRpcClient(rpcClient);
+    ChangesReviewPanel.currentPanel?.setRpcClient(rpcClient);
     WaterfallTraceStore.init(rpcClient);
     bindStatusBarEvents(rpcClient);
 
@@ -514,6 +516,14 @@ export async function activate(context: vscode.ExtensionContext) {
       await chatProvider.openFileDiff(filePath, isUntracked);
     }),
 
+    vscode.commands.registerCommand("andromity.openReview", (filePath?: string) => {
+      chatProvider.openReviewWebview(typeof filePath === "string" ? filePath : undefined);
+    }),
+
+    vscode.commands.registerCommand("andromity.openChangesReview", (filePath?: string) => {
+      chatProvider.openReviewWebview(typeof filePath === "string" ? filePath : undefined);
+    }),
+
     vscode.commands.registerCommand("andromity.refreshSessions", () => {
       sessionTreeProvider.refresh();
     }),
@@ -638,6 +648,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand("andromity.refreshChanges", () => {
       changesTreeProvider.refresh();
+      if (ChangesReviewPanel.currentPanel) {
+        void ChangesReviewPanel.currentPanel.loadChanges();
+      }
     }),
 
     vscode.commands.registerCommand("andromity.deleteSession", async (item: any) => {
@@ -830,6 +843,21 @@ export async function activate(context: vscode.ExtensionContext) {
           log(`[Andromity] Notice: Could not auto-open walkthrough: ${err}`);
         }
       );
+  }
+
+  const AUTO_OPEN_CHAT_KEY = "andromity.hasAutoOpenedChat";
+  const hasAutoOpenedChat = context.globalState.get<boolean>(AUTO_OPEN_CHAT_KEY, false);
+  const autoOpenSetting = vscode.workspace.getConfiguration("andromity").get<string>("autoOpenSidebar", "firstTime");
+  if ((autoOpenSetting === "firstTime" && !hasAutoOpenedChat) || autoOpenSetting === "always") {
+    vscode.commands.executeCommand("andromity.chatView.focus").then(
+      () => {
+        context.globalState.update(AUTO_OPEN_CHAT_KEY, true);
+        log("[Andromity] Auto-opened right-side assistant sidebar.");
+      },
+      (err) => {
+        log(`[Andromity] Notice: Could not auto-open sidebar: ${err}`);
+      }
+    );
   }
 }
 

@@ -65,7 +65,7 @@
       }
     },
     "viewsContainers": {
-      "activitybar": [
+      "secondarySidebar": [
         {
           "id": "andromity-sidebar",
           "title": "Andromity",
@@ -190,6 +190,12 @@
         "command": "andromity.openFileDiff",
         "title": "Open File Diff",
         "category": "Andromity"
+      },
+      {
+        "command": "andromity.openReview",
+        "title": "Changes Review",
+        "category": "Andromity",
+        "icon": "$(diff-multiple)"
       },
       {
         "command": "andromity.openSessionInTab",
@@ -387,14 +393,24 @@
       ],
       "view/title": [
         {
+          "command": "andromity.fixTerminalError",
+          "when": "view == terminal",
+          "group": "navigation"
+        },
+        {
           "command": "andromity.newSession",
           "when": "view == andromity.chatView",
           "group": "navigation@1"
         },
         {
-          "command": "andromity.viewGitDiff",
+          "command": "andromity.openReview",
           "when": "view == andromity.chatView",
           "group": "navigation@2"
+        },
+        {
+          "command": "andromity.viewGitDiff",
+          "when": "view == andromity.chatView",
+          "group": "navigation@3"
         },
         {
           "command": "andromity.showSessions",
@@ -514,6 +530,16 @@
           "type": "boolean",
           "default": true,
           "description": "Play sound notifications on turn finish or approval required."
+        },
+        "andromity.autoOpenSidebar": {
+          "type": "string",
+          "default": "firstTime",
+          "enum": [
+            "firstTime",
+            "always",
+            "never"
+          ],
+          "description": "Automatically open the Andromity assistant sidebar (first time after install, every time VS Code starts, or never)."
         },
         "andromity.telemetry": {
           "type": "boolean",

@@ -1,6 +1,7 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
+import { ChangesReviewPanel } from "../panels/ChangesReviewPanel.js";
 
 export const HEAD_SCHEME = "andromity-head";
 
@@ -45,17 +46,24 @@ interface GitStatusInfo {
 
 export class DiffManager {
   private _rpcClient: RpcClient;
+  private _context: vscode.ExtensionContext;
   private _provider: GitRefContentProvider;
   private _providerRegistration: vscode.Disposable;
 
   constructor(rpcClient: RpcClient, context: vscode.ExtensionContext) {
     this._rpcClient = rpcClient;
+    this._context = context;
     this._provider = new GitRefContentProvider(rpcClient);
     this._providerRegistration = vscode.workspace.registerTextDocumentContentProvider(
       HEAD_SCHEME,
       this._provider
     );
     context.subscriptions.push(this._providerRegistration);
+  }
+
+  /** Open the dedicated Changes Review Webview tab. */
+  public openReviewWebview(filePath?: string, turnFiles?: string[]): void {
+    ChangesReviewPanel.createOrShow(this._context.extensionUri, this._rpcClient, filePath, turnFiles);
   }
 
   /** Update to a freshly connected daemon client without registering a new
@@ -189,19 +197,35 @@ export class DiffManager {
     }
   }
 
-  public async undoLastTurn(sessionId: string): Promise<boolean> {
+  public async undoLastTurn(sessionId: string, turnIndex?: number, turnsToUndo?: number): Promise<boolean> {
+    const numTurns = turnsToUndo && turnsToUndo > 1 ? turnsToUndo : 1;
+    const promptText = numTurns > 1
+      ? `Undo ${numTurns} turns (rollback all file modifications made in those turns)?`
+      : "Undo last turn and rollback all file modifications made in that turn?";
     const confirm = await vscode.window.showWarningMessage(
-      "Undo last turn and rollback all file modifications made in that turn?",
+      promptText,
       { modal: true },
       "Yes, Rollback"
     );
 
     if (confirm !== "Yes, Rollback") return false;
 
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     try {
-      const res = await this._rpcClient.call<{ success: boolean; popped_messages: number; git_status: string }>(
+      const res = await this._rpcClient.call<{
+        success: boolean;
+        popped_messages: number;
+        turns_undone?: number;
+        target_turn_index?: number;
+        git_status: string;
+      }>(
         "session.undo",
-        { session_id: sessionId }
+        {
+          session_id: sessionId,
+          project_path: workspaceFolder,
+          turn_index: turnIndex,
+          turns_to_undo: turnsToUndo,
+        }
       );
 
       if (res.success) {
@@ -209,8 +233,11 @@ export class DiffManager {
           vscode.commands.executeCommand("git.refresh");
           vscode.commands.executeCommand("andromity.refreshChanges");
         } catch {}
+        const countMsg = (res.turns_undone && res.turns_undone > 1)
+          ? `${res.turns_undone} turns undone`
+          : "Turn undone";
         vscode.window.showInformationMessage(
-          `Turn undone successfully. (${res.popped_messages} messages removed. ${res.git_status})`
+          `${countMsg} successfully. (${res.popped_messages} messages removed. ${res.git_status})`
         );
         return true;
       }

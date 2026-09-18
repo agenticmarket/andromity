@@ -240,3 +240,84 @@ async def test_rpc_cron_lifecycle(tmp_path):
     assert empty_list.result == []
 
 
+@pytest.mark.asyncio
+async def test_rpc_git_revert_file_via_request(tmp_path):
+    import git
+    repo = git.Repo.init(tmp_path)
+    handler = JsonRpcHandler()
+
+    # Create and commit tracked file
+    tracked = tmp_path / "hello.txt"
+    tracked.write_text("v1")
+    repo.git.add("hello.txt")
+    repo.git.commit("-m", "c1")
+
+    # Modify tracked file
+    tracked.write_text("v2")
+    assert tracked.read_text() == "v2"
+
+    # Revert via JSON-RPC request
+    req = JsonRpcRequest(
+        id=401,
+        method="git.revert_file",
+        params={"project_path": str(tmp_path), "path": "hello.txt"}
+    )
+    resp = await handler.handle_request(req)
+    assert resp.error is None
+    assert resp.result["success"] is True
+    assert resp.result["action"] == "checkout"
+    assert tracked.read_text() == "v1"
+
+    # Create untracked file
+    untracked = tmp_path / "scratch.txt"
+    untracked.write_text("scratch")
+    assert untracked.exists()
+
+    # Revert untracked file via JSON-RPC request
+    req_untracked = JsonRpcRequest(
+        id=402,
+        method="git.revert_file",
+        params={"project_path": str(tmp_path), "path": "scratch.txt"}
+    )
+    resp_untracked = await handler.handle_request(req_untracked)
+    assert resp_untracked.error is None
+    assert resp_untracked.result["success"] is True
+    assert resp_untracked.result["action"] == "deleted"
+    assert not untracked.exists()
+
+
+@pytest.mark.asyncio
+async def test_extract_turn_files_isolation(tmp_path):
+    from andromity.core.session import Session
+    handler = JsonRpcHandler(send_notification=lambda n: None)
+    session = Session(id="test-sess", name="test", project_path=str(tmp_path))
+
+    # Turn 1: User prompt 1
+    session.add_message("user", "make turn 1 changes")
+    session.add_message("assistant", "doing turn 1", tool_calls=[
+        {"id": "call_1", "type": "function", "function": {"name": "write_file", "arguments": '{"path": "file1.txt", "content": "hello"}'}}
+    ])
+    session.add_message("tool", "file1.txt written", name="write_file", tool_call_id="call_1")
+
+    # Verify Turn 1 files
+    turn1_files = handler._extract_turn_files(session)
+    assert turn1_files == ["file1.txt"]
+
+    # Turn 2: User prompt 2
+    session.add_message("user", "make turn 2 changes")
+    session.add_message("assistant", "doing turn 2", tool_calls=[
+        {"id": "call_2", "type": "function", "function": {"name": "edit_file", "arguments": '{"path": "subdir\\\\file2.py", "target": "a", "replacement": "b"}'}},
+        {"id": "call_3", "type": "function", "function": {"name": "replace_file_content", "arguments": '{"TargetFile": "' + str(tmp_path).replace("\\", "\\\\") + '\\\\file3.md"}'}},
+    ])
+    session.add_message("tool", "file2 edited", name="edit_file", tool_call_id="call_2")
+    session.add_message("tool", "file3 replaced", name="replace_file_content", tool_call_id="call_3")
+
+    # Verify Turn 2 files ONLY contain Turn 2 files and NOT Turn 1's file1.txt
+    turn2_files = handler._extract_turn_files(session)
+    assert "file1.txt" not in turn2_files
+    assert "subdir/file2.py" in turn2_files
+    assert "file3.md" in turn2_files
+    assert len(turn2_files) == 2
+
+
+
