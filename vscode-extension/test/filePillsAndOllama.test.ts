@@ -108,7 +108,7 @@ describe("Cursor-Parity File Pills, Ambient Context Stripping & Ollama Tests", (
     assert.equal(parsed.files.length, 0, "Ambient diagnostics and selection must NOT create file pills");
   });
 
-  it("should parse user-attached drag & dropped file pills cleanly", () => {
+  it("should parse user-attached file pills cleanly", () => {
     const rawInput = "[Attached File: src/components/Header.tsx]\n[Attached File: src/styles/theme.css]\nrefactor these styles";
     const parsed = parseUserPromptDisplay(rawInput);
 

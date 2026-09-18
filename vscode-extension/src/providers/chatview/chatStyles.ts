@@ -4490,45 +4490,68 @@ export function getChatStyles(): string {
       background: rgba(255, 255, 255, 0.08);
     }
 
-    /* Pill buttons (Mode pill, Model pill, Context pill) — fixed flex to avoid layout shift when reasoning label changes */
+    /* Clean Minimal Inline Controls (Cursor & Codex Aesthetics) */
+    .prompt-btn,
     .prompt-pill-btn {
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      color: var(--muted);
-      border-radius: 6px;
-      font-size: 11px;
-      padding: 3px 7px;
+      background: transparent;
+      border: none;
+      color: var(--muted, #8b949e);
+      border-radius: 4px;
+      font-size: 11.5px;
+      padding: 3px 6px;
       display: inline-flex;
       align-items: center;
-      gap: 4px;
+      gap: 5px;
       cursor: pointer;
       white-space: nowrap;
       flex-shrink: 0;
       min-width: 0;
       max-width: 100%;
-      transition: all 0.15s;
+      transition: color 0.15s ease, background 0.15s ease;
+      font-family: inherit;
     }
+    .prompt-btn:hover,
+    .prompt-pill-btn:hover {
+      color: var(--fg, #e6edf3);
+      background: rgba(255, 255, 255, 0.06);
+    }
+    .prompt-btn.icon-only,
+    .prompt-pill-btn.icon-only {
+      padding: 3px 5px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .prompt-btn svg,
+    .prompt-pill-btn svg {
+      width: 13px;
+      height: 13px;
+      flex-shrink: 0;
+      opacity: 0.8;
+      transition: opacity 0.15s ease;
+    }
+    .prompt-btn:hover svg,
+    .prompt-pill-btn:hover svg {
+      opacity: 1;
+    }
+    .prompt-btn .chevron-down,
+    .prompt-pill-btn .chevron-down {
+      width: 10px;
+      height: 10px;
+      opacity: 0.6;
+      margin-left: 2px;
+    }
+    .prompt-btn span,
     .prompt-pill-btn span {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
       min-width: 0;
     }
-    #btn-prompt-model { max-width: 150px; }
-    #btn-prompt-reasoning { min-width: 52px; justify-content: center; }
-    #btn-prompt-reasoning #prompt-reasoning-label { min-width: 28px; text-align: center; }
-    #prompt-model-label { max-width: 118px; overflow: hidden; text-overflow: ellipsis; }
-    .prompt-pill-btn:hover {
-      color: var(--fg);
-      border-color: rgba(255, 255, 255, 0.15);
-      background: rgba(255, 255, 255, 0.08);
-    }
-    .prompt-pill-btn svg {
-      width: 12px;
-      height: 12px;
-      flex-shrink: 0;
-    }
-
+    #btn-prompt-model { max-width: 160px; }
+    #btn-prompt-reasoning { min-width: 48px; justify-content: center; }
+    #btn-prompt-reasoning #prompt-reasoning-label { min-width: 24px; text-align: center; }
+    #prompt-model-label { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
 
     .user-attached-chips {
       display: flex;
@@ -4540,57 +4563,72 @@ export function getChatStyles(): string {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      background: rgba(56, 189, 248, 0.08);
-      border: 1px solid rgba(56, 189, 248, 0.22);
-      color: var(--chip-color, #38bdf8);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: var(--fg, #e6edf3);
       font-size: 11px;
       font-weight: 500;
       padding: 2.5px 8px;
-      border-radius: 6px;
+      border-radius: 5px;
       user-select: none;
       cursor: pointer;
       transition: all 0.15s ease;
     }
     .user-file-chip:hover {
-      background: rgba(56, 189, 248, 0.16);
-      border-color: rgba(56, 189, 248, 0.42);
-      transform: translateY(-1px);
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.25);
     }
     .user-file-chip .chip-icon {
       font-size: 11px;
       line-height: 1;
+      opacity: 0.85;
     }
     .user-file-chip .chip-line {
-      opacity: 0.7;
+      opacity: 0.6;
       font-size: 10px;
     }
 
-    /* Prompt Drag & Drop Bar (Above Textarea) */
+    /* Attached Files Bar (Inside Top of Prompt Box - Cursor / Codex Parity) */
     .drag-dropped-files-bar {
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
       padding: 6px 10px 4px 10px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     }
     .dropped-file-chip {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      background: rgba(56, 189, 248, 0.12);
-      border: 1px solid rgba(56, 189, 248, 0.3);
-      color: #38bdf8;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px dashed rgba(255, 255, 255, 0.18);
+      color: var(--fg, #e6edf3);
       font-size: 11px;
       padding: 2px 7px;
-      border-radius: 6px;
+      border-radius: 5px;
       transition: all 0.15s ease;
+    }
+    .dropped-file-chip:hover {
+      border-color: rgba(255, 255, 255, 0.3);
+      background: rgba(255, 255, 255, 0.07);
+    }
+    .dropped-file-chip .chip-icon {
+      font-size: 11px;
+      line-height: 1;
+      opacity: 0.9;
+    }
+    .dropped-file-chip .chip-name {
+      font-size: 11px;
+      max-width: 140px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .dropped-file-chip .chip-remove-btn {
       background: transparent;
       border: none;
       color: var(--muted);
       cursor: pointer;
-      font-size: 13px;
+      font-size: 12px;
       line-height: 1;
       padding: 0 2px;
       margin-left: 2px;
@@ -4598,16 +4636,12 @@ export function getChatStyles(): string {
       display: flex;
       align-items: center;
       justify-content: center;
+      opacity: 0.6;
+      transition: opacity 0.15s, color 0.15s;
     }
     .dropped-file-chip .chip-remove-btn:hover {
-      background: rgba(239, 68, 68, 0.25);
+      opacity: 1;
       color: #f87171;
-    }
-
-    /* Prompt Box Drag Over State */
-    .prompt-box.drag-over {
-      border-color: #38bdf8 !important;
-      box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25) !important;
     }
 
     /* Ollama Auto-Detected Banner */
