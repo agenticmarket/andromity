@@ -4529,43 +4529,103 @@ export function getChatStyles(): string {
       flex-shrink: 0;
     }
 
-    .active-file-chip {
-      background: rgba(56, 189, 248, 0.08);
-      border: 1px solid rgba(56, 189, 248, 0.22);
-      color: #38bdf8;
-      border-radius: 6px;
-      font-size: 10.5px;
-      padding: 2px 7px;
+
+    .user-attached-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 7px;
+    }
+    .user-file-chip {
       display: inline-flex;
       align-items: center;
-      gap: 4px;
-      max-width: 140px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      cursor: default;
+      gap: 5px;
+      background: rgba(56, 189, 248, 0.1);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      color: var(--chip-color, #38bdf8);
+      font-size: 11px;
+      font-weight: 500;
+      padding: 2.5px 8px;
+      border-radius: 6px;
+      user-select: none;
+    }
+    .user-file-chip .chip-icon {
+      font-size: 11px;
+      line-height: 1;
+    }
+
+    /* Prompt Drag & Drop Bar (Above Textarea) */
+    .drag-dropped-files-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 6px 10px 4px 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .dropped-file-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      color: #38bdf8;
+      font-size: 11px;
+      padding: 2px 7px;
+      border-radius: 6px;
       transition: all 0.15s ease;
     }
-    .active-file-chip:hover {
-      background: rgba(56, 189, 248, 0.14);
-      border-color: rgba(56, 189, 248, 0.35);
-    }
-    .active-file-chip span {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .active-file-chip svg {
-      width: 11px;
-      height: 11px;
-      flex-shrink: 0;
-    }
-    .active-file-diag {
-      font-size: 9px;
-      line-height: 1.2;
-      padding: 1px 4px;
+    .dropped-file-chip .chip-remove-btn {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 13px;
+      line-height: 1;
+      padding: 0 2px;
+      margin-left: 2px;
       border-radius: 3px;
-      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .dropped-file-chip .chip-remove-btn:hover {
+      background: rgba(239, 68, 68, 0.25);
+      color: #f87171;
+    }
+
+    /* Prompt Box Drag Over State */
+    .prompt-box.drag-over {
+      border-color: #38bdf8 !important;
+      box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25) !important;
+    }
+
+    /* Ollama Auto-Detected Banner */
+    .ollama-detected-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(6, 182, 212, 0.12));
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: #34d399;
+      font-size: 11.5px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      margin: 8px 10px 4px 10px;
+    }
+    .ollama-detected-banner strong {
+      color: #6ee7b7;
+    }
+    .ollama-detected-banner .banner-dismiss {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 14px;
+      padding: 0 4px;
+    }
+    .ollama-detected-banner .banner-dismiss:hover {
+      color: var(--fg);
     }
 
     /* Send & Cancel Circular Buttons */

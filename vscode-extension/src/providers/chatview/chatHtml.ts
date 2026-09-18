@@ -643,6 +643,7 @@ ${styles}
 
     <div class="prompt-box">
       <div class="image-attachments-container" id="image-attachments-container" style="display:none;"></div>
+      <div class="drag-dropped-files-bar" id="drag-dropped-files-bar" style="display:none;"></div>
       <textarea id="prompt-input" autofocus placeholder="Ask Andromity or type / for commands, @ for skills..." rows="1" aria-label="Ask Andromity or type slash for commands, @ for skills"></textarea>
       <div class="prompt-box-footer">
         <div class="prompt-left-controls">
@@ -653,12 +654,6 @@ ${styles}
             </svg>
             <span id="prompt-mode-label" class="skeleton skeleton-text" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
           </button>
-
-          <div class="active-file-chip" id="active-file-chip" style="display:none;" title="Ambient IDE context automatically included">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>
-            <span id="active-file-name"></span>
-            <span class="active-file-diag" id="active-file-diag" style="display:none;"></span>
-          </div>
 
         </div>
 

@@ -841,6 +841,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
         }
 
+        if (e.key === 'Backspace' && promptInput.value === '' && attachedFiles.length > 0) {
+          e.preventDefault();
+          attachedFiles.pop();
+          renderAttachedFiles();
+          return;
+        }
+
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           sendCurrentPrompt();
@@ -3607,6 +3614,111 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let availableProfiles = ['builder', 'coder', 'reviewer', 'planner'];
     let availableReasoningEfforts = ['low', 'medium', 'high', 'off'];
     let attachedImages = [];
+    let attachedFiles = [];
+    let currentActiveEditorContext = null;
+
+    const BINARY_FILE_EXTENSIONS = new Set([
+      'exe', 'dll', 'bin', 'so', 'dylib', 'zip', 'tar', 'gz', '7z', 'rar', 'iso',
+      'dmg', 'class', 'pyc', 'pyo', 'o', 'obj', 'wasm', 'db', 'sqlite', 'parquet'
+    ]);
+
+    function getFileIconBadge(fileName) {
+      const ext = (fileName || '').split('.').pop().toLowerCase();
+      switch (ext) {
+        case 'tsx':
+        case 'jsx':
+          return { badge: '⚛', color: '#61dafb' };
+        case 'ts':
+          return { badge: 'TS', color: '#38bdf8' };
+        case 'js':
+        case 'mjs':
+        case 'cjs':
+          return { badge: 'JS', color: '#f7df1e' };
+        case 'py':
+          return { badge: '🐍', color: '#4ade80' };
+        case 'html':
+        case 'htm':
+          return { badge: 'HTML', color: '#fb923c' };
+        case 'css':
+        case 'scss':
+        case 'less':
+          return { badge: '#', color: '#c084fc' };
+        case 'json':
+          return { badge: '{}', color: '#facc15' };
+        case 'md':
+        case 'markdown':
+          return { badge: '📝', color: '#93c5fd' };
+        case 'rs':
+          return { badge: '🦀', color: '#f97316' };
+        case 'go':
+          return { badge: 'GO', color: '#38bdf8' };
+        case 'java':
+        case 'kt':
+          return { badge: '☕', color: '#f87171' };
+        case 'sql':
+          return { badge: '🗄️', color: '#a78bfa' };
+        default:
+          return { badge: '📄', color: '#94a3b8' };
+      }
+    }
+
+    function renderAttachedFiles() {
+      const container = document.getElementById('drag-dropped-files-bar');
+      if (!container) return;
+      if (!attachedFiles || attachedFiles.length === 0) {
+        container.style.display = 'none';
+        container.innerHTML = '';
+        return;
+      }
+      container.style.display = 'flex';
+      container.innerHTML = attachedFiles.map((file, idx) => {
+        const iconInfo = getFileIconBadge(file.name);
+        return '<span class="dropped-file-chip" title="' + escapeHtml(file.path || file.name) + '">' +
+          '<span class="chip-icon" style="color:' + iconInfo.color + ';">' + iconInfo.badge + '</span>' +
+          '<span class="chip-name">' + escapeHtml(file.name) + '</span>' +
+          '<button class="chip-remove-btn" data-action="remove-attached-file" data-idx="' + idx + '" title="Remove file">&#x2715;</button>' +
+        '</span>';
+      }).join('');
+    }
+
+    function addDroppedFileAttachment(fileInfo) {
+      if (!fileInfo || !fileInfo.name) return;
+      const ext = (fileInfo.name || '').split('.').pop().toLowerCase();
+      if (BINARY_FILE_EXTENSIONS.has(ext)) {
+        appendSystemNote('Binary file skipped: "' + escapeHtml(fileInfo.name) + '" (binary files cannot be added as code context).');
+        return;
+      }
+      if (attachedFiles.some(f => f.path === fileInfo.path || f.name === fileInfo.name)) {
+        return;
+      }
+      if (attachedFiles.length >= 8) {
+        appendSystemNote('Maximum 8 files can be attached per message.');
+        return;
+      }
+      attachedFiles.push(fileInfo);
+      renderAttachedFiles();
+    }
+
+    function removeAttachedFile(idx) {
+      if (idx >= 0 && idx < attachedFiles.length) {
+        attachedFiles.splice(idx, 1);
+        renderAttachedFiles();
+      }
+    }
+
+    function showOllamaBanner(modelName) {
+      const existing = document.getElementById('ollama-detected-banner');
+      if (existing) existing.remove();
+      const banner = document.createElement('div');
+      banner.className = 'ollama-detected-banner';
+      banner.id = 'ollama-detected-banner';
+      banner.innerHTML = '<span>⚡ <strong>Local Ollama detected</strong> (' + escapeHtml(modelName) + ')! Ready to code with 0 API keys &amp; 100% privacy.</span>' +
+        '<button class="banner-dismiss" data-action="dismiss-ollama-banner" title="Dismiss banner">&times;</button>';
+      const promptBox = document.querySelector('.prompt-box');
+      if (promptBox && promptBox.parentElement) {
+        promptBox.parentElement.insertBefore(banner, promptBox);
+      }
+    }
 
     function updateProfileBadge() {
       const lbl = document.getElementById('prompt-profile-label');
@@ -3701,25 +3813,51 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     if (promptBoxEl) {
       promptBoxEl.addEventListener('dragover', (e) => {
         e.preventDefault();
-        promptBoxEl.style.borderColor = 'var(--accent)';
+        promptBoxEl.classList.add('drag-over');
       });
       promptBoxEl.addEventListener('dragleave', () => {
-        promptBoxEl.style.borderColor = '';
+        promptBoxEl.classList.remove('drag-over');
       });
       promptBoxEl.addEventListener('drop', (e) => {
         e.preventDefault();
-        promptBoxEl.style.borderColor = '';
-        if (e.dataTransfer && e.dataTransfer.files) {
-          for (let i = 0; i < e.dataTransfer.files.length; i++) {
-            const file = e.dataTransfer.files[i];
-            if (file.type && file.type.indexOf('image') !== -1) {
-              const reader = new FileReader();
-              reader.onload = function(evt) {
-                if (evt.target && evt.target.result) {
-                  addImageAttachment(evt.target.result);
+        promptBoxEl.classList.remove('drag-over');
+        if (e.dataTransfer) {
+          if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            for (let i = 0; i < e.dataTransfer.files.length; i++) {
+              const file = e.dataTransfer.files[i];
+              if (file.type && file.type.indexOf('image') !== -1) {
+                const reader = new FileReader();
+                reader.onload = function(evt) {
+                  if (evt.target && evt.target.result) {
+                    addImageAttachment(evt.target.result);
+                  }
+                };
+                reader.readAsDataURL(file);
+              } else {
+                addDroppedFileAttachment({
+                  name: file.name,
+                  path: file.path || file.name,
+                  size: file.size
+                });
+              }
+            }
+          } else {
+            const uriList = e.dataTransfer.getData('text/uri-list');
+            const textData = uriList || e.dataTransfer.getData('text/plain') || '';
+            if (textData) {
+              const lines = textData.split(/\\r?\\n/).filter(l => l.trim().length > 0);
+              lines.forEach(rawUri => {
+                let cleanPath = rawUri.trim();
+                if (cleanPath.startsWith('file://')) {
+                  try {
+                    cleanPath = decodeURIComponent(cleanPath.replace(/^file:\\/\\/\\/?/, ''));
+                  } catch {}
                 }
-              };
-              reader.readAsDataURL(file);
+                const name = cleanPath.split(/[\\/\\\\]/).pop() || cleanPath;
+                if (name && name.indexOf('.') !== -1) {
+                  addDroppedFileAttachment({ name: name, path: cleanPath });
+                }
+              });
             }
           }
         }
@@ -3886,7 +4024,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function sendCurrentPrompt() {
       const text = promptInput.value.trim();
       const imagesToSend = [...attachedImages];
-      if (!text && imagesToSend.length === 0) return;
+      const filesToSend = [...attachedFiles];
+      if (!text && imagesToSend.length === 0 && filesToSend.length === 0) return;
 
       if (text) {
         if (sentPromptsHistory.length === 0 || sentPromptsHistory[sentPromptsHistory.length - 1] !== text) {
@@ -3901,13 +4040,25 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       sendBtn.classList.remove('has-text');
       attachedImages = [];
       renderImageAttachments();
+      attachedFiles = [];
+      renderAttachedFiles();
+
+      let fullText = text;
+      if (filesToSend.length > 0) {
+        const filePrefix = filesToSend.map(function(f) {
+          return '[Attached File: ' + (f.path || f.name) + ']';
+        }).join(String.fromCharCode(10));
+        fullText = filePrefix + (fullText ? String.fromCharCode(10) + fullText : '');
+      }
+
+      const promptPayload = fullText || (imagesToSend.length > 0 ? 'Please inspect attached image' : 'Please inspect attached files');
 
       if (isRunning) {
-        promptQueue.push({ text: text || 'Please inspect attached image', images: imagesToSend, sessionId: currentSessionId });
+        promptQueue.push({ text: promptPayload, images: imagesToSend, sessionId: currentSessionId });
         renderQueue();
         return;
       }
-      dispatchPrompt(text || 'Please inspect attached image', true, imagesToSend);
+      dispatchPrompt(promptPayload, true, imagesToSend);
     }
 
     function dispatchPrompt(text, attachContext, images) {
@@ -3915,18 +4066,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         console.log('[Andromity webview] dispatchPrompt sending:', text.slice(0,120));
         hideZeroState();
 
-        // Immediate session title derivation from first user prompt (TUI parity)
         const activeSessName = document.getElementById('active-session-name');
         if (activeSessName && (activeSessName.textContent === 'Main Session' || activeSessName.textContent === 'new-session' || activeSessName.textContent.startsWith('Session '))) {
-          const firstLine = text.trim().split(String.fromCharCode(10))[0].trim();
-          if (firstLine) {
-            let shortTitle = firstLine.slice(0, 32);
-            if (firstLine.length > 32) shortTitle += '...';
+          const cleanFirstLine = text.replace(/\\[Attached File:[^\\]\\r\\n]+\\]/g, '').trim().split(String.fromCharCode(10))[0].trim();
+          if (cleanFirstLine) {
+            let shortTitle = cleanFirstLine.slice(0, 32);
+            if (cleanFirstLine.length > 32) shortTitle += '...';
             activeSessName.textContent = shortTitle;
           }
         }
 
-        appendUserMessage(text, images, new Date().toISOString());
+        appendUserMessage(text, images, new Date().toISOString(), { activeContext: currentActiveEditorContext });
         startAssistantTurn();
         vscode.postMessage({
           type: 'send_prompt',
@@ -4325,12 +4475,86 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
+    function parseUserPromptDisplay(rawText) {
+      if (!rawText || typeof rawText !== 'string') {
+        return { userText: '', files: [] };
+      }
+
+      let text = rawText;
+      const files = [];
+      const seenFiles = new Set();
+
+      function addFile(name, path, line, isAmbient) {
+        const key = (path || name || '').toLowerCase();
+        if (!key || seenFiles.has(key)) return;
+        seenFiles.add(key);
+        files.push({ name, path, line, isAmbient });
+      }
+
+      const ambientSepMatch = text.match(/\\r?\\n\\s*---\\s*\\r?\\n(?=\\[(?:Active Document|Active Diagnostics|Selection in|Other Open Documents))/);
+      let userPart = text;
+      let ambientPart = '';
+
+      if (ambientSepMatch && typeof ambientSepMatch.index === 'number') {
+        userPart = text.slice(0, ambientSepMatch.index);
+        ambientPart = text.slice(ambientSepMatch.index + ambientSepMatch[0].length);
+      }
+
+      if (ambientPart) {
+        const docMatch = ambientPart.match(/\\[Active Document:\\s*([^(\\r\\n]+?)(?:\\s*\\([^)]*\\))?(?:,\\s*Line:\\s*(\\d+))?\\]/);
+        if (docMatch) {
+          const rawDocPath = docMatch[1].trim();
+          const lineNum = docMatch[2] ? parseInt(docMatch[2], 10) : undefined;
+          const fileName = rawDocPath.split(/[\\/\\\\]/).pop() || rawDocPath;
+          addFile(fileName, rawDocPath, lineNum, true);
+        }
+      }
+
+      const attachedFileRegex = /\\[Attached File:\\s*([^\\]\\r\\n]+)\\]/g;
+      let m;
+      while ((m = attachedFileRegex.exec(userPart)) !== null) {
+        const fullPath = m[1].trim();
+        const fName = fullPath.split(/[\\/\\\\]/).pop() || fullPath;
+        addFile(fName, fullPath, undefined, false);
+      }
+      userPart = userPart.replace(attachedFileRegex, '').trim();
+
+      const docMatchInUser = userPart.match(/\\[Active Document:\\s*([^(\\r\\n]+?)(?:\\s*\\([^)]*\\))?(?:,\\s*Line:\\s*(\\d+))?\\]/);
+      if (docMatchInUser) {
+        const rawDocPath = docMatchInUser[1].trim();
+        const lineNum = docMatchInUser[2] ? parseInt(docMatchInUser[2], 10) : undefined;
+        const fileName = rawDocPath.split(/[\\/\\\\]/).pop() || rawDocPath;
+        addFile(fileName, rawDocPath, lineNum, true);
+        userPart = userPart.replace(/\\[Active Document:[^\\]\\r\\n]+\\]/g, '').trim();
+      }
+
+      userPart = userPart.replace(/\\[(?:Other Open Documents|Active Diagnostics)[^\\]]*\\]/gs, '').trim();
+
+      return { userText: userPart, files };
+    }
+
     function appendUserMessage(text, images, ts, opts) {
-      const displayText = typeof text === 'string' ? text : extractMessageText(text);
-      const trimmed = (displayText || '').trim();
+      const rawText = typeof text === 'string' ? text : extractMessageText(text);
+      const parsed = parseUserPromptDisplay(rawText);
+
+      if (opts && opts.activeContext && opts.activeContext.relativePath) {
+        const actPath = opts.activeContext.relativePath;
+        const actName = actPath.split(/[\\/\\\\]/).pop() || actPath;
+        const alreadyHas = parsed.files.some(f => f.path === actPath || f.name === actName);
+        if (!alreadyHas) {
+          parsed.files.push({
+            name: actName,
+            path: actPath,
+            line: opts.activeContext.cursorLine,
+            isAmbient: true
+          });
+        }
+      }
+
+      const trimmed = (parsed.userText || '').trim();
       const now = Date.now();
       if (!opts || !opts.skipDedupe) {
-        if (trimmed && trimmed === lastAppendedUserText && (now - lastAppendedUserTime) < 1500) {
+        if (trimmed && trimmed === lastAppendedUserText && (now - lastAppendedUserTime) < 3000) {
           return;
         }
       }
@@ -4404,16 +4628,48 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         msgDiv.appendChild(imgContainer);
       }
 
-      if (displayText) {
+      if (parsed.files && parsed.files.length > 0) {
+        const chipsContainer = document.createElement('div');
+        chipsContainer.className = 'user-attached-chips';
+        parsed.files.forEach(f => {
+          const badgeInfo = getFileIconBadge(f.name || f.path);
+          const chip = document.createElement('span');
+          chip.className = 'user-file-chip';
+          chip.style.setProperty('--chip-color', badgeInfo.color);
+          chip.title = f.path || f.name;
+
+          const iconSpan = document.createElement('span');
+          iconSpan.className = 'chip-icon';
+          iconSpan.textContent = badgeInfo.badge;
+          chip.appendChild(iconSpan);
+
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'chip-name';
+          nameSpan.textContent = f.name;
+          chip.appendChild(nameSpan);
+
+          if (f.line) {
+            const lineSpan = document.createElement('span');
+            lineSpan.className = 'chip-line';
+            lineSpan.textContent = ':' + f.line;
+            chip.appendChild(lineSpan);
+          }
+
+          chipsContainer.appendChild(chip);
+        });
+        msgDiv.appendChild(chipsContainer);
+      }
+
+      if (parsed.userText) {
         const textWrapper = document.createElement('div');
         textWrapper.className = 'prompt-text-wrapper';
 
         const textContent = document.createElement('div');
         textContent.className = 'prompt-text-content';
-        textContent.textContent = displayText;
+        textContent.textContent = parsed.userText;
         textWrapper.appendChild(textContent);
 
-        const isLong = displayText.length > 220 || displayText.split(/\\r?\\n/).length > 3;
+        const isLong = parsed.userText.length > 220 || parsed.userText.split(/\\r?\\n/).length > 3;
         if (isLong) {
           textContent.classList.add('clamped');
           const expandBtn = document.createElement('button');
@@ -5145,6 +5401,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           updateModelBadge();
           updateOnboardingVisibility();
+          if (msg.ollamaDetectedModel) {
+            showOllamaBanner(msg.ollamaDetectedModel);
+          }
           if (msg.waterfallFirstSessionShown) {
             dismissWaterfallOnboarding();
           } else {
@@ -6177,9 +6436,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             updateSessionActivityIndicator();
           }
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
-          if (msg.prompt && lastAppendedUserText !== msg.prompt) {
-            hideZeroState();
-            appendUserMessage(msg.prompt, msg.images || [], Date.now(), { skipDedupe: true });
+          if (msg.prompt) {
+            const parsed = parseUserPromptDisplay(msg.prompt);
+            const cleanText = (parsed.userText || '').trim();
+            if (lastAppendedUserText !== cleanText && lastAppendedUserText !== msg.prompt.trim()) {
+              hideZeroState();
+              appendUserMessage(msg.prompt, msg.images || [], Date.now(), { skipDedupe: true });
+            }
           }
           if (!currentTurnAssistantDiv || !chatContainer.contains(currentTurnAssistantDiv)) {
             startAssistantTurn();
@@ -6434,6 +6697,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         case 'active_editor_context': {
           const actCtx = msg.context;
+          currentActiveEditorContext = actCtx;
           const chip = document.getElementById('active-file-chip');
           const nameSpan = document.getElementById('active-file-name');
           const diagSpan = document.getElementById('active-file-diag');
@@ -7097,6 +7361,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (rmImg) {
         const idx = parseInt(rmImg.getAttribute('data-idx') || '0', 10);
         removeImageAttachment(idx);
+        return;
+      }
+      const rmFile = e.target.closest('[data-action="remove-attached-file"]');
+      if (rmFile) {
+        const idx = parseInt(rmFile.getAttribute('data-idx') || '0', 10);
+        removeAttachedFile(idx);
+        return;
+      }
+      const rmOllama = e.target.closest('[data-action="dismiss-ollama-banner"]');
+      if (rmOllama) {
+        const b = document.getElementById('ollama-detected-banner');
+        if (b) b.remove();
         return;
       }
       const previewImg = e.target.closest('[data-action="preview-image"]');

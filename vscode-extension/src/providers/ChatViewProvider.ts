@@ -651,7 +651,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this._postToWebview({ type: "tool_result", ...params });
     });
 
-    bind("agent/toolApprovalRequired", (params: any) => {
+    bind("agent/toolApprovalRequired", (params: ToolApprovalEvent) => {
       this._postToWebview({ type: "tool_approval_required", ...params });
       const cfg = vscode.workspace.getConfiguration("andromity");
       if (cfg.get<boolean>("soundNotifications", true)) {
@@ -659,7 +659,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     });
 
-    bind("agent/askQuestions", (params: any) => {
+    bind("agent/askQuestions", (params: ClarifyingQuestionsEvent) => {
       this._postToWebview({ type: "ask_questions", ...params });
       const cfg = vscode.workspace.getConfiguration("andromity");
       if (cfg.get<boolean>("soundNotifications", true)) {
@@ -869,6 +869,49 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  private async _checkAndAutoConnectOllama(providers: ProviderInfo[]): Promise<string | null> {
+    const hasAnyKey = providers.some((p) => p.has_key);
+    return new Promise((resolve) => {
+      try {
+        const http = require("http");
+        const req = http.get("http://127.0.0.1:11434/api/tags", { timeout: 350 }, (res: any) => {
+          if (res.statusCode !== 200) {
+            resolve(null);
+            return;
+          }
+          let raw = "";
+          res.on("data", (chunk: any) => { raw += chunk; });
+          res.on("end", () => {
+            try {
+              const data = JSON.parse(raw);
+              const models = (data.models || []).map((m: any) => m.name || m.model);
+              if (models.length > 0) {
+                const bestModel =
+                  models.find((m: string) => /qwen|coder/i.test(m)) ||
+                  models.find((m: string) => /deepseek/i.test(m)) ||
+                  models.find((m: string) => /llama/i.test(m)) ||
+                  models[0];
+                if (!hasAnyKey || this._currentProvider === "ollama") {
+                  this._currentProvider = "ollama";
+                  this._currentModel = bestModel;
+                  void this._rpcClient?.call("config.set", { section: "default", key: "provider", value: "ollama" }).catch(() => {});
+                  void this._rpcClient?.call("config.set", { section: "default", key: "model", value: bestModel }).catch(() => {});
+                }
+                resolve(bestModel);
+                return;
+              }
+            } catch {}
+            resolve(null);
+          });
+        });
+        req.on("error", () => resolve(null));
+        req.on("timeout", () => { req.destroy(); resolve(null); });
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
   private _postToWebview(msg: any) {
     if (this._view) {
       this._view.webview.postMessage(msg);
@@ -968,6 +1011,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       // The plan tracker is session-scoped (session.plan). Workspace plan is
       // only loaded on demand when the Plan tab is opened.
 
+      const detectedOllama = await this._checkAndAutoConnectOllama(this._providers);
+
       this._postToWebview({
         type: "init_state",
         sessionId: this._currentSessionId,
@@ -988,6 +1033,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         waterfallFirstSessionShown: this._context?.globalState.get<boolean>("andromity.waterfallFirstSessionShown", false) || false,
         wallpaper: this.getWallpaperConfig(this._view?.webview),
         mascotEnabled: vscode.workspace.getConfiguration("andromity").get<boolean>("mascotEnabled", true),
+        ollamaDetectedModel: detectedOllama,
       });
     } catch (e: any) {
       console.error("[Andromity Chat] Initial config load failed:", e);
