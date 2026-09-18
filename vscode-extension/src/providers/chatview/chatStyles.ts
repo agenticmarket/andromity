@@ -2476,11 +2476,39 @@ export function getChatStyles(): string {
       width: 13px;
       height: 13px;
     }
+    .assistant-avatar img {
+      width: 14px;
+      height: 14px;
+      object-fit: contain;
+      display: block;
+    }
     .assistant-name {
       font-size: 12px;
       font-weight: 600;
       color: var(--fg);
       letter-spacing: 0.2px;
+    }
+    .andromity-turn-loader {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 11.5px;
+      color: var(--muted, #8b949e);
+      padding: 3px 0 5px;
+      line-height: 1.4;
+    }
+    .thinking-spinner {
+      display: inline-block;
+      width: 11px;
+      height: 11px;
+      border: 1.5px solid rgba(255, 255, 255, 0.16);
+      border-top-color: var(--accent, #388bfd);
+      border-radius: 50%;
+      animation: thinkingSpin 0.75s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes thinkingSpin {
+      to { transform: rotate(360deg); }
     }
 
     .message-footer {
@@ -2716,6 +2744,15 @@ export function getChatStyles(): string {
       border-top: 1px solid rgba(255, 255, 255, 0.08);
       margin: 12px 0;
     }
+    .assistant-text ul,
+    .assistant-text ol {
+      margin: 6px 0;
+      padding-left: 20px;
+    }
+    .assistant-text li {
+      margin: 2.5px 0;
+      line-height: 1.6;
+    }
     .md-spacer {
       height: 8px;
     }
@@ -2818,23 +2855,70 @@ export function getChatStyles(): string {
     /* Markdown Horizontal Rules & Task Lists */
     .md-hr {
       border: none;
-      border-top: 1px solid var(--border);
-      margin: 10px 0;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      margin: 12px 0;
     }
+    .assistant-text ul:has(.md-task-item),
+    .assistant-text ul:has(input[type="checkbox"]) {
+      list-style-type: none;
+      padding-left: 0;
+    }
+    .assistant-text li.md-task-item,
+    .assistant-text li:has(input[type="checkbox"]),
     .md-task-item {
+      list-style-type: none;
       display: flex;
-      align-items: center;
-      gap: 7px;
-      margin: 3px 0 3px 4px;
-      font-size: 12px;
+      align-items: flex-start;
+      gap: 8px;
+      margin: 4px 0;
+      font-size: 12.5px;
+      line-height: 1.55;
     }
+    .assistant-text .md-checkbox,
+    .assistant-text input[type="checkbox"],
     .md-checkbox {
-      margin: 0;
-      accent-color: var(--accent);
+      appearance: none;
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 3.5px;
+      border: 1.2px solid rgba(255, 255, 255, 0.28);
+      background: rgba(255, 255, 255, 0.04);
+      margin: 2.5px 0 0 0;
       cursor: default;
+      flex-shrink: 0;
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s ease;
+      box-sizing: border-box;
     }
+    .assistant-text .md-checkbox:checked,
+    .assistant-text input[type="checkbox"]:checked,
+    .md-checkbox:checked {
+      background: var(--accent, #388bfd);
+      border-color: var(--accent, #388bfd);
+    }
+    .assistant-text .md-checkbox:checked::after,
+    .assistant-text input[type="checkbox"]:checked::after,
+    .md-checkbox:checked::after {
+      content: '';
+      display: block;
+      width: 3.5px;
+      height: 7px;
+      border: solid #ffffff;
+      border-width: 0 1.6px 1.6px 0;
+      transform: rotate(45deg);
+      margin-bottom: 2px;
+    }
+    .assistant-text li.md-task-item.completed,
+    .assistant-text li.md-task-item.completed *,
+    .md-task-item.completed,
+    .md-task-item.completed .md-task-text,
     .md-task-text.completed {
       text-decoration: line-through;
+      color: var(--muted, #8b949e);
       opacity: 0.6;
     }
     .md-image {

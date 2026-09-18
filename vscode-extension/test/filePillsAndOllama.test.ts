@@ -167,4 +167,30 @@ describe("Cursor-Parity File Pills, Ambient Context Stripping & Ollama Tests", (
 
     assert.equal(pickBestOllamaModel([]), null);
   });
+
+  it("should render task checklists with custom md-checkbox and completed states", () => {
+    const { marked } = require("marked");
+    const testRenderer = {
+      checkbox(token: any) {
+        const isChecked = Boolean(token && token.checked);
+        return '<input type="checkbox" class="md-checkbox" ' + (isChecked ? 'checked ' : '') + 'disabled /> ';
+      },
+      listitem(token: any) {
+        const isTask = Boolean(token && token.task);
+        const isChecked = Boolean(token && token.checked);
+        const self: any = this;
+        const content = token && token.tokens && self.parser ? self.parser.parse(token.tokens) : (token && token.text ? token.text : '');
+        if (isTask) {
+          return '<li class="md-task-item' + (isChecked ? ' completed' : '') + '">' + content + '</li>';
+        }
+        return '<li>' + content + '</li>';
+      }
+    };
+    marked.use({ renderer: testRenderer, gfm: true });
+    const output = marked.parse("- [ ] pending task\n- [x] completed task\n- standard item");
+    assert.ok(output.includes('<li class="md-task-item"><input type="checkbox" class="md-checkbox" disabled /> pending task</li>'));
+    assert.ok(output.includes('<li class="md-task-item completed"><input type="checkbox" class="md-checkbox" checked disabled /> completed task</li>'));
+    assert.ok(output.includes('<li>standard item</li>'));
+  });
 });
+

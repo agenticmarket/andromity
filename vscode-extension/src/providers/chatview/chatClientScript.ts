@@ -4160,6 +4160,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             const title = token && typeof token === 'object' ? token.title : '';
             const text = token && typeof token === 'object' ? token.text : '';
             return '<img class="md-image" src="' + escapeHtml(href) + '" alt="' + escapeHtml(text || '') + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + ' loading="lazy" />';
+          },
+          checkbox(token) {
+            const isChecked = Boolean(token && token.checked);
+            return '<input type="checkbox" class="md-checkbox" ' + (isChecked ? 'checked ' : '') + 'disabled /> ';
+          },
+          listitem(token) {
+            const isTask = Boolean(token && token.task);
+            const isChecked = Boolean(token && token.checked);
+            const self = this;
+            const content = token && token.tokens && self.parser ? self.parser.parse(token.tokens) : (token && token.text ? renderInline(token.text) : '');
+            if (isTask) {
+              return '<li class="md-task-item' + (isChecked ? ' completed' : '') + '">' + content + '</li>';
+            }
+            return '<li>' + content + '</li>';
           }
         };
         marked.use({ renderer: markedRenderer, gfm: true, breaks: true });
@@ -4300,7 +4314,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             var taskMatch = trimmed.match(/^[-*\\u2022]\\s+\\[([ xX])\\]\\s*(.*)$/);
             if (taskMatch) {
               var isChecked = taskMatch[1].toLowerCase() === 'x';
-              html += '<div class="md-task-item"><input type="checkbox" class="md-checkbox" ' + (isChecked ? 'checked' : '') + ' disabled><span class="md-task-text ' + (isChecked ? 'completed' : '') + '">' + renderInline(taskMatch[2]) + '</span></div>';
+              html += '<div class="md-task-item' + (isChecked ? ' completed' : '') + '"><input type="checkbox" class="md-checkbox" ' + (isChecked ? 'checked' : '') + ' disabled><span class="md-task-text ' + (isChecked ? 'completed' : '') + '">' + renderInline(taskMatch[2]) + '</span></div>';
               continue;
             }
 
@@ -5029,24 +5043,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const header = document.createElement('div');
       header.className = 'assistant-header';
       header.innerHTML = '<div class="assistant-avatar">' +
-        '<img class="" src="' + sidebarIconUri + '" width="48" alt="Andromity" />' +
+        '<img src="' + sidebarIconUri + '" width="14" height="14" alt="Andromity" />' +
       '</div>' +
-      '<span class="assistant-name">Andromity</span>' +
-      '<div class="assistant-mascot-perch"></div>';
+      '<span class="assistant-name">Andromity</span>';
       wrap.appendChild(header);
 
       if (typeof interruptMascotToWork === 'function') {
         interruptMascotToWork();
       }
-      if (typeof hopMascotTo === 'function') {
-        const headerPerch = header.querySelector('.assistant-mascot-perch');
-        if (headerPerch) hopMascotTo(headerPerch);
-      }
 
       const loader = document.createElement('div');
       loader.className = 'andromity-turn-loader';
       loader.id = 'turn-loading-indicator';
-      loader.innerHTML = '<img class="spinning" src="' + sidebarIconUri + '" width="14" height="14" alt="Andromity" /> <span>Andromity is thinking... (0s)</span>';
+      loader.innerHTML = '<span class="thinking-spinner"></span> <span>Andromity is thinking... (0s)</span>';
       wrap.appendChild(loader);
 
       const loaderTimer = setInterval(() => {
