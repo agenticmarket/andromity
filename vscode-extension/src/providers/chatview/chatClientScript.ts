@@ -3819,58 +3819,174 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     });
 
-    const promptBoxEl = document.querySelector('.prompt-box');
-    if (promptBoxEl) {
-      promptBoxEl.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        promptBoxEl.classList.add('drag-over');
-      });
-      promptBoxEl.addEventListener('dragleave', () => {
-        promptBoxEl.classList.remove('drag-over');
-      });
-      promptBoxEl.addEventListener('drop', (e) => {
-        e.preventDefault();
-        promptBoxEl.classList.remove('drag-over');
-        if (e.dataTransfer) {
-          if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-            for (let i = 0; i < e.dataTransfer.files.length; i++) {
-              const file = e.dataTransfer.files[i];
-              if (file.type && file.type.indexOf('image') !== -1) {
-                const reader = new FileReader();
-                reader.onload = function(evt) {
-                  if (evt.target && evt.target.result) {
-                    addImageAttachment(evt.target.result);
-                  }
-                };
-                reader.readAsDataURL(file);
-              } else {
-                addDroppedFileAttachment({
-                  name: file.name,
-                  path: file.path || file.name,
-                  size: file.size
-                });
+    // Robust Multi-Format Drag & Drop Handler (supports Desktop/OS files + VS Code Explorer tree drags)
+    function isFileDragEvent(e) {
+      if (!e.dataTransfer) return false;
+      const types = Array.from(e.dataTransfer.types || []);
+      return types.includes('Files') ||
+             types.includes('text/uri-list') ||
+             types.some(t => t.indexOf('tree') !== -1 || t.indexOf('filelist') !== -1 || t.indexOf('explorer') !== -1);
+    }
+
+    function getPathBasename(p) {
+      if (!p || typeof p !== 'string') return '';
+      const lastSlash = Math.max(p.lastIndexOf('/'), p.lastIndexOf(String.fromCharCode(92)));
+      return lastSlash !== -1 ? p.slice(lastSlash + 1) : p;
+    }
+
+    function normalizeDroppedPath(raw) {
+      let clean = (raw || '').trim();
+      if (clean.startsWith('file://')) {
+        try {
+          clean = decodeURIComponent(clean);
+        } catch (e) {}
+        if (clean.startsWith('file:///')) {
+          clean = clean.slice(8);
+        } else if (clean.startsWith('file://')) {
+          clean = clean.slice(7);
+        }
+        if (clean.charCodeAt(0) === 47 && clean.charCodeAt(2) === 58) {
+          clean = clean.slice(1);
+        }
+      }
+      return clean;
+    }
+
+    function handleDroppedTransfer(dt) {
+      if (!dt) return;
+
+      // 1. Files array (OS Explorer, Desktop, or VS Code)
+      if (dt.files && dt.files.length > 0) {
+        for (let i = 0; i < dt.files.length; i++) {
+          const file = dt.files[i];
+          if (file.type && file.type.indexOf('image') !== -1) {
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+              if (evt.target && evt.target.result) {
+                addImageAttachment(evt.target.result);
               }
-            }
+            };
+            reader.readAsDataURL(file);
           } else {
-            const uriList = e.dataTransfer.getData('text/uri-list');
-            const textData = uriList || e.dataTransfer.getData('text/plain') || '';
-            if (textData) {
-              const lines = textData.split(/\\r?\\n/).filter(l => l.trim().length > 0);
-              lines.forEach(rawUri => {
-                let cleanPath = rawUri.trim();
-                if (cleanPath.startsWith('file://')) {
-                  try {
-                    cleanPath = decodeURIComponent(cleanPath.replace(/^file:\\/\\/\\/?/, ''));
-                  } catch {}
-                }
-                const name = cleanPath.split(/[\\/\\\\]/).pop() || cleanPath;
-                if (name && name.indexOf('.') !== -1) {
-                  addDroppedFileAttachment({ name: name, path: cleanPath });
-                }
-              });
-            }
+            addDroppedFileAttachment({
+              name: file.name,
+              path: file.path || file.name,
+              size: file.size
+            });
           }
         }
+        return;
+      }
+
+      // 2. VS Code internal tree drag data (JSON in application/vnd.code.tree.filelist or explorer)
+      const types = dt.types ? Array.from(dt.types) : [];
+      let addedFromTree = false;
+      for (const t of types) {
+        if (t.indexOf('tree') !== -1 || t.indexOf('filelist') !== -1 || t.indexOf('explorer') !== -1) {
+          try {
+            const raw = dt.getData(t);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              const arr = Array.isArray(parsed) ? parsed : [parsed];
+              for (const item of arr) {
+                let p = '';
+                if (typeof item === 'string') p = item;
+                else if (item && item.fsPath) p = item.fsPath;
+                else if (item && item.resourceUri) {
+                  p = typeof item.resourceUri === 'string' ? item.resourceUri : (item.resourceUri.fsPath || item.resourceUri.path || item.resourceUri.external || '');
+                } else if (item && item.path) p = item.path;
+                if (p) {
+                  const clean = normalizeDroppedPath(p);
+                  const name = getPathBasename(clean);
+                  if (name && name.indexOf('.') !== -1) {
+                    addDroppedFileAttachment({ name: name, path: clean });
+                    addedFromTree = true;
+                  }
+                }
+              }
+            }
+          } catch {}
+        }
+      }
+      if (addedFromTree) return;
+
+      // 3. text/uri-list
+      const uriList = dt.getData('text/uri-list');
+      if (uriList) {
+        const lines = uriList.split(String.fromCharCode(10)).map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0 && !l.startsWith('#'); });
+        let addedUri = false;
+        lines.forEach(rawUri => {
+          const clean = normalizeDroppedPath(rawUri);
+          const name = getPathBasename(clean);
+          if (name && name.indexOf('.') !== -1) {
+            addDroppedFileAttachment({ name: name, path: clean });
+            addedUri = true;
+          }
+        });
+        if (addedUri) return;
+      }
+
+      // 4. text/plain fallback
+      const textData = dt.getData('text/plain') || '';
+      if (textData) {
+        const lines = textData.split(String.fromCharCode(10)).map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
+        lines.forEach(rawUri => {
+          const clean = normalizeDroppedPath(rawUri);
+          const name = getPathBasename(clean);
+          if (name && name.indexOf('.') !== -1) {
+            addDroppedFileAttachment({ name: name, path: clean });
+          }
+        });
+      }
+    }
+
+    let dragEnterCount = 0;
+    const promptBoxEl = document.querySelector('.prompt-box');
+
+    window.addEventListener('dragenter', (e) => {
+      if (!isFileDragEvent(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragEnterCount++;
+      if (promptBoxEl) promptBoxEl.classList.add('drag-over');
+    });
+
+    window.addEventListener('dragover', (e) => {
+      if (!isFileDragEvent(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = 'copy';
+      }
+      if (promptBoxEl && !promptBoxEl.classList.contains('drag-over')) {
+        promptBoxEl.classList.add('drag-over');
+      }
+    });
+
+    window.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragEnterCount = Math.max(0, dragEnterCount - 1);
+      if (dragEnterCount === 0 || e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
+        dragEnterCount = 0;
+        if (promptBoxEl) promptBoxEl.classList.remove('drag-over');
+      }
+    });
+
+    window.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragEnterCount = 0;
+      if (promptBoxEl) promptBoxEl.classList.remove('drag-over');
+      if (e.dataTransfer) {
+        handleDroppedTransfer(e.dataTransfer);
+      }
+    });
+
+    const btnAttachFileEl = document.getElementById('btn-attach-file');
+    if (btnAttachFileEl) {
+      btnAttachFileEl.addEventListener('click', () => {
+        vscode.postMessage({ type: 'pick_file_attachment' });
       });
     }
 
@@ -4086,7 +4202,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
         }
 
-        appendUserMessage(text, images, new Date().toISOString(), { activeContext: currentActiveEditorContext });
+        appendUserMessage(text, images, new Date().toISOString());
         startAssistantTurn();
         vscode.postMessage({
           type: 'send_prompt',
@@ -4494,51 +4610,33 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const files = [];
       const seenFiles = new Set();
 
-      function addFile(name, path, line, isAmbient) {
+      function addFile(name, path) {
         const key = (path || name || '').toLowerCase();
         if (!key || seenFiles.has(key)) return;
         seenFiles.add(key);
-        files.push({ name, path, line, isAmbient });
+        files.push({ name, path });
       }
 
+      // 1. Separate ambient context block if present:
       const ambientSepMatch = text.match(/\\r?\\n\\s*---\\s*\\r?\\n(?=\\[(?:Active Document|Active Diagnostics|Selection in|Other Open Documents))/);
       let userPart = text;
-      let ambientPart = '';
-
       if (ambientSepMatch && typeof ambientSepMatch.index === 'number') {
         userPart = text.slice(0, ambientSepMatch.index);
-        ambientPart = text.slice(ambientSepMatch.index + ambientSepMatch[0].length);
       }
 
-      if (ambientPart) {
-        const docMatch = ambientPart.match(/\\[Active Document:\\s*([^(\\r\\n]+?)(?:\\s*\\([^)]*\\))?(?:,\\s*Line:\\s*(\\d+))?\\]/);
-        if (docMatch) {
-          const rawDocPath = docMatch[1].trim();
-          const lineNum = docMatch[2] ? parseInt(docMatch[2], 10) : undefined;
-          const fileName = rawDocPath.split(/[\\/\\\\]/).pop() || rawDocPath;
-          addFile(fileName, rawDocPath, lineNum, true);
-        }
-      }
-
+      // 2. Extract ONLY user-attached files: [Attached File: <path>]
       const attachedFileRegex = /\\[Attached File:\\s*([^\\]\\r\\n]+)\\]/g;
       let m;
       while ((m = attachedFileRegex.exec(userPart)) !== null) {
         const fullPath = m[1].trim();
-        const fName = fullPath.split(/[\\/\\\\]/).pop() || fullPath;
-        addFile(fName, fullPath, undefined, false);
+        const fName = getPathBasename(fullPath);
+        addFile(fName, fullPath);
       }
       userPart = userPart.replace(attachedFileRegex, '').trim();
 
-      const docMatchInUser = userPart.match(/\\[Active Document:\\s*([^(\\r\\n]+?)(?:\\s*\\([^)]*\\))?(?:,\\s*Line:\\s*(\\d+))?\\]/);
-      if (docMatchInUser) {
-        const rawDocPath = docMatchInUser[1].trim();
-        const lineNum = docMatchInUser[2] ? parseInt(docMatchInUser[2], 10) : undefined;
-        const fileName = rawDocPath.split(/[\\/\\\\]/).pop() || rawDocPath;
-        addFile(fileName, rawDocPath, lineNum, true);
-        userPart = userPart.replace(/\\[Active Document:[^\\]\\r\\n]+\\]/g, '').trim();
-      }
-
-      userPart = userPart.replace(/\\[(?:Other Open Documents|Active Diagnostics)[^\\]]*\\]/gs, '').trim();
+      // 3. Strip any leaked ambient tags from user text without creating file pills
+      userPart = userPart.replace(/\\[Active Document:[^\\]\\r\\n]+\\]/g, '').trim();
+      userPart = userPart.replace(/\\[(?:Other Open Documents|Active Diagnostics|Selection in)[^\\]]*\\]/gs, '').trim();
 
       return { userText: userPart, files };
     }
@@ -4546,20 +4644,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function appendUserMessage(text, images, ts, opts) {
       const rawText = typeof text === 'string' ? text : extractMessageText(text);
       const parsed = parseUserPromptDisplay(rawText);
-
-      if (opts && opts.activeContext && opts.activeContext.relativePath) {
-        const actPath = opts.activeContext.relativePath;
-        const actName = actPath.split(/[\\/\\\\]/).pop() || actPath;
-        const alreadyHas = parsed.files.some(f => f.path === actPath || f.name === actName);
-        if (!alreadyHas) {
-          parsed.files.push({
-            name: actName,
-            path: actPath,
-            line: opts.activeContext.cursorLine,
-            isAmbient: true
-          });
-        }
-      }
 
       const trimmed = (parsed.userText || '').trim();
       const now = Date.now();
@@ -5327,6 +5411,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     window.addEventListener('message', event => {
       const msg = event.data;
       switch (msg.type) {
+        case 'file_attached': {
+          if (msg.file) {
+            addDroppedFileAttachment(msg.file);
+          }
+          break;
+        }
         case 'set_mascot_enabled': {
           setMascotEnabled(msg.enabled !== false);
           break;

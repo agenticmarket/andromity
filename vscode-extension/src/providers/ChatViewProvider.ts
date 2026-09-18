@@ -448,6 +448,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /** Attach a file as prompt context in the webview. */
+  public attachFile(fsPath: string) {
+    if (!fsPath) return;
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    let relPath = fsPath;
+    if (ws && fsPath.startsWith(ws)) {
+      relPath = path.relative(ws, fsPath).replace(/\\/g, "/");
+    }
+    const name = path.basename(fsPath);
+    this._postToWebview({
+      type: "file_attached",
+      file: {
+        name,
+        path: relPath,
+        fsPath,
+      },
+    });
+    if (this._view) {
+      this._view.show?.(true);
+    }
+  }
+
+  /** Open native file picker to manually attach file(s) to chat prompt context. */
+  public async pickAndAttachFile(): Promise<void> {
+    const uris = await vscode.window.showOpenDialog({
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      openLabel: "Attach File",
+      title: "Attach File to Andromity Context",
+    });
+    if (!uris || uris.length === 0) return;
+    for (const uri of uris) {
+      this.attachFile(uri.fsPath);
+    }
+  }
+
   /** Open a session in a dedicated editor tab (side-by-side parallel view). */
   public openSessionInTab(sessionId?: string, sessionName?: string) {
     const sid = sessionId || this._currentSessionId;
@@ -1680,6 +1717,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (message.filePath) {
           await this.openFile(message.filePath, message.line);
         }
+        break;
+      }
+
+      case "pick_file_attachment": {
+        await this.pickAndAttachFile();
         break;
       }
 

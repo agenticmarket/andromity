@@ -21,21 +21,9 @@ describe("Cursor-Parity File Pills, Ambient Context Stripping & Ollama Tests", (
 
     const ambientSepMatch = text.match(/\r?\n\s*---\s*\r?\n(?=\[(?:Active Document|Active Diagnostics|Selection in|Other Open Documents))/);
     let userPart = text;
-    let ambientPart = "";
 
     if (ambientSepMatch && typeof ambientSepMatch.index === "number") {
       userPart = text.slice(0, ambientSepMatch.index);
-      ambientPart = text.slice(ambientSepMatch.index + ambientSepMatch[0].length);
-    }
-
-    if (ambientPart) {
-      const docMatch = ambientPart.match(/\[Active Document:\s*([^(\r\n]+?)(?:\s*\([^)]*\))?(?:,\s*Line:\s*(\d+))?\]/);
-      if (docMatch) {
-        const rawDocPath = docMatch[1].trim();
-        const lineNum = docMatch[2] ? parseInt(docMatch[2], 10) : undefined;
-        const fileName = rawDocPath.split(/[\/\\]/).pop() || rawDocPath;
-        addFile(fileName, rawDocPath, lineNum, true);
-      }
     }
 
     const attachedFileRegex = /\[Attached File:\s*([^\]\r\n]+)\]/g;
@@ -43,20 +31,13 @@ describe("Cursor-Parity File Pills, Ambient Context Stripping & Ollama Tests", (
     while ((m = attachedFileRegex.exec(userPart)) !== null) {
       const fullPath = m[1].trim();
       const fName = fullPath.split(/[\/\\]/).pop() || fullPath;
-      addFile(fName, fullPath, undefined, false);
+      addFile(fName, fullPath);
     }
     userPart = userPart.replace(attachedFileRegex, "").trim();
 
-    const docMatchInUser = userPart.match(/\[Active Document:\s*([^(\r\n]+?)(?:\s*\([^)]*\))?(?:,\s*Line:\s*(\d+))?\]/);
-    if (docMatchInUser) {
-      const rawDocPath = docMatchInUser[1].trim();
-      const lineNum = docMatchInUser[2] ? parseInt(docMatchInUser[2], 10) : undefined;
-      const fileName = rawDocPath.split(/[\/\\]/).pop() || rawDocPath;
-      addFile(fileName, rawDocPath, lineNum, true);
-      userPart = userPart.replace(/\[Active Document:[^\]\r\n]+\]/g, "").trim();
-    }
-
-    userPart = userPart.replace(/\[(?:Other Open Documents|Active Diagnostics)[^\]]*\]/gs, "").trim();
+    // Strip ambient tags without creating pills
+    userPart = userPart.replace(/\[Active Document:[^\]\r\n]+\]/g, "").trim();
+    userPart = userPart.replace(/\[(?:Other Open Documents|Active Diagnostics|Selection in)[^\]]*\]/gs, "").trim();
 
     return { userText: userPart, files };
   }
@@ -111,26 +92,20 @@ describe("Cursor-Parity File Pills, Ambient Context Stripping & Ollama Tests", (
     );
   }
 
-  it("should extract clean user prompt and active document pill from ambient context (fixing user screenshot bug)", () => {
+  it("should cleanly strip ambient context without creating any ugly file pills for open files", () => {
     const rawInput = "great\n\n---\n[Active Document: game/index.html (Language: html), Line: 9]\n[Other Open Documents: .andromity/.gitignore]";
     const parsed = parseUserPromptDisplay(rawInput);
 
     assert.equal(parsed.userText, "great");
-    assert.equal(parsed.files.length, 1);
-    assert.equal(parsed.files[0].name, "index.html");
-    assert.equal(parsed.files[0].path, "game/index.html");
-    assert.equal(parsed.files[0].line, 9);
-    assert.equal(parsed.files[0].isAmbient, true);
+    assert.equal(parsed.files.length, 0, "Ambient open files must NOT create file pills on prompt");
   });
 
-  it("should strip ambient diagnostics and selection blocks completely from user text bubble", () => {
+  it("should strip ambient diagnostics and selection blocks completely with 0 pills", () => {
     const rawInput = "fix this error\n\n---\n[Active Document: src/App.tsx, Line: 42]\n[Active Diagnostics in src/App.tsx (1 errors, 0 warnings):\n  - Line 42 [error]: Cannot find name 'foo'\n]\n[Selection in src/App.tsx (lines 40-42)]:\n```typescript\nconsole.log(foo);\n```\n[Other Open Documents: src/index.ts]";
     const parsed = parseUserPromptDisplay(rawInput);
 
     assert.equal(parsed.userText, "fix this error");
-    assert.equal(parsed.files.length, 1);
-    assert.equal(parsed.files[0].name, "App.tsx");
-    assert.equal(parsed.files[0].line, 42);
+    assert.equal(parsed.files.length, 0, "Ambient diagnostics and selection must NOT create file pills");
   });
 
   it("should parse user-attached drag & dropped file pills cleanly", () => {
@@ -140,9 +115,9 @@ describe("Cursor-Parity File Pills, Ambient Context Stripping & Ollama Tests", (
     assert.equal(parsed.userText, "refactor these styles");
     assert.equal(parsed.files.length, 2);
     assert.equal(parsed.files[0].name, "Header.tsx");
-    assert.equal(parsed.files[0].isAmbient, false);
+    assert.equal(parsed.files[0].path, "src/components/Header.tsx");
     assert.equal(parsed.files[1].name, "theme.css");
-    assert.equal(parsed.files[1].isAmbient, false);
+    assert.equal(parsed.files[1].path, "src/styles/theme.css");
   });
 
   it("should match clean prompt text across echo and prevent duplicate user message bubbles", () => {

@@ -512,6 +512,18 @@ export async function activate(context: vscode.ExtensionContext) {
       );
     }),
 
+    vscode.commands.registerCommand("andromity.attachFileToContext", async (uri?: vscode.Uri) => {
+      let targetPath = uri?.fsPath;
+      if (!targetPath) {
+        targetPath = vscode.window.activeTextEditor?.document?.fileName;
+      }
+      if (targetPath) {
+        chatProvider.attachFile(targetPath);
+      } else {
+        await chatProvider.pickAndAttachFile();
+      }
+    }),
+
     vscode.commands.registerCommand("andromity.openFileDiff", async (filePath: string, isUntracked: boolean) => {
       await chatProvider.openFileDiff(filePath, isUntracked);
     }),

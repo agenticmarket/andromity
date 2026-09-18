@@ -187,6 +187,12 @@
         "icon": "$(fold-up)"
       },
       {
+        "command": "andromity.attachFileToContext",
+        "title": "Attach to Andromity Context",
+        "category": "Andromity",
+        "icon": "$(file-add)"
+      },
+      {
         "command": "andromity.openFileDiff",
         "title": "Open File Diff",
         "category": "Andromity"
@@ -377,12 +383,16 @@
       ],
       "explorer/context": [
         {
-          "command": "andromity.explainCode",
+          "command": "andromity.attachFileToContext",
           "group": "andromity@1"
         },
         {
-          "command": "andromity.generateTests",
+          "command": "andromity.explainCode",
           "group": "andromity@2"
+        },
+        {
+          "command": "andromity.generateTests",
+          "group": "andromity@3"
         }
       ],
       "scm/resourceState/context": [
