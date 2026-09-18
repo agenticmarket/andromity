@@ -2657,43 +2657,46 @@ export function getChatStyles(): string {
       font-size: 11.5px;
       font-feature-settings: "calt", "zero";
       letter-spacing: -0.015em;
-      background: rgba(255, 255, 255, 0.08);
-      color: #79c0ff;
-      padding: 1.5px 5.5px;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--fg, #e6edf3);
+      padding: 1.5px 5px;
       border-radius: 4px;
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.09);
       word-break: break-word;
     }
     .assistant-text h1 {
-      font-size: 17px;
-      font-weight: 700;
-      letter-spacing: -0.025em;
+      font-size: 16px;
+      font-weight: 650;
+      letter-spacing: -0.02em;
       margin: 14px 0 6px;
       color: #ffffff;
+      line-height: 1.35;
     }
     .assistant-text h2 {
-      font-size: 15.5px;
-      font-weight: 600;
-      letter-spacing: -0.02em;
-      margin: 12px 0 6px;
-      color: #ffffff;
-    }
-    .assistant-text h3 {
-      font-size: 14.5px;
+      font-size: 15px;
       font-weight: 600;
       letter-spacing: -0.018em;
-      margin: 10px 0 5px;
+      margin: 12px 0 6px;
       color: #ffffff;
+      line-height: 1.35;
     }
-    .assistant-text h4 {
-      font-size: 13.5px;
+    .assistant-text h3 {
+      font-size: 14px;
       font-weight: 600;
       letter-spacing: -0.015em;
+      margin: 10px 0 5px;
+      color: #ffffff;
+      line-height: 1.35;
+    }
+    .assistant-text h4 {
+      font-size: 13px;
+      font-weight: 600;
       margin: 8px 0 4px;
       color: #ffffff;
+      line-height: 1.35;
     }
     .assistant-text h5, .assistant-text h6 {
-      font-size: 12px;
+      font-size: 11.5px;
       font-weight: 600;
       margin: 8px 0 3px;
       color: var(--muted);
@@ -2701,68 +2704,69 @@ export function getChatStyles(): string {
       letter-spacing: 0.5px;
     }
     .assistant-text blockquote {
-      border-left: 3px solid var(--accent);
-      padding: 4px 10px;
-      margin: 6px 0;
-      background: rgba(0, 127, 212, 0.08);
-      border-radius: 0 4px 4px 0;
+      border-left: 2px solid rgba(255, 255, 255, 0.2);
+      padding: 4px 12px;
+      margin: 8px 0;
+      background: transparent;
       color: var(--muted);
+      font-style: italic;
     }
     .assistant-text hr {
       border: none;
-      border-top: 1px solid var(--border);
-      margin: 10px 0;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      margin: 12px 0;
     }
     .md-spacer {
       height: 8px;
     }
     .md-line {
       margin: 2px 0;
-      line-height: 1.55;
+      line-height: 1.6;
     }
     .md-bullet {
       display: flex;
       align-items: flex-start;
       gap: 6px;
-      margin: 2px 0 2px 6px;
-      line-height: 1.55;
+      margin: 3px 0 3px 4px;
+      line-height: 1.6;
     }
     .md-dot {
-      color: var(--accent);
-      font-size: 14px;
-      line-height: 1.2;
+      color: var(--muted, #8b949e);
+      font-size: 13px;
+      line-height: 1.3;
       user-select: none;
       flex-shrink: 0;
+      opacity: 0.75;
     }
     .md-num {
-      color: var(--accent);
+      color: var(--muted, #8b949e);
       font-size: 12px;
-      font-weight: 600;
+      font-weight: 500;
       min-width: 14px;
       user-select: none;
       flex-shrink: 0;
+      opacity: 0.85;
     }
     .md-text {
       flex: 1;
     }
     .md-quote {
-      border-left: 3px solid var(--accent);
-      padding: 4px 10px;
-      margin: 6px 0;
-      background: rgba(0, 127, 212, 0.08);
-      border-radius: 0 4px 4px 0;
+      border-left: 2px solid rgba(255, 255, 255, 0.2);
+      padding: 4px 12px;
+      margin: 8px 0;
+      background: transparent;
       color: var(--muted);
+      font-style: italic;
     }
 
     /* Markdown Tables & Universal Table Styling */
     .table-scroll-wrapper {
       width: 100%;
       overflow-x: auto;
-      margin: 10px 0;
+      margin: 8px 0;
       border-radius: 6px;
-      border: 1px solid var(--border);
-      background: rgba(0, 0, 0, 0.15);
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.02);
     }
     .assistant-text table,
     .md-table,
