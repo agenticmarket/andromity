@@ -66,6 +66,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const sessionLiveBuffer = new Map(); // sessionId -> Array<raw msg> for replay when switching to a live session
     let turnEditedFiles = new Set();
     let globalDiffStats = {};
+    let lastTurnPrompt = null;
     const btnScrollBottom = document.getElementById('btn-scroll-bottom');
     const scrollUnreadBadge = document.getElementById('scroll-unread-badge');
     const timelineFlyout = document.getElementById('timeline-flyout');
@@ -146,22 +147,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const slashCommands = [
       { cmd: '/help', desc: 'Show all available commands & shortcuts', action: 'help' },
       { cmd: '/skills', desc: 'Browse and mention installed agent skills', action: 'skills' },
+      { cmd: '/trust', desc: 'Trust workspace folder (enable file writes & commands)', action: 'trust' },
+      { cmd: '/untrust', desc: 'Revoke workspace trust (block file writes & commands)', action: 'untrust' },
+      { cmd: '/mode', desc: 'Cycle permission mode (safe / trust / full / yolo)', action: 'mode' },
+      { cmd: '/model', desc: 'Switch AI model', action: 'model' },
+      { cmd: '/plan', desc: 'Open Implementation Plan editor tab', action: 'plan' },
+      { cmd: '/diff', desc: 'View git diff of current changes', action: 'diff' },
       { cmd: '/undo', desc: 'Undo last turn & rollback file modifications', action: 'undo' },
       { cmd: '/compact', desc: 'Compress conversation context to save tokens', action: 'compact' },
       { cmd: '/new', desc: 'Start a fresh conversation session', action: 'new' },
       { cmd: '/clear', desc: 'Clear current chat history view', action: 'clear' },
       { cmd: '/sessions', desc: 'Open sessions browser', action: 'sessions' },
-      { cmd: '/settings', desc: 'Open Settings, Model Catalog & MCP Hub', action: 'settings' },
-      { cmd: '/about', desc: 'About Andromity, license & repository information', action: 'about' },
-      { cmd: '/personalisation', desc: 'Open Personalisation & Wallpaper Atmosphere settings', action: 'personalisation' },
-      { cmd: '/wallpaper', desc: 'Configure background wallpaper atmosphere & ripples', action: 'personalisation' },
-      { cmd: '/pet', desc: 'Interact with or toggle Andro-Pet companion', action: 'pet' },
-      { cmd: '/companion', desc: 'Interact with or toggle Andro-Pet companion', action: 'pet' },
-      { cmd: '/model', desc: 'Switch AI model', action: 'model' },
-      { cmd: '/mode', desc: 'Cycle permission mode (safe / trust / full / yolo)', action: 'mode' },
-      { cmd: '/plan', desc: 'Open Implementation Plan editor tab', action: 'plan' },
-      { cmd: '/diff', desc: 'View git diff of current changes', action: 'diff' },
       { cmd: '/cron', desc: 'Manage scheduled background cron jobs', action: 'cron' },
+      { cmd: '/settings', desc: 'Open Settings, Model Catalog & MCP Hub', action: 'settings' },
+      { cmd: '/personalisation', desc: 'Open Personalisation & Wallpaper Atmosphere settings', action: 'personalisation' },
+      { cmd: '/pet', desc: 'Toggle or interact with Andro-Pet companion', action: 'pet' },
+      { cmd: '/about', desc: 'About Andromity, license & repository information', action: 'about' },
     ];
 
     const DEVELOPER_STATEMENTS = [
@@ -414,11 +415,53 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let lastToolRunning = false;
     let planToolCalledInTurn = false;  // set true when write_plan / update_plan_step fires in the current turn
     let userScrolledUp = false;
+    let isProgrammaticScroll = false;
+    let programmaticScrollTimer = null;
 
     function isAtBottom() {
       if (!chatContainer) return true;
       return chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 120;
     }
+
+    function scrollToBottom(smooth = false) {
+      if (!chatContainer) return;
+      userScrolledUp = false;
+      if (btnScrollBottom) {
+        btnScrollBottom.classList.remove('visible');
+        if (scrollUnreadBadge) scrollUnreadBadge.classList.remove('has-unread');
+      }
+
+      isProgrammaticScroll = true;
+      if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
+
+      if (smooth) {
+        chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+        // Keep target pinned to latest scrollHeight if content dynamically expands during smooth animation
+        let frames = 0;
+        const pinAnimation = () => {
+          if (!userScrolledUp && chatContainer) {
+            chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+          }
+          frames++;
+          if (frames < 20 && isProgrammaticScroll) {
+            requestAnimationFrame(pinAnimation);
+          } else if (chatContainer) {
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            isProgrammaticScroll = false;
+          }
+        };
+        requestAnimationFrame(pinAnimation);
+      } else {
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        requestAnimationFrame(() => {
+          if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
+          programmaticScrollTimer = setTimeout(() => {
+            isProgrammaticScroll = false;
+          }, 60);
+        });
+      }
+    }
+
     function scrollToBottomIfNeeded() {
       if (!userScrolledUp && chatContainer) {
         chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -426,8 +469,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         scrollUnreadBadge.classList.add('has-unread');
       }
     }
+
     if (chatContainer) {
+      chatContainer.addEventListener('wheel', (e) => {
+        if (e.deltaY < 0) {
+          isProgrammaticScroll = false;
+          userScrolledUp = true;
+          if (btnScrollBottom) btnScrollBottom.classList.add('visible');
+        }
+      }, { passive: true });
+
+      chatContainer.addEventListener('touchmove', () => {
+        isProgrammaticScroll = false;
+      }, { passive: true });
+
       chatContainer.addEventListener('scroll', () => {
+        if (isProgrammaticScroll) return;
         const atBottom = isAtBottom();
         userScrolledUp = !atBottom;
         if (btnScrollBottom) {
@@ -442,12 +499,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     btnScrollBottom?.addEventListener('click', () => {
-      if (chatContainer) {
-        chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
-        userScrolledUp = false;
-        btnScrollBottom.classList.remove('visible');
-        if (scrollUnreadBadge) scrollUnreadBadge.classList.remove('has-unread');
-      }
+      scrollToBottom(true);
     });
 
     let toolSeqDoneTools = new Set();
@@ -632,7 +684,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const name = s.name || s.id || 'skill';
         const desc = s.description || 'Agent skill';
         return '<div class="slash-item ' + (isSel ? 'active' : '') + '" data-action="select-mention-skill" data-skill="' + escapeHtml(name) + '" data-idx="' + idx + '" role="option" aria-selected="' + isSel + '">' +
-          '<span class="slash-cmd" style="color:#c084fc;">@' + escapeHtml(name) + '</span>' +
+          '<span class="slash-cmd">@' + escapeHtml(name) + '</span>' +
           '<span class="slash-desc">' + escapeHtml(desc) + '</span>' +
         '</div>';
       }).join('');
@@ -686,6 +738,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'skills':
           appendSkillsCard();
           break;
+        case 'trust':
+          appendSystemNote('Requesting workspace trust...');
+          vscode.postMessage({ type: 'trust_workspace' });
+          break;
+        case 'untrust':
+          appendSystemNote('Revoking workspace trust...');
+          vscode.postMessage({ type: 'untrust_workspace' });
+          break;
         case 'undo':
           vscode.postMessage({ type: 'undo_turn' });
           break;
@@ -717,6 +777,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'companion':
           toggleOrInteractMascot();
           break;
+        case 'play':
+          mascotZoomies();
+          break;
+        case 'fetch':
+          recallMascotHome(true);
+          break;
         case 'model':
           toggleModelFlyout();
           break;
@@ -727,7 +793,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           vscode.postMessage({ type: 'open_plan_tab' });
           break;
         case 'diff':
-          vscode.postMessage({ type: 'open_diff' });
+          vscode.postMessage({ type: 'open_review_tab' });
           break;
         case 'cron':
           toggleCronsFlyout();
@@ -831,6 +897,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             }
             return;
           }
+        }
+
+        if (e.key === 'Backspace' && promptInput.value === '' && attachedFiles.length > 0) {
+          e.preventDefault();
+          attachedFiles.pop();
+          renderAttachedFiles();
+          return;
         }
 
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -1024,7 +1097,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           chatMascotEl.classList.remove('hidden');
         } else {
           chatMascotEl.classList.add('hidden');
-          chatMascotEl.classList.remove('is-sleeping', 'is-peeking', 'is-petted', 'is-jumping', 'is-walking', 'is-working', 'is-celebrating');
+          if (typeof recallMascotHome === 'function') recallMascotHome(false);
+          if (typeof releaseAllMascotParticles === 'function') releaseAllMascotParticles();
+          chatMascotEl.classList.remove('is-sleeping', 'is-peeking', 'is-petted', 'is-jumping', 'is-walking', 'is-working', 'is-celebrating', 'is-grabbed', 'is-dragging', 'is-flying', 'is-landing', 'is-crouch', 'is-dizzy', 'is-zooming', 'is-resting');
           if (mascotBubbleEl) {
             mascotBubbleEl.style.display = 'none';
           }
@@ -1071,6 +1146,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function petMascot() {
       if (!chatMascotEl || chatMascotEl.classList.contains('hidden')) return;
+      try {
+        vscode.postMessage({ type: 'telemetry_feature', feature: 'mascot_petted' });
+      } catch (e) {}
       lastMascotActivityTime = Date.now();
       const wasSleeping = chatMascotEl.classList.contains('is-sleeping');
       const wasPeeking = chatMascotEl.classList.contains('is-peeking');
@@ -1088,6 +1166,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         showMascotBubble(pick, 1800);
       }
       
+      if (isMascotFreeFloating()) {
+        // Petting a landed pet keeps it playing where it is and resets its return timer.
+        cancelMascotHomeTimer();
+        scheduleMascotReturnHome();
+        const petRect = chatMascotEl.getBoundingClientRect();
+        spawnMascotParticles('heart', petRect.left + 16, petRect.top, 4);
+      }
+
       setTimeout(() => {
         chatMascotEl?.classList.remove('is-petted');
       }, 500);
@@ -1100,6 +1186,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function interruptMascotToWork() {
       lastMascotActivityTime = Date.now();
       if (!chatMascotEl || chatMascotEl.classList.contains('hidden')) return;
+      if (isMascotFreeFloating()) {
+        if (mascotPlayState === 'grabbed' || mascotPlayState === 'dragging') return;
+        recallMascotHome(false);
+        return;
+      }
       chatMascotEl.classList.remove('is-sleeping', 'is-peeking', 'is-walking');
       const homeSlot = document.getElementById('chat-mascot-home-slot');
       if (isMascotRoaming && chatMascotEl.parentElement !== homeSlot && !isMascotOnTurn) {
@@ -1113,9 +1204,27 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function hopMascotTo(targetPerchEl) {
       if (!chatMascotEl || chatMascotEl.classList.contains('hidden') || !targetPerchEl) return;
       if (chatMascotEl.parentElement === targetPerchEl) return;
+      if (mascotPlayState === 'grabbed' || mascotPlayState === 'dragging') return;
+
+      const fromPlayground = isMascotFreeFloating();
+      if (fromPlayground) {
+        stopMascotPhysics();
+        cancelMascotHomeTimer();
+        mascotPlayState = 'idle';
+        mascotVel = { x: 0, y: 0 };
+        mascotMoveSamples = [];
+        chatMascotEl.classList.remove('is-flying', 'is-resting', 'is-dizzy', 'is-zooming', 'is-crouch', 'is-landing');
+      }
 
       const firstRect = chatMascotEl.getBoundingClientRect();
       targetPerchEl.appendChild(chatMascotEl);
+      chatMascotEl.style.transition = 'none';
+      chatMascotEl.style.transform = 'none';
+      if (fromPlayground) {
+        // Free-play coordinates belong to the fixed layer: drop them once docked again.
+        chatMascotEl.style.left = '';
+        chatMascotEl.style.top = '';
+      }
       const lastRect = chatMascotEl.getBoundingClientRect();
 
       const deltaX = firstRect.left - lastRect.left;
@@ -1134,8 +1243,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       setTimeout(() => {
         if (chatMascotEl) {
           chatMascotEl.classList.remove('is-jumping');
-          chatMascotEl.style.transition = '';
-          chatMascotEl.style.transform = '';
+          // A grab, throw or free-play rest may have taken over mid-hop: never clobber it.
+          if (mascotPlayState === 'idle') {
+            chatMascotEl.style.transition = '';
+            chatMascotEl.style.transform = '';
+          }
           const homeSlot = document.getElementById('chat-mascot-home-slot');
           isMascotOnTurn = (chatMascotEl.parentElement !== homeSlot);
           if (!isMascotOnTurn) {
@@ -1174,6 +1286,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function runMascotIdleRoam() {
+      // Free-play physics owns the pet: never roam or nap while it is airborne, held or resting away.
+      if (mascotPlayState === 'grabbed' || mascotPlayState === 'dragging' || mascotPlayState === 'flying') return;
+      if (isMascotFreeFloating()) return;
       const homeSlot = document.getElementById('chat-mascot-home-slot');
       if (!chatMascotEl || isRunning || isMascotOnTurn || chatMascotEl.classList.contains('hidden')) {
         return;
@@ -1270,17 +1385,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         chatMascotEl.classList.remove('hidden');
       }
 
-      chatMascotEl.addEventListener('click', (e) => {
-        e.stopPropagation();
-        petMascot();
-      });
-
-      chatMascotEl.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          petMascot();
-        }
-      });
+      attachMascotPlayPhysics();
 
       if (promptInput) {
         promptInput.addEventListener('focus', interruptMascotToWork);
@@ -1299,6 +1404,866 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       mascotIdleTimer = setInterval(runMascotIdleRoam, 16000);
     }
 
+    // ─── Playful Drag, Throw, Bounce & Jump Physics ("Andro-Pet Playground") ───
+    const MASCOT_SIZE = 32;
+    const MASCOT_PHYSICS = {
+      gravity: 1550,
+      bounce: 0.38,
+      wallBounce: 0.65,
+      ceilingBounce: 0.40,
+      airDrag: 0.12,
+      groundFriction: 0.88,
+      stopSpeed: 28,
+      throwScale: 1.0,
+      maxSpeed: 1350,
+      jumpImpulse: 820,
+      grabThreshold: 4,
+      dizzySpeed: 850,
+      restHoldMs: 30000,
+      maxParticles: 24
+    };
+    const MASCOT_LAYER = document.getElementById('mascot-drag-layer');
+    let mascotPlayState = 'idle';
+    let mascotPointerId = null;
+    let mascotGrabOrigin = null;
+    let mascotGrabOffset = { x: MASCOT_SIZE / 2, y: MASCOT_SIZE / 2 };
+    let mascotPointerAt = { x: 0, y: 0 };
+    let mascotPos = { x: 0, y: 0 };
+    let mascotVel = { x: 0, y: 0 };
+    let mascotMoveSamples = [];
+    let mascotRafId = null;
+    let mascotLastFrameTs = 0;
+    let mascotHomeTimer = null;
+    let mascotLean = 0;
+    let mascotDragRafId = null;
+    let mascotPendingPointer = null;
+    let mascotDragField = null;
+    let mascotLastSparkleAt = 0;
+    let mascotBounceCount = 0;
+    let mascotLedgeRoamTimer = null;
+    let mascotLedgeStepTimer = null;
+    let mascotJumpTimer = null;
+    let lastMascotTapTime = 0;
+    const mascotParticles = [];
+    let mascotFieldCache = null;
+    let mascotFieldStamp = 0;
+
+    function prefersReducedMotion() {
+      try {
+        return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+      } catch (err) {
+        return false;
+      }
+    }
+
+    function pickMascotRandom(list) {
+      return list[Math.floor(Math.random() * list.length)];
+    }
+
+    // The playable world: viewport walls, top bar ceiling, and the input card ledge as ground.
+    function getMascotPlayField() {
+      const now = Date.now();
+      if (mascotFieldCache && (now - mascotFieldStamp) < 250) return mascotFieldCache;
+      const vw = window.innerWidth || document.documentElement.clientWidth || 400;
+      const vh = window.innerHeight || document.documentElement.clientHeight || 600;
+
+      let ceilingY = 6;
+      const topBar = document.querySelector('.top-bar');
+      if (topBar) {
+        const topRect = topBar.getBoundingClientRect();
+        if (topRect.height > 0) ceilingY = Math.round(topRect.bottom) + 2;
+      }
+
+      let groundY = vh - MASCOT_SIZE;
+      const inputSection = document.querySelector('.input-section');
+      if (inputSection) {
+        const inputRect = inputSection.getBoundingClientRect();
+        if (inputRect.height > 0 && inputRect.top > ceilingY + MASCOT_SIZE) {
+          groundY = Math.round(inputRect.top) - MASCOT_SIZE;
+        }
+      }
+
+      mascotFieldCache = {
+        width: vw,
+        height: vh,
+        minX: 0,
+        maxX: Math.max(0, vw - MASCOT_SIZE),
+        ceilingY: ceilingY,
+        groundY: Math.max(ceilingY + MASCOT_SIZE, groundY)
+      };
+      mascotFieldStamp = now;
+      return mascotFieldCache;
+    }
+
+    function isMascotFreeFloating() {
+      return !!(chatMascotEl && MASCOT_LAYER && chatMascotEl.parentElement === MASCOT_LAYER);
+    }
+
+    // Sub-pixel friendly formatting: rounding every frame quantises slow drags into visible 1px steps.
+    function formatMascotPx(value) {
+      return (Math.round(value * 100) / 100) + 'px';
+    }
+
+    // Smooth the body lean so the sprite hangs behind the motion instead of snapping per event.
+    function updateMascotLean(target) {
+      const clamped = Math.max(-20, Math.min(20, target));
+      mascotLean += (clamped - mascotLean) * 0.28;
+      if (Math.abs(mascotLean) < 0.05) mascotLean = 0;
+    }
+
+    function paintMascotFrame() {
+      if (!chatMascotEl) return;
+      let angle = 0;
+      if (!prefersReducedMotion() && (mascotPlayState === 'flying' || mascotPlayState === 'dragging')) {
+        angle = mascotLean;
+      }
+      const spin = angle ? ' rotate(' + angle.toFixed(2) + 'deg)' : '';
+      chatMascotEl.style.transform =
+        'translate3d(' + formatMascotPx(mascotPos.x) + ', ' + formatMascotPx(mascotPos.y) + ', 0)' + spin;
+    }
+
+    function parkMascotInLayer(x, y) {
+      if (!chatMascotEl || !MASCOT_LAYER) return false;
+      if (chatMascotEl.parentElement !== MASCOT_LAYER) MASCOT_LAYER.appendChild(chatMascotEl);
+      // Playground motion must track the pointer 1:1: never inherit a dock/patrol easing transition.
+      chatMascotEl.style.transition = 'none';
+      mascotPos.x = x;
+      mascotPos.y = y;
+      paintMascotFrame();
+      return true;
+    }
+
+    function cancelMascotDragFrame() {
+      mascotPendingPointer = null;
+      if (mascotDragRafId !== null) {
+        cancelAnimationFrame(mascotDragRafId);
+        mascotDragRafId = null;
+      }
+    }
+
+    // Coalesces high-frequency pointer events into exactly one paint per frame.
+    function commitMascotDragPaint() {
+      mascotDragRafId = null;
+      const pointer = mascotPendingPointer;
+      mascotPendingPointer = null;
+      if (!pointer || !chatMascotEl || mascotPlayState !== 'dragging') return;
+
+      const field = mascotDragField || getMascotPlayField();
+      const nx = pointer.x - mascotGrabOffset.x;
+      const ny = pointer.y - mascotGrabOffset.y;
+      mascotPos.x = Math.max(field.minX, Math.min(field.maxX, nx));
+      mascotPos.y = Math.max(field.ceilingY, Math.min(field.groundY + 12, ny));
+
+      const now = Date.now();
+      mascotMoveSamples.push({ x: pointer.x, y: pointer.y, t: now });
+      while (mascotMoveSamples.length > 8 || (mascotMoveSamples.length > 1 && (now - mascotMoveSamples[0].t) > 150)) {
+        mascotMoveSamples.shift();
+      }
+
+      // Time-normalised velocity (px/s) keeps the lean identical at any pointer polling rate.
+      const travel = computeMascotThrowVelocity();
+      updateMascotLean(travel.x * 0.007);
+      paintMascotFrame();
+
+      if ((Math.abs(travel.x) + Math.abs(travel.y)) > 260 && (now - mascotLastSparkleAt) > 75) {
+        mascotLastSparkleAt = now;
+        spawnMascotParticles('sparkle', mascotPos.x + MASCOT_SIZE / 2, mascotPos.y + MASCOT_SIZE - 4, 1);
+      }
+    }
+
+    function clearMascotFreeStyles() {
+      if (!chatMascotEl) return;
+      chatMascotEl.style.left = '';
+      chatMascotEl.style.top = '';
+      chatMascotEl.style.transform = '';
+      chatMascotEl.style.transition = '';
+    }
+
+    function flashMascotClass(cls, ms) {
+      if (!chatMascotEl) return;
+      chatMascotEl.classList.add(cls);
+      setTimeout(() => {
+        if (chatMascotEl) chatMascotEl.classList.remove(cls);
+      }, ms);
+    }
+
+    function acquireMascotParticle(kind) {
+      if (!MASCOT_LAYER) return null;
+      for (let i = 0; i < mascotParticles.length; i++) {
+        const pooled = mascotParticles[i];
+        if (pooled.__mascotFree) {
+          pooled.__mascotFree = false;
+          pooled.__mascotKind = kind;
+          pooled.className = 'mascot-particle ' + kind;
+          return pooled;
+        }
+      }
+      if (mascotParticles.length >= MASCOT_PHYSICS.maxParticles) return null;
+      const node = document.createElement('div');
+      node.className = 'mascot-particle ' + kind;
+      node.setAttribute('aria-hidden', 'true');
+      node.__mascotKind = kind;
+      node.__mascotFree = false;
+      MASCOT_LAYER.appendChild(node);
+      mascotParticles.push(node);
+      return node;
+    }
+
+    function releaseMascotParticle(node) {
+      if (!node || node.__mascotFree) return;
+      node.__mascotFree = true;
+      node.__mascotKind = '';
+      node.className = 'mascot-particle';
+    }
+
+    function releaseAllMascotParticles() {
+      for (let i = 0; i < mascotParticles.length; i++) releaseMascotParticle(mascotParticles[i]);
+    }
+
+    // Pooled reaction particles: reusing nodes keeps the drag path completely free of DOM churn.
+    function spawnMascotParticles(kind, x, y, count) {
+      if (!MASCOT_LAYER || prefersReducedMotion()) return;
+      const total = Math.max(1, Math.min(6, count || 3));
+      for (let i = 0; i < total; i++) {
+        const node = acquireMascotParticle(kind);
+        if (!node) break;
+        node.style.left = Math.round(x) + 'px';
+        node.style.top = Math.round(y) + 'px';
+        node.style.setProperty('--px', Math.round((Math.random() - 0.5) * 34) + 'px');
+        node.style.setProperty('--py', Math.round(-6 - Math.random() * 16) + 'px');
+        // Guaranteed release even if animationend never fires (e.g. animations disabled).
+        setTimeout(() => releaseMascotParticle(node), 1200);
+      }
+    }
+
+    function stopMascotPhysics() {
+      if (mascotRafId !== null) {
+        cancelAnimationFrame(mascotRafId);
+        mascotRafId = null;
+      }
+      mascotLastFrameTs = 0;
+    }
+
+    function cancelMascotHomeTimer() {
+      if (mascotHomeTimer) {
+        clearTimeout(mascotHomeTimer);
+        mascotHomeTimer = null;
+      }
+    }
+
+    function scheduleMascotReturnHome() {
+      cancelMascotHomeTimer();
+      mascotHomeTimer = setTimeout(() => {
+        mascotHomeTimer = null;
+        recallMascotHome(true);
+      }, MASCOT_PHYSICS.restHoldMs);
+    }
+
+    // Window listeners ensure the pet NEVER loses track of the cursor during fast movements.
+    function onWindowMascotMove(e) {
+      updateMascotGrab(e);
+    }
+    function onWindowMascotUp(e) {
+      endMascotGrab(e);
+    }
+    function onWindowMascotCancel() {
+      cancelMascotGrab();
+    }
+
+    function detachWindowMascotListeners() {
+      window.removeEventListener('pointermove', onWindowMascotMove);
+      window.removeEventListener('pointerup', onWindowMascotUp);
+      window.removeEventListener('pointercancel', onWindowMascotCancel);
+    }
+
+    function beginMascotGrab(e) {
+      if (!chatMascotEl || chatMascotEl.classList.contains('hidden')) return;
+      if (typeof e.button === 'number' && e.button !== 0) return;
+      if (mascotPlayState === 'grabbed' || mascotPlayState === 'dragging') return;
+
+      const rect = chatMascotEl.getBoundingClientRect();
+      mascotPointerId = e.pointerId;
+      try { chatMascotEl.setPointerCapture(e.pointerId); } catch (err) {}
+      stopMascotPhysics();
+      cancelMascotHomeTimer();
+      cancelMascotDragFrame();
+      stopLedgeRoam();
+      if (mascotJumpTimer) {
+        clearTimeout(mascotJumpTimer);
+        mascotJumpTimer = null;
+      }
+      lastMascotActivityTime = Date.now();
+      chatMascotEl.style.transition = 'none';
+      mascotDragField = null;
+      mascotLean = 0;
+      mascotLastSparkleAt = 0;
+      mascotBounceCount = 0;
+      mascotGrabOffset = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      mascotPointerAt = { x: e.clientX, y: e.clientY };
+      mascotPos = { x: rect.left, y: rect.top };
+      mascotVel = { x: 0, y: 0 };
+      mascotMoveSamples = [{ x: e.clientX, y: e.clientY, t: Date.now() }];
+      mascotGrabOrigin = { x: rect.left, y: rect.top, parent: chatMascotEl.parentElement };
+      mascotPlayState = 'grabbed';
+      chatMascotEl.classList.remove('is-flying', 'is-falling', 'is-bouncing', 'is-resting', 'is-sleeping', 'is-peeking', 'is-walking', 'is-dizzy', 'is-zooming', 'is-crouch', 'is-celebrating', 'is-petted', 'is-jumping', 'is-landing');
+      chatMascotEl.classList.add('is-grabbed');
+
+      window.addEventListener('pointermove', onWindowMascotMove, { passive: false });
+      window.addEventListener('pointerup', onWindowMascotUp);
+      window.addEventListener('pointercancel', onWindowMascotCancel);
+
+      if (e.cancelable && e.preventDefault) e.preventDefault();
+    }
+
+    function updateMascotGrab(e) {
+      if (!chatMascotEl || mascotPointerId === null || e.pointerId !== mascotPointerId) return;
+      if (mascotPlayState !== 'grabbed' && mascotPlayState !== 'dragging') return;
+
+      if (mascotPlayState === 'grabbed') {
+        const travel = Math.hypot(e.clientX - mascotPointerAt.x, e.clientY - mascotPointerAt.y);
+        if (travel < MASCOT_PHYSICS.grabThreshold) return;
+        if (!parkMascotInLayer(mascotPos.x, mascotPos.y)) return;
+        try { chatMascotEl.setPointerCapture(mascotPointerId); } catch (err) {}
+        mascotPlayState = 'dragging';
+        mascotDragField = getMascotPlayField();
+        mascotMoveSamples = [{ x: e.clientX, y: e.clientY, t: Date.now() }];
+        chatMascotEl.classList.remove('is-grabbed', 'is-sleeping', 'is-peeking', 'is-resting');
+        chatMascotEl.classList.add('is-dragging');
+      }
+
+      if (e.cancelable && e.preventDefault) e.preventDefault();
+
+      // Record the sample and paint once per animation frame instead of once per pointer event.
+      mascotPointerAt = { x: e.clientX, y: e.clientY };
+      mascotPendingPointer = { x: e.clientX, y: e.clientY };
+      if (mascotDragRafId === null) mascotDragRafId = requestAnimationFrame(commitMascotDragPaint);
+    }
+
+    function endMascotGrab(e) {
+      if (mascotPointerId === null) return;
+      if (e && typeof e.pointerId === 'number' && e.pointerId !== mascotPointerId) return;
+      if (chatMascotEl) {
+        try { chatMascotEl.releasePointerCapture(mascotPointerId); } catch (err) {}
+      }
+      detachWindowMascotListeners();
+      mascotPointerId = null;
+      if (!chatMascotEl) return;
+
+      // Commit the final pointer sample so the throw matches the last on-screen position.
+      if (mascotPendingPointer && mascotPlayState === 'dragging') {
+        if (mascotDragRafId !== null) {
+          cancelAnimationFrame(mascotDragRafId);
+          mascotDragRafId = null;
+        }
+        commitMascotDragPaint();
+      } else {
+        cancelMascotDragFrame();
+      }
+      mascotDragField = null;
+
+      const wasDragging = mascotPlayState === 'dragging';
+      chatMascotEl.classList.remove('is-grabbed', 'is-dragging');
+      if (!wasDragging) {
+        const now = Date.now();
+        if (now - lastMascotTapTime < 340) {
+          lastMascotTapTime = 0;
+          mascotJump();
+          return;
+        }
+        lastMascotTapTime = now;
+        if (isMascotFreeFloating()) {
+          mascotPlayState = 'resting';
+          chatMascotEl.classList.add('is-resting');
+          paintMascotFrame();
+          scheduleMascotReturnHome();
+        } else {
+          mascotPlayState = 'idle';
+        }
+        petMascot();
+        return;
+      }
+      lastMascotTapTime = 0;
+      throwMascot();
+    }
+
+    function cancelMascotGrab() {
+      if (chatMascotEl && mascotPointerId !== null) {
+        try { chatMascotEl.releasePointerCapture(mascotPointerId); } catch (err) {}
+      }
+      detachWindowMascotListeners();
+      stopLedgeRoam();
+      if (mascotJumpTimer) {
+        clearTimeout(mascotJumpTimer);
+        mascotJumpTimer = null;
+      }
+      if (mascotPlayState !== 'grabbed' && mascotPlayState !== 'dragging') return;
+      const wasDragging = mascotPlayState === 'dragging';
+      cancelMascotDragFrame();
+      mascotDragField = null;
+      mascotPointerId = null;
+      if (!chatMascotEl) return;
+      chatMascotEl.classList.remove('is-grabbed', 'is-dragging');
+
+      const origin = mascotGrabOrigin;
+      mascotGrabOrigin = null;
+      const originParent = origin && origin.parent;
+      if (wasDragging && originParent && originParent !== MASCOT_LAYER && originParent.parentNode) {
+        mascotPlayState = 'idle';
+        hopMascotTo(originParent);
+        return;
+      }
+      if (wasDragging) {
+        mascotPlayState = 'resting';
+        chatMascotEl.classList.add('is-resting');
+        paintMascotFrame();
+        scheduleMascotReturnHome();
+        startLedgeRoam();
+        return;
+      }
+      mascotPlayState = 'idle';
+    }
+
+    function computeMascotThrowVelocity() {
+      const samples = mascotMoveSamples;
+      if (!samples.length) return { x: 0, y: 0 };
+      const now = Date.now();
+      const last = samples[samples.length - 1];
+
+      if (now - last.t > 80) {
+        return { x: 0, y: 0 };
+      }
+
+      let first = samples[0];
+      for (let i = 0; i < samples.length; i++) {
+        if (last.t - samples[i].t <= 120) {
+          first = samples[i];
+          break;
+        }
+      }
+      const dt = Math.max(16, last.t - first.t) / 1000;
+      return { x: (last.x - first.x) / dt, y: (last.y - first.y) / dt };
+    }
+
+    function throwMascot() {
+      if (!chatMascotEl) return;
+      try {
+        vscode.postMessage({ type: 'telemetry_feature', feature: 'mascot_tossed' });
+      } catch (e) {}
+      const launch = computeMascotThrowVelocity();
+      mascotMoveSamples = [];
+      mascotBounceCount = 0;
+      const speed = Math.hypot(launch.x, launch.y);
+      const isGentleAirDrop = speed < 80;
+
+      if (prefersReducedMotion()) {
+        const field = getMascotPlayField();
+        mascotPos.y = field.groundY;
+        finishMascotRest();
+        return;
+      }
+
+      if (isGentleAirDrop) {
+        mascotVel.x = 0;
+        mascotVel.y = 40;
+        mascotPlayState = 'flying';
+        chatMascotEl.classList.add('is-flying', 'is-falling');
+        showMascotBubble(pickMascotRandom(['Wheee!', 'Whoa!', 'Down we go!', 'Catch me! ✨']), 1100);
+        startMascotPhysics();
+        return;
+      }
+
+      let vx = launch.x * MASCOT_PHYSICS.throwScale;
+      let vy = launch.y * MASCOT_PHYSICS.throwScale;
+      const throwSpeed = Math.hypot(vx, vy);
+      if (throwSpeed > MASCOT_PHYSICS.maxSpeed) {
+        const clamp = MASCOT_PHYSICS.maxSpeed / throwSpeed;
+        vx *= clamp;
+        vy *= clamp;
+      }
+      mascotVel.x = vx;
+      mascotVel.y = vy;
+
+      mascotPlayState = 'flying';
+      chatMascotEl.classList.add('is-flying');
+      if (throwSpeed > 600) {
+        showMascotBubble(pickMascotRandom(['Wheee!!', 'Woohoo!', 'Nyoom!', 'Boing!']), 1200);
+      }
+      startMascotPhysics();
+    }
+
+    function startMascotPhysics() {
+      if (mascotRafId !== null) return;
+      mascotLastFrameTs = 0;
+      mascotRafId = requestAnimationFrame(mascotPhysicsStep);
+    }
+
+    function mascotPhysicsStep(ts) {
+      mascotRafId = null;
+      if (!chatMascotEl || mascotPlayState !== 'flying') return;
+      if (!mascotLastFrameTs) mascotLastFrameTs = ts;
+      let dt = (ts - mascotLastFrameTs) / 1000;
+      mascotLastFrameTs = ts;
+      if (!(dt > 0)) dt = 1 / 60;
+      if (dt > 0.032) dt = 0.032;
+
+      const p = MASCOT_PHYSICS;
+      const field = getMascotPlayField();
+      const airDamp = Math.pow(Math.max(0.001, 1 - p.airDrag), dt * 60);
+      mascotVel.x *= airDamp;
+      mascotVel.y += p.gravity * dt;
+      mascotPos.x += mascotVel.x * dt;
+      mascotPos.y += mascotVel.y * dt;
+
+      let hitGround = false;
+      let impactVy = 0;
+
+      if (mascotPos.x <= field.minX) {
+        mascotPos.x = field.minX;
+        mascotVel.x = Math.abs(mascotVel.x) * p.wallBounce;
+        spawnMascotParticles('sparkle', field.minX + 4, mascotPos.y + MASCOT_SIZE / 2, 2);
+      } else if (mascotPos.x >= field.maxX) {
+        mascotPos.x = field.maxX;
+        mascotVel.x = -Math.abs(mascotVel.x) * p.wallBounce;
+        spawnMascotParticles('sparkle', field.maxX + MASCOT_SIZE - 4, mascotPos.y + MASCOT_SIZE / 2, 2);
+      }
+
+      if (mascotPos.y <= field.ceilingY) {
+        mascotPos.y = field.ceilingY;
+        mascotVel.y = Math.abs(mascotVel.y) * p.ceilingBounce;
+      }
+
+      if (mascotPos.y >= field.groundY) {
+        mascotPos.y = field.groundY;
+        hitGround = true;
+        impactVy = mascotVel.y;
+
+        if (mascotVel.y > 0) {
+          mascotBounceCount++;
+          if (mascotBounceCount >= 2 || mascotVel.y < 130) {
+            mascotVel.y = 0;
+          } else {
+            mascotVel.y = -mascotVel.y * p.bounce;
+          }
+        }
+
+        mascotVel.x *= Math.pow(p.groundFriction, dt * 60);
+        if (Math.abs(mascotVel.x) < 14) mascotVel.x = 0;
+      }
+
+      updateMascotLean(mascotVel.x * 0.009);
+
+      if (hitGround && impactVy > 110) {
+        onMascotBounceImpact(impactVy, mascotBounceCount);
+      }
+
+      paintMascotFrame();
+
+      const speed = Math.hypot(mascotVel.x, mascotVel.y);
+      if (hitGround && mascotVel.y === 0 && speed < p.stopSpeed) {
+        finishMascotRest();
+        return;
+      }
+
+      mascotRafId = requestAnimationFrame(mascotPhysicsStep);
+    }
+
+    function onMascotBounceImpact(impactVy, bounceNum) {
+      if (!chatMascotEl || prefersReducedMotion()) return;
+      const centerX = mascotPos.x + MASCOT_SIZE / 2;
+      const feetY = mascotPos.y + MASCOT_SIZE - 2;
+
+      chatMascotEl.classList.remove('is-falling');
+
+      if (bounceNum === 1) {
+        flashMascotClass('is-landing', 220);
+        spawnMascotParticles('dust', centerX, feetY, impactVy > 600 ? 4 : 2);
+        showMascotBubble(pickMascotRandom(['Boing!', 'Ta-da!', 'Oof! 😄', 'Bounce!', 'Hehe!']), 900);
+      }
+
+      if (impactVy > MASCOT_PHYSICS.dizzySpeed) {
+        spawnMascotParticles('star', centerX, mascotPos.y, 4);
+        flashMascotClass('is-dizzy', 1400);
+        showMascotBubble('😵 Whoa...', 1200);
+      }
+    }
+
+    function finishMascotRest() {
+      stopMascotPhysics();
+      if (!chatMascotEl) return;
+      cancelMascotDragFrame();
+      mascotVel = { x: 0, y: 0 };
+      mascotLean = 0;
+      mascotBounceCount = 0;
+      chatMascotEl.classList.remove('is-flying', 'is-falling', 'is-bouncing', 'is-dizzy', 'is-zooming', 'is-crouch', 'is-landing');
+      mascotPlayState = 'resting';
+      chatMascotEl.classList.add('is-resting');
+      paintMascotFrame();
+
+      const centerX = mascotPos.x + MASCOT_SIZE / 2;
+      spawnMascotParticles('heart', centerX, mascotPos.y + 2, 3);
+      showMascotBubble(pickMascotRandom(['Ta-da! ✨', 'Safe landing! 🐾', 'Hehe! ✨', 'Resting here!']), 1800);
+
+      scheduleMascotReturnHome();
+      startLedgeRoam();
+    }
+
+    function stopLedgeRoam() {
+      if (mascotLedgeRoamTimer) {
+        clearTimeout(mascotLedgeRoamTimer);
+        mascotLedgeRoamTimer = null;
+      }
+      if (mascotLedgeStepTimer) {
+        clearTimeout(mascotLedgeStepTimer);
+        mascotLedgeStepTimer = null;
+      }
+      if (chatMascotEl) {
+        chatMascotEl.classList.remove('is-walking');
+        chatMascotEl.style.transition = '';
+      }
+    }
+
+    function startLedgeRoam() {
+      stopLedgeRoam();
+      if (!chatMascotEl || prefersReducedMotion() || mascotPlayState !== 'resting') return;
+      mascotLedgeRoamTimer = setTimeout(stepLedgeRoam, 2600 + Math.random() * 2200);
+    }
+
+    function stepLedgeRoam() {
+      mascotLedgeRoamTimer = null;
+      if (!chatMascotEl || mascotPlayState !== 'resting' || prefersReducedMotion()) return;
+      const field = getMascotPlayField();
+      const dir = Math.random() < 0.5 ? -1 : 1;
+      const stepDist = 12 + Math.random() * 16;
+      let nextX = mascotPos.x + dir * stepDist;
+      if (nextX < field.minX + 6) nextX = mascotPos.x + stepDist;
+      if (nextX > field.maxX - 6) nextX = mascotPos.x - stepDist;
+      nextX = Math.max(field.minX, Math.min(field.maxX, nextX));
+
+      chatMascotEl.classList.add('is-walking');
+      chatMascotEl.style.transition = 'transform 0.45s ease-out';
+      mascotPos.x = nextX;
+      paintMascotFrame();
+
+      mascotLedgeStepTimer = setTimeout(() => {
+        mascotLedgeStepTimer = null;
+        if (!chatMascotEl) return;
+        chatMascotEl.classList.remove('is-walking');
+        chatMascotEl.style.transition = '';
+        if (mascotPlayState === 'resting') {
+          mascotLedgeRoamTimer = setTimeout(stepLedgeRoam, 3200 + Math.random() * 2600);
+        }
+      }, 460);
+    }
+
+    function mascotJump(scale, lateral, silent) {
+      if (!chatMascotEl || chatMascotEl.classList.contains('hidden')) return;
+      if (mascotPlayState === 'grabbed' || mascotPlayState === 'dragging' || mascotPlayState === 'flying') return;
+
+      if (prefersReducedMotion()) {
+        if (!silent) showMascotBubble(pickMascotRandom(['Hop!', 'Yip!']), 900);
+        return;
+      }
+
+      stopLedgeRoam();
+
+      if (!isMascotFreeFloating()) {
+        const rect = chatMascotEl.getBoundingClientRect();
+        if (!parkMascotInLayer(rect.left, rect.top)) return;
+        isMascotRoaming = false;
+        isMascotOnTurn = false;
+        cancelMascotHomeTimer();
+      }
+      chatMascotEl.classList.remove('is-sleeping', 'is-peeking', 'is-walking', 'is-resting', 'is-dizzy');
+      lastMascotActivityTime = Date.now();
+
+      const power = typeof scale === 'number' ? scale : 1;
+      const side = typeof lateral === 'number' ? lateral : (Math.random() < 0.5 ? -1 : 1) * 30;
+
+      flashMascotClass('is-crouch', 130);
+      if (!silent) showMascotBubble(pickMascotRandom(['Hop!', 'Wheee!', 'Yip!', 'Boing!']), 900);
+
+      if (mascotJumpTimer) {
+        clearTimeout(mascotJumpTimer);
+        mascotJumpTimer = null;
+      }
+      mascotJumpTimer = setTimeout(() => {
+        mascotJumpTimer = null;
+        if (!chatMascotEl || mascotPlayState === 'grabbed' || mascotPlayState === 'dragging') return;
+        chatMascotEl.classList.remove('is-crouch', 'is-resting');
+        mascotPlayState = 'flying';
+        chatMascotEl.classList.add('is-flying');
+        mascotVel.x = side;
+        mascotVel.y = -MASCOT_PHYSICS.jumpImpulse * power;
+        startMascotPhysics();
+      }, 120);
+    }
+
+    function nudgeMascot(dx) {
+      if (!chatMascotEl || mascotPlayState === 'grabbed' || mascotPlayState === 'dragging' || mascotPlayState === 'flying') return;
+      if (prefersReducedMotion()) return;
+      const rect = chatMascotEl.getBoundingClientRect();
+      const field = getMascotPlayField();
+      const nx = Math.max(field.minX, Math.min(field.maxX, rect.left + dx));
+      if (!parkMascotInLayer(nx, rect.top)) return;
+      stopMascotPhysics();
+      stopLedgeRoam();
+      cancelMascotHomeTimer();
+      isMascotRoaming = false;
+      isMascotOnTurn = false;
+      mascotPlayState = 'resting';
+      chatMascotEl.classList.remove('is-flying', 'is-dizzy', 'is-sleeping', 'is-peeking', 'is-walking');
+      chatMascotEl.classList.add('is-resting');
+      paintMascotFrame();
+      flashMascotClass('is-walking', 420);
+      lastMascotActivityTime = Date.now();
+      scheduleMascotReturnHome();
+      startLedgeRoam();
+    }
+
+    function mascotZoomies() {
+      if (!chatMascotEl || chatMascotEl.classList.contains('hidden')) return;
+      if (mascotPlayState === 'grabbed' || mascotPlayState === 'dragging') return;
+
+      if (prefersReducedMotion()) {
+        showMascotBubble(pickMascotRandom(['Zoomies!', 'Ta-da!']), 1200);
+        return;
+      }
+
+      stopLedgeRoam();
+
+      if (!isMascotFreeFloating()) {
+        const rect = chatMascotEl.getBoundingClientRect();
+        if (!parkMascotInLayer(rect.left, rect.top)) return;
+        isMascotRoaming = false;
+        isMascotOnTurn = false;
+      }
+
+      const field = getMascotPlayField();
+      stopMascotPhysics();
+      cancelMascotHomeTimer();
+      chatMascotEl.classList.remove('is-sleeping', 'is-peeking', 'is-resting', 'is-dizzy', 'is-crouch');
+      mascotPlayState = 'flying';
+      chatMascotEl.classList.add('is-flying');
+      const dir = mascotPos.x > field.width / 2 ? -1 : 1;
+      mascotVel.x = dir * 900;
+      mascotVel.y = -280;
+      flashMascotClass('is-zooming', 900);
+      spawnMascotParticles('sparkle', mascotPos.x + MASCOT_SIZE / 2, mascotPos.y + MASCOT_SIZE - 4, 5);
+      showMascotBubble(pickMascotRandom(['Zoomies!', 'Weeee!', '⚡⚡', 'Ta-da!']), 1400);
+      lastMascotActivityTime = Date.now();
+      startMascotPhysics();
+    }
+
+    function recallMascotHome(playful) {
+      stopLedgeRoam();
+      cancelMascotHomeTimer();
+      stopMascotPhysics();
+      cancelMascotDragFrame();
+      if (mascotJumpTimer) {
+        clearTimeout(mascotJumpTimer);
+        mascotJumpTimer = null;
+      }
+      if (!chatMascotEl) return;
+      const wasFloating = isMascotFreeFloating();
+      mascotPlayState = 'idle';
+      mascotVel = { x: 0, y: 0 };
+      mascotLean = 0;
+      mascotDragField = null;
+      mascotMoveSamples = [];
+      mascotGrabOrigin = null;
+      mascotBounceCount = 0;
+      chatMascotEl.classList.remove('is-flying', 'is-falling', 'is-bouncing', 'is-resting', 'is-dizzy', 'is-zooming', 'is-crouch', 'is-landing', 'is-grabbed', 'is-dragging', 'is-sleeping', 'is-peeking');
+      isMascotOnTurn = false;
+      isMascotRoaming = false;
+
+      const homeSlot = document.getElementById('chat-mascot-home-slot');
+      if (!homeSlot) return;
+      if (chatMascotEl.parentElement === homeSlot) {
+        clearMascotFreeStyles();
+        return;
+      }
+      if (playful && wasFloating) showMascotBubble('🏠 Back home!', 1300);
+      hopMascotTo(homeSlot);
+    }
+
+    function clampMascotToField() {
+      if (!chatMascotEl || !isMascotFreeFloating()) return;
+      if (mascotPlayState === 'flying' || mascotPlayState === 'dragging') return;
+      const field = getMascotPlayField();
+      mascotPos.x = Math.max(field.minX, Math.min(field.maxX, mascotPos.x));
+      mascotPos.y = Math.max(field.ceilingY, Math.min(field.groundY, mascotPos.y));
+      paintMascotFrame();
+    }
+
+    function attachMascotPlayPhysics() {
+      if (!chatMascotEl) return;
+
+      chatMascotEl.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        beginMascotGrab(e);
+      });
+      chatMascotEl.addEventListener('pointermove', (e) => {
+        updateMascotGrab(e);
+      });
+      chatMascotEl.addEventListener('pointerup', (e) => {
+        e.stopPropagation();
+        endMascotGrab(e);
+      });
+      chatMascotEl.addEventListener('pointercancel', () => {
+        cancelMascotGrab();
+      });
+      chatMascotEl.addEventListener('lostpointercapture', () => {
+        if (mascotPointerId === null) cancelMascotGrab();
+      });
+      chatMascotEl.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        mascotJump();
+      });
+      chatMascotEl.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        recallMascotHome(true);
+      });
+      chatMascotEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          petMascot();
+        } else if (e.key === ' ' || e.key === 'Spacebar') {
+          e.preventDefault();
+          mascotJump();
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          nudgeMascot(-16);
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          nudgeMascot(16);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          cancelMascotGrab();
+        }
+      });
+
+      window.addEventListener('blur', () => {
+        if (mascotPlayState === 'grabbed' || mascotPlayState === 'dragging') endMascotGrab();
+      });
+      window.addEventListener('focus', () => {
+        mascotLastFrameTs = 0;
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+          if (mascotPlayState === 'grabbed' || mascotPlayState === 'dragging') endMascotGrab();
+        } else {
+          mascotLastFrameTs = 0;
+        }
+      });
+      window.addEventListener('resize', () => {
+        mascotFieldCache = null;
+        mascotDragField = null;
+        clampMascotToField();
+      });
+    }
+
     function updateOnboardingVisibility() {
       if (!onboardingSection || !readyHeroSection) return;
       const isChatActive = isRunning || (chatContainer && chatContainer.querySelectorAll('.message').length > 0);
@@ -1312,6 +2277,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (!hasAnyKey && !isOllamaActive) {
         onboardingSection.style.display = 'flex';
         readyHeroSection.style.display = 'none';
+        if (!window.__onboarding_viewed_tracked) {
+          window.__onboarding_viewed_tracked = true;
+          vscode.postMessage({ type: 'telemetry_feature', feature: 'onboarding_viewed' });
+        }
       } else {
         onboardingSection.style.display = 'none';
         readyHeroSection.style.display = 'flex';
@@ -1324,6 +2293,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         chip.classList.add('active');
         selectedOnboardingProvider = chip.dataset.provider || 'anthropic';
         selectedOnboardingModel = chip.dataset.model || '';
+        vscode.postMessage({ type: 'telemetry_feature', feature: 'onboard_prov_' + selectedOnboardingProvider });
         const name = chip.dataset.name || 'AI Provider';
         const portal = chip.dataset.portal || '';
 
@@ -1385,6 +2355,187 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         apiKey: '',
         modelId: 'llama3.2:latest',
       });
+    });
+
+    let onboardingPendingProvider = '';
+    let onboardingSelectedLiveModel = '';
+    let onboardingLiveModelsList = [];
+
+    const onboardingStep1 = document.getElementById('onboarding-step-1');
+    const onboardingStep2 = document.getElementById('onboarding-step-2');
+    const onboardingStepPill = document.getElementById('onboarding-step-pill');
+    const onboardingStepText = document.getElementById('onboarding-step-text');
+
+    const onboardingStep2Badge = document.getElementById('onboarding-step2-badge');
+    const btnOnboardingStep2Back = document.getElementById('btn-onboarding-step2-back');
+    const onboardingStep2Search = document.getElementById('onboarding-step2-search');
+    const onboardingStep2ModelsList = document.getElementById('onboarding-step2-models-list');
+    const btnStep2Skip = document.getElementById('btn-step2-skip');
+    const btnStep2Confirm = document.getElementById('btn-step2-confirm');
+
+    const ONBOARDING_MODEL_PRIORITIES = [
+      /claude-3[.-]7-sonnet/i,
+      /claude-3[.-]5-sonnet/i,
+      /gpt-4o(?!-mini)/i,
+      /deepseek[/-]r1/i,
+      /deepseek-reasoner/i,
+      /deepseek[/-](chat|v3)/i,
+      /gemini-2[.-]5-flash/i,
+      /gemini-2[.-]5-pro/i,
+      /gemini-2[.-]0-flash/i,
+      /claude-sonnet/i,
+      /gpt-4o-mini/i,
+      /o3-mini/i,
+      /o1(?!-mini)/i,
+      /qwen.*coder/i,
+      /llama-3[.-]3-70b/i,
+      /llama3[.-]2/i,
+    ];
+
+    function getOnboardingModelScore(modelId, modelName) {
+      const target = ((modelId || '') + ' ' + (modelName || '')).toLowerCase();
+      for (let i = 0; i < ONBOARDING_MODEL_PRIORITIES.length; i++) {
+        if (ONBOARDING_MODEL_PRIORITIES[i].test(target)) {
+          return 1000 - i * 10;
+        }
+      }
+      return 0;
+    }
+
+    function showOnboardingModelStep(provider, models, defaultModel) {
+      onboardingPendingProvider = provider || selectedOnboardingProvider || 'anthropic';
+      
+      const rawList = Array.isArray(models) ? models.slice() : [];
+      rawList.sort((a, b) => {
+        if (defaultModel) {
+          if (a.id === defaultModel) return -1;
+          if (b.id === defaultModel) return 1;
+        }
+        const scoreA = getOnboardingModelScore(a.id, a.name);
+        const scoreB = getOnboardingModelScore(b.id, b.name);
+        if (scoreA !== scoreB) return scoreB - scoreA;
+        return (a.name || a.id).localeCompare(b.name || b.id);
+      });
+
+      onboardingLiveModelsList = rawList;
+      onboardingSelectedLiveModel = defaultModel || (onboardingLiveModelsList[0]?.id) || '';
+
+      if (onboardingStep1) onboardingStep1.style.display = 'none';
+      if (onboardingStep2) onboardingStep2.style.display = 'flex';
+      if (onboardingStepText) onboardingStepText.textContent = 'Step 2 of 2 · Choose Starting Model';
+
+      if (onboardingStep2Badge) {
+        const provName = provider ? (provider.charAt(0).toUpperCase() + provider.slice(1)) : 'AI';
+        onboardingStep2Badge.textContent = provName + ' connected';
+      }
+
+      if (onboardingStep2Search) onboardingStep2Search.value = '';
+      renderOnboardingStep2Models('');
+      if (onboardingStep2Search) setTimeout(() => onboardingStep2Search.focus(), 60);
+    }
+
+    function showOnboardingKeyStep() {
+      if (onboardingStep2) onboardingStep2.style.display = 'none';
+      if (onboardingStep1) onboardingStep1.style.display = 'flex';
+      if (onboardingStepText) onboardingStepText.textContent = 'Step 1 of 2 · Quick Setup';
+
+      if (btnOnboardingSave) {
+        btnOnboardingSave.disabled = false;
+        btnOnboardingSave.innerHTML = '<span>Connect & Continue</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+      }
+      if (btnOnboardingOllamaSave) {
+        btnOnboardingOllamaSave.disabled = false;
+        btnOnboardingOllamaSave.innerHTML = '<span>Activate Local Ollama</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+      }
+      if (btnStep2Confirm) {
+        btnStep2Confirm.disabled = false;
+        btnStep2Confirm.innerHTML = '<span>Start Coding</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+      }
+    }
+
+    function renderOnboardingStep2Models(filterQuery) {
+      if (!onboardingStep2ModelsList) return;
+      const q = (filterQuery || '').trim().toLowerCase();
+      const filtered = onboardingLiveModelsList.filter(m => {
+        if (!q) return true;
+        const name = (m.name || '').toLowerCase();
+        const id = (m.id || '').toLowerCase();
+        const desc = (m.desc || '').toLowerCase();
+        return name.includes(q) || id.includes(q) || desc.includes(q);
+      });
+
+      if (filtered.length === 0) {
+        onboardingStep2ModelsList.innerHTML = '<div style="padding:16px; text-align:center; color:var(--muted); font-size:11px;">No matching models found.</div>';
+        return;
+      }
+
+      onboardingStep2ModelsList.innerHTML = filtered.map(m => {
+        const isSelected = m.id === onboardingSelectedLiveModel;
+        const isPopular = getOnboardingModelScore(m.id, m.name) >= 800;
+        const popBadge = isPopular ? '<span class="model-badge-rec">· Popular</span>' : '';
+        return '<div class="onboarding-model-item ' + (isSelected ? 'active' : '') + '" data-action="select-live-model" data-model-id="' + escapeHtml(m.id) + '" role="option" aria-selected="' + (isSelected ? 'true' : 'false') + '">' +
+          '<div class="onboarding-model-item-info">' +
+            '<div class="onboarding-model-item-name">' + escapeHtml(m.name || m.id) + popBadge + '</div>' +
+            (m.desc ? '<div class="onboarding-model-item-desc">' + escapeHtml(m.desc) + '</div>' : '') +
+          '</div>' +
+          '<div class="onboarding-model-item-meta">' +
+            (m.context ? '<span class="onboarding-model-ctx-pill">' + escapeHtml(m.context) + '</span>' : '') +
+            (m.pricing ? '<span class="onboarding-model-pricing-pill">' + escapeHtml(m.pricing) + '</span>' : '') +
+          '</div>' +
+        '</div>';
+      }).join('');
+    }
+
+    function confirmOnboardingModel(chosenModel) {
+      const modelToUse = chosenModel || onboardingSelectedLiveModel || onboardingLiveModelsList[0]?.id;
+      if (btnStep2Confirm) {
+        btnStep2Confirm.disabled = true;
+        btnStep2Confirm.innerHTML = '<span>Saving...</span>';
+      }
+      vscode.postMessage({
+        type: 'finish_onboarding_model',
+        provider: onboardingPendingProvider,
+        modelId: modelToUse,
+      });
+    }
+
+    onboardingStep2ModelsList?.addEventListener('click', (e) => {
+      const item = e.target.closest('.onboarding-model-item');
+      if (!item) return;
+      onboardingSelectedLiveModel = item.dataset.modelId || '';
+      onboardingStep2ModelsList.querySelectorAll('.onboarding-model-item').forEach(el => el.classList.remove('active'));
+      item.classList.add('active');
+    });
+
+    onboardingStep2ModelsList?.addEventListener('dblclick', (e) => {
+      const item = e.target.closest('.onboarding-model-item');
+      if (!item) return;
+      confirmOnboardingModel(item.dataset.modelId);
+    });
+
+    onboardingStep2Search?.addEventListener('input', () => {
+      renderOnboardingStep2Models(onboardingStep2Search.value);
+    });
+
+    onboardingStep2Search?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const first = onboardingStep2ModelsList?.querySelector('.onboarding-model-item');
+        if (first) {
+          confirmOnboardingModel(first.dataset.modelId);
+        }
+      }
+    });
+
+    btnStep2Confirm?.addEventListener('click', () => {
+      confirmOnboardingModel();
+    });
+
+    btnStep2Skip?.addEventListener('click', () => {
+      confirmOnboardingModel(onboardingLiveModelsList[0]?.id);
+    });
+
+    btnOnboardingStep2Back?.addEventListener('click', () => {
+      showOnboardingKeyStep();
     });
 
     function toggleSessionsFlyout() {
@@ -1776,7 +2927,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           lastStatusText = '✗ Failed';
           lastStatusColor = 'var(--red)';
         } else if (c.last_status === 'timeout') {
-          lastStatusText = '⏱ Timeout';
+          lastStatusText = 'Timeout';
           lastStatusColor = '#eab308';
         }
         const nextRun = isEnabled ? (c.next_run_in ? ('Next: ' + c.next_run_in) : 'Next: soon') : 'Paused';
@@ -1796,8 +2947,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               '<span style="opacity:0.6; margin-left:6px;">• ' + escapeHtml(nextRun) + '</span>' +
             '</div>' +
             '<div class="cron-card-actions">' +
-              '<button class="cron-btn-action run-btn" data-cron-action="run" data-id="' + escapeHtml(c.id) + '" data-name="' + escapeHtml(c.name || '') + '" title="Trigger immediately">▶ Run</button>' +
-              '<button class="cron-btn-action" data-cron-action="toggle" data-id="' + escapeHtml(c.id) + '" title="' + (isEnabled ? 'Pause schedule' : 'Activate schedule') + '">' + (isEnabled ? '⏸ Pause' : '▶ Enable') + '</button>' +
+              '<button class="cron-btn-action run-btn" data-cron-action="run" data-id="' + escapeHtml(c.id) + '" data-name="' + escapeHtml(c.name || '') + '" title="Trigger immediately"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="margin-right:3px;vertical-align:-1px;"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>Run</button>' +
+              '<button class="cron-btn-action" data-cron-action="toggle" data-id="' + escapeHtml(c.id) + '" title="' + (isEnabled ? 'Pause schedule' : 'Activate schedule') + '">' + (isEnabled ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="margin-right:3px;vertical-align:-1px;"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>Pause' : '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="margin-right:3px;vertical-align:-1px;"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>Enable') + '</button>' +
             '</div>' +
           '</div>' +
         '</div>';
@@ -1815,7 +2966,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       card.innerHTML =
         '<div class="cron-event-hdr">' +
           '<span style="display:flex; align-items:center; gap:5px;">' +
-            '<span style="color:' + (isSuccess ? 'var(--green)' : 'var(--red)') + ';">' + (isSuccess ? '✓' : '✗') + '</span>' +
+            '<span style="color:' + (isSuccess ? 'var(--green)' : 'var(--red)') + '; display:inline-flex; align-items:center;">' + (isSuccess ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>' : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>') + '</span>' +
             '<span>Scheduled Task: <strong>' + escapeHtml(job?.name || run.job_name || 'Task') + '</strong></span>' +
           '</span>' +
           '<span style="font-size:10px; color:var(--muted); font-weight:normal;">' + durSec + 's</span>' +
@@ -2150,6 +3301,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           const sId = target.getAttribute('data-session-id');
           if (sId) {
             sessionsFlyout.style.display = 'none';
+            if (sId === currentSessionId) {
+              break;
+            }
             if (planTrackerStrip) planTrackerStrip.style.display = 'none';
             vscode.postMessage({ type: 'switch_session', sessionId: sId });
           }
@@ -2222,6 +3376,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           break;
         }
+        case 'open-review-tab':
+        case 'open-changes-review': {
+          const card = target.closest('.files-changed-card');
+          let turnFiles = undefined;
+          if (card && card.getAttribute('data-turn-files')) {
+            try {
+              turnFiles = JSON.parse(card.getAttribute('data-turn-files'));
+            } catch (err) {}
+          }
+          const fPath = target.getAttribute('data-file-path') || target.closest('[data-file-path]')?.getAttribute('data-file-path');
+          vscode.postMessage({ type: 'open_review_tab', filePath: fPath, turnFiles: turnFiles });
+          break;
+        }
         case 'toggle-timeline':
           if (timelineFlyout) {
             const isVis = timelineFlyout.style.display !== 'none';
@@ -2240,8 +3407,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           vscode.postMessage({ type: 'new_session' });
           break;
         case 'open-diff':
-          vscode.postMessage({ type: 'open_diff' });
+          vscode.postMessage({ type: 'open_review_tab' });
           break;
+        case 'remove-attached-file': {
+          const idx = parseInt(target.getAttribute('data-idx') || '0', 10);
+          removeAttachedFile(idx);
+          break;
+        }
+        case 'dismiss-ollama-banner': {
+          const b = document.getElementById('ollama-detected-banner');
+          if (b) b.remove();
+          break;
+        }
         case 'toggle-more-files': {
           e.stopPropagation();
           const card = target.closest('.files-changed-card');
@@ -2254,9 +3431,26 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           break;
         }
-        case 'undo-turn':
-          vscode.postMessage({ type: 'undo_turn' });
+        case 'undo-turn': {
+          const userWrap = target.closest('.message-wrap.user');
+          const allUserWraps = Array.from(chatContainer.querySelectorAll('.message-wrap.user'));
+          const totalTurns = allUserWraps.length;
+          let turnIndex = -1;
+          if (userWrap) {
+            turnIndex = allUserWraps.indexOf(userWrap);
+          }
+          if (turnIndex < 0 && target.hasAttribute && target.hasAttribute('data-turn-index')) {
+            turnIndex = parseInt(target.getAttribute('data-turn-index'), 10);
+          }
+          const turnsToUndo = (turnIndex >= 0 && totalTurns > 0) ? (totalTurns - turnIndex) : 1;
+          vscode.postMessage({
+            type: 'undo_turn',
+            turnIndex: turnIndex >= 0 ? turnIndex : undefined,
+            totalTurns: totalTurns,
+            turnsToUndo: turnsToUndo,
+          });
           break;
+        }
         case 'carousel-prev': {
           const cWrap = target.closest('.prompt-images-container');
           const carousel = cWrap ? cWrap.querySelector('.prompt-image-carousel') : null;
@@ -2276,6 +3470,49 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             const isClamped = pContent.classList.toggle('clamped');
             target.textContent = isClamped ? 'Show more ▾' : 'Show less ▴';
           }
+          break;
+        }
+        case 'retry-turn': {
+          const errCard = target.closest('.andromity-error-card, .error-card');
+          if (errCard) {
+            errCard.style.opacity = '0.5';
+            errCard.style.pointerEvents = 'none';
+            const btn = errCard.querySelector('.btn-error-retry');
+            if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>Retrying...';
+          }
+          vscode.postMessage({
+            type: 'retry_turn',
+            sessionId: currentSessionId,
+            stripImages: false,
+          });
+          break;
+        }
+        case 'retry-without-image': {
+          const errCard = target.closest('.andromity-error-card, .error-card');
+          if (errCard) {
+            errCard.style.opacity = '0.5';
+            errCard.style.pointerEvents = 'none';
+            const btn = errCard.querySelector('.btn-error-retry');
+            if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>Retrying without image...';
+          }
+          vscode.postMessage({
+            type: 'retry_turn',
+            sessionId: currentSessionId,
+            stripImages: true,
+          });
+          break;
+        }
+        case 'switch-model-flyout': {
+          toggleModelFlyout();
+          break;
+        }
+        case 'trigger-compact': {
+          showCompactionBanner('Compacting conversation context to reduce token usage...');
+          vscode.postMessage({ type: 'compact_session' });
+          break;
+        }
+        case 'open-settings': {
+          vscode.postMessage({ type: 'open_settings' });
           break;
         }
         case 'compact-session':
@@ -2307,6 +3544,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         case 'close-skills-card': {
           const card = target.closest('.skills-card');
+          if (card) {
+            card.remove();
+          }
+          break;
+        }
+        case 'close-help-card': {
+          const card = target.closest('.help-card');
           if (card) {
             card.remove();
           }
@@ -2488,6 +3732,111 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let availableProfiles = ['builder', 'coder', 'reviewer', 'planner'];
     let availableReasoningEfforts = ['low', 'medium', 'high', 'off'];
     let attachedImages = [];
+    let attachedFiles = [];
+    let currentActiveEditorContext = null;
+
+    const BINARY_FILE_EXTENSIONS = new Set([
+      'exe', 'dll', 'bin', 'so', 'dylib', 'zip', 'tar', 'gz', '7z', 'rar', 'iso',
+      'dmg', 'class', 'pyc', 'pyo', 'o', 'obj', 'wasm', 'db', 'sqlite', 'parquet'
+    ]);
+
+    function getFileIconBadge(fileName) {
+      const ext = (fileName || '').split('.').pop().toLowerCase();
+      switch (ext) {
+        case 'tsx':
+        case 'jsx':
+          return { badge: 'JSX', color: '#61dafb' };
+        case 'ts':
+          return { badge: 'TS', color: '#38bdf8' };
+        case 'js':
+        case 'mjs':
+        case 'cjs':
+          return { badge: 'JS', color: '#f7df1e' };
+        case 'py':
+          return { badge: 'PY', color: '#4ade80' };
+        case 'html':
+        case 'htm':
+          return { badge: 'HTML', color: '#fb923c' };
+        case 'css':
+        case 'scss':
+        case 'less':
+          return { badge: 'CSS', color: '#c084fc' };
+        case 'json':
+          return { badge: '{}', color: '#facc15' };
+        case 'md':
+        case 'markdown':
+          return { badge: 'MD', color: '#93c5fd' };
+        case 'rs':
+          return { badge: 'RS', color: '#f97316' };
+        case 'go':
+          return { badge: 'GO', color: '#38bdf8' };
+        case 'java':
+        case 'kt':
+          return { badge: 'JAVA', color: '#f87171' };
+        case 'sql':
+          return { badge: 'SQL', color: '#a78bfa' };
+        default:
+          return { badge: 'FILE', color: '#94a3b8' };
+      }
+    }
+
+    function renderAttachedFiles() {
+      const container = document.getElementById('drag-dropped-files-bar');
+      if (!container) return;
+      if (!attachedFiles || attachedFiles.length === 0) {
+        container.style.display = 'none';
+        container.innerHTML = '';
+        return;
+      }
+      container.style.display = 'flex';
+      container.innerHTML = attachedFiles.map((file, idx) => {
+        const iconInfo = getFileIconBadge(file.name);
+        return '<span class="dropped-file-chip" title="' + escapeHtml(file.path || file.name) + '">' +
+          '<span class="chip-icon" style="color:' + iconInfo.color + ';">' + iconInfo.badge + '</span>' +
+          '<span class="chip-name">' + escapeHtml(file.name) + '</span>' +
+          '<button class="chip-remove-btn" data-action="remove-attached-file" data-idx="' + idx + '" title="Remove file">&#x2715;</button>' +
+        '</span>';
+      }).join('');
+    }
+
+    function addDroppedFileAttachment(fileInfo) {
+      if (!fileInfo || !fileInfo.name) return;
+      const ext = (fileInfo.name || '').split('.').pop().toLowerCase();
+      if (BINARY_FILE_EXTENSIONS.has(ext)) {
+        appendSystemNote('Binary file skipped: "' + escapeHtml(fileInfo.name) + '" (binary files cannot be added as code context).');
+        return;
+      }
+      if (attachedFiles.some(f => f.path === fileInfo.path || f.name === fileInfo.name)) {
+        return;
+      }
+      if (attachedFiles.length >= 8) {
+        appendSystemNote('Maximum 8 files can be attached per message.');
+        return;
+      }
+      attachedFiles.push(fileInfo);
+      renderAttachedFiles();
+    }
+
+    function removeAttachedFile(idx) {
+      if (idx >= 0 && idx < attachedFiles.length) {
+        attachedFiles.splice(idx, 1);
+        renderAttachedFiles();
+      }
+    }
+
+    function showOllamaBanner(modelName) {
+      const existing = document.getElementById('ollama-detected-banner');
+      if (existing) existing.remove();
+      const banner = document.createElement('div');
+      banner.className = 'ollama-detected-banner';
+      banner.id = 'ollama-detected-banner';
+      banner.innerHTML = '<span><strong>Local Ollama detected</strong> (' + escapeHtml(modelName) + ')! Ready to code with 0 API keys &amp; 100% privacy.</span>' +
+        '<button class="banner-dismiss" data-action="dismiss-ollama-banner" title="Dismiss banner">&times;</button>';
+      const promptBox = document.querySelector('.prompt-box');
+      if (promptBox && promptBox.parentElement) {
+        promptBox.parentElement.insertBefore(banner, promptBox);
+      }
+    }
 
     function updateProfileBadge() {
       const lbl = document.getElementById('prompt-profile-label');
@@ -2578,32 +3927,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     });
 
-    const promptBoxEl = document.querySelector('.prompt-box');
-    if (promptBoxEl) {
-      promptBoxEl.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        promptBoxEl.style.borderColor = 'var(--accent)';
-      });
-      promptBoxEl.addEventListener('dragleave', () => {
-        promptBoxEl.style.borderColor = '';
-      });
-      promptBoxEl.addEventListener('drop', (e) => {
-        e.preventDefault();
-        promptBoxEl.style.borderColor = '';
-        if (e.dataTransfer && e.dataTransfer.files) {
-          for (let i = 0; i < e.dataTransfer.files.length; i++) {
-            const file = e.dataTransfer.files[i];
-            if (file.type && file.type.indexOf('image') !== -1) {
-              const reader = new FileReader();
-              reader.onload = function(evt) {
-                if (evt.target && evt.target.result) {
-                  addImageAttachment(evt.target.result);
-                }
-              };
-              reader.readAsDataURL(file);
-            }
-          }
-        }
+    function getPathBasename(p) {
+      if (!p || typeof p !== 'string') return '';
+      const lastSlash = Math.max(p.lastIndexOf('/'), p.lastIndexOf(String.fromCharCode(92)));
+      return lastSlash !== -1 ? p.slice(lastSlash + 1) : p;
+    }
+
+    const btnAttachFileEl = document.getElementById('btn-attach-file');
+    if (btnAttachFileEl) {
+      btnAttachFileEl.addEventListener('click', () => {
+        vscode.postMessage({ type: 'pick_file_attachment' });
       });
     }
 
@@ -2631,30 +3964,32 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function appendHelpCard() {
       const card = document.createElement('div');
       card.className = 'help-card';
-      card.style.cssText = 'background:var(--card-bg); border:1px solid var(--border); border-radius:8px; padding:12px; margin:8px 0; font-size:12px; box-shadow: 0 4px 14px rgba(0,0,0,0.3);';
 
       const commandsHtml = slashCommands.map(function(c) {
-        return '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 8px; border-radius:4px; transition:background 0.12s; cursor:pointer;" data-action="select-slash-cmd" data-cmd="' + escapeHtml(c.cmd) + '">' +
+        return '<div class="help-item-row" data-action="select-slash-cmd" data-cmd="' + escapeHtml(c.cmd) + '">' +
           '<div style="display:flex; align-items:center; gap:8px; min-width:0;">' +
-            '<code style="background:rgba(6,182,212,0.15); color:var(--accent); padding:2px 6px; border-radius:4px; font-weight:600; font-family:var(--vscode-editor-font-family, monospace); font-size:11.5px;">' + escapeHtml(c.cmd) + '</code>' +
+            '<span class="help-item-tag">' + escapeHtml(c.cmd) + '</span>' +
             '<span style="color:var(--fg); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(c.desc) + '</span>' +
           '</div>' +
-          '<button class="prompt-pill-btn" style="padding:2px 8px; font-size:10.5px; flex-shrink:0;">Run</button>' +
+          '<button class="btn-card-action">Run</button>' +
         '</div>';
       }).join('');
 
       card.innerHTML = 
-        '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid var(--border);">' +
-          '<div style="display:flex; align-items:center; gap:6px; font-weight:600; color:var(--fg); font-size:12.5px;">' +
-            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>' +
-            '<span>Available Commands & Shortcuts</span>' +
+        '<div class="help-card-header">' +
+          '<div class="help-card-title">' +
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>' +
+            '<span>Available Commands &amp; Shortcuts</span>' +
           '</div>' +
-          '<span style="font-size:10.5px; color:var(--muted);">Click command to run</span>' +
+          '<div style="display:flex; align-items:center; gap:6px;">' +
+            '<span style="font-size:10.5px; color:var(--muted);">Click to run</span>' +
+            '<button class="palette-close-btn" data-action="close-help-card" title="Close commands panel"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>' +
+          '</div>' +
         '</div>' +
         '<div style="display:flex; flex-direction:column; gap:2px;">' +
           commandsHtml +
         '</div>' +
-        '<div style="margin-top:8px; padding-top:6px; border-top:1px solid var(--border); font-size:11px; color:var(--muted); display:flex; justify-content:space-between;">' +
+        '<div style="margin-top:8px; padding-top:6px; border-top:1px solid var(--vscode-widget-border, var(--border)); font-size:11px; color:var(--muted); display:flex; justify-content:space-between;">' +
           '<span>Tip: Type <code>/</code> for commands, <code>@</code> for skills</span>' +
           '<span>Paste images with <code>Ctrl+V</code></span>' +
         '</div>';
@@ -2665,15 +4000,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function appendAboutCard() {
       const card = document.createElement('div');
       card.className = 'about-card';
-      card.style.cssText = 'background:var(--card-bg); border:1px solid var(--border); border-radius:8px; padding:12px; margin:8px 0; font-size:12px; box-shadow: 0 4px 14px rgba(0,0,0,0.3);';
 
       card.innerHTML = 
-        '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid var(--border);">' +
-          '<div style="display:flex; align-items:center; gap:8px; font-weight:600; color:var(--fg); font-size:12.5px;">' +
-            '<span style="color:var(--accent); font-weight:700;">Andromity AI Coding Agent</span>' +
-            '<span style="background:rgba(16,185,129,0.18); color:#10b981; font-size:10.5px; padding:1px 6px; border-radius:10px;">v0.2.9</span>' +
+        '<div class="skills-card-header">' +
+          '<div class="skills-card-title">' +
+            '<span style="font-weight:600;">Andromity AI Coding Agent</span>' +
+            '<span style="color:var(--muted); font-size:11px; border:1px solid var(--border); padding:1px 5px; border-radius:3px; margin-left:4px;">v0.2.9</span>' +
           '</div>' +
-          '<button class="skills-card-close-btn" data-action="close-about-card" title="Close">&times;</button>' +
+          '<button class="palette-close-btn" data-action="close-about-card" title="Close"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>' +
         '</div>' +
         '<div style="font-size:11.5px; color:var(--muted); line-height:1.4; margin-bottom:8px;">' +
           'Autonomous AI coding agent with subagents, live plans &amp; diffs. Free and open-source software under the MIT License.' +
@@ -2685,7 +4019,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           '</div>' +
           '<div style="display:flex; justify-content:space-between;">' +
             '<span style="color:var(--muted);">Repository:</span>' +
-            '<a href="#" style="color:var(--accent); text-decoration:none;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity">github.com/agenticmarket/andromity</a>' +
+            '<a href="#" style="color:var(--vscode-textLink-foreground, #38bdf8); text-decoration:none;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity">github.com/agenticmarket/andromity</a>' +
           '</div>' +
           '<div style="display:flex; justify-content:space-between;">' +
             '<span style="color:var(--muted);">Publisher:</span>' +
@@ -2693,9 +4027,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           '</div>' +
         '</div>' +
         '<div style="display:flex; gap:6px; flex-wrap:wrap;">' +
-          '<button class="prompt-pill-btn" style="font-size:11px; padding:3px 10px;" data-action="open-about-tab">Open Full About &amp; Diagnostics</button>' +
-          '<button class="prompt-pill-btn" style="font-size:11px; padding:3px 8px;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity">GitHub</button>' +
-          '<button class="prompt-pill-btn" style="font-size:11px; padding:3px 8px;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity/issues">Report Issue</button>' +
+          '<button class="btn-card-action" data-action="open-about-tab">Open Diagnostics</button>' +
+          '<button class="btn-card-action" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity">GitHub</button>' +
+          '<button class="btn-card-action" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity/issues">Report Issue</button>' +
         '</div>';
       chatContainer.appendChild(card);
       scrollToBottomIfNeeded();
@@ -2704,37 +4038,36 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function appendSkillsCard() {
       const card = document.createElement('div');
       card.className = 'skills-card';
-      card.style.cssText = 'background:var(--card-bg); border:1px solid var(--border); border-radius:8px; padding:12px; margin:8px 0; font-size:12px; box-shadow: 0 4px 14px rgba(0,0,0,0.3);';
 
       const skillsListHtml = allSkills && allSkills.length > 0
         ? allSkills.map(function(s) {
           const name = s.name || s.id || 'skill';
           const desc = s.description || 'Specialized agent skill';
-          return '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 8px; border-radius:4px; transition:background 0.12s; cursor:pointer;" data-action="insert-skill-mention" data-skill="' + escapeHtml(name) + '">' +
+          return '<div class="skill-item-row" data-action="insert-skill-mention" data-skill="' + escapeHtml(name) + '">' +
             '<div style="display:flex; align-items:center; gap:8px; min-width:0;">' +
-              '<span style="background:rgba(168,85,247,0.18); color:#c084fc; padding:2px 6px; border-radius:4px; font-weight:600; font-family:var(--vscode-editor-font-family, monospace); font-size:11.5px;">@' + escapeHtml(name) + '</span>' +
+              '<span class="skill-item-tag">@' + escapeHtml(name) + '</span>' +
               '<span style="color:var(--fg); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(desc) + '</span>' +
             '</div>' +
-            '<button class="prompt-pill-btn" style="padding:2px 8px; font-size:10.5px; flex-shrink:0;">Use</button>' +
+            '<button class="btn-card-action">Use</button>' +
           '</div>';
         }).join('')
         : '<div style="color:var(--muted); padding:8px 0; text-align:center;">No custom skills found. Open Settings > Skills to manage skills.</div>';
 
       card.innerHTML = 
-        '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid var(--border);">' +
-          '<div style="display:flex; align-items:center; gap:6px; font-weight:600; color:var(--fg); font-size:12.5px;">' +
-            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>' +
+        '<div class="skills-card-header">' +
+          '<div class="skills-card-title">' +
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>' +
             '<span>Agent Skills (' + allSkills.length + ' active)</span>' +
           '</div>' +
           '<div style="display:flex; align-items:center; gap:6px;">' +
-            '<button class="prompt-pill-btn" data-action="open-skills-settings" style="font-size:10.5px;">Browse Hub</button>' +
-            '<button class="skills-card-close-btn" data-action="close-skills-card" title="Close skills panel">&times;</button>' +
+            '<button class="btn-card-action" data-action="open-skills-settings">Browse Hub</button>' +
+            '<button class="palette-close-btn" data-action="close-skills-card" title="Close skills panel"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>' +
           '</div>' +
         '</div>' +
         '<div style="display:flex; flex-direction:column; gap:2px; max-height:220px; overflow-y:auto;">' +
           skillsListHtml +
         '</div>' +
-        '<div style="margin-top:8px; padding-top:6px; border-top:1px solid var(--border); font-size:11px; color:var(--muted); display:flex; justify-content:space-between;">' +
+        '<div style="margin-top:8px; padding-top:6px; border-top:1px solid var(--vscode-widget-border, var(--border)); font-size:11px; color:var(--muted); display:flex; justify-content:space-between;">' +
           '<span>Tip: Type <code>@</code> in chat to mention any skill</span>' +
           '<span>Or click any skill to insert</span>' +
         '</div>';
@@ -2767,7 +4100,27 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function sendCurrentPrompt() {
       const text = promptInput.value.trim();
       const imagesToSend = [...attachedImages];
-      if (!text && imagesToSend.length === 0) return;
+      const filesToSend = [...attachedFiles];
+      if (!text && imagesToSend.length === 0 && filesToSend.length === 0) return;
+
+      if (text && text.startsWith('/')) {
+        const cmdPart = text.split(/\s+/)[0].toLowerCase();
+        let found = slashCommands.find(c => c.cmd.toLowerCase() === cmdPart);
+        if (!found) {
+          if (cmdPart === '/companion' || cmdPart === '/play' || cmdPart === '/fetch') {
+            found = { cmd: cmdPart, action: cmdPart.slice(1) };
+          } else if (cmdPart === '/wallpaper') {
+            found = { cmd: '/wallpaper', action: 'personalisation' };
+          }
+        }
+        if (found) {
+          promptInput.value = '';
+          promptInput.style.height = 'auto';
+          sendBtn.classList.remove('has-text');
+          executeSlashCommand(found);
+          return;
+        }
+      }
 
       if (text) {
         if (sentPromptsHistory.length === 0 || sentPromptsHistory[sentPromptsHistory.length - 1] !== text) {
@@ -2782,33 +4135,52 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       sendBtn.classList.remove('has-text');
       attachedImages = [];
       renderImageAttachments();
+      attachedFiles = [];
+      renderAttachedFiles();
+
+      let fullText = text;
+      if (filesToSend.length > 0) {
+        const filePrefix = filesToSend.map(function(f) {
+          return '[Attached File: ' + (f.path || f.name) + ']';
+        }).join(String.fromCharCode(10));
+        fullText = filePrefix + (fullText ? String.fromCharCode(10) + fullText : '');
+      }
+
+      const promptPayload = fullText || (imagesToSend.length > 0 ? 'Please inspect attached image' : 'Please inspect attached files');
 
       if (isRunning) {
-        promptQueue.push({ text: text || 'Please inspect attached image', images: imagesToSend, sessionId: currentSessionId });
+        promptQueue.push({ text: promptPayload, images: imagesToSend, sessionId: currentSessionId });
         renderQueue();
         return;
       }
-      dispatchPrompt(text || 'Please inspect attached image', true, imagesToSend);
+      dispatchPrompt(promptPayload, true, imagesToSend);
     }
 
     function dispatchPrompt(text, attachContext, images) {
       try {
         console.log('[Andromity webview] dispatchPrompt sending:', text.slice(0,120));
+        lastTurnPrompt = {
+          text: text,
+          attachContext: attachContext,
+          images: images || [],
+          sessionId: currentSessionId,
+        };
         hideZeroState();
 
-        // Immediate session title derivation from first user prompt (TUI parity)
         const activeSessName = document.getElementById('active-session-name');
         if (activeSessName && (activeSessName.textContent === 'Main Session' || activeSessName.textContent === 'new-session' || activeSessName.textContent.startsWith('Session '))) {
-          const firstLine = text.trim().split(String.fromCharCode(10))[0].trim();
-          if (firstLine) {
-            let shortTitle = firstLine.slice(0, 32);
-            if (firstLine.length > 32) shortTitle += '...';
+          const cleanFirstLine = text.replace(/\\[Attached File:[^\\]\\r\\n]+\\]/g, '').trim().split(String.fromCharCode(10))[0].trim();
+          if (cleanFirstLine) {
+            let shortTitle = cleanFirstLine.slice(0, 32);
+            if (cleanFirstLine.length > 32) shortTitle += '...';
             activeSessName.textContent = shortTitle;
           }
         }
 
+        userScrolledUp = false;
         appendUserMessage(text, images, new Date().toISOString());
         startAssistantTurn();
+        scrollToBottom(false);
         vscode.postMessage({
           type: 'send_prompt',
           prompt: text,
@@ -2923,6 +4295,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             const title = token && typeof token === 'object' ? token.title : '';
             const text = token && typeof token === 'object' ? token.text : '';
             return '<img class="md-image" src="' + escapeHtml(href) + '" alt="' + escapeHtml(text || '') + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + ' loading="lazy" />';
+          },
+          checkbox(token) {
+            const isChecked = Boolean(token && token.checked);
+            return '<input type="checkbox" class="md-checkbox" ' + (isChecked ? 'checked ' : '') + 'disabled /> ';
+          },
+          listitem(token) {
+            const isTask = Boolean(token && token.task);
+            const isChecked = Boolean(token && token.checked);
+            const self = this;
+            const content = token && token.tokens && self.parser ? self.parser.parse(token.tokens) : (token && token.text ? renderInline(token.text) : '');
+            if (isTask) {
+              return '<li class="md-task-item' + (isChecked ? ' completed' : '') + '">' + content + '</li>';
+            }
+            return '<li>' + content + '</li>';
           }
         };
         marked.use({ renderer: markedRenderer, gfm: true, breaks: true });
@@ -3007,8 +4393,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               continue;
             }
 
-            // HTML details and summary
-            if (trimmed.startsWith('<details') || trimmed.startsWith('</details') || trimmed.startsWith('<summary') || trimmed.startsWith('</summary')) {
+            // HTML details, summary, and custom error card elements
+            if (trimmed.startsWith('<details') || trimmed.startsWith('</details') || trimmed.startsWith('<summary') || trimmed.startsWith('</summary') || trimmed.startsWith('<div') || trimmed.startsWith('</div') || trimmed.startsWith('<span') || trimmed.startsWith('</span') || trimmed.startsWith('<button') || trimmed.startsWith('</button') || trimmed.startsWith('<code') || trimmed.startsWith('</code') || trimmed.startsWith('<pre') || trimmed.startsWith('</pre')) {
               html += trimmed;
               continue;
             }
@@ -3063,7 +4449,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             var taskMatch = trimmed.match(/^[-*\\u2022]\\s+\\[([ xX])\\]\\s*(.*)$/);
             if (taskMatch) {
               var isChecked = taskMatch[1].toLowerCase() === 'x';
-              html += '<div class="md-task-item"><input type="checkbox" class="md-checkbox" ' + (isChecked ? 'checked' : '') + ' disabled><span class="md-task-text ' + (isChecked ? 'completed' : '') + '">' + renderInline(taskMatch[2]) + '</span></div>';
+              html += '<div class="md-task-item' + (isChecked ? ' completed' : '') + '"><input type="checkbox" class="md-checkbox" ' + (isChecked ? 'checked' : '') + ' disabled><span class="md-task-text ' + (isChecked ? 'completed' : '') + '">' + renderInline(taskMatch[2]) + '</span></div>';
               continue;
             }
 
@@ -3206,12 +4592,54 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
+    function parseUserPromptDisplay(rawText) {
+      if (!rawText || typeof rawText !== 'string') {
+        return { userText: '', files: [] };
+      }
+
+      let text = rawText;
+      const files = [];
+      const seenFiles = new Set();
+
+      function addFile(name, path) {
+        const key = (path || name || '').toLowerCase();
+        if (!key || seenFiles.has(key)) return;
+        seenFiles.add(key);
+        files.push({ name, path });
+      }
+
+      // 1. Separate ambient context block if present:
+      const ambientSepMatch = text.match(/\\r?\\n\\s*---\\s*\\r?\\n(?=\\[(?:Active Document|Active Diagnostics|Selection in|Other Open Documents))/);
+      let userPart = text;
+      if (ambientSepMatch && typeof ambientSepMatch.index === 'number') {
+        userPart = text.slice(0, ambientSepMatch.index);
+      }
+
+      // 2. Extract ONLY user-attached files: [Attached File: <path>]
+      const attachedFileRegex = /\\[Attached File:\\s*([^\\]\\r\\n]+)\\]/g;
+      let m;
+      while ((m = attachedFileRegex.exec(userPart)) !== null) {
+        const fullPath = m[1].trim();
+        const fName = getPathBasename(fullPath);
+        addFile(fName, fullPath);
+      }
+      userPart = userPart.replace(attachedFileRegex, '').trim();
+
+      // 3. Strip any leaked ambient tags from user text without creating file pills
+      userPart = userPart.replace(/\\[Active Document:[^\\]\\r\\n]+\\]/g, '').trim();
+      userPart = userPart.replace(/\\[(?:Other Open Documents|Active Diagnostics|Selection in)[^\\]]*\\]/gs, '').trim();
+
+      return { userText: userPart, files };
+    }
+
     function appendUserMessage(text, images, ts, opts) {
-      const displayText = typeof text === 'string' ? text : extractMessageText(text);
-      const trimmed = (displayText || '').trim();
+      const rawText = typeof text === 'string' ? text : extractMessageText(text);
+      const parsed = parseUserPromptDisplay(rawText);
+
+      const trimmed = (parsed.userText || '').trim();
       const now = Date.now();
       if (!opts || !opts.skipDedupe) {
-        if (trimmed && trimmed === lastAppendedUserText && (now - lastAppendedUserTime) < 1500) {
+        if (trimmed && trimmed === lastAppendedUserText && (now - lastAppendedUserTime) < 3000) {
           return;
         }
       }
@@ -3222,10 +4650,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       const wrap = document.createElement('div');
       wrap.className = 'message-wrap user';
+      const existingUserCount = chatContainer.querySelectorAll('.message-wrap.user').length;
+      wrap.setAttribute('data-turn-index', String(existingUserCount));
 
       const actionsDiv = document.createElement('div');
       actionsDiv.className = 'user-prompt-actions';
-      actionsDiv.innerHTML = '<button class="prompt-undo-btn" data-action="undo-turn" title="Undo to here">' +
+      actionsDiv.innerHTML = '<button class="prompt-undo-btn" data-action="undo-turn" data-turn-index="' + existingUserCount + '" title="Undo to here">' +
         '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">' +
           '<path d="M3 7v6h6"></path>' +
           '<path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path>' +
@@ -3283,16 +4713,53 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         msgDiv.appendChild(imgContainer);
       }
 
-      if (displayText) {
+      if (parsed.files && parsed.files.length > 0) {
+        const chipsContainer = document.createElement('div');
+        chipsContainer.className = 'user-attached-chips';
+        parsed.files.forEach(f => {
+          const badgeInfo = getFileIconBadge(f.name || f.path);
+          const chip = document.createElement('span');
+          chip.className = 'user-file-chip';
+          chip.setAttribute('data-action', 'open-file');
+          chip.setAttribute('data-file-path', f.path || f.name);
+          if (f.line) {
+            chip.setAttribute('data-line', String(f.line));
+          }
+          chip.style.setProperty('--chip-color', badgeInfo.color);
+          chip.title = (f.path || f.name) + (f.line ? ' (Line ' + f.line + ')' : '') + ' · Click to open file';
+
+          const iconSpan = document.createElement('span');
+          iconSpan.className = 'chip-icon';
+          iconSpan.textContent = badgeInfo.badge;
+          chip.appendChild(iconSpan);
+
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'chip-name';
+          nameSpan.textContent = f.name;
+          chip.appendChild(nameSpan);
+
+          if (f.line) {
+            const lineSpan = document.createElement('span');
+            lineSpan.className = 'chip-line';
+            lineSpan.textContent = ':' + f.line;
+            chip.appendChild(lineSpan);
+          }
+
+          chipsContainer.appendChild(chip);
+        });
+        msgDiv.appendChild(chipsContainer);
+      }
+
+      if (parsed.userText) {
         const textWrapper = document.createElement('div');
         textWrapper.className = 'prompt-text-wrapper';
 
         const textContent = document.createElement('div');
         textContent.className = 'prompt-text-content';
-        textContent.textContent = displayText;
+        textContent.textContent = parsed.userText;
         textWrapper.appendChild(textContent);
 
-        const isLong = displayText.length > 220 || displayText.split(/\\r?\\n/).length > 3;
+        const isLong = parsed.userText.length > 220 || parsed.userText.split(/\\r?\\n/).length > 3;
         if (isLong) {
           textContent.classList.add('clamped');
           const expandBtn = document.createElement('button');
@@ -3317,7 +4784,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       wrap.appendChild(footer);
 
       chatContainer.appendChild(wrap);
-      scrollToBottomIfNeeded();
+      scrollToBottom(false);
     }
 
     function appendCompactionSummaryCard(rawText) {
@@ -3358,7 +4825,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function showCompactionBanner(reason) {
-      appendSystemNote('⚡ ' + (reason || 'Compacting conversation context to reduce token usage...'));
+      appendSystemNote(reason || 'Compacting conversation context to reduce token usage...');
     }
 
     function hideCompactionBannerWithSuccess(msg) {
@@ -3374,7 +4841,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const card = document.createElement('div');
       card.className = 'session-coagent-card';
       card.innerHTML = '<div class="session-card-header">' +
-        '<span class="session-card-icon">✉</span>' +
+        '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg></span>' +
         '<span class="session-card-sender">Co-Agent [' + escapeHtml(fromSession || 'Agent') + ']</span>' +
         '<span class="session-card-badge">' + escapeHtml(messageType || 'message') + '</span>' +
         '</div>' +
@@ -3389,7 +4856,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       card.className = 'session-question-card';
       card.id = 'session-q-' + (questionId || '');
       card.innerHTML = '<div class="session-card-header question">' +
-        '<span class="session-card-icon">❓</span>' +
+        '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></span>' +
         '<span class="session-card-sender">Question from [' + escapeHtml(fromSession || 'Agent') + ']</span>' +
         (questionId ? '<span class="session-card-badge">ID: ' + escapeHtml(questionId) + '</span>' : '') +
         '</div>' +
@@ -3403,7 +4870,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const card = document.createElement('div');
       card.className = 'session-answer-card';
       card.innerHTML = '<div class="session-card-header answer">' +
-        '<span class="session-card-icon">✔</span>' +
+        '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg></span>' +
         '<span class="session-card-sender">Answer from [' + escapeHtml(fromSession || 'Agent') + ']</span>' +
         (questionId ? '<span class="session-card-badge">for ' + escapeHtml(questionId) + '</span>' : '') +
         '</div>' +
@@ -3418,7 +4885,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       card.className = 'session-state-card';
       const valStr = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
       card.innerHTML = '<div class="session-card-header">' +
-        '<span class="session-card-icon">⚡</span>' +
+        '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span>' +
         '<span class="session-card-sender">Shared State [' + escapeHtml(authorSession || 'Agent') + ']</span>' +
         '<span class="session-card-badge">' + escapeHtml(key || '') + '</span>' +
         '</div>' +
@@ -3432,7 +4899,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const card = document.createElement('div');
       card.className = 'session-coagent-card';
       card.innerHTML = '<div class="session-card-header">' +
-        '<span class="session-card-icon">🤝</span>' +
+        '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg></span>' +
         '<span class="session-card-sender">Handoff: ' + escapeHtml(fromSession || 'Agent') + ' → ' + escapeHtml(toSession || 'Agent') + '</span>' +
         (handoffId ? '<span class="session-card-badge">ID: ' + escapeHtml(handoffId) + '</span>' : '') +
         '</div>' +
@@ -3605,7 +5072,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           banner.className = 'compaction-banner success';
           const titleEl = document.getElementById('compaction-title');
           const detailEl = document.getElementById('compaction-detail');
-          if (titleEl) titleEl.textContent = '✓ Context Already Clean';
+          if (titleEl) titleEl.textContent = 'Context Already Clean';
           if (detailEl) detailEl.textContent = skippedReason;
           compactionBannerTimer = setTimeout(() => {
             banner.style.display = 'none';
@@ -3629,7 +5096,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         banner.className = 'compaction-banner success';
         const titleEl = document.getElementById('compaction-title');
         const detailEl = document.getElementById('compaction-detail');
-        if (titleEl) titleEl.textContent = '✓ Compaction Complete';
+        if (titleEl) titleEl.textContent = 'Compaction Complete';
         if (detailEl) detailEl.textContent = summaryText;
 
         compactionBannerTimer = setTimeout(() => {
@@ -3641,23 +5108,50 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       appendSystemNote(summaryText);
     }
 
+    const MODE_ICONS = {
+      safe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path></svg>',
+      trust: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"></path><path d="m9 13 2 2 4-4"></path></svg>',
+      full: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>',
+      yolo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 3z"></path></svg>'
+    };
+
     function updateModeBadge(mode) {
       if (!mode) return;
       currentMode = mode.toLowerCase();
       if (activeModeLabel) activeModeLabel.textContent = currentMode.toUpperCase();
-      const modeBtn = document.getElementById('btn-mode-cycle');
-      if (modeBtn) modeBtn.className = 'mode-badge-btn mode-' + currentMode;
+      
+      const promptModeBtn = document.getElementById('btn-prompt-mode');
+      const promptModeIcon = document.getElementById('prompt-mode-icon');
       const promptModeLabel = document.getElementById('prompt-mode-label');
+      
+      if (promptModeBtn) {
+        promptModeBtn.className = 'prompt-btn mode-' + currentMode;
+      }
+      if (promptModeIcon && MODE_ICONS[currentMode]) {
+        promptModeIcon.innerHTML = MODE_ICONS[currentMode];
+      }
       if (promptModeLabel) {
         promptModeLabel.textContent = currentMode.toUpperCase();
+        promptModeLabel.classList?.remove?.('skeleton', 'skeleton-text');
+        if (typeof promptModeLabel.removeAttribute === 'function') {
+          promptModeLabel.removeAttribute('aria-busy');
+        }
       }
+
       const titles = {
         safe: 'SAFE Mode: Confirms before every file edit and shell command (Click to cycle)',
         trust: 'TRUST Mode: Auto-approves file writes in workspace; prompts for commands (Click to cycle)',
         full: 'FULL Mode: Auto-approves all tool actions and logs to stream (Click to cycle)',
         yolo: 'YOLO Mode: Autonomous silent execution (Click to cycle)'
       };
-      if (modeBtn) modeBtn.title = titles[currentMode] || 'Permission Governance Mode (Click to cycle)';
+      const title = titles[currentMode] || 'Permission Governance Mode (Click to cycle)';
+      if (promptModeBtn) promptModeBtn.title = title;
+
+      const modeBtn = document.getElementById('btn-mode-cycle');
+      if (modeBtn) {
+        modeBtn.className = 'mode-badge-btn mode-' + currentMode;
+        modeBtn.title = title;
+      }
     }
 
     function removeTurnLoader() {
@@ -3711,39 +5205,34 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const header = document.createElement('div');
       header.className = 'assistant-header';
       header.innerHTML = '<div class="assistant-avatar">' +
-        '<img class="" src="' + sidebarIconUri + '" width="48" alt="Andromity" />' +
+        '<img src="' + sidebarIconUri + '" width="14" height="14" alt="Andromity" />' +
       '</div>' +
-      '<span class="assistant-name">Andromity</span>' +
-      '<div class="assistant-mascot-perch"></div>';
+      '<span class="assistant-name">Andromity</span>';
       wrap.appendChild(header);
 
       if (typeof interruptMascotToWork === 'function') {
         interruptMascotToWork();
       }
-      if (typeof hopMascotTo === 'function') {
-        const headerPerch = header.querySelector('.assistant-mascot-perch');
-        if (headerPerch) hopMascotTo(headerPerch);
-      }
 
       const loader = document.createElement('div');
       loader.className = 'andromity-turn-loader';
       loader.id = 'turn-loading-indicator';
-      loader.innerHTML = '<img class="spinning" src="' + sidebarIconUri + '" width="14" height="14" alt="Andromity" /> <span>Andromity is thinking... (0s)</span>';
+      loader.innerHTML = '<span class="thinking-spinner"></span> <span class="thinking-text">Andromity is thinking... (0s)</span>';
       wrap.appendChild(loader);
 
       const loaderTimer = setInterval(() => {
-        const span = loader.querySelector('span');
-        if (!span || !document.getElementById('turn-loading-indicator')) {
+        const textSpan = loader.querySelector('.thinking-text');
+        if (!textSpan || !document.getElementById('turn-loading-indicator')) {
           clearInterval(loaderTimer);
           return;
         }
         const elapsed = Math.floor((Date.now() - currentTurnStartTime) / 1000);
         if (elapsed < 6) {
-          span.textContent = 'Andromity is thinking... (' + elapsed + 's)';
+          textSpan.textContent = 'Andromity is thinking... (' + elapsed + 's)';
         } else if (elapsed < 16) {
-          span.textContent = 'Contacting ' + (currentModel || 'model') + '... (' + elapsed + 's)';
+          textSpan.textContent = 'Contacting ' + (currentModel || 'model') + '... (' + elapsed + 's)';
         } else {
-          span.textContent = 'Waiting for ' + (currentProvider || 'provider') + ' stream... (' + elapsed + 's)';
+          textSpan.textContent = 'Waiting for ' + (currentProvider || 'provider') + ' stream... (' + elapsed + 's)';
         }
       }, 1000);
 
@@ -3778,11 +5267,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       const card = document.createElement('div');
       card.className = 'files-changed-card';
+      try {
+        card.setAttribute('data-turn-files', JSON.stringify(files));
+      } catch (err) {}
 
       const header = document.createElement('div');
       header.className = 'files-changed-header';
       header.innerHTML = '<span class="files-changed-title">' + files.length + ' File' + (files.length > 1 ? 's' : '') + ' Changed</span>' +
-        '<button class="files-changed-review-btn" data-action="open-diff" title="Review All Changes in Git Diff">Review</button>';
+        '<button class="files-changed-review-btn" data-action="open-review-tab" title="Review All Changes in Git Diff">Review</button>';
       card.appendChild(header);
 
       const list = document.createElement('div');
@@ -3793,9 +5285,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const row = document.createElement('div');
         row.className = 'files-changed-row' + (idx >= MAX_PREVIEW ? ' files-changed-extra' : '');
         if (idx >= MAX_PREVIEW) row.style.display = 'none';
-        row.setAttribute('data-action', 'open-file-diff');
+        row.setAttribute('data-action', 'open-review-tab');
         row.setAttribute('data-file-path', filePath);
-        row.setAttribute('title', 'Click to view diff for ' + filePath);
+        row.setAttribute('title', 'Click to review diff for ' + filePath);
 
         const normalizedKey = filePath.replace(/\\\\/g, '/').trim();
         const filename = normalizedKey.split('/').pop() || filePath;
@@ -3812,10 +5304,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
 
         let statsHtml = '';
-        if (stat) {
+        if (stat && (stat.additions > 0 || stat.deletions > 0)) {
           if (stat.additions > 0) statsHtml += '<span class="files-stat-add">+' + stat.additions + '</span>';
           if (stat.deletions > 0) statsHtml += '<span class="files-stat-del">-' + stat.deletions + '</span>';
-          if (stat.additions === 0 && stat.deletions === 0) statsHtml += '<span class="chip-diff-label">Diff</span>';
+          statsHtml += '<span class="chip-diff-label" style="margin-left:4px;">Diff</span>';
         } else {
           statsHtml = '<span class="chip-diff-label">Diff</span>';
         }
@@ -3885,6 +5377,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           const card = createFilesChangedCard(turnEditedFiles);
           if (card) currentTurnAssistantDiv.appendChild(card);
         }
+        turnEditedFiles.clear();
 
         const elapsedSec = ((Date.now() - currentTurnStartTime) / 1000).toFixed(1);
         currentTurnAssistantDiv._rawMarkdown = accumulatedAssistantText;
@@ -3898,6 +5391,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy' +
         '</button>';
         currentTurnAssistantDiv.appendChild(footer);
+        scrollToBottomIfNeeded();
       }
 
       currentTurnAssistantDiv = null;
@@ -3931,6 +5425,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     window.addEventListener('message', event => {
       const msg = event.data;
       switch (msg.type) {
+        case 'file_attached': {
+          if (msg.file) {
+            addDroppedFileAttachment(msg.file);
+          }
+          break;
+        }
         case 'set_mascot_enabled': {
           setMascotEnabled(msg.enabled !== false);
           break;
@@ -3958,7 +5458,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   let html = '';
                   if (s.additions > 0) html += '<span class="files-stat-add">+' + s.additions + '</span>';
                   if (s.deletions > 0) html += '<span class="files-stat-del">-' + s.deletions + '</span>';
-                  if (s.additions === 0 && s.deletions === 0) html += '<span class="chip-diff-label">Diff</span>';
+                  if (s.additions > 0 || s.deletions > 0) {
+                    html += '<span class="chip-diff-label" style="margin-left:4px;">Diff</span>';
+                  } else {
+                    html += '<span class="chip-diff-label">Diff</span>';
+                  }
                   if (html) statsEl.innerHTML = html;
                 }
               }
@@ -4016,6 +5520,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           updateModelBadge();
           updateOnboardingVisibility();
+          if (msg.ollamaDetectedModel) {
+            showOllamaBanner(msg.ollamaDetectedModel);
+          }
           if (msg.waterfallFirstSessionShown) {
             dismissWaterfallOnboarding();
           } else {
@@ -4034,17 +5541,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'trust_updated':
           if (msg.isTrusted) {
             trustBanner.style.display = 'none';
+            appendSystemNote('Workspace trusted — file editing and shell execution enabled.');
           } else {
             trustBanner.style.display = 'flex';
+            appendSystemNote('Workspace untrusted — file editing and shell execution restricted.');
           }
           break;
 
         case 'config_updated':
           if (msg.key === 'mode') {
             updateModeBadge(msg.value);
-            // If switched from SAFE to TRUST/FULL/YOLO, auto-dismiss any pending tool approval card
             if (msg.value !== 'safe') {
-              const appCard = interactiveSlot.querySelector('.approval-card');
+              const appCard = interactiveSlot.querySelector('.permission-card, .approval-card');
               if (appCard) {
                 interactiveSlot.innerHTML = '';
                 appendSystemNote('Mode switched to ' + msg.value.toUpperCase() + ' -- pending tool auto-approved.');
@@ -4129,23 +5637,26 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.session && msg.session.id) {
             currentSessionId = msg.session.id;
           }
-          {
-            const sessState = sessionsState[currentSessionId];
-            if (sessState && sessState.isRunning) {
-              isRunning = true;
-              cancelBtn.style.display = 'flex';
-              sendBtn.style.display = 'none';
-              document.querySelector('.prompt-box')?.classList.add('is-generating');
-            } else {
-              isRunning = false;
-              cancelBtn.style.display = 'none';
-              sendBtn.style.display = 'flex';
-              document.querySelector('.prompt-box')?.classList.remove('is-generating');
-            }
-            if (promptInput && !msg.draft) {
-              promptInput.value = (sessState && sessState.draftInput) || '';
-              promptInput.style.height = 'auto';
-            }
+          const sessionIsRunning = Boolean(
+            (msg.session && (msg.session.status === 'running' || msg.session.is_running)) ||
+            (sessionsState[currentSessionId] && sessionsState[currentSessionId].isRunning)
+          );
+          sessionsState[currentSessionId] = sessionsState[currentSessionId] || {};
+          sessionsState[currentSessionId].isRunning = sessionIsRunning;
+          if (sessionIsRunning) {
+            isRunning = true;
+            cancelBtn.style.display = 'flex';
+            sendBtn.style.display = 'none';
+            document.querySelector('.prompt-box')?.classList.add('is-generating');
+          } else {
+            isRunning = false;
+            cancelBtn.style.display = 'none';
+            sendBtn.style.display = 'flex';
+            document.querySelector('.prompt-box')?.classList.remove('is-generating');
+          }
+          if (promptInput && !msg.draft) {
+            promptInput.value = (sessionsState[currentSessionId] && sessionsState[currentSessionId].draftInput) || '';
+            promptInput.style.height = 'auto';
           }
           const activeSessName = document.getElementById('active-session-name');
           if (activeSessName && msg.session) {
@@ -4172,7 +5683,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           lastAppendedUserText = '';
           lastAppendedUserTime = 0;
 
-          if (allMessages.length > 0) {
+          if (allMessages.length > 0 || sessionIsRunning) {
             hideZeroState();
             if (hasCompactedHistory) {
               appendCompactedHistoryBanner(msg.session.compacted_history.length);
@@ -4284,20 +5795,36 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     const toolName = fn.name || 'tool';
                     const toolArgs = fn.arguments || '';
 
-                    // ONLY track actual mutating tools for DIFF chips!
                     const isWriteTool = /^(write_file|write_to_file|edit_file|edit_file_multi|multi_replace_file_content|replace_file_content|patch_file|create_file|delete_file|move_file|rename_file|save_file)$/.test(toolName);
                     if (isWriteTool) {
                       try {
-                        const parsedArgs = JSON.parse(toolArgs);
-                        const p = parsedArgs.path || parsedArgs.target_path || parsedArgs.target_file || parsedArgs.file_path;
+                        const parsedArgs = typeof toolArgs === 'object' && toolArgs !== null ? toolArgs : JSON.parse(toolArgs);
+                        const p = parsedArgs.path || parsedArgs.target_path || parsedArgs.target_file || parsedArgs.file_path || parsedArgs.TargetFile;
                         if (p) turnEditedFilesForLoad.add(p);
                         if (Array.isArray(parsedArgs.edits)) {
                           for (const e of parsedArgs.edits) {
-                            const ep = e.path || e.target_path || e.file_path;
+                            const ep = e.path || e.target_path || e.file_path || e.TargetFile;
                             if (ep) turnEditedFilesForLoad.add(ep);
                           }
                         }
-                      } catch {}
+                      } catch {
+                        const rawStr = String(toolArgs);
+                        const m = rawStr.match(/"(?:TargetFile|file_path|target_file|target_path|path)"\s*:\s*"([^"]+)"/);
+                        if (m && m[1]) {
+                          turnEditedFilesForLoad.add(m[1]);
+                        }
+                      }
+                      if (typeof window.parseFileEditStats === 'function') {
+                        const es = window.parseFileEditStats(toolName, toolArgs);
+                        if (es && es.filePath) {
+                          const nKey = es.filePath.replace(/\\\\/g, '/').trim();
+                          if (!globalDiffStats[nKey]) {
+                            globalDiffStats[nKey] = { additions: 0, deletions: 0 };
+                          }
+                          globalDiffStats[nKey].additions += (es.additions || 0);
+                          globalDiffStats[nKey].deletions += (es.deletions || 0);
+                        }
+                      }
                     }
 
                     var renderedActivity = null;
@@ -4484,6 +6011,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               sessionLiveBuffer.delete(currentSessionId);
               scrollToBottomIfNeeded();
             }
+          }
+          if (sessionIsRunning && (!currentTurnAssistantDiv || !chatContainer.contains(currentTurnAssistantDiv))) {
+            startAssistantTurn();
           }
           renderConversationTimeline();
           break;
@@ -4678,7 +6208,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             const rawArgs = argsEl ? argsEl.textContent : '';
             if (rawArgs && targetTool.getAttribute('data-label-resolved') === '0') {
               try {
-                const parsed = JSON.parse(rawArgs);
+                const parsed = typeof rawArgs === 'object' && rawArgs !== null ? rawArgs : JSON.parse(rawArgs);
                 const p = parsed.path || parsed.target_path || parsed.target_file || parsed.file_path || parsed.TargetFile;
                 const c = parsed.CommandLine || parsed.command || parsed.cmd || parsed.query;
                 const labelEl = document.getElementById('label-' + msg.tool_id);
@@ -4693,7 +6223,24 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     targetTool.setAttribute('data-label-resolved', '1');
                   }
                 }
-              } catch {}
+              } catch {
+                const rawStr = String(rawArgs);
+                const fileMatch = rawStr.match(/"(?:TargetFile|file_path|target_file|target_path|path)"\s*:\s*"([^"]+)"/);
+                const cmdMatch = rawStr.match(/"(?:CommandLine|command|cmd)"\s*:\s*"([^"]+)"/);
+                const labelEl = document.getElementById('label-' + msg.tool_id);
+                if (labelEl) {
+                  if (fileMatch && fileMatch[1]) {
+                    const fname = fileMatch[1].split(String.fromCharCode(92)).join('/').split('/').pop() || fileMatch[1];
+                    labelEl.textContent = fname;
+                    labelEl.title = fileMatch[1];
+                    targetTool.setAttribute('data-label-resolved', '1');
+                  } else if (cmdMatch && cmdMatch[1]) {
+                    labelEl.textContent = cmdMatch[1];
+                    labelEl.title = cmdMatch[1];
+                    targetTool.setAttribute('data-label-resolved', '1');
+                  }
+                }
+              }
             }
           }
           break; }
@@ -4729,16 +6276,33 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               const isWriteTool = /^(write_file|write_to_file|edit_file|edit_file_multi|multi_replace_file_content|replace_file_content|patch_file|create_file|delete_file|move_file|rename_file|save_file)$/.test(toolName);
               if (isWriteTool) {
                 try {
-                  const parsed = JSON.parse(rawArgs);
+                  const parsed = typeof rawArgs === 'object' && rawArgs !== null ? rawArgs : JSON.parse(rawArgs);
                   const p = parsed.path || parsed.target_path || parsed.target_file || parsed.file_path || parsed.TargetFile;
                   if (p) turnEditedFiles.add(p);
                   if (Array.isArray(parsed.edits)) {
                     for (const e of parsed.edits) {
-                      const ep = e.path || e.target_path || e.file_path;
+                      const ep = e.path || e.target_path || e.file_path || e.TargetFile;
                       if (ep) turnEditedFiles.add(ep);
                     }
                   }
-                } catch {}
+                } catch {
+                  const rawStr = String(rawArgs);
+                  const m = rawStr.match(/"(?:TargetFile|file_path|target_file|target_path|path)"\s*:\s*"([^"]+)"/);
+                  if (m && m[1]) {
+                    turnEditedFiles.add(m[1]);
+                  }
+                }
+                if (typeof window.parseFileEditStats === 'function') {
+                  const es = window.parseFileEditStats(toolName, rawArgs);
+                  if (es && es.filePath) {
+                    const nKey = es.filePath.replace(/\\\\/g, '/').trim();
+                    if (!globalDiffStats[nKey]) {
+                      globalDiffStats[nKey] = { additions: 0, deletions: 0 };
+                    }
+                    globalDiffStats[nKey].additions += (es.additions || 0);
+                    globalDiffStats[nKey].deletions += (es.deletions || 0);
+                  }
+                }
               }
 
               let activityEl = null;
@@ -4819,7 +6383,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             sessionsState[msg.session_id].pendingQuestions = msg;
             break;
           }
-          const questions = msg.questions || [];
+          let questions = msg.questions || [];
+          if (typeof questions === 'string') {
+            try {
+              questions = JSON.parse(questions);
+            } catch {
+              questions = [{ question: questions, type: 'text', options: [] }];
+            }
+          }
+          if (!Array.isArray(questions)) {
+            questions = [questions];
+          }
           const totalQ = questions.length;
           window.currentQuestionSlide = 0;
           window.totalQuestionSlides = totalQ;
@@ -4973,6 +6547,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
 
         case 'agent_started':
+          turnEditedFiles.clear();
           if (msg.session_id) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
             sessionsState[msg.session_id].isRunning = true;
@@ -4982,7 +6557,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             updateSessionActivityIndicator();
           }
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
-          if (!currentTurnAssistantDiv) startAssistantTurn();
+          if (msg.prompt) {
+            const parsed = parseUserPromptDisplay(msg.prompt);
+            const cleanText = (parsed.userText || '').trim();
+            if (lastAppendedUserText !== cleanText && lastAppendedUserText !== msg.prompt.trim()) {
+              hideZeroState();
+              appendUserMessage(msg.prompt, msg.images || [], Date.now(), { skipDedupe: true });
+            }
+          }
+          if (!currentTurnAssistantDiv || !chatContainer.contains(currentTurnAssistantDiv)) {
+            startAssistantTurn();
+          }
           break;
 
         case 'session_compacting':
@@ -4993,9 +6578,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           hideCompactionBannerWithSuccess(msg);
           break;
 
-        case 'turn_undone':
-          appendSystemNote('Last turn undone: file changes rolled back.');
+        case 'turn_undone': {
+          const undoneCount = msg.turnsUndone || 1;
+          appendSystemNote(undoneCount > 1
+            ? (undoneCount + ' turns undone: file changes rolled back.')
+            : 'Last turn undone: file changes rolled back.');
           break;
+        }
 
         case 'agent_busy':
           if (msg.queuedPrompt) {
@@ -5022,6 +6611,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           cancelBtn.disabled = false;
           cancelBtn.style.opacity = '';
           cancelBtn.innerHTML = CANCEL_BTN_STOP_ICON;
+          if (Array.isArray(msg.turn_files)) {
+            for (const tf of msg.turn_files) {
+              if (tf) turnEditedFiles.add(tf);
+            }
+          }
           endAssistantTurn();
           interactiveSlot.innerHTML = '';
           activePendingApprovalId = null;
@@ -5122,14 +6716,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           break;
 
+        case 'key_configured_select_model': {
+          showOnboardingModelStep(msg.provider, msg.models, msg.defaultModel);
+          break;
+        }
+
         case 'key_configured_success': {
+          showOnboardingKeyStep();
           if (btnOnboardingSave) {
             btnOnboardingSave.disabled = false;
-            btnOnboardingSave.innerHTML = '<span>Connected! ✓</span>';
+            btnOnboardingSave.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px;vertical-align:-1px;"><polyline points="20 6 9 17 4 12"></polyline></svg><span>Connected!</span>';
           }
           if (btnOnboardingOllamaSave) {
             btnOnboardingOllamaSave.disabled = false;
-            btnOnboardingOllamaSave.innerHTML = '<span>Activated! ✓</span>';
+            btnOnboardingOllamaSave.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px;vertical-align:-1px;"><polyline points="20 6 9 17 4 12"></polyline></svg><span>Activated!</span>';
           }
           if (msg.provider) currentProvider = msg.provider;
           if (msg.model) currentModel = msg.model;
@@ -5142,9 +6742,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
 
         case 'key_configure_failed': {
+          showOnboardingKeyStep();
           if (btnOnboardingSave) {
             btnOnboardingSave.disabled = false;
-            btnOnboardingSave.innerHTML = '<span>Connect & Start Coding</span>';
+            btnOnboardingSave.innerHTML = '<span>Connect & Continue</span>';
           }
           if (btnOnboardingOllamaSave) {
             btnOnboardingOllamaSave.disabled = false;
@@ -5191,42 +6792,151 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
 
         case 'external_prompt': {
-          // Sent by extension commands: Explain Code, Ask About Selection, Generate Tests
           const extPrompt = msg.prompt || '';
           const extCtx = msg.context || null;
           if (!extPrompt) break;
 
-          // Focus the chat view and make sure chat is visible
           hideZeroState();
 
-          // Build user message with context snippet if provided
           let fullUserMsg = extPrompt;
-          if (extCtx && extCtx.selectedText) {
+          const codeSnippet = extCtx ? (extCtx.selectedText || extCtx.fileText) : null;
+          if (codeSnippet) {
             const lang = extCtx.languageId || '';
             const filePath = extCtx.relativePath || extCtx.filePath || '';
-            const lineInfo = extCtx.selectionRange
+            const lineInfo = extCtx.selectedText && extCtx.selectionRange
               ? ' (lines ' + extCtx.selectionRange.startLine + '-' + extCtx.selectionRange.endLine + ')'
-              : '';
+              : (extCtx.selectedText ? '' : ' (entire file)');
             const bt = String.fromCharCode(96); const fence = bt+bt+bt;
             const nl = String.fromCharCode(10);
-            fullUserMsg = extPrompt + nl + nl + fence + lang + (filePath ? '  // ' + filePath + lineInfo : '') + nl + extCtx.selectedText + nl + fence;
+            fullUserMsg = extPrompt + nl + nl + fence + lang + (filePath ? '  // ' + filePath + lineInfo : '') + nl + codeSnippet + nl + fence;
           }
 
-          // Cleanly send via dispatchPrompt (creates UI bubbles, starts turn loader, and sends send_prompt RPC)
           if (promptInput) promptInput.value = '';
           dispatchPrompt(fullUserMsg, false, []);
+          break;
+        }
+
+        case 'active_editor_context': {
+          const actCtx = msg.context;
+          currentActiveEditorContext = actCtx;
+          const chip = document.getElementById('active-file-chip');
+          const nameSpan = document.getElementById('active-file-name');
+          const diagSpan = document.getElementById('active-file-diag');
+          if (chip && nameSpan) {
+            if (actCtx && actCtx.fileName) {
+              chip.style.display = 'inline-flex';
+              const lineStr = actCtx.cursorLine ? ':' + actCtx.cursorLine : '';
+              nameSpan.textContent = actCtx.fileName + lineStr;
+              chip.title = 'Active: ' + (actCtx.relativePath || actCtx.fileName) + (actCtx.cursorLine ? ' (line ' + actCtx.cursorLine + ')' : '') + ' · Ambient IDE context included';
+              if (diagSpan) {
+                if (actCtx.errorCount > 0) {
+                  diagSpan.style.display = 'inline';
+                  diagSpan.textContent = actCtx.errorCount + ' err';
+                  diagSpan.style.background = 'rgba(239, 68, 68, 0.25)';
+                  diagSpan.style.color = '#f87171';
+                } else if (actCtx.warningCount > 0) {
+                  diagSpan.style.display = 'inline';
+                  diagSpan.textContent = actCtx.warningCount + ' warn';
+                  diagSpan.style.background = 'rgba(245, 158, 11, 0.25)';
+                  diagSpan.style.color = '#fbbf24';
+                } else {
+                  diagSpan.style.display = 'none';
+                }
+              }
+            } else {
+              chip.style.display = 'none';
+            }
+          }
           break;
         }
       }
     });
 
-    function appendErrorCard(text) {
-      const errDiv = document.createElement('div');
-      errDiv.className = 'error-card';
-      errDiv.style.color = 'var(--red)';
-      errDiv.style.fontSize = '12px';
-      errDiv.textContent = 'Error: ' + text;
-      chatContainer.appendChild(errDiv);
+    function appendErrorCard(text, rawError, errorType) {
+      if (!text) text = 'An unexpected agent error occurred.';
+      const trimmed = String(text).trim();
+      const wrap = document.createElement('div');
+
+      if (trimmed.includes('andromity-error-card')) {
+        wrap.innerHTML = trimmed;
+        chatContainer.appendChild(wrap.firstElementChild || wrap);
+        scrollToBottomIfNeeded();
+        return;
+      }
+
+      const low = trimmed.toLowerCase();
+      let badge = 'ERROR';
+      let title = 'Turn Interrupted';
+      let desc = trimmed;
+      let eType = errorType || 'generic';
+
+      const iconRetry = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>';
+      const iconModel = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>';
+      const iconCompact = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>';
+      const iconPlus = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>';
+      const iconSettings = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>';
+
+      let actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">' + iconRetry + 'Retry Turn</button>';
+
+      if (low.includes('image') || low.includes('vision') || low.includes('multimodal') || low.includes('does not support')) {
+        badge = 'IMAGE NOT SUPPORTED';
+        title = 'Model Does Not Support Images';
+        desc = 'The active model does not accept image attachments. Switch to a vision model (e.g. Claude 3.7 Sonnet, GPT-4o, Gemini 2.0 Flash) or retry with text only.';
+        eType = 'vision_unsupported';
+        actionsHtml = '<button class="btn-error-retry" data-action="retry-without-image" title="Retry without image">' + iconRetry + 'Retry without Image</button>' +
+          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to a vision model">' + iconModel + 'Switch Model</button>';
+      } else if (low.includes('429') || low.includes('rate limit') || low.includes('quota')) {
+        badge = 'RATE LIMIT';
+        title = 'Rate Limit Reached';
+        desc = 'Rate limit or quota threshold reached for the model provider. Please wait a moment and click Retry.';
+        eType = 'rate_limit';
+        actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>' +
+          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch model">' + iconModel + 'Switch Model</button>';
+      } else if (low.includes('midstream') || low.includes('503') || low.includes('502') || low.includes('500') || low.includes('serviceunavailable') || low.includes('service unavailable') || low.includes('bad gateway') || low.includes('upstream error')) {
+        badge = 'SERVICE DISRUPTED';
+        title = 'Upstream Service Interruption';
+        desc = 'The upstream provider experienced a temporary service disruption or disconnect. This is usually transient—click Retry to continue.';
+        eType = 'provider_unavailable';
+        actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>' +
+          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch model">' + iconModel + 'Switch Model</button>';
+      } else if (low.includes('context') || low.includes('token limit') || low.includes('maximum context')) {
+        badge = 'CONTEXT LIMIT';
+        title = 'Context Window Limit Reached';
+        desc = 'This conversation has reached the maximum context length for the current model. Compact context or start a new session.';
+        eType = 'context_exceeded';
+        actionsHtml = '<button class="btn-error-retry" data-action="trigger-compact" title="Compact context">' + iconCompact + 'Compact Context</button>' +
+          '<button class="btn-error-secondary" data-action="new-session" title="New session">' + iconPlus + 'New Session</button>';
+      } else if (low.includes('401') || low.includes('403') || low.includes('unauthorized') || low.includes('api key')) {
+        badge = 'AUTHENTICATION';
+        title = 'Authentication Error';
+        desc = 'Invalid or missing API key. Please check your provider settings.';
+        eType = 'auth_error';
+        actionsHtml = '<button class="btn-error-retry" data-action="open-settings" title="Open settings">' + iconSettings + 'Open Settings</button>';
+      }
+
+      const iconAlert = '<span class="error-header-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span>';
+
+      const cardHtml =
+        '<div class="andromity-error-card" data-error-type="' + eType + '" data-retryable="true">' +
+          '<div class="error-card-header">' +
+            '<div class="error-header-left">' +
+              iconAlert +
+              '<span class="error-badge">' + badge + '</span>' +
+              '<span class="error-title">' + escapeHtml(title) + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="error-card-body">' + escapeHtml(desc) + '</div>' +
+          '<details class="error-details">' +
+            '<summary>Technical Details</summary>' +
+            '<pre class="error-code"><code>' + escapeHtml(rawError || text) + '</code></pre>' +
+          '</details>' +
+          '<div class="error-card-actions">' +
+            actionsHtml +
+          '</div>' +
+        '</div>';
+
+      wrap.innerHTML = cardHtml;
+      chatContainer.appendChild(wrap.firstElementChild || wrap);
       scrollToBottomIfNeeded();
     }
 
@@ -5852,6 +7562,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         removeImageAttachment(idx);
         return;
       }
+      const rmFile = e.target.closest('[data-action="remove-attached-file"]');
+      if (rmFile) {
+        const idx = parseInt(rmFile.getAttribute('data-idx') || '0', 10);
+        removeAttachedFile(idx);
+        return;
+      }
+      const rmOllama = e.target.closest('[data-action="dismiss-ollama-banner"]');
+      if (rmOllama) {
+        const b = document.getElementById('ollama-detected-banner');
+        if (b) b.remove();
+        return;
+      }
       const previewImg = e.target.closest('[data-action="preview-image"]');
       if (previewImg && !e.target.closest('[data-action="remove-image-attachment"]')) {
         const src = previewImg.getAttribute('data-src') || (previewImg.querySelector('img') ? previewImg.querySelector('img').src : '');
@@ -5942,6 +7664,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     initChatMascot();
     setRandomStatement();
+    updateModeBadge("${state.currentMode || 'safe'}");
     vscode.postMessage({ type: 'ready' });
     vscode.postMessage({ type: 'webview_ready' });
     // Also request host to transfer focus into webview (required on first show)

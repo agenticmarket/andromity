@@ -216,7 +216,15 @@ export function getChatActivityStyles(): string {
     }
 
     .activity-row.stuck .tool-elapsed::before {
-      content: '⚠ ';
+      content: '';
+      display: inline-block;
+      width: 11px;
+      height: 11px;
+      margin-right: 3px;
+      vertical-align: -1px;
+      background: currentColor;
+      mask: url("data:image/svg+xml;utf8,<svg viewBox='0 0 24 24' fill='black' xmlns='http://www.w3.org/2000/svg'><path d='M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z'/></svg>") center/contain no-repeat;
+      -webkit-mask: url("data:image/svg+xml;utf8,<svg viewBox='0 0 24 24' fill='black' xmlns='http://www.w3.org/2000/svg'><path d='M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z'/></svg>") center/contain no-repeat;
       color: #fbbf24;
     }
 

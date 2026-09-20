@@ -204,6 +204,13 @@ async def stream_completion(
     from litellm import acompletion
     litellm.drop_params = True
     litellm.suppress_debug_info = True
+    has_images = any(
+        isinstance(m.get("content"), list) and any(
+            isinstance(p, dict) and p.get("type") in ("image_url", "image")
+            for p in m.get("content", [])
+        )
+        for m in (messages or [])
+    )
 
     sanitized_messages = sanitize_messages_for_api(messages)
 
@@ -241,21 +248,22 @@ async def stream_completion(
 
     api_key = config.get_api_key(provider_name)
 
-    kwargs: Dict[str, Any] = {
+    kwargs = {
         "model": litellm_model,
         "messages": sanitized_messages,
         "stream": True,
         "stream_options": {"include_usage": True},
-        "timeout": 90,
     }
-    if tools:
-        kwargs["tools"] = tools
     if api_key:
         kwargs["api_key"] = api_key
     if base_url:
         kwargs["api_base"] = base_url
-    if provider_name == "ollama" and "_num_ctx" in locals():
-        kwargs["num_ctx"] = locals()["_num_ctx"]
+    if tools:
+        kwargs["tools"] = tools
+
+    # Custom kwargs per provider
+    if provider_name == "ollama" and _num_ctx:
+        kwargs.setdefault("options", {})["num_ctx"] = _num_ctx
 
     # OpenRouter: send app identity headers so the dashboard shows "Andromity"
     # instead of "litellm". See https://openrouter.ai/docs#provider-routing
@@ -292,7 +300,7 @@ async def stream_completion(
                 # OpenAI o-series and compatible providers
                 kwargs["reasoning_effort"] = reasoning_effort
 
-        max_retries = 2
+        max_retries = 3
         for attempt in range(max_retries + 1):
             try:
                 response_stream = await acompletion(**kwargs)
@@ -300,22 +308,28 @@ async def stream_completion(
             except Exception as e:
                 msg = str(e).lower()
                 is_429 = "429" in msg or "rate limit" in msg or "ratelimit" in msg or "quota" in msg
-                if is_429 and attempt < max_retries:
-                    import re
-                    wait_s = 2.0 * (attempt + 1)
-                    m = re.search(r"retry in ([\d.]+)s", msg)
-                    if m:
-                        try:
-                            wait_s = min(max(float(m.group(1)), 1.0), 8.0)
-                        except Exception:
-                            pass
-                    log.warning("Rate limit on initial call, retrying in %.1fs (attempt %d/%d)...", wait_s, attempt + 1, max_retries)
+                is_transient_5xx = any(code in msg for code in ("500", "502", "503", "504", "serviceunavailable", "service_unavailable", "service unavailable", "bad gateway", "gateway timeout", "internal server error"))
+                is_conn_error = any(term in msg for term in ("connection error", "connection reset", "connection refused", "apiconnectionerror", "timeout", "timed out"))
+                if (is_429 or is_transient_5xx or is_conn_error) and attempt < max_retries:
+                    import re, random
+                    if is_429:
+                        wait_s = 2.0 * (attempt + 1)
+                        m = re.search(r"retry in ([\d.]+)s", msg)
+                        if m:
+                            try:
+                                wait_s = min(max(float(m.group(1)), 1.0), 8.0)
+                            except Exception:
+                                pass
+                        log.warning("Rate limit on initial call, retrying in %.1fs (attempt %d/%d)...", wait_s, attempt + 1, max_retries)
+                    else:
+                        wait_s = (1.5 * (2 ** attempt)) + random.uniform(0.1, 0.5)
+                        log.warning("Transient upstream error (%s), retrying in %.1fs (attempt %d/%d)...", type(e).__name__, wait_s, attempt + 1, max_retries)
                     await asyncio.sleep(wait_s)
                     continue
                 raise
     except Exception as e:
         log.error("acompletion initial error: %s", e, exc_info=True)
-        yield TextDelta(text=_format_error_text(e))
+        yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
         yield Done()
         return
 
@@ -422,15 +436,10 @@ async def stream_completion(
         yield Done(usage=usage)
         return
     except litellm.RateLimitError as e:
-        yield _handle_rate_limit(e)
+        yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
     except Exception as e:
-        msg = str(e)
-        if "429" in msg or "quota" in msg.lower() or "ratelimit" in msg.lower():
-            log.warning("Mid-stream rate limit (429): %s", e)
-            yield _handle_rate_limit(e)
-        else:
-            log.error("Mid-stream error (%s): %s", type(e).__name__, e, exc_info=True)
-            yield TextDelta(text=_format_error_text(e))
+        log.error("Mid-stream error (%s): %s", type(e).__name__, e, exc_info=True)
+        yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
     finally:
         # Always ensure Done is emitted even on cancel? No — caller handles CancelledError
         # Only emit Done on normal/error paths; CancelledError already re-raised above.
@@ -438,29 +447,187 @@ async def stream_completion(
 
     yield Done(usage=usage)
 
-def _format_error_text(e: Exception) -> str:
-    """Turn an arbitrary provider exception into a short, human-readable line.
-    Never dumps the raw exception (which can be a huge nested JSON blob)."""
-    msg = str(e)
+
+def classify_and_format_error(
+    e: Exception,
+    provider: str = "",
+    model: str = "",
+    has_images: bool = False,
+) -> str:
+    import html
+    import re
+
+    msg = str(e) or type(e).__name__
     low = msg.lower()
-    if "429" in msg or "rate limit" in low or "ratelimit" in low or "quota" in low:
-        return _handle_rate_limit(e).text
-    first_line = msg.splitlines()[0] if msg else type(e).__name__
-    if len(first_line) > 160:
-        first_line = first_line[:157] + "..."
-    return f"\n[Error: {type(e).__name__}] {first_line}\n"
+    err_cls = type(e).__name__
+
+    disp_model = model or "the selected model"
+    disp_prov = (provider or "AI provider").capitalize()
+
+    is_vision = (
+        has_images
+        or any(k in low for k in ("image", "vision", "multimodal", "modality", "does not support image"))
+    ) and any(k in low for k in ("image", "vision", "multimodal", "modality", "support", "400", "payload"))
+
+    is_rate = "429" in msg or "rate limit" in low or "ratelimit" in low or "quota" in low
+    is_upstream = any(k in low for k in (
+        "midstreamfallbackerror", "serviceunavailable", "service_unavailable", "service unavailable",
+        "503", "502", "500", "504", "bad gateway", "gateway timeout",
+        "upstream error", "apiconnectionerror", "connection reset", "broken pipe"
+    ))
+    is_context = any(k in low for k in ("context length", "maximum context", "token limit", "context_length_exceeded", "prompt is too long"))
+    is_auth = any(k in low for k in ("401", "403", "unauthorized", "invalid api key", "authentication error", "invalid_api_key", "forbidden"))
+    is_ollama_off = ("connection refused" in low or "failed to connect" in low) and ("11434" in low or provider == "ollama")
+    is_stall = "stalled" in low or "watchdog" in low or "first token" in low
+
+    icon_retry = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>'
+    icon_model = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>'
+    icon_compact = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>'
+    icon_plus = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>'
+    icon_settings = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>'
+
+    if is_vision:
+        err_type = "vision_unsupported"
+        badge = "IMAGE NOT SUPPORTED"
+        title = "Model Does Not Support Images"
+        desc = (
+            f"The model <strong>{html.escape(disp_model)}</strong> does not support image inputs. "
+            "Switch to a vision-capable model (e.g. Claude 3.7 Sonnet, GPT-4o, Gemini 2.0 Flash) or retry with text only."
+        )
+        actions = (
+            f'<button class="btn-error-retry" data-action="retry-without-image" title="Retry prompt with image removed">'
+            f'{icon_retry}Retry without Image</button>'
+            f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Choose a vision-capable model">'
+            f'{icon_model}Switch Model</button>'
+        )
+    elif is_upstream:
+        err_type = "provider_unavailable"
+        badge = "SERVICE DISRUPTED"
+        title = "Upstream Service Interruption"
+        desc = (
+            f"The upstream provider ({html.escape(disp_prov)}) experienced a temporary service disruption or mid-stream disconnect. "
+            "This is usually transient—click Retry to continue."
+        )
+        actions = (
+            f'<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn immediately">'
+            f'{icon_retry}Retry Turn</button>'
+            f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another provider/model">'
+            f'{icon_model}Switch Model</button>'
+        )
+    elif is_rate:
+        err_type = "rate_limit"
+        badge = "RATE LIMIT"
+        title = "Rate Limit / Quota Reached"
+        retry_hint = ""
+        m = re.search(r"retry in ([\d.]+)s", msg, re.IGNORECASE)
+        if m:
+            retry_hint = f" (wait ~{int(float(m.group(1)))}s)"
+        desc = (
+            f"The provider ({html.escape(disp_prov)}) returned HTTP 429 rate limit or quota exceeded{retry_hint}. "
+            "Please wait a moment and click Retry."
+        )
+        actions = (
+            f'<button class="btn-error-retry" data-action="retry-turn" title="Retry after waiting">'
+            f'{icon_retry}Retry Turn</button>'
+            f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to an alternate model">'
+            f'{icon_model}Switch Model</button>'
+        )
+    elif is_context:
+        err_type = "context_exceeded"
+        badge = "CONTEXT LIMIT"
+        title = "Context Window Limit Reached"
+        desc = (
+            f"This conversation has reached the context limit for <strong>{html.escape(disp_model)}</strong>. "
+            "Compact the conversation to preserve key details, or start a fresh session."
+        )
+        actions = (
+            f'<button class="btn-error-retry" data-action="trigger-compact" title="Compact previous context">'
+            f'{icon_compact}Compact Context</button>'
+            f'<button class="btn-error-secondary" data-action="new-session" title="Start a new session">'
+            f'{icon_plus}New Session</button>'
+        )
+    elif is_auth:
+        err_type = "auth_error"
+        badge = "AUTHENTICATION"
+        title = "Authentication Error"
+        desc = (
+            f"Invalid or missing API key for <strong>{html.escape(disp_prov)}</strong>. "
+            "Please configure your API key in Settings."
+        )
+        actions = (
+            f'<button class="btn-error-retry" data-action="open-settings" title="Open Settings to enter API key">'
+            f'{icon_settings}Open Settings</button>'
+        )
+    elif is_ollama_off:
+        err_type = "ollama_offline"
+        badge = "OFFLINE"
+        title = "Local Ollama Not Running"
+        desc = (
+            "Could not connect to local Ollama on port 11434. "
+            "Ensure the Ollama service is active (<code>ollama serve</code>)."
+        )
+        actions = (
+            f'<button class="btn-error-retry" data-action="retry-turn" title="Retry connection">'
+            f'{icon_retry}Retry Turn</button>'
+        )
+    elif is_stall:
+        err_type = "timeout"
+        badge = "TIMED OUT"
+        title = "Provider Connection Timed Out"
+        desc = (
+            f"{html.escape(disp_prov)}/{html.escape(disp_model)} sent no response within the timeout period. "
+            "The server may be overloaded. Click Retry to try again."
+        )
+        actions = (
+            f'<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">'
+            f'{icon_retry}Retry Turn</button>'
+            f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">'
+            f'{icon_model}Switch Model</button>'
+        )
+    else:
+        err_type = "generic"
+        badge = "ERROR"
+        title = f"Turn Interrupted ({err_cls})"
+        first_line = msg.splitlines()[0] if msg else err_cls
+        if len(first_line) > 140:
+            first_line = first_line[:137] + "..."
+        desc = (
+            f"An error interrupted communication with <strong>{html.escape(disp_prov)}</strong>: {html.escape(first_line)}. "
+            "Click Retry to re-send this turn."
+        )
+        actions = (
+            f'<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">'
+            f'{icon_retry}Retry Turn</button>'
+        )
+
+    raw_preview = html.escape(msg[:500] + ("..." if len(msg) > 500 else ""))
+    icon_alert = '<span class="error-header-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span>'
+
+    return (
+        f'\n<div class="andromity-error-card" data-error-type="{err_type}" data-retryable="true">\n'
+        f'  <div class="error-card-header">\n'
+        f'    <div class="error-header-left">\n'
+        f'      {icon_alert}\n'
+        f'      <span class="error-badge">{badge}</span>\n'
+        f'      <span class="error-title">{title}</span>\n'
+        f'    </div>\n'
+        f'  </div>\n'
+        f'  <div class="error-card-body">{desc}</div>\n'
+        f'  <details class="error-details">\n'
+        f'    <summary>Technical Details ({err_cls})</summary>\n'
+        f'    <pre class="error-code"><code>{raw_preview}</code></pre>\n'
+        f'  </details>\n'
+        f'  <div class="error-card-actions">\n'
+        f'    {actions}\n'
+        f'  </div>\n'
+        f'</div>\n'
+    )
+
+
+def _format_error_text(e: Exception) -> str:
+    return classify_and_format_error(e)
 
 
 def _handle_rate_limit(e: Exception) -> TextDelta:
-    import re
-    msg = str(e)
-    retry_hint = ""
-    if "retry in" in msg.lower():
-        m = re.search(r"retry in ([\d.]+)s", msg, re.IGNORECASE)
-        if m:
-            retry_hint = f" Retry in ~{int(float(m.group(1)))}s."
-    return TextDelta(text=(
-        f"\n[Rate limit reached] The provider returned HTTP 429 (quota exceeded).{retry_hint}\n"
-        f"• Switch model: /model\n"
-        f"• Or wait and retry.\n"
-    ))
+    return TextDelta(text=classify_and_format_error(e))
+

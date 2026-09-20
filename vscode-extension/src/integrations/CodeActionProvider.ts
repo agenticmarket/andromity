@@ -26,6 +26,17 @@ export class AndromityCodeActionProvider implements vscode.CodeActionProvider {
       };
       fixAction.isPreferred = true;
       actions.push(fixAction);
+
+      const explainErrorAction = new vscode.CodeAction(
+        "Explain Error with Andromity",
+        vscode.CodeActionKind.QuickFix
+      );
+      explainErrorAction.command = {
+        command: "andromity.fixErrors",
+        title: "Explain Error with Andromity",
+        arguments: [document.uri, context.diagnostics],
+      };
+      actions.push(explainErrorAction);
     }
 
     // If text is selected, offer Explain and Refactor

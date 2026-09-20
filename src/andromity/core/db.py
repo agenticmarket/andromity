@@ -100,6 +100,7 @@ def init_schema() -> None:
                 usage_breakdown TEXT NOT NULL DEFAULT '{}', plan TEXT, compacted_history TEXT NOT NULL DEFAULT '[]',
                 parent_session TEXT, branch_point TEXT,
                 allowed_commands TEXT NOT NULL DEFAULT '[]', allowed_domains TEXT NOT NULL DEFAULT '[]',
+                undo_stack TEXT NOT NULL DEFAULT '[]',
                 sync_dirty INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL
             );
@@ -154,7 +155,7 @@ def init_schema() -> None:
         conn.executescript(schema_sql)
 
         # Migration helper for older databases: ensure new columns exist
-        for col_name in ("allowed_commands", "allowed_domains"):
+        for col_name in ("allowed_commands", "allowed_domains", "undo_stack"):
             try:
                 conn.execute(f"ALTER TABLE sessions ADD COLUMN {col_name} TEXT NOT NULL DEFAULT '[]';")
             except sqlite3.OperationalError:
@@ -182,7 +183,19 @@ def transaction(conn: Optional[sqlite3.Connection] = None) -> Generator[sqlite3.
         yield connection
         return
 
-    connection.execute("BEGIN IMMEDIATE;")
+    # Retry BEGIN IMMEDIATE with backoff if another thread is momentarily finishing a write
+    import time
+    for attempt in range(15):
+        try:
+            connection.execute("BEGIN IMMEDIATE;")
+            break
+        except sqlite3.OperationalError as e:
+            err_msg = str(e).lower()
+            if ("locked" in err_msg or "busy" in err_msg) and attempt < 14:
+                time.sleep(0.01 * (attempt + 1))
+            else:
+                raise
+
     try:
         yield connection
         connection.execute("COMMIT;")

@@ -2,6 +2,48 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
+## [0.2.10] — 2026-09-20
+
+### 🎨 UI & Chat Redesign
+- **Clean Minimal Theme**: Complete UI overhaul for errors, onboarding, commands, and skills views — sleek, distraction-free layouts with consistent neutral aesthetics.
+- **Sleek Markdown Typography**: Neutral high-contrast markdown rendering with clean list and blockquote spacing matching modern IDE standards.
+- **Borderless Inline Prompt Controls**: Replaced bordered prompt inputs with clean, borderless inline controls matching Cursor/Codex style; removed drag-drop from the prompt bar.
+
+### 🛡️ Error Recovery & Resilience
+- **Resilient Error Cards**: Introduced polished error cards with one-click retry to re-execute the previous agent turn without losing context.
+- **Vision Model Guarding**: Added automatic content-type guards to prevent vision-incompatible payloads from reaching text-only models.
+- **Transient 5xx Auto-Retry**: Automatic transparent retries on transient server-side errors (5xx) with exponential backoff.
+
+### 🌐 Web Search & Security Hardening
+- **Zero-API Resilient Web Search**: Web search now cascades across multiple providers with no single-point-of-failure API dependency.
+- **Safe Skill Read Roots**: Restricted skill file reads to declared safe root directories, preventing unauthorized filesystem traversal.
+- **Security Hardening**: Additional sandboxing and input validation across web search and skill execution paths.
+
+### 📎 File Context & Attachments
+- **Cursor-Parity File Pills**: File context attachments now display as compact clickable pills (matching Cursor/Codex UX), openable directly in the editor.
+- **Drag-and-Drop Context Attachments**: Drag files from the VS Code explorer directly into the chat to attach them as context.
+- **Robust Window Drag-Drop**: Replaced ambient open-file behavior with explicit, robust drag-and-drop and manual file attachment; removed duplicate Andromity icon and mascot header clutter.
+- **Raw Context Stripping**: Automatically strips unnecessary raw context wrappers from attached file content before sending to the model.
+- **Ollama Auto-Connect & Model Registration**: Detected local Ollama models are now automatically registered in the model catalog on startup.
+
+### ⏰ Cron & Scheduling
+- **Exact Date, Time & Cron Syntax**: Full scheduling support for exact dates, exact times, and raw cron expressions (`0 2 * * *`) from the cron overlay.
+- **Daily Time Sync**: Cron overlay syncs current date and time dynamically, eliminating stale schedule previews.
+- **Running Status Sync Across Split Views**: Fixed cron job running status desync when Andromity is open in multiple split editor panels.
+- **Cron Preset Management**: Allow deleting saved cron presets directly from the scheduling overlay.
+
+### 🧩 IDE & Extension Improvements
+- **Secondary Sidebar Placement**: Extension panel can now be pinned to VS Code's secondary sidebar for a wider, more spacious layout.
+- **Terminal Error Quickfix**: Detected terminal errors surface an inline quickfix action to let the agent auto-fix in one click.
+- **Ambient IDE Context Injection**: Ambient workspace context (open files, cursor positions, diagnostics) is automatically included in agent prompts.
+- **Title Logo Button Restored**: Restored the Andromity logo button in the chat title bar with correct routing.
+- **Dual Waterfall State**: Waterfall panel correctly handles dual open/closed states across split views without desync.
+- **Terminal Capture**: Agent can capture terminal output for use as inline context during task planning.
+- **Diff Line Stats**: Changed file cards now display accurate `+additions / -deletions` line statistics.
+- **Tool & Plan Approval Routing**: Correctly routes tool execution and plan approval prompts from editor-tab session panels.
+
+---
+
 ## [0.2.9] — 2026-09-13
 
 ### 🐾 Pixel Mascot Companion & Interactive Pet

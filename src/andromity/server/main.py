@@ -45,11 +45,9 @@ def _ensure_litellm_stub():
             mei = getattr(sys, "_MEIPASS", None)
             if mei:
                 candidates.append(os.path.join(mei, "litellm"))
-        temp_dir = os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp"
-        if os.path.exists(temp_dir):
-            for entry in os.listdir(temp_dir):
-                if entry.startswith("_MEI"):
-                    candidates.append(os.path.join(temp_dir, entry, "litellm"))
+        from andromity.core.session import get_config_dir
+        cache_dir = get_config_dir() / "cache" / "litellm"
+        candidates.append(str(cache_dir))
         for d in candidates:
             try:
                 target = os.path.join(d, "model_prices_and_context_window_backup.json")

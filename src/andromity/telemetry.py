@@ -102,8 +102,22 @@ def _detect_client() -> str:
 # Sanitise helpers
 # ─────────────────────────────────────────────────────────────────────
 
-def _safe_str(value: object, max_len: int = 64, allowed: str = r"a-zA-Z0-9._:-") -> str:
-    s = str(value or "unknown")[:max_len]
+_KEY_PATTERNS = re.compile(
+    r"(?:sk-[a-zA-Z0-9_\-]{16,}|nvapi-[a-zA-Z0-9_\-]{16,}|gsk_[a-zA-Z0-9_\-]{16,}|AIza[a-zA-Z0-9_\-]{16,}|xai-[a-zA-Z0-9_\-]{16,}|key-[a-zA-Z0-9_\-]{16,})"
+)
+
+
+def _scrub_api_key(value: str) -> str:
+    """Scrub raw API keys or tokens accidentally entered into provider/model fields."""
+    if not value or not isinstance(value, str):
+        return "unknown"
+    if _KEY_PATTERNS.search(value) or (len(value) >= 32 and re.match(r"^[a-zA-Z0-9_\-]{32,}$", value)):
+        return "scrubbed_api_key"
+    return value
+
+
+def _safe_str(value: object, max_len: int = 96, allowed: str = r"a-zA-Z0-9._:/-") -> str:
+    s = _scrub_api_key(str(value or "unknown"))[:max_len]
     return re.sub(f"[^{allowed}]", "", s) or "unknown"
 
 
@@ -200,7 +214,7 @@ def send_session_start(
         # v3 fields
         "profile":          _prof,
         "duration_seconds": max(0, int(duration_sec or 0)),
-        "turn_count":       1,
+        "turn_count":       0,
     }
     threading.Thread(target=_post, args=(_PING_ENDPOINT, payload), daemon=True).start()
 

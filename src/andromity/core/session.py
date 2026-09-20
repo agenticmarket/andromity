@@ -70,7 +70,10 @@ class Session:
         self.compacted_history: List[Dict[str, Any]] = []  # old messages preserved for chat UI after compaction
         self.allowed_commands: List[str] = []
         self.allowed_domains: List[str] = []
+        self.allowed_external_files: set = set()
+        self.undo_stack: List[Dict[str, Any]] = []
         from andromity.config import config
+        self.permission_mode = config.get("default", "permission_mode", "safe")
         self.provider = config.get("default", "provider", "")
         self.model = config.get("default", "model", "")
         sessions_root = get_config_dir() / "sessions"
@@ -130,6 +133,13 @@ class Session:
         """Check if a URL or domain is allowed in this session."""
         from andromity.core.security import is_domain_allowed
         return is_domain_allowed(url_or_domain, self.allowed_domains)
+
+    def allow_external_file(self, file_path: Any) -> None:
+        """Explicitly authorize an external file path for read access in this session."""
+        try:
+            self.allowed_external_files.add(Path(file_path).expanduser().resolve())
+        except Exception:
+            pass
 
     def set_status(self, status: str):
         """Update live lifecycle status of this session in DB and JSON."""
@@ -274,6 +284,8 @@ class Session:
             "compacted_history": self.compacted_history if not snapshot else copy.deepcopy(self.compacted_history),
             "allowed_commands": list(getattr(self, "allowed_commands", [])),
             "allowed_domains": list(getattr(self, "allowed_domains", [])),
+            "undo_stack": copy.deepcopy(self.undo_stack) if (snapshot and hasattr(self, "undo_stack") and self.undo_stack) else list(getattr(self, "undo_stack", [])),
+            "permission_mode": getattr(self, "permission_mode", "safe"),
         }
 
     def compact_messages(self, new_summary: str, keep_last_n: int = 10) -> int:
@@ -308,6 +320,54 @@ class Session:
             self.save()
             return removed_count
 
+    def get_user_turn_indices(self) -> List[int]:
+        """Return the 0-based indices in self.messages that correspond to user prompt turns."""
+        return [i for i, m in enumerate(self.messages) if m.get("role") == "user"]
+
+    def rollback_to_turn(self, target_turn_index: int) -> tuple[int, int, Optional[Dict[str, Any]]]:
+        """Rollback session messages and undo stack to before the given user turn index (0-based).
+
+        Args:
+            target_turn_index: 0-based index among user turns to rollback to.
+                               e.g., in a 4-turn conversation (turns 0, 1, 2, 3), target_turn_index=2
+                               means undo turns 3 and 2, restoring state to before turn 2 started.
+
+        Returns:
+            (turns_undone, popped_message_count, snapshot_record_or_None)
+        """
+        user_turn_indices = self.get_user_turn_indices()
+        total_turns = len(user_turn_indices)
+        if total_turns == 0:
+            return 0, 0, None
+
+        target_idx = max(0, min(int(target_turn_index), total_turns - 1))
+        turns_undone = total_turns - target_idx
+        cutoff_msg_idx = user_turn_indices[target_idx]
+
+        with self._save_lock:
+            old_count = len(self.messages)
+            self.messages = self.messages[:cutoff_msg_idx]
+            popped = old_count - len(self.messages)
+
+            # Recalculate context tokens
+            self.context_tokens = sum(
+                len(str(m.get("content", ""))) // 4 + len(str(m.get("thinking", ""))) // 4
+                for m in self.messages
+            )
+
+            # Extract matching pre-turn snapshot from undo_stack if available
+            target_snapshot = None
+            if hasattr(self, "undo_stack") and self.undo_stack:
+                if target_idx < len(self.undo_stack):
+                    target_snapshot = self.undo_stack[target_idx]
+                    self.undo_stack = self.undo_stack[:target_idx]
+                else:
+                    target_snapshot = self.undo_stack.pop() if self.undo_stack else None
+
+            self.save()
+
+        return turns_undone, popped, target_snapshot
+
     # ── Plan helpers (session-scoped) ────────────────────────────────────────
 
     def save_plan(self, plan_dict: Dict[str, Any]):
@@ -341,9 +401,9 @@ class Session:
                         provider, model, token_total, context_tokens,
                         cost_usd, cost_source, usage_breakdown, plan,
                         compacted_history, parent_session, branch_point,
-                        allowed_commands, allowed_domains,
+                        allowed_commands, allowed_domains, undo_stack,
                         sync_dirty, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         project_hash = excluded.project_hash,
                         project_path = excluded.project_path,
@@ -362,6 +422,7 @@ class Session:
                         branch_point = excluded.branch_point,
                         allowed_commands = excluded.allowed_commands,
                         allowed_domains = excluded.allowed_domains,
+                        undo_stack = excluded.undo_stack,
                         sync_dirty = 1,
                         updated_at = excluded.updated_at
                 """, (
@@ -371,6 +432,7 @@ class Session:
                     j(self.usage_breakdown), j(self.plan) if self.plan else None,
                     j(self.compacted_history), self.parent_session, self.branch_point,
                     j(getattr(self, "allowed_commands", [])), j(getattr(self, "allowed_domains", [])),
+                    j(getattr(self, "undo_stack", [])),
                     self.created_at, self.updated_at
                 ))
 
@@ -508,6 +570,7 @@ class Session:
         session.compacted_history = uj(row["compacted_history"], []) if "compacted_history" in keys else []
         session.allowed_commands = uj(row["allowed_commands"], []) if "allowed_commands" in keys and row["allowed_commands"] else []
         session.allowed_domains = uj(row["allowed_domains"], []) if "allowed_domains" in keys and row["allowed_domains"] else []
+        session.undo_stack = uj(row["undo_stack"], []) if "undo_stack" in keys and row["undo_stack"] else []
 
         # Load messages
         msg_rows = c.execute(
@@ -582,6 +645,9 @@ class Session:
         session.compacted_history = data.get("compacted_history", [])
         session.allowed_commands = data.get("allowed_commands", [])
         session.allowed_domains = data.get("allowed_domains", [])
+        session.undo_stack = data.get("undo_stack", [])
+        from andromity.config import config
+        session.permission_mode = data.get("permission_mode", config.get("default", "permission_mode", "safe"))
         session.storage_dir = fp.parent
         session.file_path = fp
         session._save_timer = None

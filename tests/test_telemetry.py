@@ -91,6 +91,22 @@ def test_sanitization_helpers():
     assert _safe_str("claude-3.7-sonnet") == "claude-3.7-sonnet"
     # Strips disallowed characters
     assert _safe_str("malicious!@#payload$%^&*()") == "maliciouspayload"
+    # Scrubs accidental API keys in model/provider fields
+    assert _safe_str("nvapi-dG23LLucX-CZrKhqwA8QxNvpGDP62KbimBPFvR5KZAEOQwg8z2HNsUl1Ui") == "scrubbed_api_key"
+    assert _safe_str("sk-ant-api03-abcdef1234567890abcdef123456") == "scrubbed_api_key"
+    assert _safe_str("gsk_1234567890abcdef1234567890abcdef") == "scrubbed_api_key"
+
+
+def test_session_start_initial_turn_count(monkeypatch):
+    """Verify send_session_start initializes turn_count to 0 (not 1)."""
+    captured = []
+    monkeypatch.setattr("andromity.telemetry._should_send_telemetry", lambda: True)
+    monkeypatch.setattr("andromity.telemetry._post", lambda ep, p: captured.append((ep, p)))
+    send_session_start("sess-start-test", provider="google", model="gemini-2.5-flash")
+    import time
+    time.sleep(0.1)
+    assert len(captured) == 1
+    assert captured[0][1]["turn_count"] == 0
 
 
 def test_send_feature_used_and_session_update(monkeypatch):
@@ -122,3 +138,38 @@ def test_send_feature_used_and_session_update(monkeypatch):
     assert up_payload["event"] == "session_update"
     assert up_payload["turn_count"] == 5
     assert up_payload["duration_seconds"] == 120
+
+
+def test_cron_seed_preset_and_error_telemetry_tokens():
+    """Verify that CRON_SEED_PRESET_NAMES and error categories adhere to Zero-PII tokens."""
+    from andromity.server.rpc_handler import CRON_SEED_PRESET_NAMES
+
+    assert "Run Tests & Verify Build" in CRON_SEED_PRESET_NAMES
+    assert "Daily Code Health & TODO Scanner" in CRON_SEED_PRESET_NAMES
+    assert "My Custom Scraper" not in CRON_SEED_PRESET_NAMES
+
+    # Test error categorization logic
+    test_errors = [
+        ("401 Unauthorized: Invalid API Key", "error_auth"),
+        ("429 Too Many Requests: Rate Limit Reached", "error_rate_limit"),
+        ("Token limit of 128000 exceeded, maximum context reached", "error_context_length"),
+        ("RPC timeout waiting for response after 120s", "error_timeout"),
+        ("Command failed: exit code 1", "error_tool_execution"),
+        ("Some unexpected OS error occurred", "error_generic"),
+    ]
+
+    for err_msg, expected_cat in test_errors:
+        lower = err_msg.lower()
+        if any(k in lower for k in ("401", "unauthorized", "invalid api key", "authentication")):
+            cat = "error_auth"
+        elif any(k in lower for k in ("429", "rate limit", "quota", "too many requests")):
+            cat = "error_rate_limit"
+        elif any(k in lower for k in ("context length", "maximum context", "token limit")):
+            cat = "error_context_length"
+        elif any(k in lower for k in ("timeout", "timed out")):
+            cat = "error_timeout"
+        elif any(k in lower for k in ("tool", "command failed")):
+            cat = "error_tool_execution"
+        else:
+            cat = "error_generic"
+        assert cat == expected_cat

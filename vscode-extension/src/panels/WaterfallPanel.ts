@@ -122,7 +122,8 @@ export class WaterfallPanel {
     sessionId: string,
     sessionName: string,
     rpcClient: RpcClient | null,
-    context: vscode.ExtensionContext
+    context: vscode.ExtensionContext,
+    viewColumn: vscode.ViewColumn = vscode.ViewColumn.Active
   ): WaterfallPanel {
     if (rpcClient) {
       WaterfallTraceStore.init(rpcClient);
@@ -135,16 +136,16 @@ export class WaterfallPanel {
       }
       if (sessionName) {
         existing._sessionName = sessionName;
-        existing._panel.title = `🌊 Waterfall: ${sessionName}`;
+        existing._panel.title = `Waterfall: ${sessionName}`;
       }
-      existing._panel.reveal(vscode.ViewColumn.Beside);
+      existing._panel.reveal(viewColumn);
       return existing;
     }
 
     const panel = vscode.window.createWebviewPanel(
       WaterfallPanel.viewType,
-      `🌊 Waterfall: ${sessionName || "Session"}`,
-      vscode.ViewColumn.Beside,
+      `Waterfall: ${sessionName || "Session"}`,
+      viewColumn,
       {
         enableScripts: true,
         retainContextWhenHidden: true,

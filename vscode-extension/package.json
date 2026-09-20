@@ -2,7 +2,7 @@
   "name": "andromity-agent",
   "displayName": "Andromity AI Coding Agent for VS Code",
   "description": "Autonomous AI coding agent with subagents, live plans & diffs. BYOK support for Claude 3.7, GPT-4o, DeepSeek R1, Gemini & free local Ollama. MCP & Multi-Agent ready.",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "publisher": "agenticmarket",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -20,15 +20,17 @@
     }
   },
   "categories": [
-    "AI",
-    "Chat",
     "Programming Languages",
+    "Machine Learning",
     "Testing",
-    "Snippets"
+    "Snippets",
+    "Education"
   ],
   "keywords": [
-    "gpt6",
-    "astra",
+    "waterfall",
+    "jupyter",
+    "notebook",
+    "cursor",
     "ai agent",
     "coding agent",
     "copilot",
@@ -42,14 +44,11 @@
     "multi agent",
     "subagents",
     "local ai",
-    "cursor",
     "model context protocol",
     "task planner",
-    "groq",
     "openrouter",
     "pair programming",
-    "unit tests",
-    "language-models"
+    "unit tests"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -66,7 +65,7 @@
       }
     },
     "viewsContainers": {
-      "activitybar": [
+      "secondarySidebar": [
         {
           "id": "andromity-sidebar",
           "title": "Andromity",
@@ -188,9 +187,21 @@
         "icon": "$(fold-up)"
       },
       {
+        "command": "andromity.attachFileToContext",
+        "title": "Attach to Andromity Context",
+        "category": "Andromity",
+        "icon": "$(file-add)"
+      },
+      {
         "command": "andromity.openFileDiff",
         "title": "Open File Diff",
         "category": "Andromity"
+      },
+      {
+        "command": "andromity.openReview",
+        "title": "Changes Review",
+        "category": "Andromity",
+        "icon": "$(diff-multiple)"
       },
       {
         "command": "andromity.openSessionInTab",
@@ -200,9 +211,12 @@
       },
       {
         "command": "andromity.openWaterfall",
-        "title": "Open Live Execution Waterfall",
+        "title": "🌊 Waterfall",
         "category": "Andromity",
-        "icon": "$(pulse)"
+        "icon": {
+          "light": "media/waterfall.svg",
+          "dark": "media/waterfall.svg"
+        }
       },
       {
         "command": "andromity.deleteSession",
@@ -215,6 +229,24 @@
         "title": "Welcome / Getting Started",
         "category": "Andromity",
         "icon": "$(rocket)"
+      },
+      {
+        "command": "andromity.fixNotebookCell",
+        "title": "Fix Cell Error with Andromity",
+        "category": "Andromity",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "andromity.explainNotebookCell",
+        "title": "Explain Notebook Cell",
+        "category": "Andromity",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "andromity.fixTerminalError",
+        "title": "Fix Terminal Error with Andromity",
+        "category": "Andromity",
+        "icon": "$(tools)"
       }
     ],
     "keybindings": [
@@ -317,17 +349,50 @@
         {
           "command": "andromity.openChat",
           "group": "navigation@1",
-          "when": "!editorReadonly"
+          "when": "!andromity.isAgentRunning && !editorReadonly"
+        },
+        {
+          "command": "andromity.openWaterfall",
+          "group": "navigation@1",
+          "when": "andromity.isAgentRunning && !editorReadonly"
+        }
+      ],
+      "notebook/cell/title": [
+        {
+          "command": "andromity.fixNotebookCell",
+          "group": "inline@1",
+          "when": "notebookCellType == code"
+        },
+        {
+          "command": "andromity.explainNotebookCell",
+          "group": "inline@2",
+          "when": "notebookCellType == code"
+        }
+      ],
+      "terminal/context": [
+        {
+          "command": "andromity.fixTerminalError",
+          "group": "navigation@1"
+        }
+      ],
+      "terminal/title/context": [
+        {
+          "command": "andromity.fixTerminalError",
+          "group": "1_actions"
         }
       ],
       "explorer/context": [
         {
-          "command": "andromity.explainCode",
+          "command": "andromity.attachFileToContext",
           "group": "andromity@1"
         },
         {
-          "command": "andromity.generateTests",
+          "command": "andromity.explainCode",
           "group": "andromity@2"
+        },
+        {
+          "command": "andromity.generateTests",
+          "group": "andromity@3"
         }
       ],
       "scm/resourceState/context": [
@@ -338,14 +403,24 @@
       ],
       "view/title": [
         {
+          "command": "andromity.fixTerminalError",
+          "when": "view == terminal",
+          "group": "navigation"
+        },
+        {
           "command": "andromity.newSession",
           "when": "view == andromity.chatView",
           "group": "navigation@1"
         },
         {
-          "command": "andromity.viewGitDiff",
+          "command": "andromity.openReview",
           "when": "view == andromity.chatView",
           "group": "navigation@2"
+        },
+        {
+          "command": "andromity.viewGitDiff",
+          "when": "view == andromity.chatView",
+          "group": "navigation@3"
         },
         {
           "command": "andromity.showSessions",
@@ -465,6 +540,16 @@
           "type": "boolean",
           "default": true,
           "description": "Play sound notifications on turn finish or approval required."
+        },
+        "andromity.autoOpenSidebar": {
+          "type": "string",
+          "default": "firstTime",
+          "enum": [
+            "firstTime",
+            "always",
+            "never"
+          ],
+          "description": "Automatically open the Andromity assistant sidebar (first time after install, every time VS Code starts, or never)."
         },
         "andromity.telemetry": {
           "type": "boolean",

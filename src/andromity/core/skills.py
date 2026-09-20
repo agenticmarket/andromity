@@ -19,9 +19,12 @@ import shutil
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from andromity.config import get_config_dir
+
+if TYPE_CHECKING:
+    from andromity.core.session import Session
 
 USER_AGENT = "andromity-skills/0.1"
 
@@ -54,7 +57,33 @@ RAW_URL = "https://raw.githubusercontent.com/{repo}/{branch}/{path}"
 MENTION_RE = re.compile(r"@([A-Za-z0-9_-]+)")
 
 
-def attach_skill_mentions(prompt: str, manager: "SkillsManager") -> str:
+def get_approved_skill_roots(project_path: Optional[Path] = None) -> List[Path]:
+    """Return canonical directories where skills can be safely installed or read from."""
+    roots: List[Path] = []
+    if project_path:
+        p = Path(project_path).resolve()
+        roots.extend([
+            (p / ".agents" / "skills").resolve(),
+            (p / ".andromity" / "skills").resolve(),
+            (p / "skills").resolve(),
+        ])
+    
+    roots.append((get_config_dir() / "skills").resolve())
+    roots.append((Path.home() / ".andromity" / "skills").resolve())
+    roots.append((Path.home() / ".claude" / "skills").resolve())
+    roots.append((Path.home() / ".gemini" / "config" / "skills").resolve())
+    roots.append((Path.home() / ".gemini" / "antigravity-ide" / "builtin" / "skills").resolve())
+    
+    seen = set()
+    valid_roots = []
+    for r in roots:
+        if r not in seen:
+            seen.add(r)
+            valid_roots.append(r)
+    return valid_roots
+
+
+def attach_skill_mentions(prompt: str, manager: "SkillsManager", session: Optional["Session"] = None) -> str:
     """Append an explicit attach note for every @skill mention in the prompt.
 
     The agent's system prompt already lists installed skills, but an explicit
@@ -70,13 +99,20 @@ def attach_skill_mentions(prompt: str, manager: "SkillsManager") -> str:
     matched_names = sorted({m for m in MENTION_RE.findall(prompt) if m in installed_map})
     if not matched_names:
         return prompt
-    skill_lines = "\n".join(
-        f"- {name}: {Path(installed_map[name].path) / 'SKILL.md'}"
-        for name in matched_names
-    )
+
+    from andromity.core.tools import _current_session_var
+    active_session = session or _current_session_var.get()
+
+    skill_lines = []
+    for name in matched_names:
+        skill_file = (Path(installed_map[name].path) / "SKILL.md").resolve()
+        skill_lines.append(f"- {name}: {skill_file}")
+        if active_session and hasattr(active_session, "allow_external_file"):
+            active_session.allow_external_file(skill_file)
+
     note = (
         "\n\n[Attached skills: " + ", ".join(matched_names) + "]\n"
-        "Skill instructions file(s):\n" + skill_lines + "\n"
+        "Skill instructions file(s):\n" + "\n".join(skill_lines) + "\n"
         "The user explicitly attached the skill(s) above. Read each skill's SKILL.md file directly "
         "and follow its instructions for this task."
     )

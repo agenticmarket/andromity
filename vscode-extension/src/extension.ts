@@ -10,6 +10,7 @@ import { SessionTreeProvider } from "./providers/SessionTreeProvider.js";
 import { SettingsPanel } from "./panels/SettingsPanel.js";
 import { PlanEditorPanel } from "./panels/PlanEditorPanel.js";
 import { WaterfallPanel, WaterfallTraceStore } from "./panels/WaterfallPanel.js";
+import { ChangesReviewPanel } from "./panels/ChangesReviewPanel.js";
 import { PythonBridge, formatTimestamp } from "./server/PythonBridge.js";
 import { RpcClient } from "./server/RpcClient.js";
 
@@ -49,6 +50,7 @@ function bindStatusBarEvents(client: RpcClient) {
     const sid = params?.session_id || "main";
     activeRunningSessions.add(sid);
     updateStatusBar();
+    void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", true);
   };
 
   const markFinished = (params?: any) => {
@@ -58,6 +60,9 @@ function bindStatusBarEvents(client: RpcClient) {
       activeRunningSessions.clear();
     }
     updateStatusBar();
+    if (activeRunningSessions.size === 0) {
+      void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+    }
   };
 
   client.on("agent/started", markRunning);
@@ -81,6 +86,7 @@ export async function activate(context: vscode.ExtensionContext) {
     outputChannel.appendLine(`[${formatTimestamp()}] ${msg}`);
   };
   log("[Andromity] Activating extension...");
+  void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
 
   // 1. Initialize Python Bridge Daemon
   pythonBridge = new PythonBridge(outputChannel);
@@ -139,6 +145,7 @@ export async function activate(context: vscode.ExtensionContext) {
     SettingsPanel.prewarm(rpcClient);
     SettingsPanel.currentPanel?.setRpcClient(rpcClient);
     PlanEditorPanel.currentPanel?.setRpcClient(rpcClient);
+    ChangesReviewPanel.currentPanel?.setRpcClient(rpcClient);
     WaterfallTraceStore.init(rpcClient);
     bindStatusBarEvents(rpcClient);
 
@@ -406,29 +413,40 @@ export async function activate(context: vscode.ExtensionContext) {
         placeHolder: "e.g., How can I optimize this algorithm?",
       });
       if (prompt) {
-        await chatProvider.sendPromptFromExternal(prompt, editorContext);
+        await chatProvider.sendPromptFromExternal(prompt, editorContext, { taskName: "Code Selection Inquiry" });
       }
     }),
 
     vscode.commands.registerCommand("andromity.explainCode", async () => {
       const editorContext = EditorBridge.getActiveContext();
-      if (!editorContext.selectedText) {
-        vscode.window.showInformationMessage("Select some code first to explain.");
+      if (!editorContext.selectedText && !editorContext.fileText) {
+        vscode.window.showInformationMessage("Select some code or open a file first to explain.");
         return;
       }
-      await chatProvider.sendPromptFromExternal("Explain this code step-by-step in detail.", editorContext);
+      await chatProvider.sendPromptFromExternal("Explain this code step-by-step in detail.", editorContext, { taskName: "Explain Code" });
     }),
 
     vscode.commands.registerCommand("andromity.fixErrors", async (uri?: vscode.Uri, diagnostics?: vscode.Diagnostic[]) => {
       const editorContext = EditorBridge.getActiveContext();
-      const prompt = "Please analyze and fix the errors/diagnostics reported in this code.";
-      await chatProvider.sendPromptFromExternal(prompt, editorContext);
+      let prompt = "Please analyze and fix the errors/diagnostics reported in this code.";
+      if (diagnostics && diagnostics.length > 0) {
+        const diagText = diagnostics.map(d => `[Line ${d.range.start.line + 1}] ${d.message}`).join("\n");
+        prompt += `\n\nReported Diagnostics:\n\`\`\`\n${diagText}\n\`\`\``;
+      } else if (editorContext.diagnostics && editorContext.diagnostics.length > 0) {
+        const diagText = editorContext.diagnostics.map(d => `[Line ${d.line}] ${d.message}`).join("\n");
+        prompt += `\n\nReported Diagnostics:\n\`\`\`\n${diagText}\n\`\`\``;
+      }
+      await chatProvider.sendPromptFromExternal(prompt, editorContext, { taskName: "Fix Code Diagnostics" });
     }),
 
     vscode.commands.registerCommand("andromity.generateTests", async () => {
       const editorContext = EditorBridge.getActiveContext();
+      if (!editorContext.selectedText && !editorContext.fileText) {
+        vscode.window.showInformationMessage("Open a file or select code first to generate unit tests.");
+        return;
+      }
       const prompt = "Write comprehensive unit tests with edge cases for this code.";
-      await chatProvider.sendPromptFromExternal(prompt, editorContext);
+      await chatProvider.sendPromptFromExternal(prompt, editorContext, { taskName: "Generate Unit Tests" });
     }),
 
     vscode.commands.registerCommand("andromity.undoTurn", async () => {
@@ -444,7 +462,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("andromity.sendPrompt", async (promptText: string) => {
       await vscode.commands.executeCommand("andromity.chatView.focus");
       if (promptText) {
-        await chatProvider.sendPromptFromExternal(promptText);
+        await chatProvider.sendPromptFromExternal(promptText, undefined, { taskName: "External Task" });
       }
     }),
 
@@ -494,8 +512,28 @@ export async function activate(context: vscode.ExtensionContext) {
       );
     }),
 
+    vscode.commands.registerCommand("andromity.attachFileToContext", async (uri?: vscode.Uri) => {
+      let targetPath = uri?.fsPath;
+      if (!targetPath) {
+        targetPath = vscode.window.activeTextEditor?.document?.fileName;
+      }
+      if (targetPath) {
+        chatProvider.attachFile(targetPath);
+      } else {
+        await chatProvider.pickAndAttachFile();
+      }
+    }),
+
     vscode.commands.registerCommand("andromity.openFileDiff", async (filePath: string, isUntracked: boolean) => {
       await chatProvider.openFileDiff(filePath, isUntracked);
+    }),
+
+    vscode.commands.registerCommand("andromity.openReview", (filePath?: string) => {
+      chatProvider.openReviewWebview(typeof filePath === "string" ? filePath : undefined);
+    }),
+
+    vscode.commands.registerCommand("andromity.openChangesReview", (filePath?: string) => {
+      chatProvider.openReviewWebview(typeof filePath === "string" ? filePath : undefined);
     }),
 
     vscode.commands.registerCommand("andromity.refreshSessions", () => {
@@ -517,11 +555,103 @@ export async function activate(context: vscode.ExtensionContext) {
           sessionId,
           sessionName,
           pythonBridge?.getClient() || null,
-          context
+          context,
+          vscode.ViewColumn.Active
         );
       } else {
         vscode.window.showInformationMessage("No active session to open waterfall trace for.");
       }
+    }),
+
+    vscode.commands.registerCommand("andromity.fixNotebookCell", async (cell?: vscode.NotebookCell) => {
+      let code = "";
+      let outputText = "";
+      const targetCell = cell || (vscode.window.activeNotebookEditor?.selection ? vscode.window.activeNotebookEditor.notebook.cellAt(vscode.window.activeNotebookEditor.selection.start) : undefined);
+      if (targetCell) {
+        code = targetCell.document.getText();
+        for (const out of targetCell.outputs || []) {
+          for (const item of out.items || []) {
+            try {
+              outputText += new TextDecoder().decode(item.data) + "\n";
+            } catch {}
+          }
+        }
+      }
+      if (!code) {
+        vscode.window.showInformationMessage("Select a notebook cell with an error to diagnose.");
+        return;
+      }
+      let prompt = `This Jupyter notebook cell encountered an error. Please diagnose the issue and provide the corrected code:\n\n\`\`\`python\n${code}\n\`\`\``;
+      if (outputText.trim()) {
+        prompt += `\n\nExecution Output / Traceback:\n\`\`\`\n${outputText.trim().slice(0, 3000)}\n\`\`\``;
+      }
+      await vscode.commands.executeCommand("andromity.chatView.focus");
+      await chatProvider.sendPromptFromExternal(prompt, undefined, { taskName: "Notebook Cell Fix" });
+    }),
+
+    vscode.commands.registerCommand("andromity.explainNotebookCell", async (cell?: vscode.NotebookCell) => {
+      let code = "";
+      let outputText = "";
+      const targetCell = cell || (vscode.window.activeNotebookEditor?.selection ? vscode.window.activeNotebookEditor.notebook.cellAt(vscode.window.activeNotebookEditor.selection.start) : undefined);
+      if (targetCell) {
+        code = targetCell.document.getText();
+        for (const out of targetCell.outputs || []) {
+          for (const item of out.items || []) {
+            try {
+              outputText += new TextDecoder().decode(item.data) + "\n";
+            } catch {}
+          }
+        }
+      }
+      if (!code) {
+        vscode.window.showInformationMessage("Select a notebook cell to explain.");
+        return;
+      }
+      let prompt = `Please explain this Jupyter notebook cell step-by-step:\n\n\`\`\`python\n${code}\n\`\`\``;
+      if (outputText.trim()) {
+        prompt += `\n\nExecution Output:\n\`\`\`\n${outputText.trim().slice(0, 2000)}\n\`\`\``;
+      }
+      await vscode.commands.executeCommand("andromity.chatView.focus");
+      await chatProvider.sendPromptFromExternal(prompt, undefined, { taskName: "Notebook Explanation" });
+    }),
+
+    vscode.commands.registerCommand("andromity.fixTerminalError", async () => {
+      let terminalText = "";
+      try {
+        const prev = await vscode.env.clipboard.readText();
+        await vscode.commands.executeCommand("workbench.action.terminal.copySelection");
+        let current = await vscode.env.clipboard.readText();
+        if (current && current !== prev && current.trim()) {
+          terminalText = current;
+        } else {
+          try {
+            await vscode.commands.executeCommand("workbench.action.terminal.copyLastCommandAndOutput");
+            current = await vscode.env.clipboard.readText();
+            if (current && current !== prev && current.trim()) {
+              terminalText = current;
+            }
+          } catch {}
+          if (!terminalText) {
+            try {
+              await vscode.commands.executeCommand("workbench.action.terminal.selectAll");
+              await vscode.commands.executeCommand("workbench.action.terminal.copySelection");
+              await vscode.commands.executeCommand("workbench.action.terminal.clearSelection");
+              current = await vscode.env.clipboard.readText();
+              if (current && current.trim()) {
+                const lines = current.trim().split(/\r?\n/);
+                terminalText = lines.slice(-60).join("\n");
+              }
+            } catch {}
+          }
+        }
+      } catch {}
+
+      let prompt = "Please analyze my terminal command failure or error output and explain how to fix it.";
+      if (terminalText.trim()) {
+        prompt = `Please diagnose and fix this terminal error:\n\n\`\`\`terminal\n${terminalText.trim().slice(0, 4000)}\n\`\`\``;
+      }
+      await vscode.commands.executeCommand("andromity.chatView.focus");
+      await chatProvider.sendPromptFromExternal(prompt, undefined, { taskName: "Terminal Diagnostics" });
     }),
 
     vscode.commands.registerCommand("andromity.refreshCrons", () => {
@@ -530,6 +660,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand("andromity.refreshChanges", () => {
       changesTreeProvider.refresh();
+      if (ChangesReviewPanel.currentPanel) {
+        void ChangesReviewPanel.currentPanel.loadChanges();
+      }
     }),
 
     vscode.commands.registerCommand("andromity.deleteSession", async (item: any) => {
@@ -688,7 +821,9 @@ export async function activate(context: vscode.ExtensionContext) {
         "Copy the terminal error output, then use Andromity: Ask About Selection or paste it in the chat for explanation."
       );
       await chatProvider.sendPromptFromExternal(
-        "Explain the last terminal error and propose a fix. (Paste the error output below if available.)"
+        "Explain the last terminal error and propose a fix. (Paste the error output below if available.)",
+        undefined,
+        { taskName: "Terminal Diagnostics" }
       );
     }),
 
@@ -720,6 +855,21 @@ export async function activate(context: vscode.ExtensionContext) {
           log(`[Andromity] Notice: Could not auto-open walkthrough: ${err}`);
         }
       );
+  }
+
+  const AUTO_OPEN_CHAT_KEY = "andromity.hasAutoOpenedChat";
+  const hasAutoOpenedChat = context.globalState.get<boolean>(AUTO_OPEN_CHAT_KEY, false);
+  const autoOpenSetting = vscode.workspace.getConfiguration("andromity").get<string>("autoOpenSidebar", "firstTime");
+  if ((autoOpenSetting === "firstTime" && !hasAutoOpenedChat) || autoOpenSetting === "always") {
+    vscode.commands.executeCommand("andromity.chatView.focus").then(
+      () => {
+        context.globalState.update(AUTO_OPEN_CHAT_KEY, true);
+        log("[Andromity] Auto-opened right-side assistant sidebar.");
+      },
+      (err) => {
+        log(`[Andromity] Notice: Could not auto-open sidebar: ${err}`);
+      }
+    );
   }
 }
 

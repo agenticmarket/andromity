@@ -102,27 +102,81 @@ def _get_project_root() -> Path:
 
 def _resolve_project_path(path: Union[str, Path]) -> Path:
     """Resolve path relative to project root if it is not already absolute."""
-    p = Path(path)
+    p = Path(path).expanduser()
     if not p.is_absolute():
         p = _get_project_root() / p
     return p.resolve()
 
 
-def _assert_safe_path(p: Path) -> Path:
-    """Raise PermissionError if path escapes the project directory. Returns resolved path."""
+BLOCKED_SENSITIVE_PATTERNS = {
+    ".ssh", "id_rsa", "id_ed25519", "known_hosts", "authorized_keys",
+    ".aws", "credentials", ".gnupg", ".bash_history", ".zsh_history",
+    "/etc/shadow", "/etc/passwd", "system32", "sam", "ntuser.dat",
+}
+
+
+def _is_sensitive_path(resolved: Path) -> bool:
+    parts = {part.lower() for part in resolved.parts}
+    name = resolved.name.lower()
+    for pattern in BLOCKED_SENSITIVE_PATTERNS:
+        if pattern in parts or pattern in name:
+            return True
+    return False
+
+
+def _assert_safe_write_path(p: Path) -> Path:
+    """Strictly verify that path is within the project directory for modifying/deleting operations."""
     root = _get_project_root()
-    if not p.is_absolute():
-        resolved = (root / p).resolve()
-    else:
-        resolved = p.resolve()
+    resolved = p.resolve() if p.is_absolute() else (root / p).resolve()
     try:
         resolved.relative_to(root)
     except ValueError:
         raise PermissionError(
             f"Access denied: '{p}' is outside the project directory ({root}). "
-            "Andromity can only access files within the active project directory."
+            "Modifying or deleting files outside the active project directory is strictly forbidden."
         )
     return resolved
+
+
+def _assert_safe_read_path(p: Path) -> Path:
+    """Verify that path is safe to read: inside workspace, in approved skill roots, or explicitly attached."""
+    root = _get_project_root()
+    resolved = p.resolve() if p.is_absolute() else (root / p).resolve()
+
+    try:
+        resolved.relative_to(root)
+        return resolved
+    except ValueError:
+        pass
+
+    if _is_sensitive_path(resolved):
+        raise PermissionError(
+            f"Access denied: Path '{p}' matches sensitive system/credential targets and cannot be read."
+        )
+
+    try:
+        from andromity.core.skills import get_approved_skill_roots
+        for skill_root in get_approved_skill_roots(root):
+            try:
+                resolved.relative_to(skill_root)
+                return resolved
+            except ValueError:
+                continue
+    except Exception:
+        pass
+
+    session = _current_session_var.get()
+    if session and hasattr(session, "allowed_external_files"):
+        if resolved in session.allowed_external_files:
+            return resolved
+
+    raise PermissionError(
+        f"Access denied: '{p}' is outside the project directory ({root}) "
+        "and is not an approved skill or attached file."
+    )
+
+
+_assert_safe_path = _assert_safe_write_path
 
 
 def _is_trusted() -> bool:
@@ -222,7 +276,7 @@ def read_file(
     """
     p = _resolve_project_path(path)
     try:
-        _assert_safe_path(p)
+        _assert_safe_read_path(p)
     except Exception as e:
         return f"Error reading file: {e}"
     if not p.is_file():
@@ -1498,7 +1552,7 @@ CORE_TOOLS = [
                 "properties": {
                     "questions": {
                         "type": "array",
-                        "description": "Questions to ask. type='single' uses the options as exclusive choices; type='multi' allows selecting several options; type='text' expects a free-form answer.",
+                        "description": "Direct JSON array of question objects (do not format as a stringified JSON string). type='single' uses options as exclusive choices; type='multi' allows selecting several options; type='text' expects a free-form answer.",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -1574,6 +1628,8 @@ CORE_TOOLS = [
                 "properties": {
                     "query": {"type": "string", "description": "The search query"},
                     "max_results": {"type": "integer", "description": "Max results to return (default 5)"},
+                    "fetch_top": {"type": "integer", "description": "Auto-fetch clean markdown content from top N results (default 0)"},
+                    "domains": {"type": "array", "items": {"type": "string"}, "description": "Optional domain filter (e.g. ['docs.python.org', 'github.com'])"},
                 },
                 "required": ["query"],
             },

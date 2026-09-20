@@ -369,8 +369,8 @@ export class SessionTabPanel {
       return;
     }
 
-    if (message.type === "open_diff") {
-      await this._viewProvider.showGitDiff();
+    if (message.type === "open_diff" || message.type === "open_review_tab" || message.type === "open_changes_review") {
+      this._viewProvider.openReviewWebview(message.filePath, message.turnFiles);
       return;
     }
 
@@ -438,9 +438,11 @@ export class SessionTabPanel {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           let promptText = message.prompt || "";
           const editorContext = EditorBridge.getActiveContext();
-          if (message.attachContext && editorContext.selectedText) {
-            promptText += `\n\n--- Context from ${editorContext.relativePath} (lines ${editorContext.selectionRange?.startLine}-${editorContext.selectionRange?.endLine}) ---\n\`\`\`${editorContext.languageId || ""}\n${editorContext.selectedText}\n\`\`\``;
-          }
+          promptText = EditorBridge.formatPromptWithEditorState(
+            promptText,
+            editorContext,
+            message.attachContext !== false
+          );
           const cleanModel = (message.model || this._currentModel || "").replace(/^~+/, "");
           await this._rpcClient.call("agent.prompt", {
             session_id: this._sessionId,
@@ -471,9 +473,67 @@ export class SessionTabPanel {
       }
 
       case "cycle_mode": {
-        const nextMode = message.nextMode || (this._currentMode === "safe" ? "trust" : this._currentMode === "trust" ? "yolo" : "safe");
+        let nextMode = message.nextMode || (this._currentMode === "safe" ? "trust" : this._currentMode === "trust" ? "yolo" : "safe");
+        if (nextMode === "yolo") {
+          const confirm = await vscode.window.showWarningMessage(
+            "Enter YOLO Mode? Autonomous agent will execute shell commands and edit files without confirmation.",
+            { modal: true },
+            "Enable YOLO Mode",
+            "Keep Safe Mode"
+          );
+          if (confirm !== "Enable YOLO Mode") {
+            nextMode = "safe";
+          }
+        }
         this._currentMode = nextMode;
-        this._postMessage({ type: "config_updated", key: "mode", value: nextMode });
+        const config = vscode.workspace.getConfiguration("andromity");
+        await config.update("permissionMode", this._currentMode, vscode.ConfigurationTarget.Global);
+        await this._rpcClient?.call("config.set", {
+          section: "default",
+          key: "permission_mode",
+          value: this._currentMode,
+        });
+        this._postMessage({ type: "config_updated", key: "mode", value: this._currentMode });
+        this._viewProvider.refreshConfig();
+        vscode.window.showInformationMessage(`Permission Mode: ${this._currentMode.toUpperCase()}`);
+        break;
+      }
+
+      case "cycle_profile":
+      case "update_profile": {
+        const profiles = ["builder", "coder", "architect", "reviewer", "tester", "writer"];
+        if (message.value && profiles.includes(message.value.toLowerCase())) {
+          this._currentProfile = message.value.toLowerCase();
+        } else {
+          const nextIdx = (profiles.indexOf(this._currentProfile.toLowerCase()) + 1) % profiles.length;
+          this._currentProfile = profiles[nextIdx];
+        }
+        await this._rpcClient?.call("config.set", {
+          section: "default",
+          key: "profile",
+          value: this._currentProfile,
+        }).catch(() => {});
+        this._postMessage({ type: "config_updated", key: "profile", value: this._currentProfile });
+        vscode.window.showInformationMessage(`Agent Profile: ${this._currentProfile.toUpperCase()}`);
+        break;
+      }
+
+      case "cycle_reasoning":
+      case "update_reasoning": {
+        const efforts = ["high", "medium", "low", "off"];
+        if (message.value && efforts.includes(message.value.toLowerCase())) {
+          this._currentReasoning = message.value.toLowerCase();
+        } else {
+          const nextIdx = (efforts.indexOf(this._currentReasoning.toLowerCase()) + 1) % efforts.length;
+          this._currentReasoning = efforts[nextIdx];
+        }
+        await this._rpcClient?.call("config.set", {
+          section: "default",
+          key: "reasoning_effort",
+          value: this._currentReasoning,
+        }).catch(() => {});
+        this._postMessage({ type: "config_updated", key: "reasoningEffort", value: this._currentReasoning });
+        vscode.window.showInformationMessage(`Reasoning Effort: ${this._currentReasoning.toUpperCase()}`);
         break;
       }
 
@@ -489,14 +549,126 @@ export class SessionTabPanel {
             case "mode": this._currentMode = value; break;
             case "reasoningEffort": this._currentReasoning = value; break;
           }
+          await this._rpcClient?.call("config.set", {
+            section: "default",
+            key: key === "reasoningEffort" ? "reasoning_effort" : key === "mode" ? "permission_mode" : key,
+            value: value,
+          }).catch(() => {});
           this._postMessage({ type: "config_updated", key: key, value: value, provider: message.provider || this._currentProvider });
         }
         break;
       }
 
+      case "approve_tool": {
+        await this._rpcClient.call("agent.approve_tool", {
+          approval_id: message.approvalId,
+          session_id: this._sessionId,
+          approved: true,
+          scope: message.scope || "once",
+          tool_name: message.toolName,
+        }).catch((err) => console.error("[SessionTab] Tool approval error:", err));
+        if (message.scope === "session") {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          await this._rpcClient.call("config.set", { section: "default", key: "permission_mode", value: "trust" }).catch(() => {});
+          this._currentMode = "trust";
+          this._postMessage({ type: "config_updated", key: "mode", value: "trust" });
+        } else if (message.scope === "always") {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          await this._rpcClient.call("trust.set", { project_path: workspaceFolder }).catch(() => {});
+          await this._rpcClient.call("config.set", { section: "default", key: "permission_mode", value: "trust" }).catch(() => {});
+          this._currentMode = "trust";
+          this._postMessage({ type: "trust_updated", isTrusted: true });
+          this._postMessage({ type: "config_updated", key: "mode", value: "trust" });
+        }
+        break;
+      }
+
+      case "reject_tool": {
+        await this._rpcClient.call("agent.reject_tool", {
+          approval_id: message.approvalId,
+          session_id: this._sessionId,
+        }).catch((err) => console.error("[SessionTab] Tool reject error:", err));
+        break;
+      }
+
+      case "approve_plan": {
+        try {
+          await this._rpcClient.call("plan.approve", {
+            session_id: this._sessionId,
+            comment: message.feedback || "",
+            feedback: message.feedback || "",
+          });
+          const msg = "The plan has been approved by the user. Proceed with execution of the todos in order." +
+            (message.feedback ? ` User note: ${message.feedback}` : "");
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          const cleanModel = (this._currentModel || "").replace(/^~+/, "");
+          await this._rpcClient.call("agent.prompt", {
+            session_id: this._sessionId,
+            prompt: msg,
+            project_path: workspaceFolder,
+            profile: this._currentProfile,
+            model: cleanModel,
+            provider: this._currentProvider,
+            mode: this._currentMode,
+            reasoning_effort: this._currentReasoning,
+          }, 120000);
+          vscode.window.showInformationMessage("Plan approved -- agent is executing.");
+        } catch (e: any) {
+          vscode.window.showErrorMessage(`Failed to approve plan: ${e.message}`);
+        }
+        break;
+      }
+
+      case "reject_plan": {
+        try {
+          await this._rpcClient.call("plan.reject", {
+            session_id: this._sessionId,
+            comment: message.feedback || "",
+            feedback: message.feedback || "",
+          });
+          const msg = "The plan was rejected by the user. Please revise the plan and present a new one." +
+            (message.feedback ? ` User reason: ${message.feedback}` : "");
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          const cleanModel = (this._currentModel || "").replace(/^~+/, "");
+          await this._rpcClient.call("agent.prompt", {
+            session_id: this._sessionId,
+            prompt: msg,
+            project_path: workspaceFolder,
+            profile: this._currentProfile,
+            model: cleanModel,
+            provider: this._currentProvider,
+            mode: this._currentMode,
+            reasoning_effort: this._currentReasoning,
+          }, 120000);
+          vscode.window.showInformationMessage("Plan rejected -- agent will revise.");
+        } catch (e: any) {
+          vscode.window.showErrorMessage(`Failed to reject plan: ${e.message}`);
+        }
+        break;
+      }
+
+      case "answer_question": {
+        await this._rpcClient.call("agent.answer_question", {
+          question_id: message.questionId,
+          session_id: this._sessionId,
+          answers: message.answers,
+        }).catch((err) => console.error("[SessionTab] Answer question error:", err));
+        break;
+      }
+
+      case "trust_workspace": {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        await this._rpcClient?.call("trust.set", { project_path: workspaceFolder });
+        vscode.window.showInformationMessage("Workspace trusted. File editing and shell commands enabled.");
+        this._postMessage({ type: "trust_updated", isTrusted: true });
+        SettingsPanel.currentPanel?.loadData();
+        break;
+      }
+
       case "tool_approval_response": {
         await this._rpcClient.call("agent.approve_tool", {
-          call_id: message.callId,
+          approval_id: message.approvalId || message.callId,
+          session_id: this._sessionId,
           approved: message.approved,
           reason: message.reason,
           answer: message.answer,
@@ -505,16 +677,24 @@ export class SessionTabPanel {
       }
 
       case "plan_approval_response": {
-        await this._rpcClient.call("agent.approve_plan", {
-          session_id: this._sessionId,
-          approved: message.approved,
-          feedback: message.feedback,
-        }).catch((err) => console.error("[SessionTab] Plan approval error:", err));
+        if (message.approved) {
+          await this._rpcClient.call("plan.approve", {
+            session_id: this._sessionId,
+            comment: message.feedback || "",
+            feedback: message.feedback || "",
+          }).catch(() => {});
+        } else {
+          await this._rpcClient.call("plan.reject", {
+            session_id: this._sessionId,
+            comment: message.feedback || "",
+            feedback: message.feedback || "",
+          }).catch(() => {});
+        }
         break;
       }
 
       case "ask_question_response": {
-        await this._rpcClient.call("agent.answer_questions", {
+        await this._rpcClient.call("agent.answer_question", {
           session_id: this._sessionId,
           question_id: message.questionId,
           answers: message.answers,
@@ -538,6 +718,8 @@ export class SessionTabPanel {
         const res = await this._rpcClient.call<any>("session.undo", {
           session_id: this._sessionId,
           project_path: workspaceFolder,
+          turn_index: (message as any).turnIndex,
+          turns_to_undo: (message as any).turnsToUndo,
         }).catch(() => null);
         if (res?.success) {
           try {
@@ -545,6 +727,11 @@ export class SessionTabPanel {
             vscode.commands.executeCommand("andromity.refreshChanges");
           } catch {}
           await this._loadSession();
+          this._postMessage({
+            type: "turn_undone",
+            turnsUndone: res.turns_undone,
+            targetTurnIndex: res.target_turn_index,
+          });
         } else if (res?.error) {
           vscode.window.showWarningMessage(res.error);
         }

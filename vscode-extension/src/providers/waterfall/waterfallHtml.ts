@@ -40,7 +40,7 @@ export function getWaterfallHtml(
   <header class="wf-header">
     <div class="wf-header-row1">
       <div class="wf-title-area">
-        <span class="wf-logo">🌊 Waterfall Trace</span>
+        <span class="wf-logo"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:5px;vertical-align:-2px;"><path d="M2 12h5l3 9 4-18 3 9h5"/></svg>Waterfall Trace</span>
         <span class="wf-session-pill" title="${sessionName}">${sessionName}</span>
         <div class="wf-live-status">
           <span class="wf-live-dot" id="wf-live-dot"></span>
@@ -98,7 +98,7 @@ export function getWaterfallHtml(
     <!-- Timeline Waterfall View -->
     <div class="wf-timeline-view" id="wf-timeline-container">
       <div class="wf-empty-state" id="wf-empty-state">
-        <div class="wf-empty-icon">⚡</div>
+        <div class="wf-empty-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12h5l3 9 4-18 3 9h5"/></svg></div>
         <p>No agent events recorded for this session yet.</p>
         <p style="font-size: 11px;">Send a prompt in the chat or invoke an agent action to see real-time waterfall timing tracks.</p>
       </div>
@@ -115,7 +115,7 @@ export function getWaterfallHtml(
   <div class="wf-modal-backdrop" id="wf-guide-modal" style="display: none;">
     <div class="wf-modal-card">
       <div class="wf-modal-header">
-        <div class="wf-modal-title">🌊 Waterfall Trace — Developer Guide & Glossary</div>
+        <div class="wf-modal-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px;vertical-align:-2px;"><path d="M2 12h5l3 9 4-18 3 9h5"/></svg>Waterfall Trace — Developer Guide &amp; Glossary</div>
         <button class="wf-modal-close" id="wf-guide-close" title="Close Guide (Esc)">&times;</button>
       </div>
       <div class="wf-modal-body">
@@ -123,19 +123,19 @@ export function getWaterfallHtml(
           <div class="wf-guide-section-title">Execution Layers & Colors</div>
           <div class="wf-guide-grid">
             <div class="wf-guide-item">
-              <strong style="color: var(--purple);">🟣 LLM Call (Purple)</strong>
+              <strong style="color: var(--purple); display:flex; align-items:center; gap:6px;"><span style="width:8px; height:8px; border-radius:50%; background:var(--purple); display:inline-block;"></span>LLM Call (Purple)</strong>
               <p>Model reasoning & token generation. The light purple bar segment highlights <strong>TTFB</strong> (prompt processing delay before first token).</p>
             </div>
             <div class="wf-guide-item">
-              <strong style="color: var(--cyan);">🟢 Tool Execution (Cyan / Green)</strong>
+              <strong style="color: var(--cyan); display:flex; align-items:center; gap:6px;"><span style="width:8px; height:8px; border-radius:50%; background:var(--cyan); display:inline-block;"></span>Tool Execution (Cyan / Green)</strong>
               <p>Local commands run by the agent (file edits, read_file, shell_exec, git operations, searches).</p>
             </div>
             <div class="wf-guide-item">
-              <strong style="color: var(--amber);">🟡 Subagent (Amber / Blue)</strong>
+              <strong style="color: var(--amber); display:flex; align-items:center; gap:6px;"><span style="width:8px; height:8px; border-radius:50%; background:var(--amber); display:inline-block;"></span>Subagent (Amber / Blue)</strong>
               <p>Autonomous delegated child agent. Click to expand and inspect its inner tool waterfall and final result.</p>
             </div>
             <div class="wf-guide-item">
-              <strong style="color: var(--red);">🔴 Error / Blocked (Red)</strong>
+              <strong style="color: var(--red); display:flex; align-items:center; gap:6px;"><span style="width:8px; height:8px; border-radius:50%; background:var(--red); display:inline-block;"></span>Error / Blocked (Red)</strong>
               <p>Failed tool executions, permission denials, or model timeouts.</p>
             </div>
           </div>
