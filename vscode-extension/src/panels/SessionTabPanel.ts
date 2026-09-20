@@ -476,7 +476,7 @@ export class SessionTabPanel {
         let nextMode = message.nextMode || (this._currentMode === "safe" ? "trust" : this._currentMode === "trust" ? "yolo" : "safe");
         if (nextMode === "yolo") {
           const confirm = await vscode.window.showWarningMessage(
-            "⚠️ Enter YOLO Mode? Autonomous agent will execute shell commands and edit files without confirmation.",
+            "Enter YOLO Mode? Autonomous agent will execute shell commands and edit files without confirmation.",
             { modal: true },
             "Enable YOLO Mode",
             "Keep Safe Mode"

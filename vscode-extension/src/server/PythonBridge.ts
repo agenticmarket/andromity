@@ -79,12 +79,12 @@ export class PythonBridge {
     for (const base of searchDirs) {
       const candidate = path.join(base, "bin", `${platform}-${arch}`, exeName);
       if (fs.existsSync(candidate)) {
-        this._log(`[Andromity] ✓ Bundled binary found: ${candidate}`);
+        this._log(`[Andromity] [OK] Bundled binary found: ${candidate}`);
         return candidate;
       }
       const candidateSubdir = path.join(base, "bin", `${platform}-${arch}`, "andromity-server", exeName);
       if (fs.existsSync(candidateSubdir)) {
-        this._log(`[Andromity] ✓ Bundled binary found: ${candidateSubdir}`);
+        this._log(`[Andromity] [OK] Bundled binary found: ${candidateSubdir}`);
         return candidateSubdir;
       }
     }
@@ -497,7 +497,7 @@ export class PythonBridge {
       // Step 1: Can we import directly via PYTHONPATH (workspace dev mode)?
       const wsCheck = await this._verifyPackage(pythonPath, hasSrc ? srcDir! : undefined);
       if (wsCheck.ok) {
-        this._log(`[Andromity] ✓ Package importable via workspace src/. No pip install needed.`);
+        this._log(`[Andromity] [OK] Package importable via workspace src/. No pip install needed.`);
       } else {
         this._log(`[Andromity] Workspace check: ${wsCheck.error || "not found"}`);
 
@@ -526,7 +526,7 @@ export class PythonBridge {
         }
 
         this._packageInstallAttempted = false;
-        this._log(`[Andromity] ✓ Package verified. Starting daemon...`);
+        this._log(`[Andromity] [OK] Package verified. Starting daemon...`);
         vscode.window.showInformationMessage("Andromity Engine installed successfully!");
       }
     }
@@ -601,7 +601,7 @@ export class PythonBridge {
     const rgPath = this._findVsCodeRipgrep();
     if (rgPath) {
       env.ANDROMITY_RG_PATH = rgPath;
-      this._log(`[Andromity] ✓ Bundled ripgrep found: ${rgPath}`);
+      this._log(`[Andromity] [OK] Bundled ripgrep found: ${rgPath}`);
     }
 
     // Ensure any previously running daemon process is cleanly terminated before spawning a new one

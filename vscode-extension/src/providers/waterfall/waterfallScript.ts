@@ -303,7 +303,7 @@ export function getWaterfallScript(sessionId: string): string {
           }
           if (!span.thinking && !span.response && (!span.toolCalls || span.toolCalls.length === 0)) {
             if (span.status === 'running') {
-              payloadHtml += \`<div style="color: var(--cyan); font-family: var(--font-mono); font-size: 11px; padding: 6px 0;">⚡ Generating model completion...</div>\`;
+              payloadHtml += \`<div style="color: var(--cyan); font-family: var(--font-mono); font-size: 11px; padding: 6px 0;">Generating model completion...</div>\`;
             } else {
               payloadHtml += \`<div style="color: var(--muted); font-family: var(--font-mono); font-size: 11px; padding: 6px 0;">(No textual response content)</div>\`;
             }
@@ -1273,27 +1273,27 @@ export function getWaterfallScript(sessionId: string): string {
           }
 
           case 'session_message_received': {
-            addLog('SESSION-MSG', \`✉ Message from \${msg.from_session || 'agent'}: \${(msg.content || '').slice(0, 100)}\`);
+            addLog('SESSION-MSG', \`Message from \${msg.from_session || 'agent'}: \${(msg.content || '').slice(0, 100)}\`);
             break;
           }
 
           case 'session_question_received': {
-            addLog('SESSION-Q', \`❓ Question from \${msg.from_session || 'agent'} (ID: \${msg.question_id || ''}): \${(msg.question || '').slice(0, 100)}\`);
+            addLog('SESSION-Q', \`Question from \${msg.from_session || 'agent'} (ID: \${msg.question_id || ''}): \${(msg.question || '').slice(0, 100)}\`);
             break;
           }
 
           case 'session_answer_received': {
-            addLog('SESSION-ANS', \`✔ Answer from \${msg.from_session || 'agent'} for \${msg.question_id || ''}: \${(msg.answer || '').slice(0, 100)}\`);
+            addLog('SESSION-ANS', \`Answer from \${msg.from_session || 'agent'} for \${msg.question_id || ''}: \${(msg.answer || '').slice(0, 100)}\`);
             break;
           }
 
           case 'session_shared_state_changed': {
-            addLog('SHARED-STATE', \`⚡ \${msg.author_session || 'agent'} set \${msg.key || ''} = \${JSON.stringify(msg.value || '').slice(0, 80)}\`);
+            addLog('SHARED-STATE', \`\${msg.author_session || 'agent'} set \${msg.key || ''} = \${JSON.stringify(msg.value || '').slice(0, 80)}\`);
             break;
           }
 
           case 'session_handoff_written': {
-            addLog('HANDOFF', \`🤝 Handoff from \${msg.from_session || 'agent'} to \${msg.to_session || 'agent'}: \${(msg.task_summary || '').slice(0, 80)}\`);
+            addLog('HANDOFF', \`Handoff from \${msg.from_session || 'agent'} to \${msg.to_session || 'agent'}: \${(msg.task_summary || '').slice(0, 80)}\`);
             break;
           }
 

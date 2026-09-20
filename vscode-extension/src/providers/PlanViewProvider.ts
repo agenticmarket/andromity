@@ -393,14 +393,14 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
         approvalHtml = '<div class="approval-box">' +
           '<input type="text" id="plan-feedback" placeholder="Optional notes/feedback for the agent…" />' +
           '<div class="approval-buttons">' +
-            '<button class="btn-approve" data-action="decide-plan" data-approved="true">✓ Approve Plan</button>' +
-            '<button class="btn-reject" data-action="decide-plan" data-approved="false">✕ Reject</button>' +
+            '<button class="btn-approve" data-action="decide-plan" data-approved="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px;vertical-align:-1px;"><polyline points="20 6 9 17 4 12"></polyline></svg>Approve Plan</button>' +
+            '<button class="btn-reject" data-action="decide-plan" data-approved="false"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px;vertical-align:-1px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>Reject</button>' +
           '</div>' +
         '</div>';
       } else if (status === 'approved') {
-        approvalHtml = '<div class="plan-decided" style="color:var(--done-fg);">✓ Plan approved — agent is executing steps.</div>';
+        approvalHtml = '<div class="plan-decided" style="color:var(--done-fg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px;vertical-align:-1px;"><polyline points="20 6 9 17 4 12"></polyline></svg>Plan approved — agent is executing steps.</div>';
       } else {
-        approvalHtml = '<div class="plan-decided" style="color:var(--failed-fg);">✕ Plan rejected — waiting for revision.</div>';
+        approvalHtml = '<div class="plan-decided" style="color:var(--failed-fg);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px;vertical-align:-1px;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>Plan rejected — waiting for revision.</div>';
       }
 
       var html = '<div class="plan-header">' +

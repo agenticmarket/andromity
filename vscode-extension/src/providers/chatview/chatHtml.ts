@@ -151,7 +151,7 @@ ${styles}
       <div class="waterfall-callout-popover" id="waterfall-callout-popover" style="display:none;" role="tooltip" aria-label="Waterfall Trace guide">
         <div class="popover-arrow"></div>
         <div class="popover-header">
-          <div class="popover-badge">🌊 Live Waterfall</div>
+          <div class="popover-badge"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px;vertical-align:-1px;"><path d="M2 12h5l3 9 4-18 3 9h5"/></svg>Live Waterfall</div>
           <button class="popover-close-btn" id="btn-dismiss-wf-callout" aria-label="Dismiss waterfall callout" title="Dismiss">&times;</button>
         </div>
         <div class="popover-body">
@@ -197,7 +197,8 @@ ${styles}
       </div>
       <div style="display:flex; align-items:center; gap:6px;">
         <button class="crons-action-hdr-btn" id="btn-crons-manage" title="Configure in Settings">
-          <span>⚙ Settings</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px;vertical-align:-1px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1 2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          <span>Settings</span>
         </button>
         <button class="crons-close-btn" id="btn-crons-close" aria-label="Close scheduled tasks drawer" title="Close">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
@@ -404,7 +405,9 @@ ${styles}
             <!-- Form area for Ollama (Zero-key local setup) -->
             <div class="onboarding-ollama-area" id="onboarding-ollama-form" style="display:none;">
               <div class="ollama-info-box">
-                <div class="ollama-info-icon">💻</div>
+                <div class="ollama-info-icon">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+                </div>
                 <div class="ollama-info-content">
                   <div class="ollama-info-title">Zero-Key Local AI</div>
                   <div class="ollama-info-desc">Runs entirely on your local GPU/CPU. Fully private, offline, and free forever. Make sure Ollama is running on your machine.</div>
@@ -428,7 +431,7 @@ ${styles}
           <div class="onboarding-step-view" id="onboarding-step-2" style="display:none;">
             <div class="onboarding-card-header">
               <div class="onboarding-step2-top-bar">
-                <span class="onboarding-step2-badge" id="onboarding-step2-badge">CONNECTED</span>
+                <span class="onboarding-step2-badge" id="onboarding-step2-badge">Connected</span>
                 <button class="onboarding-step2-back" id="btn-onboarding-step2-back" title="Back to Provider Setup">
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"></polyline></svg>
                   <span>Change Key</span>
@@ -563,16 +566,21 @@ ${styles}
     <!-- Floating Slash Command Palette -->
     <div class="slash-palette" id="slash-palette" style="display:none;" role="listbox" aria-label="Slash commands">
       <div class="slash-palette-header">
-        <span>Commands (Click or press Enter)</span>
-        <button class="palette-close-btn" id="btn-slash-close" aria-label="Close slash commands" title="Close (Esc)">&times;</button>
+        <span>Commands</span>
+        <button class="palette-close-btn" id="btn-slash-close" aria-label="Close slash commands" title="Close (Esc)">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
       </div>
       <div class="slash-palette-list" id="slash-palette-list"></div>
     </div>
 
+    <!-- Floating @ Mention Palette (Skills & Tools) -->
     <div class="slash-palette" id="mention-palette" style="display:none;" role="listbox" aria-label="Skills and tools">
-      <div class="slash-palette-header" style="color:#c084fc;">
-        <span>Skills & Tools (Click to mention)</span>
-        <button class="palette-close-btn" id="btn-mention-close" aria-label="Close skills palette" title="Close (Esc)">&times;</button>
+      <div class="slash-palette-header">
+        <span>Skills &amp; Tools</span>
+        <button class="palette-close-btn" id="btn-mention-close" aria-label="Close skills palette" title="Close (Esc)">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
       </div>
       <div class="slash-palette-list" id="mention-palette-list"></div>
     </div>

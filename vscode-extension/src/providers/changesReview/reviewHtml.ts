@@ -37,16 +37,52 @@ export function getReviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
     }
     .codicon-chevron-down::before { content: "▼"; font-size: 8px; }
     .codicon-chevron-down.collapsed::before { content: "▶"; font-size: 8px; }
-    .codicon-folder::before { content: "📁"; font-size: 11px; }
-    .codicon-file::before { content: "📄"; font-size: 11px; }
+    .codicon-folder::before {
+      content: "";
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      vertical-align: -1px;
+      background: currentColor;
+      mask: url("data:image/svg+xml;utf8,<svg viewBox='0 0 24 24' fill='black' xmlns='http://www.w3.org/2000/svg'><path d='M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z'/></svg>") center/contain no-repeat;
+      -webkit-mask: url("data:image/svg+xml;utf8,<svg viewBox='0 0 24 24' fill='black' xmlns='http://www.w3.org/2000/svg'><path d='M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z'/></svg>") center/contain no-repeat;
+    }
+    .codicon-file::before {
+      content: "";
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      vertical-align: -1px;
+      background: currentColor;
+      mask: url("data:image/svg+xml;utf8,<svg viewBox='0 0 24 24' fill='black' xmlns='http://www.w3.org/2000/svg'><path d='M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z'/></svg>") center/contain no-repeat;
+      -webkit-mask: url("data:image/svg+xml;utf8,<svg viewBox='0 0 24 24' fill='black' xmlns='http://www.w3.org/2000/svg'><path d='M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z'/></svg>") center/contain no-repeat;
+    }
     .codicon-diff::before { content: "±"; font-weight: bold; }
-    .codicon-check-all::before { content: "✔"; }
+    .codicon-check-all::before {
+      content: "";
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      vertical-align: -1px;
+      background: currentColor;
+      mask: url("data:image/svg+xml;utf8,<svg viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' xmlns='http://www.w3.org/2000/svg'><polyline points='20 6 9 17 4 12'/></svg>") center/contain no-repeat;
+      -webkit-mask: url("data:image/svg+xml;utf8,<svg viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' xmlns='http://www.w3.org/2000/svg'><polyline points='20 6 9 17 4 12'/></svg>") center/contain no-repeat;
+    }
     .codicon-go-to-file::before { content: "↗"; font-size: 14px; }
     .codicon-diff-single::before { content: "◫"; font-size: 13px; }
     .codicon-discard::before { content: "↩"; font-size: 13px; }
     .codicon-unfold::before { content: "↕"; }
     .codicon-refresh::before { content: "↻"; }
-    .codicon-loading::before { content: "⏳"; }
+    .codicon-loading::before {
+      content: "";
+      display: inline-block;
+      width: 11px;
+      height: 11px;
+      border: 2px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      vertical-align: -1px;
+    }
   </style>
 </head>
 <body>
@@ -54,7 +90,7 @@ export function getReviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
   <header class="review-header">
     <div class="header-left">
       <div class="branch-pill">
-        <span class="codicon codicon-git-branch branch-icon">⎇</span>
+        <span class="codicon codicon-git-branch branch-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg></span>
         <span id="branch-label">HEAD</span>
       </div>
       <span class="target-badge">↔ Working Tree</span>

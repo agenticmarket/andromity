@@ -1566,19 +1566,17 @@ export function getChatStyles(): string {
       gap: 8px;
     }
     .onboarding-step-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      padding: 2px 7px;
-      border-radius: 4px;
-      font-size: 9.5px;
+      display: inline-block;
+      font-size: 11px;
       font-weight: 500;
-      text-transform: uppercase;
-      letter-spacing: 0.3px;
-      background: rgba(255, 255, 255, 0.04);
       color: var(--muted, #888888);
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
-      width: fit-content;
+      background: transparent;
+      border: none;
+      padding: 0;
+      margin: 0 0 2px 0;
+      width: auto;
+      text-transform: none;
+      letter-spacing: normal;
     }
     .onboarding-step-pill .step-dot {
       display: none;
@@ -1591,15 +1589,15 @@ export function getChatStyles(): string {
       letter-spacing: -0.2px;
     }
     .onboarding-subtitle {
-      font-size: 11.5px;
-      color: var(--muted, #71717a);
+      font-size: 12px;
+      color: var(--muted, #888888);
       margin: 0;
       line-height: 1.45;
     }
     .onboarding-card {
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
-      border-radius: 8px;
+      background: var(--vscode-editorWidget-background, rgba(255, 255, 255, 0.02));
+      border: 1px solid var(--vscode-widget-border, var(--border, rgba(255, 255, 255, 0.08)));
+      border-radius: var(--radius, 6px);
       padding: 12px;
       display: flex;
       flex-direction: column;
@@ -1608,18 +1606,17 @@ export function getChatStyles(): string {
     .onboarding-card-header {
       display: flex;
       flex-direction: column;
-      gap: 1px;
+      gap: 2px;
     }
     .onboarding-label {
-      font-size: 10.5px;
+      font-size: 11px;
       font-weight: 600;
       color: var(--fg, #ffffff);
-      text-transform: uppercase;
-      letter-spacing: 0.4px;
+      letter-spacing: -0.01em;
     }
     .onboarding-sublabel {
-      font-size: 10.5px;
-      color: var(--muted, #71717a);
+      font-size: 11px;
+      color: var(--muted, #888888);
     }
     .onboarding-providers-grid {
       display: grid;
@@ -1632,22 +1629,24 @@ export function getChatStyles(): string {
       align-items: flex-start;
       gap: 2px;
       padding: 7px 9px;
-      border-radius: 5px;
+      border-radius: var(--radius, 4px);
       border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
       background: rgba(255, 255, 255, 0.02);
-      color: var(--fg, #f4f4f5);
+      color: var(--fg, #e4e4e7);
       cursor: pointer;
       text-align: left;
       transition: background 0.12s ease, border-color 0.12s ease;
       position: relative;
+      font-family: inherit;
     }
     .onboarding-provider-chip:hover {
       background: rgba(255, 255, 255, 0.05);
       border-color: rgba(255, 255, 255, 0.15);
     }
     .onboarding-provider-chip.active {
-      background: rgba(255, 255, 255, 0.08);
-      border-color: #09f994;
+      background: rgba(255, 255, 255, 0.06);
+      border-color: var(--vscode-focusBorder, var(--accent, #007fd4));
+      color: var(--fg, #ffffff);
     }
     .provider-chip-name {
       font-size: 11.5px;
@@ -1655,11 +1654,11 @@ export function getChatStyles(): string {
       color: var(--fg, #ffffff);
     }
     .provider-chip-badge {
-      font-size: 9.5px;
-      color: var(--muted, #71717a);
+      font-size: 10px;
+      color: var(--muted, #888888);
     }
     .onboarding-provider-chip.active .provider-chip-badge {
-      color: #09f994;
+      color: var(--muted, #888888);
     }
     .onboarding-form-area, .onboarding-ollama-area {
       display: flex;
@@ -1674,8 +1673,8 @@ export function getChatStyles(): string {
       justify-content: space-between;
     }
     .onboarding-portal-link {
-      font-size: 10px;
-      color: var(--accent-cyan, #38bdf8);
+      font-size: 10.5px;
+      color: var(--vscode-textLink-foreground, #38bdf8);
       text-decoration: none;
       display: inline-flex;
       align-items: center;
@@ -1684,7 +1683,7 @@ export function getChatStyles(): string {
       transition: color 0.12s;
     }
     .onboarding-portal-link:hover {
-      color: #7dd3fc;
+      color: var(--vscode-textLink-activeForeground, #7dd3fc);
       text-decoration: underline;
     }
     .onboarding-input-wrap {
@@ -1697,7 +1696,7 @@ export function getChatStyles(): string {
       width: 100%;
       background: var(--vscode-input-background, #1e1e1e);
       border: 1px solid var(--vscode-input-border, rgba(255, 255, 255, 0.1));
-      border-radius: 5px;
+      border-radius: var(--radius, 4px);
       padding: 7px 28px 7px 9px;
       color: var(--vscode-input-foreground, #ffffff);
       font-size: 11.5px;
@@ -1706,7 +1705,7 @@ export function getChatStyles(): string {
       transition: border-color 0.12s;
     }
     .onboarding-key-input:focus {
-      border-color: #09f994;
+      border-color: var(--vscode-focusBorder, var(--accent, #007fd4));
     }
     .onboarding-toggle-vis {
       position: absolute;
@@ -1729,22 +1728,23 @@ export function getChatStyles(): string {
       align-items: center;
       justify-content: center;
       gap: 5px;
-      padding: 7px 12px;
-      background: #09f994;
-      color: #0b0f19;
+      padding: 6px 12px;
+      background: var(--vscode-button-background, #007fd4);
+      color: var(--vscode-button-foreground, #ffffff);
       font-size: 11.5px;
-      font-weight: 600;
-      border: none;
-      border-radius: 5px;
+      font-weight: 500;
+      border: 1px solid var(--vscode-button-border, transparent);
+      border-radius: var(--radius, 4px);
       cursor: pointer;
-      transition: background 0.12s ease;
+      transition: background 0.12s ease, opacity 0.12s ease;
+      font-family: inherit;
       margin-top: 2px;
     }
     .btn-onboarding-save:hover {
-      background: #10fba0;
+      background: var(--vscode-button-hoverBackground, #026ec1);
     }
     .btn-onboarding-save:active {
-      background: #09f994;
+      opacity: 0.85;
     }
     .ollama-info-box {
       display: flex;
@@ -1766,11 +1766,11 @@ export function getChatStyles(): string {
     .ollama-info-title {
       font-size: 11px;
       font-weight: 600;
-      color: #38bdf8;
+      color: var(--fg, #e4e4e7);
     }
     .ollama-info-desc {
       font-size: 10.5px;
-      color: var(--muted, #71717a);
+      color: var(--muted, #888888);
       line-height: 1.35;
     }
     .onboarding-footer-links {
@@ -1814,28 +1814,27 @@ export function getChatStyles(): string {
     .onboarding-step2-badge {
       display: inline-flex;
       align-items: center;
-      font-size: 9px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.4px;
-      padding: 1.5px 6px;
-      border-radius: 4px;
-      background: rgba(9, 249, 148, 0.08);
-      color: #09f994;
-      border: 1px solid rgba(9, 249, 148, 0.25);
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--muted, #888888);
+      text-transform: none;
+      letter-spacing: normal;
+      padding: 0;
+      background: transparent;
+      border: none;
     }
     .onboarding-step2-back {
       display: inline-flex;
       align-items: center;
       gap: 4px;
-      font-size: 10px;
+      font-size: 10.5px;
       font-weight: 500;
-      color: var(--muted, #71717a);
+      color: var(--muted, #888888);
       background: transparent;
       border: none;
       cursor: pointer;
       padding: 2px 6px;
-      border-radius: 4px;
+      border-radius: var(--radius, 4px);
       transition: all 0.12s;
     }
     .onboarding-step2-back:hover {
@@ -1846,13 +1845,16 @@ export function getChatStyles(): string {
       display: flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 8px;
-      border-radius: 6px;
+      padding: 5px 8px;
+      border-radius: var(--radius, 4px);
       background: var(--vscode-input-background, #18181b);
       border: 1px solid var(--vscode-input-border, rgba(255, 255, 255, 0.08));
     }
+    .onboarding-search-wrap:focus-within {
+      border-color: var(--vscode-focusBorder, var(--accent, #007fd4));
+    }
     .onboarding-search-icon {
-      color: var(--muted, #71717a);
+      color: var(--muted, #888888);
       flex-shrink: 0;
     }
     .onboarding-search-input {
@@ -1865,7 +1867,7 @@ export function getChatStyles(): string {
       font-family: inherit;
     }
     .onboarding-search-input::placeholder {
-      color: var(--muted, #71717a);
+      color: var(--muted, #888888);
     }
     .onboarding-models-list {
       display: flex;
@@ -1880,8 +1882,8 @@ export function getChatStyles(): string {
       align-items: center;
       justify-content: space-between;
       padding: 6px 8px;
-      border-radius: 6px;
-      border: 1px solid rgba(255, 255, 255, 0.04);
+      border-radius: var(--radius, 4px);
+      border: 1px solid var(--border, rgba(255, 255, 255, 0.04));
       background: rgba(255, 255, 255, 0.02);
       cursor: pointer;
       transition: all 0.1s ease;
@@ -1892,8 +1894,8 @@ export function getChatStyles(): string {
       border-color: rgba(255, 255, 255, 0.1);
     }
     .onboarding-model-item.active {
-      background: rgba(9, 249, 148, 0.06);
-      border-color: #09f994;
+      background: rgba(255, 255, 255, 0.06);
+      border-color: var(--vscode-focusBorder, var(--accent, #007fd4));
     }
     .onboarding-model-item-info {
       display: flex;
@@ -1914,22 +1916,21 @@ export function getChatStyles(): string {
       gap: 6px;
     }
     .onboarding-model-item.active .onboarding-model-item-name {
-      color: #09f994;
+      color: var(--fg, #ffffff);
     }
     .model-badge-rec {
-      font-size: 8.5px;
-      font-weight: 600;
-      padding: 1px 4px;
-      border-radius: 3px;
-      background: rgba(9, 249, 148, 0.12);
-      color: #09f994;
-      border: 1px solid rgba(9, 249, 148, 0.25);
-      text-transform: uppercase;
-      letter-spacing: 0.3px;
+      font-size: 10px;
+      font-weight: 400;
+      color: var(--muted, #888888);
+      background: transparent;
+      border: none;
+      padding: 0;
+      text-transform: none;
+      letter-spacing: normal;
     }
     .onboarding-model-item-desc {
-      font-size: 10px;
-      color: var(--muted, #71717a);
+      font-size: 10.5px;
+      color: var(--muted, #888888);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -1942,18 +1943,21 @@ export function getChatStyles(): string {
       flex-shrink: 0;
     }
     .onboarding-model-ctx-pill {
-      font-size: 9px;
-      padding: 1px 4px;
-      border-radius: 3px;
-      background: rgba(255, 255, 255, 0.06);
-      color: var(--muted, #71717a);
+      font-size: 10px;
+      padding: 0;
+      background: transparent;
+      border: none;
+      color: var(--muted, #888888);
     }
     .onboarding-model-item.active .onboarding-model-ctx-pill {
-      color: #09f994;
+      color: var(--muted, #888888);
     }
     .onboarding-model-pricing-pill {
-      font-size: 8.5px;
-      color: var(--muted, #71717a);
+      font-size: 10px;
+      color: var(--muted, #888888);
+      padding: 0;
+      background: transparent;
+      border: none;
     }
     .onboarding-step2-actions {
       display: flex;
@@ -1965,19 +1969,20 @@ export function getChatStyles(): string {
       border-top: 1px solid var(--border, rgba(255, 255, 255, 0.06));
     }
     .btn-step2-skip {
-      background: transparent;
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
-      color: var(--muted, #71717a);
+      background: var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.05));
+      border: 1px solid var(--vscode-button-secondaryBorder, var(--border, rgba(255, 255, 255, 0.1)));
+      color: var(--vscode-button-secondaryForeground, var(--fg, #e4e4e7));
       font-size: 11px;
       font-weight: 500;
       padding: 5px 10px;
-      border-radius: 6px;
+      border-radius: var(--radius, 4px);
       cursor: pointer;
       transition: all 0.12s;
+      font-family: inherit;
     }
     .btn-step2-skip:hover {
+      background: var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.09));
       color: var(--fg, #ffffff);
-      border-color: rgba(255, 255, 255, 0.2);
     }
     .ready-hero-section {
       width: 100%;
@@ -2005,12 +2010,12 @@ export function getChatStyles(): string {
       height: 32px;
       object-fit: contain;
       display: block;
-      filter: drop-shadow(0 2px 10px rgba(9, 249, 148, 0.25));
+      filter: none;
       transition: transform 0.2s ease;
     }
 
     .zero-logo-img:hover {
-      transform: scale(1.06);
+      transform: scale(1.04);
     }
 
     .zero-statement-wrap {
@@ -4320,16 +4325,16 @@ export function getChatStyles(): string {
       position: relative;
     }
 
-    /* Slash Command Palette Overlay */
+    /* Slash Command & Mention Palette Overlay */
     .slash-palette {
       position: absolute;
       bottom: calc(100% - 4px);
       left: 10px;
       right: 10px;
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+      background: var(--vscode-editorWidget-background, var(--card-bg));
+      border: 1px solid var(--vscode-widget-border, var(--border));
+      border-radius: var(--radius, 4px);
+      box-shadow: 0 4px 12px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.25));
       z-index: 250;
       max-height: 250px;
       overflow-y: auto;
@@ -4341,77 +4346,168 @@ export function getChatStyles(): string {
       align-items: center;
       justify-content: space-between;
       padding: 6px 10px;
-      font-size: 10px;
+      font-size: 11px;
       font-weight: 600;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      border-bottom: 1px solid var(--border);
-      background: rgba(255, 255, 255, 0.02);
+      color: var(--vscode-descriptionForeground, var(--muted));
+      border-bottom: 1px solid var(--vscode-widget-border, var(--border));
+      background: var(--vscode-editorWidget-headerBackground, rgba(255, 255, 255, 0.02));
     }
     .palette-close-btn {
       background: transparent;
       border: none;
-      color: var(--muted);
-      font-size: 15px;
-      line-height: 1;
+      color: var(--vscode-descriptionForeground, var(--muted));
       cursor: pointer;
-      min-width: 24px;
-      min-height: 24px;
+      width: 20px;
+      height: 20px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      border-radius: 4px;
+      border-radius: var(--radius, 3px);
       transition: all 0.12s ease;
+      padding: 0;
     }
     .palette-close-btn:hover {
-      color: var(--fg);
-      background: rgba(255, 255, 255, 0.1);
+      color: var(--vscode-foreground, var(--fg));
+      background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
     }
     .skills-card-close-btn {
       background: transparent;
       border: none;
-      color: var(--muted);
-      font-size: 16px;
-      line-height: 1;
-      cursor: pointer;
-      padding: 2px 6px;
-      border-radius: 4px;
+      color: var(--vscode-descriptionForeground, var(--muted));
       transition: all 0.12s ease;
     }
     .skills-card-close-btn:hover {
-      color: var(--fg);
-      background: rgba(255, 255, 255, 0.08);
+      color: var(--vscode-foreground, var(--fg));
+      background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
     }
     .slash-palette-list {
       display: flex;
       flex-direction: column;
-      padding: 3px 0;
+      padding: 4px;
+      gap: 1px;
     }
     .slash-item {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
-      padding: 6px 10px;
+      padding: 5px 8px;
+      border-radius: var(--radius, 3px);
       cursor: pointer;
       font-size: 12px;
-      transition: background 0.12s;
+      color: var(--vscode-foreground, var(--fg));
+      transition: background 0.1s ease;
     }
-    .slash-item:hover, .slash-item.active {
-      background: rgba(255, 255, 255, 0.08);
+    .slash-item:hover {
+      background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+    }
+    .slash-item.active {
+      background: var(--vscode-list-activeSelectionBackground, rgba(255, 255, 255, 0.12));
+      color: var(--vscode-list-activeSelectionForeground, var(--fg));
     }
     .slash-cmd {
       font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 11.5px;
       font-weight: 600;
-      color: var(--accent);
+      color: var(--vscode-symbolIcon-functionForeground, var(--accent, #38bdf8));
+    }
+    .slash-item.active .slash-cmd {
+      color: var(--vscode-list-activeSelectionForeground, var(--vscode-symbolIcon-functionForeground, #38bdf8));
     }
     .slash-desc {
-      color: var(--muted);
+      color: var(--vscode-descriptionForeground, var(--muted));
       font-size: 11px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    .slash-item.active .slash-desc {
+      color: var(--vscode-list-activeSelectionForeground, var(--vscode-descriptionForeground, var(--muted)));
+      opacity: 0.85;
+    }
+
+    /* Skills & Command In-Chat Panel Cards */
+    .skills-card,
+    .help-card,
+    .about-card {
+      width: 100%;
+      background: var(--vscode-editorWidget-background, var(--card-bg));
+      border: 1px solid var(--vscode-widget-border, var(--border));
+      border-radius: var(--radius, 4px);
+      padding: 12px;
+      margin: 8px 0;
+      font-size: 12px;
+      box-sizing: border-box;
+      animation: errorCardFadeIn 0.15s ease-out;
+    }
+    .skills-card-header,
+    .help-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--vscode-widget-border, var(--border));
+    }
+    .skills-card-title,
+    .help-card-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 600;
+      color: var(--fg);
+      font-size: 12px;
+    }
+    .skill-item-row,
+    .help-item-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 5px 8px;
+      border-radius: var(--radius, 4px);
+      transition: background 0.12s;
+      cursor: pointer;
+    }
+    .skill-item-row:hover,
+    .help-item-row:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .skill-item-tag {
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--vscode-symbolIcon-functionForeground, var(--accent, #007fd4));
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+      border-radius: 3px;
+      padding: 1px 5px;
+    }
+    .help-item-tag {
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent, #007fd4);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+      border-radius: 3px;
+      padding: 1px 5px;
+    }
+    .btn-card-action {
+      background: var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.05));
+      color: var(--vscode-button-secondaryForeground, var(--fg, #e4e4e7));
+      border: 1px solid var(--vscode-button-secondaryBorder, var(--border, rgba(255, 255, 255, 0.1)));
+      border-radius: var(--radius, 4px);
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.12s;
+      font-family: inherit;
+    }
+    .btn-card-action:hover {
+      background: var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.09));
+      color: var(--fg, #ffffff);
     }
 
     .prompt-box {
@@ -6093,22 +6189,20 @@ export function getChatStyles(): string {
     .andromity-error-card,
     .error-card {
       width: 100%;
-      background: rgba(248, 81, 73, 0.08);
-      border: 1px solid rgba(248, 81, 73, 0.28);
-      border-left: 3px solid #f85149;
-      border-radius: 8px;
-      padding: 11px 14px;
-      margin: 10px 0 6px 0;
+      background: var(--vscode-editorWidget-background, rgba(255, 255, 255, 0.02));
+      border: 1px solid var(--vscode-widget-border, var(--border, rgba(255, 255, 255, 0.08)));
+      border-radius: var(--radius, 6px);
+      padding: 10px 12px;
+      margin: 8px 0;
       box-sizing: border-box;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
-      font-size: 12.5px;
-      line-height: 1.45;
+      font-size: 12px;
+      line-height: 1.5;
       color: var(--fg, #e4e4e7);
-      animation: errorCardFadeIn 0.2s ease-out;
+      animation: errorCardFadeIn 0.15s ease-out;
     }
 
     @keyframes errorCardFadeIn {
-      from { opacity: 0; transform: translateY(3px); }
+      from { opacity: 0; transform: translateY(2px); }
       to { opacity: 1; transform: translateY(0); }
     }
 
@@ -6117,52 +6211,60 @@ export function getChatStyles(): string {
       align-items: center;
       justify-content: space-between;
       gap: 8px;
-      margin-bottom: 7px;
+      margin-bottom: 5px;
     }
 
     .error-header-left {
       display: flex;
       align-items: center;
-      gap: 7px;
+      gap: 6px;
       flex-wrap: wrap;
     }
 
-    .error-badge {
-      font-size: 9.5px;
-      font-weight: 700;
-      padding: 2px 6px;
-      border-radius: 3px;
-      letter-spacing: 0.4px;
-      text-transform: uppercase;
-      background: rgba(248, 81, 73, 0.2);
-      color: #ff7b72;
-      border: 1px solid rgba(248, 81, 73, 0.35);
+    .error-header-icon {
+      color: var(--muted, #888888);
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
     }
 
     .error-title {
       font-weight: 600;
       font-size: 12px;
-      color: #fca5a5;
+      color: var(--fg, #e4e4e7);
       letter-spacing: -0.01em;
     }
 
+    .error-badge {
+      font-size: 9px;
+      font-weight: 500;
+      padding: 1.5px 5.5px;
+      border-radius: 3px;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--muted, #888888);
+      border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+    }
+
     .error-card-body {
-      font-size: 12px;
-      color: var(--fg, #e4e4e7);
-      margin-bottom: 10px;
+      font-size: 11.5px;
+      color: var(--muted, #9ca3af);
+      margin-bottom: 8px;
       line-height: 1.5;
     }
 
     .error-card-body strong {
-      color: #ffffff;
+      color: var(--fg, #ffffff);
+      font-weight: 600;
     }
 
     .error-details {
-      margin: 8px 0 10px 0;
-      background: rgba(0, 0, 0, 0.25);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-radius: 5px;
-      padding: 6px 9px;
+      margin: 5px 0 8px 0;
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+      border-radius: 4px;
+      padding: 5px 8px;
       font-size: 11px;
     }
 
@@ -6170,8 +6272,9 @@ export function getChatStyles(): string {
       cursor: pointer;
       color: var(--muted, #888888);
       font-weight: 500;
+      font-size: 10.5px;
       user-select: none;
-      transition: color 0.15s ease;
+      transition: color 0.12s ease;
       outline: none;
     }
 
@@ -6180,23 +6283,24 @@ export function getChatStyles(): string {
     }
 
     .error-code {
-      margin-top: 6px;
+      margin-top: 5px;
       font-family: var(--font-mono);
-      font-size: 11px;
-      color: #fca5a5;
+      font-size: 10.5px;
+      color: var(--muted, #a1a1aa);
       white-space: pre-wrap;
       word-break: break-word;
-      max-height: 140px;
+      max-height: 110px;
       overflow-y: auto;
       background: transparent;
       border: none;
       padding: 0;
+      line-height: 1.4;
     }
 
     .error-card-actions {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       flex-wrap: wrap;
       margin-top: 6px;
     }
@@ -6205,27 +6309,25 @@ export function getChatStyles(): string {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 6px;
-      background: linear-gradient(135deg, #2563eb, #3b82f6);
-      color: #ffffff;
-      border: none;
-      border-radius: 5px;
-      font-size: 11.5px;
-      font-weight: 600;
-      padding: 6px 13px;
+      gap: 5px;
+      background: var(--vscode-button-background, #007fd4);
+      color: var(--vscode-button-foreground, #ffffff);
+      border: 1px solid var(--vscode-button-border, transparent);
+      border-radius: var(--radius, 4px);
+      font-size: 11px;
+      font-weight: 500;
+      padding: 4px 10px;
       cursor: pointer;
-      box-shadow: 0 2px 6px rgba(37, 99, 235, 0.35);
-      transition: all 0.15s ease;
+      transition: background 0.12s ease, opacity 0.12s ease;
+      font-family: inherit;
     }
 
     .btn-error-retry:hover {
-      background: linear-gradient(135deg, #1d4ed8, #2563eb);
-      box-shadow: 0 3px 9px rgba(37, 99, 235, 0.5);
-      transform: translateY(-0.5px);
+      background: var(--vscode-button-hoverBackground, #026ec1);
     }
 
     .btn-error-retry:active {
-      transform: translateY(0.5px);
+      opacity: 0.85;
     }
 
     .btn-error-secondary {
@@ -6233,21 +6335,22 @@ export function getChatStyles(): string {
       align-items: center;
       justify-content: center;
       gap: 5px;
-      background: rgba(255, 255, 255, 0.07);
-      color: var(--fg, #e4e4e7);
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      border-radius: 5px;
-      font-size: 11.5px;
+      background: var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.05));
+      color: var(--vscode-button-secondaryForeground, var(--fg, #e4e4e7));
+      border: 1px solid var(--vscode-button-secondaryBorder, var(--border, rgba(255, 255, 255, 0.1)));
+      border-radius: var(--radius, 4px);
+      font-size: 11px;
       font-weight: 500;
-      padding: 5px 11px;
+      padding: 4px 10px;
       cursor: pointer;
-      transition: all 0.15s ease;
+      transition: all 0.12s ease;
+      font-family: inherit;
     }
 
     .btn-error-secondary:hover {
-      background: rgba(255, 255, 255, 0.12);
-      border-color: rgba(255, 255, 255, 0.22);
-      color: #ffffff;
+      background: var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.09));
+      border-color: rgba(255, 255, 255, 0.18);
+      color: var(--fg, #ffffff);
     }
 
     ${getPromptStyles()}

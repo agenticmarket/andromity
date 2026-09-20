@@ -147,24 +147,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const slashCommands = [
       { cmd: '/help', desc: 'Show all available commands & shortcuts', action: 'help' },
       { cmd: '/skills', desc: 'Browse and mention installed agent skills', action: 'skills' },
+      { cmd: '/trust', desc: 'Trust workspace folder (enable file writes & commands)', action: 'trust' },
+      { cmd: '/untrust', desc: 'Revoke workspace trust (block file writes & commands)', action: 'untrust' },
+      { cmd: '/mode', desc: 'Cycle permission mode (safe / trust / full / yolo)', action: 'mode' },
+      { cmd: '/model', desc: 'Switch AI model', action: 'model' },
+      { cmd: '/plan', desc: 'Open Implementation Plan editor tab', action: 'plan' },
+      { cmd: '/diff', desc: 'View git diff of current changes', action: 'diff' },
       { cmd: '/undo', desc: 'Undo last turn & rollback file modifications', action: 'undo' },
       { cmd: '/compact', desc: 'Compress conversation context to save tokens', action: 'compact' },
       { cmd: '/new', desc: 'Start a fresh conversation session', action: 'new' },
       { cmd: '/clear', desc: 'Clear current chat history view', action: 'clear' },
       { cmd: '/sessions', desc: 'Open sessions browser', action: 'sessions' },
-      { cmd: '/settings', desc: 'Open Settings, Model Catalog & MCP Hub', action: 'settings' },
-      { cmd: '/about', desc: 'About Andromity, license & repository information', action: 'about' },
-      { cmd: '/personalisation', desc: 'Open Personalisation & Wallpaper Atmosphere settings', action: 'personalisation' },
-      { cmd: '/wallpaper', desc: 'Configure background wallpaper atmosphere & ripples', action: 'personalisation' },
-      { cmd: '/pet', desc: 'Interact with or toggle Andro-Pet companion', action: 'pet' },
-      { cmd: '/companion', desc: 'Interact with or toggle Andro-Pet companion', action: 'pet' },
-      { cmd: '/play', desc: 'Play a trick with Andro-Pet (zoomies, jumps & spins)', action: 'play' },
-      { cmd: '/fetch', desc: 'Call Andro-Pet back to its home ledge', action: 'fetch' },
-      { cmd: '/model', desc: 'Switch AI model', action: 'model' },
-      { cmd: '/mode', desc: 'Cycle permission mode (safe / trust / full / yolo)', action: 'mode' },
-      { cmd: '/plan', desc: 'Open Implementation Plan editor tab', action: 'plan' },
-      { cmd: '/diff', desc: 'View git diff of current changes', action: 'diff' },
       { cmd: '/cron', desc: 'Manage scheduled background cron jobs', action: 'cron' },
+      { cmd: '/settings', desc: 'Open Settings, Model Catalog & MCP Hub', action: 'settings' },
+      { cmd: '/personalisation', desc: 'Open Personalisation & Wallpaper Atmosphere settings', action: 'personalisation' },
+      { cmd: '/pet', desc: 'Toggle or interact with Andro-Pet companion', action: 'pet' },
+      { cmd: '/about', desc: 'About Andromity, license & repository information', action: 'about' },
     ];
 
     const DEVELOPER_STATEMENTS = [
@@ -635,7 +633,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const name = s.name || s.id || 'skill';
         const desc = s.description || 'Agent skill';
         return '<div class="slash-item ' + (isSel ? 'active' : '') + '" data-action="select-mention-skill" data-skill="' + escapeHtml(name) + '" data-idx="' + idx + '" role="option" aria-selected="' + isSel + '">' +
-          '<span class="slash-cmd" style="color:#c084fc;">@' + escapeHtml(name) + '</span>' +
+          '<span class="slash-cmd">@' + escapeHtml(name) + '</span>' +
           '<span class="slash-desc">' + escapeHtml(desc) + '</span>' +
         '</div>';
       }).join('');
@@ -688,6 +686,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         case 'skills':
           appendSkillsCard();
+          break;
+        case 'trust':
+          appendSystemNote('Requesting workspace trust...');
+          vscode.postMessage({ type: 'trust_workspace' });
+          break;
+        case 'untrust':
+          appendSystemNote('Revoking workspace trust...');
+          vscode.postMessage({ type: 'untrust_workspace' });
           break;
         case 'undo':
           vscode.postMessage({ type: 'undo_turn' });
@@ -2368,8 +2374,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (onboardingStepText) onboardingStepText.textContent = 'Step 2 of 2 · Choose Starting Model';
 
       if (onboardingStep2Badge) {
-        const provName = provider ? provider.toUpperCase() : 'AI';
-        onboardingStep2Badge.textContent = provName + ' CONNECTED';
+        const provName = provider ? (provider.charAt(0).toUpperCase() + provider.slice(1)) : 'AI';
+        onboardingStep2Badge.textContent = provName + ' connected';
       }
 
       if (onboardingStep2Search) onboardingStep2Search.value = '';
@@ -2415,7 +2421,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       onboardingStep2ModelsList.innerHTML = filtered.map(m => {
         const isSelected = m.id === onboardingSelectedLiveModel;
         const isPopular = getOnboardingModelScore(m.id, m.name) >= 800;
-        const popBadge = isPopular ? '<span class="model-badge-rec">Popular</span>' : '';
+        const popBadge = isPopular ? '<span class="model-badge-rec">· Popular</span>' : '';
         return '<div class="onboarding-model-item ' + (isSelected ? 'active' : '') + '" data-action="select-live-model" data-model-id="' + escapeHtml(m.id) + '" role="option" aria-selected="' + (isSelected ? 'true' : 'false') + '">' +
           '<div class="onboarding-model-item-info">' +
             '<div class="onboarding-model-item-name">' + escapeHtml(m.name || m.id) + popBadge + '</div>' +
@@ -2870,7 +2876,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           lastStatusText = '✗ Failed';
           lastStatusColor = 'var(--red)';
         } else if (c.last_status === 'timeout') {
-          lastStatusText = '⏱ Timeout';
+          lastStatusText = 'Timeout';
           lastStatusColor = '#eab308';
         }
         const nextRun = isEnabled ? (c.next_run_in ? ('Next: ' + c.next_run_in) : 'Next: soon') : 'Paused';
@@ -2890,8 +2896,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               '<span style="opacity:0.6; margin-left:6px;">• ' + escapeHtml(nextRun) + '</span>' +
             '</div>' +
             '<div class="cron-card-actions">' +
-              '<button class="cron-btn-action run-btn" data-cron-action="run" data-id="' + escapeHtml(c.id) + '" data-name="' + escapeHtml(c.name || '') + '" title="Trigger immediately">▶ Run</button>' +
-              '<button class="cron-btn-action" data-cron-action="toggle" data-id="' + escapeHtml(c.id) + '" title="' + (isEnabled ? 'Pause schedule' : 'Activate schedule') + '">' + (isEnabled ? '⏸ Pause' : '▶ Enable') + '</button>' +
+              '<button class="cron-btn-action run-btn" data-cron-action="run" data-id="' + escapeHtml(c.id) + '" data-name="' + escapeHtml(c.name || '') + '" title="Trigger immediately"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="margin-right:3px;vertical-align:-1px;"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>Run</button>' +
+              '<button class="cron-btn-action" data-cron-action="toggle" data-id="' + escapeHtml(c.id) + '" title="' + (isEnabled ? 'Pause schedule' : 'Activate schedule') + '">' + (isEnabled ? '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="margin-right:3px;vertical-align:-1px;"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>Pause' : '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="margin-right:3px;vertical-align:-1px;"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>Enable') + '</button>' +
             '</div>' +
           '</div>' +
         '</div>';
@@ -2909,7 +2915,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       card.innerHTML =
         '<div class="cron-event-hdr">' +
           '<span style="display:flex; align-items:center; gap:5px;">' +
-            '<span style="color:' + (isSuccess ? 'var(--green)' : 'var(--red)') + ';">' + (isSuccess ? '✓' : '✗') + '</span>' +
+            '<span style="color:' + (isSuccess ? 'var(--green)' : 'var(--red)') + '; display:inline-flex; align-items:center;">' + (isSuccess ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>' : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>') + '</span>' +
             '<span>Scheduled Task: <strong>' + escapeHtml(job?.name || run.job_name || 'Task') + '</strong></span>' +
           '</span>' +
           '<span style="font-size:10px; color:var(--muted); font-weight:normal;">' + durSec + 's</span>' +
@@ -3421,7 +3427,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             errCard.style.opacity = '0.5';
             errCard.style.pointerEvents = 'none';
             const btn = errCard.querySelector('.btn-error-retry');
-            if (btn) btn.textContent = '🔄 Retrying...';
+            if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>Retrying...';
           }
           vscode.postMessage({
             type: 'retry_turn',
@@ -3436,7 +3442,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             errCard.style.opacity = '0.5';
             errCard.style.pointerEvents = 'none';
             const btn = errCard.querySelector('.btn-error-retry');
-            if (btn) btn.textContent = '🔄 Retrying without image...';
+            if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>Retrying without image...';
           }
           vscode.postMessage({
             type: 'retry_turn',
@@ -3487,6 +3493,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         case 'close-skills-card': {
           const card = target.closest('.skills-card');
+          if (card) {
+            card.remove();
+          }
+          break;
+        }
+        case 'close-help-card': {
+          const card = target.closest('.help-card');
           if (card) {
             card.remove();
           }
@@ -3681,7 +3694,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       switch (ext) {
         case 'tsx':
         case 'jsx':
-          return { badge: '⚛', color: '#61dafb' };
+          return { badge: 'JSX', color: '#61dafb' };
         case 'ts':
           return { badge: 'TS', color: '#38bdf8' };
         case 'js':
@@ -3689,30 +3702,30 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'cjs':
           return { badge: 'JS', color: '#f7df1e' };
         case 'py':
-          return { badge: '🐍', color: '#4ade80' };
+          return { badge: 'PY', color: '#4ade80' };
         case 'html':
         case 'htm':
           return { badge: 'HTML', color: '#fb923c' };
         case 'css':
         case 'scss':
         case 'less':
-          return { badge: '#', color: '#c084fc' };
+          return { badge: 'CSS', color: '#c084fc' };
         case 'json':
           return { badge: '{}', color: '#facc15' };
         case 'md':
         case 'markdown':
-          return { badge: '📝', color: '#93c5fd' };
+          return { badge: 'MD', color: '#93c5fd' };
         case 'rs':
-          return { badge: '🦀', color: '#f97316' };
+          return { badge: 'RS', color: '#f97316' };
         case 'go':
           return { badge: 'GO', color: '#38bdf8' };
         case 'java':
         case 'kt':
-          return { badge: '☕', color: '#f87171' };
+          return { badge: 'JAVA', color: '#f87171' };
         case 'sql':
-          return { badge: '🗄️', color: '#a78bfa' };
+          return { badge: 'SQL', color: '#a78bfa' };
         default:
-          return { badge: '📄', color: '#94a3b8' };
+          return { badge: 'FILE', color: '#94a3b8' };
       }
     }
 
@@ -3766,7 +3779,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const banner = document.createElement('div');
       banner.className = 'ollama-detected-banner';
       banner.id = 'ollama-detected-banner';
-      banner.innerHTML = '<span>⚡ <strong>Local Ollama detected</strong> (' + escapeHtml(modelName) + ')! Ready to code with 0 API keys &amp; 100% privacy.</span>' +
+      banner.innerHTML = '<span><strong>Local Ollama detected</strong> (' + escapeHtml(modelName) + ')! Ready to code with 0 API keys &amp; 100% privacy.</span>' +
         '<button class="banner-dismiss" data-action="dismiss-ollama-banner" title="Dismiss banner">&times;</button>';
       const promptBox = document.querySelector('.prompt-box');
       if (promptBox && promptBox.parentElement) {
@@ -3900,30 +3913,32 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function appendHelpCard() {
       const card = document.createElement('div');
       card.className = 'help-card';
-      card.style.cssText = 'background:var(--card-bg); border:1px solid var(--border); border-radius:8px; padding:12px; margin:8px 0; font-size:12px; box-shadow: 0 4px 14px rgba(0,0,0,0.3);';
 
       const commandsHtml = slashCommands.map(function(c) {
-        return '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 8px; border-radius:4px; transition:background 0.12s; cursor:pointer;" data-action="select-slash-cmd" data-cmd="' + escapeHtml(c.cmd) + '">' +
+        return '<div class="help-item-row" data-action="select-slash-cmd" data-cmd="' + escapeHtml(c.cmd) + '">' +
           '<div style="display:flex; align-items:center; gap:8px; min-width:0;">' +
-            '<code style="background:rgba(6,182,212,0.15); color:var(--accent); padding:2px 6px; border-radius:4px; font-weight:600; font-family:var(--vscode-editor-font-family, monospace); font-size:11.5px;">' + escapeHtml(c.cmd) + '</code>' +
+            '<span class="help-item-tag">' + escapeHtml(c.cmd) + '</span>' +
             '<span style="color:var(--fg); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(c.desc) + '</span>' +
           '</div>' +
-          '<button class="prompt-pill-btn" style="padding:2px 8px; font-size:10.5px; flex-shrink:0;">Run</button>' +
+          '<button class="btn-card-action">Run</button>' +
         '</div>';
       }).join('');
 
       card.innerHTML = 
-        '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid var(--border);">' +
-          '<div style="display:flex; align-items:center; gap:6px; font-weight:600; color:var(--fg); font-size:12.5px;">' +
-            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>' +
-            '<span>Available Commands & Shortcuts</span>' +
+        '<div class="help-card-header">' +
+          '<div class="help-card-title">' +
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>' +
+            '<span>Available Commands &amp; Shortcuts</span>' +
           '</div>' +
-          '<span style="font-size:10.5px; color:var(--muted);">Click command to run</span>' +
+          '<div style="display:flex; align-items:center; gap:6px;">' +
+            '<span style="font-size:10.5px; color:var(--muted);">Click to run</span>' +
+            '<button class="palette-close-btn" data-action="close-help-card" title="Close commands panel"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>' +
+          '</div>' +
         '</div>' +
         '<div style="display:flex; flex-direction:column; gap:2px;">' +
           commandsHtml +
         '</div>' +
-        '<div style="margin-top:8px; padding-top:6px; border-top:1px solid var(--border); font-size:11px; color:var(--muted); display:flex; justify-content:space-between;">' +
+        '<div style="margin-top:8px; padding-top:6px; border-top:1px solid var(--vscode-widget-border, var(--border)); font-size:11px; color:var(--muted); display:flex; justify-content:space-between;">' +
           '<span>Tip: Type <code>/</code> for commands, <code>@</code> for skills</span>' +
           '<span>Paste images with <code>Ctrl+V</code></span>' +
         '</div>';
@@ -3934,15 +3949,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function appendAboutCard() {
       const card = document.createElement('div');
       card.className = 'about-card';
-      card.style.cssText = 'background:var(--card-bg); border:1px solid var(--border); border-radius:8px; padding:12px; margin:8px 0; font-size:12px; box-shadow: 0 4px 14px rgba(0,0,0,0.3);';
 
       card.innerHTML = 
-        '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid var(--border);">' +
-          '<div style="display:flex; align-items:center; gap:8px; font-weight:600; color:var(--fg); font-size:12.5px;">' +
-            '<span style="color:var(--accent); font-weight:700;">Andromity AI Coding Agent</span>' +
-            '<span style="background:rgba(16,185,129,0.18); color:#10b981; font-size:10.5px; padding:1px 6px; border-radius:10px;">v0.2.9</span>' +
+        '<div class="skills-card-header">' +
+          '<div class="skills-card-title">' +
+            '<span style="font-weight:600;">Andromity AI Coding Agent</span>' +
+            '<span style="color:var(--muted); font-size:11px; border:1px solid var(--border); padding:1px 5px; border-radius:3px; margin-left:4px;">v0.2.9</span>' +
           '</div>' +
-          '<button class="skills-card-close-btn" data-action="close-about-card" title="Close">&times;</button>' +
+          '<button class="palette-close-btn" data-action="close-about-card" title="Close"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>' +
         '</div>' +
         '<div style="font-size:11.5px; color:var(--muted); line-height:1.4; margin-bottom:8px;">' +
           'Autonomous AI coding agent with subagents, live plans &amp; diffs. Free and open-source software under the MIT License.' +
@@ -3954,7 +3968,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           '</div>' +
           '<div style="display:flex; justify-content:space-between;">' +
             '<span style="color:var(--muted);">Repository:</span>' +
-            '<a href="#" style="color:var(--accent); text-decoration:none;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity">github.com/agenticmarket/andromity</a>' +
+            '<a href="#" style="color:var(--vscode-textLink-foreground, #38bdf8); text-decoration:none;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity">github.com/agenticmarket/andromity</a>' +
           '</div>' +
           '<div style="display:flex; justify-content:space-between;">' +
             '<span style="color:var(--muted);">Publisher:</span>' +
@@ -3962,9 +3976,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           '</div>' +
         '</div>' +
         '<div style="display:flex; gap:6px; flex-wrap:wrap;">' +
-          '<button class="prompt-pill-btn" style="font-size:11px; padding:3px 10px;" data-action="open-about-tab">Open Full About &amp; Diagnostics</button>' +
-          '<button class="prompt-pill-btn" style="font-size:11px; padding:3px 8px;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity">GitHub</button>' +
-          '<button class="prompt-pill-btn" style="font-size:11px; padding:3px 8px;" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity/issues">Report Issue</button>' +
+          '<button class="btn-card-action" data-action="open-about-tab">Open Diagnostics</button>' +
+          '<button class="btn-card-action" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity">GitHub</button>' +
+          '<button class="btn-card-action" data-action="open-portal" data-url="https://github.com/agenticmarket/andromity/issues">Report Issue</button>' +
         '</div>';
       chatContainer.appendChild(card);
       scrollToBottomIfNeeded();
@@ -3973,37 +3987,36 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function appendSkillsCard() {
       const card = document.createElement('div');
       card.className = 'skills-card';
-      card.style.cssText = 'background:var(--card-bg); border:1px solid var(--border); border-radius:8px; padding:12px; margin:8px 0; font-size:12px; box-shadow: 0 4px 14px rgba(0,0,0,0.3);';
 
       const skillsListHtml = allSkills && allSkills.length > 0
         ? allSkills.map(function(s) {
           const name = s.name || s.id || 'skill';
           const desc = s.description || 'Specialized agent skill';
-          return '<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 8px; border-radius:4px; transition:background 0.12s; cursor:pointer;" data-action="insert-skill-mention" data-skill="' + escapeHtml(name) + '">' +
+          return '<div class="skill-item-row" data-action="insert-skill-mention" data-skill="' + escapeHtml(name) + '">' +
             '<div style="display:flex; align-items:center; gap:8px; min-width:0;">' +
-              '<span style="background:rgba(168,85,247,0.18); color:#c084fc; padding:2px 6px; border-radius:4px; font-weight:600; font-family:var(--vscode-editor-font-family, monospace); font-size:11.5px;">@' + escapeHtml(name) + '</span>' +
+              '<span class="skill-item-tag">@' + escapeHtml(name) + '</span>' +
               '<span style="color:var(--fg); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(desc) + '</span>' +
             '</div>' +
-            '<button class="prompt-pill-btn" style="padding:2px 8px; font-size:10.5px; flex-shrink:0;">Use</button>' +
+            '<button class="btn-card-action">Use</button>' +
           '</div>';
         }).join('')
         : '<div style="color:var(--muted); padding:8px 0; text-align:center;">No custom skills found. Open Settings > Skills to manage skills.</div>';
 
       card.innerHTML = 
-        '<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid var(--border);">' +
-          '<div style="display:flex; align-items:center; gap:6px; font-weight:600; color:var(--fg); font-size:12.5px;">' +
-            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>' +
+        '<div class="skills-card-header">' +
+          '<div class="skills-card-title">' +
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path></svg>' +
             '<span>Agent Skills (' + allSkills.length + ' active)</span>' +
           '</div>' +
           '<div style="display:flex; align-items:center; gap:6px;">' +
-            '<button class="prompt-pill-btn" data-action="open-skills-settings" style="font-size:10.5px;">Browse Hub</button>' +
-            '<button class="skills-card-close-btn" data-action="close-skills-card" title="Close skills panel">&times;</button>' +
+            '<button class="btn-card-action" data-action="open-skills-settings">Browse Hub</button>' +
+            '<button class="palette-close-btn" data-action="close-skills-card" title="Close skills panel"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>' +
           '</div>' +
         '</div>' +
         '<div style="display:flex; flex-direction:column; gap:2px; max-height:220px; overflow-y:auto;">' +
           skillsListHtml +
         '</div>' +
-        '<div style="margin-top:8px; padding-top:6px; border-top:1px solid var(--border); font-size:11px; color:var(--muted); display:flex; justify-content:space-between;">' +
+        '<div style="margin-top:8px; padding-top:6px; border-top:1px solid var(--vscode-widget-border, var(--border)); font-size:11px; color:var(--muted); display:flex; justify-content:space-between;">' +
           '<span>Tip: Type <code>@</code> in chat to mention any skill</span>' +
           '<span>Or click any skill to insert</span>' +
         '</div>';
@@ -4038,6 +4051,25 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const imagesToSend = [...attachedImages];
       const filesToSend = [...attachedFiles];
       if (!text && imagesToSend.length === 0 && filesToSend.length === 0) return;
+
+      if (text && text.startsWith('/')) {
+        const cmdPart = text.split(/\s+/)[0].toLowerCase();
+        let found = slashCommands.find(c => c.cmd.toLowerCase() === cmdPart);
+        if (!found) {
+          if (cmdPart === '/companion' || cmdPart === '/play' || cmdPart === '/fetch') {
+            found = { cmd: cmdPart, action: cmdPart.slice(1) };
+          } else if (cmdPart === '/wallpaper') {
+            found = { cmd: '/wallpaper', action: 'personalisation' };
+          }
+        }
+        if (found) {
+          promptInput.value = '';
+          promptInput.style.height = 'auto';
+          sendBtn.classList.remove('has-text');
+          executeSlashCommand(found);
+          return;
+        }
+      }
 
       if (text) {
         if (sentPromptsHistory.length === 0 || sentPromptsHistory[sentPromptsHistory.length - 1] !== text) {
@@ -4740,7 +4772,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function showCompactionBanner(reason) {
-      appendSystemNote('⚡ ' + (reason || 'Compacting conversation context to reduce token usage...'));
+      appendSystemNote(reason || 'Compacting conversation context to reduce token usage...');
     }
 
     function hideCompactionBannerWithSuccess(msg) {
@@ -4756,7 +4788,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const card = document.createElement('div');
       card.className = 'session-coagent-card';
       card.innerHTML = '<div class="session-card-header">' +
-        '<span class="session-card-icon">✉</span>' +
+        '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg></span>' +
         '<span class="session-card-sender">Co-Agent [' + escapeHtml(fromSession || 'Agent') + ']</span>' +
         '<span class="session-card-badge">' + escapeHtml(messageType || 'message') + '</span>' +
         '</div>' +
@@ -4771,7 +4803,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       card.className = 'session-question-card';
       card.id = 'session-q-' + (questionId || '');
       card.innerHTML = '<div class="session-card-header question">' +
-        '<span class="session-card-icon">❓</span>' +
+        '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></span>' +
         '<span class="session-card-sender">Question from [' + escapeHtml(fromSession || 'Agent') + ']</span>' +
         (questionId ? '<span class="session-card-badge">ID: ' + escapeHtml(questionId) + '</span>' : '') +
         '</div>' +
@@ -4785,7 +4817,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const card = document.createElement('div');
       card.className = 'session-answer-card';
       card.innerHTML = '<div class="session-card-header answer">' +
-        '<span class="session-card-icon">✔</span>' +
+        '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg></span>' +
         '<span class="session-card-sender">Answer from [' + escapeHtml(fromSession || 'Agent') + ']</span>' +
         (questionId ? '<span class="session-card-badge">for ' + escapeHtml(questionId) + '</span>' : '') +
         '</div>' +
@@ -4800,7 +4832,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       card.className = 'session-state-card';
       const valStr = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
       card.innerHTML = '<div class="session-card-header">' +
-        '<span class="session-card-icon">⚡</span>' +
+        '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span>' +
         '<span class="session-card-sender">Shared State [' + escapeHtml(authorSession || 'Agent') + ']</span>' +
         '<span class="session-card-badge">' + escapeHtml(key || '') + '</span>' +
         '</div>' +
@@ -4814,7 +4846,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const card = document.createElement('div');
       card.className = 'session-coagent-card';
       card.innerHTML = '<div class="session-card-header">' +
-        '<span class="session-card-icon">🤝</span>' +
+        '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg></span>' +
         '<span class="session-card-sender">Handoff: ' + escapeHtml(fromSession || 'Agent') + ' → ' + escapeHtml(toSession || 'Agent') + '</span>' +
         (handoffId ? '<span class="session-card-badge">ID: ' + escapeHtml(handoffId) + '</span>' : '') +
         '</div>' +
@@ -4987,7 +5019,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           banner.className = 'compaction-banner success';
           const titleEl = document.getElementById('compaction-title');
           const detailEl = document.getElementById('compaction-detail');
-          if (titleEl) titleEl.textContent = '✓ Context Already Clean';
+          if (titleEl) titleEl.textContent = 'Context Already Clean';
           if (detailEl) detailEl.textContent = skippedReason;
           compactionBannerTimer = setTimeout(() => {
             banner.style.display = 'none';
@@ -5011,7 +5043,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         banner.className = 'compaction-banner success';
         const titleEl = document.getElementById('compaction-title');
         const detailEl = document.getElementById('compaction-detail');
-        if (titleEl) titleEl.textContent = '✓ Compaction Complete';
+        if (titleEl) titleEl.textContent = 'Compaction Complete';
         if (detailEl) detailEl.textContent = summaryText;
 
         compactionBannerTimer = setTimeout(() => {
@@ -5455,8 +5487,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'trust_updated':
           if (msg.isTrusted) {
             trustBanner.style.display = 'none';
+            appendSystemNote('Workspace trusted — file editing and shell execution enabled.');
           } else {
             trustBanner.style.display = 'flex';
+            appendSystemNote('Workspace untrusted — file editing and shell execution restricted.');
           }
           break;
 
@@ -6637,11 +6671,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           showOnboardingKeyStep();
           if (btnOnboardingSave) {
             btnOnboardingSave.disabled = false;
-            btnOnboardingSave.innerHTML = '<span>Connected! ✓</span>';
+            btnOnboardingSave.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px;vertical-align:-1px;"><polyline points="20 6 9 17 4 12"></polyline></svg><span>Connected!</span>';
           }
           if (btnOnboardingOllamaSave) {
             btnOnboardingOllamaSave.disabled = false;
-            btnOnboardingOllamaSave.innerHTML = '<span>Activated! ✓</span>';
+            btnOnboardingOllamaSave.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px;vertical-align:-1px;"><polyline points="20 6 9 17 4 12"></polyline></svg><span>Activated!</span>';
           }
           if (msg.provider) currentProvider = msg.provider;
           if (msg.model) currentModel = msg.model;
@@ -6781,48 +6815,58 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       let title = 'Turn Interrupted';
       let desc = trimmed;
       let eType = errorType || 'generic';
-      let actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">🔄 Retry Turn</button>';
+
+      const iconRetry = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>';
+      const iconModel = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>';
+      const iconCompact = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>';
+      const iconPlus = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>';
+      const iconSettings = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>';
+
+      let actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">' + iconRetry + 'Retry Turn</button>';
 
       if (low.includes('image') || low.includes('vision') || low.includes('multimodal') || low.includes('does not support')) {
         badge = 'IMAGE NOT SUPPORTED';
         title = 'Model Does Not Support Images';
         desc = 'The active model does not accept image attachments. Switch to a vision model (e.g. Claude 3.7 Sonnet, GPT-4o, Gemini 2.0 Flash) or retry with text only.';
         eType = 'vision_unsupported';
-        actionsHtml = '<button class="btn-error-retry" data-action="retry-without-image" title="Retry without image">🔄 Retry without Image</button>' +
-          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to a vision model">⚙️ Switch Model</button>';
+        actionsHtml = '<button class="btn-error-retry" data-action="retry-without-image" title="Retry without image">' + iconRetry + 'Retry without Image</button>' +
+          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to a vision model">' + iconModel + 'Switch Model</button>';
       } else if (low.includes('429') || low.includes('rate limit') || low.includes('quota')) {
         badge = 'RATE LIMIT';
         title = 'Rate Limit Reached';
         desc = 'Rate limit or quota threshold reached for the model provider. Please wait a moment and click Retry.';
         eType = 'rate_limit';
-        actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry turn">🔄 Retry Turn</button>' +
-          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch model">⚙️ Switch Model</button>';
+        actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>' +
+          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch model">' + iconModel + 'Switch Model</button>';
       } else if (low.includes('midstream') || low.includes('503') || low.includes('502') || low.includes('500') || low.includes('serviceunavailable') || low.includes('service unavailable') || low.includes('bad gateway') || low.includes('upstream error')) {
         badge = 'SERVICE DISRUPTED';
         title = 'Upstream Service Interruption';
         desc = 'The upstream provider experienced a temporary service disruption or disconnect. This is usually transient—click Retry to continue.';
         eType = 'provider_unavailable';
-        actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry turn">🔄 Retry Turn</button>' +
-          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch model">⚙️ Switch Model</button>';
+        actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>' +
+          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch model">' + iconModel + 'Switch Model</button>';
       } else if (low.includes('context') || low.includes('token limit') || low.includes('maximum context')) {
         badge = 'CONTEXT LIMIT';
         title = 'Context Window Limit Reached';
         desc = 'This conversation has reached the maximum context length for the current model. Compact context or start a new session.';
         eType = 'context_exceeded';
-        actionsHtml = '<button class="btn-error-retry" data-action="trigger-compact" title="Compact context">🗜️ Compact Context</button>' +
-          '<button class="btn-error-secondary" data-action="new-session" title="New session">➕ New Session</button>';
+        actionsHtml = '<button class="btn-error-retry" data-action="trigger-compact" title="Compact context">' + iconCompact + 'Compact Context</button>' +
+          '<button class="btn-error-secondary" data-action="new-session" title="New session">' + iconPlus + 'New Session</button>';
       } else if (low.includes('401') || low.includes('403') || low.includes('unauthorized') || low.includes('api key')) {
         badge = 'AUTHENTICATION';
         title = 'Authentication Error';
         desc = 'Invalid or missing API key. Please check your provider settings.';
         eType = 'auth_error';
-        actionsHtml = '<button class="btn-error-retry" data-action="open-settings" title="Open settings">⚙️ Open Settings</button>';
+        actionsHtml = '<button class="btn-error-retry" data-action="open-settings" title="Open settings">' + iconSettings + 'Open Settings</button>';
       }
+
+      const iconAlert = '<span class="error-header-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span>';
 
       const cardHtml =
         '<div class="andromity-error-card" data-error-type="' + eType + '" data-retryable="true">' +
           '<div class="error-card-header">' +
             '<div class="error-header-left">' +
+              iconAlert +
               '<span class="error-badge">' + badge + '</span>' +
               '<span class="error-title">' + escapeHtml(title) + '</span>' +
             '</div>' +

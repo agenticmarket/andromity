@@ -1319,7 +1319,7 @@ export class SettingsPanel {
 
     .chip {
       padding: 3px 9px;
-      border-radius: 12px;
+      border-radius: 4px;
       font-size: 11px;
       background: rgba(255, 255, 255, 0.05);
       border: 1px solid var(--card-border);
@@ -1541,7 +1541,6 @@ export class SettingsPanel {
 
     .status-dot.connected {
       background: var(--tag-green-fg);
-      box-shadow: 0 0 6px rgba(63, 185, 80, 0.6);
     }
 
     .item-card-desc {
@@ -2445,7 +2444,7 @@ export class SettingsPanel {
               <input type="checkbox" id="setting-wallpaper-enabled">
               <div>
                 <div class="setting-label" style="font-weight: 500;">Enable Ambient Wallpaper</div>
-                <div class="setting-desc">Toggle wallpaper and particle physics on/off. (⚠️ Note: May increase battery consumption on portable devices).</div>
+                <div class="setting-desc">Toggle wallpaper and particle physics on/off. (Note: May increase battery consumption on portable devices).</div>
               </div>
             </label>
           </div>
@@ -2567,7 +2566,7 @@ export class SettingsPanel {
           </tr>
           <tr>
             <td>Permissions</td>
-            <td><span style="color:var(--tag-green-fg); font-weight:600;">✓ Commercial use</span> &nbsp;&bull;&nbsp; <span style="color:var(--tag-green-fg); font-weight:600;">✓ Modification</span> &nbsp;&bull;&nbsp; <span style="color:var(--tag-green-fg); font-weight:600;">✓ Distribution</span> &nbsp;&bull;&nbsp; <span style="color:var(--tag-green-fg); font-weight:600;">✓ Private use</span></td>
+            <td><span style="color:var(--tag-green-fg); font-weight:600;">Commercial use</span> &nbsp;&bull;&nbsp; <span style="color:var(--tag-green-fg); font-weight:600;">Modification</span> &nbsp;&bull;&nbsp; <span style="color:var(--tag-green-fg); font-weight:600;">Distribution</span> &nbsp;&bull;&nbsp; <span style="color:var(--tag-green-fg); font-weight:600;">Private use</span></td>
           </tr>
           <tr>
             <td>Conditions &amp; Limits</td>
@@ -3118,7 +3117,7 @@ SOFTWARE.</pre>
         if (modeEl) {
           const isBundled = sys.is_bundled;
           modeEl.innerHTML = isBundled
-            ? '<span style="color:#09f994;font-weight:600;">⚡ ' + escapeHtml(sys.engine_mode) + ' (Zero-Python)</span>'
+            ? '<span style="color:#09f994;font-weight:600;">' + escapeHtml(sys.engine_mode) + ' (Zero-Python)</span>'
             : '<span style="color:#38bdf8;font-weight:600;">' + escapeHtml(sys.engine_mode) + '</span>';
         }
       }
@@ -3146,7 +3145,7 @@ SOFTWARE.</pre>
           if (!msg.connected) {
             const modeEl = document.getElementById("diag-engine-mode");
             if (modeEl) {
-              modeEl.innerHTML = '<span style="color:#d29922;font-weight:600;">⚡ Connecting to Andromity Engine...</span>';
+              modeEl.innerHTML = '<span style="color:#d29922;font-weight:600;">Connecting to Andromity Engine...</span>';
             }
           }
           break;
@@ -3980,7 +3979,7 @@ SOFTWARE.</pre>
             '</div>' +
             '<div class="item-card-desc">' + escapeHtml(r.description || 'Remote instruction pack from ' + r.repo) + '</div>' +
             '<div style="display: flex; align-items: center; justify-content: space-between; margin-top: 8px;">' +
-              (isInstalled ? '<span class="badge green" style="font-size:10px; font-weight:600;">✓ Installed</span>' : '<span></span>') +
+              (isInstalled ? '<span class="badge green" style="font-size:10px; font-weight:600;">Installed</span>' : '<span></span>') +
               '<button class="btn ' + (isInstalled ? 'btn-secondary' : '') + '" style="padding: 4px 10px; font-size: 11px;" data-action="install-skill" data-skill-name="' + escapeHtml(r.name) + '" data-source-id="' + escapeHtml(r.source_id || 'anthropic') + '">' +
                 (isInstalled ? 'Reinstall' : 'Install Skill') +
               '</button>' +
@@ -4045,12 +4044,12 @@ SOFTWARE.</pre>
           '<div class="item-card-desc"><code>' + cmdStr + '</code></div>' +
           (isError && s.error ? '<div style="font-size:11px; color:#f85149; margin-top:6px; padding:5px 8px; background:rgba(248,81,73,0.08); border:1px solid rgba(248,81,73,0.2);">' + escapeHtml(s.error) + '</div>' : '') +
           (isError && s.error_detail ? '<div style="font-size:10.5px; color:var(--text-muted); margin-top:4px; padding:5px 8px; background:rgba(255,255,255,0.03); border:1px solid var(--card-border); max-height:80px; overflow:auto; white-space:pre-wrap; word-break:break-word;">' + escapeHtml(s.error_detail) + '</div>' : '') +
-          (isAuth ? '<div style="margin-top:8px;"><button class="btn" style="font-size:11px; padding:4px 10px;" data-action="mcp_auth" data-name="' + escapeHtml(s.name) + '">🔑 Connect / Authenticate</button></div>' : '') +
+          (isAuth ? '<div style="margin-top:8px;"><button class="btn" style="font-size:11px; padding:4px 10px;" data-action="mcp_auth" data-name="' + escapeHtml(s.name) + '">Connect / Authenticate</button></div>' : '') +
           '<div style="display:flex; gap:6px; margin-top:10px; flex-wrap:wrap;">' +
             '<button class="btn btn-secondary" style="padding:4px 8px; font-size:11px;" data-action="mcp_restart" data-name="' + escapeHtml(s.name) + '"' + (isDisabled ? ' disabled title="Enable first to restart"' : '') + '>↺ Restart</button>' +
             (isDisabled
-              ? '<button class="btn" style="padding:4px 8px; font-size:11px;" data-action="mcp_toggle" data-name="' + escapeHtml(s.name) + '" data-disabled="false">▶ Enable</button>'
-              : '<button class="btn btn-secondary" style="padding:4px 8px; font-size:11px;" data-action="mcp_toggle" data-name="' + escapeHtml(s.name) + '" data-disabled="true">⏸ Disable</button>'
+              ? '<button class="btn" style="padding:4px 8px; font-size:11px;" data-action="mcp_toggle" data-name="' + escapeHtml(s.name) + '" data-disabled="false">Enable</button>'
+              : '<button class="btn btn-secondary" style="padding:4px 8px; font-size:11px;" data-action="mcp_toggle" data-name="' + escapeHtml(s.name) + '" data-disabled="true">Disable</button>'
             ) +
           '</div>' +
         '</div>';
@@ -4070,7 +4069,7 @@ SOFTWARE.</pre>
       btnToggleAddCron.addEventListener("click", () => {
         const isHidden = cronCreateForm.style.display === "none";
         cronCreateForm.style.display = isHidden ? "flex" : "none";
-        btnToggleAddCron.textContent = isHidden ? "✕ Close Form" : "+ New Cron Job";
+        btnToggleAddCron.textContent = isHidden ? "Close Form" : "+ New Cron Job";
       });
     }
 
@@ -4228,7 +4227,7 @@ SOFTWARE.</pre>
           const disabled = btn.dataset.disabled === "true";
           btn.disabled = true;
           const orig = btn.textContent;
-          btn.textContent = disabled ? "⏸ Disabling..." : "▶ Enabling...";
+          btn.textContent = disabled ? "Disabling..." : "Enabling...";
           vscode.postMessage({ type: "mcp_toggle", name, disabled });
           setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 4000);
         }
@@ -4289,7 +4288,7 @@ SOFTWARE.</pre>
             '<button class="btn btn-secondary" data-action="history" data-id="' + escapeHtml(job.id) + '" title="View execution history runs for this job">' +
               '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="margin-right:4px; vertical-align:-1.5px;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>History' + ((job.run_count && job.run_count > 0) ? ' (' + job.run_count + ')' : '') +
             '</button>' +
-            '<button class="btn btn-danger" data-action="delete" data-id="' + escapeHtml(job.id) + '">✕</button>' +
+            '<button class="btn btn-danger" data-action="delete" data-id="' + escapeHtml(job.id) + '" title="Delete"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>' +
           '</div>' +
         '</div>';
       }).join('');

@@ -136,7 +136,7 @@ export class WaterfallPanel {
       }
       if (sessionName) {
         existing._sessionName = sessionName;
-        existing._panel.title = `🌊 Waterfall: ${sessionName}`;
+        existing._panel.title = `Waterfall: ${sessionName}`;
       }
       existing._panel.reveal(viewColumn);
       return existing;
@@ -144,7 +144,7 @@ export class WaterfallPanel {
 
     const panel = vscode.window.createWebviewPanel(
       WaterfallPanel.viewType,
-      `🌊 Waterfall: ${sessionName || "Session"}`,
+      `Waterfall: ${sessionName || "Session"}`,
       viewColumn,
       {
         enableScripts: true,

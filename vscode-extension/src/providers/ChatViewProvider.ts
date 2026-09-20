@@ -780,8 +780,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       if (status === "success") {
         const msgPromise = sessionId
-          ? vscode.window.showInformationMessage(`⏱ Cron "${jobName}" completed in ${durSec}s.`, "Open Session")
-          : vscode.window.showInformationMessage(`⏱ Cron "${jobName}" completed in ${durSec}s.`);
+          ? vscode.window.showInformationMessage(`Cron "${jobName}" completed in ${durSec}s.`, "Open Session")
+          : vscode.window.showInformationMessage(`Cron "${jobName}" completed in ${durSec}s.`);
         msgPromise.then((choice) => {
           if (choice === "Open Session" && sessionId) {
             vscode.commands.executeCommand("andromity.switchSessionById", sessionId);
@@ -789,8 +789,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         });
       } else if (status === "failed") {
         const msgPromise = sessionId
-          ? vscode.window.showWarningMessage(`⏱ Cron "${jobName}" failed: ${params.run?.error || "Error during execution"}`, "Open Session")
-          : vscode.window.showWarningMessage(`⏱ Cron "${jobName}" failed: ${params.run?.error || "Error during execution"}`);
+          ? vscode.window.showWarningMessage(`Cron "${jobName}" failed: ${params.run?.error || "Error during execution"}`, "Open Session")
+          : vscode.window.showWarningMessage(`Cron "${jobName}" failed: ${params.run?.error || "Error during execution"}`);
         msgPromise.then((choice) => {
           if (choice === "Open Session" && sessionId) {
             vscode.commands.executeCommand("andromity.switchSessionById", sessionId);
@@ -1592,7 +1592,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         if (nextMode === "yolo") {
           const confirm = await vscode.window.showWarningMessage(
-            "⚠️ Enter YOLO Mode? Autonomous agent will execute shell commands and edit files without confirmation.",
+            "Enter YOLO Mode? Autonomous agent will execute shell commands and edit files without confirmation.",
             { modal: true },
             "Enable YOLO Mode",
             "Keep Safe Mode"
@@ -1664,6 +1664,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         vscode.window.showInformationMessage("Workspace trusted. File editing and shell commands enabled.");
         this._postToWebview({ type: "trust_updated", isTrusted: true });
         SettingsPanel.currentPanel?.loadData();
+        break;
+      }
+
+      case "untrust_workspace":
+      case "revoke_trust": {
+        const workspaceFolder = (message.path as string) || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (workspaceFolder) {
+          await this._rpcClient?.call("trust.revoke", { project_path: workspaceFolder });
+          vscode.window.showInformationMessage("Workspace trust revoked. File editing and shell commands blocked.");
+          this._postToWebview({ type: "trust_updated", isTrusted: false });
+          SettingsPanel.currentPanel?.loadData();
+        }
         break;
       }
 

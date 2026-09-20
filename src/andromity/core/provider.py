@@ -480,6 +480,12 @@ def classify_and_format_error(
     is_ollama_off = ("connection refused" in low or "failed to connect" in low) and ("11434" in low or provider == "ollama")
     is_stall = "stalled" in low or "watchdog" in low or "first token" in low
 
+    icon_retry = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>'
+    icon_model = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>'
+    icon_compact = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>'
+    icon_plus = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>'
+    icon_settings = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>'
+
     if is_vision:
         err_type = "vision_unsupported"
         badge = "IMAGE NOT SUPPORTED"
@@ -489,10 +495,10 @@ def classify_and_format_error(
             "Switch to a vision-capable model (e.g. Claude 3.7 Sonnet, GPT-4o, Gemini 2.0 Flash) or retry with text only."
         )
         actions = (
-            '<button class="btn-error-retry" data-action="retry-without-image" title="Retry prompt with image removed">'
-            '🔄 Retry without Image</button>'
-            '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Choose a vision-capable model">'
-            '⚙️ Switch Model</button>'
+            f'<button class="btn-error-retry" data-action="retry-without-image" title="Retry prompt with image removed">'
+            f'{icon_retry}Retry without Image</button>'
+            f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Choose a vision-capable model">'
+            f'{icon_model}Switch Model</button>'
         )
     elif is_upstream:
         err_type = "provider_unavailable"
@@ -503,10 +509,10 @@ def classify_and_format_error(
             "This is usually transient—click Retry to continue."
         )
         actions = (
-            '<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn immediately">'
-            '🔄 Retry Turn</button>'
-            '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another provider/model">'
-            '⚙️ Switch Model</button>'
+            f'<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn immediately">'
+            f'{icon_retry}Retry Turn</button>'
+            f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another provider/model">'
+            f'{icon_model}Switch Model</button>'
         )
     elif is_rate:
         err_type = "rate_limit"
@@ -521,10 +527,10 @@ def classify_and_format_error(
             "Please wait a moment and click Retry."
         )
         actions = (
-            '<button class="btn-error-retry" data-action="retry-turn" title="Retry after waiting">'
-            '🔄 Retry Turn</button>'
-            '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to an alternate model">'
-            '⚙️ Switch Model</button>'
+            f'<button class="btn-error-retry" data-action="retry-turn" title="Retry after waiting">'
+            f'{icon_retry}Retry Turn</button>'
+            f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to an alternate model">'
+            f'{icon_model}Switch Model</button>'
         )
     elif is_context:
         err_type = "context_exceeded"
@@ -535,10 +541,10 @@ def classify_and_format_error(
             "Compact the conversation to preserve key details, or start a fresh session."
         )
         actions = (
-            '<button class="btn-error-retry" data-action="trigger-compact" title="Compact previous context">'
-            '🗜️ Compact Context</button>'
-            '<button class="btn-error-secondary" data-action="new-session" title="Start a new session">'
-            '➕ New Session</button>'
+            f'<button class="btn-error-retry" data-action="trigger-compact" title="Compact previous context">'
+            f'{icon_compact}Compact Context</button>'
+            f'<button class="btn-error-secondary" data-action="new-session" title="Start a new session">'
+            f'{icon_plus}New Session</button>'
         )
     elif is_auth:
         err_type = "auth_error"
@@ -549,8 +555,8 @@ def classify_and_format_error(
             "Please configure your API key in Settings."
         )
         actions = (
-            '<button class="btn-error-retry" data-action="open-settings" title="Open Settings to enter API key">'
-            '⚙️ Open Settings</button>'
+            f'<button class="btn-error-retry" data-action="open-settings" title="Open Settings to enter API key">'
+            f'{icon_settings}Open Settings</button>'
         )
     elif is_ollama_off:
         err_type = "ollama_offline"
@@ -561,8 +567,8 @@ def classify_and_format_error(
             "Ensure the Ollama service is active (<code>ollama serve</code>)."
         )
         actions = (
-            '<button class="btn-error-retry" data-action="retry-turn" title="Retry connection">'
-            '🔄 Retry Turn</button>'
+            f'<button class="btn-error-retry" data-action="retry-turn" title="Retry connection">'
+            f'{icon_retry}Retry Turn</button>'
         )
     elif is_stall:
         err_type = "timeout"
@@ -573,10 +579,10 @@ def classify_and_format_error(
             "The server may be overloaded. Click Retry to try again."
         )
         actions = (
-            '<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">'
-            '🔄 Retry Turn</button>'
-            '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">'
-            '⚙️ Switch Model</button>'
+            f'<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">'
+            f'{icon_retry}Retry Turn</button>'
+            f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">'
+            f'{icon_model}Switch Model</button>'
         )
     else:
         err_type = "generic"
@@ -590,16 +596,18 @@ def classify_and_format_error(
             "Click Retry to re-send this turn."
         )
         actions = (
-            '<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">'
-            '🔄 Retry Turn</button>'
+            f'<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">'
+            f'{icon_retry}Retry Turn</button>'
         )
 
     raw_preview = html.escape(msg[:500] + ("..." if len(msg) > 500 else ""))
+    icon_alert = '<span class="error-header-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span>'
 
     return (
         f'\n<div class="andromity-error-card" data-error-type="{err_type}" data-retryable="true">\n'
         f'  <div class="error-card-header">\n'
         f'    <div class="error-header-left">\n'
+        f'      {icon_alert}\n'
         f'      <span class="error-badge">{badge}</span>\n'
         f'      <span class="error-title">{title}</span>\n'
         f'    </div>\n'
