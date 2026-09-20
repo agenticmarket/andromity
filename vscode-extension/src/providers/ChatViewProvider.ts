@@ -53,6 +53,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _boundClient: RpcClient | null = null;
   private _rpcDisposables: Array<() => void> = [];
   private _latestTurnFiles: Set<string> = new Set<string>();
+  private _lastPromptPayload: any = null;
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -1234,6 +1235,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "send_prompt": {
         let promptText = message.prompt || "";
+        this._lastPromptPayload = { ...message };
         console.log('[Andromity ext] send_prompt recv:', promptText.slice(0,120), 'sess', this._currentSessionId, 'hasClient', !!this._rpcClient);
         try {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -1343,6 +1345,69 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           "keys",
           () => this.refreshConfig()
         );
+        break;
+      }
+
+      case "retry_turn": {
+        const sid = message.sessionId || this._currentSessionId;
+        if (!sid) break;
+        if (this._lastPromptPayload) {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          try {
+            await this._rpcClient?.call("session.undo", {
+              session_id: sid,
+              project_path: workspaceFolder,
+              turns_to_undo: 1,
+            });
+            await this._loadSession(sid);
+          } catch (undoErr) {
+            console.warn("[Andromity] Pre-retry undo skipped:", undoErr);
+          }
+
+          const retryPayload = { ...this._lastPromptPayload };
+          if (message.stripImages) {
+            retryPayload.images = [];
+          }
+          if (this._currentModel) retryPayload.model = this._currentModel;
+          if (this._currentProvider) retryPayload.provider = this._currentProvider;
+
+          this._postToWebview({
+            type: "agent_started",
+            session_id: sid,
+            prompt: retryPayload.prompt,
+            images: retryPayload.images || [],
+          });
+
+          try {
+            const cleanModel = (retryPayload.model || this._currentModel || "").replace(/^~+/, "");
+            this._runningSessions.add(sid);
+            if (sid === this._currentSessionId) {
+              this._isExecuting = true;
+            }
+            void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", true);
+
+            await this._rpcClient?.call("agent.prompt", {
+              session_id: sid,
+              prompt: retryPayload.prompt,
+              project_path: workspaceFolder,
+              profile: retryPayload.profile || this._currentProfile,
+              model: cleanModel,
+              provider: retryPayload.provider || this._currentProvider,
+              mode: retryPayload.mode || this._currentMode,
+              reasoning_effort: retryPayload.reasoningEffort || this._currentReasoning,
+              image_uris: retryPayload.images || [],
+            }, 120000);
+          } catch (err: any) {
+            this._runningSessions.delete(sid);
+            this._isExecuting = false;
+            void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
+            this._postToWebview({
+              type: "agent_error",
+              session_id: sid,
+              error: err?.message || String(err),
+            });
+          }
+        }
         break;
       }
 

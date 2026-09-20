@@ -66,6 +66,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const sessionLiveBuffer = new Map(); // sessionId -> Array<raw msg> for replay when switching to a live session
     let turnEditedFiles = new Set();
     let globalDiffStats = {};
+    let lastTurnPrompt = null;
     const btnScrollBottom = document.getElementById('btn-scroll-bottom');
     const scrollUnreadBadge = document.getElementById('scroll-unread-badge');
     const timelineFlyout = document.getElementById('timeline-flyout');
@@ -3414,6 +3415,49 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           break;
         }
+        case 'retry-turn': {
+          const errCard = target.closest('.andromity-error-card, .error-card');
+          if (errCard) {
+            errCard.style.opacity = '0.5';
+            errCard.style.pointerEvents = 'none';
+            const btn = errCard.querySelector('.btn-error-retry');
+            if (btn) btn.textContent = '🔄 Retrying...';
+          }
+          vscode.postMessage({
+            type: 'retry_turn',
+            sessionId: currentSessionId,
+            stripImages: false,
+          });
+          break;
+        }
+        case 'retry-without-image': {
+          const errCard = target.closest('.andromity-error-card, .error-card');
+          if (errCard) {
+            errCard.style.opacity = '0.5';
+            errCard.style.pointerEvents = 'none';
+            const btn = errCard.querySelector('.btn-error-retry');
+            if (btn) btn.textContent = '🔄 Retrying without image...';
+          }
+          vscode.postMessage({
+            type: 'retry_turn',
+            sessionId: currentSessionId,
+            stripImages: true,
+          });
+          break;
+        }
+        case 'switch-model-flyout': {
+          toggleModelFlyout();
+          break;
+        }
+        case 'trigger-compact': {
+          showCompactionBanner('Compacting conversation context to reduce token usage...');
+          vscode.postMessage({ type: 'compact_session' });
+          break;
+        }
+        case 'open-settings': {
+          vscode.postMessage({ type: 'open_settings' });
+          break;
+        }
         case 'compact-session':
           showCompactionBanner('Compacting conversation context to reduce token usage...');
           vscode.postMessage({ type: 'compact_session' });
@@ -4032,6 +4076,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function dispatchPrompt(text, attachContext, images) {
       try {
         console.log('[Andromity webview] dispatchPrompt sending:', text.slice(0,120));
+        lastTurnPrompt = {
+          text: text,
+          attachContext: attachContext,
+          images: images || [],
+          sessionId: currentSessionId,
+        };
         hideZeroState();
 
         const activeSessName = document.getElementById('active-session-name');
@@ -4258,8 +4308,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               continue;
             }
 
-            // HTML details and summary
-            if (trimmed.startsWith('<details') || trimmed.startsWith('</details') || trimmed.startsWith('<summary') || trimmed.startsWith('</summary')) {
+            // HTML details, summary, and custom error card elements
+            if (trimmed.startsWith('<details') || trimmed.startsWith('</details') || trimmed.startsWith('<summary') || trimmed.startsWith('</summary') || trimmed.startsWith('<div') || trimmed.startsWith('</div') || trimmed.startsWith('<span') || trimmed.startsWith('</span') || trimmed.startsWith('<button') || trimmed.startsWith('</button') || trimmed.startsWith('<code') || trimmed.startsWith('</code') || trimmed.startsWith('<pre') || trimmed.startsWith('</pre')) {
               html += trimmed;
               continue;
             }
@@ -6714,13 +6764,81 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     });
 
-    function appendErrorCard(text) {
-      const errDiv = document.createElement('div');
-      errDiv.className = 'error-card';
-      errDiv.style.color = 'var(--red)';
-      errDiv.style.fontSize = '12px';
-      errDiv.textContent = 'Error: ' + text;
-      chatContainer.appendChild(errDiv);
+    function appendErrorCard(text, rawError, errorType) {
+      if (!text) text = 'An unexpected agent error occurred.';
+      const trimmed = String(text).trim();
+      const wrap = document.createElement('div');
+
+      if (trimmed.includes('andromity-error-card')) {
+        wrap.innerHTML = trimmed;
+        chatContainer.appendChild(wrap.firstElementChild || wrap);
+        scrollToBottomIfNeeded();
+        return;
+      }
+
+      const low = trimmed.toLowerCase();
+      let badge = 'ERROR';
+      let title = 'Turn Interrupted';
+      let desc = trimmed;
+      let eType = errorType || 'generic';
+      let actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">🔄 Retry Turn</button>';
+
+      if (low.includes('image') || low.includes('vision') || low.includes('multimodal') || low.includes('does not support')) {
+        badge = 'IMAGE NOT SUPPORTED';
+        title = 'Model Does Not Support Images';
+        desc = 'The active model does not accept image attachments. Switch to a vision model (e.g. Claude 3.7 Sonnet, GPT-4o, Gemini 2.0 Flash) or retry with text only.';
+        eType = 'vision_unsupported';
+        actionsHtml = '<button class="btn-error-retry" data-action="retry-without-image" title="Retry without image">🔄 Retry without Image</button>' +
+          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to a vision model">⚙️ Switch Model</button>';
+      } else if (low.includes('429') || low.includes('rate limit') || low.includes('quota')) {
+        badge = 'RATE LIMIT';
+        title = 'Rate Limit Reached';
+        desc = 'Rate limit or quota threshold reached for the model provider. Please wait a moment and click Retry.';
+        eType = 'rate_limit';
+        actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry turn">🔄 Retry Turn</button>' +
+          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch model">⚙️ Switch Model</button>';
+      } else if (low.includes('midstream') || low.includes('503') || low.includes('502') || low.includes('500') || low.includes('serviceunavailable') || low.includes('service unavailable') || low.includes('bad gateway') || low.includes('upstream error')) {
+        badge = 'SERVICE DISRUPTED';
+        title = 'Upstream Service Interruption';
+        desc = 'The upstream provider experienced a temporary service disruption or disconnect. This is usually transient—click Retry to continue.';
+        eType = 'provider_unavailable';
+        actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry turn">🔄 Retry Turn</button>' +
+          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch model">⚙️ Switch Model</button>';
+      } else if (low.includes('context') || low.includes('token limit') || low.includes('maximum context')) {
+        badge = 'CONTEXT LIMIT';
+        title = 'Context Window Limit Reached';
+        desc = 'This conversation has reached the maximum context length for the current model. Compact context or start a new session.';
+        eType = 'context_exceeded';
+        actionsHtml = '<button class="btn-error-retry" data-action="trigger-compact" title="Compact context">🗜️ Compact Context</button>' +
+          '<button class="btn-error-secondary" data-action="new-session" title="New session">➕ New Session</button>';
+      } else if (low.includes('401') || low.includes('403') || low.includes('unauthorized') || low.includes('api key')) {
+        badge = 'AUTHENTICATION';
+        title = 'Authentication Error';
+        desc = 'Invalid or missing API key. Please check your provider settings.';
+        eType = 'auth_error';
+        actionsHtml = '<button class="btn-error-retry" data-action="open-settings" title="Open settings">⚙️ Open Settings</button>';
+      }
+
+      const cardHtml =
+        '<div class="andromity-error-card" data-error-type="' + eType + '" data-retryable="true">' +
+          '<div class="error-card-header">' +
+            '<div class="error-header-left">' +
+              '<span class="error-badge">' + badge + '</span>' +
+              '<span class="error-title">' + escapeHtml(title) + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="error-card-body">' + escapeHtml(desc) + '</div>' +
+          '<details class="error-details">' +
+            '<summary>Technical Details</summary>' +
+            '<pre class="error-code"><code>' + escapeHtml(rawError || text) + '</code></pre>' +
+          '</details>' +
+          '<div class="error-card-actions">' +
+            actionsHtml +
+          '</div>' +
+        '</div>';
+
+      wrap.innerHTML = cardHtml;
+      chatContainer.appendChild(wrap.firstElementChild || wrap);
       scrollToBottomIfNeeded();
     }
 

@@ -167,16 +167,36 @@ class Agent:
         LiteLLM's supports_vision() is unreliable for routed/aggregator and
         local providers — it reports False for many OpenRouter vision models
         (e.g. dots-3-note supports images but supports_vision() says no). So
-        we only hard-block direct, well-known providers (OpenAI, Anthropic,
-        Gemini, …) when they explicitly report no vision; everything else is
-        allowed through and the provider itself returns a clear error if the
-        model truly rejects images.
+        we only block models known explicitly to be text-only (e.g. DeepSeek-R1,
+        text-only Llama/Qwen) or direct providers reporting False.
         """
         provider = self.provider or config.get("default", "provider", "")
         model = self.model or config.get("default", "model", "")
         litellm_model = f"{provider}/{model}" if model and "/" not in model else model
         if not litellm_model:
             return True
+
+        m_lower = model.lower()
+        # Explicit vision indicators
+        vision_indicators = (
+            "vision", "-vl", "vl-", "llava", "bakllava", "gemma3", "gemma-3",
+            "minicpm", "pixtral", "omni", "gpt-4o", "gpt-4.1", "gpt-5",
+            "claude-3", "claude-opus", "claude-sonnet", "claude-haiku", "gemini",
+            "o1", "o3", "o4"
+        )
+        if any(vi in m_lower for vi in vision_indicators):
+            return True
+
+        # Explicit known text-only model families across all providers
+        text_only_indicators = (
+            "deepseek",
+            "llama-3.1", "llama-3.2-1b", "llama-3.2-3b", "llama-3.3", "llama3.1", "llama3.3",
+            "qwen2.5-coder", "qwen2.5-7b", "qwen2.5-14b", "qwen2.5-32b", "qwen2.5-72b",
+            "mistral-large", "mistral-small", "codellama", "phi-4", "phi4"
+        )
+        if any(ti in m_lower for ti in text_only_indicators) and "vision" not in m_lower and "vl" not in m_lower:
+            return False
+
         cfg = config.get_provider_config(provider) or {}
         routed_or_local = provider in ("openrouter", "ollama", "nvidia") \
             or (cfg.get("type") and cfg.get("type") != provider)
@@ -342,8 +362,13 @@ class Agent:
         if _uris:
             if not self._model_supports_vision():
                 model_name = self.model or config.get("default", "model", "the current model")
-                yield TextDelta(text=f"\n[Image not sent] {model_name} does not support images. Switch to a vision model (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-flash) with /model.\n")
+                prov_name = self.provider or config.get("default", "provider", "")
+                from andromity.core.provider import classify_and_format_error
+                fake_err = Exception(f"Model '{model_name}' does not support image input.")
+                card = classify_and_format_error(fake_err, provider=prov_name, model=model_name, has_images=True)
+                yield TextDelta(text=f"\n[Image not sent] {model_name} does not support images. Switch to a vision model (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-flash) with /model.\n" + card)
                 yield Done()
+                self._fire_session_end(had_error=True)
                 return
             self._turn_image_parts = [
                 {"type": "text", "text": user_input},
@@ -562,8 +587,9 @@ class Agent:
             self._empty_retried = False
 
             if not tool_calls_to_execute:
+                has_error = "andromity-error-card" in (assistant_content or "") or "[Error:" in (assistant_content or "")
                 yield Done(usage=last_usage)
-                self._fire_session_end()
+                self._fire_session_end(had_error=has_error)
                 break
 
             # ── ask_questions: user answers in an inline panel; the answers become the

@@ -6089,10 +6089,165 @@ export function getChatStyles(): string {
       animation: waterfallPulse 2s infinite ease-in-out;
     }
 
-    @keyframes waterfallPulse {
-      0% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.6); }
-      70% { box-shadow: 0 0 0 6px rgba(139, 92, 246, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0); }
+    /* ─── Resilient Error Recovery Card & Retry Actions ────────────────── */
+    .andromity-error-card,
+    .error-card {
+      width: 100%;
+      background: rgba(248, 81, 73, 0.08);
+      border: 1px solid rgba(248, 81, 73, 0.28);
+      border-left: 3px solid #f85149;
+      border-radius: 8px;
+      padding: 11px 14px;
+      margin: 10px 0 6px 0;
+      box-sizing: border-box;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+      font-size: 12.5px;
+      line-height: 1.45;
+      color: var(--fg, #e4e4e7);
+      animation: errorCardFadeIn 0.2s ease-out;
+    }
+
+    @keyframes errorCardFadeIn {
+      from { opacity: 0; transform: translateY(3px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .error-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 7px;
+    }
+
+    .error-header-left {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex-wrap: wrap;
+    }
+
+    .error-badge {
+      font-size: 9.5px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 3px;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+      background: rgba(248, 81, 73, 0.2);
+      color: #ff7b72;
+      border: 1px solid rgba(248, 81, 73, 0.35);
+    }
+
+    .error-title {
+      font-weight: 600;
+      font-size: 12px;
+      color: #fca5a5;
+      letter-spacing: -0.01em;
+    }
+
+    .error-card-body {
+      font-size: 12px;
+      color: var(--fg, #e4e4e7);
+      margin-bottom: 10px;
+      line-height: 1.5;
+    }
+
+    .error-card-body strong {
+      color: #ffffff;
+    }
+
+    .error-details {
+      margin: 8px 0 10px 0;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 5px;
+      padding: 6px 9px;
+      font-size: 11px;
+    }
+
+    .error-details summary {
+      cursor: pointer;
+      color: var(--muted, #888888);
+      font-weight: 500;
+      user-select: none;
+      transition: color 0.15s ease;
+      outline: none;
+    }
+
+    .error-details summary:hover {
+      color: var(--fg, #e4e4e7);
+    }
+
+    .error-code {
+      margin-top: 6px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: #fca5a5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 140px;
+      overflow-y: auto;
+      background: transparent;
+      border: none;
+      padding: 0;
+    }
+
+    .error-card-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+    }
+
+    .btn-error-retry {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      background: linear-gradient(135deg, #2563eb, #3b82f6);
+      color: #ffffff;
+      border: none;
+      border-radius: 5px;
+      font-size: 11.5px;
+      font-weight: 600;
+      padding: 6px 13px;
+      cursor: pointer;
+      box-shadow: 0 2px 6px rgba(37, 99, 235, 0.35);
+      transition: all 0.15s ease;
+    }
+
+    .btn-error-retry:hover {
+      background: linear-gradient(135deg, #1d4ed8, #2563eb);
+      box-shadow: 0 3px 9px rgba(37, 99, 235, 0.5);
+      transform: translateY(-0.5px);
+    }
+
+    .btn-error-retry:active {
+      transform: translateY(0.5px);
+    }
+
+    .btn-error-secondary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      background: rgba(255, 255, 255, 0.07);
+      color: var(--fg, #e4e4e7);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 5px;
+      font-size: 11.5px;
+      font-weight: 500;
+      padding: 5px 11px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .btn-error-secondary:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 255, 255, 0.22);
+      color: #ffffff;
     }
 
     ${getPromptStyles()}
