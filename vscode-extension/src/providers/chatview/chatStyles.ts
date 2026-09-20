@@ -17,7 +17,7 @@ export function getChatStyles(): string {
       --red: #f85149;
       --purple: #bc8cff;
       --muted: var(--vscode-descriptionForeground, #888888);
-      --radius: 6px;
+      --radius: 5px;
       --font-ui: 'Inter', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
       --font-mono: 'JetBrains Mono', 'Geist Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', Consolas, 'Courier New', monospace;
       --font: var(--font-ui);
@@ -47,7 +47,7 @@ export function getChatStyles(): string {
       -moz-osx-font-smoothing: grayscale;
       text-rendering: optimizeLegibility;
       letter-spacing: -0.011em;
-      font-size: var(--vscode-font-size, 13px);
+      font-size: var(--vscode-font-size, 15px);
       color: var(--fg);
       background: var(--bg);
       display: flex;
@@ -2506,6 +2506,9 @@ export function getChatStyles(): string {
       border-radius: 50%;
       animation: thinkingSpin 0.75s linear infinite;
       flex-shrink: 0;
+      overflow: hidden;
+      font-size: 0;
+      line-height: 0;
     }
     @keyframes thinkingSpin {
       to { transform: rotate(360deg); }
@@ -4640,6 +4643,70 @@ export function getChatStyles(): string {
     #btn-prompt-reasoning { min-width: 48px; justify-content: center; }
     #btn-prompt-reasoning #prompt-reasoning-label { min-width: 24px; text-align: center; }
     #prompt-model-label { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+
+    /* Seamless Permission Mode Indicator (Clean Minimal, Merged with Prompt Bar) */
+    #btn-prompt-mode {
+      background: transparent;
+      border: none;
+      font-weight: 500;
+      font-size: 11.5px;
+      padding: 3px 6px;
+      letter-spacing: 0.2px;
+      border-radius: 4px;
+      transition: color 0.15s ease, background 0.15s ease;
+    }
+    #btn-prompt-mode .prompt-mode-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+    }
+    #btn-prompt-mode .prompt-mode-icon svg {
+      width: 13px;
+      height: 13px;
+      stroke-width: 2;
+      opacity: 0.88;
+      transition: transform 0.15s ease, opacity 0.15s ease;
+    }
+    #btn-prompt-mode:hover .prompt-mode-icon svg {
+      opacity: 1;
+      transform: scale(1.08);
+    }
+    #btn-prompt-mode:hover {
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    #btn-prompt-mode.mode-safe {
+      color: #3fb950;
+    }
+    #btn-prompt-mode.mode-safe:hover {
+      color: #4ade80;
+      background: rgba(63, 185, 80, 0.1);
+    }
+
+    #btn-prompt-mode.mode-trust {
+      color: #58a6ff;
+    }
+    #btn-prompt-mode.mode-trust:hover {
+      color: #79c0ff;
+      background: rgba(88, 166, 255, 0.1);
+    }
+
+    #btn-prompt-mode.mode-full {
+      color: #bc8cff;
+    }
+    #btn-prompt-mode.mode-full:hover {
+      color: #d2a8ff;
+      background: rgba(188, 140, 255, 0.1);
+    }
+
+    #btn-prompt-mode.mode-yolo {
+      color: #f0883e;
+    }
+    #btn-prompt-mode.mode-yolo:hover {
+      color: #ffa657;
+      background: rgba(240, 136, 62, 0.1);
+    }
 
     .user-attached-chips {
       display: flex;

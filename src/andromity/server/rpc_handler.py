@@ -697,6 +697,7 @@ class JsonRpcHandler:
         reasoning_effort = params.get("reasoning_effort") or config.get("default", "reasoning_effort", "medium")
         # Respect per-session mode passed from client, falling back to server default
         mode = (params.get("mode") or config.get("default", "permission_mode", "safe")).lower()
+        session.permission_mode = mode
         is_trusted_workspace = config.is_trusted(session.project_path)
         auto_approve = mode in ("full", "yolo")
 
@@ -704,7 +705,7 @@ class JsonRpcHandler:
         async def _on_tool_approval(tool_name: str, args: Dict[str, Any]) -> bool:
             # 1. Untrusted workspace security check (matching TUI app.py:534)
             if not is_trusted_workspace and mode not in ("full", "yolo"):
-                if tool_name in ("write_file", "edit_file", "edit_file_multi", "patch_file", "delete_file", "shell_exec", "shell_bg", "shell_kill"):
+                if tool_name in ("write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill", "spawn_subagent"):
                     log.warning("Tool '%s' blocked — workspace %s is untrusted", tool_name, session.project_path)
                     return (False, "TOOL BLOCKED: Workspace is untrusted. Grant trust in Andromity Hub (Trust & Security) to permit file edits or terminal commands.")
 
@@ -717,20 +718,18 @@ class JsonRpcHandler:
             is_sensitive = is_sensitive_path(target_path) if target_path else False
 
             # 3. Read-only tools bypass approval UNLESS accessing sensitive credentials/keys
-            if tool_name in READ_ONLY_TOOLS:
-                if tool_name == "read_file" and is_sensitive:
-                    pass  # Sensitive file (e.g. .env, id_rsa) requires approval even in read mode
-                else:
-                    return True
+            if is_sensitive:
+                needs_approval = True
+            elif tool_name in READ_ONLY_TOOLS:
+                return True
 
             needs_approval = False
 
             # 4. Mode-specific evaluation (exact match with TUI app.py:549-617)
-            if tool_name in ("write_file", "edit_file", "edit_file_multi", "patch_file"):
+            if tool_name in ("write_file", "edit_file", "edit_file_multi"):
                 if mode == "safe":
                     needs_approval = True
                 elif mode == "trust":
-                    # In TRUST mode on trusted workspace, file modifications are auto-approved
                     return True
 
             elif tool_name in ("shell_exec", "shell_bg"):
@@ -738,26 +737,18 @@ class JsonRpcHandler:
                 if mode == "safe":
                     needs_approval = True
                 elif mode == "trust":
-                    import shlex
-                    import re as _re
-                    _SHELL_META = _re.compile(r'[;&|`$(){}\\<>]')
-                    if _SHELL_META.search(command):
+                    from andromity.core.security import is_command_allowlisted
+                    global_allowed = config.get("default", "allowed_commands", []) or []
+                    session_allowed = getattr(session, "allowed_commands", []) or []
+                    allowed = list(set(global_allowed) | set(session_allowed))
+                    if not is_command_allowlisted(command, allowed):
                         needs_approval = True
-                    else:
-                        global_allowed = config.get("default", "allowed_commands", []) or []
-                        session_allowed = getattr(session, "allowed_commands", []) or []
-                        allowed = set(global_allowed) | set(session_allowed)
-                        if not allowed:
-                            needs_approval = True
-                        else:
-                            try:
-                                cmd_token = shlex.split(command)[0] if command else ""
-                            except ValueError:
-                                cmd_token = ""
-                            if not any(cmd_token == prefix or command.startswith(prefix + " ") or command == prefix for prefix in allowed):
-                                needs_approval = True
 
             elif tool_name == "shell_kill":
+                if mode == "safe":
+                    needs_approval = True
+
+            elif tool_name == "spawn_subagent":
                 if mode == "safe":
                     needs_approval = True
 
@@ -2016,6 +2007,24 @@ class JsonRpcHandler:
             self._cron_schedulers[project_path] = scheduler
         return self._cron_schedulers[project_path]
 
+    def _make_cron_approval(self, cron_job):
+        async def _approval(tool_name: str, args: dict) -> bool:
+            if cron_job.mode == "yolo":
+                return True
+            from andromity.core.security import is_sensitive_path
+            target_path = str(args.get("path", "") or args.get("target_path", "") or args.get("target_file", "") or args.get("file_path", ""))
+            if target_path and is_sensitive_path(target_path):
+                return False
+            if tool_name in ("shell_exec", "shell_bg"):
+                from andromity.core.security import is_command_allowlisted
+                command = str(args.get("command", "")).strip()
+                allowed = cron_job.allowed_commands or config.get("default", "allowed_commands", [])
+                return is_command_allowlisted(command, allowed)
+            if tool_name in ("write_file", "edit_file", "edit_file_multi", "shell_kill", "spawn_subagent") and cron_job.mode == "safe":
+                return False
+            return True
+        return _approval
+
     async def _execute_cron_job(self, project_path: str, job, is_manual: bool = False) -> Dict[str, Any]:
         from andromity.core.cron import CronStore, CronRunStore, CronRun
         from andromity.core.events import TextDelta, ToolCallStart, ToolResult
@@ -2070,24 +2079,11 @@ class JsonRpcHandler:
                 self.notify("cron/run_completed", {"job_id": job.id, "run": run.to_dict(), "job": job.to_dict()})
                 return run.to_dict()
 
-        def _make_cron_approval(cron_job):
-            async def _approval(tool_name: str, args: dict) -> bool:
-                if cron_job.mode == "yolo":
-                    return True
-                if tool_name in ("shell_exec", "shell_bg"):
-                    command = str(args.get("command", "")).strip()
-                    allowed = cron_job.allowed_commands or config.get("default", "allowed_commands", [])
-                    return any(command.startswith(p) for p in allowed)
-                if tool_name in ("write_file", "edit_file", "write_to_file", "replace_file_content", "multi_replace_file_content") and cron_job.mode == "safe":
-                    return False
-                return True
-            return _approval
-
         agent = Agent(
             session=cron_session,
             profile="builder",
             auto_approve=(job.mode in ("trust", "yolo", "full")),
-            on_tool_approval=_make_cron_approval(job),
+            on_tool_approval=self._make_cron_approval(job),
             reasoning_effort="medium",
             provider=job.provider,
             model=job.model,

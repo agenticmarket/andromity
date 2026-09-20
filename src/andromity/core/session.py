@@ -70,8 +70,10 @@ class Session:
         self.compacted_history: List[Dict[str, Any]] = []  # old messages preserved for chat UI after compaction
         self.allowed_commands: List[str] = []
         self.allowed_domains: List[str] = []
+        self.allowed_external_files: set = set()
         self.undo_stack: List[Dict[str, Any]] = []
         from andromity.config import config
+        self.permission_mode = config.get("default", "permission_mode", "safe")
         self.provider = config.get("default", "provider", "")
         self.model = config.get("default", "model", "")
         sessions_root = get_config_dir() / "sessions"
@@ -131,6 +133,13 @@ class Session:
         """Check if a URL or domain is allowed in this session."""
         from andromity.core.security import is_domain_allowed
         return is_domain_allowed(url_or_domain, self.allowed_domains)
+
+    def allow_external_file(self, file_path: Any) -> None:
+        """Explicitly authorize an external file path for read access in this session."""
+        try:
+            self.allowed_external_files.add(Path(file_path).expanduser().resolve())
+        except Exception:
+            pass
 
     def set_status(self, status: str):
         """Update live lifecycle status of this session in DB and JSON."""
@@ -276,6 +285,7 @@ class Session:
             "allowed_commands": list(getattr(self, "allowed_commands", [])),
             "allowed_domains": list(getattr(self, "allowed_domains", [])),
             "undo_stack": copy.deepcopy(self.undo_stack) if (snapshot and hasattr(self, "undo_stack") and self.undo_stack) else list(getattr(self, "undo_stack", [])),
+            "permission_mode": getattr(self, "permission_mode", "safe"),
         }
 
     def compact_messages(self, new_summary: str, keep_last_n: int = 10) -> int:
@@ -636,6 +646,8 @@ class Session:
         session.allowed_commands = data.get("allowed_commands", [])
         session.allowed_domains = data.get("allowed_domains", [])
         session.undo_stack = data.get("undo_stack", [])
+        from andromity.config import config
+        session.permission_mode = data.get("permission_mode", config.get("default", "permission_mode", "safe"))
         session.storage_dir = fp.parent
         session.file_path = fp
         session._save_timer = None

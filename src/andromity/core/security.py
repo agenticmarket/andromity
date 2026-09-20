@@ -109,8 +109,123 @@ SENSITIVE_PATTERNS = [
     "/proc/self/environ",
 ]
 
+SENSITIVE_NAMES = {
+    ".env",
+    "id_rsa",
+    "id_ed25519",
+    "id_ecdsa",
+    "id_dsa",
+    "authorized_keys",
+    "known_hosts",
+    "config.toml",
+}
+
+SENSITIVE_DIRS = {
+    ".ssh",
+    ".git",
+    ".aws",
+    ".gnupg",
+}
+
+SENSITIVE_KEYWORD_REGEX = re.compile(
+    r"(^|[._\-/])(secret|password|credential|token)s?([._\-/]|$)",
+    re.IGNORECASE,
+)
+
+SENSITIVE_EXACT_SYSTEM_PATHS = {
+    "/etc/shadow",
+    "/etc/passwd",
+    "/proc/self/environ",
+}
+
+_SHELL_FORBIDDEN = re.compile(r'[;&|`$(){}<>\n\r%^]')
+
+
+SOURCE_CODE_EXTS = {
+    ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+    ".go", ".rs", ".c", ".cpp", ".h", ".hpp", ".java", ".cs", ".rb", ".php",
+}
+
 
 def is_sensitive_path(path: str) -> bool:
-    """Check if path targets sensitive files or directories."""
-    path_lower = path.lower().replace("\\", "/")
-    return any(pat in path_lower for pat in SENSITIVE_PATTERNS)
+    if not path:
+        return False
+    from pathlib import PurePath
+    normalized = path.strip().replace("\\", "/")
+    lower = normalized.lower()
+
+    for sys_path in SENSITIVE_EXACT_SYSTEM_PATHS:
+        if sys_path in lower:
+            return True
+
+    try:
+        pure = PurePath(normalized)
+    except Exception:
+        pure = None
+
+    if pure:
+        name_lower = pure.name.lower()
+        if name_lower in SENSITIVE_NAMES or name_lower.startswith(".env."):
+            return True
+
+        for part in pure.parts:
+            if part.lower() in SENSITIVE_DIRS:
+                return True
+
+        if pure.suffix.lower() in SOURCE_CODE_EXTS:
+            return pure.stem.lower() in {"secret", "secrets", "password", "passwords", "credential", "credentials"}
+
+        if SENSITIVE_KEYWORD_REGEX.search(name_lower):
+            return True
+    else:
+        if any(name in lower for name in SENSITIVE_NAMES):
+            return True
+
+    return False
+
+
+def is_command_allowlisted(command: str, allowed: Optional[List[str]] = None) -> bool:
+    if not command or not allowed:
+        return False
+
+    cmd_clean = command.strip()
+    if not cmd_clean or "\x00" in cmd_clean or _SHELL_FORBIDDEN.search(cmd_clean):
+        return False
+
+    import os
+    import shlex
+    try:
+        tokens = shlex.split(cmd_clean, posix=(os.name != 'nt' and '\\' not in cmd_clean))
+    except ValueError:
+        return False
+
+    if not tokens:
+        return False
+
+    matched_prefix_tokens: Optional[List[str]] = None
+    for prefix in allowed:
+        p_str = prefix.strip()
+        if not p_str:
+            continue
+        try:
+            p_tokens = shlex.split(p_str, posix=(os.name != 'nt' and '\\' not in p_str))
+        except ValueError:
+            continue
+        if not p_tokens:
+            continue
+
+        if len(tokens) >= len(p_tokens) and tokens[:len(p_tokens)] == p_tokens:
+            matched_prefix_tokens = p_tokens
+            break
+
+    if matched_prefix_tokens is None:
+        return False
+
+    for token in tokens[len(matched_prefix_tokens):]:
+        clean_token = token.split("=", 1)[-1].strip("'\"")
+        if is_sensitive_path(clean_token):
+            return False
+
+    return True
+
+

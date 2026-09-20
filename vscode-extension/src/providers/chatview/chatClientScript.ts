@@ -4973,23 +4973,50 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       appendSystemNote(summaryText);
     }
 
+    const MODE_ICONS = {
+      safe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path></svg>',
+      trust: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"></path><path d="m9 13 2 2 4-4"></path></svg>',
+      full: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>',
+      yolo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 3z"></path></svg>'
+    };
+
     function updateModeBadge(mode) {
       if (!mode) return;
       currentMode = mode.toLowerCase();
       if (activeModeLabel) activeModeLabel.textContent = currentMode.toUpperCase();
-      const modeBtn = document.getElementById('btn-mode-cycle');
-      if (modeBtn) modeBtn.className = 'mode-badge-btn mode-' + currentMode;
+      
+      const promptModeBtn = document.getElementById('btn-prompt-mode');
+      const promptModeIcon = document.getElementById('prompt-mode-icon');
       const promptModeLabel = document.getElementById('prompt-mode-label');
+      
+      if (promptModeBtn) {
+        promptModeBtn.className = 'prompt-btn mode-' + currentMode;
+      }
+      if (promptModeIcon && MODE_ICONS[currentMode]) {
+        promptModeIcon.innerHTML = MODE_ICONS[currentMode];
+      }
       if (promptModeLabel) {
         promptModeLabel.textContent = currentMode.toUpperCase();
+        promptModeLabel.classList?.remove?.('skeleton', 'skeleton-text');
+        if (typeof promptModeLabel.removeAttribute === 'function') {
+          promptModeLabel.removeAttribute('aria-busy');
+        }
       }
+
       const titles = {
         safe: 'SAFE Mode: Confirms before every file edit and shell command (Click to cycle)',
         trust: 'TRUST Mode: Auto-approves file writes in workspace; prompts for commands (Click to cycle)',
         full: 'FULL Mode: Auto-approves all tool actions and logs to stream (Click to cycle)',
         yolo: 'YOLO Mode: Autonomous silent execution (Click to cycle)'
       };
-      if (modeBtn) modeBtn.title = titles[currentMode] || 'Permission Governance Mode (Click to cycle)';
+      const title = titles[currentMode] || 'Permission Governance Mode (Click to cycle)';
+      if (promptModeBtn) promptModeBtn.title = title;
+
+      const modeBtn = document.getElementById('btn-mode-cycle');
+      if (modeBtn) {
+        modeBtn.className = 'mode-badge-btn mode-' + currentMode;
+        modeBtn.title = title;
+      }
     }
 
     function removeTurnLoader() {
@@ -5055,22 +5082,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const loader = document.createElement('div');
       loader.className = 'andromity-turn-loader';
       loader.id = 'turn-loading-indicator';
-      loader.innerHTML = '<span class="thinking-spinner"></span> <span>Andromity is thinking... (0s)</span>';
+      loader.innerHTML = '<span class="thinking-spinner"></span> <span class="thinking-text">Andromity is thinking... (0s)</span>';
       wrap.appendChild(loader);
 
       const loaderTimer = setInterval(() => {
-        const span = loader.querySelector('span');
-        if (!span || !document.getElementById('turn-loading-indicator')) {
+        const textSpan = loader.querySelector('.thinking-text');
+        if (!textSpan || !document.getElementById('turn-loading-indicator')) {
           clearInterval(loaderTimer);
           return;
         }
         const elapsed = Math.floor((Date.now() - currentTurnStartTime) / 1000);
         if (elapsed < 6) {
-          span.textContent = 'Andromity is thinking... (' + elapsed + 's)';
+          textSpan.textContent = 'Andromity is thinking... (' + elapsed + 's)';
         } else if (elapsed < 16) {
-          span.textContent = 'Contacting ' + (currentModel || 'model') + '... (' + elapsed + 's)';
+          textSpan.textContent = 'Contacting ' + (currentModel || 'model') + '... (' + elapsed + 's)';
         } else {
-          span.textContent = 'Waiting for ' + (currentProvider || 'provider') + ' stream... (' + elapsed + 's)';
+          textSpan.textContent = 'Waiting for ' + (currentProvider || 'provider') + ' stream... (' + elapsed + 's)';
         }
       }, 1000);
 
@@ -7421,6 +7448,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     initChatMascot();
     setRandomStatement();
+    updateModeBadge("${state.currentMode || 'safe'}");
     vscode.postMessage({ type: 'ready' });
     vscode.postMessage({ type: 'webview_ready' });
     // Also request host to transfer focus into webview (required on first show)

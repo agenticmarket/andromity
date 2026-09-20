@@ -38,10 +38,9 @@ export default {
       if (url.pathname === '/api/stats' || url.pathname === '/stats') {
         const expectedSecret = env.STATS_SECRET;
         const providedKey = request.headers.get('x-stats-key') ||
-                            request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '') ||
-                            url.searchParams.get('key');
+                            request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
 
-        if (expectedSecret && !timingSafeMatch(providedKey, expectedSecret)) {
+        if (!expectedSecret || !timingSafeMatch(providedKey, expectedSecret)) {
           return new Response(JSON.stringify({ error: 'Unauthorized' }), {
             status: 401,
             headers: { ...securityHeaders, 'Content-Type': 'application/json' },

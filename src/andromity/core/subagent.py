@@ -434,7 +434,7 @@ class SubAgent:
                     targs = {}
 
                 res_str = None
-                write_tools = {"write_file", "edit_file", "edit_file_multi", "shell_exec"}
+                write_tools = {"write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill", "spawn_subagent"}
                 if self.permission_mode == "safe" and tname in write_tools:
                     res_str = f"TOOL BLOCKED: Subagents cannot execute mutating tool '{tname}' in SAFE mode without user confirmation. Use read-only tools or switch permission mode to TRUST."
                 elif self.permission_mode == "trust" and tname in {"write_file", "edit_file", "edit_file_multi"}:
@@ -448,6 +448,18 @@ class SubAgent:
                                 res_str = f"TOOL BLOCKED: Writing to paths outside project directory is prohibited in TRUST mode ({target_p})."
                         except Exception:
                             pass
+                elif self.permission_mode == "trust" and tname in ("shell_exec", "shell_bg"):
+                    from andromity.core.security import is_command_allowlisted
+                    from andromity.config import config
+                    cmd = str(targs.get("command", "")).strip()
+                    allowed = config.get("default", "allowed_commands", []) or []
+                    if not is_command_allowlisted(cmd, allowed):
+                        res_str = f"TOOL BLOCKED: Command '{cmd}' is not in allowlist or contains forbidden shell constructs for subagents in TRUST mode."
+                elif self.permission_mode in ("safe", "trust") and tname in ("read_file", "view_file", "grep_search"):
+                    from andromity.core.security import is_sensitive_path
+                    target_p = str(targs.get("path") or targs.get("file_path") or "")
+                    if target_p and is_sensitive_path(target_p):
+                        res_str = f"TOOL BLOCKED: Subagents cannot access sensitive file '{target_p}'."
                 elif tname == "fetch_url":
                     from andromity.core.security import _is_private_ip, get_domain
                     url_target = str(targs.get("url") or "")

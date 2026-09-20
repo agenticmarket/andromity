@@ -595,7 +595,7 @@ class AndromityApp(App):
 
     async def _on_tool_approval(self, tool_name: str, args: dict) -> bool:
         if not config.is_trusted(self._project_path):
-            if tool_name in ("write_file", "edit_file", "edit_file_multi", "delete_file", "shell_exec", "shell_bg", "shell_kill"):
+            if tool_name in ("write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill", "spawn_subagent"):
                 chat = self.query_one(ChatPanel)
                 chat.add_system_message(f"[red]✗ Blocked '{tool_name}'[/] — Folder is untrusted. Use [bold cyan]/trust[/] to enable.")
                 return False
@@ -635,29 +635,19 @@ class AndromityApp(App):
             if mode == "safe":
                 needs_approval = True
             elif mode == "trust":
-                import shlex
-                import re as _re
-                _SHELL_META = _re.compile(r'[;&|`$(){}\\<>]')
-                if _SHELL_META.search(command):
+                from andromity.core.security import is_command_allowlisted
+                global_allowed = config.get("default", "allowed_commands", []) or []
+                session_allowed = getattr(self.session, "allowed_commands", []) if hasattr(self, "session") else []
+                allowed = list(set(global_allowed) | set(session_allowed))
+                if not is_command_allowlisted(command, allowed):
                     needs_approval = True
-                else:
-                    global_allowed = config.get("default", "allowed_commands", []) or []
-                    session_allowed = getattr(self.session, "allowed_commands", []) if hasattr(self, "session") else []
-                    allowed = set(global_allowed) | set(session_allowed)
-                    if not allowed:
-                        needs_approval = True
-                    else:
-                        try:
-                            cmd_token = shlex.split(command)[0] if command else ""
-                        except ValueError:
-                            cmd_token = ""
-                        if not any(cmd_token == prefix or command.startswith(prefix + " ") or command == prefix
-                                   for prefix in allowed):
-                            needs_approval = True
         elif tool_name == "shell_kill":
             if mode == "safe":
                 needs_approval = True
-        elif tool_name == "read_file":
+        elif tool_name == "spawn_subagent":
+            if mode == "safe":
+                needs_approval = True
+        elif tool_name in ("read_file", "view_file", "grep_search"):
             if is_sensitive:
                 needs_approval = True
         elif tool_name == "web_search":
@@ -986,18 +976,26 @@ class AndromityApp(App):
         async def _approval(tool_name: str, args: dict) -> bool:
             if cron.mode == "yolo":
                 return True
+            from andromity.core.security import is_sensitive_path
+            target_path = str(args.get("path", "") or args.get("target_path", "") or args.get("target_file", "") or args.get("file_path", ""))
+            if target_path and is_sensitive_path(target_path):
+                cron_panel = self.query_one(CronStatusPanel)
+                cron_panel.push_notification(
+                    f"[yellow]⏱ Cron '{escape(cron.name)}':[/] blocked '{escape(tool_name)}' (sensitive path access)"
+                )
+                return False
             if tool_name in ("shell_exec", "shell_bg"):
+                from andromity.core.security import is_command_allowlisted
                 command = str(args.get("command", "")).strip()
                 allowed = cron.allowed_commands or config.get("default", "allowed_commands", [])
-                if any(command.startswith(p) for p in allowed):
+                if is_command_allowlisted(command, allowed):
                     return True
-                # Block unapproved commands — notify but don't prompt
                 cron_panel = self.query_one(CronStatusPanel)
                 cron_panel.push_notification(
                     f"[yellow]⏱ Cron '{escape(cron.name)}':[/] blocked '{escape(tool_name)}' (not in allowlist)"
                 )
                 return False
-            if tool_name in ("write_file", "edit_file", "write_to_file", "replace_file_content", "multi_replace_file_content") and cron.mode == "safe":
+            if tool_name in ("write_file", "edit_file", "edit_file_multi", "shell_kill", "spawn_subagent") and cron.mode == "safe":
                 cron_panel = self.query_one(CronStatusPanel)
                 cron_panel.push_notification(
                     f"[yellow]⏱ Cron '{escape(cron.name)}':[/] blocked '{escape(tool_name)}' (safe mode)"
