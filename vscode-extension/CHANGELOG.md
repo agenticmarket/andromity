@@ -2,6 +2,35 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [0.2.10] - 2026-09-20
+
+### Added & Improved
+- **🎨 UI & Chat Redesign:**
+  - **Clean Minimal Theme:** Complete overhaul of errors, onboarding, commands, and skills views for a sleek, distraction-free experience.
+  - **Neutral Markdown Typography:** High-contrast markdown rendering with clean list and blockquote spacing.
+  - **Borderless Inline Prompt Controls:** Replaced bordered inputs with borderless inline controls matching Cursor/Codex style; drag-drop removed from prompt bar.
+- **🛡️ Error Recovery & Resilience:**
+  - **Resilient Error Cards:** Polished error cards with one-click retry to re-execute the previous agent turn without losing context.
+  - **Vision Model Guarding:** Automatic content-type guards preventing vision payloads from reaching text-only models.
+  - **Transient 5xx Auto-Retry:** Transparent exponential-backoff retries on transient server-side errors.
+- **🌐 Web Search & Security:**
+  - **Zero-API Resilient Web Search:** Web search cascades across multiple providers with no single-point-of-failure API dependency.
+  - **Safe Skill Read Roots:** Skill file reads restricted to declared safe root directories, preventing unauthorized traversal.
+- **📎 File Context & Attachments:**
+  - **Cursor-Parity File Pills:** File context attachments display as compact clickable pills, openable directly in the editor.
+  - **Drag-and-Drop Context:** Drag files from the VS Code explorer into the chat to attach them as context.
+  - **Ollama Auto-Connect:** Detected local Ollama models are automatically registered in the model catalog on startup.
+- **⏰ Cron & Scheduling:**
+  - **Exact Date, Time & Cron Syntax:** Full scheduling support for exact dates, exact times, and raw cron expressions from the cron overlay.
+  - **Running Status Sync:** Fixed cron job status desync across split editor panels.
+  - **Cron Preset Deletion:** Allow deleting saved cron presets directly from the scheduling overlay.
+- **🧩 IDE Improvements:**
+  - **Secondary Sidebar Support:** Extension panel can be pinned to the secondary sidebar for a wider layout.
+  - **Terminal Error Quickfix:** Inline quickfix action surfaces for detected terminal errors to let the agent auto-fix in one click.
+  - **Ambient IDE Context Injection:** Workspace context (open files, cursor positions, diagnostics) automatically included in agent prompts.
+  - **Tool & Plan Approval Routing:** Correctly routes tool execution and plan approval prompts from editor-tab session panels.
+  - **Diff Line Stats:** Changed file cards display accurate `+additions / -deletions` line statistics.
+
 ## [0.2.9] - 2026-09-13
 
 ### Added & Improved

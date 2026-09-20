@@ -415,11 +415,53 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let lastToolRunning = false;
     let planToolCalledInTurn = false;  // set true when write_plan / update_plan_step fires in the current turn
     let userScrolledUp = false;
+    let isProgrammaticScroll = false;
+    let programmaticScrollTimer = null;
 
     function isAtBottom() {
       if (!chatContainer) return true;
       return chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 120;
     }
+
+    function scrollToBottom(smooth = false) {
+      if (!chatContainer) return;
+      userScrolledUp = false;
+      if (btnScrollBottom) {
+        btnScrollBottom.classList.remove('visible');
+        if (scrollUnreadBadge) scrollUnreadBadge.classList.remove('has-unread');
+      }
+
+      isProgrammaticScroll = true;
+      if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
+
+      if (smooth) {
+        chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+        // Keep target pinned to latest scrollHeight if content dynamically expands during smooth animation
+        let frames = 0;
+        const pinAnimation = () => {
+          if (!userScrolledUp && chatContainer) {
+            chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+          }
+          frames++;
+          if (frames < 20 && isProgrammaticScroll) {
+            requestAnimationFrame(pinAnimation);
+          } else if (chatContainer) {
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            isProgrammaticScroll = false;
+          }
+        };
+        requestAnimationFrame(pinAnimation);
+      } else {
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        requestAnimationFrame(() => {
+          if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
+          programmaticScrollTimer = setTimeout(() => {
+            isProgrammaticScroll = false;
+          }, 60);
+        });
+      }
+    }
+
     function scrollToBottomIfNeeded() {
       if (!userScrolledUp && chatContainer) {
         chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -427,8 +469,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         scrollUnreadBadge.classList.add('has-unread');
       }
     }
+
     if (chatContainer) {
+      chatContainer.addEventListener('wheel', (e) => {
+        if (e.deltaY < 0) {
+          isProgrammaticScroll = false;
+          userScrolledUp = true;
+          if (btnScrollBottom) btnScrollBottom.classList.add('visible');
+        }
+      }, { passive: true });
+
+      chatContainer.addEventListener('touchmove', () => {
+        isProgrammaticScroll = false;
+      }, { passive: true });
+
       chatContainer.addEventListener('scroll', () => {
+        if (isProgrammaticScroll) return;
         const atBottom = isAtBottom();
         userScrolledUp = !atBottom;
         if (btnScrollBottom) {
@@ -443,12 +499,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     btnScrollBottom?.addEventListener('click', () => {
-      if (chatContainer) {
-        chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
-        userScrolledUp = false;
-        btnScrollBottom.classList.remove('visible');
-        if (scrollUnreadBadge) scrollUnreadBadge.classList.remove('has-unread');
-      }
+      scrollToBottom(true);
     });
 
     let toolSeqDoneTools = new Set();
@@ -4126,8 +4177,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
         }
 
+        userScrolledUp = false;
         appendUserMessage(text, images, new Date().toISOString());
         startAssistantTurn();
+        scrollToBottom(false);
         vscode.postMessage({
           type: 'send_prompt',
           prompt: text,
@@ -4731,7 +4784,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       wrap.appendChild(footer);
 
       chatContainer.appendChild(wrap);
-      scrollToBottomIfNeeded();
+      scrollToBottom(false);
     }
 
     function appendCompactionSummaryCard(rawText) {
@@ -5338,6 +5391,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy' +
         '</button>';
         currentTurnAssistantDiv.appendChild(footer);
+        scrollToBottomIfNeeded();
       }
 
       currentTurnAssistantDiv = null;
