@@ -84,6 +84,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return true;
   }
 
+  public getCurrentModel(): string {
+    return this._currentModel;
+  }
+
+  public getCurrentProvider(): string {
+    return this._currentProvider;
+  }
+
   constructor(
     private readonly _extensionUri: vscode.Uri,
     private readonly _context?: vscode.ExtensionContext

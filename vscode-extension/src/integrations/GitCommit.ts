@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
+import { ChatViewProvider } from "../providers/ChatViewProvider.js";
 
 /**
  * Generate AI commit message via Andromity daemon.
@@ -32,13 +33,24 @@ export async function generateCommitMessage(rpcClient: RpcClient | null): Promis
     },
     async () => {
       try {
+        // Build file change summary from Git API
+        const changedFiles: string[] = [];
+        for (const c of repo.state.indexChanges || []) {
+          changedFiles.push(`staged: ${vscode.workspace.asRelativePath(c.uri)}`);
+        }
+        for (const c of repo.state.workingTreeChanges || []) {
+          changedFiles.push(`unstaged: ${vscode.workspace.asRelativePath(c.uri)}`);
+        }
+        const fileListSummary = changedFiles.length > 0
+          ? `Changed files (${changedFiles.length}):\n${changedFiles.slice(0, 40).map(f => `- ${f}`).join("\n")}\n\n`
+          : "";
+
         // Prefer staged changes; fallback to working tree diff via daemon git.diff
         let diff = "";
-        const hasStaged = repo.state.indexChanges.length > 0;
+        const hasStaged = (repo.state.indexChanges || []).length > 0;
         // Try git extension diff (staged if any, else all)
         try {
           // vscode.git API: repo.diff(true) = staged, diff(false)= unstaged
-          // We combine both for full picture; fallback to daemon if needed
           const staged = hasStaged ? await repo.diff(true) : "";
           const unstaged = await repo.diff(false);
           diff = (staged || "") + "\n" + (unstaged || "");
@@ -60,19 +72,32 @@ export async function generateCommitMessage(rpcClient: RpcClient | null): Promis
           return;
         }
 
-        const prompt = 
-        `Write a concise conventional commit message for git (type(scope): subject) for the following git diff. Return ONLY the commit message human readable explanation if needed imp things and major things included and what files are changed and in which directory, no quotes, max 300 chars subject, body optional bullet points if needed:\n\n${diff.slice(0, 6000)}`;
+        // Retrieve active model and provider selected by the user in the IDE
+        const chat = ChatViewProvider.currentProvider;
+        const activeModel = chat?.getCurrentModel();
+        const activeProvider = chat?.getCurrentProvider();
 
-        // Use daemon quickPrompt (single LLM call) — added in rpc_handler.py: rpc_agent_quickPrompt
+        const prompt = 
+        `Write a concise conventional commit message for git (type(scope): subject) for the following git diff.\n${fileListSummary}Return ONLY the commit message (one-line conventional summary, plus optional bullet points for key changes). No code blocks, no quotes, max 72 chars for subject:\n\n${diff.slice(0, 8000)}`;
+
+        // Use daemon quickPrompt with the user's active model & provider
         let commitMessage = "";
         try {
-          const res = await rpcClient.call<any>("agent.quickPrompt", { prompt, project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath }, 60000);
+          const res = await rpcClient.call<any>(
+            "agent.quickPrompt",
+            {
+              prompt,
+              project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+              model: activeModel,
+              provider: activeProvider,
+            },
+            35000
+          );
           commitMessage = typeof res === "string" ? res : res?.message || res?.result || res?.commitMessage || "";
         } catch (e: any) {
           // Fallback: open chat with the diff prompt if quickPrompt unavailable
           if (String(e.message || e).includes("not found")) {
             vscode.window.showInformationMessage("Quick commit requires daemon update. Opening chat with diff prompt instead.");
-            // Copy prompt to clipboard and focus chat
             await vscode.env.clipboard.writeText(prompt);
             vscode.commands.executeCommand("andromity.chatView.focus");
             return;

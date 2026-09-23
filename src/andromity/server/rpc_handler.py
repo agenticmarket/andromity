@@ -1146,12 +1146,36 @@ class JsonRpcHandler:
         project_path = params.get("project_path")
         model = params.get("model") or config.get("default", "model", "claude-sonnet-4-6")
         provider = params.get("provider") or config.get("default", "provider", "anthropic")
-        # Use litellm directly for speed, fallback to Agent if unavailable
+
+        provider_name = (provider or "anthropic").lower()
+        model_name = str(model or "")
+
+        p_conf = config.get_provider_config(provider_name)
+        api_key = config.get_api_key(provider_name)
+        base_url = p_conf.get("base_url") if p_conf and isinstance(p_conf, dict) else None
+
+        # Resolve LiteLLM provider prefixes so models route properly
+        if provider_name == "google":
+            litellm_model = f"gemini/{model_name}" if not model_name.startswith("gemini/") else model_name
+        elif provider_name == "ollama":
+            litellm_model = f"ollama_chat/{model_name}" if not (model_name.startswith("ollama/") or model_name.startswith("ollama_chat/")) else model_name
+            base_url = base_url or "http://localhost:11434"
+        elif provider_name == "openrouter":
+            clean = model_name.lstrip("~")
+            litellm_model = f"openrouter/{clean}" if not clean.startswith("openrouter/") else clean
+        elif provider_name == "nvidia":
+            litellm_model = f"nvidia_nim/{model_name}" if not model_name.startswith("nvidia_nim/") else model_name
+        elif p_conf and p_conf.get("type") and p_conf.get("type") != provider_name:
+            litellm_model = f"{p_conf.get('type')}/{model_name}"
+        else:
+            litellm_model = f"{provider_name}/{model_name}" if not model_name.startswith(f"{provider_name}/") else model_name
+
+        # Fast fail if provider requires key but none configured
+        if provider_name != "ollama" and not api_key:
+            raise RuntimeError(f"No API key configured for provider '{provider_name}'. Please configure it in Settings.")
+
         try:
             import sys, os
-            # PyInstaller bundled binary: litellm looks for model_prices_and_context_window_backup.json
-            # in the extracted _MEIxxx temp folder which doesn't persist between runs.
-            # Pre-create an empty stub so litellm won't crash with FileNotFoundError.
             if getattr(sys, "frozen", False):
                 _mei = getattr(sys, "_MEIPASS", None)
                 if _mei:
@@ -1163,24 +1187,21 @@ class JsonRpcHandler:
                             _f.write("{}")
 
             import litellm
-            from andromity.core.models import get_context_limit_for_model
+            litellm.suppress_debug_info = True
 
-            api_key = config.get_api_key(provider)
-            base_url = None
-            p_conf = config.get_provider_config(provider)
-            if p_conf and isinstance(p_conf, dict):
-                base_url = p_conf.get("base_url")
-
-            model_id = model
-            # litellm expects provider prefix for some models; try raw then with provider/
             messages = [{"role": "user", "content": prompt}]
-            kwargs: Dict[str, Any] = {"model": model_id, "messages": messages, "temperature": 0.3, "max_tokens": 300}
+            kwargs: Dict[str, Any] = {
+                "model": litellm_model,
+                "messages": messages,
+                "temperature": 0.2,
+                "max_tokens": 400,
+            }
             if api_key:
                 kwargs["api_key"] = api_key
             if base_url:
                 kwargs["api_base"] = base_url
-            # Quick timeout: 25s
-            resp = await asyncio.wait_for(asyncio.to_thread(lambda: litellm.completion(**kwargs)), timeout=25)
+
+            resp = await asyncio.wait_for(asyncio.to_thread(lambda: litellm.completion(**kwargs)), timeout=20)
             text = ""
             try:
                 text = resp.choices[0].message.content or ""
@@ -1189,19 +1210,8 @@ class JsonRpcHandler:
             if text.strip():
                 return {"message": text.strip(), "result": text.strip()}
         except Exception as e:
-            log.debug("quickPrompt litellm failed: %s, falling back to Agent", e)
-
-        # Fallback: run a one-shot Agent without tools streaming, collect TextDelta
-        session = Session(name="quick-prompt-temp", project_path=str(project_path or Path.cwd()))
-        agent = Agent(session=session, model=model, provider=provider, auto_approve=True)
-        collected = []
-        async for event in agent.run(prompt):
-            if isinstance(event, TextDelta):
-                collected.append(event.text)
-            elif isinstance(event, Done):
-                break
-        result = "".join(collected).strip()
-        return {"message": result, "result": result}
+            log.warning("quickPrompt direct completion failed: %s", e)
+            raise RuntimeError(f"Failed to generate commit message via {provider_name}/{model_name}: {e}")
 
     async def rpc_agent_approve_tool(self, params: Dict[str, Any]) -> Dict[str, Any]:
         approval_id = params.get("approval_id")
