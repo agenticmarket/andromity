@@ -60,7 +60,7 @@ def execute_agent_task(
             body=(
                 "⚠️ **Permission Denied:** Interactive tasks can only be triggered by repository "
                 "maintainers (Owner, Member, or Collaborator) to prevent unauthorized API quota consumption.\n\n"
-                "--- \n<sub>Powered by [Andromity](https://agenticmarket.dev)</sub>"
+                "--- \n<sub>Powered by [Andromity](https://andromity.agenticmarket.dev)</sub>"
             ),
             marker=f"<!-- andromity-task-perm-{issue_number} -->",
         )
@@ -77,7 +77,7 @@ def execute_agent_task(
         issue_number,
         body=(
             f"⏳ **Andromity** is processing your task: `{instruction}`...\n\n"
-            "--- \n<sub>Powered by [Andromity](https://agenticmarket.dev)</sub>"
+            "--- \n<sub>Powered by [Andromity](https://andromity.agenticmarket.dev)</sub>"
         ),
         marker=f"<!-- andromity-task-status-{issue_number} -->",
     )
@@ -98,7 +98,7 @@ def execute_agent_task(
         body=(
             f"✅ **Andromity** finished processing task: `{instruction}`.\n\n"
             f"- Changes committed with `{CO_AUTHOR_TRAILER}`\n\n"
-            "--- \n<sub>Powered by [Andromity](https://agenticmarket.dev)</sub>"
+            "--- \n<sub>Powered by [Andromity](https://andromity.agenticmarket.dev)</sub>"
         ),
         marker=f"<!-- andromity-task-status-{issue_number} -->",
     )

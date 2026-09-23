@@ -80,11 +80,12 @@ class TestCIAction(unittest.TestCase):
             pr_body="No changes",
         )
         self.assertIn("No changes detected in PR diff", result)
-        self.assertIn("agenticmarket.dev", result)
+        self.assertIn("andromity.agenticmarket.dev", result)
 
     def test_pr_reviewer_footer_attribution(self):
-        """Verify review footer points to agenticmarket.dev and uses Andromity branding."""
-        self.assertIn("agenticmarket.dev", REVIEW_FOOTER)
+        """Verify review footer points to andromity.agenticmarket.dev and uses Andromity branding."""
+        self.assertIn("https://andromity.agenticmarket.dev", REVIEW_FOOTER)
+        self.assertIn("https://andromity.agenticmarket.dev/docs", REVIEW_FOOTER)
         self.assertIn("Andromity", REVIEW_FOOTER)
         self.assertNotIn("Andromity AI", REVIEW_FOOTER)
 
