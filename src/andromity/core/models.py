@@ -77,6 +77,7 @@ MODEL_CATALOG = {
         "name": "OpenRouter (All Models)",
         "requires_env": "OPENROUTER_API_KEY",
         "models": [
+            {"id": "deepseek/deepseek-v4.1-flash", "name": "DeepSeek V4.1 Flash", "desc": "Ultra-fast, cost-effective coding & reasoning", "context": "128K", "pricing": "OpenRouter pricing"},
             {"id": "anthropic/claude-3.7-sonnet", "name": "Claude 3.7 Sonnet", "desc": "Latest Sonnet with hybrid reasoning", "context": "200K", "pricing": "OpenRouter pricing"},
             {"id": "openai/gpt-4o", "name": "GPT-4o", "desc": "Flagship OpenAI model", "context": "128K", "pricing": "OpenRouter pricing"},
             {"id": "deepseek/deepseek-r1", "name": "DeepSeek R1", "desc": "Open-weight reasoning model", "context": "128K", "pricing": "OpenRouter pricing"},

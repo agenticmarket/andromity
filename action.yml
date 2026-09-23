@@ -1,0 +1,56 @@
+name: "Andromity Coding Agent"
+description: "Autonomous Pull Request reviews and code tasks powered by Andromity."
+author: "Agentic Market"
+branding:
+  icon: "code"
+  color: "purple"
+
+inputs:
+  api-key:
+    description: "API key for the LLM provider (OpenRouter API key recommended)."
+    required: false
+    default: ""
+  openrouter-api-key:
+    description: "OpenRouter API key (alias for api-key)."
+    required: false
+    default: ""
+  github-token:
+    description: "GitHub token for authenticating API calls and posting PR reviews."
+    required: false
+    default: ${{ github.token }}
+  mode:
+    description: "Operation mode: 'review' for automated PR code reviews, 'task' for interactive issue solving."
+    required: false
+    default: "review"
+  model:
+    description: "LLM model identifier to use (default: OpenRouter DeepSeek Flash v4.1)."
+    required: false
+    default: "openrouter/deepseek/deepseek-v4.1-flash"
+  prompt:
+    description: "Optional custom instruction for the review or task."
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+
+    - name: Run Andromity CI
+      shell: bash
+      env:
+        INPUT_API_KEY: ${{ inputs.api-key || inputs.openrouter-api-key }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_PROMPT: ${{ inputs.prompt }}
+        GITHUB_EVENT_PATH: ${{ github.event_path }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_EVENT_NAME: ${{ github.event_name }}
+        GITHUB_SHA: ${{ github.sha }}
+        GITHUB_REF: ${{ github.ref }}
+      run: |
+        uv run --package andromity andromity-ci
