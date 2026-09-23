@@ -2332,6 +2332,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (selectedOnboardingProvider === 'ollama') {
           if (onboardingKeyForm) onboardingKeyForm.style.display = 'none';
           if (onboardingOllamaForm) onboardingOllamaForm.style.display = 'flex';
+          vscode.postMessage({ type: 'check_ollama_status' });
         } else {
           if (onboardingKeyForm) onboardingKeyForm.style.display = 'flex';
           if (onboardingOllamaForm) onboardingOllamaForm.style.display = 'none';
@@ -2370,16 +2371,85 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     });
 
+    let currentOllamaStatus = null;
+    const btnOnboardingOllamaStart = document.getElementById('btn-onboarding-ollama-start');
+    const btnOnboardingOllamaPull = document.getElementById('btn-onboarding-ollama-pull');
+    const btnOnboardingOllamaDownload = document.getElementById('btn-onboarding-ollama-download');
+    const onboardingOllamaStatusChip = document.getElementById('onboarding-ollama-status-chip');
+    const onboardingOllamaStatusDot = document.getElementById('onboarding-ollama-status-dot');
+    const onboardingOllamaStatusText = document.getElementById('onboarding-ollama-status-text');
+
     btnOnboardingOllamaSave?.addEventListener('click', () => {
       btnOnboardingOllamaSave.disabled = true;
       btnOnboardingOllamaSave.innerHTML = '<span>Activating Ollama...</span>';
+      const bestModel = currentOllamaStatus?.bestModel || (currentOllamaStatus?.models?.[0]) || 'llama3.2:latest';
       vscode.postMessage({
         type: 'set_api_key',
         provider: 'ollama',
         apiKey: '',
-        modelId: 'llama3.2:latest',
+        modelId: bestModel,
       });
     });
+
+    btnOnboardingOllamaStart?.addEventListener('click', () => {
+      if (btnOnboardingOllamaStart) {
+        btnOnboardingOllamaStart.disabled = true;
+        btnOnboardingOllamaStart.innerHTML = '<span>Starting server...</span>';
+      }
+      vscode.postMessage({ type: 'start_ollama_server' });
+    });
+
+    btnOnboardingOllamaPull?.addEventListener('click', () => {
+      const model = btnOnboardingOllamaPull.dataset.model || 'qwen2.5-coder:7b';
+      if (btnOnboardingOllamaPull) {
+        btnOnboardingOllamaPull.disabled = true;
+        btnOnboardingOllamaPull.innerHTML = '<span>Pulling ' + model + '...</span>';
+      }
+      vscode.postMessage({ type: 'pull_ollama_model', model: model });
+    });
+
+    function updateOllamaStatusUI(status) {
+      if (!status) return;
+      currentOllamaStatus = status;
+      if (!onboardingOllamaStatusDot || !onboardingOllamaStatusText) return;
+
+      if (status.running) {
+        if (status.models && status.models.length > 0) {
+          const activeModelName = status.bestModel || status.models[0] || 'ready';
+          onboardingOllamaStatusDot.className = 'ollama-status-dot online';
+          onboardingOllamaStatusText.textContent = 'Ollama running · ' + status.models.length + ' model' + (status.models.length > 1 ? 's' : '') + ' ready (' + activeModelName + ')';
+          if (btnOnboardingOllamaSave) btnOnboardingOllamaSave.style.display = 'flex';
+          if (btnOnboardingOllamaStart) btnOnboardingOllamaStart.style.display = 'none';
+          if (btnOnboardingOllamaPull) btnOnboardingOllamaPull.style.display = 'none';
+          if (btnOnboardingOllamaDownload) btnOnboardingOllamaDownload.style.display = 'none';
+        } else {
+          onboardingOllamaStatusDot.className = 'ollama-status-dot warning';
+          onboardingOllamaStatusText.textContent = 'Ollama running · 0 models installed';
+          if (btnOnboardingOllamaPull) btnOnboardingOllamaPull.style.display = 'flex';
+          if (btnOnboardingOllamaSave) btnOnboardingOllamaSave.style.display = 'flex';
+          if (btnOnboardingOllamaStart) btnOnboardingOllamaStart.style.display = 'none';
+          if (btnOnboardingOllamaDownload) btnOnboardingOllamaDownload.style.display = 'none';
+        }
+      } else if (status.installed) {
+        onboardingOllamaStatusDot.className = 'ollama-status-dot warning';
+        onboardingOllamaStatusText.textContent = 'Ollama installed · Server stopped';
+        if (btnOnboardingOllamaStart) {
+          btnOnboardingOllamaStart.style.display = 'flex';
+          btnOnboardingOllamaStart.disabled = false;
+          btnOnboardingOllamaStart.innerHTML = '<span>Start Ollama Server</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
+        }
+        if (btnOnboardingOllamaSave) btnOnboardingOllamaSave.style.display = 'flex';
+        if (btnOnboardingOllamaPull) btnOnboardingOllamaPull.style.display = 'none';
+        if (btnOnboardingOllamaDownload) btnOnboardingOllamaDownload.style.display = 'none';
+      } else {
+        onboardingOllamaStatusDot.className = 'ollama-status-dot offline';
+        onboardingOllamaStatusText.textContent = 'Ollama not detected on machine';
+        if (btnOnboardingOllamaDownload) btnOnboardingOllamaDownload.style.display = 'flex';
+        if (btnOnboardingOllamaSave) btnOnboardingOllamaSave.style.display = 'flex';
+        if (btnOnboardingOllamaStart) btnOnboardingOllamaStart.style.display = 'none';
+        if (btnOnboardingOllamaPull) btnOnboardingOllamaPull.style.display = 'none';
+      }
+    }
 
     let onboardingPendingProvider = '';
     let onboardingSelectedLiveModel = '';
@@ -5637,12 +5707,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.ollamaDetectedModel) {
             showOllamaBanner(msg.ollamaDetectedModel);
           }
+          if (msg.ollamaStatus) {
+            updateOllamaStatusUI(msg.ollamaStatus);
+          }
           if (msg.waterfallFirstSessionShown) {
             dismissWaterfallOnboarding();
           } else {
             checkWaterfallOnboarding(msg.waterfallFirstSessionShown);
           }
           break;
+
+        case 'ollama_status_updated': {
+          updateOllamaStatusUI(msg.status);
+          break;
+        }
 
         case 'dismiss_waterfall_callout':
           dismissWaterfallOnboarding();

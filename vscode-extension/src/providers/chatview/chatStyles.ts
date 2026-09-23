@@ -1768,6 +1768,63 @@ export function getChatStyles(): string {
       font-weight: 600;
       color: var(--fg, #e4e4e7);
     }
+    .btn-onboarding-save.secondary {
+      background: var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.08));
+      color: var(--vscode-button-secondaryForeground, var(--fg, #ffffff));
+      border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+    }
+    .btn-onboarding-save.secondary:hover {
+      background: var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.14));
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+    .ollama-status-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 10px;
+      border-radius: var(--radius, 4px);
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+      font-size: 11px;
+      color: var(--fg, #e4e4e7);
+      margin-top: 2px;
+      margin-bottom: 2px;
+    }
+    .ollama-status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--muted, #71717a);
+      flex-shrink: 0;
+      transition: background-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .ollama-status-dot.online {
+      background: #22c55e;
+      box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
+    }
+    .ollama-status-dot.warning {
+      background: #f59e0b;
+      box-shadow: 0 0 6px rgba(245, 158, 11, 0.4);
+    }
+    .ollama-status-dot.offline {
+      background: #ef4444;
+      box-shadow: 0 0 6px rgba(239, 68, 68, 0.3);
+    }
+    .ollama-status-dot.checking {
+      background: #60a5fa;
+      animation: pulseDot 1.2s infinite ease-in-out;
+    }
+    @keyframes pulseDot {
+      0%, 100% { opacity: 0.4; }
+      50% { opacity: 1; }
+    }
+    .ollama-status-text {
+      font-size: 11px;
+      color: var(--fg, #e4e4e7);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .ollama-info-desc {
       font-size: 10.5px;
       color: var(--muted, #888888);

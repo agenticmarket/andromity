@@ -19,6 +19,14 @@ import {
 import { getChatViewHtml, ChatViewState } from "./chatview/chatHtml.js";
 import { PlanViewProvider } from "./PlanViewProvider.js";
 
+export interface OllamaStatus {
+  running: boolean;
+  installed: boolean;
+  models: string[];
+  bestModel: string | null;
+  host: string;
+}
+
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "andromity.chatView";
   public static currentProvider: ChatViewProvider | null = null;
@@ -55,6 +63,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _latestTurnFiles: Set<string> = new Set<string>();
   private _lastPromptPayload: any = null;
   private _configData: any = null;
+  private _lastOllamaStatus: OllamaStatus | null = null;
+  private _ollamaTerminal: vscode.Terminal | null = null;
+  private _ollamaBinaryPath: string | null = null;
+  private _ollamaAppBinaryPath: string | null = null;
+  private _ollamaInstalledCached: boolean | null = null;
 
   public isViewVisible(): boolean {
     return !!(this._view && this._view.visible);
@@ -682,11 +695,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", true);
       this._postToWebview({ type: "agent_started", ...params });
       if (sid && this._context) {
-        // Auto-open live Waterfall in an editor tab for the user's first 3 agent sessions
-        const autoOpenCount = this._context.globalState.get<number>("andromity.waterfallAutoOpenCount", 0);
-        if (autoOpenCount < 3) {
-          void this._context.globalState.update("andromity.waterfallAutoOpenCount", autoOpenCount + 1);
-          void this._context.globalState.update("andromity.waterfallFirstSessionShown", true);
+        const config = vscode.workspace.getConfiguration("andromity");
+        const shouldAutoOpen = config.get<boolean>("waterfallAutoOpen", true);
+        if (shouldAutoOpen) {
           WaterfallPanel.createOrShow(
             this._extensionUri,
             sid,
@@ -938,14 +949,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private async _checkAndAutoConnectOllama(providers: ProviderInfo[]): Promise<string | null> {
-    const hasAnyKey = providers.some((p) => p.has_key);
+  public async probeOllama(): Promise<OllamaStatus> {
+    const config = vscode.workspace.getConfiguration("andromity");
+    const configuredHost = config.get<string>("ollamaHost", "http://127.0.0.1:11434");
+    const candidateHosts = [configuredHost, "http://127.0.0.1:11434", "http://localhost:11434"];
+    const uniqueHosts = Array.from(new Set(candidateHosts));
+
+    for (const host of uniqueHosts) {
+      const res = await this._probeOllamaHost(host);
+      if (res.running) {
+        this._lastOllamaStatus = res;
+        return res;
+      }
+    }
+
+    const installed = await this._checkOllamaCliInstalled();
+    const res: OllamaStatus = {
+      running: false,
+      installed,
+      models: [],
+      bestModel: null,
+      host: configuredHost,
+    };
+    this._lastOllamaStatus = res;
+    return res;
+  }
+
+  private _probeOllamaHost(host: string): Promise<OllamaStatus> {
     return new Promise((resolve) => {
       try {
-        const http = require("http");
-        const req = http.get("http://127.0.0.1:11434/api/tags", { timeout: 350 }, (res: any) => {
+        const cleanHost = host.replace(/\/+$/, "");
+        const isHttps = cleanHost.startsWith("https:");
+        const client = isHttps ? require("https") : require("http");
+        const url = `${cleanHost}/api/tags`;
+        const req = client.get(url, { timeout: 1200 }, (res: any) => {
           if (res.statusCode !== 200) {
-            resolve(null);
+            res.resume();
+            resolve({ running: false, installed: true, models: [], bestModel: null, host: cleanHost });
             return;
           }
           let raw = "";
@@ -953,32 +993,273 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           res.on("end", () => {
             try {
               const data = JSON.parse(raw);
-              const models = (data.models || []).map((m: any) => m.name || m.model);
-              if (models.length > 0) {
-                const bestModel =
-                  models.find((m: string) => /qwen|coder/i.test(m)) ||
-                  models.find((m: string) => /deepseek/i.test(m)) ||
-                  models.find((m: string) => /llama/i.test(m)) ||
-                  models[0];
-                if (!hasAnyKey || this._currentProvider === "ollama") {
-                  this._currentProvider = "ollama";
-                  this._currentModel = bestModel;
-                  void this._rpcClient?.call("config.set", { section: "default", key: "provider", value: "ollama" }).catch(() => {});
-                  void this._rpcClient?.call("config.set", { section: "default", key: "model", value: bestModel }).catch(() => {});
+              const isEmbeddingModel = (m: any) => {
+                const caps = m.capabilities || [];
+                if (caps.length > 0 && caps.includes("embedding") && !caps.includes("completion") && !caps.includes("chat")) {
+                  return true;
                 }
-                resolve(bestModel);
-                return;
-              }
-            } catch {}
-            resolve(null);
+                const nm = (m.name || m.model || "").toLowerCase();
+                return (
+                  nm.includes("embed") ||
+                  nm.includes("minilm") ||
+                  nm.includes("bge-") ||
+                  nm.includes("e5-") ||
+                  nm.includes("sentence-transformers")
+                );
+              };
+
+              const allModels = (data.models || []).map((m: any) => m.name || m.model);
+              const chatModels = (data.models || [])
+                .filter((m: any) => !isEmbeddingModel(m))
+                .map((m: any) => m.name || m.model);
+
+              const models = chatModels.length > 0 ? chatModels : allModels;
+              const bestModel =
+                models.find((m: string) => /qwen.*coder/i.test(m)) ||
+                models.find((m: string) => /deepseek.*coder/i.test(m)) ||
+                models.find((m: string) => /codellama/i.test(m)) ||
+                models.find((m: string) => /qwen/i.test(m)) ||
+                models.find((m: string) => /deepseek/i.test(m)) ||
+                models.find((m: string) => /llama3/i.test(m)) ||
+                models.find((m: string) => /llama/i.test(m)) ||
+                models.find((m: string) => /mistral/i.test(m)) ||
+                models[0] ||
+                null;
+
+              resolve({
+                running: true,
+                installed: true,
+                models,
+                bestModel,
+                host: cleanHost,
+              });
+            } catch {
+              resolve({ running: true, installed: true, models: [], bestModel: null, host: cleanHost });
+            }
           });
         });
-        req.on("error", () => resolve(null));
-        req.on("timeout", () => { req.destroy(); resolve(null); });
+        req.on("error", () => resolve({ running: false, installed: false, models: [], bestModel: null, host }));
+        req.on("timeout", () => { req.destroy(); resolve({ running: false, installed: false, models: [], bestModel: null, host }); });
       } catch {
-        resolve(null);
+        resolve({ running: false, installed: false, models: [], bestModel: null, host });
       }
     });
+  }
+
+  private _resolveOllamaBinary(): string | null {
+    if (this._ollamaBinaryPath) return this._ollamaBinaryPath;
+    const fs = require("fs");
+    const path = require("path");
+
+    // 1. Direct standard paths based on OS
+    if (process.platform === "win32") {
+      const candidates = [
+        process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Programs", "Ollama", "ollama.exe") : "",
+        process.env.PROGRAMFILES ? path.join(process.env.PROGRAMFILES, "Ollama", "ollama.exe") : "",
+        process.env["ProgramFiles(x86)"] ? path.join(process.env["ProgramFiles(x86)"], "Ollama", "ollama.exe") : "",
+      ].filter(Boolean);
+
+      for (const p of candidates) {
+        try {
+          if (fs.existsSync(p)) {
+            this._ollamaBinaryPath = p;
+            this._ollamaInstalledCached = true;
+            return p;
+          }
+        } catch {}
+      }
+    } else {
+      const candidates = [
+        "/usr/local/bin/ollama",
+        "/usr/bin/ollama",
+        "/opt/homebrew/bin/ollama",
+      ];
+      for (const p of candidates) {
+        try {
+          if (fs.existsSync(p)) {
+            this._ollamaBinaryPath = p;
+            this._ollamaInstalledCached = true;
+            return p;
+          }
+        } catch {}
+      }
+    }
+
+    // 2. Search PATH directories directly with fs.existsSync (instant, zero console popups)
+    const envPath = process.env.PATH || "";
+    const sep = process.platform === "win32" ? ";" : ":";
+    const exeName = process.platform === "win32" ? "ollama.exe" : "ollama";
+    for (const dir of envPath.split(sep)) {
+      if (!dir) continue;
+      const full = path.join(dir, exeName);
+      try {
+        if (fs.existsSync(full)) {
+          this._ollamaBinaryPath = full;
+          this._ollamaInstalledCached = true;
+          return full;
+        }
+      } catch {}
+    }
+
+    return null;
+  }
+
+  private _resolveOllamaAppBinary(): string | null {
+    if (this._ollamaAppBinaryPath) return this._ollamaAppBinaryPath;
+    if (process.platform !== "win32") return null;
+    const fs = require("fs");
+    const path = require("path");
+
+    const candidates = [
+      process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Programs", "Ollama", "ollama app.exe") : "",
+      process.env.PROGRAMFILES ? path.join(process.env.PROGRAMFILES, "Ollama", "ollama app.exe") : "",
+      process.env["ProgramFiles(x86)"] ? path.join(process.env["ProgramFiles(x86)"], "Ollama", "ollama app.exe") : "",
+    ].filter(Boolean);
+
+    for (const p of candidates) {
+      try {
+        if (fs.existsSync(p)) {
+          this._ollamaAppBinaryPath = p;
+          return p;
+        }
+      } catch {}
+    }
+    return null;
+  }
+
+  private async _checkOllamaCliInstalled(): Promise<boolean> {
+    if (this._ollamaInstalledCached !== null) return this._ollamaInstalledCached;
+    const binary = this._resolveOllamaBinary();
+    if (binary) {
+      this._ollamaInstalledCached = true;
+      return true;
+    }
+
+    // Fallback: asynchronous check with windowsHide: true so no black window appears
+    return new Promise((resolve) => {
+      const { exec } = require("child_process");
+      const cmd = process.platform === "win32" ? "where.exe ollama" : "which ollama";
+      exec(cmd, { timeout: 1500, windowsHide: true }, (err: any, stdout: any) => {
+        const ok = !err && Boolean(stdout && stdout.trim());
+        this._ollamaInstalledCached = ok;
+        if (ok && stdout) {
+          const firstLine = stdout.trim().split(/\r?\n/)[0];
+          if (firstLine) this._ollamaBinaryPath = firstLine.trim();
+        }
+        resolve(ok);
+      });
+    });
+  }
+
+  private _getOrCreateOllamaTerminal(title: string = "Ollama"): vscode.Terminal {
+    if (this._ollamaTerminal) {
+      const isAlive = vscode.window.terminals.includes(this._ollamaTerminal);
+      if (isAlive && this._ollamaTerminal.exitStatus === undefined) {
+        return this._ollamaTerminal;
+      }
+    }
+    const existing = vscode.window.terminals.find((t) => t.name.startsWith("Ollama") && t.exitStatus === undefined);
+    if (existing) {
+      this._ollamaTerminal = existing;
+      return existing;
+    }
+    this._ollamaTerminal = vscode.window.createTerminal(title);
+    return this._ollamaTerminal;
+  }
+
+  public async startOllamaServer(): Promise<boolean> {
+    // 1. If already running, return immediately without spawning anything
+    const initialStatus = await this.probeOllama();
+    if (initialStatus.running) return true;
+
+    // 2. Resolve installed binary without running visible console windows
+    const installed = await this._checkOllamaCliInstalled();
+    if (!installed) {
+      vscode.window.showErrorMessage(
+        "Ollama is not installed on this machine. Please download it from https://ollama.com",
+        "Download Ollama"
+      ).then((action) => {
+        if (action === "Download Ollama") {
+          vscode.env.openExternal(vscode.Uri.parse("https://ollama.com/download"));
+        }
+      });
+      return false;
+    }
+
+    // 3. Start silently in background
+    try {
+      const { spawn } = require("child_process");
+      const appExe = this._resolveOllamaAppBinary();
+      const binary = this._resolveOllamaBinary();
+
+      if (appExe) {
+        // On Windows, launching the official tray app starts Ollama cleanly with no console window
+        const child = spawn(appExe, [], {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        child.on("error", () => {});
+        child.unref();
+      } else if (binary) {
+        const child = spawn(binary, ["serve"], {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        child.on("error", () => {});
+        child.unref();
+      } else {
+        const child = spawn("ollama", ["serve"], {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+          shell: process.platform === "win32",
+        });
+        child.on("error", () => {});
+        child.unref();
+      }
+    } catch {}
+
+    // 4. Poll up to 4s (8 x 500ms) for background server to respond to HTTP
+    for (let i = 0; i < 8; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      const status = await this.probeOllama();
+      if (status.running) return true;
+    }
+
+    return false;
+  }
+
+  public async pullOllamaModel(modelName: string) {
+    const installed = await this._checkOllamaCliInstalled();
+    if (!installed) {
+      vscode.window.showErrorMessage("Ollama CLI is not installed on this machine. Please install Ollama first.");
+      return;
+    }
+    const raw = String(modelName || "").trim();
+    if (!/^[a-zA-Z0-9._:\-\/]+$/.test(raw)) {
+      vscode.window.showErrorMessage("Invalid model name format.");
+      return;
+    }
+    const t = this._getOrCreateOllamaTerminal("Ollama");
+    t.show(true);
+    t.sendText(`ollama pull ${raw}`);
+  }
+
+  private async _checkAndAutoConnectOllama(providers: ProviderInfo[]): Promise<string | null> {
+    const hasAnyKey = providers.some((p) => p.has_key);
+    const status = await this.probeOllama();
+    if (status.running && status.bestModel) {
+      if (!hasAnyKey || this._currentProvider === "ollama") {
+        this._currentProvider = "ollama";
+        this._currentModel = status.bestModel;
+        void this._rpcClient?.call("config.set", { section: "default", key: "provider", value: "ollama" }).catch(() => {});
+        void this._rpcClient?.call("config.set", { section: "default", key: "model", value: status.bestModel }).catch(() => {});
+      }
+      return status.bestModel;
+    }
+    return null;
   }
 
   private _postToWebview(msg: any) {
@@ -1117,6 +1398,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         wallpaper: this.getWallpaperConfig(this._view?.webview),
         mascotEnabled: vscode.workspace.getConfiguration("andromity").get<boolean>("mascotEnabled", true),
         ollamaDetectedModel: detectedOllama,
+        ollamaStatus: this._lastOllamaStatus,
       });
     } catch (e: any) {
       console.error("[Andromity Chat] Initial config load failed:", e);
@@ -1503,6 +1785,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             return !m.provider || m.provider === provider;
           });
 
+          if (provider === "ollama") {
+            const status = await this.probeOllama();
+            if (!status.running) {
+              const msg = status.installed
+                ? "Ollama server is not running. Please start Ollama before activating."
+                : "Ollama is not installed on this machine. Please download it from https://ollama.com";
+              vscode.window.showWarningMessage(msg);
+              this._postToWebview({ type: "ollama_status_updated", status });
+              this._postToWebview({ type: "key_configure_failed", error: msg });
+              break;
+            }
+            if (!status.models || status.models.length === 0) {
+              const msg = "Ollama server is running, but no models are installed. Please pull a coding model first.";
+              vscode.window.showWarningMessage(msg);
+              this._postToWebview({ type: "ollama_status_updated", status });
+              this._postToWebview({ type: "key_configure_failed", error: msg });
+              break;
+            }
+            for (const nm of status.models) {
+              if (!providerModels.some((m: any) => m.id === nm)) {
+                providerModels.push({
+                  id: nm,
+                  name: nm,
+                  provider: "ollama",
+                  desc: "Local Ollama Model",
+                  is_free: true,
+                } as any);
+              }
+            }
+          }
+
           if (providerModels.length > 0) {
             this._models = liveModels;
             void this._rpcClient?.call("telemetry.recordFeature", {
@@ -1548,6 +1861,46 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             error: err.message,
           });
         }
+        break;
+      }
+
+      case "start_ollama_server": {
+        const ok = await this.startOllamaServer();
+        const status = await this.probeOllama();
+        this._postToWebview({
+          type: "ollama_status_updated",
+          status,
+        });
+        if (ok) {
+          vscode.window.showInformationMessage("Ollama server started successfully!");
+          await this.refreshConfig();
+        } else {
+          vscode.window.showWarningMessage(
+            "Could not start Ollama server automatically in background. You can open a terminal to inspect or run 'ollama serve'.",
+            "Open Terminal"
+          ).then((action) => {
+            if (action === "Open Terminal") {
+              const t = this._getOrCreateOllamaTerminal("Ollama");
+              t.show(true);
+              t.sendText("ollama serve");
+            }
+          });
+        }
+        break;
+      }
+
+      case "pull_ollama_model": {
+        const modelName = message.model || message.modelName || "qwen2.5-coder:7b";
+        this.pullOllamaModel(modelName);
+        break;
+      }
+
+      case "check_ollama_status": {
+        const status = await this.probeOllama();
+        this._postToWebview({
+          type: "ollama_status_updated",
+          status,
+        });
         break;
       }
 

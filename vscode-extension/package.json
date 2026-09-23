@@ -586,6 +586,16 @@
           "type": "boolean",
           "default": true,
           "description": "Soft radial cursor spotlight aura on the background."
+        },
+        "andromity.waterfallAutoOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically open the live Waterfall execution trace side-by-side when an agent session begins."
+        },
+        "andromity.ollamaHost": {
+          "type": "string",
+          "default": "http://127.0.0.1:11434",
+          "description": "Base URL for the local Ollama instance."
         }
       }
     },

@@ -1923,6 +1923,23 @@ export function getWaterfallScript(sessionId: string): string {
         }
       });
 
+      const autoOpenPill = document.getElementById('wf-auto-open-pill');
+      if (autoOpenPill) {
+        autoOpenPill.addEventListener('click', (e) => {
+          const target = e.target;
+          const btn = (target && target.closest) ? target.closest('[data-action]') : null;
+          if (!btn) return;
+          const action = btn.getAttribute('data-action');
+          if (action === 'dismiss-pill') {
+            autoOpenPill.classList.add('collapsed');
+            setTimeout(() => { autoOpenPill.remove(); }, 260);
+            vscode.postMessage({ type: 'dismiss_waterfall_auto_open_notice' });
+          } else if (action === 'open-settings') {
+            vscode.postMessage({ type: 'open_settings' });
+          }
+        });
+      }
+
       // Signal ready
       vscode.postMessage({ type: 'waterfall_ready' });
     })();

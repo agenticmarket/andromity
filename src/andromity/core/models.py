@@ -241,6 +241,13 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
         models = []
         for item in data.get("models", []):
             name = item.get("name", "")
+            caps = item.get("capabilities") or []
+            is_embed = (
+                ("embedding" in caps and "completion" not in caps and "chat" not in caps)
+                or any(x in name.lower() for x in ("embed", "minilm", "bge-", "e5-", "sentence-transformers"))
+            )
+            if is_embed:
+                continue
             size_bytes = item.get("size", 0)
             size_gb = f"{size_bytes / (1024**3):.1f}GB" if size_bytes else ""
             num_ctx = get_ollama_num_ctx(name, base_url or "http://localhost:11434")

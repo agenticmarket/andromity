@@ -15,6 +15,7 @@ export interface ChatViewState {
   models?: { id: string; name: string }[];
   wallpaperConfig?: WallpaperConfig;
   defaultWallpaperUri?: string;
+  ollamaStatus?: any;
 }
 
 export function formatModelDisplayName(id?: string, models?: { id: string; name: string }[]): string {
@@ -124,7 +125,7 @@ ${styles}
           <line x1="10" y1="14" x2="21" y2="3"></line>
         </svg>
       </button>
-      <button class="top-bar-icon-btn" id="btn-top-timeline" style="" title="Conversation Timeline & Milestones" data-action="toggle-timeline">
+      <button class="top-bar-icon-btn" id="btn-top-timeline" style="display:none;" title="Conversation Timeline & Milestones" data-action="toggle-timeline">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <circle cx="12" cy="12" r="10"></circle>
           <polyline points="12 6 12 12 16 14"></polyline>
@@ -409,13 +410,31 @@ ${styles}
                 </div>
                 <div class="ollama-info-content">
                   <div class="ollama-info-title">Zero-Key Local AI</div>
-                  <div class="ollama-info-desc">Runs entirely on your local GPU/CPU. Fully private, offline, and free forever. Make sure Ollama is running on your machine.</div>
+                  <div class="ollama-info-desc" id="ollama-info-desc">Runs entirely on your local GPU/CPU. Fully private, offline, and free forever.</div>
                 </div>
               </div>
-              <button class="btn-onboarding-save" id="btn-onboarding-ollama-save">
-                <span>Activate Local Ollama</span>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
-              </button>
+              <div class="ollama-status-chip" id="onboarding-ollama-status-chip">
+                <span class="ollama-status-dot" id="onboarding-ollama-status-dot"></span>
+                <span class="ollama-status-text" id="onboarding-ollama-status-text">Checking local Ollama service...</span>
+              </div>
+              <div class="ollama-actions" id="onboarding-ollama-actions" style="display:flex; flex-direction:column; gap:6px; width:100%;">
+                <button class="btn-onboarding-save" id="btn-onboarding-ollama-save">
+                  <span>Activate Local Ollama</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                </button>
+                <button class="btn-onboarding-save secondary" id="btn-onboarding-ollama-start" style="display:none;">
+                  <span>Start Ollama Server</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                </button>
+                <button class="btn-onboarding-save secondary" id="btn-onboarding-ollama-pull" style="display:none;" data-model="qwen2.5-coder:7b">
+                  <span>Pull Coding Model (qwen2.5-coder:7b)</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                </button>
+                <a href="https://ollama.com/download" target="_blank" class="btn-onboarding-save secondary" id="btn-onboarding-ollama-download" style="display:none; text-decoration:none; justify-content:center;">
+                  <span>Download Ollama (Free &amp; Private)</span>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                </a>
+              </div>
             </div>
 
             <div class="onboarding-footer-links">

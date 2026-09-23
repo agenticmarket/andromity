@@ -201,6 +201,14 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed release history and version notes.
 
 ---
 
+## Maintainer & Authors
+
+Andromity is created and actively maintained by:
+
+- **Shekhar Pachlore** ([@shekharP1536](https://github.com/shekharP1536)) — Creator & Lead Maintainer (Core Architecture & Autonomous Runtimes)
+
+---
+
 ## Contributing
 
 Open an issue or PR. Honest feedback and bug reports are more useful than feature requests right now.

@@ -692,11 +692,11 @@ assert(saveKeyMsg.apiKey === 'AIzaSyDemoValidGeminiKey1234567890', "Key payload 
 assert(btnSaveKey.disabled === true, "Save button should be disabled during connection");
 console.log("  ✓ Valid API key successfully posted to extension host");
 
-// 2.4 Test Live Model Selection Modal on key_configured_select_model
-console.log("  Testing live model selection modal on key_configured_select_model...");
-const onboardingModal = chatDom.elementsById.get('onboarding-model-modal');
-assert(onboardingModal, "DOM Element #onboarding-model-modal missing");
-assert(onboardingModal.style.display === 'none', "Modal should initially be hidden");
+// 2.4 Test Live Model Selection View on key_configured_select_model
+console.log("  Testing live model selection view on key_configured_select_model...");
+const onboardingModal = chatDom.elementsById.get('onboarding-model-modal') || chatDom.elementsById.get('onboarding-step-2');
+assert(onboardingModal, "DOM Element #onboarding-step-2 missing");
+assert(onboardingModal.style.display === 'none', "Step 2 should initially be hidden");
 
 chatDom.dispatchMessage({
   type: 'key_configured_select_model',
@@ -708,11 +708,11 @@ chatDom.dispatchMessage({
   defaultModel: 'gemini-2.5-flash'
 });
 
-assert(onboardingModal.style.display === 'flex', "Modal must be visible upon key_configured_select_model");
-console.log("  ✓ Real Model Selection Modal emerges smoothly with live models");
+assert(onboardingModal.style.display === 'flex', "Step 2 view must be visible upon key_configured_select_model");
+console.log("  ✓ Real Model Selection emerges smoothly with live models");
 
-const btnConfirmModel = chatDom.elementsById.get('btn-confirm-onboarding-model');
-assert(btnConfirmModel, "#btn-confirm-onboarding-model missing");
+const btnConfirmModel = chatDom.elementsById.get('btn-confirm-onboarding-model') || chatDom.elementsById.get('btn-step2-confirm');
+assert(btnConfirmModel, "#btn-step2-confirm missing");
 btnConfirmModel.click();
 
 const finishModelMsg = chatDom.postedMessages.find(m => m.type === 'finish_onboarding_model');

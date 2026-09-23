@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
 import { getWaterfallHtml } from "../providers/waterfall/waterfallHtml.js";
+import { SettingsPanel } from "./SettingsPanel.js";
 
 export class WaterfallTraceStore {
   private static _buffers = new Map<string, any[]>();
@@ -201,11 +202,13 @@ export class WaterfallPanel {
 
     this._bindRpcEvents();
 
+    const noticeDismissed = this._context?.globalState?.get<boolean>("andromity.waterfallNoticeDismissed", false) || false;
     this._panel.webview.html = getWaterfallHtml(
       this._panel.webview,
       this._sessionId,
       this._sessionName,
-      this._extensionUri
+      this._extensionUri,
+      noticeDismissed
     );
   }
 
@@ -376,6 +379,16 @@ export class WaterfallPanel {
         if (message.text) {
           await vscode.env.clipboard.writeText(message.text);
         }
+        break;
+      }
+      case "dismiss_waterfall_auto_open_notice": {
+        if (this._context) {
+          void this._context.globalState.update("andromity.waterfallNoticeDismissed", true);
+        }
+        break;
+      }
+      case "open_settings": {
+        SettingsPanel.createOrShow(this._extensionUri, this._rpcClient, "general");
         break;
       }
       case "waterfall_ready": {
