@@ -16,12 +16,27 @@ from andromity.ci.github_client import GitHubClient
 CO_AUTHOR_TRAILER = "Co-authored-by: Andromity <noreply@agenticmarket.dev>"
 
 
-def run_git_command(args: list[str]) -> str:
+def run_git_command(args: list[str], timeout: int = 30) -> str:
     """Execute a git command safely and return output."""
-    res = subprocess.run(["git"] + args, capture_output=True, text=True, check=False)
-    if res.returncode != 0:
-        print(f"[Andromity CI] git {' '.join(args)} error: {res.stderr}", file=sys.stderr)
-    return res.stdout.strip()
+    try:
+        res = subprocess.run(
+            ["git"] + args, capture_output=True, text=True, check=False, timeout=timeout
+        )
+        if res.returncode != 0:
+            print(f"[Andromity CI] git {' '.join(args)} error: {res.stderr}", file=sys.stderr)
+        return res.stdout.strip()
+    except subprocess.TimeoutExpired:
+        print(f"[Andromity CI] git {' '.join(args)} timed out after {timeout}s", file=sys.stderr)
+        return ""
+
+
+def _sanitize_instruction(instruction: str, max_len: int = 200) -> str:
+    """Sanitize user instruction for safe use in commit messages and logs."""
+    # Strip control characters, newlines, and backticks to prevent injection
+    sanitized = instruction.replace("\n", " ").replace("\r", " ").replace("`", "'").strip()
+    if len(sanitized) > max_len:
+        sanitized = sanitized[:max_len] + "..."
+    return sanitized
 
 
 def execute_agent_task(
@@ -51,11 +66,11 @@ def execute_agent_task(
         )
         return False
 
-    print(f"[Andromity CI] Authorized maintainer triggered task: '{instruction}'")
+    print(f"[Andromity CI] Authorized maintainer triggered task: '{_sanitize_instruction(instruction)}'")
 
-    # 2. Setup git identity
-    run_git_command(["config", "user.name", "Andromity"])
-    run_git_command(["config", "user.email", "noreply@agenticmarket.dev"])
+    # 2. Setup git identity (--local to avoid contaminating global config)
+    run_git_command(["config", "--local", "user.name", "Andromity"])
+    run_git_command(["config", "--local", "user.email", "noreply@agenticmarket.dev"])
 
     # 3. Post start notification
     github_client.create_or_update_comment(
@@ -68,7 +83,8 @@ def execute_agent_task(
     )
 
     # 4. Format commit message with co-author trailer
-    commit_msg = f"feat: {instruction}\n\n{CO_AUTHOR_TRAILER}"
+    safe_instruction = _sanitize_instruction(instruction)
+    commit_msg = f"feat: {safe_instruction}\n\n{CO_AUTHOR_TRAILER}"
 
     # In task mode, if working directory has changes, commit them with the co-author trailer
     status = run_git_command(["status", "--porcelain"])

@@ -21,6 +21,10 @@ class GitHubClient:
     """Minimal, robust GitHub API client for CI and PR automation."""
 
     def __init__(self, token: str, repository: str, api_url: str = "https://api.github.com"):
+        if not token or not token.strip():
+            raise ValueError("GitHubClient requires a non-empty token.")
+        if not repository or not repository.strip():
+            raise ValueError("GitHubClient requires a non-empty repository (e.g. 'owner/repo').")
         self.token = token.strip()
         self.repository = repository.strip()
         self.api_url = api_url.rstrip("/")
@@ -49,16 +53,21 @@ class GitHubClient:
         req = urllib.request.Request(url, data=encoded_data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
-                raw_body = resp.read()
+                # Cap response reads at 10 MB to prevent OOM on huge diffs
+                max_read = 10 * 1024 * 1024
+                raw_body = resp.read(max_read)
                 if not raw_body:
                     return None
                 if accept == "application/vnd.github.v3.diff":
                     return raw_body.decode("utf-8", errors="replace")
                 return json.loads(raw_body.decode("utf-8"))
         except urllib.error.HTTPError as e:
-            err_msg = e.read().decode("utf-8", errors="replace")
+            err_msg = e.read(4096).decode("utf-8", errors="replace")
             print(f"[Andromity CI] GitHub API HTTPError {e.code} on {method} {url}: {err_msg}", file=sys.stderr)
             raise RuntimeError(f"GitHub API Error {e.code}: {err_msg}") from e
+        except urllib.error.URLError as e:
+            print(f"[Andromity CI] Network error on {method} {url}: {e.reason}", file=sys.stderr)
+            raise RuntimeError(f"GitHub API network error: {e.reason}") from e
 
     def get_pr_diff(self, pr_number: int) -> str:
         """Fetch unified diff for the pull request."""

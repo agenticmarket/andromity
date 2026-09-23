@@ -39,6 +39,9 @@ def main() -> int:
     api_key = os.environ.get("INPUT_API_KEY", "").strip() or os.environ.get("OPENROUTER_API_KEY", "").strip()
     github_token = os.environ.get("INPUT_GITHUB_TOKEN", "").strip() or os.environ.get("GITHUB_TOKEN", "").strip()
     mode = os.environ.get("INPUT_MODE", "review").strip().lower()
+    if mode not in ("review", "task"):
+        print(f"❌ Invalid mode: '{mode}'. Must be 'review' or 'task'.", file=sys.stderr)
+        return 1
     model = os.environ.get("INPUT_MODEL", "").strip() or DEFAULT_MODEL
     custom_prompt = os.environ.get("INPUT_PROMPT", "").strip()
 
@@ -46,13 +49,19 @@ def main() -> int:
     event_path = os.environ.get("GITHUB_EVENT_PATH", "").strip()
     event_name = os.environ.get("GITHUB_EVENT_NAME", "").strip()
 
+    # Never log sensitive tokens
+    api_key_display = f"{api_key[:4]}...{api_key[-4:]}" if api_key and len(api_key) > 8 else "(not set)"
     print(f"📦 Repository: {repository or 'Local/Unknown'}")
     print(f"⚡ Mode: {mode}")
     print(f"🧠 Model: {model}")
+    print(f"🔑 API Key: {api_key_display}")
 
     if not github_token:
         print("❌ Error: GITHUB_TOKEN or input.github-token is required to run Andromity CI.", file=sys.stderr)
         return 1
+
+    if not api_key:
+        print("⚠️ Warning: No API key provided. LLM inference will fail unless OPENROUTER_API_KEY is set.", file=sys.stderr)
 
     payload = load_event_payload(event_path)
     client = GitHubClient(token=github_token, repository=repository)
@@ -72,6 +81,11 @@ def main() -> int:
             pr_number = pr_data.get("number")
             pr_title = pr_data.get("title", "Pull Request")
             pr_body = pr_data.get("body", "")
+
+        # Validate pr_number is a real integer
+        if not pr_number or not isinstance(pr_number, int):
+            print(f"❌ Invalid or missing PR number: {pr_number}", file=sys.stderr)
+            return 1
 
         print(f"🔍 Fetching diff for PR #{pr_number}: '{pr_title}'...")
         try:

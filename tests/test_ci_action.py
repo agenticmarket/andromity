@@ -102,6 +102,8 @@ class TestCIAction(unittest.TestCase):
         self.assertFalse(success)
         mock_client.create_or_update_comment.assert_called_once()
         args, kwargs = mock_client.create_or_update_comment.call_args
+        self.assertIn("Permission Denied", kwargs["body"])
+
     def test_list_comments_uses_per_page_100(self):
         """Verify comment listing requests 100 items per page to prevent missing previous comments."""
         client = GitHubClient(token="fake-token", repository="agenticmarket/andromity")
@@ -123,6 +125,37 @@ class TestCIAction(unittest.TestCase):
         self.assertIn("${{ github.action_path }}", content)
         self.assertIn("openrouter/deepseek/deepseek-v4.1-flash", content)
 
+    def test_github_client_rejects_empty_token(self):
+        """Verify constructor rejects empty or whitespace tokens."""
+        with self.assertRaises(ValueError):
+            GitHubClient(token="", repository="owner/repo")
+        with self.assertRaises(ValueError):
+            GitHubClient(token="   ", repository="owner/repo")
+
+    def test_github_client_rejects_empty_repository(self):
+        """Verify constructor rejects empty or whitespace repository."""
+        with self.assertRaises(ValueError):
+            GitHubClient(token="valid-token", repository="")
+
+    def test_instruction_sanitization(self):
+        """Verify instruction sanitization strips newlines, control chars, and caps length."""
+        from andromity.ci.task_runner import _sanitize_instruction
+        # Newlines should be replaced with spaces
+        self.assertNotIn("\n", _sanitize_instruction("line1\nline2\rline3"))
+        # Backticks should be replaced with single quotes
+        self.assertNotIn("`", _sanitize_instruction("run `rm -rf /`"))
+        # Long instructions should be truncated
+        long_input = "a" * 300
+        result = _sanitize_instruction(long_input)
+        self.assertLessEqual(len(result), 204)  # 200 + "..."
+        self.assertTrue(result.endswith("..."))
+
+    def test_review_marker_is_html_comment(self):
+        """Verify review marker is a valid HTML comment that won't render visibly."""
+        self.assertTrue(REVIEW_MARKER.startswith("<!--"))
+        self.assertTrue(REVIEW_MARKER.endswith("-->"))
+
 
 if __name__ == "__main__":
     unittest.main()
+
