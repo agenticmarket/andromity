@@ -324,3 +324,44 @@ async def test_rpc_session_undo_turns_to_undo_param(tmp_path):
     assert res["target_turn_index"] == 1
     assert len(session.get_user_turn_indices()) == 1
     assert session.messages[-1]["content"] == "A1"
+
+
+@pytest.mark.asyncio
+async def test_per_file_snapshot_isolation_and_rollback(tmp_path):
+    """Verify targeted per-file snapshotting rolls back agent edits without clobbering unrelated user edits."""
+    from git import Repo
+    from andromity.core.git_ops import create_pre_edit_snapshot, restore_snapshot
+    
+    repo = Repo.init(tmp_path)
+    (tmp_path / "baseline.py").write_text("print('baseline')\n", encoding="utf-8")
+    repo.git.add("-A")
+    repo.index.commit("baseline commit")
+    
+    # 1. User is editing an unrelated document
+    user_file = tmp_path / "user_notes.txt"
+    user_file.write_text("User personal notes - DO NOT TOUCH\n", encoding="utf-8")
+    
+    # 2. Agent prepares to edit agent_code.py (takes targeted snapshot of agent_code.py)
+    agent_file = tmp_path / "agent_code.py"
+    agent_file.write_text("def v1(): pass\n", encoding="utf-8")
+    repo.git.add("agent_code.py")
+    repo.index.commit("add agent_code")
+    
+    # Pre-edit snapshot of ONLY agent_code.py
+    snap = create_pre_edit_snapshot(repo, target_files=["agent_code.py"])
+    assert snap is not None
+    
+    # Agent makes modification
+    agent_file.write_text("def v2_broken(): raise RuntimeError()\n", encoding="utf-8")
+    # User adds more to user_notes.txt while agent is running
+    user_file.write_text("User personal notes - DO NOT TOUCH - Updated by User\n", encoding="utf-8")
+    
+    # 3. Rollback the agent turn
+    ok = restore_snapshot(repo, snap, files=["agent_code.py"])
+    assert ok is True
+    
+    # Agent code restored to pre-edit state
+    assert agent_file.read_text(encoding="utf-8") == "def v1(): pass\n"
+    # User's manual file completely preserved and untainted!
+    assert user_file.read_text(encoding="utf-8") == "User personal notes - DO NOT TOUCH - Updated by User\n"
+

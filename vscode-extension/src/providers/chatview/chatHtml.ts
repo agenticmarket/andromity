@@ -106,7 +106,6 @@ ${styles}
     </div>
   </div>
 
-  <!-- Top Bar (Clean Session Header, No Duplicate Buttons) -->
   <div class="top-bar">
     <div class="top-bar-left">
       <div class="session-badge-btn" id="btn-session-picker" role="button" tabindex="0" aria-label="Current session, click to switch or manage sessions" title="Sessions (Click to switch or manage sessions)">
@@ -125,7 +124,7 @@ ${styles}
           <line x1="10" y1="14" x2="21" y2="3"></line>
         </svg>
       </button>
-      <button class="top-bar-icon-btn" id="btn-top-timeline" style="display:none;" title="Conversation Timeline & Milestones" data-action="toggle-timeline">
+      <button class="top-bar-icon-btn" id="btn-top-timeline" style="" title="Conversation Timeline & Milestones" data-action="toggle-timeline">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <circle cx="12" cy="12" r="10"></circle>
           <polyline points="12 6 12 12 16 14"></polyline>

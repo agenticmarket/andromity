@@ -37,7 +37,7 @@ export class ChangesReviewPanel {
     turnFiles?: string[]
   ): ChangesReviewPanel {
     const column = vscode.window.activeTextEditor
-      ? vscode.ViewColumn.Beside
+      ? (vscode.window.activeTextEditor.viewColumn || vscode.ViewColumn.Active)
       : vscode.ViewColumn.One;
 
     if (ChangesReviewPanel.currentPanel) {

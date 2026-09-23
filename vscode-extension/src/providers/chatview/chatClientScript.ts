@@ -436,19 +436,29 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       isProgrammaticScroll = true;
       if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
 
+      const doScroll = () => {
+        if (!chatContainer) return;
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        const lastEl = chatContainer.lastElementChild;
+        if (lastEl && typeof lastEl.scrollIntoView === 'function') {
+          lastEl.scrollIntoView({ block: 'end', behavior: smooth ? 'smooth' : 'auto' });
+        }
+      };
+
       if (smooth) {
         chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
         programmaticScrollTimer = setTimeout(() => {
           isProgrammaticScroll = false;
         }, 300);
       } else {
-        chatContainer.scrollTop = chatContainer.scrollHeight;
-        requestAnimationFrame(() => {
-          if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
-          programmaticScrollTimer = setTimeout(() => {
-            isProgrammaticScroll = false;
-          }, 80);
-        });
+        doScroll();
+        requestAnimationFrame(doScroll);
+        setTimeout(doScroll, 50);
+        setTimeout(doScroll, 180);
+        programmaticScrollTimer = setTimeout(() => {
+          doScroll();
+          isProgrammaticScroll = false;
+        }, 350);
       }
     }
 
@@ -4250,6 +4260,44 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       renderQueue();
     };
 
+    function highlightCode(code, lang) {
+      if (!code) return '';
+      const language = (lang || '').toLowerCase().trim();
+      let escaped = String(code)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+      const jsKw = '\\\\b(const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|new|this|class|extends|import|export|from|default|async|await|try|catch|finally|throw|typeof|instanceof|yield|null|undefined|true|false)\\\\b';
+      const pyKw = '\\\\b(def|class|return|if|elif|else|for|while|try|except|finally|raise|import|from|as|with|lambda|yield|pass|break|continue|None|True|False|is|not|in|and|or|async|await)\\\\b';
+      const shKw = '\\\\b(echo|cd|ls|cat|mkdir|rm|cp|mv|git|npm|uv|pip|python|node|npx|chmod|chown|curl|wget|grep|sed|awk|if|then|fi|elif|else|for|do|done|while|case|esac)\\\\b';
+      const jsonKw = '\\\\b(true|false|null)\\\\b';
+
+      let kw = jsKw;
+      if (language === 'py' || language === 'python') kw = pyKw;
+      else if (language === 'sh' || language === 'bash' || language === 'shell' || language === 'zsh') kw = shKw;
+      else if (language === 'json') kw = jsonKw;
+
+      const salt = Math.random().toString(36).slice(2, 8);
+      const placeholders = [];
+      const saveToken = function(cls, text) {
+        const id = '___TOK_' + salt + '_' + placeholders.length + '___';
+        placeholders.push('<span class="' + cls + '">' + text + '</span>');
+        return id;
+      };
+
+      escaped = escaped.replace(/("(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*'|\\x60(?:[^\\x60\\\\]|\\\\.)*\\x60)/g, function(str) { return saveToken('tok-string', str); });
+      escaped = escaped.replace(/(\\/\\/[^\\n]*|#[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/)/g, function(cmt) { return saveToken('tok-comment', cmt); });
+      escaped = escaped.replace(/\\b(\\d+(?:\\.\\d+)?)\\b/g, function(num) { return saveToken('tok-number', num); });
+      escaped = escaped.replace(new RegExp(kw, 'g'), function(k) { return saveToken('tok-keyword', k); });
+      escaped = escaped.replace(/\\b([a-zA-Z_$][a-zA-Z0-9_$]*)(?=\\s*\\()/g, function(fn) { return saveToken('tok-fn', fn); });
+
+      for (let i = 0; i < placeholders.length; i++) {
+        escaped = escaped.split('___TOK_' + salt + '_' + i + '___').join(placeholders[i]);
+      }
+      return escaped;
+    }
+
     try {
       if (typeof marked !== 'undefined') {
         const markedRenderer = {
@@ -4258,6 +4306,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             const lang = token && typeof token === 'object' ? (token.lang || 'code') : 'code';
             const language = (lang || 'code').trim();
             const enc = encodeURIComponent(text);
+            const highlighted = highlightCode(text, language);
             return '<div class="code-block-container">' +
               '<div class="code-block-header">' +
                 '<span class="code-lang-tag">' + escapeHtml(language.toUpperCase()) + '</span>' +
@@ -4266,7 +4315,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   '<button class="code-btn" data-code="' + enc + '" data-action="apply-code"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg> Insert</button>' +
                 '</div>' +
               '</div>' +
-              '<pre class="code-block-pre"><code>' + escapeHtml(text) + '</code></pre>' +
+              '<pre class="code-block-pre"><code>' + highlighted + '</code></pre>' +
             '</div>';
           },
           table(token) {
@@ -4394,7 +4443,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 '<button class="code-btn" data-code="' + enc + '" data-action="apply-code"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg> Insert</button>' +
               '</div>' +
             '</div>' +
-            '<pre class="code-block-pre"><code>' + escapeHtml(code.trim()) + '</code></pre>' +
+            '<pre class="code-block-pre"><code>' + highlightCode(code.trim(), lang) + '</code></pre>' +
           '</div>';
         } else {
           var rawLines = codeParts[i].split('\\n');
@@ -5691,6 +5740,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               promptInput.style.height = 'auto';
             }
             renderQueue();
+            scrollToBottom(false);
           }
           break;
 

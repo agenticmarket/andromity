@@ -48,7 +48,7 @@ class UsageTracker:
         summary = UsageSummary()
 
         for s in sessions:
-            if self._is_test_or_temp_session(s.project_path, s.name):
+            if not project_path and self._is_test_or_temp_session(s.project_path, s.name):
                 continue
             session_time = s.updated_at or s.created_at
             if cutoff and session_time and session_time < cutoff:

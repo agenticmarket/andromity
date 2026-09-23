@@ -183,14 +183,24 @@ def _is_trusted() -> bool:
     return config.is_trusted(str(_get_project_root()))
 
 
-def _ensure_snapshot():
+def _ensure_snapshot(target_file: Optional[str] = None):
     session = _current_session_var.get()
+    if session and target_file:
+        if not hasattr(session, "_turn_file_backups") or session._turn_file_backups is None:
+            session._turn_file_backups = {}
+        if target_file not in session._turn_file_backups:
+            try:
+                p = _resolve_project_path(target_file)
+                session._turn_file_backups[target_file] = p.read_text(encoding="utf-8") if p.exists() else None
+            except Exception:
+                pass
+
     if session and getattr(session, "_turn_snapshotted", False):
         return
     root = _get_project_root()
     repo = get_repo(root)
     if repo:
-        create_pre_edit_snapshot(repo)
+        create_pre_edit_snapshot(repo, target_files=[target_file] if target_file else None)
         if session:
             session._turn_snapshotted = True
 
@@ -352,7 +362,7 @@ def write_file(path: str, content: str) -> str:
         _assert_safe_path(p)
     except Exception as e:
         return f"Error writing file: {e}"
-    _ensure_snapshot()
+    _ensure_snapshot(path)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "w", encoding="utf-8") as f:
@@ -401,7 +411,7 @@ def edit_file(
             # Check exact occurrence count
             exact_count = content.count(old_str)
             if exact_count == 1:
-                _ensure_snapshot()
+                _ensure_snapshot(path)
                 new_content = content.replace(old_str, new_str, 1)
                 with open(p, "w", encoding="utf-8") as f:
                     f.write(new_content)
@@ -454,7 +464,7 @@ def edit_file(
                         )
 
         if match_start_idx is not None and match_end_idx is not None:
-            _ensure_snapshot()
+            _ensure_snapshot(path)
             # Determine indentation from the original matched block
             original_indent = ""
             m_indent = re.match(r"^(\s*)", file_lines[match_start_idx])

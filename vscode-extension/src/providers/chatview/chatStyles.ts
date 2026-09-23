@@ -3026,7 +3026,7 @@ export function getChatStyles(): string {
     }
     .code-block-pre code {
       background: transparent !important;
-      color: var(--vscode-editor-foreground, #e4e4e7) !important;
+      color: var(--vscode-editor-foreground, #e4e4e7);
       padding: 0 !important;
       border: none !important;
       border-radius: 0 !important;
@@ -3034,6 +3034,24 @@ export function getChatStyles(): string {
       font-size: inherit;
       white-space: pre;
       display: block;
+    }
+    .code-block-pre code .tok-keyword {
+      color: var(--vscode-symbolIcon-keywordForeground, #c586c0) !important;
+      font-weight: 600;
+    }
+    .code-block-pre code .tok-string {
+      color: var(--vscode-debugTokenExpression-string, #ce9178) !important;
+    }
+    .code-block-pre code .tok-comment {
+      color: var(--vscode-editorLineNumber-foreground, #6a9955) !important;
+      font-style: italic;
+      opacity: 0.85;
+    }
+    .code-block-pre code .tok-number {
+      color: var(--vscode-debugTokenExpression-number, #b5cea8) !important;
+    }
+    .code-block-pre code .tok-fn {
+      color: var(--vscode-symbolIcon-functionForeground, #dcdcaa) !important;
     }
 
     /* Plan Ready Pill (shown in chat when a plan is created/updated) */

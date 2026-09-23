@@ -325,16 +325,14 @@ class SubAgent:
         res_str = None
         write_tools = {"write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill", "spawn_subagent"}
         
-        # Check workspace trust: untrusted workspaces block mutating operations in safe and trust modes
         from andromity.config import config
-        if self.project_path and not config.is_trusted(self.project_path) and self.permission_mode not in ("full", "yolo"):
-            if tname in write_tools:
-                res_str = f"TOOL BLOCKED: Subagents cannot execute mutating tool '{tname}' in an untrusted workspace folder ({self.project_path})."
+        if self.permission_mode == "safe" and tname in write_tools:
+            res_str = f"TOOL BLOCKED: Subagents cannot execute mutating tool '{tname}' in SAFE mode without user confirmation. Use read-only tools or switch permission mode to TRUST."
+        elif self.project_path and not config.is_trusted(self.project_path) and self.permission_mode not in ("full", "yolo") and tname in write_tools:
+            res_str = f"TOOL BLOCKED: Subagents cannot execute mutating tool '{tname}' in an untrusted workspace folder ({self.project_path})."
 
         if res_str is None:
-            if self.permission_mode == "safe" and tname in write_tools:
-                res_str = f"TOOL BLOCKED: Subagents cannot execute mutating tool '{tname}' in SAFE mode without user confirmation. Use read-only tools or switch permission mode to TRUST."
-            elif self.permission_mode == "trust" and tname in {"write_file", "edit_file", "edit_file_multi"}:
+            if self.permission_mode == "trust" and tname in {"write_file", "edit_file", "edit_file_multi"}:
                 target_p = str(targs.get("path") or targs.get("file_path") or "")
                 if target_p and self.project_path:
                     from pathlib import Path

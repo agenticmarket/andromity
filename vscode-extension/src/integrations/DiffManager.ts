@@ -114,15 +114,6 @@ export class DiffManager {
     const rightUri = vscode.Uri.file(absPath);
     const fileName = path.basename(absPath);
 
-    if (!isUntracked) {
-      try {
-        await vscode.commands.executeCommand("git.openChange", rightUri);
-        return;
-      } catch {
-        // git extension unavailable or file not tracked — fall through
-      }
-    }
-
     const leftUri = vscode.Uri.from({
       scheme: HEAD_SCHEME,
       path: absPath,
@@ -132,7 +123,7 @@ export class DiffManager {
 
     try {
       const headContent = await this._provider.provideTextDocumentContent(leftUri);
-      if (!headContent) {
+      if (isUntracked && !headContent) {
         const emptyLeftUri = vscode.Uri.from({
           scheme: HEAD_SCHEME,
           path: absPath,
@@ -148,6 +139,16 @@ export class DiffManager {
         );
         return;
       }
+
+      if (!isUntracked) {
+        try {
+          await vscode.commands.executeCommand("git.openChange", rightUri);
+          return;
+        } catch {
+          // fall through to custom diff provider
+        }
+      }
+
       await vscode.commands.executeCommand(
         "vscode.diff",
         leftUri,

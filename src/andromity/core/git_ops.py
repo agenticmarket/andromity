@@ -66,11 +66,16 @@ def ensure_git_tracking(project_path: Path) -> tuple["Repo", bool]:
     return repo, True
 
 
-def create_pre_edit_snapshot(repo_or_path: Union["Repo", Path, str]) -> Optional[str]:
+def create_pre_edit_snapshot(
+    repo_or_path: Union["Repo", Path, str],
+    target_files: Optional[List[str]] = None,
+) -> Optional[str]:
     """
-    Snapshot the FULL working tree state (tracked + untracked) before any
-    file modifications, using a temporary git index so the user's staging
-    area is never touched.
+    Snapshot the working tree state before file modifications, using a temporary
+    git index so the user's staging area is never touched.
+
+    If target_files is provided, stages only those specific files to avoid
+    scanning the entire workspace (reducing write latency and isolating edits and unwanted tracking).
 
     Returns a commit hash stored on the andromity-snapshots shadow branch,
     or None on failure.
@@ -94,7 +99,13 @@ def create_pre_edit_snapshot(repo_or_path: Union["Repo", Path, str]) -> Optional
 
         work_dir = Path(repo.working_tree_dir)
 
-        # ── Build a tree that includes untracked files ──────────────────────
+        # Base commit: use latest snapshot on shadow branch if present, else HEAD
+        try:
+            snap_base = repo.git.rev_parse(f"refs/heads/{SNAPSHOT_BRANCH}").strip()
+        except (GitCommandError, Exception):
+            snap_base = head_commit
+
+        # ── Build a tree (targeted or full) ────────────────────────────────
         # We use a temp index file so the user's real staging area is untouched.
         tmp_fd, tmp_index = tempfile.mkstemp(prefix="andromity-idx-")
         try:
@@ -105,8 +116,26 @@ def create_pre_edit_snapshot(repo_or_path: Union["Repo", Path, str]) -> Optional
             except OSError:
                 pass
             env = {**os.environ, "GIT_INDEX_FILE": tmp_index}
-            # Stage everything (tracked + untracked) into the temp index.
-            repo.git.execute(["git", "add", "-A"], env=env)
+            if target_files:
+                repo.git.execute(["git", "read-tree", snap_base], env=env)
+                rel_targets = []
+                resolved_work = work_dir.resolve()
+                for tf in target_files:
+                    try:
+                        p = Path(tf)
+                        if not p.is_absolute():
+                            p = (resolved_work / p).resolve()
+                        else:
+                            p = p.resolve()
+                        rel_targets.append(p.relative_to(resolved_work).as_posix())
+                    except (ValueError, Exception):
+                        continue
+                existing_targets = [f for f in rel_targets if (work_dir / f).exists()]
+                if existing_targets:
+                    repo.git.execute(["git", "add", "--"] + existing_targets, env=env)
+            else:
+                # Stage everything (tracked + untracked) into the temp index.
+                repo.git.execute(["git", "add", "-A"], env=env)
             # Write the tree from the temp index.
             tree_hash = repo.git.execute(["git", "write-tree"], env=env).strip()
         finally:
@@ -124,7 +153,7 @@ def create_pre_edit_snapshot(repo_or_path: Union["Repo", Path, str]) -> Optional
 
         snap_hash = repo.git.commit_tree(
             tree_hash,
-            "-p", head_commit,
+            "-p", snap_base,
             "-m", "andromity: pre-turn snapshot",
         ).strip()
 
