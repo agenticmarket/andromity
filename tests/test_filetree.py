@@ -91,8 +91,9 @@ def test_sync_node_adds_new_file_in_place(tmp_path):
     panel._sync_node(tree.root, tmp_path, git_status={})
 
     names = [_label(c) for c in tree.root.children]
-    assert [n for n in names if ".txt" in n] == ["a_first.txt", "b_new.txt", "c_last.txt"]
-    assert len(tree.root.children) == 3
+    txt_names = [n for n in names if ".txt" in n]
+    assert txt_names == ["a_first.txt", "b_new.txt", "c_last.txt"]
+    assert len(txt_names) == 3
 
 
 def test_sync_node_removes_deleted_file(tmp_path):

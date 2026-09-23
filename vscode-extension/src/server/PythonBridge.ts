@@ -58,16 +58,10 @@ export class PythonBridge {
     const arch = process.arch;           // 'x64' | 'arm64'
     const exeName = platform === "win32" ? "andromity-server.exe" : "andromity-server";
 
-    // Locate binary: check workspace folders first (so local development uses fresh build), then walk up from __dirname
+    // Locate binary: walk up from __dirname looking for folder with bin/ (never search untrusted workspace folders)
     const searchDirs: string[] = [];
-    
-    // 1. Check workspace folders first
-    for (const wf of vscode.workspace.workspaceFolders ?? []) {
-      searchDirs.push(path.join(wf.uri.fsPath, "vscode-extension"));
-      searchDirs.push(wf.uri.fsPath);
-    }
 
-    // 2. Walk up from __dirname looking for folder with bin/
+    // Walk up from __dirname looking for folder with bin/
     let curr = __dirname;
     for (let i = 0; i < 5; i++) {
       searchDirs.push(curr);
@@ -295,11 +289,12 @@ export class PythonBridge {
           env.PYTHONPATH = env.PYTHONPATH ? `${srcDir}${path.delimiter}${env.PYTHONPATH}` : srcDir;
         }
 
-        // Use workspace install if we have pyproject.toml, else PyPI
-        const hasPyproject = fs.existsSync(path.join(cwd, "pyproject.toml"));
+        // Use workspace install only if trusted and has pyproject.toml, else pull cleanly from official PyPI
+        const isTrustedWorkspace = vscode.workspace.isTrusted ?? true;
+        const hasPyproject = isTrustedWorkspace && fs.existsSync(path.join(cwd, "pyproject.toml"));
         const pipArgs = hasPyproject
           ? ["-m", "pip", "install", ".", "--quiet", "--no-warn-script-location"]
-          : ["-m", "pip", "install", "--upgrade", "andromity", "--quiet", "--no-warn-script-location"];
+          : ["-m", "pip", "install", "--upgrade", "andromity", "--index-url", "https://pypi.org/simple/", "--quiet", "--no-warn-script-location"];
 
         const source = hasPyproject ? "workspace" : "PyPI";
         progress.report({ message: `Installing from ${source}...` });

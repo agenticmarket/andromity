@@ -579,7 +579,7 @@ def _shell_invocation(shell: str, command: str) -> list[str]:
     return [shell, "-c", command]
 
 
-def shell_exec(command: str, timeout: int = 120) -> str:
+def shell_exec(command: str, timeout: int = 300) -> str:
     """Executes a shell command (blocking — waits for it to finish)."""
     if not _is_trusted():
         return "Error: This folder is not trusted. Use /trust to allow shell commands."
@@ -1463,7 +1463,7 @@ CORE_TOOLS = [
                 "type": "object",
                 "properties": {
                     "command": {"type": "string", "description": "Command to execute"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds (default 120). Increase for slow builds."},
+                    "timeout": {"type": "integer", "description": "Timeout in seconds (default 300). Increase for slow builds or long test suites."},
                 },
                 "required": ["command"],
             },
@@ -1663,7 +1663,7 @@ CORE_TOOLS = [
                     "model_override": {"type": "string", "description": "Optional model override for this subagent"},
                     "provider_override": {"type": "string", "description": "Optional provider override"},
                     "tools": {"type": "array", "items": {"type": "string"}, "description": "Optional list of tools allowed for this subagent"},
-                    "timeout": {"type": "number", "description": "Optional timeout in seconds (default 180s)"},
+                    "timeout": {"type": "number", "description": "Optional timeout in seconds (default 600s)"},
                     "wait": {"type": "boolean", "description": "Whether to wait for completion (default true)"},
                     "context_snapshot": {"type": "object", "description": "Optional curated dictionary or key context facts to pass into the subagent"},
                 },
@@ -2021,10 +2021,49 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
     return res_str
 
 
-async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[str] = None, timeout: float = 120.0) -> str:
+async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[str] = None, timeout: Optional[float] = None) -> str:
     """Asynchronous tool execution (natively awaits MCP tools and async coordination tools, dispatches core tools)."""
+    # Dynamically resolve effective timeout if not explicitly passed
+    if timeout is not None:
+        effective_timeout = float(timeout)
+    elif name == "spawn_subagent":
+        sub_timeout = args.get("timeout")
+        if sub_timeout is not None:
+            try:
+                effective_timeout = float(sub_timeout) + 15.0
+            except (ValueError, TypeError):
+                from andromity.core.subagent_config import SubAgentConfigManager
+                effective_timeout = SubAgentConfigManager.get_default_timeout() + 15.0
+        else:
+            from andromity.core.subagent_config import SubAgentConfigManager
+            effective_timeout = SubAgentConfigManager.get_default_timeout() + 15.0
+    elif name == "shell_exec":
+        cmd_timeout = args.get("timeout")
+        if cmd_timeout is not None:
+            try:
+                effective_timeout = float(cmd_timeout) + 10.0
+            except (ValueError, TypeError):
+                effective_timeout = 310.0
+        else:
+            effective_timeout = 310.0
+    elif name == "session_ask_question":
+        ask_timeout = args.get("timeout")
+        if ask_timeout is not None:
+            try:
+                effective_timeout = float(ask_timeout) + 10.0
+            except (ValueError, TypeError):
+                effective_timeout = 70.0
+        else:
+            effective_timeout = 70.0
+    else:
+        try:
+            from andromity.config import config
+            effective_timeout = float(config.get("tools", "default_timeout_seconds", 300.0))
+        except Exception:
+            effective_timeout = 300.0
+
     try:
-        async with asyncio.timeout(timeout):
+        async with asyncio.timeout(effective_timeout):
             if name.startswith("mcp__"):
                 if _mcp_manager:
                     res = await _mcp_manager.execute_mcp_tool(name, args)
@@ -2048,8 +2087,8 @@ async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[
                 # Run blocking core tools in a background thread to prevent freezing the Textual UI
                 res = await asyncio.to_thread(execute_tool, name, args)
     except asyncio.TimeoutError:
-        log.warning("Tool %s timed out after %ss", name, timeout)
-        return f"Error: Tool '{name}' timed out after {timeout:.0f} seconds."
+        log.warning("Tool %s timed out after %ss", name, effective_timeout)
+        return f"Error: Tool '{name}' timed out after {effective_timeout:.0f} seconds."
     except Exception as e:
         log.exception("Error in execute_tool_async for %s: %s", name, e)
         return f"Error executing {name}: {e}"

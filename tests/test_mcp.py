@@ -182,7 +182,7 @@ def test_mcp_tool_info_to_schema():
 
 def test_mcp_client_manager_load_config(tmp_path):
     andromity_dir = tmp_path / ".andromity"
-    andromity_dir.mkdir()
+    andromity_dir.mkdir(parents=True, exist_ok=True)
     config_file = andromity_dir / "mcp.json"
     config_file.write_text(json.dumps({
         "mcpServers": {
@@ -300,7 +300,7 @@ async def test_mcp_server_failure_handling(tmp_path):
         }
     }
     andromity_dir = tmp_path / ".andromity"
-    andromity_dir.mkdir(parents=True)
+    andromity_dir.mkdir(parents=True, exist_ok=True)
     (andromity_dir / "mcp.json").write_text(json.dumps(bad_config), encoding="utf-8")
 
     with patch("pathlib.Path.home", return_value=tmp_path):
@@ -432,12 +432,12 @@ async def test_mcp_restart(tmp_path):
     with patch("pathlib.Path.home", return_value=tmp_path):
         manager = MCPClientManager(str(tmp_path))
         await manager.start_all()
-    try:
-        assert manager.server_status["mockserver"]["status"] == "running"
-        ok = await manager.restart("mockserver")
-        assert ok is True
-        assert manager.server_status["mockserver"]["status"] == "running"
-        assert "mockserver" in manager.sessions
-    finally:
-        await manager.stop_all()
+        try:
+            assert manager.server_status["mockserver"]["status"] == "running"
+            ok = await manager.restart("mockserver")
+            assert ok is True
+            assert manager.server_status["mockserver"]["status"] == "running"
+            assert "mockserver" in manager.sessions
+        finally:
+            await manager.stop_all()
 

@@ -162,6 +162,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       { cmd: '/settings', desc: 'Open Settings, Model Catalog & MCP Hub', action: 'settings' },
       { cmd: '/personalisation', desc: 'Open Personalisation & Wallpaper Atmosphere settings', action: 'personalisation' },
       { cmd: '/pet', desc: 'Toggle or interact with Andro-Pet companion', action: 'pet' },
+      { cmd: '/play', desc: 'Perform a trick with Andro-Pet companion', action: 'play' },
+      { cmd: '/fetch', desc: 'Recall Andro-Pet companion home', action: 'fetch' },
       { cmd: '/about', desc: 'About Andromity, license & repository information', action: 'about' },
     ];
 
@@ -418,9 +420,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let isProgrammaticScroll = false;
     let programmaticScrollTimer = null;
 
-    function isAtBottom() {
+    function isAtBottom(threshold = 120) {
       if (!chatContainer) return true;
-      return chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 120;
+      return (chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight) <= threshold;
     }
 
     function scrollToBottom(smooth = false) {
@@ -436,36 +438,30 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       if (smooth) {
         chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
-        // Keep target pinned to latest scrollHeight if content dynamically expands during smooth animation
-        let frames = 0;
-        const pinAnimation = () => {
-          if (!userScrolledUp && chatContainer) {
-            chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
-          }
-          frames++;
-          if (frames < 20 && isProgrammaticScroll) {
-            requestAnimationFrame(pinAnimation);
-          } else if (chatContainer) {
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-            isProgrammaticScroll = false;
-          }
-        };
-        requestAnimationFrame(pinAnimation);
+        programmaticScrollTimer = setTimeout(() => {
+          isProgrammaticScroll = false;
+        }, 300);
       } else {
         chatContainer.scrollTop = chatContainer.scrollHeight;
         requestAnimationFrame(() => {
           if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
           programmaticScrollTimer = setTimeout(() => {
             isProgrammaticScroll = false;
-          }, 60);
+          }, 80);
         });
       }
     }
 
     function scrollToBottomIfNeeded() {
-      if (!userScrolledUp && chatContainer) {
+      if (!chatContainer) return;
+      if (!userScrolledUp) {
+        isProgrammaticScroll = true;
+        if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
         chatContainer.scrollTop = chatContainer.scrollHeight;
-      } else if (userScrolledUp && scrollUnreadBadge) {
+        programmaticScrollTimer = setTimeout(() => {
+          isProgrammaticScroll = false;
+        }, 80);
+      } else if (scrollUnreadBadge) {
         scrollUnreadBadge.classList.add('has-unread');
       }
     }
@@ -476,6 +472,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           isProgrammaticScroll = false;
           userScrolledUp = true;
           if (btnScrollBottom) btnScrollBottom.classList.add('visible');
+        } else if (e.deltaY > 0) {
+          if (isAtBottom(80)) {
+            userScrolledUp = false;
+            if (btnScrollBottom) {
+              btnScrollBottom.classList.remove('visible');
+              if (scrollUnreadBadge) scrollUnreadBadge.classList.remove('has-unread');
+            }
+          }
         }
       }, { passive: true });
 
@@ -483,9 +487,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         isProgrammaticScroll = false;
       }, { passive: true });
 
+      chatContainer.addEventListener('pointerdown', () => {
+        isProgrammaticScroll = false;
+      }, { passive: true });
+
+      chatContainer.addEventListener('load', (e) => {
+        if (e.target && e.target.tagName === 'IMG') {
+          scrollToBottomIfNeeded();
+        }
+      }, true);
+
       chatContainer.addEventListener('scroll', () => {
         if (isProgrammaticScroll) return;
-        const atBottom = isAtBottom();
+        const atBottom = isAtBottom(80);
         userScrolledUp = !atBottom;
         if (btnScrollBottom) {
           if (userScrolledUp) {
@@ -4592,12 +4606,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
+    function normalizePromptText(str) {
+      if (typeof str !== 'string') return '';
+      return str.replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n').trim();
+    }
+
     function parseUserPromptDisplay(rawText) {
       if (!rawText || typeof rawText !== 'string') {
         return { userText: '', files: [] };
       }
 
-      let text = rawText;
+      let text = rawText.replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n');
       const files = [];
       const seenFiles = new Set();
 
@@ -4636,15 +4655,21 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const rawText = typeof text === 'string' ? text : extractMessageText(text);
       const parsed = parseUserPromptDisplay(rawText);
 
-      const trimmed = (parsed.userText || '').trim();
+      const trimmed = normalizePromptText(parsed.userText || '');
+      const rawTrimmed = normalizePromptText(rawText);
       const now = Date.now();
       if (!opts || !opts.skipDedupe) {
-        if (trimmed && trimmed === lastAppendedUserText && (now - lastAppendedUserTime) < 3000) {
-          return;
+        if ((trimmed && trimmed === lastAppendedUserText) || (rawTrimmed && rawTrimmed === lastAppendedUserText)) {
+          if ((now - lastAppendedUserTime) < 5000) {
+            return;
+          }
         }
       }
       if (trimmed) {
         lastAppendedUserText = trimmed;
+        lastAppendedUserTime = now;
+      } else if (rawTrimmed) {
+        lastAppendedUserText = rawTrimmed;
         lastAppendedUserTime = now;
       }
 
@@ -4968,6 +4993,37 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     window.copyMessageText = copyMessageText;
 
     let lastSoundPlayedAt = 0;
+    function playSyntheticChime(kind) {
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+        const now = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.type = 'sine';
+        if (kind === 'attention') {
+          osc.frequency.setValueAtTime(659.25, now);
+          osc.frequency.setValueAtTime(880.00, now + 0.12);
+        } else {
+          osc.frequency.setValueAtTime(880.00, now);
+          osc.frequency.setValueAtTime(1174.66, now + 0.12);
+        }
+
+        gain.gain.setValueAtTime(0.08, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.35);
+        setTimeout(function() { try { ctx.close(); } catch (_) {} }, 400);
+      } catch (e) {
+        console.warn('Synthetic chime failed:', e);
+      }
+    }
+
     function playTone(kind) {
       const now = Date.now();
       if (now - lastSoundPlayedAt < 1200) {
@@ -4978,10 +5034,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const audio = document.getElementById('audio-done');
         if (audio) {
           audio.currentTime = 0;
-          audio.play().catch(function() {});
+          const p = audio.play();
+          if (p && typeof p.catch === 'function') {
+            p.catch(function(err) {
+              console.warn('Audio element play failed, falling back to AudioContext synth:', err);
+              playSyntheticChime(kind);
+            });
+          }
+        } else {
+          playSyntheticChime(kind);
         }
       } catch (e) {
         console.warn('Audio play failed:', e);
+        playSyntheticChime(kind);
       }
     }
 
@@ -6016,6 +6081,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             startAssistantTurn();
           }
           renderConversationTimeline();
+          scrollToBottom(false);
+          requestAnimationFrame(() => {
+            scrollToBottom(false);
+          });
           break;
 
         case 'play_sound':
@@ -6195,6 +6264,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 }
               }
             }
+            scrollToBottomIfNeeded();
           }
           break; }
 
@@ -6242,6 +6312,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 }
               }
             }
+            scrollToBottomIfNeeded();
           }
           break; }
 
@@ -6363,6 +6434,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               }
             } catch (e) { /* not a JSON subagent result */ }
           }
+          scrollToBottomIfNeeded();
           break; }
 
         case 'tool_approval_required': {
@@ -6559,8 +6631,34 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
           if (msg.prompt) {
             const parsed = parseUserPromptDisplay(msg.prompt);
-            const cleanText = (parsed.userText || '').trim();
-            if (lastAppendedUserText !== cleanText && lastAppendedUserText !== msg.prompt.trim()) {
+            const cleanText = normalizePromptText(parsed.userText || '');
+            const rawPromptNorm = normalizePromptText(msg.prompt);
+
+            const isMatchLast = Boolean(
+              lastAppendedUserText &&
+              (lastAppendedUserText === cleanText ||
+               lastAppendedUserText === rawPromptNorm ||
+               (cleanText && (lastAppendedUserText.includes(cleanText) || cleanText.includes(lastAppendedUserText))))
+            );
+
+            let domHasMatchingPrompt = false;
+            const userWraps = chatContainer.querySelectorAll('.message-wrap.user');
+            if (userWraps.length > 0) {
+              const lastUserWrap = userWraps[userWraps.length - 1];
+              const textEl = lastUserWrap.querySelector('.prompt-text-content');
+              const domText = normalizePromptText(textEl ? textEl.textContent : lastUserWrap.textContent || '');
+              if (domText && (
+                domText === cleanText ||
+                domText === rawPromptNorm ||
+                (cleanText && (domText.includes(cleanText) || cleanText.includes(domText)))
+              )) {
+                domHasMatchingPrompt = true;
+              }
+            }
+
+            const isTurnAlreadyActive = Boolean(currentTurnAssistantDiv && chatContainer.contains(currentTurnAssistantDiv));
+
+            if (!isMatchLast && !domHasMatchingPrompt && !isTurnAlreadyActive) {
               hideZeroState();
               appendUserMessage(msg.prompt, msg.images || [], Date.now(), { skipDedupe: true });
             }
@@ -6794,6 +6892,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'external_prompt': {
           const extPrompt = msg.prompt || '';
           const extCtx = msg.context || null;
+          const targetSid = msg.sessionId || currentSessionId;
           if (!extPrompt) break;
 
           hideZeroState();
@@ -6812,6 +6911,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
 
           if (promptInput) promptInput.value = '';
+          if (isRunning) {
+            promptQueue.push({ text: fullUserMsg, images: [], sessionId: targetSid });
+            renderQueue();
+            break;
+          }
           dispatchPrompt(fullUserMsg, false, []);
           break;
         }

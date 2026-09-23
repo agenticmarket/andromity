@@ -48,6 +48,8 @@ class UsageTracker:
         summary = UsageSummary()
 
         for s in sessions:
+            if self._is_test_or_temp_session(s.project_path, s.name):
+                continue
             session_time = s.updated_at or s.created_at
             if cutoff and session_time and session_time < cutoff:
                 continue
@@ -195,3 +197,13 @@ class UsageTracker:
                 except Exception:
                     continue
         return stats
+    @staticmethod
+    def _is_test_or_temp_session(project_path: str | None, name: str | None = None) -> bool:
+        if not project_path:
+            return False
+        p = project_path.lower().replace("\\", "/")
+        if "/pytest-of-" in p or "/temp/pytest" in p or "/tmp/pytest" in p:
+            return True
+        if "/appdata/local/temp" in p or "/tmp/tmp" in p:
+            return True
+        return False

@@ -804,12 +804,38 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
 
     assert.ok(scriptMatches.length > 0, "Should find at least one inline script in PlanEditorPanel");
 
+    assert.ok(html.includes("@media (max-width: 680px)"), "PlanEditorPanel HTML must include 680px responsive breakpoint");
+    assert.ok(html.includes("@media (max-width: 480px)"), "PlanEditorPanel HTML must include 480px responsive breakpoint");
+    assert.ok(html.includes(".btn-proceed.approved"), "PlanEditorPanel HTML must include approved button styling");
+    assert.ok(html.includes(".btn-proceed.executing"), "PlanEditorPanel HTML must include executing button styling");
+
     for (let i = 0; i < scriptMatches.length; i++) {
       const code = scriptMatches[i];
       assert.doesNotThrow(() => {
         new vm.Script(code, { filename: `plan-editor-script-${i}.js` });
       }, `PlanEditorPanel script #${i} must have valid syntax`);
     }
+  });
+
+  it("chatClientScript should queue external_prompt when agent is running to prevent session forking", () => {
+    const state: ChatViewState = {
+      currentSessionId: "sess-plan-test",
+      currentModel: "anthropic/claude-3.7-sonnet",
+      currentProvider: "anthropic",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "medium",
+      models: [{ id: "anthropic/claude-3.7-sonnet", name: "Claude 3.7 Sonnet" }],
+    };
+    const scriptCode = getChatClientScript("icon.svg", state);
+    assert.ok(
+      scriptCode.includes("case 'external_prompt':"),
+      "Script must handle external_prompt message"
+    );
+    assert.ok(
+      scriptCode.includes("if (isRunning) {") && scriptCode.includes("promptQueue.push({ text: fullUserMsg"),
+      "Script must queue external_prompt when isRunning is true instead of executing concurrently or forking"
+    );
   });
 
   it("chatClientScript should attach data-turn-index and dispatch targeted turn rollback", () => {

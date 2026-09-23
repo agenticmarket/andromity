@@ -3812,15 +3812,15 @@ SOFTWARE.</pre>
       if (!container) return;
 
       const modelMap = {};
-      if (Array.isArray(filteredSessions) && filteredSessions.length > 0) {
+      if (currentUsageRange === "all" && usageData.by_model && Object.keys(usageData.by_model).length > 0) {
+        Object.assign(modelMap, usageData.by_model);
+      } else if (Array.isArray(filteredSessions) && filteredSessions.length > 0) {
         filteredSessions.forEach(s => {
           const m = s.model || 'default';
           if (!modelMap[m]) modelMap[m] = { tokens: 0, cost: 0, provider: s.provider || '' };
           modelMap[m].tokens += (s.token_total || s.tokens || 0);
           modelMap[m].cost += (s.cost_usd || 0);
         });
-      } else if (currentUsageRange === "all" && usageData.by_model) {
-        Object.assign(modelMap, usageData.by_model);
       }
 
       const entries = Object.entries(modelMap);
@@ -3862,7 +3862,9 @@ SOFTWARE.</pre>
       if (!container) return;
 
       const provMap = {};
-      if (Array.isArray(filteredSessions) && filteredSessions.length > 0) {
+      if (currentUsageRange === "all" && usageData.by_provider && Object.keys(usageData.by_provider).length > 0) {
+        Object.assign(provMap, usageData.by_provider);
+      } else if (Array.isArray(filteredSessions) && filteredSessions.length > 0) {
         filteredSessions.forEach(s => {
           const p = s.provider || (s.model && s.model.includes('/') ? s.model.split('/')[0] : 'openrouter');
           if (!provMap[p]) provMap[p] = { tokens: 0, cost: 0, sessions: 0 };
@@ -3870,8 +3872,6 @@ SOFTWARE.</pre>
           provMap[p].cost += (s.cost_usd || 0);
           provMap[p].sessions += 1;
         });
-      } else if (currentUsageRange === "all" && usageData.by_provider) {
-        Object.assign(provMap, usageData.by_provider);
       }
 
       const entries = Object.entries(provMap);

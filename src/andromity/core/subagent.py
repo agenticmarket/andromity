@@ -313,6 +313,85 @@ class SubAgent:
                 duration_ms=res.duration_ms,
             )
 
+    async def _exec_tool(self, tc: dict) -> tuple[str, str, str]:
+        fn = tc.get("function", {})
+        tname = fn.get("name", "")
+        tcall_id = tc.get("id", "")
+        try:
+            targs = json.loads(fn.get("arguments", "{}"))
+        except Exception:
+            targs = {}
+
+        res_str = None
+        write_tools = {"write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill", "spawn_subagent"}
+        
+        # Check workspace trust: untrusted workspaces block mutating operations in safe and trust modes
+        from andromity.config import config
+        if self.project_path and not config.is_trusted(self.project_path) and self.permission_mode not in ("full", "yolo"):
+            if tname in write_tools:
+                res_str = f"TOOL BLOCKED: Subagents cannot execute mutating tool '{tname}' in an untrusted workspace folder ({self.project_path})."
+
+        if res_str is None:
+            if self.permission_mode == "safe" and tname in write_tools:
+                res_str = f"TOOL BLOCKED: Subagents cannot execute mutating tool '{tname}' in SAFE mode without user confirmation. Use read-only tools or switch permission mode to TRUST."
+            elif self.permission_mode == "trust" and tname in {"write_file", "edit_file", "edit_file_multi"}:
+                target_p = str(targs.get("path") or targs.get("file_path") or "")
+                if target_p and self.project_path:
+                    from pathlib import Path
+                    try:
+                        resolved_target = Path(target_p).resolve()
+                        resolved_proj = Path(self.project_path).resolve()
+                        if not resolved_target.is_relative_to(resolved_proj):
+                            res_str = f"TOOL BLOCKED: Writing to paths outside project directory is prohibited in TRUST mode ({target_p})."
+                    except Exception:
+                        pass
+            elif self.permission_mode == "trust" and tname in ("shell_exec", "shell_bg"):
+                from andromity.core.security import is_command_allowlisted
+                from andromity.config import config
+                cmd = str(targs.get("command", "")).strip()
+                allowed = config.get("default", "allowed_commands", []) or []
+                if not is_command_allowlisted(cmd, allowed):
+                    res_str = f"TOOL BLOCKED: Command '{cmd}' is not in allowlist or contains forbidden shell constructs for subagents in TRUST mode."
+            elif self.permission_mode in ("safe", "trust") and tname in ("read_file", "view_file", "grep_search"):
+                from andromity.core.security import is_sensitive_path
+                target_p = str(targs.get("path") or targs.get("file_path") or "")
+                if target_p and is_sensitive_path(target_p):
+                    res_str = f"TOOL BLOCKED: Subagents cannot access sensitive file '{target_p}'."
+            elif tname == "fetch_url":
+                from andromity.core.security import _is_private_ip, get_domain
+                url_target = str(targs.get("url") or "")
+                dom = get_domain(url_target)
+                if dom and _is_private_ip(dom):
+                    res_str = f"SECURITY BLOCKED: Fetching internal/private network addresses is blocked ({dom})."
+
+        t_start = time.time()
+        if res_str is None:
+            try:
+                res_str = await execute_tool_async(tname, targs)
+            except Exception as ex:
+                res_str = f"Error: Tool {tname} failed: {ex}"
+        tool_dur_ms = (time.time() - t_start) * 1000.0
+        act_desc = _format_tool_activity(tname, targs)
+        tool_status = "error" if ("Error:" in res_str or "BLOCKED" in res_str) else "done"
+        self._notify_progress(
+            event_type="tool_result",
+            tool_id=tcall_id,
+            tool_name=tname,
+            tool_args=json.dumps(targs),
+            tool_result=res_str[:5000],
+            detail=act_desc,
+            duration_ms=tool_dur_ms,
+        )
+        self.tools_executed.append({
+            "id": tcall_id,
+            "name": tname,
+            "args": targs,
+            "result": res_str[:2000],
+            "duration_ms": tool_dur_ms,
+            "status": tool_status,
+        })
+        return tcall_id, tname, res_str
+
     async def _run_internal(self, events_accum: List[StreamEvent], max_turns: int = 15):
         """Multi-turn tool-calling loop for the sub-agent."""
         # Task is already in the system prompt — only add a short user trigger
@@ -424,78 +503,7 @@ class SubAgent:
                 self._notify_progress(event_type="text", detail="Task execution finished.")
                 break
 
-            async def _exec_tool(tc: dict) -> tuple[str, str, str]:
-                fn = tc.get("function", {})
-                tname = fn.get("name", "")
-                tcall_id = tc.get("id", "")
-                try:
-                    targs = json.loads(fn.get("arguments", "{}"))
-                except Exception:
-                    targs = {}
-
-                res_str = None
-                write_tools = {"write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill", "spawn_subagent"}
-                if self.permission_mode == "safe" and tname in write_tools:
-                    res_str = f"TOOL BLOCKED: Subagents cannot execute mutating tool '{tname}' in SAFE mode without user confirmation. Use read-only tools or switch permission mode to TRUST."
-                elif self.permission_mode == "trust" and tname in {"write_file", "edit_file", "edit_file_multi"}:
-                    target_p = str(targs.get("path") or targs.get("file_path") or "")
-                    if target_p and self.project_path:
-                        from pathlib import Path
-                        try:
-                            resolved_target = Path(target_p).resolve()
-                            resolved_proj = Path(self.project_path).resolve()
-                            if not resolved_target.is_relative_to(resolved_proj):
-                                res_str = f"TOOL BLOCKED: Writing to paths outside project directory is prohibited in TRUST mode ({target_p})."
-                        except Exception:
-                            pass
-                elif self.permission_mode == "trust" and tname in ("shell_exec", "shell_bg"):
-                    from andromity.core.security import is_command_allowlisted
-                    from andromity.config import config
-                    cmd = str(targs.get("command", "")).strip()
-                    allowed = config.get("default", "allowed_commands", []) or []
-                    if not is_command_allowlisted(cmd, allowed):
-                        res_str = f"TOOL BLOCKED: Command '{cmd}' is not in allowlist or contains forbidden shell constructs for subagents in TRUST mode."
-                elif self.permission_mode in ("safe", "trust") and tname in ("read_file", "view_file", "grep_search"):
-                    from andromity.core.security import is_sensitive_path
-                    target_p = str(targs.get("path") or targs.get("file_path") or "")
-                    if target_p and is_sensitive_path(target_p):
-                        res_str = f"TOOL BLOCKED: Subagents cannot access sensitive file '{target_p}'."
-                elif tname == "fetch_url":
-                    from andromity.core.security import _is_private_ip, get_domain
-                    url_target = str(targs.get("url") or "")
-                    dom = get_domain(url_target)
-                    if dom and _is_private_ip(dom):
-                        res_str = f"SECURITY BLOCKED: Fetching internal/private network addresses is blocked ({dom})."
-
-                t_start = time.time()
-                if res_str is None:
-                    try:
-                        res_str = await execute_tool_async(tname, targs)
-                    except Exception as ex:
-                        res_str = f"Error: Tool {tname} failed: {ex}"
-                tool_dur_ms = (time.time() - t_start) * 1000.0
-                act_desc = _format_tool_activity(tname, targs)
-                tool_status = "error" if ("Error:" in res_str or "BLOCKED" in res_str) else "done"
-                self._notify_progress(
-                    event_type="tool_result",
-                    tool_id=tcall_id,
-                    tool_name=tname,
-                    tool_args=json.dumps(targs),
-                    tool_result=res_str[:5000],
-                    detail=act_desc,
-                    duration_ms=tool_dur_ms,
-                )
-                self.tools_executed.append({
-                    "id": tcall_id,
-                    "name": tname,
-                    "args": targs,
-                    "result": res_str[:2000],
-                    "duration_ms": tool_dur_ms,
-                    "status": tool_status,
-                })
-                return tcall_id, tname, res_str
-
-            tasks = [_exec_tool(tc) for tc in tool_calls_to_execute]
+            tasks = [self._exec_tool(tc) for tc in tool_calls_to_execute]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             for i, item in enumerate(results):

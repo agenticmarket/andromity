@@ -65,7 +65,7 @@
       }
     },
     "viewsContainers": {
-      "secondarySidebar": [
+      "activitybar": [
         {
           "id": "andromity-sidebar",
           "title": "Andromity",
@@ -543,7 +543,7 @@
         },
         "andromity.autoOpenSidebar": {
           "type": "string",
-          "default": "firstTime",
+          "default": "always",
           "enum": [
             "firstTime",
             "always",

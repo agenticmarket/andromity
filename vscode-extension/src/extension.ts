@@ -116,8 +116,8 @@ export async function activate(context: vscode.ExtensionContext) {
   const changesTreeProvider = new ChangesTreeProvider();
 
   // Plan approve/reject flows through the chat session + queue (TUI parity).
-  planProvider.setPlanActionHandler(async (approved, feedback) => {
-    await chatProvider.handlePlanApproval(approved, feedback);
+  planProvider.setPlanActionHandler(async (approved, feedback, sessionId) => {
+    await chatProvider.handlePlanApproval(approved, feedback, sessionId);
   });
 
   context.subscriptions.push(
@@ -164,9 +164,10 @@ export async function activate(context: vscode.ExtensionContext) {
           context.extensionUri,
           params.plan,
           rpcClient,
-          async (approved, feedback) => {
-            await chatProvider.handlePlanApproval(approved, feedback);
-          }
+          async (approved, feedback, sid) => {
+            await chatProvider.handlePlanApproval(approved, feedback, sid || params.session_id);
+          },
+          params.session_id
         );
       }
     });
@@ -176,7 +177,7 @@ export async function activate(context: vscode.ExtensionContext) {
         currentPlan = params.plan;
         chatProvider.updateCurrentPlan(params.plan, params.session_id);
         planProvider.updatePlan(params.plan, params.session_id);
-        PlanEditorPanel.currentPanel?.updatePlan(params.plan);
+        PlanEditorPanel.currentPanel?.updatePlan(params.plan, params.session_id);
       }
     });
 
@@ -369,8 +370,11 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand("andromity.openChat", () => {
-      vscode.commands.executeCommand("andromity.chatView.focus");
+    vscode.commands.registerCommand("andromity.openChat", async () => {
+      try {
+        await vscode.commands.executeCommand("workbench.action.focusAuxiliaryBar");
+      } catch {}
+      await vscode.commands.executeCommand("andromity.chatView.focus");
     }),
 
     vscode.commands.registerCommand("andromity.newSession", async () => {
@@ -479,15 +483,17 @@ export async function activate(context: vscode.ExtensionContext) {
       chatProvider.toggleSessionsDrawer();
     }),
 
-    vscode.commands.registerCommand("andromity.openPlanTab", async (plan?: any) => {
+    vscode.commands.registerCommand("andromity.openPlanTab", async (plan?: any, sessionId?: string) => {
+      const activeSid = sessionId || chatProvider.getCurrentSessionId();
       const planToShow = plan || currentPlan || chatProvider.getCurrentPlan();
       PlanEditorPanel.createOrShow(
         context.extensionUri,
         planToShow,
         pythonBridge?.getClient() || null,
-        async (approved, feedback) => {
-          await chatProvider.handlePlanApproval(approved, feedback);
-        }
+        async (approved, feedback, sid) => {
+          await chatProvider.handlePlanApproval(approved, feedback, sid || activeSid);
+        },
+        activeSid
       );
     }),
 
@@ -859,17 +865,20 @@ export async function activate(context: vscode.ExtensionContext) {
 
   const AUTO_OPEN_CHAT_KEY = "andromity.hasAutoOpenedChat";
   const hasAutoOpenedChat = context.globalState.get<boolean>(AUTO_OPEN_CHAT_KEY, false);
-  const autoOpenSetting = vscode.workspace.getConfiguration("andromity").get<string>("autoOpenSidebar", "firstTime");
+  const autoOpenSetting = vscode.workspace.getConfiguration("andromity").get<string>("autoOpenSidebar", "always");
   if ((autoOpenSetting === "firstTime" && !hasAutoOpenedChat) || autoOpenSetting === "always") {
-    vscode.commands.executeCommand("andromity.chatView.focus").then(
-      () => {
+    setTimeout(async () => {
+      try {
+        await vscode.commands.executeCommand("workbench.action.focusAuxiliaryBar");
+      } catch {}
+      try {
+        await vscode.commands.executeCommand("andromity.chatView.focus");
         context.globalState.update(AUTO_OPEN_CHAT_KEY, true);
         log("[Andromity] Auto-opened right-side assistant sidebar.");
-      },
-      (err) => {
-        log(`[Andromity] Notice: Could not auto-open sidebar: ${err}`);
+      } catch (err: any) {
+        log(`[Andromity] Notice: Could not auto-open sidebar: ${err?.message || err}`);
       }
-    );
+    }, 300);
   }
 }
 

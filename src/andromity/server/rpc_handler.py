@@ -722,8 +722,8 @@ class JsonRpcHandler:
                 needs_approval = True
             elif tool_name in READ_ONLY_TOOLS:
                 return True
-
-            needs_approval = False
+            else:
+                needs_approval = False
 
             # 4. Mode-specific evaluation (exact match with TUI app.py:549-617)
             if tool_name in ("write_file", "edit_file", "edit_file_multi"):

@@ -54,6 +54,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _rpcDisposables: Array<() => void> = [];
   private _latestTurnFiles: Set<string> = new Set<string>();
   private _lastPromptPayload: any = null;
+  private _configData: any = null;
+
+  public isViewVisible(): boolean {
+    return !!(this._view && this._view.visible);
+  }
+
+  public isSoundEnabled(kind: "done" | "attention" = "done"): boolean {
+    const cfg = vscode.workspace.getConfiguration("andromity");
+    const vsCodeEnabled = cfg.get<boolean>("soundNotifications", true);
+    if (!vsCodeEnabled) return false;
+    if (this._configData) {
+      if (kind === "done" && this._configData.sound_done === false) return false;
+      if (kind === "attention" && this._configData.sound_attention === false) return false;
+    }
+    return true;
+  }
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -315,12 +331,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public async sendPromptFromExternal(
     prompt: string,
     context?: any,
-    options?: { taskName?: string; forceNewSession?: boolean; forkSessionIfBusy?: boolean }
+    options?: { taskName?: string; forceNewSession?: boolean; forkSessionIfBusy?: boolean; targetSessionId?: string }
   ) {
     if (!this._view) {
       await vscode.commands.executeCommand("andromity.chatView.focus");
       for (let i = 0; i < 20 && !this._view; i++) {
         await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+
+    if (options?.targetSessionId && options.targetSessionId !== this._currentSessionId) {
+      this._currentSessionId = options.targetSessionId;
+      this._persistLastActiveSession(options.targetSessionId);
+      if (this._view) {
+        this._view.webview.postMessage({ type: "session_switched", sessionId: options.targetSessionId });
+        await this._loadSession(options.targetSessionId);
       }
     }
 
@@ -372,6 +397,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               type: "external_prompt",
               prompt,
               context,
+              sessionId: newSess.id,
             });
           }
           return;
@@ -381,13 +407,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
-    // Default / Idle path: Reuse active session so conversation history & context are preserved!
+    // Default / Idle / Dedicated path: Reuse active session so conversation history & context are preserved!
     if (this._view) {
       this._view.show?.(true);
       this._view.webview.postMessage({
         type: "external_prompt",
         prompt,
         context,
+        sessionId: options?.targetSessionId || this._currentSessionId,
       });
     }
   }
@@ -527,15 +554,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * Plan approve/reject flow (TUI parity): persists plan status on the daemon,
    * then sends the follow-up prompt through the chat queue.
    */
-  public async handlePlanApproval(approved: boolean, feedback: string = "") {
-    if (!this._rpcClient || !this._currentSessionId) return;
+  public async handlePlanApproval(approved: boolean, feedback: string = "", targetSessionId?: string) {
+    const activeSid = targetSessionId || this._currentSessionId;
+    if (!this._rpcClient || !activeSid) return;
     try {
       void this._rpcClient.call("telemetry.recordFeature", {
         feature: approved ? "plan_approved" : "plan_rejected",
-        session_id: this._currentSessionId,
+        session_id: activeSid,
       }).catch(() => {});
       await this._rpcClient.call(approved ? "plan.approve" : "plan.reject", {
-        session_id: this._currentSessionId,
+        session_id: activeSid,
         comment: feedback,
         feedback: feedback,
       });
@@ -544,7 +572,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           (feedback ? ` User note: ${feedback}` : "")
         : "The plan was rejected by the user. Please revise the plan and present a new one." +
           (feedback ? ` User reason: ${feedback}` : "");
-      this.sendPromptFromExternal(msg);
+
+      // CRITICAL: Plan approval MUST ALWAYS continue in the session to which the plan belongs!
+      // Never fork a new session for plan approval. If the session is currently running,
+      // it queues in that session so it seamlessly executes when the current turn finishes.
+      await this.sendPromptFromExternal(msg, undefined, {
+        forkSessionIfBusy: false,
+        targetSessionId: activeSid,
+      });
       vscode.window.showInformationMessage(
         approved ? "Plan approved -- agent is executing." : "Plan rejected -- agent will revise."
       );
@@ -691,16 +726,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     bind("agent/toolApprovalRequired", (params: ToolApprovalEvent) => {
       this._postToWebview({ type: "tool_approval_required", ...params });
-      const cfg = vscode.workspace.getConfiguration("andromity");
-      if (cfg.get<boolean>("soundNotifications", true)) {
+      if (this.isSoundEnabled("attention")) {
         this._postToWebview({ type: "play_sound", kind: "attention" });
       }
     });
 
     bind("agent/askQuestions", (params: ClarifyingQuestionsEvent) => {
       this._postToWebview({ type: "ask_questions", ...params });
-      const cfg = vscode.workspace.getConfiguration("andromity");
-      if (cfg.get<boolean>("soundNotifications", true)) {
+      if (this.isSoundEnabled("attention")) {
         this._postToWebview({ type: "play_sound", kind: "attention" });
       }
     });
@@ -713,8 +746,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (!sid || sid === this._currentSessionId) {
         this._currentPlan = params.plan;
         this._postToWebview({ type: "plan_approval", plan: params.plan, session_id: sid });
-        const cfg = vscode.workspace.getConfiguration("andromity");
-        if (cfg.get<boolean>("soundNotifications", true)) {
+        if (this.isSoundEnabled("attention")) {
           this._postToWebview({ type: "play_sound", kind: "attention" });
         }
       }
@@ -836,8 +868,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       this._postToWebview({ type: "agent_done", ...params, turn_files: turnFiles });
-      const cfg = vscode.workspace.getConfiguration("andromity");
-      if (cfg.get<boolean>("soundNotifications", true)) {
+      if (this.isSoundEnabled("done")) {
         this._postToWebview({ type: "play_sound", kind: "done" });
       }
       vscode.commands.executeCommand("andromity.refreshChanges");
@@ -972,6 +1003,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       this._models = models || [];
       this._providers = providers || [];
+      this._configData = configData || {};
       this._currentProvider = configData?.default_provider || "openrouter";
       this._currentModel = configData?.default_model || "anthropic/claude-3.7-sonnet";
       this._currentProfile = configData?.default_profile || "builder";
@@ -1291,7 +1323,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             mode: message.mode || this._currentMode,
             reasoning_effort: message.reasoningEffort || this._currentReasoning,
             image_uris: message.images || [],
-          }, 120000);
+          }, 600000);
         } catch (err: any) {
           const activeSid = message.sessionId || this._currentSessionId;
           const msg = err.message || String(err);
@@ -1396,7 +1428,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               mode: retryPayload.mode || this._currentMode,
               reasoning_effort: retryPayload.reasoningEffort || this._currentReasoning,
               image_uris: retryPayload.images || [],
-            }, 120000);
+            }, 600000);
           } catch (err: any) {
             this._runningSessions.delete(sid);
             this._isExecuting = false;
@@ -1413,7 +1445,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "open_external_url": {
         if (message.url && typeof message.url === "string") {
-          vscode.env.openExternal(vscode.Uri.parse(message.url));
+          try {
+            const parsed = vscode.Uri.parse(message.url);
+            if (parsed.scheme === "http" || parsed.scheme === "https") {
+              vscode.env.openExternal(parsed);
+            } else {
+              console.warn(`[Andromity] Blocked non-http external URL: ${message.url}`);
+            }
+          } catch {
+            // Ignore invalid URLs
+          }
         }
         break;
       }
@@ -1712,12 +1753,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "approve_plan": {
-        await this.handlePlanApproval(true, message.feedback || "");
+        await this.handlePlanApproval(true, message.feedback || "", message.sessionId);
         break;
       }
 
       case "reject_plan": {
-        await this.handlePlanApproval(false, message.feedback || "");
+        await this.handlePlanApproval(false, message.feedback || "", message.sessionId);
         break;
       }
 

@@ -88,12 +88,12 @@ export default {
         if (!lorePayload) {
           return new Response(JSON.stringify({ error: 'unknown_signal' }), {
             status: 404,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            headers: { ...securityHeaders, 'Content-Type': 'application/json' },
           });
         }
         return new Response(JSON.stringify(lorePayload, null, 2), {
           status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60' },
+          headers: { ...securityHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60' },
         });
       }
 
@@ -101,7 +101,7 @@ export default {
         const tipPayload = await getRandomTip(url, env);
         return new Response(JSON.stringify(tipPayload, null, 2), {
           status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+          headers: { ...securityHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
         });
       }
 
@@ -109,7 +109,7 @@ export default {
         const newsPayload = await getLatestNews(env);
         return new Response(JSON.stringify(newsPayload, null, 2), {
           status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300' },
+          headers: { ...securityHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300' },
         });
       }
 
@@ -117,7 +117,7 @@ export default {
         const seasonInfo = await getSeasonalInfo(env);
         return new Response(JSON.stringify(seasonInfo, null, 2), {
           status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+          headers: { ...securityHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
         });
       }
     }
@@ -354,10 +354,12 @@ export default {
 
 function timingSafeMatch(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  const maxLen = Math.max(a.length, b.length);
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < maxLen; i++) {
+    const charA = i < a.length ? a.charCodeAt(i) : 0;
+    const charB = i < b.length ? b.charCodeAt(i) : 0;
+    diff |= charA ^ charB;
   }
   return diff === 0;
 }
@@ -1236,7 +1238,7 @@ async function getLoreDirective(cmdName) {
     seasonal: season.active ? season.season : null,
     seasonal_modifier: season.active ? season.modifier : null,
     clue: base.clue,
-    version: '0.2.4',
+    version: '0.2.10',
     ts: new Date().toISOString(),
   };
 }
@@ -1263,14 +1265,14 @@ async function getLatestNews() {
   const season = await getSeasonalInfo();
   return {
     status: 'ok',
-    version: '0.2.4',
-    title: 'Andromity 0.2.4 — Autonomous Agent Engine',
-    released_at: '2026-09-03',
+    version: '0.2.10',
+    title: 'Andromity 0.2.10 — Autonomous Agent Engine',
+    released_at: '2026-09-20',
     highlights: [
-      '⚡ Autonomous multi-agent coordination with durable sessions',
-      '🌐 Real-time Edge Telemetry on Cloudflare D1',
-      '🛠️ MCP (Model Context Protocol) integration for dynamic tool orchestration',
-      '🎨 Refined terminal TUI and VS Code Extension integration',
+      '🎨 Minimal theme overhaul with sleek typography and borderless prompt controls',
+      '🛡️ Error recovery cards, 5xx auto-retry, and vision model guards',
+      '🌐 Zero-API resilient web search and safe skill read roots',
+      '⏰ Advanced cron scheduling with exact date/time syntax and preset management',
     ],
     season_banner: season.active ? season.name : null,
     docs_url: 'https://github.com/agenticmarket/andromity',

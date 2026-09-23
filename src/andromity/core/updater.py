@@ -148,7 +148,10 @@ def perform_update() -> Tuple[bool, str]:
     if is_pipx:
         cmd = [pipx_bin, "upgrade", "andromity"]
     else:
-        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "andromity"]
+        cmd = [
+            sys.executable, "-m", "pip", "install", "--upgrade", "andromity",
+            "--index-url", "https://pypi.org/simple/",
+        ]
 
     try:
         log.info("Running upgrade command: %s", " ".join(cmd))

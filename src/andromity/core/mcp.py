@@ -719,14 +719,14 @@ class MCPClientManager:
                              command=cmd_str,
                              error_detail="\n".join(session.stderr_tail[-25:]) or session.error)
 
-    async def restart(self, name: str) -> bool:
+    async def restart(self, name: str, trusted: bool = False) -> bool:
         """Stop (if running) and start a single server. Returns True if running."""
         srv_conf = self.load_config().get("mcpServers", {}).get(name, {})
         if name in self.sessions:
             await self.sessions[name].stop()
             del self.sessions[name]
         self.server_status.pop(name, None)
-        await self.start_server(name, srv_conf, trusted=True)
+        await self.start_server(name, srv_conf, trusted=trusted)
         return self.server_status.get(name, {}).get("status") == "running"
 
     def check_liveness(self) -> List[str]:
