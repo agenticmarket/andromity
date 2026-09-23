@@ -2386,9 +2386,10 @@ class JsonRpcHandler:
                         continue
                     if proj_root:
                         try:
-                            p = Path(clean_str)
+                            # Normalize backslashes for cross-platform compatibility
+                            p = Path(clean_str.replace("\\", "/"))
                             if p.is_absolute():
-                                clean_str = str(p.resolve().relative_to(proj_root))
+                                clean_str = str(p.resolve().relative_to(proj_root.resolve()))
                         except Exception:
                             pass
                     norm = clean_str.replace("\\", "/").strip().lstrip("./")

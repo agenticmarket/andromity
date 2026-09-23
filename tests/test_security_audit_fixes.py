@@ -215,9 +215,12 @@ async def test_subagent_blocks_mutating_tools_in_untrusted_workspace(tmp_path):
         assert "untrusted workspace" in res_shell.lower()
 
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
 def test_vscode_bridge_does_not_search_workspace_for_binaries():
     """FINDING-DEEP-1: Ensure PythonBridge._findBundledBinary does not search workspaceFolders."""
-    bridge_ts_path = Path(r"D:\saas\agent\vscode-extension\src\server\PythonBridge.ts")
+    bridge_ts_path = REPO_ROOT / "vscode-extension" / "src" / "server" / "PythonBridge.ts"
     assert bridge_ts_path.exists()
     content = bridge_ts_path.read_text(encoding="utf-8")
 
@@ -234,7 +237,7 @@ def test_vscode_bridge_does_not_search_workspace_for_binaries():
 
 def test_vscode_pip_install_pinned_and_trusted():
     """FINDING-DEEP-4: Ensure PythonBridge._installPackage verifies trust and pins PyPI index."""
-    bridge_ts_path = Path(r"D:\saas\agent\vscode-extension\src\server\PythonBridge.ts")
+    bridge_ts_path = REPO_ROOT / "vscode-extension" / "src" / "server" / "PythonBridge.ts"
     assert bridge_ts_path.exists()
     content = bridge_ts_path.read_text(encoding="utf-8")
 
@@ -251,7 +254,7 @@ def test_vscode_pip_install_pinned_and_trusted():
 
 def test_vscode_open_external_url_validates_scheme():
     """FINDING-DEEP-3: Ensure ChatViewProvider validates http/https scheme on open_external_url."""
-    chat_ts_path = Path(r"D:\saas\agent\vscode-extension\src\providers\ChatViewProvider.ts")
+    chat_ts_path = REPO_ROOT / "vscode-extension" / "src" / "providers" / "ChatViewProvider.ts"
     assert chat_ts_path.exists()
     content = chat_ts_path.read_text(encoding="utf-8")
 
@@ -267,7 +270,7 @@ def test_vscode_open_external_url_validates_scheme():
 
 def test_telemetry_timing_safe_match_constant_time():
     """FINDING-DEEP-5: Ensure telemetry-worker timingSafeMatch does not early-return on length mismatch."""
-    worker_js_path = Path(r"D:\saas\agent\telemetry-worker\worker.js")
+    worker_js_path = REPO_ROOT / "telemetry-worker" / "worker.js"
     assert worker_js_path.exists()
     content = worker_js_path.read_text(encoding="utf-8")
 

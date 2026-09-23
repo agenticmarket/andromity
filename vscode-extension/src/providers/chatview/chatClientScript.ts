@@ -419,8 +419,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let userScrolledUp = false;
     let isProgrammaticScroll = false;
     let programmaticScrollTimer = null;
+    let _scrollRafId = null;
 
-    function isAtBottom(threshold = 120) {
+    function isAtBottom(threshold = 80) {
       if (!chatContainer) return true;
       return (chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight) <= threshold;
     }
@@ -436,41 +437,36 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       isProgrammaticScroll = true;
       if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
 
-      const doScroll = () => {
-        if (!chatContainer) return;
-        chatContainer.scrollTop = chatContainer.scrollHeight;
-        const lastEl = chatContainer.lastElementChild;
-        if (lastEl && typeof lastEl.scrollIntoView === 'function') {
-          lastEl.scrollIntoView({ block: 'end', behavior: smooth ? 'smooth' : 'auto' });
-        }
-      };
-
       if (smooth) {
         chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
         programmaticScrollTimer = setTimeout(() => {
           isProgrammaticScroll = false;
-        }, 300);
-      } else {
-        doScroll();
-        requestAnimationFrame(doScroll);
-        setTimeout(doScroll, 50);
-        setTimeout(doScroll, 180);
-        programmaticScrollTimer = setTimeout(() => {
-          doScroll();
-          isProgrammaticScroll = false;
         }, 350);
+      } else {
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        requestAnimationFrame(() => {
+          if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
+          requestAnimationFrame(() => {
+            isProgrammaticScroll = false;
+          });
+        });
       }
     }
 
     function scrollToBottomIfNeeded() {
       if (!chatContainer) return;
       if (!userScrolledUp) {
-        isProgrammaticScroll = true;
-        if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
-        chatContainer.scrollTop = chatContainer.scrollHeight;
-        programmaticScrollTimer = setTimeout(() => {
-          isProgrammaticScroll = false;
-        }, 80);
+        if (_scrollRafId) return; // Coalesce within current frame to eliminate jitter
+        _scrollRafId = requestAnimationFrame(() => {
+          _scrollRafId = null;
+          if (!chatContainer || userScrolledUp) return;
+          isProgrammaticScroll = true;
+          if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
+          chatContainer.scrollTop = chatContainer.scrollHeight;
+          requestAnimationFrame(() => {
+            isProgrammaticScroll = false;
+          });
+        });
       } else if (scrollUnreadBadge) {
         scrollUnreadBadge.classList.add('has-unread');
       }
@@ -479,10 +475,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     if (chatContainer) {
       chatContainer.addEventListener('wheel', (e) => {
         if (e.deltaY < 0) {
+          // User scrolled UP: immediately halt auto-scroll and cancel pending RAF scroll
           isProgrammaticScroll = false;
           userScrolledUp = true;
+          if (_scrollRafId) {
+            cancelAnimationFrame(_scrollRafId);
+            _scrollRafId = null;
+          }
           if (btnScrollBottom) btnScrollBottom.classList.add('visible');
         } else if (e.deltaY > 0) {
+          // User scrolled DOWN: if reaching the bottom, resume auto-scroll
           if (isAtBottom(80)) {
             userScrolledUp = false;
             if (btnScrollBottom) {
@@ -520,6 +522,35 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
         }
       });
+
+      // ResizeObserver to handle layout height changes (such as planTrackerStrip or interactiveSlot appearing/updating/collapsing)
+      if (typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(() => {
+          if (!userScrolledUp) {
+            // Keep bottom lock cleanly without triggering userScrolledUp
+            isProgrammaticScroll = true;
+            if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            requestAnimationFrame(() => {
+              isProgrammaticScroll = false;
+            });
+          } else {
+            // If user was scrolled up but new size reaches bottom, clear scrolled-up state
+            if (isAtBottom(80)) {
+              userScrolledUp = false;
+              if (btnScrollBottom) btnScrollBottom.classList.remove('visible');
+              if (scrollUnreadBadge) scrollUnreadBadge.classList.remove('has-unread');
+            }
+          }
+        });
+        ro.observe(chatContainer);
+        if (planTrackerStrip) {
+          ro.observe(planTrackerStrip);
+        }
+        if (interactiveSlot) {
+          ro.observe(interactiveSlot);
+        }
+      }
     }
 
     btnScrollBottom?.addEventListener('click', () => {
@@ -640,6 +671,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const seqToCollapse = currentToolSequence;
         if (!toolSeqUserToggled) {
           seqToCollapse.classList.add('collapsed');
+          if (!userScrolledUp) {
+            scrollToBottomIfNeeded();
+          }
         }
         currentToolSequence = null;
       }
@@ -3139,6 +3173,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (trackerTodosList) {
         trackerTodosList.innerHTML = stepItemsHtml || '<div style="color:var(--muted);font-size:11px;padding:2px 0;">No steps listed.</div>';
       }
+      scrollToBottomIfNeeded();
     }
 
     function renderPlanPill(plan) {

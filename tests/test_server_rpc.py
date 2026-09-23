@@ -304,10 +304,11 @@ async def test_extract_turn_files_isolation(tmp_path):
     assert turn1_files == ["file1.txt"]
 
     # Turn 2: User prompt 2
+    file3_path = (tmp_path / "file3.md").as_posix()
     session.add_message("user", "make turn 2 changes")
     session.add_message("assistant", "doing turn 2", tool_calls=[
-        {"id": "call_2", "type": "function", "function": {"name": "edit_file", "arguments": '{"path": "subdir\\\\file2.py", "target": "a", "replacement": "b"}'}},
-        {"id": "call_3", "type": "function", "function": {"name": "replace_file_content", "arguments": '{"TargetFile": "' + str(tmp_path).replace("\\", "\\\\") + '\\\\file3.md"}'}},
+        {"id": "call_2", "type": "function", "function": {"name": "edit_file", "arguments": '{"path": "subdir/file2.py", "target": "a", "replacement": "b"}'}},
+        {"id": "call_3", "type": "function", "function": {"name": "replace_file_content", "arguments": '{"TargetFile": "' + file3_path + '"}'}},
     ])
     session.add_message("tool", "file2 edited", name="edit_file", tool_call_id="call_2")
     session.add_message("tool", "file3 replaced", name="replace_file_content", tool_call_id="call_3")

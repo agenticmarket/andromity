@@ -953,7 +953,6 @@ export function getChatStyles(): string {
       flex-direction: column;
       gap: 6px;
       transition: border-color 0.15s ease, background 0.15s ease;
-      animation: bannerSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     }
     .plan-tracker-strip:hover {
       border-color: var(--vscode-focusBorder, rgba(255, 255, 255, 0.15));
@@ -1523,6 +1522,7 @@ export function getChatStyles(): string {
       flex: 1;
       overflow-y: auto;
       overflow-x: hidden;
+      overflow-anchor: none;
       width: 100%;
       max-width: 100%;
       box-sizing: border-box;
