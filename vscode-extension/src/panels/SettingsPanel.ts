@@ -58,6 +58,7 @@ export class SettingsPanel {
           waterfallAutoOpen: vscodeConfig.get<boolean>("waterfallAutoOpen", true),
           soundNotifications: vscodeConfig.get<boolean>("soundNotifications", true) && configData?.sound_done !== false,
           telemetry: (vscode.env.isTelemetryEnabled ?? true) && vscodeConfig.get<boolean>("telemetry", true) && configData?.telemetry !== false,
+          includeCoAuthor: vscodeConfig.get<boolean>("includeCoAuthor", true),
           wallpaper: {
             enabled: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("enabled", false),
             rippleIntensity: vscode.workspace.getConfiguration("andromity.wallpaper").get<string>("rippleIntensity", "medium"),
@@ -203,6 +204,7 @@ export class SettingsPanel {
             waterfallAutoOpen: vscodeConfig.get<boolean>("waterfallAutoOpen", true),
             soundNotifications: vscodeConfig.get<boolean>("soundNotifications", true) && configData?.sound_done !== false,
             telemetry: (vscode.env.isTelemetryEnabled ?? true) && vscodeConfig.get<boolean>("telemetry", true) && configData?.telemetry !== false,
+            includeCoAuthor: vscodeConfig.get<boolean>("includeCoAuthor", true),
             wallpaper: {
               enabled: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("enabled", false),
               rippleIntensity: vscode.workspace.getConfiguration("andromity.wallpaper").get<string>("rippleIntensity", "medium"),
@@ -243,6 +245,7 @@ export class SettingsPanel {
           waterfallAutoOpen: fastRes.vscodeConfig.get<boolean>("waterfallAutoOpen", true),
           soundNotifications: fastRes.vscodeConfig.get<boolean>("soundNotifications", true) && fastRes.configData?.sound_done !== false,
           telemetry: (vscode.env.isTelemetryEnabled ?? true) && fastRes.vscodeConfig.get<boolean>("telemetry", true) && fastRes.configData?.telemetry !== false,
+          includeCoAuthor: fastRes.vscodeConfig.get<boolean>("includeCoAuthor", true),
           wallpaper: {
             enabled: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("enabled", false),
             rippleIntensity: vscode.workspace.getConfiguration("andromity.wallpaper").get<string>("rippleIntensity", "medium"),
@@ -478,6 +481,18 @@ export class SettingsPanel {
         this._panel.webview.postMessage({
           type: "setting_updated",
           key: "soundNotifications",
+          value: message.value,
+        });
+        this._onConfigChangeCallback?.();
+        break;
+      }
+
+      case "toggle_coauthor": {
+        const config = vscode.workspace.getConfiguration("andromity");
+        await config.update("includeCoAuthor", message.value, vscode.ConfigurationTarget.Global);
+        this._panel.webview.postMessage({
+          type: "setting_updated",
+          key: "includeCoAuthor",
           value: message.value,
         });
         this._onConfigChangeCallback?.();
@@ -2412,6 +2427,16 @@ export class SettingsPanel {
             </div>
           </label>
         </div>
+
+        <div class="settings-card">
+          <label class="checkbox-row">
+            <input type="checkbox" id="setting-coauthor">
+            <div>
+              <div class="setting-label">Git Co-Author Attribution</div>
+              <div class="setting-desc">Append <code>Co-authored-by: Andromity &lt;noreply@agenticmarket.dev&gt;</code> trailer to AI-generated commit messages.</div>
+            </div>
+          </label>
+        </div>
       </div>
     </div>
 
@@ -2881,6 +2906,7 @@ SOFTWARE.</pre>
     const checkAutoCompact = document.getElementById("setting-auto-compact");
     const checkSound = document.getElementById("setting-sound");
     const checkTelemetry = document.getElementById("setting-telemetry");
+    const checkCoAuthor = document.getElementById("setting-coauthor");
 
     if (selectStartupSession) {
       selectStartupSession.addEventListener("change", () => {
@@ -2922,6 +2948,11 @@ SOFTWARE.</pre>
     if (checkTelemetry) {
       checkTelemetry.addEventListener("change", () => {
         vscode.postMessage({ type: "toggle_telemetry", value: checkTelemetry.checked });
+      });
+    }
+    if (checkCoAuthor) {
+      checkCoAuthor.addEventListener("change", () => {
+        vscode.postMessage({ type: "toggle_coauthor", value: checkCoAuthor.checked });
       });
     }
 
@@ -3120,6 +3151,7 @@ SOFTWARE.</pre>
       if (checkAutoCompact) checkAutoCompact.checked = currentConfig.auto_compact !== false;
       if (checkSound) checkSound.checked = msg.soundNotifications !== false;
       if (checkTelemetry) checkTelemetry.checked = msg.telemetry !== false;
+      if (checkCoAuthor) checkCoAuthor.checked = msg.includeCoAuthor !== false;
 
       const wp = msg.wallpaper || {};
       if (checkWpEnabled) {

@@ -541,6 +541,11 @@
           "default": true,
           "description": "Play sound notifications on turn finish or approval required."
         },
+        "andromity.includeCoAuthor": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically append 'Co-authored-by: Andromity <noreply@agenticmarket.dev>' to AI-generated commit messages."
+        },
         "andromity.autoOpenSidebar": {
           "type": "string",
           "default": "always",

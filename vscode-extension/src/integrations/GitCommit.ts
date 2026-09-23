@@ -112,6 +112,15 @@ export async function generateCommitMessage(rpcClient: RpcClient | null): Promis
 
         commitMessage = commitMessage.trim().replace(/^["'`]+|["'`]+$/g, "").trim();
 
+        // Check if user has enabled Co-authored-by trailer in Andromity settings
+        const config = vscode.workspace.getConfiguration("andromity");
+        const includeCoAuthor = config.get<boolean>("includeCoAuthor", true);
+        const coAuthorTrailer = "Co-authored-by: Andromity <noreply@agenticmarket.dev>";
+
+        if (includeCoAuthor && !commitMessage.includes("Co-authored-by:")) {
+          commitMessage = `${commitMessage}\n\n${coAuthorTrailer}`;
+        }
+
         // Inject into SCM inputBox (VS Code Git API)
         repo.inputBox.value = commitMessage;
         vscode.window.showInformationMessage("Andromity: Commit message generated!");
