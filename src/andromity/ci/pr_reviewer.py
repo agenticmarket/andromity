@@ -86,14 +86,19 @@ Unified Git Diff:
         # Enable silent mode for clean CI logs
         litellm.suppress_debug_info = True
 
-        response = litellm.completion(
-            model=model,
-            messages=[
+        completion_kwargs = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": SYSTEM_REVIEW_PROMPT},
                 {"role": "user", "content": user_content},
             ],
-            temperature=0.2,
-        )
+            "temperature": 0.2,
+        }
+        resolved_key = api_key or os.environ.get("OPENROUTER_API_KEY") or os.environ.get("GEMINI_API_KEY")
+        if resolved_key:
+            completion_kwargs["api_key"] = resolved_key
+
+        response = litellm.completion(**completion_kwargs)
 
         review_content = response.choices[0].message.content or ""
         return f"{review_content.strip()}\n\n{REVIEW_FOOTER}"

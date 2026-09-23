@@ -48,7 +48,7 @@ class GitHubClient:
 
         req = urllib.request.Request(url, data=encoded_data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=30) as resp:
                 raw_body = resp.read()
                 if not raw_body:
                     return None
@@ -71,7 +71,7 @@ class GitHubClient:
 
     def list_comments(self, issue_or_pr_number: int) -> List[Dict[str, Any]]:
         """List comments on an issue or PR."""
-        comments = self._request(f"issues/{issue_or_pr_number}/comments", method="GET")
+        comments = self._request(f"issues/{issue_or_pr_number}/comments?per_page=100", method="GET")
         return comments if isinstance(comments, list) else []
 
     def find_existing_comment(self, issue_or_pr_number: int, marker: str = REVIEW_MARKER) -> Optional[int]:

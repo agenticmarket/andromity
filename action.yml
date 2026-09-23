@@ -53,4 +53,4 @@ runs:
         GITHUB_SHA: ${{ github.sha }}
         GITHUB_REF: ${{ github.ref }}
       run: |
-        uv run --package andromity andromity-ci
+        uv run --project "${{ github.action_path }}" andromity-ci

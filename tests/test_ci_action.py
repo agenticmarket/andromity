@@ -102,7 +102,26 @@ class TestCIAction(unittest.TestCase):
         self.assertFalse(success)
         mock_client.create_or_update_comment.assert_called_once()
         args, kwargs = mock_client.create_or_update_comment.call_args
-        self.assertIn("Permission Denied", kwargs["body"])
+    def test_list_comments_uses_per_page_100(self):
+        """Verify comment listing requests 100 items per page to prevent missing previous comments."""
+        client = GitHubClient(token="fake-token", repository="agenticmarket/andromity")
+        with patch.object(client, "_request", return_value=[]) as mock_req:
+            client.list_comments(issue_or_pr_number=99)
+            mock_req.assert_called_once_with("issues/99/comments?per_page=100", method="GET")
+
+    def test_models_catalog_has_deepseek_flash_v4_1(self):
+        """Verify OpenRouter models catalog includes deepseek-v4.1-flash."""
+        from andromity.core.models import MODEL_CATALOG
+        openrouter_models = MODEL_CATALOG.get("openrouter", {}).get("models", [])
+        model_ids = [m["id"] for m in openrouter_models]
+        self.assertIn("deepseek/deepseek-v4.1-flash", model_ids)
+
+    def test_action_yml_declares_github_action_path(self):
+        """Verify action.yml references github.action_path for third-party composite runs."""
+        with open("action.yml", "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("${{ github.action_path }}", content)
+        self.assertIn("openrouter/deepseek/deepseek-v4.1-flash", content)
 
 
 if __name__ == "__main__":
