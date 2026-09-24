@@ -46,6 +46,43 @@ describe("Antigravity Activity Row Unit Tests", () => {
     assert.equal(stats.additions, 5); // 3 + 2
   });
 
+  it("parseFileEditStats should correctly compute stats for edit_file_multi", () => {
+    const args = {
+      path: "src/reconcilekit/matching.py",
+      edits: [
+        {
+          old_str: "line1\nline2",
+          new_str: "line1\nline2\nline3",
+        },
+        {
+          old_str: "alpha",
+          new_str: "beta",
+        },
+      ],
+    };
+
+    const stats = parseFileEditStats("edit_file_multi", args);
+    assert.ok(stats);
+    assert.equal(stats.filename, "matching.py");
+    assert.equal(stats.badgeText, "PY");
+    assert.equal(stats.badgeClass, "badge-py");
+    assert.equal(stats.deletions, 3); // 2 + 1
+    assert.equal(stats.additions, 4); // 3 + 1
+  });
+
+  it("parseFileEditStats should correctly compute stats for edit_file with 2 lines replaced", () => {
+    const args = {
+      path: "src/reconcilekit/matching.py",
+      old_str: "line 1\nline 2",
+      new_str: "new line 1\nnew line 2",
+    };
+
+    const stats = parseFileEditStats("edit_file", args);
+    assert.ok(stats);
+    assert.equal(stats.deletions, 2);
+    assert.equal(stats.additions, 2);
+  });
+
   it("parseFileEditStats should count whole file additions for write_to_file", () => {
     const args = {
       TargetFile: "docs/Walkthrough.md",
@@ -87,6 +124,96 @@ describe("Antigravity Activity Row Unit Tests", () => {
     assert.equal(typeof sandbox.window.parseFileEditStats, "function");
     assert.equal(typeof sandbox.window.renderAntigravityActivityRow, "function");
     assert.equal(typeof sandbox.window.renderCommandActivityRow, "function");
+  });
+
+  it("renderAntigravityActivityRow should render diff button and stats with open-review-tab", () => {
+    const script = getChatActivityScript();
+    let clickHandler: any = null;
+    const messages: any[] = [];
+
+    const sandbox: any = {
+      window: {
+        __vscodeApi: {
+          postMessage: (msg: any) => messages.push(msg),
+        },
+      },
+      document: {
+        addEventListener: (event: string, handler: any) => {
+          if (event === "click") clickHandler = handler;
+        },
+        createElement: (tag: string) => {
+          const el: any = {
+            tagName: tag.toUpperCase(),
+            className: "",
+            attributes: {},
+            innerHTML: "",
+            style: {},
+            setAttribute: (k: string, v: string) => { el.attributes[k] = v; },
+            getAttribute: (k: string) => el.attributes[k],
+            closest: (sel: string) => {
+              if (sel === ".activity-diff-btn" && el.className.includes("activity-diff-btn")) return el;
+              if (sel === ".activity-stats" && el.className.includes("activity-stats")) return el;
+              if (sel === ".activity-row-file" && el.className.includes("activity-row-file")) return el;
+              return null;
+            },
+          };
+          return el;
+        },
+      },
+      escapeHtml: (s: string) => s,
+    };
+    vm.createContext(sandbox);
+    new vm.Script(script, { filename: "chatActivityRow.js" }).runInContext(sandbox);
+
+    const row = sandbox.window.renderAntigravityActivityRow("edit_file", {
+      path: "src/reconcilekit/matching.py",
+      old_str: "a\nb",
+      new_str: "c\nd",
+    }, "done");
+
+    assert.ok(row);
+    assert.ok(row.innerHTML.includes('data-action="open-review-tab"'));
+    assert.ok(row.innerHTML.includes('class="activity-diff-btn"'));
+    assert.ok(row.innerHTML.includes('class="activity-stats"'));
+    assert.ok(row.innerHTML.includes('+2'));
+    assert.ok(row.innerHTML.includes('-2'));
+
+    // Test clicking the diff button
+    assert.equal(typeof clickHandler, "function");
+    const fakeDiffBtn = {
+      className: "activity-diff-btn",
+      attributes: { "data-file-path": "src/reconcilekit/matching.py" },
+      getAttribute: (k: string) => (fakeDiffBtn.attributes as any)[k],
+      closest: (sel: string) => sel === ".activity-diff-btn" ? fakeDiffBtn : null,
+    };
+    let stopped = false;
+    clickHandler({
+      target: fakeDiffBtn,
+      stopPropagation: () => { stopped = true; },
+    });
+
+    assert.equal(stopped, true);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].type, "open_review_tab");
+    assert.equal(messages[0].filePath, "src/reconcilekit/matching.py");
+
+    // Test clicking stats (+2 -2)
+    const fakeStats = {
+      className: "activity-stats",
+      attributes: { "data-file-path": "src/reconcilekit/matching.py" },
+      getAttribute: (k: string) => (fakeStats.attributes as any)[k],
+      closest: (sel: string) => sel === ".activity-stats" ? fakeStats : null,
+    };
+    stopped = false;
+    clickHandler({
+      target: fakeStats,
+      stopPropagation: () => { stopped = true; },
+    });
+
+    assert.equal(stopped, true);
+    assert.equal(messages.length, 2);
+    assert.equal(messages[1].type, "open_review_tab");
+    assert.equal(messages[1].filePath, "src/reconcilekit/matching.py");
   });
 
   it("getChatActivityStyles should return valid CSS tokens adhering to theme guidelines", () => {

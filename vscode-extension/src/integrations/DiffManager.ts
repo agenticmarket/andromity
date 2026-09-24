@@ -19,7 +19,10 @@ export class GitRefContentProvider implements vscode.TextDocumentContentProvider
 
   provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
     // uri: andromity-head:/abs/path/to/file?ref=HEAD#projectPath
-    const filePath = uri.fsPath || uri.path;
+    let filePath = uri.fsPath || uri.path;
+    if (process.platform === "win32" && filePath.startsWith("/") && /^\/[a-zA-Z]:/.test(filePath)) {
+      filePath = filePath.substring(1);
+    }
     const ref = uri.query.replace(/^ref=/, "") || "HEAD";
     if (ref === "EMPTY") {
       return Promise.resolve("");
@@ -114,9 +117,12 @@ export class DiffManager {
     const rightUri = vscode.Uri.file(absPath);
     const fileName = path.basename(absPath);
 
+    const posixPath = absPath.replace(/\\/g, "/");
+    const uriPath = posixPath.startsWith("/") ? posixPath : "/" + posixPath;
+
     const leftUri = vscode.Uri.from({
       scheme: HEAD_SCHEME,
-      path: absPath,
+      path: uriPath,
       query: isUntracked ? "ref=SNAPSHOT" : "ref=HEAD",
       fragment: ws.uri.fsPath,
     });
@@ -126,7 +132,7 @@ export class DiffManager {
       if (isUntracked && !headContent) {
         const emptyLeftUri = vscode.Uri.from({
           scheme: HEAD_SCHEME,
-          path: absPath,
+          path: uriPath,
           query: "ref=EMPTY",
           fragment: ws.uri.fsPath,
         });
@@ -138,15 +144,6 @@ export class DiffManager {
           { preview: true }
         );
         return;
-      }
-
-      if (!isUntracked) {
-        try {
-          await vscode.commands.executeCommand("git.openChange", rightUri);
-          return;
-        } catch {
-          // fall through to custom diff provider
-        }
       }
 
       await vscode.commands.executeCommand(

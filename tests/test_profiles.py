@@ -20,8 +20,7 @@ def test_unknown_defaults_to_builder():
 
 def test_builder_allowed_tools():
     tools = get_allowed_tools("builder")
-    assert all(t in tools for t in ["read_file", "write_file", "edit_file", "shell_exec", "list_dir"])
-    assert all(t in tools for t in ["create_todo", "update_todo", "list_todos"])
+    assert all(t in tools for t in ["read_file", "write_file", "edit_file", "shell_exec", "list_dir", "write_plan"])
 
 
 def test_reviewer_allowed_tools():
@@ -40,9 +39,9 @@ def test_filter_tools():
     assert "read_file" in names and "write_file" not in names
 
 
-def test_coder_has_todo_tools():
+def test_coder_allowed_tools():
     tools = get_allowed_tools("coder")
-    assert all(t in tools for t in ["create_todo", "update_todo", "list_todos"])
+    assert all(t in tools for t in ["read_file", "write_file", "edit_file", "shell_exec", "list_dir"])
     assert "write_plan" not in tools  # coder doesn't plan
 
 

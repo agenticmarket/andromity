@@ -13,7 +13,7 @@ from typing import Optional
 
 from andromity.ci.github_client import GitHubClient
 
-CO_AUTHOR_TRAILER = "Co-authored-by: Andromity <noreply@agenticmarket.dev>"
+CO_AUTHOR_TRAILER = "Co-authored-by: Andromity <333054755+andromity-bot@users.noreply.github.com>"
 
 
 def run_git_command(args: list[str], timeout: int = 30) -> str:
@@ -70,7 +70,7 @@ def execute_agent_task(
 
     # 2. Setup git identity (--local to avoid contaminating global config)
     run_git_command(["config", "--local", "user.name", "Andromity"])
-    run_git_command(["config", "--local", "user.email", "noreply@agenticmarket.dev"])
+    run_git_command(["config", "--local", "user.email", "333054755+andromity-bot@users.noreply.github.com"])
 
     # 3. Post start notification
     github_client.create_or_update_comment(

@@ -940,6 +940,135 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
       }
     }
   });
+
+  it("chatClientScript should maintain auto-scroll when at latest and preserve user scroll position when scrolled up", () => {
+    const state: ChatViewState = {
+      currentSessionId: "sess-scroll",
+      currentModel: "anthropic/claude-3.7-sonnet",
+      currentProvider: "anthropic",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "medium",
+      models: [{ id: "anthropic/claude-3.7-sonnet", name: "Claude 3.7 Sonnet" }],
+    };
+    const scriptCode = getChatClientScript("icon.svg", state);
+
+    assert.ok(scriptCode.includes("function isAtBottom(threshold = 64)"), "isAtBottom should have a generous threshold of 64px");
+    assert.ok(scriptCode.includes("if (userScrolledUp)"), "scrollToBottomIfNeeded should respect userScrolledUp");
+    assert.ok(
+      scriptCode.includes("if (isAtBottom(64))") && scriptCode.includes("userScrolledUp = false;"),
+      "startAssistantTurn must not unconditionally overwrite userScrolledUp when user is reading history"
+    );
+    assert.ok(
+      scriptCode.includes("userScrolledUp = false;\n          scrollToBottom(false);"),
+      "session_loaded must reset userScrolledUp and scrollToBottom to jump to latest turn on session open"
+    );
+  });
+
+  it("chatClientScript should format relative session times like 'now', '2m ago' and render in session item meta", () => {
+    const state: ChatViewState = {
+      currentSessionId: "sess-time",
+      currentModel: "anthropic/claude-3.7-sonnet",
+      currentProvider: "anthropic",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "medium",
+      models: [{ id: "anthropic/claude-3.7-sonnet", name: "Claude 3.7 Sonnet" }],
+    };
+    const scriptCode = getChatClientScript("icon.svg", state);
+
+    assert.ok(scriptCode.includes("formatDateBadge(s.updated_at || s.created_at)"), "renderSessionItemHtml must format session timestamp");
+    assert.ok(scriptCode.includes("session-item-time"), "session-item-meta must include session-item-time element");
+    assert.ok(scriptCode.includes("if (diffMins < 1 || diffSecs < 60) return 'now';"), "Under 1 min must format as 'now'");
+    assert.ok(scriptCode.includes("if (diffMins < 60) return diffMins + 'm ago';"), "Under 60 mins must format as 'Xm ago'");
+    assert.ok(scriptCode.includes("if (diffHours < 24) return diffHours + 'h ago';"), "Under 24 hours must format as 'Xh ago'");
+  });
+
+  it("chatClientScript should render clarifying questions using permission-card aesthetic with question-options-group", () => {
+    const state: ChatViewState = {
+      currentSessionId: "sess-q",
+      currentModel: "anthropic/claude-3.7-sonnet",
+      currentProvider: "anthropic",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "medium",
+      models: [{ id: "anthropic/claude-3.7-sonnet", name: "Claude 3.7 Sonnet" }],
+    };
+    const scriptCode = getChatClientScript("icon.svg", state);
+
+    assert.ok(scriptCode.includes("permission-card questions-card"), "questions card must adopt permission-card class");
+    assert.ok(scriptCode.includes("permission-code-box question-prompt-box"), "question prompt must use permission-code-box");
+    assert.ok(scriptCode.includes("permission-options-group question-options-group"), "options must use permission-options-group");
+    assert.ok(scriptCode.includes("permission-option-row question-option-row"), "option rows must use permission-option-row");
+    assert.ok(scriptCode.includes("question-radio-custom"), "options must render custom radio indicators");
+  });
+
+  it("should render professional reasoning popover slider with clean stepped controls", () => {
+    const state: ChatViewState = {
+      currentSessionId: "sess-reasoning",
+      currentModel: "anthropic/claude-3.7-sonnet",
+      currentProvider: "anthropic",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "high",
+      models: [{ id: "anthropic/claude-3.7-sonnet", name: "Claude 3.7 Sonnet" }],
+    };
+
+    const mockWebview: any = {
+      cspSource: "vscode-webview:",
+      asWebviewUri: (u: any) => "vscode-resource://" + (u.fsPath || u.path || String(u)),
+    };
+    const html = getChatViewHtml(mockWebview, { fsPath: "D:/mock/ext" } as any, state);
+    const styles = getChatStyles();
+    const scriptCode = getChatClientScript("icon.svg", state);
+
+    // 1. HTML validation (Clean & Minimal: only slider + step labels)
+    assert.ok(html.includes('id="reasoning-popover"'), "Chat HTML must contain reasoning-popover container");
+    assert.ok(html.includes('id="reasoning-slider-range"'), "Chat HTML must contain reasoning-slider-range input");
+    assert.ok(html.includes('id="reasoning-slider-track"'), "Chat HTML must contain reasoning-slider-track");
+    assert.ok(html.includes('id="reasoning-slider-fill"'), "Chat HTML must contain reasoning-slider-fill");
+    assert.ok(!html.includes('id="reasoning-popover-desc"'), "Minimal popover must omit description text box");
+    assert.ok(!html.includes('id="reasoning-popover-badge"'), "Minimal popover must omit title/badge header");
+    assert.ok(html.includes('data-level="off"'), "Popover must contain Off step");
+    assert.ok(html.includes('data-level="low"'), "Popover must contain Low step");
+    assert.ok(html.includes('data-level="medium"'), "Popover must contain Medium step");
+    assert.ok(html.includes('data-level="high"'), "Popover must contain High step");
+
+    // 2. CSS styles validation
+    assert.ok(styles.includes('.reasoning-popover'), "Styles must define .reasoning-popover");
+    assert.ok(styles.includes('.reasoning-slider-range::-webkit-slider-thumb'), "Styles must style custom slider thumb");
+    assert.ok(styles.includes('.reasoning-tick-point'), "Styles must define tick points");
+    assert.ok(styles.includes('.reasoning-step-btn'), "Styles must define step buttons");
+
+    // 3. Client script logic validation
+    assert.ok(scriptCode.includes("const reasoningPopover = document.getElementById('reasoning-popover')"), "Script must reference reasoningPopover");
+    assert.ok(scriptCode.includes("function toggleReasoningPopover"), "Script must define toggleReasoningPopover");
+    assert.ok(scriptCode.includes("function setReasoningLevel"), "Script must define setReasoningLevel");
+    assert.ok(scriptCode.includes("REASONING_LEVELS"), "Script must define discrete REASONING_LEVELS");
+    assert.ok(scriptCode.includes("update_config") && scriptCode.includes("reasoningEffort"), "Script must dispatch reasoningEffort update_config");
+  });
+
+  it("should render sleek session status badges with watching pill and pulse indicator", () => {
+    const styles = getChatStyles();
+    const state: ChatViewState = {
+      currentSessionId: "sess-test",
+      currentModel: "anthropic/claude-3.7-sonnet",
+      currentProvider: "anthropic",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "medium",
+    };
+    const scriptCode = getChatClientScript("icon.svg", state);
+
+    // CSS asserts
+    assert.ok(styles.includes(".session-badge-status"), "Styles must define .session-badge-status");
+    assert.ok(styles.includes(".session-status-watching"), "Styles must define .session-status-watching");
+    assert.ok(styles.includes(".session-pulse-dot"), "Styles must define .session-pulse-dot");
+    assert.ok(styles.includes("@keyframes sessionPulse"), "Styles must define sessionPulse keyframe");
+
+    // Script asserts
+    assert.ok(scriptCode.includes("session-status-watching"), "Script must render session-status-watching badge");
+    assert.ok(scriptCode.includes("session-pulse-dot"), "Script must render pulse dot for watching session");
+    assert.ok(scriptCode.includes("<span>Watching</span>"), "Script must render Watching label in title case");
+  });
 });
-
-

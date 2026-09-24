@@ -2,7 +2,7 @@
   "name": "andromity-agent",
   "displayName": "Andromity AI Coding Agent for VS Code",
   "description": "Autonomous AI coding agent with subagents, live plans & diffs. BYOK support for Claude 3.7, GPT-4o, DeepSeek R1, Gemini & free local Ollama. MCP & Multi-Agent ready.",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "publisher": "agenticmarket",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -65,7 +65,7 @@
       }
     },
     "viewsContainers": {
-      "activitybar": [
+      "secondarySidebar": [
         {
           "id": "andromity-sidebar",
           "title": "Andromity",
@@ -496,7 +496,10 @@
         "andromity.startupSession": {
           "type": "string",
           "default": "fresh",
-          "enum": ["last", "fresh"],
+          "enum": [
+            "last",
+            "fresh"
+          ],
           "enumDescriptions": [
             "Resume the session that was active when the panel/window was last closed.",
             "Always start a new empty session on load (previous sessions remain in history)."
@@ -544,7 +547,7 @@
         "andromity.includeCoAuthor": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically append 'Co-authored-by: Andromity <noreply@agenticmarket.dev>' to AI-generated commit messages."
+          "description": "Automatically append 'Co-authored-by: Andromity <333054755+andromity-bot@users.noreply.github.com>' to AI-generated commit messages."
         },
         "andromity.autoOpenSidebar": {
           "type": "string",
@@ -579,7 +582,12 @@
         "andromity.wallpaper.rippleIntensity": {
           "type": "string",
           "default": "medium",
-          "enum": ["off", "light", "medium", "strong"],
+          "enum": [
+            "off",
+            "light",
+            "medium",
+            "strong"
+          ],
           "description": "Intensity of the environmental water ripple effect on mouse hover."
         },
         "andromity.wallpaper.floatingAsterisks": {

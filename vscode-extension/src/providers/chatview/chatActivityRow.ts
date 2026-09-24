@@ -103,6 +103,16 @@ export function parseFileEditStats(toolName: string, args: Record<string, any> |
         }
       }
     }
+  } else if (lowerTool === "edit_file_multi" || Array.isArray(parsedArgs.edits)) {
+    const edits = parsedArgs.edits;
+    if (Array.isArray(edits)) {
+      for (const e of edits) {
+        if (e) {
+          deletions += countLines(e.old_str || e.old_string || e.target_content || e.TargetContent);
+          additions += countLines(e.new_str || e.new_string || e.replacement_content || e.ReplacementContent);
+        }
+      }
+    }
   } else if (lowerTool === "write_to_file" || lowerTool === "write_file" || lowerTool === "create_file") {
     const content = parsedArgs.CodeContent || parsedArgs.content || parsedArgs.text || "";
     additions = countLines(content);
@@ -211,6 +221,16 @@ export function getChatActivityScript(): string {
               }
             }
           }
+        } else if (lowerTool === 'edit_file_multi' || Array.isArray(parsedArgs.edits)) {
+          var edits = parsedArgs.edits;
+          if (Array.isArray(edits)) {
+            for (var i = 0; i < edits.length; i++) {
+              if (edits[i]) {
+                deletions += countL(edits[i].old_str || edits[i].old_string || edits[i].target_content || edits[i].TargetContent);
+                additions += countL(edits[i].new_str || edits[i].new_string || edits[i].replacement_content || edits[i].ReplacementContent);
+              }
+            }
+          }
         } else if (lowerTool === 'write_to_file' || lowerTool === 'write_file' || lowerTool === 'create_file') {
           var content = parsedArgs.CodeContent || parsedArgs.content || parsedArgs.text || '';
           additions = countL(content);
@@ -245,12 +265,12 @@ export function getChatActivityScript(): string {
           statsHtml = '<span class="activity-running-dot" title="Editing file..."></span>';
         } else {
           if (stat.additions > 0 || stat.deletions > 0) {
-            statsHtml = '<span class="activity-stats">' +
+            statsHtml = '<span class="activity-stats" data-action="open-review-tab" data-file-path="' + safePath + '" title="Review diff for ' + safeFile + '">' +
               (stat.additions > 0 ? ('<span class="activity-stat-add">+' + stat.additions + '</span>') : '') +
               (stat.deletions > 0 ? ('<span class="activity-stat-del">-' + stat.deletions + '</span>') : '') +
             '</span>';
           } else {
-            statsHtml = '<span class="activity-stats"><span class="activity-stat-add">+0</span> <span class="activity-stat-del">-0</span></span>';
+            statsHtml = '<span class="activity-stats" data-action="open-review-tab" data-file-path="' + safePath + '" title="Review diff for ' + safeFile + '"><span class="activity-stat-add">+0</span> <span class="activity-stat-del">-0</span></span>';
           }
         }
 
@@ -267,7 +287,7 @@ export function getChatActivityScript(): string {
           '<span class="activity-filename" title="' + safePath + '">' + safeFile + '</span>' +
           statsHtml +
           (!isRunning ? (
-            '<button class="activity-diff-btn" data-action="open-file-diff" data-file-path="' + safePath + '" title="Open Side-by-Side Diff">' +
+            '<button class="activity-diff-btn" data-action="open-review-tab" data-file-path="' + safePath + '" title="Review diff for ' + safeFile + '">' +
               diffIconSvg +
             '</button>'
           ) : '');
@@ -319,11 +339,13 @@ export function getChatActivityScript(): string {
       // Document click delegation for activity rows
       document.addEventListener('click', function(e) {
         var diffBtn = e.target.closest('.activity-diff-btn');
-        if (diffBtn) {
+        var statsEl = !diffBtn ? e.target.closest('.activity-stats') : null;
+        if (diffBtn || statsEl) {
           e.stopPropagation();
-          var p = diffBtn.getAttribute('data-file-path');
+          var targetEl = diffBtn || statsEl;
+          var p = targetEl.getAttribute('data-file-path') || targetEl.closest('[data-file-path]')?.getAttribute('data-file-path');
           if (p) {
-            postToVsCode({ type: 'open_file_diff', filePath: p });
+            postToVsCode({ type: 'open_review_tab', filePath: p });
           }
           return;
         }

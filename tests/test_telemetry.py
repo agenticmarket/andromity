@@ -95,6 +95,9 @@ def test_sanitization_helpers():
     assert _safe_str("nvapi-dG23LLucX-CZrKhqwA8QxNvpGDP62KbimBPFvR5KZAEOQwg8z2HNsUl1Ui") == "scrubbed_api_key"
     assert _safe_str("sk-ant-api03-abcdef1234567890abcdef123456") == "scrubbed_api_key"
     assert _safe_str("gsk_1234567890abcdef1234567890abcdef") == "scrubbed_api_key"
+    # Preserves UUID session IDs without false-positive scrubbing
+    assert _safe_str("ba961115-6312-4fa1-ba4d-07fe92d9b224") == "ba961115-6312-4fa1-ba4d-07fe92d9b224"
+    assert _safe_str("sess-2026-09-24-6a8b0929") == "sess-2026-09-24-6a8b0929"
 
 
 def test_session_start_initial_turn_count(monkeypatch):

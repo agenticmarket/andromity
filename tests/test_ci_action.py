@@ -18,9 +18,9 @@ class TestCIAction(unittest.TestCase):
         self.assertEqual(DEFAULT_MODEL, "openrouter/deepseek/deepseek-v4.1-flash")
 
     def test_co_author_trailer_format(self):
-        """Verify co-author trailer strictly adheres to Andromity <noreply@agenticmarket.dev>."""
-        self.assertEqual(CO_AUTHOR_TRAILER, "Co-authored-by: Andromity <noreply@agenticmarket.dev>")
-        self.assertIn("agenticmarket.dev", CO_AUTHOR_TRAILER)
+        """Verify co-author trailer links to andromity-bot GitHub account (ID 333054755)."""
+        self.assertEqual(CO_AUTHOR_TRAILER, "Co-authored-by: Andromity <333054755+andromity-bot@users.noreply.github.com>")
+        self.assertIn("andromity-bot@users.noreply.github.com", CO_AUTHOR_TRAILER)
         self.assertNotIn("Andromity AI", CO_AUTHOR_TRAILER)
         self.assertIn("Andromity", CO_AUTHOR_TRAILER)
 

@@ -300,6 +300,10 @@ export class SessionTabPanel {
           context_tokens: params.context_tokens,
           token_total: params.token_total,
           cost_usd: params.cost_usd,
+          status: params.status,
+          collaborators: params.collaborators,
+          watching_for: params.watching_for,
+          consecutive_auto_wakes: params.consecutive_auto_wakes,
         });
       }
     });
@@ -393,7 +397,7 @@ export class SessionTabPanel {
 
     if (message.type === "open_file_diff") {
       if (message.filePath) {
-        await this._viewProvider.openFileDiff(message.filePath, false);
+        this._viewProvider.openReviewWebview(message.filePath);
       }
       return;
     }
@@ -739,6 +743,13 @@ export class SessionTabPanel {
           SessionTabPanel._panels.set(this._sessionId, this);
           await this._loadSession();
         }
+        break;
+      }
+
+      case "reset_auto_wake": {
+        await this._rpcClient.call("session.resetAutoWake", {
+          session_id: this._sessionId,
+        }).catch((err) => console.error("[SessionTab] Reset auto wake error:", err));
         break;
       }
 

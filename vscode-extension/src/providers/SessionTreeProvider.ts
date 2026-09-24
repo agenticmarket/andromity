@@ -2,6 +2,38 @@ import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
 import { SessionInfo } from "../server/types.js";
 
+function formatRelativeTime(dateStr?: string): string {
+  if (!dateStr) return "";
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return "";
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffSecs = Math.max(0, Math.floor(diffMs / 1000));
+    const diffMins = Math.floor(diffSecs / 60);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffMins < 1 || diffSecs < 60) return "now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays === 1) return "1d ago";
+    if (diffDays < 7) return `${diffDays}d ago`;
+    if (diffDays < 30) {
+      const weeks = Math.floor(diffDays / 7);
+      return `${weeks}w ago`;
+    }
+    if (diffDays < 365) {
+      const months = Math.floor(diffDays / 30);
+      return `${months}mo ago`;
+    }
+    const years = Math.floor(diffDays / 365);
+    return `${years}y ago`;
+  } catch {
+    return "";
+  }
+}
+
 export class SessionTreeItem extends vscode.TreeItem {
   constructor(
     public readonly session: SessionInfo,
@@ -18,7 +50,9 @@ export class SessionTreeItem extends vscode.TreeItem {
 
     const statusBadge = session.status && session.status !== "idle" && session.status !== "running" ? `[${session.status}] ` : "";
     const prefix = isSubsession ? "Subagent • " : "";
-    this.description = `${prefix}${statusBadge}${session.message_count || 0} msgs • $${(session.cost_usd || 0).toFixed(3)}`;
+    const timeAgo = formatRelativeTime(session.updated_at || session.created_at);
+    const timePart = timeAgo ? `${timeAgo} • ` : "";
+    this.description = `${prefix}${statusBadge}${timePart}${session.message_count || 0} msgs • $${(session.cost_usd || 0).toFixed(3)}`;
     this.tooltip = `Status: ${session.status || "idle"}\nID: ${session.id}\nUpdated: ${session.updated_at || "N/A"}\nTokens: ${session.token_total || 0}`;
     this.contextValue = isSubsession ? "subsessionItem" : "sessionItem";
 

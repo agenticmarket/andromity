@@ -1278,6 +1278,16 @@ def session_answer_question(question_id: str, answer: str) -> str:
     return f"Error: Question '{question_id}' was not found, has timed out, or was already answered."
 
 
+def session_watch(target_session: Optional[str] = None, reason: str = "") -> str:
+    """Put current session into standby 'watching' mode to wait for updates, questions, or handoffs from another session."""
+    cur_sess = _current_session_var.get()
+    if not cur_sess:
+        return "Error: No active session found."
+    cur_sess.set_status("watching", watching_for={"target_session": target_session, "reason": reason})
+    target_info = f" targeting '{target_session}'" if target_session else ""
+    return f"Session entered 'watching' state{target_info}. It will hibernate and automatically wake up when an incoming question, handoff, or signal arrives."
+
+
 def shared_state_set(key: str, value: Any) -> str:
     from andromity.core.shared_state import SharedStateBoard
     cur_sess = _current_session_var.get()
@@ -1770,6 +1780,20 @@ CORE_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "session_watch",
+            "description": "Put the current session into standby 'watching' mode waiting for updates, questions, or handoffs from another session without consuming tokens.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_session": {"type": "string", "description": "Optional name or ID of the session this agent is waiting for"},
+                    "reason": {"type": "string", "description": "Optional reason or deliverable this session is expecting before resuming"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "shared_state_set",
             "description": "Set a namespaced key-value fact on the shared state board (e.g. 'auth.endpoints', 'ui.theme', 'db.schema').",
             "parameters": {
@@ -1986,6 +2010,8 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
             res = session_read_messages(**args)
         elif name == "session_answer_question":
             res = session_answer_question(**args)
+        elif name == "session_watch":
+            res = session_watch(**args)
         elif name == "shared_state_set":
             res = shared_state_set(**args)
         elif name == "shared_state_get":
@@ -2093,6 +2119,8 @@ async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[
                 res = session_read_messages(**args)
             elif name == "session_answer_question":
                 res = session_answer_question(**args)
+            elif name == "session_watch":
+                res = session_watch(**args)
             else:
                 # Run blocking core tools in a background thread to prevent freezing the Textual UI
                 res = await asyncio.to_thread(execute_tool, name, args)

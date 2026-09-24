@@ -37,10 +37,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _currentSessionId: string = "";
   private _isExecuting: boolean = false;
   private _runningSessions: Set<string> = new Set<string>();
+  private _waterfallAutoOpenedSessions: Set<string> = new Set<string>();
   private _sessionNames: Map<string, string> = new Map<string, string>();
   private _currentProfile: string = "builder";
-  private _currentModel: string = "claude-sonnet-4-6";
-  private _currentProvider: string = "anthropic";
+  private _currentModel: string = "";
+  private _currentProvider: string = "";
   private _currentMode: string = "safe";
   private _currentReasoning: string = "medium";
   private _models: ModelInfo[] = [];
@@ -84,12 +85,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return true;
   }
 
-  public getCurrentModel(): string {
-    return this._currentModel;
+  public getCurrentModel(): string | undefined {
+    return this._currentModel || undefined;
   }
 
-  public getCurrentProvider(): string {
-    return this._currentProvider;
+  public getCurrentProvider(): string | undefined {
+    return this._currentProvider || undefined;
   }
 
   constructor(
@@ -467,10 +468,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /** Wired to the "Andromity: Open File Diff" command. */
-  public async openFileDiff(filePath: string, isUntracked: boolean) {
-    if (this._diffManager) {
-      await this._diffManager.showFileDiff(filePath, isUntracked);
-    }
+  public async openFileDiff(filePath: string, isUntracked: boolean = false) {
+    this.openReviewWebview(filePath);
   }
 
   /** Open a file directly in VS Code's editor, optionally jumping to a specific line. */
@@ -705,7 +704,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (sid && this._context) {
         const config = vscode.workspace.getConfiguration("andromity");
         const shouldAutoOpen = config.get<boolean>("waterfallAutoOpen", true);
-        if (shouldAutoOpen) {
+        const isFirstPrompt = params?.turn_index !== undefined
+          ? params.turn_index === 0
+          : !this._waterfallAutoOpenedSessions.has(sid);
+
+        if (shouldAutoOpen && isFirstPrompt && !this._waterfallAutoOpenedSessions.has(sid)) {
+          this._waterfallAutoOpenedSessions.add(sid);
           WaterfallPanel.createOrShow(
             this._extensionUri,
             sid,
@@ -798,6 +802,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         context_tokens: params.context_tokens,
         token_total: params.token_total,
         cost_usd: params.cost_usd,
+        status: params.status,
+        collaborators: params.collaborators,
+        watching_for: params.watching_for,
+        consecutive_auto_wakes: params.consecutive_auto_wakes,
       });
       vscode.commands.executeCommand("andromity.refreshSessions");
     });
@@ -1437,6 +1445,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
       if (sessionData?.name) {
         this._sessionNames.set(sessionId, sessionData.name);
+      }
+      if (sessionData?.messages && sessionData.messages.some((m: any) => m.role === "user")) {
+        this._waterfallAutoOpenedSessions.add(sessionId);
       }
       if (sessionData && sessionData.plan && sessionData.plan.steps && sessionData.plan.steps.length > 0) {
         this._currentPlan = sessionData.plan;
@@ -2207,7 +2218,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "open_file_diff": {
         if (message.filePath) {
           void this._rpcClient?.call("telemetry.recordFeature", { feature: "side_by_side_diff", session_id: this._currentSessionId }).catch(() => {});
-          await this.openFileDiff(message.filePath, false);
+          this.openReviewWebview(message.filePath);
         }
         break;
       }
@@ -2278,6 +2289,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const sid = message.sessionId || this._currentSessionId;
         const sname = message.sessionName || "Chat Session";
         if (sid) {
+          this._waterfallAutoOpenedSessions.add(sid);
           void this._rpcClient?.call("telemetry.recordFeature", { feature: "waterfall", session_id: sid }).catch(() => {});
           if (this._context) {
             void this._context.globalState.update("andromity.waterfallFirstSessionShown", true);
@@ -2294,7 +2306,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "switch_session": {
-        this.setCurrentSessionId(message.sessionId);
+        this.setCurrentSessionId(message.sessionId, true);
+        break;
+      }
+
+      case "reset_auto_wake": {
+        if (this._rpcClient && message.sessionId) {
+          await this._rpcClient.call("session.resetAutoWake", {
+            session_id: message.sessionId,
+          }).catch((err) => console.error("[ChatView] Reset auto wake error:", err));
+        }
         break;
       }
 
@@ -2345,6 +2366,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "delete_session": {
         if (this._rpcClient && message.sessionId) {
+          this._waterfallAutoOpenedSessions.delete(message.sessionId);
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           await this._rpcClient.call("session.delete", {
             session_id: message.sessionId,

@@ -91,7 +91,12 @@ class Agent:
         # Set when the current turn carries pasted images (see run()).
         self._turn_image_parts = None
         # Coarse tool-usage counters for session_end telemetry (no args stored)
-        self._tool_usage_counts: Dict[str, int] = {"bash": 0, "file": 0, "web": 0}
+        # Bind to session so multi-turn interactions retain cumulative tool activity
+        if session is not None and not hasattr(session, "_tool_usage_counts"):
+            session._tool_usage_counts = {"bash": 0, "file": 0, "web": 0}
+        self._tool_usage_counts: Dict[str, int] = (
+            session._tool_usage_counts if session is not None else {"bash": 0, "file": 0, "web": 0}
+        )
         # Session wall-clock start time for duration telemetry
         self._session_start_time: float = time.time()
         # Turn counter for telemetry (incremented per user message)
@@ -714,18 +719,19 @@ class Agent:
                     register_session(self.session)
                     tool_call, tool_name, args = prep
                     t0 = time.time()
-                    # Categorise tool for telemetry — counts only, no args stored
-                    _BASH_TOOLS = {"run_terminal_cmd", "run_command", "execute_command", "bash"}
-                    _WEB_TOOLS  = {"web_search", "read_url", "browser", "search_web", "read_url_content"}
-                    _FILE_TOOLS = {"read_file", "write_file", "edit_file", "view_file",
-                                   "write_to_file", "replace_file_content", "multi_replace_file_content",
-                                   "list_dir", "grep_search"}
+                    # Categorise tool for telemetry — exact tools from CORE_TOOLS only
+                    _BASH_TOOLS = {"shell_exec", "shell_bg", "shell_read", "shell_kill", "shell_list"}
+                    _WEB_TOOLS  = {"web_search", "fetch_url"}
+                    _FILE_TOOLS = {
+                        "read_file", "write_file", "edit_file", "edit_file_multi",
+                        "find_files", "list_dir", "grep_search"
+                    }
                     if tool_name in _BASH_TOOLS:
-                        self._tool_usage_counts["bash"] += 1
+                        self._tool_usage_counts["bash"] = self._tool_usage_counts.get("bash", 0) + 1
                     elif tool_name in _WEB_TOOLS:
-                        self._tool_usage_counts["web"] += 1
+                        self._tool_usage_counts["web"] = self._tool_usage_counts.get("web", 0) + 1
                     elif tool_name in _FILE_TOOLS:
-                        self._tool_usage_counts["file"] += 1
+                        self._tool_usage_counts["file"] = self._tool_usage_counts.get("file", 0) + 1
                     if self.dry_run:
                         dur = round((time.time() - t0) * 1000, 2)
                         return tool_call["id"], f"[DRY RUN] Would execute {tool_name}({json.dumps(args, indent=2)})", dur, True

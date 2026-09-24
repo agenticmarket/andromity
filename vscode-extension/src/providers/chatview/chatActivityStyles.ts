@@ -134,6 +134,14 @@ export function getChatActivityStyles(): string {
       font-size: 10.5px;
       font-weight: 600;
       flex-shrink: 0;
+      cursor: pointer;
+      border-radius: 4px;
+      padding: 1px 4px;
+      transition: all 0.12s ease;
+    }
+
+    .activity-stats:hover {
+      background: rgba(255, 255, 255, 0.08);
     }
 
     .activity-stat-add {
