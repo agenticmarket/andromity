@@ -11,15 +11,27 @@ export function getNonce(): string {
   return text;
 }
 
+function escapeHtml(str: string): string {
+  if (!str) return "";
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 export function getWaterfallHtml(
   webview: vscode.Webview,
   sessionId: string,
   sessionName: string,
-  extensionUri?: vscode.Uri
+  extensionUri?: vscode.Uri,
+  noticeDismissed: boolean = false
 ): string {
   const nonce = getNonce();
   const styles = getWaterfallStyles();
   const script = getWaterfallScript(sessionId);
+  const safeSessionName = escapeHtml(sessionName || "Session");
   const markedScriptUri = extensionUri
     ? webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "marked.min.js"))
     : "";
@@ -30,18 +42,30 @@ export function getWaterfallHtml(
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline' https://fonts.googleapis.com; script-src 'nonce-${nonce}' ${webview.cspSource}; img-src ${webview.cspSource} https: data:; font-src ${webview.cspSource} https://fonts.gstatic.com data:;">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Waterfall — ${sessionName}</title>
+  <title>Waterfall — ${safeSessionName}</title>
   <style>
     ${styles}
   </style>
 </head>
 <body>
+  ${noticeDismissed ? "" : `
+  <div class="wf-banner-pill" id="wf-auto-open-pill">
+    <div class="wf-banner-pill-left">
+      <span class="wf-banner-icon">🌊</span>
+      <span class="wf-banner-text"><strong>Live Waterfall</strong> opened automatically for this session · You can change this in Settings</span>
+    </div>
+    <div class="wf-banner-pill-actions">
+      <button class="wf-pill-btn" data-action="open-settings">Settings</button>
+      <button class="wf-pill-btn wf-pill-dismiss" data-action="dismiss-pill">Don't show again</button>
+    </div>
+  </div>
+  `}
   <!-- Header Bar -->
   <header class="wf-header">
     <div class="wf-header-row1">
       <div class="wf-title-area">
         <span class="wf-logo"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:5px;vertical-align:-2px;"><path d="M2 12h5l3 9 4-18 3 9h5"/></svg>Waterfall Trace</span>
-        <span class="wf-session-pill" title="${sessionName}">${sessionName}</span>
+        <span class="wf-session-pill" title="${safeSessionName}">${safeSessionName}</span>
         <div class="wf-live-status">
           <span class="wf-live-dot" id="wf-live-dot"></span>
           <span id="wf-live-text">IDLE</span>

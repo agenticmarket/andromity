@@ -47,4 +47,13 @@ scripts/sync_agent.py
 scripts/browser_runner.py
 wallpaper-ambient-test.html
 /wildcat-panther-dusk.jpg
-product/
+/product
+/product/
+litellm_disclosure_package/
+prefect_disclosure_package/
+prefect_disclosure_package.zip
+security_audit/
+*.mp4
+*.mov
+*.webm
+

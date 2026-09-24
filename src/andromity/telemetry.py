@@ -105,13 +105,18 @@ def _detect_client() -> str:
 _KEY_PATTERNS = re.compile(
     r"(?:sk-[a-zA-Z0-9_\-]{16,}|nvapi-[a-zA-Z0-9_\-]{16,}|gsk_[a-zA-Z0-9_\-]{16,}|AIza[a-zA-Z0-9_\-]{16,}|xai-[a-zA-Z0-9_\-]{16,}|key-[a-zA-Z0-9_\-]{16,})"
 )
+_UUID_OR_SESS_PATTERN = re.compile(
+    r"^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|sess-[a-zA-Z0-9_\-]+)$"
+)
 
 
 def _scrub_api_key(value: str) -> str:
     """Scrub raw API keys or tokens accidentally entered into provider/model fields."""
     if not value or not isinstance(value, str):
         return "unknown"
-    if _KEY_PATTERNS.search(value) or (len(value) >= 32 and re.match(r"^[a-zA-Z0-9_\-]{32,}$", value)):
+    if _UUID_OR_SESS_PATTERN.match(value):
+        return value
+    if _KEY_PATTERNS.search(value) or (len(value) >= 32 and re.match(r"^[a-zA-Z0-9_]{32,}$", value)):
         return "scrubbed_api_key"
     return value
 

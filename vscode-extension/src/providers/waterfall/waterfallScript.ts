@@ -449,12 +449,21 @@ export function getWaterfallScript(sessionId: string): string {
           if (span.status === 'running') return now;
           return span.argsEndTime || now;
         };
+        // Compute monotonic visual start offsets so chronological spans
+        // in a waterfall trace never render to the left of preceding steps.
+        let prevMonotonicStart = 0;
         let turnMaxElapsed = 100;
 
-        for (const span of turn.spans) {
-          const end = spanLiveEnd(span);
-          const elapsed = end - turn.startTime;
-          if (elapsed > turnMaxElapsed) turnMaxElapsed = elapsed;
+        for (let idx = 0; idx < turn.spans.length; idx++) {
+          const span = turn.spans[idx];
+          const rawStart = Math.max(0, span.startTime - turn.startTime);
+          const start = Math.max(prevMonotonicStart, rawStart);
+          prevMonotonicStart = start;
+          span._visualStartOffset = start;
+
+          const dur = Math.max(50, spanLiveEnd(span) - span.startTime);
+          const end = start + dur;
+          if (end > turnMaxElapsed) turnMaxElapsed = end;
         }
 
         const durEl = document.getElementById('wf-turn-dur-' + turn.id);
@@ -475,8 +484,8 @@ export function getWaterfallScript(sessionId: string): string {
           const ttfb = document.getElementById('wf-ttfb-' + span.id);
           if (!bar) continue;
 
-          const startOffset = Math.max(0, span.startTime - turn.startTime);
-          const currentDuration = spanLiveEnd(span) - span.startTime;
+          const startOffset = typeof span._visualStartOffset === 'number' ? span._visualStartOffset : Math.max(0, span.startTime - turn.startTime);
+          const currentDuration = Math.max(50, spanLiveEnd(span) - span.startTime);
 
           const leftPercent = Math.min(96, Math.max(0, (startOffset / turnMaxElapsed) * 100));
           const widthPercent = Math.min(100 - leftPercent, Math.max(2, (currentDuration / turnMaxElapsed) * 100));
@@ -1536,30 +1545,28 @@ export function getWaterfallScript(sessionId: string): string {
                     state.committedLlmTurnIds.add(m.turn_id);
                   }
                   
-                  // Compute LLM duration
+                  // Compute LLM duration and accurate timestamps:
+                  // In Python daemon agent.py, m.duration stores the cumulative turn duration (time.time() - turn_start_time).
+                  // Therefore delta LLM duration is cumMs minus turn time elapsed before this LLM step began.
+                  const asstEndTs = m.ts ? new Date(m.ts).getTime() : 0;
                   let llmDurMs = 1000;
-                  if (m.ts) {
-                    const msgTs = new Date(m.ts).getTime();
-                    if (msgTs > turnCursor) {
-                      llmDurMs = msgTs - turnCursor;
-                    } else if (m.duration) {
-                      const cumMs = Math.round(m.duration * 1000);
-                      llmDurMs = cumMs > prevCumulativeDurMs ? (cumMs - prevCumulativeDurMs) : cumMs;
-                    }
-                  } else if (m.duration) {
+                  if (typeof m.duration === 'number' && m.duration > 0) {
                     const cumMs = Math.round(m.duration * 1000);
-                    llmDurMs = cumMs > prevCumulativeDurMs ? (cumMs - prevCumulativeDurMs) : cumMs;
+                    const elapsedSoFar = Math.max(0, turnCursor - currentTurn.startTime);
+                    llmDurMs = cumMs > elapsedSoFar ? (cumMs - elapsedSoFar) : cumMs;
+                  } else if (asstEndTs && asstEndTs > turnCursor) {
+                    llmDurMs = asstEndTs - turnCursor;
                   }
                   llmDurMs = Math.max(100, Math.min(600000, llmDurMs));
 
-                  const spanStart = turnCursor;
-                  const spanEnd = turnCursor + llmDurMs;
-                  turnCursor = spanEnd;
-                  if (m.duration) {
-                    prevCumulativeDurMs = Math.round(m.duration * 1000);
-                  } else {
-                    prevCumulativeDurMs += llmDurMs;
+                  let spanStart = turnCursor;
+                  let spanEnd = turnCursor + llmDurMs;
+                  if (asstEndTs > 0) {
+                    spanEnd = Math.max(turnCursor + 100, asstEndTs);
+                    spanStart = Math.max(turnCursor, spanEnd - llmDurMs);
                   }
+                  turnCursor = spanEnd;
+                  prevCumulativeDurMs += llmDurMs;
 
                   const span = {
                     id: spanId,
@@ -1587,6 +1594,9 @@ export function getWaterfallScript(sessionId: string): string {
 
                   // Process tool calls emitted by this assistant turn
                   if (m.tool_calls && Array.isArray(m.tool_calls)) {
+                    const toolBatchStart = turnCursor;
+                    let maxToolEnd = toolBatchStart;
+
                     m.tool_calls.forEach((tc, tcIdx) => {
                       if (tc.id) state.committedToolCallIds.add(tc.id);
                       const tName = tc.function ? tc.function.name : (tc.name || 'tool');
@@ -1601,17 +1611,17 @@ export function getWaterfallScript(sessionId: string): string {
 
                       if (toolResultMsg && toolResultMsg.ts) {
                         const toolEndTs = new Date(toolResultMsg.ts).getTime();
-                        if (toolEndTs > turnCursor) {
-                          toolDur = toolEndTs - turnCursor;
+                        if (toolEndTs > toolBatchStart) {
+                          toolDur = toolEndTs - toolBatchStart;
                         }
                       } else {
                         // Estimate duration from gap to next assistant message
                         const nextAsst = messages.slice(i + 1).find(tm => tm.role === 'assistant');
                         if (nextAsst && nextAsst.ts) {
                           const nextTs = new Date(nextAsst.ts).getTime();
-                          const gap = nextTs > turnCursor ? (nextTs - turnCursor) : 0;
-                          const estLlm = nextAsst.duration ? Math.round(nextAsst.duration * 1000) - prevCumulativeDurMs : 1000;
-                          toolDur = Math.max(100, Math.round((gap - Math.max(100, estLlm)) / (m.tool_calls.length || 1)));
+                          const gap = nextTs > toolBatchStart ? (nextTs - toolBatchStart) : 0;
+                          const estLlm = nextAsst.duration ? Math.round(nextAsst.duration * 1000) : 1000;
+                          toolDur = Math.max(100, Math.round(gap - Math.max(100, estLlm)));
                         }
                       }
 
@@ -1634,8 +1644,8 @@ export function getWaterfallScript(sessionId: string): string {
                               name: step.name,
                               args: step.args,
                               detail: step.name,
-                              startTime: turnCursor,
-                              endTime: turnCursor + (step.duration_ms || 100),
+                              startTime: toolBatchStart,
+                              endTime: toolBatchStart + (step.duration_ms || 100),
                               durationMs: step.duration_ms || 100,
                               status: step.status || 'done',
                               result: step.result || ''
@@ -1644,9 +1654,9 @@ export function getWaterfallScript(sessionId: string): string {
                         } catch (e) {}
                       }
 
-                      const tStart = turnCursor;
-                      const tEnd = turnCursor + toolDur;
-                      turnCursor = tEnd;
+                      const tStart = toolBatchStart;
+                      const tEnd = toolBatchStart + toolDur;
+                      if (tEnd > maxToolEnd) maxToolEnd = tEnd;
 
                       const tSpan = {
                         id: tSpanId,
@@ -1665,6 +1675,8 @@ export function getWaterfallScript(sessionId: string): string {
                       currentTurn.spans.push(tSpan);
                       renderSpanRow(tSpan);
                     });
+
+                    turnCursor = maxToolEnd;
                   }
                 } else if (m.role === 'tool' && currentTurn) {
                   if (m.tool_call_id) state.committedToolCallIds.add(m.tool_call_id);
@@ -1910,6 +1922,23 @@ export function getWaterfallScript(sessionId: string): string {
           els.guideModal.style.display = 'none';
         }
       });
+
+      const autoOpenPill = document.getElementById('wf-auto-open-pill');
+      if (autoOpenPill) {
+        autoOpenPill.addEventListener('click', (e) => {
+          const target = e.target;
+          const btn = (target && target.closest) ? target.closest('[data-action]') : null;
+          if (!btn) return;
+          const action = btn.getAttribute('data-action');
+          if (action === 'dismiss-pill') {
+            autoOpenPill.classList.add('collapsed');
+            setTimeout(() => { autoOpenPill.remove(); }, 260);
+            vscode.postMessage({ type: 'dismiss_waterfall_auto_open_notice' });
+          } else if (action === 'open-settings') {
+            vscode.postMessage({ type: 'open_settings' });
+          }
+        });
+      }
 
       // Signal ready
       vscode.postMessage({ type: 'waterfall_ready' });

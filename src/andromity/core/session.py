@@ -47,7 +47,10 @@ class Session:
         actual_id = session_id or id
         self.id = _validate_session_id(actual_id) if actual_id else str(uuid.uuid4())
         self.name = name
-        self.status = "idle"  # 'idle' | 'running' | 'approval_required' | 'compacting' | 'error' | 'cancelled'
+        self.status = "idle"  # 'idle' | 'running' | 'approval_required' | 'compacting' | 'error' | 'cancelled' | 'watching' | 'paused_limit_reached'
+        self.consecutive_auto_wakes: int = 0
+        self.collaborators: List[str] = []
+        self.watching_for: Optional[Dict[str, Any]] = None
         self.project_path = normalize_project_path(project_path)
         self.project_hash = hashlib.sha256(self.project_path.encode()).hexdigest()[:16]
         self.parent_session = None
@@ -141,9 +144,13 @@ class Session:
         except Exception:
             pass
 
-    def set_status(self, status: str):
+    def set_status(self, status: str, watching_for: Optional[Dict[str, Any]] = None):
         """Update live lifecycle status of this session in DB and JSON."""
         self.status = status
+        if watching_for is not None:
+            self.watching_for = watching_for
+        elif status != "watching":
+            self.watching_for = None
         self.updated_at = datetime.now(timezone.utc).isoformat()
         self._save_to_db()
         self._mark_dirty(delay=0.05)
@@ -286,6 +293,9 @@ class Session:
             "allowed_domains": list(getattr(self, "allowed_domains", [])),
             "undo_stack": copy.deepcopy(self.undo_stack) if (snapshot and hasattr(self, "undo_stack") and self.undo_stack) else list(getattr(self, "undo_stack", [])),
             "permission_mode": getattr(self, "permission_mode", "safe"),
+            "consecutive_auto_wakes": getattr(self, "consecutive_auto_wakes", 0),
+            "collaborators": list(getattr(self, "collaborators", [])),
+            "watching_for": getattr(self, "watching_for", None),
         }
 
     def compact_messages(self, new_summary: str, keep_last_n: int = 10) -> int:
@@ -571,6 +581,9 @@ class Session:
         session.allowed_commands = uj(row["allowed_commands"], []) if "allowed_commands" in keys and row["allowed_commands"] else []
         session.allowed_domains = uj(row["allowed_domains"], []) if "allowed_domains" in keys and row["allowed_domains"] else []
         session.undo_stack = uj(row["undo_stack"], []) if "undo_stack" in keys and row["undo_stack"] else []
+        session.consecutive_auto_wakes = 0
+        session.collaborators = []
+        session.watching_for = None
 
         # Load messages
         msg_rows = c.execute(
@@ -646,6 +659,9 @@ class Session:
         session.allowed_commands = data.get("allowed_commands", [])
         session.allowed_domains = data.get("allowed_domains", [])
         session.undo_stack = data.get("undo_stack", [])
+        session.consecutive_auto_wakes = data.get("consecutive_auto_wakes", 0)
+        session.collaborators = data.get("collaborators", [])
+        session.watching_for = data.get("watching_for")
         from andromity.config import config
         session.permission_mode = data.get("permission_mode", config.get("default", "permission_mode", "safe"))
         session.storage_dir = fp.parent

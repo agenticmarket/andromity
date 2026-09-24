@@ -88,12 +88,12 @@ export default {
         if (!lorePayload) {
           return new Response(JSON.stringify({ error: 'unknown_signal' }), {
             status: 404,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            headers: { ...securityHeaders, 'Content-Type': 'application/json' },
           });
         }
         return new Response(JSON.stringify(lorePayload, null, 2), {
           status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60' },
+          headers: { ...securityHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60' },
         });
       }
 
@@ -101,7 +101,7 @@ export default {
         const tipPayload = await getRandomTip(url, env);
         return new Response(JSON.stringify(tipPayload, null, 2), {
           status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+          headers: { ...securityHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
         });
       }
 
@@ -109,7 +109,7 @@ export default {
         const newsPayload = await getLatestNews(env);
         return new Response(JSON.stringify(newsPayload, null, 2), {
           status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300' },
+          headers: { ...securityHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300' },
         });
       }
 
@@ -117,7 +117,7 @@ export default {
         const seasonInfo = await getSeasonalInfo(env);
         return new Response(JSON.stringify(seasonInfo, null, 2), {
           status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+          headers: { ...securityHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
         });
       }
     }
@@ -354,10 +354,12 @@ export default {
 
 function timingSafeMatch(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  const maxLen = Math.max(a.length, b.length);
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < maxLen; i++) {
+    const charA = i < a.length ? a.charCodeAt(i) : 0;
+    const charB = i < b.length ? b.charCodeAt(i) : 0;
+    diff |= charA ^ charB;
   }
   return diff === 0;
 }
@@ -400,6 +402,9 @@ async function getD1Stats(env) {
     mascotStatsRes,
     wallpaperStatsRes,
     settingsTabsRes,
+    // v6 — waterfall loyalty & work intent
+    waterfallFrequencyRes,
+    workQualityRes,
   ] = await env.DB.batch([
     env.DB.prepare(`SELECT COUNT(*) AS count FROM users`),
     env.DB.prepare(`SELECT COUNT(*) AS count FROM sessions`),
@@ -488,15 +493,29 @@ async function getD1Stats(env) {
         COALESCE(e.tool_bash_count, 0) AS tool_bash_count,
         COALESCE(e.tool_file_count, 0) AS tool_file_count,
         COALESCE(e.tool_web_count, 0) AS tool_web_count,
+        (COALESCE(e.tool_bash_count, 0) + COALESCE(e.tool_file_count, 0) + COALESCE(e.tool_web_count, 0)) AS total_tools_count,
+        COALESCE((SELECT COUNT(*) FROM feature_events fe WHERE fe.session_id = s.session_id AND fe.feature_name = 'waterfall'), 0) AS session_waterfall_count,
+        COALESCE((SELECT COUNT(*) FROM feature_events fe WHERE fe.user_id = s.user_id AND fe.feature_name = 'waterfall'), 0) AS user_waterfall_total,
         s.created_at
       FROM sessions s
       LEFT JOIN (
-        SELECT session_id, turn_count, had_error, duration_bucket,
-               tool_bash_count, tool_file_count, tool_web_count,
-               ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY id DESC) as rn
+        SELECT
+          CASE WHEN session_id = 'scrubbed_api_key' THEN user_id || '_' || substr(created_at, 1, 13) ELSE session_id END AS match_key,
+          session_id, user_id,
+          MAX(turn_count) AS turn_count,
+          MAX(had_error) AS had_error,
+          MAX(duration_bucket) AS duration_bucket,
+          SUM(tool_bash_count) AS tool_bash_count,
+          SUM(tool_file_count) AS tool_file_count,
+          SUM(tool_web_count) AS tool_web_count,
+          MAX(created_at) AS created_at
         FROM events
         WHERE event = 'session_end'
-      ) e ON s.session_id = e.session_id AND e.rn = 1
+        GROUP BY match_key
+      ) e ON (
+        s.session_id = e.session_id OR
+        (e.session_id = 'scrubbed_api_key' AND s.user_id = e.user_id AND substr(s.created_at, 1, 13) = substr(e.created_at, 1, 13))
+      )
       ORDER BY s.created_at DESC
       LIMIT 50
     `),
@@ -675,6 +694,59 @@ async function getD1Stats(env) {
       GROUP BY feature_name
       ORDER BY visits DESC
     `),
+    // v6 — waterfall loyalty & habit distribution
+    env.DB.prepare(`
+      SELECT
+        CASE
+          WHEN wf_count = 1 THEN '1 trace (Explorer)'
+          WHEN wf_count BETWEEN 2 AND 4 THEN '2-4 traces (Engaged)'
+          ELSE '5+ traces (Habitual Power User)'
+        END AS bucket,
+        COUNT(*) AS users,
+        SUM(wf_count) AS invocations
+      FROM (
+        SELECT user_id, COUNT(*) as wf_count
+        FROM feature_events
+        WHERE feature_name = 'waterfall'
+        GROUP BY user_id
+      )
+      GROUP BY bucket
+      ORDER BY CASE bucket
+        WHEN '1 trace (Explorer)' THEN 1
+        WHEN '2-4 traces (Engaged)' THEN 2
+        ELSE 3
+      END
+    `),
+    // v6 — developer work intent & execution quality
+    env.DB.prepare(`
+      SELECT
+        CASE
+          WHEN (COALESCE(e.tool_bash_count,0) + COALESCE(e.tool_file_count,0) + COALESCE(e.tool_web_count,0)) > 0 THEN 'Real Work (Tool Calling)'
+          WHEN COALESCE(s.turn_count, 1) > 1 THEN 'Multi-Turn Chat / Review'
+          WHEN s.duration_seconds >= 1800 THEN 'Idle Window (Wall-Clock Open)'
+          ELSE 'Quick Query / Bounce'
+        END AS category,
+        COUNT(*) AS sessions,
+        COUNT(DISTINCT s.user_id) AS users
+      FROM sessions s
+      LEFT JOIN (
+        SELECT
+          CASE WHEN session_id = 'scrubbed_api_key' THEN user_id || '_' || substr(created_at, 1, 13) ELSE session_id END AS match_key,
+          session_id, user_id,
+          SUM(tool_bash_count) AS tool_bash_count,
+          SUM(tool_file_count) AS tool_file_count,
+          SUM(tool_web_count) AS tool_web_count,
+          MAX(created_at) AS created_at
+        FROM events
+        WHERE event = 'session_end'
+        GROUP BY match_key
+      ) e ON (
+        s.session_id = e.session_id OR
+        (e.session_id = 'scrubbed_api_key' AND s.user_id = e.user_id AND substr(s.created_at, 1, 13) = substr(e.created_at, 1, 13))
+      )
+      GROUP BY category
+      ORDER BY sessions DESC
+    `),
   ]);
 
   const totalUsers      = totalUsersRes.results?.[0]?.count ?? 0;
@@ -753,6 +825,18 @@ async function getD1Stats(env) {
       unique_users_enabled: 0,
     },
     settings_tabs: settingsTabsRes?.results ?? [],
+    // v6 — waterfall loyalty & work intent
+    waterfall_stats: {
+      total_invocations: waterfallFrequencyRes?.results?.reduce((sum, r) => sum + (r.invocations || 0), 0) ?? 0,
+      unique_users: waterfallFrequencyRes?.results?.reduce((sum, r) => sum + (r.users || 0), 0) ?? 0,
+      repeat_users: waterfallFrequencyRes?.results?.filter(r => r.bucket !== '1 trace (Explorer)').reduce((sum, r) => sum + (r.users || 0), 0) ?? 0,
+      repeat_rate: (waterfallFrequencyRes?.results?.reduce((sum, r) => sum + (r.users || 0), 0) ?? 0) > 0
+        ? Number((((waterfallFrequencyRes?.results?.filter(r => r.bucket !== '1 trace (Explorer)').reduce((sum, r) => sum + (r.users || 0), 0) ?? 0) /
+          (waterfallFrequencyRes?.results?.reduce((sum, r) => sum + (r.users || 0), 0) ?? 1)) * 100).toFixed(1))
+        : 0,
+      frequency_buckets: waterfallFrequencyRes?.results ?? [],
+    },
+    work_intent: workQualityRes?.results ?? [],
     updated_at: new Date().toISOString(),
   };
 }
@@ -1236,7 +1320,7 @@ async function getLoreDirective(cmdName) {
     seasonal: season.active ? season.season : null,
     seasonal_modifier: season.active ? season.modifier : null,
     clue: base.clue,
-    version: '0.2.4',
+    version: '0.2.10',
     ts: new Date().toISOString(),
   };
 }
@@ -1263,14 +1347,14 @@ async function getLatestNews() {
   const season = await getSeasonalInfo();
   return {
     status: 'ok',
-    version: '0.2.4',
-    title: 'Andromity 0.2.4 — Autonomous Agent Engine',
-    released_at: '2026-09-03',
+    version: '0.2.10',
+    title: 'Andromity 0.2.10 — Autonomous Agent Engine',
+    released_at: '2026-09-20',
     highlights: [
-      '⚡ Autonomous multi-agent coordination with durable sessions',
-      '🌐 Real-time Edge Telemetry on Cloudflare D1',
-      '🛠️ MCP (Model Context Protocol) integration for dynamic tool orchestration',
-      '🎨 Refined terminal TUI and VS Code Extension integration',
+      '🎨 Minimal theme overhaul with sleek typography and borderless prompt controls',
+      '🛡️ Error recovery cards, 5xx auto-retry, and vision model guards',
+      '🌐 Zero-API resilient web search and safe skill read roots',
+      '⏰ Advanced cron scheduling with exact date/time syntax and preset management',
     ],
     season_banner: season.active ? season.name : null,
     docs_url: 'https://github.com/agenticmarket/andromity',

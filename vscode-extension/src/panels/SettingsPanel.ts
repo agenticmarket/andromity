@@ -55,8 +55,10 @@ export class SettingsPanel {
           crons: crons || [],
           currentWorkspace: workspaceFolder || "",
           startupSession: vscodeConfig.get<string>("startupSession", "last"),
+          waterfallAutoOpen: vscodeConfig.get<boolean>("waterfallAutoOpen", true),
           soundNotifications: vscodeConfig.get<boolean>("soundNotifications", true) && configData?.sound_done !== false,
           telemetry: (vscode.env.isTelemetryEnabled ?? true) && vscodeConfig.get<boolean>("telemetry", true) && configData?.telemetry !== false,
+          includeCoAuthor: vscodeConfig.get<boolean>("includeCoAuthor", true),
           wallpaper: {
             enabled: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("enabled", false),
             rippleIntensity: vscode.workspace.getConfiguration("andromity.wallpaper").get<string>("rippleIntensity", "medium"),
@@ -199,8 +201,10 @@ export class SettingsPanel {
             trustData: trustData || { is_trusted: true, trusted_projects: [] },
             currentWorkspace: workspaceFolder || "",
             startupSession: vscodeConfig.get<string>("startupSession", "last"),
+            waterfallAutoOpen: vscodeConfig.get<boolean>("waterfallAutoOpen", true),
             soundNotifications: vscodeConfig.get<boolean>("soundNotifications", true) && configData?.sound_done !== false,
             telemetry: (vscode.env.isTelemetryEnabled ?? true) && vscodeConfig.get<boolean>("telemetry", true) && configData?.telemetry !== false,
+            includeCoAuthor: vscodeConfig.get<boolean>("includeCoAuthor", true),
             wallpaper: {
               enabled: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("enabled", false),
               rippleIntensity: vscode.workspace.getConfiguration("andromity.wallpaper").get<string>("rippleIntensity", "medium"),
@@ -238,8 +242,10 @@ export class SettingsPanel {
           crons: crons || [],
           currentWorkspace: workspaceFolder || "",
           startupSession: fastRes.vscodeConfig.get<string>("startupSession", "last"),
+          waterfallAutoOpen: fastRes.vscodeConfig.get<boolean>("waterfallAutoOpen", true),
           soundNotifications: fastRes.vscodeConfig.get<boolean>("soundNotifications", true) && fastRes.configData?.sound_done !== false,
           telemetry: (vscode.env.isTelemetryEnabled ?? true) && fastRes.vscodeConfig.get<boolean>("telemetry", true) && fastRes.configData?.telemetry !== false,
+          includeCoAuthor: fastRes.vscodeConfig.get<boolean>("includeCoAuthor", true),
           wallpaper: {
             enabled: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("enabled", false),
             rippleIntensity: vscode.workspace.getConfiguration("andromity.wallpaper").get<string>("rippleIntensity", "medium"),
@@ -441,6 +447,9 @@ export class SettingsPanel {
           } else if (message.key === "startupSession") {
             const config = vscode.workspace.getConfiguration("andromity");
             await config.update("startupSession", message.value, vscode.ConfigurationTarget.Global);
+          } else if (message.key === "waterfallAutoOpen") {
+            const config = vscode.workspace.getConfiguration("andromity");
+            await config.update("waterfallAutoOpen", message.value, vscode.ConfigurationTarget.Global);
           }
           this._panel.webview.postMessage({
             type: "setting_updated",
@@ -472,6 +481,18 @@ export class SettingsPanel {
         this._panel.webview.postMessage({
           type: "setting_updated",
           key: "soundNotifications",
+          value: message.value,
+        });
+        this._onConfigChangeCallback?.();
+        break;
+      }
+
+      case "toggle_coauthor": {
+        const config = vscode.workspace.getConfiguration("andromity");
+        await config.update("includeCoAuthor", message.value, vscode.ConfigurationTarget.Global);
+        this._panel.webview.postMessage({
+          type: "setting_updated",
+          key: "includeCoAuthor",
           value: message.value,
         });
         this._onConfigChangeCallback?.();
@@ -2322,6 +2343,15 @@ export class SettingsPanel {
         </div>
 
         <div class="settings-card">
+          <div class="setting-label">Live Waterfall Auto-Open</div>
+          <div class="setting-desc">Automatically open the real-time execution waterfall panel for every agent session. You can also open it on demand anytime from the chat top bar.</div>
+          <select class="setting-select" id="setting-waterfall-auto-open">
+            <option value="enabled">Enabled — Auto-open waterfall on session start (Default)</option>
+            <option value="disabled">Disabled — Only open waterfall manually</option>
+          </select>
+        </div>
+
+        <div class="settings-card">
           <div class="setting-label">Agent Profile</div>
           <div class="setting-desc">Determines how Andromity approaches coding tasks (planning first vs. direct execution).</div>
           <select class="setting-select" id="setting-profile">
@@ -2394,6 +2424,16 @@ export class SettingsPanel {
             <div>
               <div class="setting-label">Anonymous Telemetry</div>
               <div class="setting-desc">Sends anonymous session metadata to help improve Andromity: OS, app version, provider name (e.g. "anthropic"), model name (e.g. "claude-sonnet-5"), reasoning mode, and coarse session stats (turn count, duration bucket). <strong>No prompts, code, file paths, or API keys are ever transmitted.</strong> Opt out anytime with <code>DO_NOT_TRACK=1</code>.</div>
+            </div>
+          </label>
+        </div>
+
+        <div class="settings-card">
+          <label class="checkbox-row">
+            <input type="checkbox" id="setting-coauthor">
+            <div>
+              <div class="setting-label">Git Co-Author Attribution</div>
+              <div class="setting-desc">Append <code>Co-authored-by: Andromity &lt;333054755+andromity-bot@users.noreply.github.com&gt;</code> trailer to AI-generated commit messages.</div>
             </div>
           </label>
         </div>
@@ -2858,6 +2898,7 @@ SOFTWARE.</pre>
     const selectProfile = document.getElementById("setting-profile");
     const selectMode = document.getElementById("setting-mode");
     const selectStartupSession = document.getElementById("setting-startup-session");
+    const selectWaterfallAutoOpen = document.getElementById("setting-waterfall-auto-open");
     const selectReasoning = document.getElementById("setting-reasoning");
     const inputUserName = document.getElementById("setting-user-name");
     const inputUserEmail = document.getElementById("setting-user-email");
@@ -2865,10 +2906,18 @@ SOFTWARE.</pre>
     const checkAutoCompact = document.getElementById("setting-auto-compact");
     const checkSound = document.getElementById("setting-sound");
     const checkTelemetry = document.getElementById("setting-telemetry");
+    const checkCoAuthor = document.getElementById("setting-coauthor");
 
     if (selectStartupSession) {
       selectStartupSession.addEventListener("change", () => {
         vscode.postMessage({ type: "update_setting", key: "startupSession", value: selectStartupSession.value });
+      });
+    }
+
+    if (selectWaterfallAutoOpen) {
+      selectWaterfallAutoOpen.addEventListener("change", () => {
+        const isEnabled = selectWaterfallAutoOpen.value === "enabled";
+        vscode.postMessage({ type: "update_setting", key: "waterfallAutoOpen", value: isEnabled });
       });
     }
 
@@ -2899,6 +2948,11 @@ SOFTWARE.</pre>
     if (checkTelemetry) {
       checkTelemetry.addEventListener("change", () => {
         vscode.postMessage({ type: "toggle_telemetry", value: checkTelemetry.checked });
+      });
+    }
+    if (checkCoAuthor) {
+      checkCoAuthor.addEventListener("change", () => {
+        vscode.postMessage({ type: "toggle_coauthor", value: checkCoAuthor.checked });
       });
     }
 
@@ -3087,6 +3141,9 @@ SOFTWARE.</pre>
       if (currentConfig.default_profile && selectProfile) selectProfile.value = currentConfig.default_profile;
       if (currentConfig.permission_mode && selectMode) selectMode.value = currentConfig.permission_mode.toLowerCase();
       if (msg.startupSession && selectStartupSession) selectStartupSession.value = msg.startupSession;
+      if (typeof msg.waterfallAutoOpen !== "undefined" && selectWaterfallAutoOpen) {
+        selectWaterfallAutoOpen.value = msg.waterfallAutoOpen !== false ? "enabled" : "disabled";
+      }
       if (currentConfig.reasoning_effort && selectReasoning) selectReasoning.value = currentConfig.reasoning_effort;
       if (currentConfig.user_name && inputUserName) inputUserName.value = currentConfig.user_name;
       if (currentConfig.user_email && inputUserEmail) inputUserEmail.value = currentConfig.user_email;
@@ -3094,6 +3151,7 @@ SOFTWARE.</pre>
       if (checkAutoCompact) checkAutoCompact.checked = currentConfig.auto_compact !== false;
       if (checkSound) checkSound.checked = msg.soundNotifications !== false;
       if (checkTelemetry) checkTelemetry.checked = msg.telemetry !== false;
+      if (checkCoAuthor) checkCoAuthor.checked = msg.includeCoAuthor !== false;
 
       const wp = msg.wallpaper || {};
       if (checkWpEnabled) {
@@ -3812,15 +3870,15 @@ SOFTWARE.</pre>
       if (!container) return;
 
       const modelMap = {};
-      if (Array.isArray(filteredSessions) && filteredSessions.length > 0) {
+      if (currentUsageRange === "all" && usageData.by_model && Object.keys(usageData.by_model).length > 0) {
+        Object.assign(modelMap, usageData.by_model);
+      } else if (Array.isArray(filteredSessions) && filteredSessions.length > 0) {
         filteredSessions.forEach(s => {
           const m = s.model || 'default';
           if (!modelMap[m]) modelMap[m] = { tokens: 0, cost: 0, provider: s.provider || '' };
           modelMap[m].tokens += (s.token_total || s.tokens || 0);
           modelMap[m].cost += (s.cost_usd || 0);
         });
-      } else if (currentUsageRange === "all" && usageData.by_model) {
-        Object.assign(modelMap, usageData.by_model);
       }
 
       const entries = Object.entries(modelMap);
@@ -3862,7 +3920,9 @@ SOFTWARE.</pre>
       if (!container) return;
 
       const provMap = {};
-      if (Array.isArray(filteredSessions) && filteredSessions.length > 0) {
+      if (currentUsageRange === "all" && usageData.by_provider && Object.keys(usageData.by_provider).length > 0) {
+        Object.assign(provMap, usageData.by_provider);
+      } else if (Array.isArray(filteredSessions) && filteredSessions.length > 0) {
         filteredSessions.forEach(s => {
           const p = s.provider || (s.model && s.model.includes('/') ? s.model.split('/')[0] : 'openrouter');
           if (!provMap[p]) provMap[p] = { tokens: 0, cost: 0, sessions: 0 };
@@ -3870,8 +3930,6 @@ SOFTWARE.</pre>
           provMap[p].cost += (s.cost_usd || 0);
           provMap[p].sessions += 1;
         });
-      } else if (currentUsageRange === "all" && usageData.by_provider) {
-        Object.assign(provMap, usageData.by_provider);
       }
 
       const entries = Object.entries(provMap);

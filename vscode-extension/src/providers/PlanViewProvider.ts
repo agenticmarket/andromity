@@ -8,7 +8,7 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
   private _currentPlan: any = null;
   private _currentSessionId: string = "";
   private _sessionPlans: Map<string, any> = new Map();
-  private _planActionHandler: ((approved: boolean, feedback: string) => void) | null = null;
+  private _planActionHandler: ((approved: boolean, feedback: string, sessionId?: string) => void) | null = null;
 
   constructor(private readonly _extensionUri: vscode.Uri) {}
 
@@ -27,7 +27,7 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  public setPlanActionHandler(handler: (approved: boolean, feedback: string) => void) {
+  public setPlanActionHandler(handler: (approved: boolean, feedback: string, sessionId?: string) => void) {
     this._planActionHandler = handler;
   }
 
@@ -77,10 +77,10 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
           this.updatePlan(this._currentPlan, this._currentSessionId);
           break;
         case "approve_plan":
-          this._planActionHandler?.(true, message.feedback || "");
+          this._planActionHandler?.(true, message.feedback || "", this._currentSessionId);
           break;
         case "reject_plan":
-          this._planActionHandler?.(false, message.feedback || "");
+          this._planActionHandler?.(false, message.feedback || "", this._currentSessionId);
           break;
       }
     });

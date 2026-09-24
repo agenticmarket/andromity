@@ -15,6 +15,7 @@ export interface ChatViewState {
   models?: { id: string; name: string }[];
   wallpaperConfig?: WallpaperConfig;
   defaultWallpaperUri?: string;
+  ollamaStatus?: any;
 }
 
 export function formatModelDisplayName(id?: string, models?: { id: string; name: string }[]): string {
@@ -65,6 +66,15 @@ export function getChatViewHtml(webview: vscode.Webview, extensionUri: vscode.Ur
   const clientScript = getChatClientScript(sidebarIconUri.toString(), state);
   const ambientScript = getChatAmbientScript(defaultWallpaperUri, state.wallpaperConfig);
 
+  const reasoningVal = (state.currentReasoning || "medium").toLowerCase();
+  const reasoningMap: Record<string, { label: string; idx: number; pct: number; desc: string }> = {
+    off: { label: "Off", idx: 0, pct: 0, desc: "Direct responses • zero reasoning overhead" },
+    low: { label: "Low", idx: 1, pct: 33.33, desc: "Fast & concise thoughts • minimal latency" },
+    medium: { label: "Medium", idx: 2, pct: 66.66, desc: "Balanced reasoning for coding & architecture" },
+    high: { label: "High", idx: 3, pct: 100, desc: "Deep step-by-step reflection • complex tasks" },
+  };
+  const activeReasoning = reasoningMap[reasoningVal] || reasoningMap.medium;
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -106,7 +116,6 @@ ${styles}
     </div>
   </div>
 
-  <!-- Top Bar (Clean Session Header, No Duplicate Buttons) -->
   <div class="top-bar">
     <div class="top-bar-left">
       <div class="session-badge-btn" id="btn-session-picker" role="button" tabindex="0" aria-label="Current session, click to switch or manage sessions" title="Sessions (Click to switch or manage sessions)">
@@ -116,8 +125,16 @@ ${styles}
           <polyline points="6 9 12 15 18 9"></polyline>
         </svg>
       </div>
+      <div class="session-collab-badge" id="session-collab-badge" style="display:none;" title="Co-Agent Collaboration"></div>
     </div>
     <div class="top-bar-right">
+      <button class="top-bar-icon-btn" id="btn-top-collab-inbox" style="display:none;" aria-label="Collaboration Inbox" title="Collaboration Inbox (Inter-Session Mailbox)" data-action="toggle-collab-inbox">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
+          <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+          <polyline points="22,6 12,13 2,6"></polyline>
+        </svg>
+        <span class="collab-inbox-badge-count" id="collab-inbox-badge" style="display:none;">0</span>
+      </button>
       <button class="top-bar-icon-btn" id="btn-top-open-tab" aria-label="Open Session in New Editor Tab (Side-by-Side)" title="Open Session in New Editor Tab (Side-by-Side)" data-action="open-current-tab">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
@@ -160,6 +177,41 @@ ${styles}
         <div class="popover-footer">
           <button class="popover-action-btn" id="btn-action-wf-callout">Open Waterfall</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Floating Collaboration Inbox Drawer / Popover -->
+  <div class="collab-inbox-popover" id="collab-inbox-popover" style="display:none;" role="dialog" aria-modal="true" aria-label="Collaboration Inbox">
+    <div class="collab-inbox-header">
+      <div class="collab-inbox-header-title">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+          <polyline points="22,6 12,13 2,6"></polyline>
+        </svg>
+        <span>Collaboration Inbox</span>
+        <span class="collab-inbox-header-pill" id="collab-inbox-status-pill" style="display:none;">0 items</span>
+      </div>
+      <div class="collab-inbox-header-actions">
+        <button class="collab-inbox-text-btn" id="btn-collab-clear-all" style="display:none;" title="Mark all as read">Mark Read</button>
+        <button class="collab-inbox-close-btn" id="btn-close-collab-inbox" aria-label="Close Inbox" title="Close (Esc)">&times;</button>
+      </div>
+    </div>
+    <div class="collab-inbox-tabs" style="display:none;">
+      <button class="collab-inbox-tab active" data-tab="all">All</button>
+      <button class="collab-inbox-tab" data-tab="questions">Questions</button>
+      <button class="collab-inbox-tab" data-tab="answers">Answers</button>
+      <button class="collab-inbox-tab" data-tab="messages">Messages</button>
+      <button class="collab-inbox-tab" data-tab="handoffs">Handoffs</button>
+    </div>
+    <div class="collab-inbox-list" id="collab-inbox-list">
+      <div class="collab-inbox-empty" id="collab-inbox-empty">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+          <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+          <polyline points="22,6 12,13 2,6"></polyline>
+        </svg>
+        <div class="empty-title">No collaboration messages</div>
+        <div class="empty-sub">Messages exchanged with co-agents appear here.</div>
       </div>
     </div>
   </div>
@@ -410,13 +462,31 @@ ${styles}
                 </div>
                 <div class="ollama-info-content">
                   <div class="ollama-info-title">Zero-Key Local AI</div>
-                  <div class="ollama-info-desc">Runs entirely on your local GPU/CPU. Fully private, offline, and free forever. Make sure Ollama is running on your machine.</div>
+                  <div class="ollama-info-desc" id="ollama-info-desc">Runs entirely on your local GPU/CPU. Fully private, offline, and free forever.</div>
                 </div>
               </div>
-              <button class="btn-onboarding-save" id="btn-onboarding-ollama-save">
-                <span>Activate Local Ollama</span>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
-              </button>
+              <div class="ollama-status-chip" id="onboarding-ollama-status-chip">
+                <span class="ollama-status-dot" id="onboarding-ollama-status-dot"></span>
+                <span class="ollama-status-text" id="onboarding-ollama-status-text">Checking local Ollama service...</span>
+              </div>
+              <div class="ollama-actions" id="onboarding-ollama-actions" style="display:flex; flex-direction:column; gap:6px; width:100%;">
+                <button class="btn-onboarding-save" id="btn-onboarding-ollama-save">
+                  <span>Activate Local Ollama</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                </button>
+                <button class="btn-onboarding-save secondary" id="btn-onboarding-ollama-start" style="display:none;">
+                  <span>Start Ollama Server</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                </button>
+                <button class="btn-onboarding-save secondary" id="btn-onboarding-ollama-pull" style="display:none;" data-model="qwen2.5-coder:7b">
+                  <span>Pull Coding Model (qwen2.5-coder:7b)</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                </button>
+                <a href="https://ollama.com/download" target="_blank" class="btn-onboarding-save secondary" id="btn-onboarding-ollama-download" style="display:none; text-decoration:none; justify-content:center;">
+                  <span>Download Ollama (Free &amp; Private)</span>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                </a>
+              </div>
             </div>
 
             <div class="onboarding-footer-links">
@@ -667,6 +737,40 @@ ${styles}
       <div class="image-attachments-container" id="image-attachments-container" style="display:none;"></div>
       <div class="drag-dropped-files-bar" id="drag-dropped-files-bar" style="display:none;"></div>
       <textarea id="prompt-input" autofocus placeholder="Ask Andromity or type / for commands, @ for skills..." rows="1" aria-label="Ask Andromity or type slash for commands, @ for skills"></textarea>
+      
+      <!-- Stepped Reasoning Effort Popover (Clean & Minimal) -->
+      <div class="reasoning-popover" id="reasoning-popover" style="display:none;" role="dialog" aria-label="Thinking Effort">
+        <div class="reasoning-slider-container">
+          <div class="reasoning-slider-track-wrap">
+            <input type="range" class="reasoning-slider-range" id="reasoning-slider-range" min="0" max="3" step="1" value="${activeReasoning.idx}" aria-label="Thinking effort level">
+            <div class="reasoning-slider-track" id="reasoning-slider-track">
+              <div class="reasoning-slider-fill fill-${activeReasoning.label.toLowerCase()}" id="reasoning-slider-fill" style="width: ${activeReasoning.pct}%;"></div>
+            </div>
+            <div class="reasoning-slider-ticks">
+              <span class="reasoning-tick-point ${activeReasoning.idx >= 0 ? 'active' : ''}" data-level-idx="0" title="Off"></span>
+              <span class="reasoning-tick-point ${activeReasoning.idx >= 1 ? 'active' : ''}" data-level-idx="1" title="Low"></span>
+              <span class="reasoning-tick-point ${activeReasoning.idx >= 2 ? 'active' : ''}" data-level-idx="2" title="Medium"></span>
+              <span class="reasoning-tick-point ${activeReasoning.idx >= 3 ? 'active' : ''}" data-level-idx="3" title="High"></span>
+            </div>
+          </div>
+
+          <div class="reasoning-slider-labels">
+            <button type="button" class="reasoning-step-btn ${activeReasoning.idx === 0 ? 'active' : ''}" data-level="off" data-idx="0" title="Off">
+              <span class="reasoning-step-label">Off</span>
+            </button>
+            <button type="button" class="reasoning-step-btn ${activeReasoning.idx === 1 ? 'active' : ''}" data-level="low" data-idx="1" title="Low">
+              <span class="reasoning-step-label">Low</span>
+            </button>
+            <button type="button" class="reasoning-step-btn ${activeReasoning.idx === 2 ? 'active' : ''}" data-level="medium" data-idx="2" title="Medium">
+              <span class="reasoning-step-label">Medium</span>
+            </button>
+            <button type="button" class="reasoning-step-btn ${activeReasoning.idx === 3 ? 'active' : ''}" data-level="high" data-idx="3" title="High">
+              <span class="reasoning-step-label">High</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div class="prompt-box-footer">
         <div class="prompt-left-controls">
           <button class="prompt-btn icon-only" id="btn-attach-file" title="Attach file context" aria-label="Attach file context">
@@ -691,11 +795,16 @@ ${styles}
               <polyline points="6 9 12 15 18 9"></polyline>
             </svg>
           </button>
-          <button class="prompt-btn" id="btn-prompt-reasoning" title="Reasoning / Thinking Effort (Click to switch)" aria-label="Reasoning effort">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          <button class="prompt-btn" id="btn-prompt-reasoning" title="Reasoning / Thinking Effort: ${activeReasoning.label} (Click to adjust)" aria-label="Reasoning effort" aria-haspopup="dialog" aria-expanded="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"></path>
+              <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"></path>
+              <path d="M12 5v13"></path>
             </svg>
-            <span id="prompt-reasoning-label" class="skeleton skeleton-text" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
+            <span id="prompt-reasoning-label">${activeReasoning.label}</span>
+            <svg class="chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
           </button>
           <button class="codex-cancel-btn" id="btn-cancel" title="Stop Generation" style="display:none;" aria-label="Cancel agent turn">
             <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>
@@ -714,16 +823,21 @@ ${styles}
   <!-- Status Bar Footer -->
   <div class="status-bar" id="status-bar-footer">
     <div class="status-bar-left">
-      <button class="prompt-pill-btn" id="btn-prompt-profile" title="Agent Profile Persona (Click to cycle)" aria-label="Agent profile">
+      <button class="prompt-pill-btn" id="btn-prompt-profile" title="Agent Profile (Click to cycle: Builder → Coder → Reviewer → Planner)" aria-label="Agent profile">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
           <circle cx="12" cy="7" r="4"></circle>
         </svg>
         <span id="prompt-profile-label" class="skeleton skeleton-text" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
+        <svg class="cycle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="m17 2 4 4-4 4"></path>
+          <path d="M3 11v-1a4 4 0 0 1 4-4h14"></path>
+          <path d="m7 22-4-4 4-4"></path>
+          <path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
+        </svg>
         <span class="profile-mascot-perch" id="profile-mascot-perch"></span>
       </button>
       <div class="token-capacity-widget" id="token-capacity-widget" tabindex="0" role="button" aria-label="Token Usage & Model Capacity">
-        <svg class="token-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
         <span id="token-label" class="skeleton skeleton-text" style="min-width:56px;" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
         <div class="token-mini-track" id="token-mini-track">
           <div class="token-mini-bar" id="token-mini-bar" style="width: 0%;"></div>

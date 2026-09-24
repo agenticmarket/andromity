@@ -183,14 +183,24 @@ def _is_trusted() -> bool:
     return config.is_trusted(str(_get_project_root()))
 
 
-def _ensure_snapshot():
+def _ensure_snapshot(target_file: Optional[str] = None):
     session = _current_session_var.get()
+    if session and target_file:
+        if not hasattr(session, "_turn_file_backups") or session._turn_file_backups is None:
+            session._turn_file_backups = {}
+        if target_file not in session._turn_file_backups:
+            try:
+                p = _resolve_project_path(target_file)
+                session._turn_file_backups[target_file] = p.read_text(encoding="utf-8") if p.exists() else None
+            except Exception:
+                pass
+
     if session and getattr(session, "_turn_snapshotted", False):
         return
     root = _get_project_root()
     repo = get_repo(root)
     if repo:
-        create_pre_edit_snapshot(repo)
+        create_pre_edit_snapshot(repo, target_files=[target_file] if target_file else None)
         if session:
             session._turn_snapshotted = True
 
@@ -352,7 +362,7 @@ def write_file(path: str, content: str) -> str:
         _assert_safe_path(p)
     except Exception as e:
         return f"Error writing file: {e}"
-    _ensure_snapshot()
+    _ensure_snapshot(path)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "w", encoding="utf-8") as f:
@@ -401,7 +411,7 @@ def edit_file(
             # Check exact occurrence count
             exact_count = content.count(old_str)
             if exact_count == 1:
-                _ensure_snapshot()
+                _ensure_snapshot(path)
                 new_content = content.replace(old_str, new_str, 1)
                 with open(p, "w", encoding="utf-8") as f:
                     f.write(new_content)
@@ -454,7 +464,7 @@ def edit_file(
                         )
 
         if match_start_idx is not None and match_end_idx is not None:
-            _ensure_snapshot()
+            _ensure_snapshot(path)
             # Determine indentation from the original matched block
             original_indent = ""
             m_indent = re.match(r"^(\s*)", file_lines[match_start_idx])
@@ -579,7 +589,7 @@ def _shell_invocation(shell: str, command: str) -> list[str]:
     return [shell, "-c", command]
 
 
-def shell_exec(command: str, timeout: int = 120) -> str:
+def shell_exec(command: str, timeout: int = 300) -> str:
     """Executes a shell command (blocking — waits for it to finish)."""
     if not _is_trusted():
         return "Error: This folder is not trusted. Use /trust to allow shell commands."
@@ -1268,6 +1278,16 @@ def session_answer_question(question_id: str, answer: str) -> str:
     return f"Error: Question '{question_id}' was not found, has timed out, or was already answered."
 
 
+def session_watch(target_session: Optional[str] = None, reason: str = "") -> str:
+    """Put current session into standby 'watching' mode to wait for updates, questions, or handoffs from another session."""
+    cur_sess = _current_session_var.get()
+    if not cur_sess:
+        return "Error: No active session found."
+    cur_sess.set_status("watching", watching_for={"target_session": target_session, "reason": reason})
+    target_info = f" targeting '{target_session}'" if target_session else ""
+    return f"Session entered 'watching' state{target_info}. It will hibernate and automatically wake up when an incoming question, handoff, or signal arrives."
+
+
 def shared_state_set(key: str, value: Any) -> str:
     from andromity.core.shared_state import SharedStateBoard
     cur_sess = _current_session_var.get()
@@ -1463,7 +1483,7 @@ CORE_TOOLS = [
                 "type": "object",
                 "properties": {
                     "command": {"type": "string", "description": "Command to execute"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds (default 120). Increase for slow builds."},
+                    "timeout": {"type": "integer", "description": "Timeout in seconds (default 300). Increase for slow builds or long test suites."},
                 },
                 "required": ["command"],
             },
@@ -1663,7 +1683,7 @@ CORE_TOOLS = [
                     "model_override": {"type": "string", "description": "Optional model override for this subagent"},
                     "provider_override": {"type": "string", "description": "Optional provider override"},
                     "tools": {"type": "array", "items": {"type": "string"}, "description": "Optional list of tools allowed for this subagent"},
-                    "timeout": {"type": "number", "description": "Optional timeout in seconds (default 180s)"},
+                    "timeout": {"type": "number", "description": "Optional timeout in seconds (default 600s)"},
                     "wait": {"type": "boolean", "description": "Whether to wait for completion (default true)"},
                     "context_snapshot": {"type": "object", "description": "Optional curated dictionary or key context facts to pass into the subagent"},
                 },
@@ -1754,6 +1774,20 @@ CORE_TOOLS = [
                     "answer": {"type": "string", "description": "The answer payload to return to the asking session"},
                 },
                 "required": ["question_id", "answer"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "session_watch",
+            "description": "Put the current session into standby 'watching' mode waiting for updates, questions, or handoffs from another session without consuming tokens.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_session": {"type": "string", "description": "Optional name or ID of the session this agent is waiting for"},
+                    "reason": {"type": "string", "description": "Optional reason or deliverable this session is expecting before resuming"},
+                },
             },
         },
     },
@@ -1976,6 +2010,8 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
             res = session_read_messages(**args)
         elif name == "session_answer_question":
             res = session_answer_question(**args)
+        elif name == "session_watch":
+            res = session_watch(**args)
         elif name == "shared_state_set":
             res = shared_state_set(**args)
         elif name == "shared_state_get":
@@ -2021,10 +2057,49 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
     return res_str
 
 
-async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[str] = None, timeout: float = 120.0) -> str:
+async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[str] = None, timeout: Optional[float] = None) -> str:
     """Asynchronous tool execution (natively awaits MCP tools and async coordination tools, dispatches core tools)."""
+    # Dynamically resolve effective timeout if not explicitly passed
+    if timeout is not None:
+        effective_timeout = float(timeout)
+    elif name == "spawn_subagent":
+        sub_timeout = args.get("timeout")
+        if sub_timeout is not None:
+            try:
+                effective_timeout = float(sub_timeout) + 15.0
+            except (ValueError, TypeError):
+                from andromity.core.subagent_config import SubAgentConfigManager
+                effective_timeout = SubAgentConfigManager.get_default_timeout() + 15.0
+        else:
+            from andromity.core.subagent_config import SubAgentConfigManager
+            effective_timeout = SubAgentConfigManager.get_default_timeout() + 15.0
+    elif name == "shell_exec":
+        cmd_timeout = args.get("timeout")
+        if cmd_timeout is not None:
+            try:
+                effective_timeout = float(cmd_timeout) + 10.0
+            except (ValueError, TypeError):
+                effective_timeout = 310.0
+        else:
+            effective_timeout = 310.0
+    elif name == "session_ask_question":
+        ask_timeout = args.get("timeout")
+        if ask_timeout is not None:
+            try:
+                effective_timeout = float(ask_timeout) + 10.0
+            except (ValueError, TypeError):
+                effective_timeout = 70.0
+        else:
+            effective_timeout = 70.0
+    else:
+        try:
+            from andromity.config import config
+            effective_timeout = float(config.get("tools", "default_timeout_seconds", 300.0))
+        except Exception:
+            effective_timeout = 300.0
+
     try:
-        async with asyncio.timeout(timeout):
+        async with asyncio.timeout(effective_timeout):
             if name.startswith("mcp__"):
                 if _mcp_manager:
                     res = await _mcp_manager.execute_mcp_tool(name, args)
@@ -2044,12 +2119,14 @@ async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[
                 res = session_read_messages(**args)
             elif name == "session_answer_question":
                 res = session_answer_question(**args)
+            elif name == "session_watch":
+                res = session_watch(**args)
             else:
                 # Run blocking core tools in a background thread to prevent freezing the Textual UI
                 res = await asyncio.to_thread(execute_tool, name, args)
     except asyncio.TimeoutError:
-        log.warning("Tool %s timed out after %ss", name, timeout)
-        return f"Error: Tool '{name}' timed out after {timeout:.0f} seconds."
+        log.warning("Tool %s timed out after %ss", name, effective_timeout)
+        return f"Error: Tool '{name}' timed out after {effective_timeout:.0f} seconds."
     except Exception as e:
         log.exception("Error in execute_tool_async for %s: %s", name, e)
         return f"Error executing {name}: {e}"

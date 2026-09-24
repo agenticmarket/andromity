@@ -228,13 +228,28 @@ export class SessionTabPanel {
       if (isMatch(params)) this._postMessage({ type: "tool_result", ...params });
     });
     bind("agent/toolApprovalRequired", (params: any) => {
-      if (isMatch(params)) this._postMessage({ type: "tool_approval_required", ...params });
+      if (isMatch(params)) {
+        this._postMessage({ type: "tool_approval_required", ...params });
+        if (this._viewProvider.isSoundEnabled("attention") && !this._viewProvider.isViewVisible()) {
+          this._postMessage({ type: "play_sound", kind: "attention" });
+        }
+      }
     });
     bind("agent/askQuestions", (params: any) => {
-      if (isMatch(params)) this._postMessage({ type: "ask_questions", ...params });
+      if (isMatch(params)) {
+        this._postMessage({ type: "ask_questions", ...params });
+        if (this._viewProvider.isSoundEnabled("attention") && !this._viewProvider.isViewVisible()) {
+          this._postMessage({ type: "play_sound", kind: "attention" });
+        }
+      }
     });
     bind("agent/planApproval", (params: any) => {
-      if (isMatch(params)) this._postMessage({ type: "plan_approval", plan: params.plan });
+      if (isMatch(params)) {
+        this._postMessage({ type: "plan_approval", plan: params.plan });
+        if (this._viewProvider.isSoundEnabled("attention") && !this._viewProvider.isViewVisible()) {
+          this._postMessage({ type: "play_sound", kind: "attention" });
+        }
+      }
     });
     bind("agent/planUpdated", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "plan_updated", plan: params.plan, session_id: params.session_id });
@@ -252,7 +267,12 @@ export class SessionTabPanel {
       if (isMatch(params)) this._postMessage({ type: "subagent_failed", ...params });
     });
     bind("agent/done", (params: any) => {
-      if (isMatch(params)) this._postMessage({ type: "agent_done", ...params });
+      if (isMatch(params)) {
+        this._postMessage({ type: "agent_done", ...params });
+        if (this._viewProvider.isSoundEnabled("done") && !this._viewProvider.isViewVisible()) {
+          this._postMessage({ type: "play_sound", kind: "done" });
+        }
+      }
     });
     bind("agent/cancelled", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "agent_cancelled", ...params });
@@ -280,6 +300,10 @@ export class SessionTabPanel {
           context_tokens: params.context_tokens,
           token_total: params.token_total,
           cost_usd: params.cost_usd,
+          status: params.status,
+          collaborators: params.collaborators,
+          watching_for: params.watching_for,
+          consecutive_auto_wakes: params.consecutive_auto_wakes,
         });
       }
     });
@@ -351,7 +375,16 @@ export class SessionTabPanel {
     }
 
     if (message.type === "open_plan_tab") {
-      PlanEditorPanel.createOrShow(this._extensionUri, null, this._rpcClient);
+      const plan = this._viewProvider.getCurrentPlan?.();
+      PlanEditorPanel.createOrShow(
+        this._extensionUri,
+        plan || null,
+        this._rpcClient,
+        async (approved, feedback, sid) => {
+          await this._viewProvider.handlePlanApproval(approved, feedback, sid || this._sessionId);
+        },
+        this._sessionId
+      );
       return;
     }
 
@@ -364,7 +397,7 @@ export class SessionTabPanel {
 
     if (message.type === "open_file_diff") {
       if (message.filePath) {
-        await this._viewProvider.openFileDiff(message.filePath, false);
+        this._viewProvider.openReviewWebview(message.filePath);
       }
       return;
     }
@@ -454,7 +487,7 @@ export class SessionTabPanel {
             mode: message.mode || this._currentMode,
             reasoning_effort: message.reasoningEffort || this._currentReasoning,
             image_uris: message.images || [],
-          }, 120000);
+          }, 600000);
         } catch (err: any) {
           vscode.window.showErrorMessage(`Agent run failed: ${err.message}`);
           this._postMessage({ type: "agent_error", error: err.message, session_id: this._sessionId });
@@ -611,7 +644,7 @@ export class SessionTabPanel {
             provider: this._currentProvider,
             mode: this._currentMode,
             reasoning_effort: this._currentReasoning,
-          }, 120000);
+          }, 600000);
           vscode.window.showInformationMessage("Plan approved -- agent is executing.");
         } catch (e: any) {
           vscode.window.showErrorMessage(`Failed to approve plan: ${e.message}`);
@@ -639,7 +672,7 @@ export class SessionTabPanel {
             provider: this._currentProvider,
             mode: this._currentMode,
             reasoning_effort: this._currentReasoning,
-          }, 120000);
+          }, 600000);
           vscode.window.showInformationMessage("Plan rejected -- agent will revise.");
         } catch (e: any) {
           vscode.window.showErrorMessage(`Failed to reject plan: ${e.message}`);
@@ -710,6 +743,13 @@ export class SessionTabPanel {
           SessionTabPanel._panels.set(this._sessionId, this);
           await this._loadSession();
         }
+        break;
+      }
+
+      case "reset_auto_wake": {
+        await this._rpcClient.call("session.resetAutoWake", {
+          session_id: this._sessionId,
+        }).catch((err) => console.error("[SessionTab] Reset auto wake error:", err));
         break;
       }
 

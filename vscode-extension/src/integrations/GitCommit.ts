@@ -1,5 +1,45 @@
 import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
+import { ChatViewProvider } from "../providers/ChatViewProvider.js";
+
+/**
+ * Extract commit message from AI response.
+ * Handles <commit_message> tags, <think> tags, markdown code blocks, and reasoning leaks.
+ * Priority order:
+ *   1. Strip <think>...</think> reasoning blocks (DeepSeek-R1, Qwen, etc.)
+ *   2. Extract from <commit_message>...</commit_message> tag
+ *   3. Fallback: scan for first conventional commit header line
+ *   4. Strip any remaining markdown code fences or wrapping quotes
+ */
+export function extractCommitMessage(raw: string): string {
+  if (!raw) return "";
+  let text = raw.trim();
+
+  // 1. Strip any <think>...</think> reasoning blocks
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+
+  // 2. Extract content from <commit_message>...</commit_message> tag if present
+  const tagMatch = text.match(/<commit_message>([\s\S]*?)(?:<\/commit_message>|$)/i);
+  if (tagMatch && tagMatch[1].trim()) {
+    text = tagMatch[1].trim();
+  } else {
+    // 3. Fallback: model ignored tags â€” find the first conventional commit header line
+    //    and take everything from there onward (skips any preceding thinking/preamble)
+    const lines = text.split("\n");
+    const commitLineIndex = lines.findIndex(line =>
+      /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9_./\\-]+\))?!?:\s*.+/i.test(line.trim())
+    );
+    if (commitLineIndex > 0) {
+      text = lines.slice(commitLineIndex).join("\n").trim();
+    }
+  }
+
+  // 4. Strip markdown code fences (```git, ```text, ```) and wrapping quotes
+  text = text.replace(/^```[a-zA-Z0-9_-]*\n?/gm, "").replace(/```$/gm, "").trim();
+  text = text.replace(/^["'`]+|["'`]+$/g, "").trim();
+
+  return text;
+}
 
 /**
  * Generate AI commit message via Andromity daemon.
@@ -32,13 +72,24 @@ export async function generateCommitMessage(rpcClient: RpcClient | null): Promis
     },
     async () => {
       try {
+        // Build file change summary from Git API
+        const changedFiles: string[] = [];
+        for (const c of repo.state.indexChanges || []) {
+          changedFiles.push(`staged: ${vscode.workspace.asRelativePath(c.uri)}`);
+        }
+        for (const c of repo.state.workingTreeChanges || []) {
+          changedFiles.push(`unstaged: ${vscode.workspace.asRelativePath(c.uri)}`);
+        }
+        const fileListSummary = changedFiles.length > 0
+          ? `Changed files (${changedFiles.length}):\n${changedFiles.slice(0, 40).map(f => `- ${f}`).join("\n")}\n\n`
+          : "";
+
         // Prefer staged changes; fallback to working tree diff via daemon git.diff
         let diff = "";
-        const hasStaged = repo.state.indexChanges.length > 0;
+        const hasStaged = (repo.state.indexChanges || []).length > 0;
         // Try git extension diff (staged if any, else all)
         try {
-          // vscode.git API: repo.diff(true) = staged, diff(false)= unstaged
-          // We combine both for full picture; fallback to daemon if needed
+          // vscode.git API: repo.diff(true) = staged, diff(false) = unstaged
           const staged = hasStaged ? await repo.diff(true) : "";
           const unstaged = await repo.diff(false);
           diff = (staged || "") + "\n" + (unstaged || "");
@@ -60,32 +111,76 @@ export async function generateCommitMessage(rpcClient: RpcClient | null): Promis
           return;
         }
 
-        const prompt = 
-        `Write a concise conventional commit message for git (type(scope): subject) for the following git diff. Return ONLY the commit message human readable explanation if needed imp things and major things included and what files are changed and in which directory, no quotes, max 300 chars subject, body optional bullet points if needed:\n\n${diff.slice(0, 6000)}`;
+        // Retrieve active model and provider selected by the user in the IDE
+        const chat = ChatViewProvider.currentProvider;
+        const activeModel = chat?.getCurrentModel();
+        const activeProvider = chat?.getCurrentProvider();
 
-        // Use daemon quickPrompt (single LLM call) — added in rpc_handler.py: rpc_agent_quickPrompt
+        const prompt =
+`Write a concise professional commit message for git following Conventional Commits (type(scope): subject <= 72 chars, plus optional bullet points for key changes) for the following git diff.
+${fileListSummary}
+STRICT FORMAT RULES:
+1. You MUST enclose your final commit message strictly inside <commit_message> and </commit_message> tags.
+2. Put ONLY the commit message inside <commit_message>...</commit_message> â€” no markdown code fences, no backticks, no quotes, no explanations.
+3. Any thinking, analysis, reasoning, or draft notes MUST remain OUTSIDE the <commit_message> tags.
+
+Example of correct output:
+<commit_message>
+feat(portfolio): add portfolio and project implementations
+
+- Add Pantry Pilot, Snake Rush, and ReconcileKit
+- Add project tests, configuration, and documentation
+</commit_message>
+
+Diff:
+${diff.slice(0, 8000)}`;
+
+        // Use daemon quickPrompt with the user's active model & provider
         let commitMessage = "";
         try {
-          const res = await rpcClient.call<any>("agent.quickPrompt", { prompt, project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath }, 60000);
+          const res = await rpcClient.call<any>(
+            "agent.quickPrompt",
+            {
+              prompt,
+              project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+              model: activeModel,
+              provider: activeProvider,
+            },
+            35000
+          );
           commitMessage = typeof res === "string" ? res : res?.message || res?.result || res?.commitMessage || "";
         } catch (e: any) {
           // Fallback: open chat with the diff prompt if quickPrompt unavailable
           if (String(e.message || e).includes("not found")) {
             vscode.window.showInformationMessage("Quick commit requires daemon update. Opening chat with diff prompt instead.");
-            // Copy prompt to clipboard and focus chat
             await vscode.env.clipboard.writeText(prompt);
             vscode.commands.executeCommand("andromity.chatView.focus");
             return;
           }
-          throw e;
-        }
-
-        if (!commitMessage || commitMessage.trim().length < 5) {
-          vscode.window.showWarningMessage("Daemon did not return commit message. Try again or check Output > Andromity.");
+          vscode.window.showErrorMessage(
+            `Failed to generate commit message: ${e?.message || e}. Please check your provider API key in Settings.`
+          );
           return;
         }
 
-        commitMessage = commitMessage.trim().replace(/^["'`]+|["'`]+$/g, "").trim();
+        // Extract clean commit message â€” strips thinking blocks, <commit_message> tags, code fences
+        commitMessage = extractCommitMessage(commitMessage);
+
+        if (!commitMessage || commitMessage.trim().length < 5) {
+          vscode.window.showWarningMessage(
+            "Daemon returned an empty commit message. Please verify your provider API key in Settings."
+          );
+          return;
+        }
+
+        // Check if user has enabled Co-authored-by trailer in Andromity settings
+        const config = vscode.workspace.getConfiguration("andromity");
+        const includeCoAuthor = config.get<boolean>("includeCoAuthor", true);
+        const coAuthorTrailer = "Co-authored-by: Andromity <333054755+andromity-bot@users.noreply.github.com>";
+
+        if (includeCoAuthor && !commitMessage.includes("Co-authored-by:")) {
+          commitMessage = `${commitMessage}\n\n${coAuthorTrailer}`;
+        }
 
         // Inject into SCM inputBox (VS Code Git API)
         repo.inputBox.value = commitMessage;

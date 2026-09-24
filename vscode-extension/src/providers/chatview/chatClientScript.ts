@@ -39,6 +39,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const activeModelName = document.getElementById('active-model-name');
     const activeModeLabel = document.getElementById('active-mode-label');
     const modelFlyout = document.getElementById('model-flyout');
+    const reasoningPopover = document.getElementById('reasoning-popover');
     const flyoutSearch = document.getElementById('flyout-search');
     const flyoutList = document.getElementById('flyout-list');
     const queueContainer = document.getElementById('queue-container');
@@ -129,6 +130,202 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       });
     });
 
+    // ── Collaboration Inbox State & Event Listeners ──────────────────────────
+    const btnCollabInbox = document.getElementById('btn-top-collab-inbox');
+    const collabInboxPopover = document.getElementById('collab-inbox-popover');
+    const btnCloseCollabInbox = document.getElementById('btn-close-collab-inbox');
+    const btnCollabClearAll = document.getElementById('btn-collab-clear-all');
+
+    let collabInboxItems = [];
+    let collabInboxActiveTab = 'all';
+    let sessionCollabActive = false;
+
+    function getSessionCollabInboxItems() {
+      if (!currentSessionId) return collabInboxItems.slice();
+      return collabInboxItems.filter(i => !i.sessionId || i.sessionId === currentSessionId);
+    }
+
+    function addCollabInboxItem(item) {
+      if (!item) return;
+      if (item.id && collabInboxItems.some(i => i.id === item.id)) return;
+      if (!item.sessionId) item.sessionId = currentSessionId;
+      collabInboxItems.unshift(item);
+      updateCollabInboxBadge();
+      renderCollabInbox();
+    }
+
+    function updateCollabInboxBadge() {
+      const items = getSessionCollabInboxItems();
+      const hasItems = items.length > 0;
+      const badge = document.getElementById('collab-inbox-badge');
+      const unreadCount = items.filter(i => i.unread).length;
+      if (badge) {
+        if (unreadCount > 0) {
+          badge.textContent = unreadCount > 99 ? '99+' : String(unreadCount);
+          badge.style.display = 'inline-flex';
+        } else {
+          badge.style.display = 'none';
+        }
+      }
+      const pill = document.getElementById('collab-inbox-status-pill');
+      if (pill) {
+        pill.textContent = items.length + (items.length === 1 ? ' item' : ' items');
+        pill.style.display = hasItems ? '' : 'none';
+      }
+      const markReadBtn = document.getElementById('btn-collab-clear-all');
+      if (markReadBtn) {
+        markReadBtn.style.display = hasItems ? '' : 'none';
+      }
+      const tabsEl = document.querySelector('.collab-inbox-tabs');
+      if (tabsEl) {
+        tabsEl.style.display = hasItems ? '' : 'none';
+      }
+      if (!hasItems && collabInboxActiveTab !== 'all') {
+        collabInboxActiveTab = 'all';
+        document.querySelectorAll('.collab-inbox-tab').forEach(b => {
+          b.classList.toggle('active', b.getAttribute('data-tab') === 'all');
+        });
+      }
+      // The inbox entry point only exists while collaboration is happening in
+      // this session: messages exchanged or an active co-agent link.
+      if (btnCollabInbox) {
+        const showInbox = hasItems || sessionCollabActive;
+        btnCollabInbox.style.display = showInbox ? '' : 'none';
+        if (!showInbox && collabInboxPopover) {
+          collabInboxPopover.style.display = 'none';
+        }
+      }
+    }
+
+    function renderCollabInbox() {
+      const listEl = document.getElementById('collab-inbox-list');
+      if (!listEl) return;
+
+      const filtered = getSessionCollabInboxItems().filter(item => {
+        if (collabInboxActiveTab === 'all') return true;
+        if (collabInboxActiveTab === 'questions') return item.type === 'question';
+        if (collabInboxActiveTab === 'answers') return item.type === 'answer';
+        if (collabInboxActiveTab === 'messages') return item.type === 'message';
+        if (collabInboxActiveTab === 'handoffs') return item.type === 'handoff';
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        listEl.innerHTML = '<div class="collab-inbox-empty">' +
+          '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>' +
+          '<div class="empty-title">No collaboration messages</div>' +
+          '<div class="empty-sub">Messages exchanged with co-agents appear here.</div>' +
+          '</div>';
+        return;
+      }
+
+      listEl.innerHTML = '';
+      filtered.forEach(item => {
+        const div = document.createElement('div');
+        div.className = 'collab-inbox-item type-' + item.type + (item.unread ? ' unread' : '');
+        div.id = 'inbox-item-' + item.id;
+
+        const shortFrom = formatSessionShort(item.fromSession, 18);
+        let iconSvg = '';
+        let typeBadge = '';
+        if (item.type === 'question') {
+          iconSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#d2a8ff" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
+          typeBadge = '<span class="session-card-badge" style="color:#d2a8ff;border:1px solid rgba(210,168,255,0.3)">Question</span>';
+        } else if (item.type === 'answer') {
+          iconSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#3fb950" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+          typeBadge = '<span class="session-card-badge" style="color:#3fb950;border:1px solid rgba(63,185,80,0.3)">Answer</span>';
+        } else if (item.type === 'handoff') {
+          iconSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2"><path d="M5 12h14"></path><path d="M12 5l7 7-7 7"></path></svg>';
+          typeBadge = '<span class="session-card-badge" style="color:#38bdf8;border:1px solid rgba(56,189,248,0.3)">Handoff</span>';
+        } else {
+          iconSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>';
+          typeBadge = '<span class="session-card-badge">' + escapeHtml(item.messageType || 'Broadcast') + '</span>';
+        }
+
+        let actionsHtml = '';
+        if (item.fromSessionId) {
+          actionsHtml += '<button class="session-card-btn session-card-jump-btn" data-action="switch-session" data-session-id="' + escapeHtml(item.fromSessionId) + '" title="Switch to [' + escapeHtml(item.fromSession) + ']">' +
+            '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg> ' +
+            'Open Session ↗</button>';
+        }
+        if (item.type === 'question' && item.questionId) {
+          actionsHtml += '<button class="session-card-btn session-card-wake-btn" data-action="wake-agent-question" data-question-id="' + escapeHtml(item.questionId) + '" data-from-session="' + escapeHtml(item.fromSession || '') + '" title="Wake agent to answer this question">' +
+            '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> ' +
+            'Wake & Answer</button>';
+        }
+
+        const timeStr = item.timestamp ? new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+
+        div.innerHTML = '<div class="collab-inbox-item-header">' +
+          '<div class="collab-inbox-item-title">' +
+            iconSvg +
+            '<span title="' + escapeHtml(item.fromSession || 'Agent') + '">[' + escapeHtml(shortFrom) + ']</span>' +
+            typeBadge +
+          '</div>' +
+          (timeStr ? '<span class="collab-inbox-item-time">' + escapeHtml(timeStr) + '</span>' : '') +
+          '</div>' +
+          '<div class="collab-inbox-item-body">' + renderMarkdown(item.content || '') + '</div>' +
+          (actionsHtml ? '<div class="collab-inbox-item-footer">' + actionsHtml + '</div>' : '');
+
+        listEl.appendChild(div);
+      });
+    }
+
+    function toggleCollabInbox(open) {
+      if (!collabInboxPopover) return;
+      const shouldOpen = open !== undefined ? !!open : (collabInboxPopover.style.display === 'none');
+      if (shouldOpen) {
+        if (btnCollabInbox && btnCollabInbox.style.display === 'none') return;
+        collabInboxPopover.style.display = 'flex';
+        getSessionCollabInboxItems().forEach(i => { i.unread = false; });
+        updateCollabInboxBadge();
+        renderCollabInbox();
+      } else {
+        collabInboxPopover.style.display = 'none';
+      }
+    }
+
+    btnCollabInbox?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleCollabInbox();
+    });
+
+    btnCloseCollabInbox?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleCollabInbox(false);
+    });
+
+    btnCollabClearAll?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      getSessionCollabInboxItems().forEach(i => { i.unread = false; });
+      updateCollabInboxBadge();
+      renderCollabInbox();
+    });
+
+    document.querySelectorAll('.collab-inbox-tab').forEach(tabBtn => {
+      tabBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.querySelectorAll('.collab-inbox-tab').forEach(b => b.classList.remove('active'));
+        tabBtn.classList.add('active');
+        collabInboxActiveTab = tabBtn.getAttribute('data-tab') || 'all';
+        renderCollabInbox();
+      });
+    });
+
+    document.addEventListener('click', (e) => {
+      if (collabInboxPopover && collabInboxPopover.style.display !== 'none') {
+        if (!collabInboxPopover.contains(e.target) && !btnCollabInbox?.contains(e.target)) {
+          collabInboxPopover.style.display = 'none';
+        }
+      }
+    });
+
+    const sessionCollabBadgeEl = document.getElementById('session-collab-badge');
+    sessionCollabBadgeEl?.addEventListener('click', (e) => {
+      if (e.target && e.target.classList && e.target.classList.contains('collab-resume-btn')) return;
+      toggleCollabInbox(true);
+    });
+
     let selectedOnboardingProvider = 'anthropic';
     let selectedOnboardingModel = 'claude-sonnet-4-6';
 
@@ -162,6 +359,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       { cmd: '/settings', desc: 'Open Settings, Model Catalog & MCP Hub', action: 'settings' },
       { cmd: '/personalisation', desc: 'Open Personalisation & Wallpaper Atmosphere settings', action: 'personalisation' },
       { cmd: '/pet', desc: 'Toggle or interact with Andro-Pet companion', action: 'pet' },
+      { cmd: '/play', desc: 'Perform a trick with Andro-Pet companion', action: 'play' },
+      { cmd: '/fetch', desc: 'Recall Andro-Pet companion home', action: 'fetch' },
       { cmd: '/about', desc: 'About Andromity, license & repository information', action: 'about' },
     ];
 
@@ -417,15 +616,32 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let userScrolledUp = false;
     let isProgrammaticScroll = false;
     let programmaticScrollTimer = null;
+    let _scrollRafId = null;
+    let _ignoreScrollUntil = 0; // timestamp: suppress scroll events from programmatic scrolls
+    let _lastScrollTop = 0;
+    let _isUserActivelyScrolling = false;
+    let _userScrollDebounceTimer = null;
+    let _lastUserScrollTime = 0;
 
-    function isAtBottom() {
+    function markUserScrollActive() {
+      _lastUserScrollTime = Date.now();
+      _isUserActivelyScrolling = true;
+      if (_userScrollDebounceTimer) clearTimeout(_userScrollDebounceTimer);
+      _userScrollDebounceTimer = setTimeout(() => {
+        _isUserActivelyScrolling = false;
+      }, 500);
+    }
+
+    function isAtBottom(threshold = 64) {
       if (!chatContainer) return true;
-      return chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 120;
+      return (chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight) <= threshold;
     }
 
     function scrollToBottom(smooth = false) {
       if (!chatContainer) return;
       userScrolledUp = false;
+      _isUserActivelyScrolling = false;
+      _lastUserScrollTime = 0;
       if (btnScrollBottom) {
         btnScrollBottom.classList.remove('visible');
         if (scrollUnreadBadge) scrollUnreadBadge.classList.remove('has-unread');
@@ -434,59 +650,135 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       isProgrammaticScroll = true;
       if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
 
+      const doScroll = () => {
+        if (!chatContainer) return;
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        const lastEl = chatContainer.lastElementChild;
+        if (lastEl && typeof lastEl.scrollIntoView === 'function') {
+          lastEl.scrollIntoView({ block: 'end', behavior: smooth ? 'smooth' : 'auto' });
+        }
+      };
+
       if (smooth) {
         chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
-        // Keep target pinned to latest scrollHeight if content dynamically expands during smooth animation
-        let frames = 0;
-        const pinAnimation = () => {
-          if (!userScrolledUp && chatContainer) {
-            chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
-          }
-          frames++;
-          if (frames < 20 && isProgrammaticScroll) {
-            requestAnimationFrame(pinAnimation);
-          } else if (chatContainer) {
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-            isProgrammaticScroll = false;
-          }
-        };
-        requestAnimationFrame(pinAnimation);
+        programmaticScrollTimer = setTimeout(() => {
+          isProgrammaticScroll = false;
+          _ignoreScrollUntil = 0;
+          if (chatContainer) _lastScrollTop = chatContainer.scrollTop;
+        }, 350);
+        _ignoreScrollUntil = Date.now() + 350;
       } else {
-        chatContainer.scrollTop = chatContainer.scrollHeight;
-        requestAnimationFrame(() => {
-          if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
-          programmaticScrollTimer = setTimeout(() => {
-            isProgrammaticScroll = false;
-          }, 60);
-        });
+        _ignoreScrollUntil = Date.now() + 200;
+        doScroll();
+        _lastScrollTop = chatContainer.scrollTop;
+        programmaticScrollTimer = setTimeout(() => {
+          isProgrammaticScroll = false;
+        }, 120);
       }
     }
 
     function scrollToBottomIfNeeded() {
-      if (!userScrolledUp && chatContainer) {
-        chatContainer.scrollTop = chatContainer.scrollHeight;
-      } else if (userScrolledUp && scrollUnreadBadge) {
-        scrollUnreadBadge.classList.add('has-unread');
+      if (!chatContainer) return;
+      // If user has scrolled up to inspect previous content, NEVER auto-scroll! Protect user intention.
+      if (userScrolledUp) {
+        if (scrollUnreadBadge) scrollUnreadBadge.classList.add('has-unread');
+        return;
       }
+
+      if (_scrollRafId) return; // Coalesce within current frame to eliminate jitter
+      _scrollRafId = requestAnimationFrame(() => {
+        _scrollRafId = null;
+        if (!chatContainer || userScrolledUp) {
+          if (scrollUnreadBadge) scrollUnreadBadge.classList.add('has-unread');
+          return;
+        }
+        isProgrammaticScroll = true;
+        if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
+        _ignoreScrollUntil = Date.now() + 200;
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        _lastScrollTop = chatContainer.scrollTop;
+        programmaticScrollTimer = setTimeout(() => {
+          isProgrammaticScroll = false;
+        }, 120);
+      });
     }
 
     if (chatContainer) {
+      _lastScrollTop = chatContainer.scrollTop;
+
       chatContainer.addEventListener('wheel', (e) => {
         if (e.deltaY < 0) {
-          isProgrammaticScroll = false;
+          // User scrolled UP: immediately halt auto-scroll and cancel pending RAF scroll
           userScrolledUp = true;
+          markUserScrollActive();
+          _ignoreScrollUntil = 0;
+          isProgrammaticScroll = false;
+          if (_scrollRafId) {
+            cancelAnimationFrame(_scrollRafId);
+            _scrollRafId = null;
+          }
           if (btnScrollBottom) btnScrollBottom.classList.add('visible');
+        } else if (e.deltaY > 0) {
+          // User scrolled DOWN: if user reached near the bottom, resume auto-scroll
+          if (isAtBottom(64)) {
+            userScrolledUp = false;
+            _isUserActivelyScrolling = false;
+            _lastUserScrollTime = 0;
+            if (btnScrollBottom) {
+              btnScrollBottom.classList.remove('visible');
+              if (scrollUnreadBadge) scrollUnreadBadge.classList.remove('has-unread');
+            }
+          }
         }
       }, { passive: true });
 
       chatContainer.addEventListener('touchmove', () => {
+        markUserScrollActive();
+        _ignoreScrollUntil = 0;
         isProgrammaticScroll = false;
       }, { passive: true });
 
+      chatContainer.addEventListener('pointerdown', () => {
+        // User clicked or grabbed the scrollbar: mark active user interaction
+        markUserScrollActive();
+        _ignoreScrollUntil = 0;
+        isProgrammaticScroll = false;
+      }, { passive: true });
+
+      chatContainer.addEventListener('load', (e) => {
+        if (e.target && e.target.tagName === 'IMG') {
+          scrollToBottomIfNeeded();
+        }
+      }, true);
+
       chatContainer.addEventListener('scroll', () => {
-        if (isProgrammaticScroll) return;
-        const atBottom = isAtBottom();
-        userScrolledUp = !atBottom;
+        // Suppress scroll events caused by our own programmatic auto-scrolls
+        if (isProgrammaticScroll || Date.now() < _ignoreScrollUntil) {
+          _lastScrollTop = chatContainer.scrollTop;
+          return;
+        }
+
+        const currentScrollTop = chatContainer.scrollTop;
+        const delta = currentScrollTop - _lastScrollTop;
+        _lastScrollTop = currentScrollTop;
+
+        const atBottom = isAtBottom(64);
+
+        if (atBottom) {
+          // User reached or is at bottom: auto-scroll resumes
+          userScrolledUp = false;
+          _isUserActivelyScrolling = false;
+          _lastUserScrollTime = 0;
+        } else if (delta < -2) {
+          // User scrolled UP away from bottom: halt auto-scroll
+          userScrolledUp = true;
+          markUserScrollActive();
+          if (_scrollRafId) {
+            cancelAnimationFrame(_scrollRafId);
+            _scrollRafId = null;
+          }
+        }
+
         if (btnScrollBottom) {
           if (userScrolledUp) {
             btnScrollBottom.classList.add('visible');
@@ -496,6 +788,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
         }
       });
+
+      // ResizeObserver: watch only sticky UI elements (planTrackerStrip, interactiveSlot).
+      // If user is scrolled up or actively scrolling, DO NOT auto-scroll!
+      if (typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(() => {
+          if (!userScrolledUp) {
+            scrollToBottomIfNeeded();
+          }
+        });
+        if (planTrackerStrip) {
+          ro.observe(planTrackerStrip);
+        }
+        if (interactiveSlot) {
+          ro.observe(interactiveSlot);
+        }
+      }
     }
 
     btnScrollBottom?.addEventListener('click', () => {
@@ -615,7 +923,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         updateToolSeqHeader();
         const seqToCollapse = currentToolSequence;
         if (!toolSeqUserToggled) {
-          seqToCollapse.classList.add('collapsed');
+          // Only auto-collapse if user is at bottom. If user scrolled up to read earlier responses
+          // or active tools, do NOT auto-collapse it, preventing viewport jumping.
+          if (!userScrolledUp) {
+            seqToCollapse.classList.add('collapsed');
+            scrollToBottomIfNeeded();
+          }
         }
         currentToolSequence = null;
       }
@@ -2308,6 +2621,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (selectedOnboardingProvider === 'ollama') {
           if (onboardingKeyForm) onboardingKeyForm.style.display = 'none';
           if (onboardingOllamaForm) onboardingOllamaForm.style.display = 'flex';
+          vscode.postMessage({ type: 'check_ollama_status' });
         } else {
           if (onboardingKeyForm) onboardingKeyForm.style.display = 'flex';
           if (onboardingOllamaForm) onboardingOllamaForm.style.display = 'none';
@@ -2346,16 +2660,85 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     });
 
+    let currentOllamaStatus = null;
+    const btnOnboardingOllamaStart = document.getElementById('btn-onboarding-ollama-start');
+    const btnOnboardingOllamaPull = document.getElementById('btn-onboarding-ollama-pull');
+    const btnOnboardingOllamaDownload = document.getElementById('btn-onboarding-ollama-download');
+    const onboardingOllamaStatusChip = document.getElementById('onboarding-ollama-status-chip');
+    const onboardingOllamaStatusDot = document.getElementById('onboarding-ollama-status-dot');
+    const onboardingOllamaStatusText = document.getElementById('onboarding-ollama-status-text');
+
     btnOnboardingOllamaSave?.addEventListener('click', () => {
       btnOnboardingOllamaSave.disabled = true;
       btnOnboardingOllamaSave.innerHTML = '<span>Activating Ollama...</span>';
+      const bestModel = currentOllamaStatus?.bestModel || (currentOllamaStatus?.models?.[0]) || 'llama3.2:latest';
       vscode.postMessage({
         type: 'set_api_key',
         provider: 'ollama',
         apiKey: '',
-        modelId: 'llama3.2:latest',
+        modelId: bestModel,
       });
     });
+
+    btnOnboardingOllamaStart?.addEventListener('click', () => {
+      if (btnOnboardingOllamaStart) {
+        btnOnboardingOllamaStart.disabled = true;
+        btnOnboardingOllamaStart.innerHTML = '<span>Starting server...</span>';
+      }
+      vscode.postMessage({ type: 'start_ollama_server' });
+    });
+
+    btnOnboardingOllamaPull?.addEventListener('click', () => {
+      const model = btnOnboardingOllamaPull.dataset.model || 'qwen2.5-coder:7b';
+      if (btnOnboardingOllamaPull) {
+        btnOnboardingOllamaPull.disabled = true;
+        btnOnboardingOllamaPull.innerHTML = '<span>Pulling ' + model + '...</span>';
+      }
+      vscode.postMessage({ type: 'pull_ollama_model', model: model });
+    });
+
+    function updateOllamaStatusUI(status) {
+      if (!status) return;
+      currentOllamaStatus = status;
+      if (!onboardingOllamaStatusDot || !onboardingOllamaStatusText) return;
+
+      if (status.running) {
+        if (status.models && status.models.length > 0) {
+          const activeModelName = status.bestModel || status.models[0] || 'ready';
+          onboardingOllamaStatusDot.className = 'ollama-status-dot online';
+          onboardingOllamaStatusText.textContent = 'Ollama running · ' + status.models.length + ' model' + (status.models.length > 1 ? 's' : '') + ' ready (' + activeModelName + ')';
+          if (btnOnboardingOllamaSave) btnOnboardingOllamaSave.style.display = 'flex';
+          if (btnOnboardingOllamaStart) btnOnboardingOllamaStart.style.display = 'none';
+          if (btnOnboardingOllamaPull) btnOnboardingOllamaPull.style.display = 'none';
+          if (btnOnboardingOllamaDownload) btnOnboardingOllamaDownload.style.display = 'none';
+        } else {
+          onboardingOllamaStatusDot.className = 'ollama-status-dot warning';
+          onboardingOllamaStatusText.textContent = 'Ollama running · 0 models installed';
+          if (btnOnboardingOllamaPull) btnOnboardingOllamaPull.style.display = 'flex';
+          if (btnOnboardingOllamaSave) btnOnboardingOllamaSave.style.display = 'flex';
+          if (btnOnboardingOllamaStart) btnOnboardingOllamaStart.style.display = 'none';
+          if (btnOnboardingOllamaDownload) btnOnboardingOllamaDownload.style.display = 'none';
+        }
+      } else if (status.installed) {
+        onboardingOllamaStatusDot.className = 'ollama-status-dot warning';
+        onboardingOllamaStatusText.textContent = 'Ollama installed · Server stopped';
+        if (btnOnboardingOllamaStart) {
+          btnOnboardingOllamaStart.style.display = 'flex';
+          btnOnboardingOllamaStart.disabled = false;
+          btnOnboardingOllamaStart.innerHTML = '<span>Start Ollama Server</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
+        }
+        if (btnOnboardingOllamaSave) btnOnboardingOllamaSave.style.display = 'flex';
+        if (btnOnboardingOllamaPull) btnOnboardingOllamaPull.style.display = 'none';
+        if (btnOnboardingOllamaDownload) btnOnboardingOllamaDownload.style.display = 'none';
+      } else {
+        onboardingOllamaStatusDot.className = 'ollama-status-dot offline';
+        onboardingOllamaStatusText.textContent = 'Ollama not detected on machine';
+        if (btnOnboardingOllamaDownload) btnOnboardingOllamaDownload.style.display = 'flex';
+        if (btnOnboardingOllamaSave) btnOnboardingOllamaSave.style.display = 'flex';
+        if (btnOnboardingOllamaStart) btnOnboardingOllamaStart.style.display = 'none';
+        if (btnOnboardingOllamaPull) btnOnboardingOllamaPull.style.display = 'none';
+      }
+    }
 
     let onboardingPendingProvider = '';
     let onboardingSelectedLiveModel = '';
@@ -2573,17 +2956,37 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (isNaN(d.getTime())) return '';
         const now = new Date();
         const diffMs = now.getTime() - d.getTime();
-        const diffMins = Math.floor(diffMs / 60000);
+        const diffSecs = Math.max(0, Math.floor(diffMs / 1000));
+        const diffMins = Math.floor(diffSecs / 60);
         const diffHours = Math.floor(diffMins / 60);
         const diffDays = Math.floor(diffHours / 24);
 
-        if (diffMins < 2) return 'Just now';
+        if (diffMins < 1 || diffSecs < 60) return 'now';
         if (diffMins < 60) return diffMins + 'm ago';
-        if (diffHours < 24 && now.getDate() === d.getDate()) return formatTime(d);
-        if (diffDays === 1 || (diffDays === 0 && now.getDate() !== d.getDate())) return 'Yesterday';
+        if (diffHours < 24) return diffHours + 'h ago';
+        if (diffDays === 1) return '1d ago';
+        if (diffDays < 7) return diffDays + 'd ago';
+        if (diffDays < 30) {
+          const weeks = Math.floor(diffDays / 7);
+          return weeks + 'w ago';
+        }
+        if (diffDays < 365) {
+          const months = Math.floor(diffDays / 30);
+          return months + 'mo ago';
+        }
+        const years = Math.floor(diffDays / 365);
+        return years + 'y ago';
+      } catch (e) {
+        return '';
+      }
+    }
 
-        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        return months[d.getMonth()] + ' ' + d.getDate();
+    function formatFullTimeTooltip(dateStr) {
+      if (!dateStr) return '';
+      try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return '';
+        return d.toLocaleString();
       } catch (e) {
         return '';
       }
@@ -2694,6 +3097,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const name = escapeHtml(s.name || s.id || (isSubsession ? 'Subagent Task' : 'Session'));
       const msgs = s.message_count ? (s.message_count + ' msgs') : 'Empty';
       const cost = (s.cost_usd && Number(s.cost_usd) > 0) ? ('$' + Number(s.cost_usd).toFixed(3)) : '';
+      const timeStr = formatDateBadge(s.updated_at || s.created_at);
+      const timeTooltip = formatFullTimeTooltip(s.updated_at || s.created_at);
       const sessState = sessionsState[s.id];
       const isRunningSess = !!((sessState && sessState.isRunning) || s.status === 'running');
 
@@ -2702,9 +3107,28 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       let statusBadge = '';
       if (sessState && sessState.hasUnread && !isCur) {
-        statusBadge = '<span class="session-badge-status session-status-unread">NEW</span>';
+        statusBadge = '<span class="session-badge-status session-status-unread"><span class="session-pulse-dot"></span><span>New</span></span>';
       } else if (s.status && s.status !== 'idle' && s.status !== 'running') {
-        statusBadge = '<span class="session-badge-status session-status-' + escapeHtml(s.status) + '">' + escapeHtml(s.status) + '</span>';
+        const rawStatus = String(s.status);
+        if (rawStatus === 'watching') {
+          statusBadge = '<span class="session-badge-status session-status-watching" title="Watching for events/replies">' +
+            '<span class="session-pulse-dot"></span>' +
+            '<span>Watching</span>' +
+          '</span>';
+        } else if (rawStatus === 'paused' || rawStatus === 'paused_limit_reached') {
+          statusBadge = '<span class="session-badge-status session-status-paused" title="Paused">' +
+            '<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>' +
+            '<span>Paused</span>' +
+          '</span>';
+        } else if (rawStatus === 'approval_required') {
+          statusBadge = '<span class="session-badge-status session-status-approval_required" title="Action Approval Required">' +
+            '<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>' +
+            '<span>Approval</span>' +
+          '</span>';
+        } else {
+          const displayLabel = rawStatus.charAt(0).toUpperCase() + rawStatus.slice(1).replace(/_/g, ' ');
+          statusBadge = '<span class="session-badge-status session-status-' + escapeHtml(rawStatus) + '">' + escapeHtml(displayLabel) + '</span>';
+        }
       }
 
       const activeDot = isCur ? '<span class="session-active-dot" title="Active session"></span>' : '';
@@ -2722,8 +3146,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const parentRef = (!isSubsession && parentName) ? ('<span>· Parent: ' + escapeHtml(parentName) + '</span>') : '';
       const itemClass = 'session-item ' + (isSubsession ? 'session-subsession-item ' : '') + (isCur ? 'active' : '');
 
-      return '<div class="' + itemClass + '" data-session-id="' + s.id + '">' +
-        '<div class="session-item-info" data-action="switch-session" data-session-id="' + s.id + '">' +
+      return '<div class="' + itemClass + '" data-action="switch-session" data-session-id="' + s.id + '">' +
+        '<div class="session-item-info" data-session-id="' + s.id + '">' +
           '<div class="session-item-title">' +
             branchSymbol +
             activeDot +
@@ -2734,6 +3158,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           '</div>' +
           '<div class="session-item-meta">' +
             '<span>' + msgs + '</span>' +
+            (timeStr ? '<span class="session-item-time" title="' + escapeHtml(timeTooltip) + '">· ' + timeStr + '</span>' : '') +
             (cost ? '<span>· ' + cost + '</span>' : '') +
             parentRef +
             toggleBtn +
@@ -3214,6 +3639,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (modelFlyout && !modelFlyout.contains(e.target) && !isPicker) {
         modelFlyout.style.display = 'none';
       }
+      const isReasoningTrigger = e.target.closest('#btn-prompt-reasoning');
+      if (reasoningPopover && !reasoningPopover.contains(e.target) && !isReasoningTrigger) {
+        reasoningPopover.style.display = 'none';
+        const btnReasoningEl = document.getElementById('btn-prompt-reasoning');
+        if (btnReasoningEl) {
+          btnReasoningEl.setAttribute('aria-expanded', 'false');
+          btnReasoningEl.classList.remove('active');
+        }
+      }
       const isSessionTrigger = e.target.closest('#btn-session-picker');
       if (sessionsFlyout && !sessionsFlyout.contains(e.target) && !isSessionTrigger) {
         sessionsFlyout.style.display = 'none';
@@ -3298,13 +3732,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         }
         case 'switch-session':
-          const sId = target.getAttribute('data-session-id');
+          const sId = target.getAttribute('data-session-id') || target.closest('[data-session-id]')?.getAttribute('data-session-id');
           if (sId) {
             sessionsFlyout.style.display = 'none';
+            if (collabInboxPopover) collabInboxPopover.style.display = 'none';
+            if (planTrackerStrip) planTrackerStrip.style.display = 'none';
             if (sId === currentSessionId) {
+              userScrolledUp = false;
+              scrollToBottom(false);
+              requestAnimationFrame(() => {
+                scrollToBottom(false);
+              });
               break;
             }
-            if (planTrackerStrip) planTrackerStrip.style.display = 'none';
             vscode.postMessage({ type: 'switch_session', sessionId: sId });
           }
           break;
@@ -3324,6 +3764,32 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             vscode.postMessage({ type: 'delete_session', sessionId: delId });
           }
           break;
+        case 'wake-agent-question': {
+          e.stopPropagation();
+          if (collabInboxPopover) collabInboxPopover.style.display = 'none';
+          const qId = target.getAttribute('data-question-id') || '';
+          const fromS = target.getAttribute('data-from-session') || 'Co-Agent';
+          const promptText = 'Please answer the pending question from [' + fromS + '] (ID: ' + qId + ') using session_answer_question tool or continue work.';
+          const inputEl = document.getElementById('chat-input');
+          if (inputEl) {
+            inputEl.value = promptText;
+            inputEl.focus();
+          }
+          vscode.postMessage({
+            type: 'agent_prompt',
+            prompt: promptText,
+            sessionId: currentSessionId,
+          });
+          break;
+        }
+        case 'resume-auto-wake': {
+          e.stopPropagation();
+          vscode.postMessage({
+            type: 'reset_auto_wake',
+            sessionId: currentSessionId,
+          });
+          break;
+        }
         case 'open-session-tab': {
           e.stopPropagation();
           const tabSid = target.getAttribute('data-session-id') || target.closest('[data-session-id]')?.getAttribute('data-session-id');
@@ -3370,9 +3836,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         }
         case 'open-file-diff': {
-          const fPath = target.getAttribute('data-file-path') || target.closest('[data-file-path]')?.getAttribute('data-file-path') || target.closest('.file-edited-chip')?.getAttribute('data-file-path') || target.closest('.activity-diff-btn')?.getAttribute('data-file-path');
+          const fPath = target.getAttribute('data-file-path') || target.closest('[data-file-path]')?.getAttribute('data-file-path') || target.closest('.file-edited-chip')?.getAttribute('data-file-path') || target.closest('.activity-diff-btn')?.getAttribute('data-file-path') || target.closest('.activity-stats')?.getAttribute('data-file-path');
           if (fPath) {
-            vscode.postMessage({ type: 'open_file_diff', filePath: fPath });
+            vscode.postMessage({ type: 'open_review_tab', filePath: fPath });
           }
           break;
         }
@@ -3410,8 +3876,23 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           vscode.postMessage({ type: 'open_review_tab' });
           break;
         case 'remove-attached-file': {
+          e.stopPropagation();
           const idx = parseInt(target.getAttribute('data-idx') || '0', 10);
           removeAttachedFile(idx);
+          break;
+        }
+        case 'clear-all-attached-files': {
+          e.stopPropagation();
+          attachedFiles = [];
+          renderAttachedFiles();
+          break;
+        }
+        case 'open-attached-file': {
+          e.stopPropagation();
+          const filePath = target.getAttribute('data-path') || '';
+          if (filePath) {
+            vscode.postMessage({ type: 'open_file', filePath: filePath });
+          }
           break;
         }
         case 'dismiss-ollama-banner': {
@@ -3730,7 +4211,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     let availableProfiles = ['builder', 'coder', 'reviewer', 'planner'];
-    let availableReasoningEfforts = ['low', 'medium', 'high', 'off'];
+    const REASONING_LEVELS = [
+      { id: 'off', label: 'Off', desc: 'Direct responses • zero reasoning overhead', pct: 0 },
+      { id: 'low', label: 'Low', desc: 'Fast & concise thoughts • minimal latency', pct: 33.33 },
+      { id: 'medium', label: 'Medium', desc: 'Balanced reasoning for coding & architecture', pct: 66.66 },
+      { id: 'high', label: 'High', desc: 'Deep step-by-step reflection • complex tasks', pct: 100 }
+    ];
+    let availableReasoningEfforts = REASONING_LEVELS.map(l => l.id);
     let attachedImages = [];
     let attachedFiles = [];
     let currentActiveEditorContext = null;
@@ -3775,8 +4262,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           return { badge: 'JAVA', color: '#f87171' };
         case 'sql':
           return { badge: 'SQL', color: '#a78bfa' };
+        case 'txt':
+        case 'log':
+          return { badge: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>', color: '#94a3b8' };
+        case 'yml':
+        case 'yaml':
+        case 'toml':
+          return { badge: 'CFG', color: '#a3e635' };
         default:
-          return { badge: 'FILE', color: '#94a3b8' };
+          return { badge: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>', color: '#94a3b8' };
       }
     }
 
@@ -3789,14 +4283,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         return;
       }
       container.style.display = 'flex';
-      container.innerHTML = attachedFiles.map((file, idx) => {
+      const chipsHtml = attachedFiles.map((file, idx) => {
         const iconInfo = getFileIconBadge(file.name);
-        return '<span class="dropped-file-chip" title="' + escapeHtml(file.path || file.name) + '">' +
+        return '<span class="dropped-file-chip" data-action="open-attached-file" data-path="' + escapeHtml(file.path || file.name) + '" title="Click to open in editor (' + escapeHtml(file.path || file.name) + ')">' +
           '<span class="chip-icon" style="color:' + iconInfo.color + ';">' + iconInfo.badge + '</span>' +
           '<span class="chip-name">' + escapeHtml(file.name) + '</span>' +
-          '<button class="chip-remove-btn" data-action="remove-attached-file" data-idx="' + idx + '" title="Remove file">&#x2715;</button>' +
+          '<button class="chip-remove-btn" data-action="remove-attached-file" data-idx="' + idx + '" title="Remove file" aria-label="Remove ' + escapeHtml(file.name) + '">&#x2715;</button>' +
         '</span>';
       }).join('');
+
+      const clearAllHtml = attachedFiles.length >= 2
+        ? '<button class="attached-files-clear-btn" data-action="clear-all-attached-files" title="Remove all attached files">Clear all (' + attachedFiles.length + ')</button>'
+        : '';
+
+      container.innerHTML = '<div class="attached-files-list">' + chipsHtml + '</div>' + clearAllHtml;
     }
 
     function addDroppedFileAttachment(fileInfo) {
@@ -3841,23 +4341,103 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function updateProfileBadge() {
       const lbl = document.getElementById('prompt-profile-label');
       if (lbl) {
-        lbl.textContent = (currentProfile || 'builder').toUpperCase();
+        const p = (currentProfile || 'builder').toLowerCase();
+        const display = p.charAt(0).toUpperCase() + p.slice(1);
+        lbl.textContent = display.toUpperCase();
+        if (typeof lbl.removeAttribute === 'function') {
+          lbl.removeAttribute('aria-busy');
+        }
+        if (lbl.classList && typeof lbl.classList.remove === 'function') {
+          lbl.classList.remove('skeleton', 'skeleton-text');
+        }
         if (lbl.parentElement) {
-          lbl.parentElement.title = 'Active Profile: ' + (currentProfile || 'builder').toUpperCase() + ' (Click to cycle Builder, Coder, Reviewer, Planner)';
+          const nextIdx = (availableProfiles.indexOf(p) + 1) % availableProfiles.length;
+          const nextP = availableProfiles[nextIdx] || 'builder';
+          const nextDisplay = nextP.charAt(0).toUpperCase() + nextP.slice(1);
+          lbl.parentElement.title = 'Agent Profile: ' + display + ' (Click to switch to ' + nextDisplay + ' • Builder → Coder → Reviewer → Planner)';
         }
       }
     }
 
-    function updateReasoningBadge() {
+    function getReasoningLevelIndex(val) {
+      const v = (val || 'medium').toLowerCase();
+      const idx = REASONING_LEVELS.findIndex(l => l.id === v);
+      return idx >= 0 ? idx : 2;
+    }
+
+    function setReasoningLevel(levelId, notifyExtension) {
+      const idx = getReasoningLevelIndex(levelId);
+      const lvl = REASONING_LEVELS[idx];
+      currentReasoning = lvl.id;
+      updateReasoningUI(lvl);
+      if (notifyExtension) {
+        vscode.postMessage({ type: 'update_config', key: 'reasoningEffort', value: currentReasoning });
+      }
+    }
+
+    function updateReasoningUI(lvl) {
+      if (!lvl) {
+        const idx = getReasoningLevelIndex(currentReasoning);
+        lvl = REASONING_LEVELS[idx];
+      }
+      const idx = REASONING_LEVELS.indexOf(lvl);
+
+      // 1. Update prompt button label & title
       const lbl = document.getElementById('prompt-reasoning-label');
       if (lbl) {
-        const val = currentReasoning || 'medium';
-        const icons = { high: 'High', medium: 'Medium', low: 'Low', off: 'Off' };
-        lbl.textContent = icons[val] || val.toUpperCase();
+        lbl.textContent = lvl.label;
+        if (typeof lbl.removeAttribute === 'function') {
+          lbl.removeAttribute('aria-busy');
+        }
+        if (lbl.classList && typeof lbl.classList.remove === 'function') {
+          lbl.classList.remove('skeleton', 'skeleton-text');
+        }
         if (lbl.parentElement) {
-          lbl.parentElement.title = 'Reasoning Effort: ' + val.toUpperCase() + ' (Click to cycle High, Medium, Low, Off)';
+          lbl.parentElement.title = 'Reasoning Effort: ' + lvl.label + ' (Click to adjust)';
         }
       }
+
+      // 2. Update popover badge
+      const badge = document.getElementById('reasoning-popover-badge');
+      if (badge) {
+        badge.textContent = lvl.label;
+        badge.className = 'reasoning-popover-badge badge-' + lvl.id;
+      }
+
+      // 3. Update description text
+      const desc = document.getElementById('reasoning-popover-desc');
+      if (desc) {
+        desc.textContent = lvl.desc;
+      }
+
+      // 4. Update slider input value
+      const slider = document.getElementById('reasoning-slider-range');
+      if (slider && Number(slider.value) !== idx) {
+        slider.value = String(idx);
+      }
+
+      // 5. Update slider track fill width & style
+      const fill = document.getElementById('reasoning-slider-fill');
+      if (fill) {
+        fill.style.width = lvl.pct + '%';
+        fill.className = 'reasoning-slider-fill fill-' + lvl.id;
+      }
+
+      // 6. Update step button states
+      document.querySelectorAll('.reasoning-step-btn').forEach(btn => {
+        const bLevel = btn.getAttribute('data-level');
+        btn.classList.toggle('active', bLevel === lvl.id);
+      });
+
+      // 7. Update tick point indicator states
+      document.querySelectorAll('.reasoning-tick-point').forEach(tp => {
+        const tIdx = parseInt(tp.getAttribute('data-level-idx') || '0', 10);
+        tp.classList.toggle('active', tIdx <= idx);
+      });
+    }
+
+    function updateReasoningBadge() {
+      updateReasoningUI();
     }
 
     function renderImageAttachments() {
@@ -3951,15 +4531,68 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     const btnReasoningEl = document.getElementById('btn-prompt-reasoning');
+    const btnReasoningClose = document.getElementById('btn-reasoning-close');
+    const reasoningSlider = document.getElementById('reasoning-slider-range');
+
+    function toggleReasoningPopover(forceState) {
+      if (!reasoningPopover) return;
+      const isVisible = reasoningPopover.style.display !== 'none';
+      const show = typeof forceState === 'boolean' ? forceState : !isVisible;
+      reasoningPopover.style.display = show ? 'flex' : 'none';
+      if (btnReasoningEl) {
+        btnReasoningEl.setAttribute('aria-expanded', show ? 'true' : 'false');
+        btnReasoningEl.classList.toggle('active', show);
+      }
+      if (show) {
+        updateReasoningUI();
+        if (reasoningSlider) {
+          reasoningSlider.focus();
+        }
+      }
+    }
+
     if (btnReasoningEl) {
-      btnReasoningEl.addEventListener('click', () => {
-        const val = (currentReasoning || 'medium').toLowerCase();
-        const nextIdx = (availableReasoningEfforts.indexOf(val) + 1) % availableReasoningEfforts.length;
-        currentReasoning = availableReasoningEfforts[nextIdx];
-        updateReasoningBadge();
-        vscode.postMessage({ type: 'update_config', key: 'reasoningEffort', value: currentReasoning });
+      btnReasoningEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleReasoningPopover();
       });
     }
+
+    if (btnReasoningClose) {
+      btnReasoningClose.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleReasoningPopover(false);
+      });
+    }
+
+    if (reasoningSlider) {
+      reasoningSlider.addEventListener('input', (e) => {
+        const valIdx = parseInt(e.target.value, 10);
+        const lvl = REASONING_LEVELS[valIdx] || REASONING_LEVELS[2];
+        setReasoningLevel(lvl.id, true);
+      });
+    }
+
+    document.querySelectorAll('.reasoning-step-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const lvlId = btn.getAttribute('data-level');
+        if (lvlId) {
+          setReasoningLevel(lvlId, true);
+        }
+      });
+    });
+
+    document.querySelectorAll('.reasoning-tick-point').forEach(tp => {
+      tp.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const tIdx = parseInt(tp.getAttribute('data-level-idx') || '0', 10);
+        const lvl = REASONING_LEVELS[tIdx];
+        if (lvl) {
+          setReasoningLevel(lvl.id, true);
+        }
+      });
+    });
 
     function appendHelpCard() {
       const card = document.createElement('div');
@@ -4236,6 +4869,44 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       renderQueue();
     };
 
+    function highlightCode(code, lang) {
+      if (!code) return '';
+      const language = (lang || '').toLowerCase().trim();
+      let escaped = String(code)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+      const jsKw = '\\\\b(const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|new|this|class|extends|import|export|from|default|async|await|try|catch|finally|throw|typeof|instanceof|yield|null|undefined|true|false)\\\\b';
+      const pyKw = '\\\\b(def|class|return|if|elif|else|for|while|try|except|finally|raise|import|from|as|with|lambda|yield|pass|break|continue|None|True|False|is|not|in|and|or|async|await)\\\\b';
+      const shKw = '\\\\b(echo|cd|ls|cat|mkdir|rm|cp|mv|git|npm|uv|pip|python|node|npx|chmod|chown|curl|wget|grep|sed|awk|if|then|fi|elif|else|for|do|done|while|case|esac)\\\\b';
+      const jsonKw = '\\\\b(true|false|null)\\\\b';
+
+      let kw = jsKw;
+      if (language === 'py' || language === 'python') kw = pyKw;
+      else if (language === 'sh' || language === 'bash' || language === 'shell' || language === 'zsh') kw = shKw;
+      else if (language === 'json') kw = jsonKw;
+
+      const salt = Math.random().toString(36).slice(2, 8);
+      const placeholders = [];
+      const saveToken = function(cls, text) {
+        const id = '___TOK_' + salt + '_' + placeholders.length + '___';
+        placeholders.push('<span class="' + cls + '">' + text + '</span>');
+        return id;
+      };
+
+      escaped = escaped.replace(/("(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*'|\\x60(?:[^\\x60\\\\]|\\\\.)*\\x60)/g, function(str) { return saveToken('tok-string', str); });
+      escaped = escaped.replace(/(\\/\\/[^\\n]*|#[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/)/g, function(cmt) { return saveToken('tok-comment', cmt); });
+      escaped = escaped.replace(/\\b(\\d+(?:\\.\\d+)?)\\b/g, function(num) { return saveToken('tok-number', num); });
+      escaped = escaped.replace(new RegExp(kw, 'g'), function(k) { return saveToken('tok-keyword', k); });
+      escaped = escaped.replace(/\\b([a-zA-Z_$][a-zA-Z0-9_$]*)(?=\\s*\\()/g, function(fn) { return saveToken('tok-fn', fn); });
+
+      for (let i = 0; i < placeholders.length; i++) {
+        escaped = escaped.split('___TOK_' + salt + '_' + i + '___').join(placeholders[i]);
+      }
+      return escaped;
+    }
+
     try {
       if (typeof marked !== 'undefined') {
         const markedRenderer = {
@@ -4244,6 +4915,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             const lang = token && typeof token === 'object' ? (token.lang || 'code') : 'code';
             const language = (lang || 'code').trim();
             const enc = encodeURIComponent(text);
+            const highlighted = highlightCode(text, language);
             return '<div class="code-block-container">' +
               '<div class="code-block-header">' +
                 '<span class="code-lang-tag">' + escapeHtml(language.toUpperCase()) + '</span>' +
@@ -4252,7 +4924,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   '<button class="code-btn" data-code="' + enc + '" data-action="apply-code"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg> Insert</button>' +
                 '</div>' +
               '</div>' +
-              '<pre class="code-block-pre"><code>' + escapeHtml(text) + '</code></pre>' +
+              '<pre class="code-block-pre"><code>' + highlighted + '</code></pre>' +
             '</div>';
           },
           table(token) {
@@ -4380,7 +5052,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 '<button class="code-btn" data-code="' + enc + '" data-action="apply-code"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg> Insert</button>' +
               '</div>' +
             '</div>' +
-            '<pre class="code-block-pre"><code>' + escapeHtml(code.trim()) + '</code></pre>' +
+            '<pre class="code-block-pre"><code>' + highlightCode(code.trim(), lang) + '</code></pre>' +
           '</div>';
         } else {
           var rawLines = codeParts[i].split('\\n');
@@ -4477,6 +5149,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
       }
       return html;
+    }
+
+    /** Shared "Copied" affordance for message actions; restores the idle label after 1.6s. */
+    function flashCopied(btn, label) {
+      if (!btn || !btn.classList) return;
+      if (!btn._idleHtml) btn._idleHtml = btn.innerHTML;
+      btn.classList.add('copied');
+      const labelEl = document.createElement('span');
+      labelEl.className = 'msg-action-label';
+      labelEl.textContent = label || 'Copied';
+      btn.innerHTML = FOOTER_CHECK_ICON;
+      btn.appendChild(labelEl);
+      setTimeout(function() {
+        btn.classList.remove('copied');
+        if (btn._idleHtml) btn.innerHTML = btn._idleHtml;
+      }, 1600);
     }
 
     function copyToClipboard(text) {
@@ -4591,13 +5279,86 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function formatTime(date) {
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
+    // Humanized turn duration: 0.4s / 42.7s / 5m 44s / 1h 05m
+    // Exact seconds stay available for the tooltip, so precision is not lost.
+    function formatDuration(seconds) {
+      var total = Number(seconds);
+      if (!isFinite(total) || total < 0) return '';
+      if (total < 9.95) return (Math.round(total * 10) / 10).toFixed(1) + 's';
+      var rounded = Math.round(total);
+      if (rounded < 60) return rounded + 's';
+      var hours = Math.floor(rounded / 3600);
+      var minutes = Math.floor((rounded % 3600) / 60);
+      var secs = rounded % 60;
+      if (hours > 0) return hours + 'h ' + (minutes < 10 ? '0' + minutes : String(minutes)) + 'm';
+      return secs > 0 ? minutes + 'm ' + secs + 's' : minutes + 'm';
+    }
+
+    var FOOTER_CLOCK_ICON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>';
+    var FOOTER_COPY_ICON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+    var FOOTER_CHECK_ICON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+
+    /**
+     * Single source of truth for the post-response meta strip:
+     *   [clock] 5m 44s · 04:43 PM   [Copy]
+     * Keeps duration + timestamp legible on one quiet line, with the exact
+     * elapsed seconds preserved in the tooltip.
+     */
+    function buildMessageFooter(opts) {
+      opts = opts || {};
+      var footer = document.createElement('div');
+      footer.className = 'message-footer';
+
+      var hasDuration = typeof opts.durationSeconds === 'number' && isFinite(opts.durationSeconds) && opts.durationSeconds >= 0;
+      var durationSeconds = hasDuration ? opts.durationSeconds : null;
+      var timeStr = opts.timestamp ? formatTime(new Date(opts.timestamp)) : formatTime(new Date());
+      var durationLabel = durationSeconds !== null ? formatDuration(durationSeconds) : '';
+
+      var titleParts = [];
+      if (durationSeconds !== null) titleParts.push('Took ' + durationSeconds.toFixed(1) + 's');
+      titleParts.push('Answered at ' + timeStr);
+
+      var metaHtml = '<span class="message-meta" title="' + titleParts.join(' · ') + '">';
+      if (durationLabel) {
+        metaHtml += '<span class="turn-duration-badge">' + FOOTER_CLOCK_ICON + '<span>' + durationLabel + '</span></span>' +
+          '<span class="message-meta-sep">·</span>';
+      }
+      metaHtml += '<span class="message-time">' + timeStr + '</span></span>';
+
+      var actionsHtml = '';
+      if (opts.copyAction) {
+        var copyTitle = opts.copyTitle || 'Copy';
+        actionsHtml = '<span class="message-actions">' +
+          '<button type="button" class="msg-copy-btn" data-action="' + opts.copyAction + '" title="' + copyTitle + '" aria-label="' + copyTitle + '">' +
+          FOOTER_COPY_ICON + '<span class="msg-action-label">Copy</span>' +
+          '</button></span>';
+      }
+
+      footer.innerHTML = metaHtml + actionsHtml;
+      return footer;
+    }
+
+    /** Pins the meta strip of the newest turn; every older strip stays hover-only. */
+    function pinLatestMessageFooter() {
+      var footers = document.querySelectorAll('.message-footer');
+      for (var i = 0; i < footers.length; i++) {
+        footers[i].classList.toggle('visible', i === footers.length - 1);
+      }
+    }
+
+
+
+    function normalizePromptText(str) {
+      if (typeof str !== 'string') return '';
+      return str.replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n').trim();
+    }
 
     function parseUserPromptDisplay(rawText) {
       if (!rawText || typeof rawText !== 'string') {
         return { userText: '', files: [] };
       }
 
-      let text = rawText;
+      let text = rawText.replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n');
       const files = [];
       const seenFiles = new Set();
 
@@ -4636,15 +5397,21 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const rawText = typeof text === 'string' ? text : extractMessageText(text);
       const parsed = parseUserPromptDisplay(rawText);
 
-      const trimmed = (parsed.userText || '').trim();
+      const trimmed = normalizePromptText(parsed.userText || '');
+      const rawTrimmed = normalizePromptText(rawText);
       const now = Date.now();
       if (!opts || !opts.skipDedupe) {
-        if (trimmed && trimmed === lastAppendedUserText && (now - lastAppendedUserTime) < 3000) {
-          return;
+        if ((trimmed && trimmed === lastAppendedUserText) || (rawTrimmed && rawTrimmed === lastAppendedUserText)) {
+          if ((now - lastAppendedUserTime) < 5000) {
+            return;
+          }
         }
       }
       if (trimmed) {
         lastAppendedUserText = trimmed;
+        lastAppendedUserTime = now;
+      } else if (rawTrimmed) {
+        lastAppendedUserText = rawTrimmed;
         lastAppendedUserTime = now;
       }
 
@@ -4774,14 +5541,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       wrap.appendChild(msgDiv);
 
-      const footer = document.createElement('div');
-      footer.className = 'message-footer';
-      const timeStr = ts ? formatTime(new Date(ts)) : formatTime(new Date());
-      footer.innerHTML = '<span>' + timeStr + '</span>' +
-        '<button class="msg-copy-btn" data-action="copy-prompt" title="Copy prompt">' +
-          '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy' +
-        '</button>';
-      wrap.appendChild(footer);
+      wrap.appendChild(buildMessageFooter({
+        timestamp: ts || Date.now(),
+        copyAction: 'copy-prompt',
+        copyTitle: 'Copy prompt',
+      }));
 
       chatContainer.appendChild(wrap);
       scrollToBottom(false);
@@ -4836,13 +5600,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     }
 
+    function formatSessionShort(name, maxLen) {
+      if (!name) return 'Agent';
+      maxLen = maxLen || 20;
+      return name.length > maxLen ? name.slice(0, maxLen - 1) + '…' : name;
+    }
+
     function appendSessionMessageCard(fromSession, content, messageType) {
       hideZeroState();
       const card = document.createElement('div');
       card.className = 'session-coagent-card';
+      const short = formatSessionShort(fromSession, 22);
       card.innerHTML = '<div class="session-card-header">' +
-        '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg></span>' +
-        '<span class="session-card-sender">Co-Agent [' + escapeHtml(fromSession || 'Agent') + ']</span>' +
+        '<div class="session-card-header-left">' +
+          '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg></span>' +
+          '<span class="session-card-sender" title="' + escapeHtml(fromSession || 'Agent') + '">Co-Agent [' + escapeHtml(short) + ']</span>' +
+        '</div>' +
         '<span class="session-card-badge">' + escapeHtml(messageType || 'message') + '</span>' +
         '</div>' +
         '<div class="session-card-content">' + renderMarkdown(content || '') + '</div>';
@@ -4850,29 +5623,56 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       scrollToBottomIfNeeded();
     }
 
-    function appendSessionQuestionCard(fromSession, question, questionId) {
+    function appendSessionQuestionCard(fromSession, question, questionId, fromSessionId) {
       hideZeroState();
       const card = document.createElement('div');
       card.className = 'session-question-card';
       card.id = 'session-q-' + (questionId || '');
+
+      const short = formatSessionShort(fromSession, 22);
+      let actionsHtml = '';
+      if (fromSessionId) {
+        actionsHtml += '<button class="session-card-btn session-card-jump-btn" data-action="switch-session" data-session-id="' + escapeHtml(fromSessionId) + '" title="Switch to [' + escapeHtml(fromSession) + ']">' +
+          '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg> ' +
+          'Open Session ↗</button>';
+      }
+      actionsHtml += '<button class="session-card-btn session-card-wake-btn" data-action="wake-agent-question" data-question-id="' + escapeHtml(questionId || '') + '" data-from-session="' + escapeHtml(fromSession || '') + '" title="Wake agent to answer this question">' +
+        '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> ' +
+        'Wake & Answer</button>';
+
       card.innerHTML = '<div class="session-card-header question">' +
-        '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></span>' +
-        '<span class="session-card-sender">Question from [' + escapeHtml(fromSession || 'Agent') + ']</span>' +
-        (questionId ? '<span class="session-card-badge">ID: ' + escapeHtml(questionId) + '</span>' : '') +
+        '<div class="session-card-header-left">' +
+          '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></span>' +
+          '<span class="session-card-sender" title="' + escapeHtml(fromSession || 'Agent') + '">Question from [' + escapeHtml(short) + ']</span>' +
+          (questionId ? '<span class="session-card-badge">ID: ' + escapeHtml(questionId) + '</span>' : '') +
+        '</div>' +
+        '<div class="session-card-header-actions">' + actionsHtml + '</div>' +
         '</div>' +
         '<div class="session-card-content">' + renderMarkdown(question || '') + '</div>';
       chatContainer.appendChild(card);
       scrollToBottomIfNeeded();
     }
 
-    function appendSessionAnswerCard(fromSession, answer, questionId) {
+    function appendSessionAnswerCard(fromSession, answer, questionId, fromSessionId) {
       hideZeroState();
       const card = document.createElement('div');
       card.className = 'session-answer-card';
+
+      const short = formatSessionShort(fromSession, 22);
+      let jumpHtml = '';
+      if (fromSessionId) {
+        jumpHtml = '<button class="session-card-btn session-card-jump-btn" data-action="switch-session" data-session-id="' + escapeHtml(fromSessionId) + '" title="Switch to [' + escapeHtml(fromSession) + ']">' +
+          '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg> ' +
+          'Open Session ↗</button>';
+      }
+
       card.innerHTML = '<div class="session-card-header answer">' +
-        '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg></span>' +
-        '<span class="session-card-sender">Answer from [' + escapeHtml(fromSession || 'Agent') + ']</span>' +
-        (questionId ? '<span class="session-card-badge">for ' + escapeHtml(questionId) + '</span>' : '') +
+        '<div class="session-card-header-left">' +
+          '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg></span>' +
+          '<span class="session-card-sender" title="' + escapeHtml(fromSession || 'Agent') + '">Answer from [' + escapeHtml(short) + ']</span>' +
+          (questionId ? '<span class="session-card-badge">for ' + escapeHtml(questionId) + '</span>' : '') +
+        '</div>' +
+        (jumpHtml ? '<div class="session-card-header-actions">' + jumpHtml + '</div>' : '') +
         '</div>' +
         '<div class="session-card-content">' + renderMarkdown(answer || '') + '</div>';
       chatContainer.appendChild(card);
@@ -4915,6 +5715,43 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         return id !== currentSessionId && (sessionsState[id]?.hasUnread || sessionsState[id]?.isRunning);
       });
       dot.style.display = anyUnreadOrRunning ? 'inline-block' : 'none';
+    }
+
+    function updateSessionCollabBadge(data) {
+      const badge = document.getElementById('session-collab-badge');
+
+      const status = data?.status;
+      const collabs = data?.collaborators || [];
+      const watchingFor = data?.watching_for;
+      sessionCollabActive = status === 'watching' || status === 'paused_limit_reached' || (Array.isArray(collabs) && collabs.length > 0);
+
+      if (!badge) {
+        updateCollabInboxBadge();
+        return;
+      }
+
+      if (status === 'watching') {
+        badge.style.display = 'inline-flex';
+        badge.className = 'session-collab-badge watching';
+        const targetStr = watchingFor?.target_session ? ' for [' + escapeHtml(watchingFor.target_session) + ']' : '';
+        badge.innerHTML = '<span class="status-pulse-dot" style="width:6px;height:6px;border-radius:50%;background:#38bdf8;box-shadow:0 0 6px #38bdf8;display:inline-block;"></span>' +
+          '<span>Watching' + targetStr + '</span>';
+      } else if (status === 'paused_limit_reached') {
+        badge.style.display = 'inline-flex';
+        badge.className = 'session-collab-badge paused';
+        badge.innerHTML = '<span>⚠️ Limit (Paused)</span>' +
+          '<button class="session-card-btn session-card-wake-btn" data-action="resume-auto-wake" style="margin-left:4px;padding:1px 5px;" title="Resume auto-wake">Resume</button>';
+      } else if (Array.isArray(collabs) && collabs.length > 0) {
+        badge.style.display = 'inline-flex';
+        badge.className = 'session-collab-badge';
+        const firstName = collabs[0];
+        badge.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>' +
+          '<span>Linked: ' + escapeHtml(firstName) + '</span>';
+      } else {
+        badge.style.display = 'none';
+      }
+
+      updateCollabInboxBadge();
     }
 
     function copyMessageText(btn) {
@@ -4960,14 +5797,43 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
       if (text) {
         copyToClipboard(text);
-        const orig = btn.innerHTML;
-        btn.innerHTML = '<span style="color:var(--green)">Copied!</span>';
-        setTimeout(function() { btn.innerHTML = orig; }, 1500);
+        flashCopied(btn, 'Copied');
       }
     }
     window.copyMessageText = copyMessageText;
 
     let lastSoundPlayedAt = 0;
+    function playSyntheticChime(kind) {
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+        const now = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.type = 'sine';
+        if (kind === 'attention') {
+          osc.frequency.setValueAtTime(659.25, now);
+          osc.frequency.setValueAtTime(880.00, now + 0.12);
+        } else {
+          osc.frequency.setValueAtTime(880.00, now);
+          osc.frequency.setValueAtTime(1174.66, now + 0.12);
+        }
+
+        gain.gain.setValueAtTime(0.08, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.35);
+        setTimeout(function() { try { ctx.close(); } catch (_) {} }, 400);
+      } catch (e) {
+        console.warn('Synthetic chime failed:', e);
+      }
+    }
+
     function playTone(kind) {
       const now = Date.now();
       if (now - lastSoundPlayedAt < 1200) {
@@ -4978,10 +5844,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const audio = document.getElementById('audio-done');
         if (audio) {
           audio.currentTime = 0;
-          audio.play().catch(function() {});
+          const p = audio.play();
+          if (p && typeof p.catch === 'function') {
+            p.catch(function(err) {
+              console.warn('Audio element play failed, falling back to AudioContext synth:', err);
+              playSyntheticChime(kind);
+            });
+          }
+        } else {
+          playSyntheticChime(kind);
         }
       } catch (e) {
         console.warn('Audio play failed:', e);
+        playSyntheticChime(kind);
       }
     }
 
@@ -5179,7 +6054,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function startAssistantTurn() {
       isRunning = true;
-      userScrolledUp = false; // new turn always shows latest
+      // Only stick to bottom if user was already at the bottom; do not steal scroll if user is reading history
+      if (isAtBottom(64)) {
+        userScrolledUp = false;
+      }
       document.querySelector('.prompt-box')?.classList.add('is-generating');
       if (promptInput) { promptInput.setAttribute('aria-busy','true'); }
       if (sendBtn) sendBtn.setAttribute('disabled','true');
@@ -5379,18 +6257,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
         turnEditedFiles.clear();
 
-        const elapsedSec = ((Date.now() - currentTurnStartTime) / 1000).toFixed(1);
+        const elapsedSec = (Date.now() - currentTurnStartTime) / 1000;
         currentTurnAssistantDiv._rawMarkdown = accumulatedAssistantText;
-        const footer = document.createElement('div');
-        footer.className = 'message-footer';
-        footer.innerHTML = '<span class="turn-duration-badge">' +
-          '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:2px;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
-          '<span>' + elapsedSec + 's · ' + formatTime(new Date()) + '</span>' +
-        '</span>' +
-        '<button class="msg-copy-btn" data-action="copy-message" title="Copy response">' +
-          '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy' +
-        '</button>';
-        currentTurnAssistantDiv.appendChild(footer);
+        currentTurnAssistantDiv.appendChild(buildMessageFooter({
+          durationSeconds: elapsedSec,
+          timestamp: Date.now(),
+          copyAction: 'copy-message',
+          copyTitle: 'Copy response',
+        }));
+        pinLatestMessageFooter();
         scrollToBottomIfNeeded();
       }
 
@@ -5482,8 +6357,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.mode) {
             updateModeBadge(msg.mode);
           }
-          if (msg.profile) currentProfile = msg.profile;
-          if (msg.reasoningEffort) currentReasoning = msg.reasoningEffort;
+          if (msg.profile) {
+            currentProfile = msg.profile;
+            updateProfileBadge();
+          }
+          if (msg.reasoningEffort) {
+            currentReasoning = msg.reasoningEffort;
+            updateReasoningBadge();
+          }
           if (typeof msg.mascotEnabled === 'boolean') {
             setMascotEnabled(msg.mascotEnabled);
           }
@@ -5523,12 +6404,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.ollamaDetectedModel) {
             showOllamaBanner(msg.ollamaDetectedModel);
           }
+          if (msg.ollamaStatus) {
+            updateOllamaStatusUI(msg.ollamaStatus);
+          }
           if (msg.waterfallFirstSessionShown) {
             dismissWaterfallOnboarding();
           } else {
             checkWaterfallOnboarding(msg.waterfallFirstSessionShown);
           }
           break;
+
+        case 'ollama_status_updated': {
+          updateOllamaStatusUI(msg.status);
+          break;
+        }
 
         case 'dismiss_waterfall_callout':
           dismissWaterfallOnboarding();
@@ -5566,8 +6455,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             updateModelBadge();
           } else if (msg.key === 'profile') {
             currentProfile = msg.value;
+            updateProfileBadge();
           } else if (msg.key === 'reasoningEffort') {
             currentReasoning = msg.value;
+            updateReasoningBadge();
           }
           break;
 
@@ -5581,6 +6472,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
 
         case 'session_switched':
+          userScrolledUp = false;
+          _isUserActivelyScrolling = false;
+          _lastUserScrollTime = 0;
+          _ignoreScrollUntil = Date.now() + 300;
+          if (_scrollRafId) {
+            cancelAnimationFrame(_scrollRafId);
+            _scrollRafId = null;
+          }
           if (currentSessionId) {
             sessionsState[currentSessionId] = sessionsState[currentSessionId] || {};
             sessionsState[currentSessionId].draftInput = promptInput ? promptInput.value : '';
@@ -5592,6 +6491,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             currentAssistantContent = null;
             currentToolSequence = null;
           }
+          // Clear per-session diff state so it doesn't leak into the target session
+          turnEditedFiles.clear();
+          globalDiffStats = {};
           if (msg.sessionId) {
             currentSessionId = msg.sessionId;
           }
@@ -5601,6 +6503,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           updateSessionActivityIndicator();
           removeTurnLoader();
           finishCurrentThinking();
+          sessionCollabActive = false;
+          const collabBadgeOnSwitch = document.getElementById('session-collab-badge');
+          if (collabBadgeOnSwitch) collabBadgeOnSwitch.style.display = 'none';
+          if (collabInboxPopover) collabInboxPopover.style.display = 'none';
+          updateCollabInboxBadge();
+          renderCollabInbox();
           interactiveSlot.innerHTML = '';
           if (planTrackerStrip) planTrackerStrip.style.display = 'none';
           {
@@ -5626,17 +6534,35 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               promptInput.style.height = 'auto';
             }
             renderQueue();
+            scrollToBottom(false);
           }
           break;
 
         case 'session_loaded':
+          userScrolledUp = false;
+          _isUserActivelyScrolling = false;
+          _lastUserScrollTime = 0;
+          _ignoreScrollUntil = Date.now() + 300;
+          if (_scrollRafId) {
+            cancelAnimationFrame(_scrollRafId);
+            _scrollRafId = null;
+          }
           removeTurnLoader();
           finishCurrentThinking();
           chatContainer.innerHTML = '';
           interactiveSlot.innerHTML = '';
+          // Reset diff stats — they belong to the previous session's history and must not
+          // accumulate into the newly loaded session's tool call replay.
+          globalDiffStats = {};
+          turnEditedFiles.clear();
           if (msg.session && msg.session.id) {
             currentSessionId = msg.session.id;
           }
+          if (msg.session) {
+            updateSessionCollabBadge(msg.session);
+          }
+          updateCollabInboxBadge();
+          renderCollabInbox();
           const sessionIsRunning = Boolean(
             (msg.session && (msg.session.status === 'running' || msg.session.is_running)) ||
             (sessionsState[currentSessionId] && sessionsState[currentSessionId].isRunning)
@@ -5902,26 +6828,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     if (card) currentAssistantWrap.appendChild(card);
                   }
 
-                  let elapsedSec = m.duration ? Number(m.duration).toFixed(1) : null;
-                  if (!elapsedSec && m.ts && lastUserMsgTs) {
+                  let elapsedSec = m.duration ? Number(m.duration) : null;
+                  if (elapsedSec === null && m.ts && lastUserMsgTs) {
                     const delta = (new Date(m.ts).getTime() - new Date(lastUserMsgTs).getTime()) / 1000;
                     if (delta > 0 && delta < 3600) {
-                      elapsedSec = delta.toFixed(1);
+                      elapsedSec = delta;
                     }
                   }
-                  const timeStr = m.ts ? formatTime(new Date(m.ts)) : formatTime(new Date());
-                  const badgeText = elapsedSec ? (elapsedSec + 's · ' + timeStr) : timeStr;
-
-                  const footer = document.createElement('div');
-                  footer.className = 'message-footer';
-                  footer.innerHTML = '<span class="turn-duration-badge">' +
-                    '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:2px;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
-                    '<span>' + badgeText + '</span>' +
-                  '</span>' +
-                  '<button class="msg-copy-btn" data-action="copy-message" title="Copy response">' +
-                    '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy' +
-                  '</button>';
-                  currentAssistantWrap.appendChild(footer);
+                  currentAssistantWrap.appendChild(buildMessageFooter({
+                    durationSeconds: elapsedSec,
+                    timestamp: m.ts || Date.now(),
+                    copyAction: 'copy-message',
+                    copyTitle: 'Copy response',
+                  }));
                   currentAssistantWrap = null;
                 }
               }
@@ -5945,6 +6864,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               updatePlanTracker(msg.session.plan);
             } else if (planTrackerStrip) {
               planTrackerStrip.style.display = 'none';
+          // Anchor the newest answer's meta strip; older ones stay hover-only
+          pinLatestMessageFooter();
+
             }
           }
           // Replay any live buffered deltas that arrived while this session was in background
@@ -6013,9 +6935,24 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             }
           }
           if (sessionIsRunning && (!currentTurnAssistantDiv || !chatContainer.contains(currentTurnAssistantDiv))) {
+            // Only start a brand-new turn wrapper if the live-buffer replay didn't already
+            // attach one. The replay above sets currentTurnAssistantDiv when it finds a
+            // matching last-assistant-wrap to continue into, so we should NOT create a
+            // second wrapper here — that caused the "new turn" visual break after session switch.
             startAssistantTurn();
           }
           renderConversationTimeline();
+          userScrolledUp = false;
+          scrollToBottom(false);
+          requestAnimationFrame(() => {
+            scrollToBottom(false);
+            setTimeout(() => {
+              scrollToBottom(false);
+            }, 60);
+            setTimeout(() => {
+              scrollToBottom(false);
+            }, 180);
+          });
           break;
 
         case 'play_sound':
@@ -6195,6 +7132,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 }
               }
             }
+            scrollToBottomIfNeeded();
           }
           break; }
 
@@ -6242,6 +7180,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 }
               }
             }
+            scrollToBottomIfNeeded();
           }
           break; }
 
@@ -6363,6 +7302,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               }
             } catch (e) { /* not a JSON subagent result */ }
           }
+          scrollToBottomIfNeeded();
           break; }
 
         case 'tool_approval_required': {
@@ -6403,37 +7343,53 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             let optionsHtml = '';
             if (q.options && q.options.length > 0) {
               const isMulti = q.type === 'multi';
-              optionsHtml = '<div class="question-options-list">';
-              q.options.forEach(opt => {
-                optionsHtml += '<label class="question-option-row">' +
-                  '<input type="' + (isMulti ? 'checkbox' : 'radio') + '" name="q_' + idx + '" value="' + escapeHtml(opt) + '">' +
-                  '<span>' + escapeHtml(opt) + '</span>' +
+              optionsHtml = '<div class="permission-options-group question-options-group">';
+              q.options.forEach((opt, optIdx) => {
+                const optNum = optIdx + 1;
+                const numBadge = optNum <= 9 ? ('<kbd class="perm-kbd">' + optNum + '</kbd>') : '';
+                optionsHtml += '<label class="permission-option-row question-option-row" data-opt-idx="' + optIdx + '">' +
+                  '<div class="question-radio-custom' + (isMulti ? ' question-checkbox-custom' : '') + '">' +
+                    '<input type="' + (isMulti ? 'checkbox' : 'radio') + '" name="q_' + idx + '" value="' + escapeHtml(opt) + '">' +
+                    '<span class="custom-radio-indicator"></span>' +
+                  '</div>' +
+                  '<div class="option-row-main">' +
+                    '<div class="option-row-title">' + escapeHtml(opt) + '</div>' +
+                  '</div>' +
+                  (numBadge ? '<div class="option-row-badge">' + numBadge + '</div>' : '') +
                 '</label>';
               });
               optionsHtml += '</div>';
             } else {
-              optionsHtml = '<div style="margin-top:4px;">' +
-                '<textarea id="q_input_' + idx + '" class="question-textarea" data-q-idx="' + idx + '" placeholder="Type your answer..." rows="2"></textarea>' +
+              optionsHtml = '<div class="question-input-wrapper">' +
+                '<textarea id="q_input_' + idx + '" class="question-textarea" data-q-idx="' + idx + '" placeholder="Type your answer..." rows="3"></textarea>' +
               '</div>';
             }
 
             slidesHtml += '<div class="question-slide" id="q-slide-' + idx + '" style="' + (idx === 0 ? 'display:block;' : 'display:none;') + '">' +
-              '<div class="question-prompt">' +
-                (totalQ > 1 ? '<span class="question-num-tag">Question ' + (idx + 1) + ':</span> ' : '') + escapeHtml(q.question) +
+              '<div class="permission-code-box question-prompt-box">' +
+                (totalQ > 1 ? '<span class="question-num-tag">Question ' + (idx + 1) + ':</span>' : '') +
+                '<span class="question-prompt-text">' + escapeHtml(q.question) + '</span>' +
               '</div>' +
               optionsHtml +
             '</div>';
           });
 
-          let qHtml = '<div class="questions-card" id="questions-carousel-card">' +
-            '<div class="questions-header">' +
-              '<div class="questions-title">Clarifying Questions</div>' +
-              (totalQ > 1 ? '<div class="questions-step-badge" id="q-step-badge">1 of ' + totalQ + '</div>' : '') +
+          let qHtml = '<div class="permission-card questions-card" id="questions-carousel-card">' +
+            '<div class="permission-header">' +
+              '<div class="permission-title-row">' +
+                '<div class="permission-icon-title">' +
+                  '<span class="permission-icon-box question">' +
+                    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>' +
+                  '</span>' +
+                  '<span class="permission-title">Clarifying Questions</span>' +
+                '</div>' +
+                (totalQ > 1 ? '<div class="questions-step-badge" id="q-step-badge">1 of ' + totalQ + '</div>' : '') +
+              '</div>' +
             '</div>' +
             '<div class="carousel-slides">' + slidesHtml + '</div>' +
             '<div class="carousel-footer">' +
               '<button class="btn-carousel-prev" id="btn-q-prev" data-action="q-prev" style="visibility:hidden;">Back</button>' +
-              '<div style="display:flex; gap:6px;">' +
+              '<div style="display:flex; gap:8px;">' +
                 (totalQ > 1 ? '<button class="btn-carousel-next" id="btn-q-next" data-action="q-next">Next</button>' : '') +
                 '<button class="btn-carousel-submit" id="btn-q-submit" data-action="submit-questions" data-question-id="' + msg.question_id + '" data-total-q="' + totalQ + '" style="' + (totalQ > 1 ? 'display:none;' : '') + '">Submit ' + (totalQ > 1 ? 'Answers' : 'Answer') + '</button>' +
               '</div>' +
@@ -6485,29 +7441,77 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         case 'session_message_received':
           if (!currentSessionId || msg.to_session_id === currentSessionId || msg.to_session === currentSessionId || msg.to_session === 'all' || msg.to_session === '*') {
-            appendSessionMessageCard(msg.from_session, msg.content, msg.message_type);
+            addCollabInboxItem({
+              id: 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+              type: 'message',
+              fromSession: msg.from_session,
+              fromSessionId: msg.from_session_id,
+              toSession: msg.to_session,
+              content: msg.content,
+              messageType: msg.message_type,
+              timestamp: msg.timestamp || new Date().toISOString(),
+              unread: true
+            });
           }
           break;
 
         case 'session_question_received':
           if (!currentSessionId || msg.to_session_id === currentSessionId || msg.to_session === currentSessionId || msg.to_session === 'all' || msg.to_session === '*') {
-            appendSessionQuestionCard(msg.from_session, msg.question, msg.question_id);
+            addCollabInboxItem({
+              id: 'q_' + (msg.question_id || Date.now()),
+              type: 'question',
+              fromSession: msg.from_session,
+              fromSessionId: msg.from_session_id,
+              toSession: msg.to_session,
+              content: msg.question,
+              questionId: msg.question_id,
+              timestamp: msg.timestamp || new Date().toISOString(),
+              unread: true
+            });
           }
           break;
 
         case 'session_answer_received':
           if (!currentSessionId || msg.to_session_id === currentSessionId || msg.to_session === currentSessionId || msg.to_session === 'all' || msg.to_session === '*') {
-            appendSessionAnswerCard(msg.from_session, msg.answer, msg.question_id);
+            addCollabInboxItem({
+              id: 'ans_' + (msg.question_id || Date.now()),
+              type: 'answer',
+              fromSession: msg.from_session,
+              fromSessionId: msg.from_session_id,
+              toSession: msg.to_session,
+              content: msg.answer,
+              questionId: msg.question_id,
+              timestamp: msg.timestamp || new Date().toISOString(),
+              unread: true
+            });
           }
           break;
 
         case 'session_shared_state_changed':
-          appendSharedStateCard(msg.author_session, msg.key, msg.value);
+          addCollabInboxItem({
+            id: 'state_' + Date.now(),
+            type: 'message',
+            fromSession: msg.author_session,
+            toSession: 'all',
+            content: '**Shared State**: ' + escapeHtml(msg.key || '') + ' = ' + (typeof msg.value === 'string' ? msg.value : JSON.stringify(msg.value)),
+            messageType: 'Shared State',
+            timestamp: new Date().toISOString(),
+            unread: true
+          });
           break;
 
         case 'session_handoff_written':
           if (msg.to_session === currentSessionId || msg.from_session === currentSessionId || msg.to_session === 'all' || !currentSessionId) {
-            appendHandoffCard(msg.from_session, msg.to_session, msg.task_summary, msg.handoff_id);
+            addCollabInboxItem({
+              id: 'handoff_' + (msg.handoff_id || Date.now()),
+              type: 'handoff',
+              fromSession: msg.from_session,
+              toSession: msg.to_session,
+              content: '**Phase**: ' + (msg.phase || '') + ' (' + (msg.status || '') + ')\\n\\n' + (msg.task_summary || msg.summary || ''),
+              handoffId: msg.handoff_id,
+              timestamp: msg.timestamp || new Date().toISOString(),
+              unread: true
+            });
           }
           break;
 
@@ -6559,8 +7563,34 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
           if (msg.prompt) {
             const parsed = parseUserPromptDisplay(msg.prompt);
-            const cleanText = (parsed.userText || '').trim();
-            if (lastAppendedUserText !== cleanText && lastAppendedUserText !== msg.prompt.trim()) {
+            const cleanText = normalizePromptText(parsed.userText || '');
+            const rawPromptNorm = normalizePromptText(msg.prompt);
+
+            const isMatchLast = Boolean(
+              lastAppendedUserText &&
+              (lastAppendedUserText === cleanText ||
+               lastAppendedUserText === rawPromptNorm ||
+               (cleanText && (lastAppendedUserText.includes(cleanText) || cleanText.includes(lastAppendedUserText))))
+            );
+
+            let domHasMatchingPrompt = false;
+            const userWraps = chatContainer.querySelectorAll('.message-wrap.user');
+            if (userWraps.length > 0) {
+              const lastUserWrap = userWraps[userWraps.length - 1];
+              const textEl = lastUserWrap.querySelector('.prompt-text-content');
+              const domText = normalizePromptText(textEl ? textEl.textContent : lastUserWrap.textContent || '');
+              if (domText && (
+                domText === cleanText ||
+                domText === rawPromptNorm ||
+                (cleanText && (domText.includes(cleanText) || cleanText.includes(domText)))
+              )) {
+                domHasMatchingPrompt = true;
+              }
+            }
+
+            const isTurnAlreadyActive = Boolean(currentTurnAssistantDiv && chatContainer.contains(currentTurnAssistantDiv));
+
+            if (!isMatchLast && !domHasMatchingPrompt && !isTurnAlreadyActive) {
               hideZeroState();
               appendUserMessage(msg.prompt, msg.images || [], Date.now(), { skipDedupe: true });
             }
@@ -6789,11 +7819,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               updateTokenDisplay(msg);
             }
           }
+          if (!msg.session_id || msg.session_id === currentSessionId) {
+            updateSessionCollabBadge(msg);
+          }
           break;
 
         case 'external_prompt': {
           const extPrompt = msg.prompt || '';
           const extCtx = msg.context || null;
+          const targetSid = msg.sessionId || currentSessionId;
           if (!extPrompt) break;
 
           hideZeroState();
@@ -6812,6 +7846,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
 
           if (promptInput) promptInput.value = '';
+          if (isRunning) {
+            promptQueue.push({ text: fullUserMsg, images: [], sessionId: targetSid });
+            renderQueue();
+            break;
+          }
           dispatchPrompt(fullUserMsg, false, []);
           break;
         }
@@ -7386,6 +8425,42 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
       }
 
+      // ── Questions Card Keyboard Handling ──
+      const questionsCard = document.getElementById('questions-carousel-card');
+      if (questionsCard) {
+        if (!isInput && e.key >= '1' && e.key <= '9') {
+          const optIdx = parseInt(e.key, 10) - 1;
+          const currSlide = document.getElementById('q-slide-' + (window.currentQuestionSlide || 0));
+          if (currSlide) {
+            const row = currSlide.querySelector('.question-option-row[data-opt-idx="' + optIdx + '"]');
+            if (row) {
+              const inp = row.querySelector('input');
+              if (inp) {
+                if (inp.type === 'checkbox') {
+                  inp.checked = !inp.checked;
+                } else {
+                  inp.checked = true;
+                }
+                inp.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+            }
+          }
+          return;
+        }
+
+        if (!isInput && e.key === 'Enter') {
+          e.preventDefault();
+          const btnNext = document.getElementById('btn-q-next');
+          const btnSubmit = document.getElementById('btn-q-submit');
+          if (btnNext && btnNext.style.display !== 'none' && window.getComputedStyle(btnNext).display !== 'none') {
+            btnNext.click();
+          } else if (btnSubmit) {
+            btnSubmit.click();
+          }
+          return;
+        }
+      }
+
       if (!activePendingApprovalId) return;
       const isToolInput = isInput;
 
@@ -7546,6 +8621,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape') {
         window.closeImageLightbox();
+        if (collabInboxPopover && collabInboxPopover.style.display !== 'none') {
+          collabInboxPopover.style.display = 'none';
+        }
+        if (reasoningPopover && reasoningPopover.style.display !== 'none') {
+          reasoningPopover.style.display = 'none';
+          const btnReasoningEl = document.getElementById('btn-prompt-reasoning');
+          if (btnReasoningEl) {
+            btnReasoningEl.setAttribute('aria-expanded', 'false');
+            btnReasoningEl.classList.remove('active');
+          }
+        }
       }
     });
 

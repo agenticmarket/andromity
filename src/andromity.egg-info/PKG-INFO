@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: andromity
-Version: 0.2.9
+Version: 0.2.11
 Summary: AI coding agent with a beautiful terminal UI. Works with Claude, Gemini, GPT, Ollama and more.
 Author-email: Agentic Market <hello@agenticmarket.dev>
 License: MIT
@@ -48,10 +48,9 @@ Dynamic: license-file
 
   **Trust-governed, BYOK, autonomous coding agent with subagents, live plans, native diffs & one-click rollback.**
 
-  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.8-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.10-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![PyPI](https://img.shields.io/pypi/v/andromity)](https://pypi.org/project/andromity/)
   ![Python](https://img.shields.io/badge/python-3.11+-blue)
-  [![Tests](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml/badge.svg)](https://github.com/agenticmarket/andromity/actions/workflows/tests.yml)
   [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
   English | [简体中文](README.zh-CN.md) | [Русский](README.ru.md) | [Português (Brasil)](README.pt-BR.md) | [日本語](README.ja.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [हिन्दी](README.hi.md)
@@ -242,6 +241,14 @@ Your code goes to one place: the LLM provider you configure. Not us.
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed release history and version notes.
+
+---
+
+## Maintainer & Authors
+
+Andromity is created and actively maintained by:
+
+- **Shekhar Pachlore** ([@shekharP1536](https://github.com/shekharP1536)) — Creator & Lead Maintainer (Core Architecture & Autonomous Runtimes)
 
 ---
 

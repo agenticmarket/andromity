@@ -304,10 +304,11 @@ async def test_extract_turn_files_isolation(tmp_path):
     assert turn1_files == ["file1.txt"]
 
     # Turn 2: User prompt 2
+    file3_path = (tmp_path / "file3.md").as_posix()
     session.add_message("user", "make turn 2 changes")
     session.add_message("assistant", "doing turn 2", tool_calls=[
-        {"id": "call_2", "type": "function", "function": {"name": "edit_file", "arguments": '{"path": "subdir\\\\file2.py", "target": "a", "replacement": "b"}'}},
-        {"id": "call_3", "type": "function", "function": {"name": "replace_file_content", "arguments": '{"TargetFile": "' + str(tmp_path).replace("\\", "\\\\") + '\\\\file3.md"}'}},
+        {"id": "call_2", "type": "function", "function": {"name": "edit_file", "arguments": '{"path": "subdir/file2.py", "target": "a", "replacement": "b"}'}},
+        {"id": "call_3", "type": "function", "function": {"name": "replace_file_content", "arguments": '{"TargetFile": "' + file3_path + '"}'}},
     ])
     session.add_message("tool", "file2 edited", name="edit_file", tool_call_id="call_2")
     session.add_message("tool", "file3 replaced", name="replace_file_content", tool_call_id="call_3")
@@ -318,6 +319,134 @@ async def test_extract_turn_files_isolation(tmp_path):
     assert "subdir/file2.py" in turn2_files
     assert "file3.md" in turn2_files
     assert len(turn2_files) == 2
+
+
+def test_read_only_tools_integrity():
+    from andromity.server.rpc_handler import READ_ONLY_TOOLS
+    from andromity.core.tools import CORE_TOOLS
+
+    core_names = {t["function"]["name"] for t in CORE_TOOLS}
+    known_aliases = {"view_file", "ask_question"}
+    for t in READ_ONLY_TOOLS:
+        assert t in core_names or t in known_aliases, f"Unknown tool in READ_ONLY_TOOLS: {t}"
+
+    # Critical read tools must be present
+    assert "read_file" in READ_ONLY_TOOLS
+    assert "grep_search" in READ_ONLY_TOOLS
+    assert "find_files" in READ_ONLY_TOOLS
+    assert "list_dir" in READ_ONLY_TOOLS
+    assert "shell_read" in READ_ONLY_TOOLS
+    assert "shell_list" in READ_ONLY_TOOLS
+
+    # Network and mutating tools must NOT be in READ_ONLY_TOOLS
+    assert "web_search" not in READ_ONLY_TOOLS
+    assert "fetch_url" not in READ_ONLY_TOOLS
+    assert "write_file" not in READ_ONLY_TOOLS
+    assert "edit_file" not in READ_ONLY_TOOLS
+    assert "shell_exec" not in READ_ONLY_TOOLS
+
+    # Phantom tools must not be present
+    assert "semantic_search" not in READ_ONLY_TOOLS
+    assert "git_status" not in READ_ONLY_TOOLS
+    assert "create_todo" not in READ_ONLY_TOOLS
+
+
+@pytest.mark.asyncio
+async def test_rpc_tool_approval_behavior(tmp_path, monkeypatch):
+    """Verify tool approval logic in rpc_handler for read-only vs mutating/network tools."""
+    from unittest.mock import MagicMock
+    from andromity.core.session import Session
+    from andromity.server.rpc_handler import JsonRpcHandler
+
+    notifications = []
+    handler = JsonRpcHandler(send_notification=lambda n: notifications.append(n))
+    session = Session(id="sess-approval-test", name="test", project_path=str(tmp_path))
+
+    captured = {}
+    def mock_agent(*args, **kwargs):
+        captured["on_tool_approval"] = kwargs.get("on_tool_approval")
+        inst = MagicMock()
+        async def mock_run(*a, **kw):
+            if False:
+                yield
+        inst.run = mock_run
+        return inst
+
+    monkeypatch.setattr("andromity.server.rpc_handler.Agent", mock_agent)
+    monkeypatch.setattr(handler, "_get_or_load_session", lambda sid, ppath: session)
+    monkeypatch.setattr("andromity.config.config.is_trusted", lambda *a, **kw: True)
+
+    # Trigger rpc_agent_prompt in safe mode
+    await handler.rpc_agent_prompt({
+        "session_id": session.id,
+        "prompt": "Test approval",
+        "mode": "safe",
+    })
+
+    on_tool_approval = captured["on_tool_approval"]
+    assert on_tool_approval is not None
+
+    # 1. Read-only tools should immediately auto-approve (return True)
+    assert await on_tool_approval("read_file", {"path": "src/main.py"}) is True
+    assert await on_tool_approval("view_file", {"path": "src/main.py"}) is True
+    assert await on_tool_approval("grep_search", {"query": "hello"}) is True
+    assert await on_tool_approval("find_files", {"pattern": "*.py"}) is True
+    assert await on_tool_approval("list_dir", {"path": "."}) is True
+    assert await on_tool_approval("shell_read", {"process_id": "dev1"}) is True
+    assert await on_tool_approval("shell_list", {}) is True
+    assert await on_tool_approval("session_list", {}) is True
+    assert await on_tool_approval("session_read_messages", {}) is True
+    assert await on_tool_approval("shared_state_get", {"key": "auth"}) is True
+    assert await on_tool_approval("read_handoff", {"phase": "init"}) is True
+
+    # 2. Sensitive file access in read_file must NOT auto-approve (must require approval)
+    task_sens = asyncio.create_task(on_tool_approval("read_file", {"path": ".env"}))
+    await asyncio.sleep(0.02)
+    assert not task_sens.done()
+    assert len(handler._pending_approvals) == 1
+    task_sens.cancel()
+    try:
+        await task_sens
+    except asyncio.CancelledError:
+        pass
+    handler._pending_approvals.clear()
+
+    # 3. web_search in safe mode must NOT auto-approve
+    task_web = asyncio.create_task(on_tool_approval("web_search", {"query": "python docs"}))
+    await asyncio.sleep(0.02)
+    assert not task_web.done()
+    assert len(handler._pending_approvals) == 1
+    task_web.cancel()
+    try:
+        await task_web
+    except asyncio.CancelledError:
+        pass
+    handler._pending_approvals.clear()
+
+    # 4. fetch_url in safe mode must NOT auto-approve
+    task_fetch = asyncio.create_task(on_tool_approval("fetch_url", {"url": "https://python.org"}))
+    await asyncio.sleep(0.02)
+    assert not task_fetch.done()
+    assert len(handler._pending_approvals) == 1
+    task_fetch.cancel()
+    try:
+        await task_fetch
+    except asyncio.CancelledError:
+        pass
+    handler._pending_approvals.clear()
+
+    # 5. Mutating write_file in safe mode must NOT auto-approve
+    task_write = asyncio.create_task(on_tool_approval("write_file", {"path": "test.txt", "content": "abc"}))
+    await asyncio.sleep(0.02)
+    assert not task_write.done()
+    assert len(handler._pending_approvals) == 1
+    task_write.cancel()
+    try:
+        await task_write
+    except asyncio.CancelledError:
+        pass
+    handler._pending_approvals.clear()
+
 
 
 

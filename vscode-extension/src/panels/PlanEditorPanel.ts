@@ -10,13 +10,15 @@ export class PlanEditorPanel {
   private _disposables: vscode.Disposable[] = [];
   private _rpcClient: RpcClient | null = null;
   private _currentPlan: any = null;
-  private _onPlanActionHandler?: (approved: boolean, feedback: string) => void;
+  private _sessionId: string = "";
+  private _onPlanActionHandler?: (approved: boolean, feedback: string, sessionId?: string) => void;
 
   public static createOrShow(
     extensionUri: vscode.Uri,
     plan: any,
     rpcClient: RpcClient | null,
-    onPlanAction?: (approved: boolean, feedback: string) => void
+    onPlanAction?: (approved: boolean, feedback: string, sessionId?: string) => void,
+    sessionId?: string
   ): PlanEditorPanel {
     const column = vscode.window.activeTextEditor
       ? vscode.ViewColumn.Beside
@@ -26,8 +28,11 @@ export class PlanEditorPanel {
       PlanEditorPanel.currentPanel._panel.reveal(column);
       PlanEditorPanel.currentPanel._rpcClient = rpcClient;
       PlanEditorPanel.currentPanel._onPlanActionHandler = onPlanAction;
+      if (sessionId) {
+        PlanEditorPanel.currentPanel._sessionId = sessionId;
+      }
       if (plan) {
-        PlanEditorPanel.currentPanel.updatePlan(plan);
+        PlanEditorPanel.currentPanel.updatePlan(plan, sessionId);
       }
       return PlanEditorPanel.currentPanel;
     }
@@ -50,7 +55,8 @@ export class PlanEditorPanel {
       extensionUri,
       plan,
       rpcClient,
-      onPlanAction
+      onPlanAction,
+      sessionId
     );
 
     return PlanEditorPanel.currentPanel;
@@ -61,13 +67,15 @@ export class PlanEditorPanel {
     extensionUri: vscode.Uri,
     plan: any,
     rpcClient: RpcClient | null,
-    onPlanAction?: (approved: boolean, feedback: string) => void
+    onPlanAction?: (approved: boolean, feedback: string, sessionId?: string) => void,
+    sessionId?: string
   ) {
     this._panel = panel;
     this._extensionUri = extensionUri;
     this._rpcClient = rpcClient;
     this._currentPlan = plan;
     this._onPlanActionHandler = onPlanAction;
+    this._sessionId = sessionId || (plan?.session_id || "");
 
     this._panel.webview.html = this._getHtmlForWebview(this._panel.webview);
 
@@ -76,15 +84,15 @@ export class PlanEditorPanel {
         switch (message.type) {
           case "webview_ready":
             if (this._currentPlan) {
-              this.updatePlan(this._currentPlan);
+              this.updatePlan(this._currentPlan, this._sessionId);
             }
             break;
           case "proceed_plan":
           case "approve_plan":
-            this._handleApproval(true, message.feedback || "");
+            this._handleApproval(true, message.feedback || "", message.sessionId || this._sessionId);
             break;
           case "reject_plan":
-            this._handleApproval(false, message.feedback || "");
+            this._handleApproval(false, message.feedback || "", message.sessionId || this._sessionId);
             break;
         }
       },
@@ -99,26 +107,37 @@ export class PlanEditorPanel {
     this._rpcClient = client;
   }
 
-  public setPlanActionHandler(handler: (approved: boolean, feedback: string) => void) {
+  public setPlanActionHandler(handler: (approved: boolean, feedback: string, sessionId?: string) => void) {
     this._onPlanActionHandler = handler;
   }
 
-  public updatePlan(plan: any) {
+  public updatePlan(plan: any, sessionId?: string) {
     this._currentPlan = plan;
+    if (sessionId) {
+      this._sessionId = sessionId;
+    } else if (plan?.session_id) {
+      this._sessionId = plan.session_id;
+    }
     if (this._panel) {
-      this._panel.webview.postMessage({ type: "plan_updated", plan });
+      this._panel.webview.postMessage({
+        type: "plan_updated",
+        plan,
+        sessionId: this._sessionId,
+      });
     }
   }
 
-  private async _handleApproval(approved: boolean, feedback: string) {
+  private async _handleApproval(approved: boolean, feedback: string, sessionId?: string) {
+    const sid = sessionId || this._sessionId;
     if (this._onPlanActionHandler) {
-      this._onPlanActionHandler(approved, feedback);
+      this._onPlanActionHandler(approved, feedback, sid);
     }
     if (this._panel && this._currentPlan) {
       this._currentPlan.status = approved ? "approved" : "rejected";
       this._panel.webview.postMessage({
         type: "plan_updated",
         plan: this._currentPlan,
+        sessionId: sid,
       });
     }
   }
@@ -190,27 +209,39 @@ export class PlanEditorPanel {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 12px;
       padding: 10px 20px;
       background: var(--bg);
       border-bottom: 1px solid var(--border);
       backdrop-filter: blur(8px);
+      transition: padding 0.15s ease;
     }
     .header-left {
       display: flex;
       align-items: center;
       gap: 10px;
+      min-width: 0;
+      flex: 1 1 auto;
+      overflow: hidden;
     }
     .doc-icon {
       width: 18px;
       height: 18px;
       color: var(--accent);
+      flex-shrink: 0;
     }
     .plan-title-text {
       font-size: 15px;
       font-weight: 600;
       letter-spacing: -0.2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
     }
     .status-badge {
+      flex-shrink: 0;
+      white-space: nowrap;
       display: inline-flex;
       align-items: center;
       gap: 4px;
@@ -229,6 +260,7 @@ export class PlanEditorPanel {
       display: flex;
       align-items: center;
       gap: 8px;
+      flex-shrink: 0;
     }
     .btn-review-toggle {
       display: inline-flex;
@@ -242,6 +274,7 @@ export class PlanEditorPanel {
       background: rgba(255, 255, 255, 0.05);
       color: var(--fg);
       cursor: pointer;
+      white-space: nowrap;
       transition: background 0.12s;
     }
     .btn-review-toggle:hover {
@@ -255,19 +288,113 @@ export class PlanEditorPanel {
       font-size: 12px;
       font-weight: 600;
       border-radius: 4px;
-      border: none;
+      border: 1px solid transparent;
       background: var(--accent-blue);
       color: #ffffff;
       cursor: pointer;
-      transition: background 0.15s;
+      white-space: nowrap;
+      transition: all 0.15s ease;
       box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
     }
-    .btn-proceed:hover {
+    .btn-proceed:hover:not(:disabled) {
       background: var(--blue-hover);
     }
     .btn-proceed:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
+      cursor: default;
+    }
+    .btn-proceed.approved, .btn-proceed.completed {
+      background: rgba(16, 185, 129, 0.18);
+      color: #10b981;
+      border-color: rgba(16, 185, 129, 0.4);
+      box-shadow: none;
+      opacity: 1 !important;
+    }
+    .btn-proceed.executing {
+      background: rgba(6, 182, 212, 0.18);
+      color: #38bdf8;
+      border-color: rgba(6, 182, 212, 0.4);
+      box-shadow: none;
+      opacity: 1 !important;
+    }
+    .btn-proceed.rejected {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--failed-fg);
+      border-color: rgba(239, 68, 68, 0.35);
+      box-shadow: none;
+      opacity: 0.8;
+    }
+    .spinner-icon {
+      animation: plan-spin 1s linear infinite;
+    }
+    @keyframes plan-spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    /* Small Screen & Split-View Breakpoints */
+    @media (max-width: 680px) {
+      .top-action-bar {
+        padding: 8px 14px;
+        gap: 8px;
+      }
+      .plan-title-text {
+        font-size: 13.5px;
+      }
+      .plan-body-container {
+        padding: 16px 14px 40px !important;
+      }
+      .btn-review-toggle {
+        padding: 5px 9px;
+        font-size: 11.5px;
+      }
+      .btn-proceed {
+        padding: 5px 11px;
+        font-size: 11.5px;
+      }
+      .step-item {
+        padding: 7px 12px;
+        gap: 10px;
+        font-size: 12px;
+      }
+      .questions-box {
+        padding: 10px 14px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .top-action-bar {
+        flex-wrap: wrap;
+        padding: 8px 10px;
+        gap: 6px;
+      }
+      .header-left {
+        width: 100%;
+        justify-content: space-between;
+      }
+      .plan-title-text {
+        font-size: 13px;
+        max-width: calc(100% - 130px);
+      }
+      .header-actions {
+        width: 100%;
+        justify-content: flex-end;
+        gap: 6px;
+        padding-top: 5px;
+        border-top: 1px dashed rgba(255, 255, 255, 0.06);
+      }
+      .btn-review-toggle, .btn-proceed {
+        padding: 4px 10px;
+        font-size: 11px;
+      }
+      .plan-body-container {
+        padding: 12px 10px 30px !important;
+      }
+      .feedback-drawer {
+        padding: 8px 10px !important;
+      }
+      .feedback-input {
+        font-size: 11.5px;
+      }
     }
 
     /* Feedback Drawer */
@@ -502,6 +629,7 @@ export class PlanEditorPanel {
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
+    let currentPlanSessionId = ${JSON.stringify(this._sessionId || "")};
 
     const titleEl = document.getElementById('header-plan-title');
     const badgeEl = document.getElementById('header-plan-badge');
@@ -521,33 +649,50 @@ export class PlanEditorPanel {
     });
 
     btnProceed.addEventListener('click', () => {
-      vscode.postMessage({ type: 'proceed_plan', feedback: '' });
+      if (btnProceed.disabled) return;
+      btnProceed.disabled = true;
+      btnProceed.className = 'btn-proceed approved';
+      btnProceed.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg> <span>Approved</span>';
       badgeEl.className = 'status-badge status-approved';
       badgeEl.textContent = 'Approved — Executing';
-      btnProceed.disabled = true;
+      btnReject.disabled = true;
+      vscode.postMessage({ type: 'proceed_plan', feedback: '', sessionId: currentPlanSessionId });
     });
 
     btnProceedWithNotes.addEventListener('click', () => {
+      if (btnProceed.disabled) return;
       const text = feedbackInput.value.trim();
-      vscode.postMessage({ type: 'proceed_plan', feedback: text });
+      btnProceed.disabled = true;
+      btnProceed.className = 'btn-proceed approved';
+      btnProceed.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg> <span>Approved</span>';
       badgeEl.className = 'status-badge status-approved';
       badgeEl.textContent = 'Approved — Executing';
+      btnReject.disabled = true;
       drawerEl.classList.remove('open');
-      btnProceed.disabled = true;
+      vscode.postMessage({ type: 'proceed_plan', feedback: text, sessionId: currentPlanSessionId });
     });
 
     btnReject.addEventListener('click', () => {
+      if (btnReject.disabled) return;
       const text = feedbackInput.value.trim();
-      vscode.postMessage({ type: 'reject_plan', feedback: text });
+      btnProceed.disabled = true;
+      btnProceed.className = 'btn-proceed rejected';
+      btnProceed.innerHTML = '<span>Rejected</span>';
       badgeEl.className = 'status-badge status-rejected';
       badgeEl.textContent = 'Rejected';
+      btnReject.disabled = true;
       drawerEl.classList.remove('open');
-      btnProceed.disabled = true;
+      vscode.postMessage({ type: 'reject_plan', feedback: text, sessionId: currentPlanSessionId });
     });
 
     window.addEventListener('message', (event) => {
       const msg = event.data;
       if (msg.type === 'plan_updated' && msg.plan) {
+        if (msg.sessionId) {
+          currentPlanSessionId = msg.sessionId;
+        } else if (msg.plan.session_id) {
+          currentPlanSessionId = msg.plan.session_id;
+        }
         renderPlan(msg.plan);
       }
     });
@@ -568,15 +713,35 @@ export class PlanEditorPanel {
       const status = (plan.status || 'pending').toLowerCase();
       if (status === 'approved' || status === 'executing' || status === 'completed') {
         badgeEl.className = 'status-badge status-approved';
-        badgeEl.textContent = status === 'completed' ? 'Completed' : (status === 'executing' ? 'Executing' : 'Approved');
-        btnProceed.disabled = (status === 'completed');
+        if (status === 'completed') {
+          badgeEl.textContent = 'Completed';
+          btnProceed.className = 'btn-proceed completed';
+          btnProceed.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg> <span>Completed</span>';
+        } else if (status === 'executing') {
+          badgeEl.textContent = 'Executing';
+          btnProceed.className = 'btn-proceed executing';
+          btnProceed.innerHTML = '<svg class="spinner-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-linecap="round"></circle></svg> <span>Executing...</span>';
+        } else {
+          badgeEl.textContent = 'Approved';
+          btnProceed.className = 'btn-proceed approved';
+          btnProceed.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg> <span>Approved</span>';
+        }
+        btnProceed.disabled = true;
+        btnReject.disabled = true;
       } else if (status === 'rejected') {
         badgeEl.className = 'status-badge status-rejected';
         badgeEl.textContent = 'Rejected';
+        btnProceed.className = 'btn-proceed rejected';
+        btnProceed.innerHTML = '<span>Rejected</span>';
+        btnProceed.disabled = true;
+        btnReject.disabled = true;
       } else {
         badgeEl.className = 'status-badge status-pending';
         badgeEl.textContent = 'Pending Review';
+        btnProceed.className = 'btn-proceed';
+        btnProceed.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg> <span>Proceed</span>';
         btnProceed.disabled = false;
+        btnReject.disabled = false;
       }
 
       let html = '';

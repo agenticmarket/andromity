@@ -58,15 +58,44 @@ except ImportError:
 
 
 def get_config_dir() -> Path:
+    if os.environ.get("ANDROMITY_CONFIG_DIR"):
+        return Path(os.environ["ANDROMITY_CONFIG_DIR"]).expanduser()
     if platform.system() == "Windows":
         return Path(os.environ.get("APPDATA", "~")).expanduser() / "andromity"
     return Path.home() / ".andromity"
 
 
+ALLOWED_SHELLS = {
+    "/bin/bash", "/bin/sh", "/bin/zsh", "/bin/dash",
+    "/usr/bin/bash", "/usr/bin/sh", "/usr/bin/zsh", "/usr/bin/dash",
+    "/usr/local/bin/bash", "/usr/local/bin/zsh", "/usr/local/bin/fish",
+    "/opt/homebrew/bin/bash", "/opt/homebrew/bin/zsh", "/opt/homebrew/bin/fish",
+}
+
+
 def get_shell() -> str:
     if platform.system() == "Windows":
         return "powershell"
-    return os.environ.get("SHELL", "/bin/bash")
+    shell = os.environ.get("SHELL", "/bin/bash").strip()
+    if shell in ALLOWED_SHELLS and os.path.isfile(shell) and os.access(shell, os.X_OK):
+        return shell
+
+    etc_shells = Path("/etc/shells")
+    if etc_shells.is_file():
+        try:
+            valid_shells = {
+                line.strip() for line in etc_shells.read_text(encoding="utf-8", errors="ignore").splitlines()
+                if line.strip() and not line.startswith("#")
+            }
+            if shell in valid_shells and os.path.isfile(shell) and os.access(shell, os.X_OK):
+                return shell
+        except Exception:
+            pass
+
+    for fallback in ("/bin/bash", "/usr/bin/bash", "/bin/sh", "/usr/bin/sh"):
+        if os.path.isfile(fallback) and os.access(fallback, os.X_OK):
+            return fallback
+    return "/bin/bash"
 
 
 class ConfigManager:
@@ -74,6 +103,11 @@ class ConfigManager:
         self.config_dir = config_dir or get_config_dir()
         self.config_path = self.config_dir / "config.toml"
         self.config_dir.mkdir(parents=True, exist_ok=True)
+        if platform.system() != "Windows":
+            try:
+                os.chmod(self.config_dir, 0o700)
+            except OSError:
+                pass
         self._config_cache: Dict[str, Any] = {}
         self._load()
 
@@ -117,7 +151,17 @@ class ConfigManager:
                     os.fsync(f.fileno())
                 except OSError:
                     pass
+            if platform.system() != "Windows":
+                try:
+                    os.chmod(tmp_path, 0o600)
+                except OSError:
+                    pass
             os.replace(str(tmp_path), str(self.config_path))
+            if platform.system() != "Windows":
+                try:
+                    os.chmod(self.config_path, 0o600)
+                except OSError:
+                    pass
         except Exception:
             if tmp_path.exists():
                 try:

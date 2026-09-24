@@ -38,6 +38,66 @@ export function getWaterfallStyles(): string {
       flex-direction: column;
     }
 
+    /* Auto-Open Informational Banner Pill */
+    .wf-banner-pill {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 7px 14px;
+      background: linear-gradient(90deg, rgba(56, 189, 248, 0.08) 0%, rgba(99, 102, 241, 0.06) 100%);
+      border-bottom: 1px solid rgba(56, 189, 248, 0.2);
+      font-size: 11.5px;
+      color: var(--fg);
+      transition: all 0.25s ease;
+      z-index: 101;
+    }
+    .wf-banner-pill.collapsed {
+      opacity: 0;
+      max-height: 0;
+      padding: 0 14px;
+      overflow: hidden;
+      border-bottom: none;
+    }
+    .wf-banner-pill-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .wf-banner-icon {
+      font-size: 13px;
+      color: var(--cyan);
+    }
+    .wf-banner-pill-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .wf-pill-btn {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      color: var(--fg);
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 10.5px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .wf-pill-btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+    .wf-pill-dismiss {
+      color: var(--muted);
+      background: transparent;
+      border-color: transparent;
+    }
+    .wf-pill-dismiss:hover {
+      color: var(--fg);
+      background: rgba(255, 255, 255, 0.06);
+    }
+
     /* Top Navigation Bar */
     .wf-header {
       position: sticky;

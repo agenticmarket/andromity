@@ -15,11 +15,16 @@ from andromity.config import config, get_config_dir
 from andromity.core.agent import Agent
 
 READ_ONLY_TOOLS = {
-    "list_dir", "view_file", "find_files", "grep_search",
-    "file_outline", "read_symbol", "fetch_web_page", "web_search",
-    "read_image", "semantic_search", "git_status", "git_diff", "git_log",
-    "ask_questions", "ask_question", "fetch_context_bundle", "fetch_code_structure",
-    "update_plan_step", "create_todo", "update_todo", "list_tools", "write_plan",
+    # Core read-only filesystem & search inspection
+    "read_file", "view_file", "find_files", "grep_search", "list_dir",
+    # Shell background process inspection
+    "shell_read", "shell_list",
+    # Tool discovery
+    "list_tools",
+    # Planning & interactive tools (safe non-code-mutating)
+    "write_plan", "update_plan_step", "ask_questions", "ask_question",
+    # Session & multi-agent coordination read-only tools
+    "session_list", "session_read_messages", "shared_state_get", "read_handoff",
 }
 CRON_SEED_PRESET_NAMES = {"Run Tests & Verify Build", "Daily Code Health & TODO Scanner"}
 from andromity.core.events import (
@@ -112,6 +117,22 @@ class JsonRpcHandler:
                 "question": event.question,
                 "timestamp": event.timestamp,
             })
+            to_sid = getattr(event, "to_session_id", "")
+            if to_sid:
+                auto_prompt = (
+                    f"[Incoming Question from co-agent '{event.from_session}' (ID: {event.question_id})]:\n"
+                    f"\"{event.question}\"\n\n"
+                    f"Please address this question, perform any required actions or tools, and provide an answer using "
+                    f"session_answer_question(question_id='{event.question_id}', answer='...')."
+                )
+                asyncio.create_task(self._handle_auto_awake(
+                    target_session_id=to_sid,
+                    from_session=event.from_session,
+                    from_session_id=getattr(event, "from_session_id", ""),
+                    prompt_content=auto_prompt,
+                    trigger_type="question",
+                    question_id=event.question_id,
+                ))
         elif isinstance(event, SessionAnswerReceived):
             self.notify("session/answerReceived", {
                 "question_id": event.question_id,
@@ -130,13 +151,131 @@ class JsonRpcHandler:
                 "timestamp": event.timestamp,
             })
         elif isinstance(event, HandoffWritten):
+            h_id = getattr(event, "handoff_id", getattr(event, "phase", ""))
+            to_sess = getattr(event, "to_session", "")
+            summary = getattr(event, "task_summary", getattr(event, "summary", ""))
             self.notify("session/handoffWritten", {
-                "handoff_id": event.handoff_id,
+                "handoff_id": h_id,
                 "from_session": event.from_session,
-                "to_session": event.to_session,
-                "task_summary": event.task_summary,
+                "to_session": to_sess,
+                "task_summary": summary,
                 "timestamp": event.timestamp,
             })
+            if to_sess:
+                from andromity.core.session_bus import SessionBus
+                to_sid = SessionBus.get_instance().resolve_session_id(to_sess)
+                if to_sid:
+                    auto_prompt = (
+                        f"[Incoming Task Handoff from co-agent '{event.from_session}' (Phase: {getattr(event, 'phase', h_id)})]:\n"
+                        f"Summary: {summary}\n\n"
+                        f"Please review the handoff details with read_handoff(phase='{getattr(event, 'phase', '')}'), take any necessary actions, and report progress."
+                    )
+                    asyncio.create_task(self._handle_auto_awake(
+                        target_session_id=to_sid,
+                        from_session=event.from_session,
+                        from_session_id="",
+                        prompt_content=auto_prompt,
+                        trigger_type="handoff",
+                    ))
+
+    async def _handle_auto_awake(
+        self,
+        target_session_id: str,
+        from_session: str,
+        from_session_id: str,
+        prompt_content: str,
+        trigger_type: str = "question",
+        question_id: Optional[str] = None,
+    ):
+        """Evaluate auto-wake rules, circuit breaker, and dispatch reactive turn if allowed."""
+        if not target_session_id:
+            return
+
+        session = self._active_sessions.get(target_session_id)
+        if not session:
+            try:
+                session = self._get_or_load_session(target_session_id)
+            except Exception as e:
+                log.warning("Auto-wake: failed to load target session %s: %s", target_session_id, e)
+                return
+
+        # 1. If session is already actively executing a turn, do not auto-wake
+        if session.id in self._running_tasks and not self._running_tasks[session.id].done():
+            log.info("Auto-wake: session %s is already running a turn; skipping wake.", session.id)
+            return
+
+        # 2. Check watching / auto-wake eligibility
+        status = getattr(session, "status", "idle")
+        if status not in ("watching", "idle"):
+            log.info("Auto-wake: session %s status is '%s'; skipping wake.", session.id, status)
+            return
+
+        # 3. Check Circuit Breaker (Max consecutive auto-wakes)
+        max_auto_wakes = int(config.get("collaboration", "max_auto_wakes", 2))
+        current_wakes = getattr(session, "consecutive_auto_wakes", 0)
+
+        if current_wakes >= max_auto_wakes:
+            session.set_status("paused_limit_reached")
+            session.save()
+            log.warning("Auto-wake circuit breaker tripped for session %s (count=%s, max=%s)", session.id, current_wakes, max_auto_wakes)
+            self.notify("session/autoWakeLimitReached", {
+                "session_id": session.id,
+                "current_wakes": current_wakes,
+                "max_auto_wakes": max_auto_wakes,
+                "from_session": from_session,
+                "from_session_id": from_session_id,
+                "question_id": question_id,
+            })
+            self.notify("session/updated", {
+                "session_id": session.id,
+                "status": "paused_limit_reached",
+                "consecutive_auto_wakes": current_wakes,
+                "collaborators": getattr(session, "collaborators", []),
+            })
+            return
+
+        # 4. Increment circuit breaker counter and record collaborator link
+        session.consecutive_auto_wakes = current_wakes + 1
+        if not hasattr(session, "collaborators") or session.collaborators is None:
+            session.collaborators = []
+        if from_session and from_session not in session.collaborators:
+            session.collaborators.append(from_session)
+        session.save()
+
+        # Update sender's collaborators as well for bidirectional UI link
+        if from_session_id:
+            sender = self._active_sessions.get(from_session_id)
+            if sender:
+                if not hasattr(sender, "collaborators") or sender.collaborators is None:
+                    sender.collaborators = []
+                if session.name and session.name not in sender.collaborators:
+                    sender.collaborators.append(session.name)
+                    sender.save()
+                    self.notify("session/updated", {
+                        "session_id": sender.id,
+                        "collaborators": sender.collaborators,
+                    })
+
+        log.info("Auto-waking session %s from '%s' (%s/%s auto-wakes)", session.id, from_session, session.consecutive_auto_wakes, max_auto_wakes)
+
+        # Notify UI of auto-wake activity
+        self.notify("session/updated", {
+            "session_id": session.id,
+            "status": "running",
+            "consecutive_auto_wakes": session.consecutive_auto_wakes,
+            "collaborators": session.collaborators,
+        })
+
+        # 5. Dispatch turn
+        try:
+            await self.rpc_agent_prompt({
+                "session_id": session.id,
+                "prompt": prompt_content,
+                "project_path": session.project_path,
+                "is_auto_wake": True,
+            })
+        except Exception as e:
+            log.exception("Auto-wake execution failed for session %s: %s", session.id, e)
 
     def notify(self, method: str, params: Dict[str, Any]):
         """Send a JSON-RPC notification to the client."""
@@ -386,6 +525,8 @@ class JsonRpcHandler:
             "compacted_history": getattr(session, "compacted_history", []),
             "model": getattr(session, "model", None) or getattr(getattr(self, "agent", None), "model_name", None) or getattr(getattr(self, "config", None), "model", None),
             "provider": getattr(session, "provider", None) or getattr(getattr(self, "agent", None), "provider_name", None) or getattr(getattr(self, "config", None), "provider", None),
+            "collaborators": list(getattr(session, "collaborators", None) or []),
+            "watching_for": getattr(session, "watching_for", None),
         }
 
     async def rpc_session_delete(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -676,6 +817,41 @@ class JsonRpcHandler:
         questions = bus.get_pending_questions_for(session_id)
         return {"questions": questions}
 
+    async def rpc_session_setWatching(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        session_id = params.get("session_id")
+        target_session = params.get("target_session")
+        reason = params.get("reason", "")
+        if not session_id:
+            raise ValueError("session_id is required")
+        session = self._get_or_load_session(session_id)
+        session.set_status("watching", watching_for={"target_session": target_session, "reason": reason})
+        session.save()
+        self.notify("session/updated", {
+            "session_id": session.id,
+            "status": "watching",
+            "watching_for": session.watching_for,
+            "consecutive_auto_wakes": getattr(session, "consecutive_auto_wakes", 0),
+            "collaborators": getattr(session, "collaborators", []),
+        })
+        return {"success": True, "status": "watching"}
+
+    async def rpc_session_resetAutoWake(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        session_id = params.get("session_id")
+        if not session_id:
+            raise ValueError("session_id is required")
+        session = self._get_or_load_session(session_id)
+        session.consecutive_auto_wakes = 0
+        if session.status == "paused_limit_reached":
+            session.set_status("watching")
+        session.save()
+        self.notify("session/updated", {
+            "session_id": session.id,
+            "status": session.status,
+            "consecutive_auto_wakes": 0,
+            "collaborators": getattr(session, "collaborators", []),
+        })
+        return {"success": True, "consecutive_auto_wakes": 0}
+
     # ── Agent Execution & Streaming Methods ─────────────────────────────────────
 
     async def rpc_agent_prompt(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -690,6 +866,11 @@ class JsonRpcHandler:
 
         if session_id in self._running_tasks and not self._running_tasks[session_id].done():
             raise RuntimeError(f"Session {session_id} is already running a turn.")
+
+        is_auto_wake = bool(params.get("is_auto_wake", False))
+        if not is_auto_wake:
+            session.consecutive_auto_wakes = 0
+            session.save()
 
         profile = params.get("profile") or config.get("default", "profile", "builder")
         model = params.get("model") or config.get("default", "model", "claude-sonnet-4-6")
@@ -722,8 +903,8 @@ class JsonRpcHandler:
                 needs_approval = True
             elif tool_name in READ_ONLY_TOOLS:
                 return True
-
-            needs_approval = False
+            else:
+                needs_approval = False
 
             # 4. Mode-specific evaluation (exact match with TUI app.py:549-617)
             if tool_name in ("write_file", "edit_file", "edit_file_multi"):
@@ -752,7 +933,7 @@ class JsonRpcHandler:
                 if mode == "safe":
                     needs_approval = True
 
-            elif tool_name == "read_file":
+            elif tool_name in ("read_file", "view_file", "grep_search"):
                 if is_sensitive:
                     needs_approval = True
 
@@ -820,7 +1001,7 @@ class JsonRpcHandler:
                 self._pending_questions.pop(question_id, None)
 
         # Auto-title session from first user prompt if still default
-        if session.name in ("new-session", "Main Session") or session.name.startswith("Session ") or session.name.startswith("session-"):
+        if not is_auto_wake and (session.name in ("new-session", "Main Session") or session.name.startswith("Session ") or session.name.startswith("session-")):
             try:
                 auto_name = Session.auto_name_from_message(prompt)
                 if auto_name:
@@ -878,9 +1059,11 @@ class JsonRpcHandler:
 
                 images = params.get("images")
                 image_uris = params.get("image_uris")
+                user_turn_idx = len(session.get_user_turn_indices()) if hasattr(session, "get_user_turn_indices") else 0
                 self.notify("agent/started", {
                     "session_id": session_id,
                     "prompt": prompt,
+                    "turn_index": user_turn_idx,
                 })
                 session.set_status("running")
                 async for event in agent.run(prompt, images=images, image_uris=image_uris):
@@ -1085,8 +1268,18 @@ class JsonRpcHandler:
                     except Exception as title_err:
                         log.debug("Auto-title refinement error: %s", title_err)
 
-                session.set_status("idle")
+                if getattr(session, "watching_for", None):
+                    session.set_status("watching", watching_for=session.watching_for)
+                else:
+                    session.set_status("idle")
                 session.save()
+                self.notify("session/updated", {
+                    "session_id": session.id,
+                    "status": session.status,
+                    "watching_for": getattr(session, "watching_for", None),
+                    "consecutive_auto_wakes": getattr(session, "consecutive_auto_wakes", 0),
+                    "collaborators": getattr(session, "collaborators", []),
+                })
             except asyncio.CancelledError:
                 try:
                     agent.kill_subagents("cancelled")
@@ -1144,14 +1337,61 @@ class JsonRpcHandler:
         if not prompt:
             raise ValueError("prompt is required")
         project_path = params.get("project_path")
-        model = params.get("model") or config.get("default", "model", "claude-sonnet-4-6")
-        provider = params.get("provider") or config.get("default", "provider", "anthropic")
-        # Use litellm directly for speed, fallback to Agent if unavailable
+        model = params.get("model")
+        provider = params.get("provider")
+
+        # Fallback to user's active/configured provider that actually has a valid API key
+        def find_working_provider(preferred_prov: Optional[str] = None):
+            candidates = []
+            if preferred_prov:
+                candidates.append(str(preferred_prov).lower().strip())
+            default_prov = (config.get("default", "provider", "") or "").lower().strip()
+            if default_prov and default_prov not in candidates:
+                candidates.append(default_prov)
+            for p in ["openrouter", "anthropic", "openai", "google", "deepseek", "groq", "nvidia", "ollama"]:
+                if p not in candidates:
+                    candidates.append(p)
+            for p in candidates:
+                if p == "ollama":
+                    return p, config.get_api_key(p)
+                k = config.get_api_key(p)
+                if k:
+                    return p, k
+            return (preferred_prov or default_prov or "openrouter"), None
+
+        provider_name, api_key = find_working_provider(provider)
+
+        # Resolve model name: if provider fell back to a different provider, use default model
+        if not model or (provider and provider.lower().strip() != provider_name):
+            model_name = config.get("default", "model") or "anthropic/claude-3.7-sonnet"
+        else:
+            model_name = str(model)
+
+        p_conf = config.get_provider_config(provider_name)
+        base_url = p_conf.get("base_url") if p_conf and isinstance(p_conf, dict) else None
+
+        # Resolve LiteLLM provider prefixes so models route properly
+        if provider_name == "google":
+            litellm_model = f"gemini/{model_name}" if not model_name.startswith("gemini/") else model_name
+        elif provider_name == "ollama":
+            litellm_model = f"ollama_chat/{model_name}" if not (model_name.startswith("ollama/") or model_name.startswith("ollama_chat/")) else model_name
+            base_url = base_url or "http://localhost:11434"
+        elif provider_name == "openrouter":
+            clean = model_name.lstrip("~")
+            litellm_model = f"openrouter/{clean}" if not clean.startswith("openrouter/") else clean
+        elif provider_name == "nvidia":
+            litellm_model = f"nvidia_nim/{model_name}" if not model_name.startswith("nvidia_nim/") else model_name
+        elif p_conf and p_conf.get("type") and p_conf.get("type") != provider_name:
+            litellm_model = f"{p_conf.get('type')}/{model_name}"
+        else:
+            litellm_model = f"{provider_name}/{model_name}" if not model_name.startswith(f"{provider_name}/") else model_name
+
+        # Fast fail if provider requires key but none configured
+        if provider_name != "ollama" and not api_key:
+            raise RuntimeError(f"No API key configured for provider '{provider_name}'. Please configure it in Settings.")
+
         try:
-            import sys, os
-            # PyInstaller bundled binary: litellm looks for model_prices_and_context_window_backup.json
-            # in the extracted _MEIxxx temp folder which doesn't persist between runs.
-            # Pre-create an empty stub so litellm won't crash with FileNotFoundError.
+            import sys, os, re
             if getattr(sys, "frozen", False):
                 _mei = getattr(sys, "_MEIPASS", None)
                 if _mei:
@@ -1163,45 +1403,57 @@ class JsonRpcHandler:
                             _f.write("{}")
 
             import litellm
-            from andromity.core.models import get_context_limit_for_model
+            litellm.suppress_debug_info = True
 
-            api_key = config.get_api_key(provider)
-            base_url = None
-            p_conf = config.get_provider_config(provider)
-            if p_conf and isinstance(p_conf, dict):
-                base_url = p_conf.get("base_url")
-
-            model_id = model
-            # litellm expects provider prefix for some models; try raw then with provider/
             messages = [{"role": "user", "content": prompt}]
-            kwargs: Dict[str, Any] = {"model": model_id, "messages": messages, "temperature": 0.3, "max_tokens": 300}
+            kwargs: Dict[str, Any] = {
+                "model": litellm_model,
+                "messages": messages,
+                "temperature": 0.2,
+                "max_tokens": 800,
+            }
             if api_key:
                 kwargs["api_key"] = api_key
             if base_url:
                 kwargs["api_base"] = base_url
-            # Quick timeout: 25s
+
             resp = await asyncio.wait_for(asyncio.to_thread(lambda: litellm.completion(**kwargs)), timeout=25)
             text = ""
             try:
-                text = resp.choices[0].message.content or ""
+                msg_obj = resp.choices[0].message
+                text = getattr(msg_obj, "content", "") or ""
+                # For reasoning models that store output in reasoning_content
+                if not text and hasattr(msg_obj, "reasoning_content") and msg_obj.reasoning_content:
+                    text = msg_obj.reasoning_content
+                if not text and hasattr(resp.choices[0], "text"):
+                    text = resp.choices[0].text or ""
             except Exception:
                 text = str(resp)
-            if text.strip():
-                return {"message": text.strip(), "result": text.strip()}
-        except Exception as e:
-            log.debug("quickPrompt litellm failed: %s, falling back to Agent", e)
 
-        # Fallback: run a one-shot Agent without tools streaming, collect TextDelta
-        session = Session(name="quick-prompt-temp", project_path=str(project_path or Path.cwd()))
-        agent = Agent(session=session, model=model, provider=provider, auto_approve=True)
-        collected = []
-        async for event in agent.run(prompt):
-            if isinstance(event, TextDelta):
-                collected.append(event.text)
-            elif isinstance(event, Done):
-                break
-        result = "".join(collected).strip()
-        return {"message": result, "result": result}
+            # Strip markdown code blocks (e.g. ```text ... ```) and backticks
+            # Also strip <think>...</think> reasoning blocks emitted by reasoning models
+            text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+
+            # If the prompt used <commit_message> tag format, extract only that portion
+            tag_match = re.search(r"<commit_message>([\s\S]*?)(?:</commit_message>|$)", text, flags=re.DOTALL | re.IGNORECASE)
+            if tag_match and tag_match.group(1).strip():
+                text = tag_match.group(1).strip()
+            else:
+                # Fallback: scan for first conventional commit header line to skip any preamble
+                commit_line_match = re.search(
+                    r"^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^\)]*\))?!?:\s*.+",
+                    text, flags=re.MULTILINE | re.IGNORECASE
+                )
+                if commit_line_match and commit_line_match.start() > 0:
+                    text = text[commit_line_match.start():].strip()
+
+            cleaned = re.sub(r"^```[^\n]*\n?|```$", "", text.strip(), flags=re.MULTILINE).strip()
+            if cleaned:
+                return {"message": cleaned, "result": cleaned}
+            raise RuntimeError(f"Model {provider_name}/{model_name} returned empty completion text.")
+        except Exception as e:
+            log.warning("quickPrompt direct completion failed: %s", e)
+            raise RuntimeError(f"Failed to generate commit message via {provider_name}/{model_name}: {e}")
 
     async def rpc_agent_approve_tool(self, params: Dict[str, Any]) -> Dict[str, Any]:
         approval_id = params.get("approval_id")
@@ -2376,9 +2628,10 @@ class JsonRpcHandler:
                         continue
                     if proj_root:
                         try:
-                            p = Path(clean_str)
+                            # Normalize backslashes for cross-platform compatibility
+                            p = Path(clean_str.replace("\\", "/"))
                             if p.is_absolute():
-                                clean_str = str(p.resolve().relative_to(proj_root))
+                                clean_str = str(p.resolve().relative_to(proj_root.resolve()))
                         except Exception:
                             pass
                     norm = clean_str.replace("\\", "/").strip().lstrip("./")

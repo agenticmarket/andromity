@@ -67,7 +67,7 @@ class SubAgentConfigManager:
 
     @staticmethod
     def get_default_timeout() -> float:
-        return float(config.get("subagents", "timeout_seconds", 180.0))
+        return float(config.get("subagents", "timeout_seconds", 600.0))
 
     @staticmethod
     def get_result_max_tokens() -> int:

@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { RpcClient } from "../server/RpcClient.js";
+import { HEAD_SCHEME } from "../integrations/DiffManager.js";
 import { getReviewHtml } from "../providers/changesReview/reviewHtml.js";
 
 interface GitStatusResult {
@@ -37,7 +38,7 @@ export class ChangesReviewPanel {
     turnFiles?: string[]
   ): ChangesReviewPanel {
     const column = vscode.window.activeTextEditor
-      ? vscode.ViewColumn.Beside
+      ? (vscode.window.activeTextEditor.viewColumn || vscode.ViewColumn.Active)
       : vscode.ViewColumn.One;
 
     if (ChangesReviewPanel.currentPanel) {
@@ -344,10 +345,13 @@ export class ChangesReviewPanel {
     }
 
     try {
+      const posixPath = absPath.replace(/\\/g, "/");
+      const uriPath = posixPath.startsWith("/") ? posixPath : "/" + posixPath;
       const headUri = vscode.Uri.from({
-        scheme: "andromity-git-head",
-        path: "/" + filePath.replace(/\\/g, "/"),
+        scheme: HEAD_SCHEME,
+        path: uriPath,
         query: `ref=HEAD`,
+        fragment: ws,
       });
       await vscode.commands.executeCommand(
         "vscode.diff",
