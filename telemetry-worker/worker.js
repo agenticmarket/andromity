@@ -47,12 +47,28 @@ export default {
           });
         }
 
+        const wantsHtml = url.pathname === '/stats' && (
+          url.searchParams.get('format') === 'html' ||
+          request.headers.get('Accept')?.includes('text/html')
+        );
+
+        // Edge Cache Optimization: Serve cached JSON response if fresh (< 60s)
+        const cache = caches.default;
+        const cacheKeyUrl = new URL(request.url);
+        cacheKeyUrl.searchParams.delete('format');
+        const cacheKey = new Request(cacheKeyUrl.toString(), { method: 'GET' });
+
+        if (!wantsHtml) {
+          try {
+            const cachedRes = await cache.match(cacheKey);
+            if (cachedRes) {
+              return cachedRes;
+            }
+          } catch {}
+        }
+
         try {
           const stats = await getD1Stats(env);
-          const wantsHtml = url.pathname === '/stats' && (
-            url.searchParams.get('format') === 'html' ||
-            request.headers.get('Accept')?.includes('text/html')
-          );
 
           if (wantsHtml) {
             return new Response(renderStatsHtml(stats), {
@@ -65,17 +81,26 @@ export default {
             });
           }
 
-          return new Response(JSON.stringify(stats, null, 2), {
+          const response = new Response(JSON.stringify(stats, null, 2), {
             status: 200,
             headers: {
               ...securityHeaders,
               'Content-Type': 'application/json',
-              'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+              'Cache-Control': 'public, max-age=60, s-maxage=60',
             },
           });
+
+          // Cache on Cloudflare Edge for 60 seconds (prevents D1 read quota exhaustion)
+          ctx.waitUntil(cache.put(cacheKey, response.clone()));
+
+          return response;
         } catch (err) {
           console.error('Stats query failed:', err);
-          return new Response(JSON.stringify({ error: 'Failed to retrieve stats' }), {
+          return new Response(JSON.stringify({
+            error: 'Failed to retrieve stats',
+            details: String(err?.message || err),
+            hint: 'If D1 daily quota is exceeded, it resets automatically at 00:00 UTC.'
+          }), {
             status: 500,
             headers: { ...securityHeaders, 'Content-Type': 'application/json' },
           });
@@ -124,6 +149,58 @@ export default {
 
     if (request.method !== 'POST') {
       return new Response('Method Not Allowed', { status: 405, headers: securityHeaders });
+    }
+
+    if (url.pathname === '/api/admin/purge-user' || url.pathname === '/purge-user') {
+      const expectedSecret = env.STATS_SECRET;
+      const providedKey = request.headers.get('x-stats-key') ||
+                          request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
+
+      if (!expectedSecret || !timingSafeMatch(providedKey, expectedSecret)) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401,
+          headers: { ...securityHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      try {
+        const body = await request.json().catch(() => ({}));
+        const targetUserId = typeof body.user_id === 'string' ? body.user_id.trim() : '';
+        if (!targetUserId || !/^[a-zA-Z0-9_-]{8,64}$/.test(targetUserId)) {
+          return new Response(JSON.stringify({ error: 'Valid user_id parameter is required' }), {
+            status: 400,
+            headers: { ...securityHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        if (!env.DB) {
+          return new Response(JSON.stringify({ error: 'Database not bound' }), {
+            status: 500,
+            headers: { ...securityHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        const purgeBatch = await env.DB.batch([
+          env.DB.prepare(`DELETE FROM feature_events WHERE user_id = ?`).bind(targetUserId),
+          env.DB.prepare(`DELETE FROM events WHERE user_id = ?`).bind(targetUserId),
+          env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(targetUserId),
+          env.DB.prepare(`DELETE FROM users WHERE user_id = ?`).bind(targetUserId),
+        ]);
+
+        return new Response(JSON.stringify({
+          success: true,
+          purged_user_id: targetUserId,
+          changes: purgeBatch.map((r) => r.meta?.changes ?? 0),
+        }), {
+          status: 200,
+          headers: { ...securityHeaders, 'Content-Type': 'application/json' },
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: 'Purge failed', details: String(err) }), {
+          status: 500,
+          headers: { ...securityHeaders, 'Content-Type': 'application/json' },
+        });
+      }
     }
 
     if (url.pathname !== '/ping' && url.pathname !== '/event') {
@@ -494,8 +571,8 @@ async function getD1Stats(env) {
         COALESCE(e.tool_file_count, 0) AS tool_file_count,
         COALESCE(e.tool_web_count, 0) AS tool_web_count,
         (COALESCE(e.tool_bash_count, 0) + COALESCE(e.tool_file_count, 0) + COALESCE(e.tool_web_count, 0)) AS total_tools_count,
-        COALESCE((SELECT COUNT(*) FROM feature_events fe WHERE fe.session_id = s.session_id AND fe.feature_name = 'waterfall'), 0) AS session_waterfall_count,
-        COALESCE((SELECT COUNT(*) FROM feature_events fe WHERE fe.user_id = s.user_id AND fe.feature_name = 'waterfall'), 0) AS user_waterfall_total,
+        COALESCE(fe_s.cnt, 0) AS session_waterfall_count,
+        COALESCE(fe_u.cnt, 0) AS user_waterfall_total,
         s.created_at
       FROM sessions s
       LEFT JOIN (
@@ -516,8 +593,20 @@ async function getD1Stats(env) {
         s.session_id = e.session_id OR
         (e.session_id = 'scrubbed_api_key' AND s.user_id = e.user_id AND substr(s.created_at, 1, 13) = substr(e.created_at, 1, 13))
       )
+      LEFT JOIN (
+        SELECT session_id, COUNT(*) AS cnt
+        FROM feature_events
+        WHERE feature_name = 'waterfall'
+        GROUP BY session_id
+      ) fe_s ON s.session_id = fe_s.session_id
+      LEFT JOIN (
+        SELECT user_id, COUNT(*) AS cnt
+        FROM feature_events
+        WHERE feature_name = 'waterfall'
+        GROUP BY user_id
+      ) fe_u ON s.user_id = fe_u.user_id
       ORDER BY s.created_at DESC
-      LIMIT 50
+      LIMIT 100
     `),
     env.DB.prepare(`
       SELECT
