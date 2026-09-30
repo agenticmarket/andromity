@@ -915,7 +915,7 @@ ${styles}
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
             </span>
             <span class="tracker-title" id="bg-strip-title">Background Tasks</span>
-            <span class="tracker-count bg-strip-badge"><span class="bg-strip-dot"></span><span id="bg-strip-count">1 running</span></span>
+            <span class="tracker-count" id="bg-strip-count">1 running</span>
             <span class="bg-strip-timer" id="bg-strip-timer">0s</span>
           </div>
           <div class="tracker-actions">

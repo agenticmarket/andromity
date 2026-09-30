@@ -1275,29 +1275,6 @@ export function getChatStyles(): string {
       align-items: center;
       justify-content: center;
     }
-    .bg-strip-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      font-size: 10px;
-      font-weight: 600;
-      padding: 1px 6px;
-      border-radius: 9999px;
-      background: rgba(56, 189, 248, 0.12);
-      color: #38bdf8;
-      border: 1px solid rgba(56, 189, 248, 0.22);
-    }
-    .bg-strip-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: #38bdf8;
-      animation: bg-dot-pulse 1.4s ease-in-out infinite;
-    }
-    @keyframes bg-dot-pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.4; transform: scale(0.8); }
-    }
     .bg-strip-timer {
       font-size: 10px;
       font-family: var(--font-mono, monospace);
@@ -1385,11 +1362,6 @@ export function getChatStyles(): string {
       font-size: 10.5px;
       color: var(--vscode-descriptionForeground, #a1a1aa);
     }
-    .bg-item-logs-btn {
-      padding: 1px 6px;
-      font-size: 10.5px;
-      border-radius: 3px;
-    }
     .bg-item-stop-btn {
       padding: 2px 4px;
       border-radius: 3px;
@@ -1398,6 +1370,17 @@ export function getChatStyles(): string {
     .bg-item-stop-btn:hover {
       background: rgba(248, 81, 73, 0.15);
       color: #ff7b72;
+    }
+    @media (max-width: 320px) {
+      .bg-process-strip {
+        padding: 5px 8px;
+      }
+      .bg-item-left {
+        gap: 5px;
+      }
+      .bg-item-cmd {
+        max-width: 100px;
+      }
     }
 
     /* ─── Compaction In-Progress Indicator Banner ────────────────────────────── */

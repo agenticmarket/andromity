@@ -132,14 +132,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           const elStr = formatElapsedSecs(el);
           const safeCmd = escapeHtml((proc.command || 'Process ' + procId).split(String.fromCharCode(10)).join(' '));
           const safeProcId = escapeHtml(procId);
-          itemsHtml += '<div class="bg-process-item" data-process-id="' + safeProcId + '" title="Click to view live logs and management in editor tab">' +
+          itemsHtml += '<div class="bg-process-item" data-process-id="' + safeProcId + '" title="Click to view live logs in new tab">' +
             '<div class="bg-item-left">' +
               '<span class="bg-item-id">' + safeProcId + '</span>' +
               '<span class="bg-item-cmd" title="' + safeCmd + '">' + safeCmd + '</span>' +
             '</div>' +
             '<div class="bg-item-right">' +
               '<span class="bg-item-elapsed" id="bg-elapsed-' + safeProcId + '">' + elStr + '</span>' +
-              '<button class="btn-tracker-open bg-item-logs-btn" data-process-id="' + safeProcId + '" title="Open task logs in editor tab">Logs</button>' +
               '<button class="btn-tracker-close bg-item-stop-btn" data-process-id="' + safeProcId + '" title="Stop process"><svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg></button>' +
             '</div>' +
           '</div>';
@@ -212,11 +211,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           return;
         }
 
-        const logsBtn = ev.target.closest('.bg-item-logs-btn');
         const item = ev.target.closest('.bg-process-item');
-        if (logsBtn || item) {
-          const target = logsBtn || item;
-          const procId = target.getAttribute('data-process-id');
+        if (item) {
+          const procId = item.getAttribute('data-process-id');
           if (procId) {
             const proc = activeBgProcesses.get(procId);
             vscode.postMessage({

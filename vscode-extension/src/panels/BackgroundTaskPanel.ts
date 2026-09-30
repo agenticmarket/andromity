@@ -24,16 +24,17 @@ export class BackgroundTaskPanel {
     sessionId?: string,
     viewColumn?: vscode.ViewColumn
   ): BackgroundTaskPanel {
+    const defaultCol = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+    const column = viewColumn || defaultCol;
     const existing = BackgroundTaskPanel._panels.get(processId);
     if (existing) {
-      existing._panel.reveal(viewColumn || vscode.ViewColumn.Beside);
+      existing._panel.reveal(column);
       if (command) existing._command = command;
       if (rpcClient) existing._rpcClient = rpcClient;
       existing._fetchLogs();
       return existing;
     }
 
-    const column = viewColumn || vscode.ViewColumn.Beside;
     const panel = vscode.window.createWebviewPanel(
       BackgroundTaskPanel.viewType,
       `Task: ${processId}`,
@@ -266,37 +267,34 @@ export class BackgroundTaskPanel {
     .status-badge {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
-      font-size: 10px;
+      font-size: 10.5px;
       font-weight: 600;
-      padding: 1px 7px;
-      border-radius: 9999px;
-      background: rgba(56, 189, 248, 0.12);
       color: var(--cyan);
-      border: 1px solid rgba(56, 189, 248, 0.22);
+      letter-spacing: 0.02em;
     }
     .status-badge.stopped {
-      background: rgba(248, 81, 73, 0.12);
       color: var(--red);
-      border-color: rgba(248, 81, 73, 0.22);
     }
     .status-badge.done {
-      background: rgba(16, 185, 129, 0.12);
       color: var(--green);
-      border-color: rgba(16, 185, 129, 0.22);
     }
-    .status-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: currentColor;
-    }
-    .status-badge.running .status-dot {
-      animation: pulse-dot 1.4s ease-in-out infinite;
-    }
-    @keyframes pulse-dot {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.3; transform: scale(0.75); }
+    @media (max-width: 600px) {
+      .header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 8px 12px;
+      }
+      .header-actions {
+        width: 100%;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+        gap: 5px;
+      }
+      .terminal-container {
+        padding: 10px 12px;
+        font-size: 11px;
+      }
     }
     .timer-text {
       font-family: var(--font-mono);
@@ -404,7 +402,6 @@ export class BackgroundTaskPanel {
         <div class="task-title-row">
           <span class="task-id">${safePid}</span>
           <span class="status-badge running" id="status-badge">
-            <span class="status-dot"></span>
             <span id="status-text">RUNNING</span>
           </span>
           <span class="timer-text" id="timer-text">0s</span>

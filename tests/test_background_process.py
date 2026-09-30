@@ -219,3 +219,45 @@ async def test_shell_kill_cross_project_and_async_notification(tmp_path, monkeyp
     assert len(exited) >= 1
     assert exited[0].params["process_id"] == "bg_cross_test"
 
+
+@pytest.mark.asyncio
+async def test_user_stopped_process_notifies_ai(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools_mod, "_is_trusted", lambda: True)
+    monkeypatch.setattr(tools_mod, "_get_project_root", lambda: tmp_path.resolve())
+
+    handler = JsonRpcHandler(send_notification=lambda n: None)
+
+    auto_wake_calls = []
+    async def mock_auto_awake(**kwargs):
+        auto_wake_calls.append(kwargs)
+
+    monkeypatch.setattr(handler, "_handle_auto_awake", mock_auto_awake)
+
+    sleep_cmd = "ping 127.0.0.1 -n 20" if sys.platform == "win32" else "sleep 20"
+    start_res = tools_mod.shell_bg(sleep_cmd, process_id="user_kill_test")
+    assert "Background process started" in start_res
+
+    # Associate session_id
+    full_key = (tools_mod._bg_project_key(), "user_kill_test")
+    with tools_mod._bg_lock:
+        if full_key in tools_mod._bg_processes:
+            tools_mod._bg_processes[full_key]["session_id"] = "sess-user-kill"
+
+    # User clicks stop -> triggers process/kill
+    kill_res = await handler.handle_request(JsonRpcRequest(
+        id=101,
+        method="process/kill",
+        params={"process_id": "user_kill_test"},
+    ))
+    assert kill_res is not None
+    assert kill_res.result["status"] == "ok"
+
+    # Allow async auto-wake dispatch
+    await asyncio.sleep(0.1)
+
+    assert len(auto_wake_calls) == 1
+    call = auto_wake_calls[0]
+    assert call["target_session_id"] == "sess-user-kill"
+    assert "[User Action]: Background process 'user_kill_test'" in call["prompt_content"]
+    assert "was manually stopped by the user" in call["prompt_content"]
+

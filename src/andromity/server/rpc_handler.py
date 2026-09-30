@@ -93,6 +93,7 @@ class JsonRpcHandler:
         self._active_agents: Dict[str, Any] = {}
         self._mcp_manager: Optional[Any] = None
         self._mcp_started: bool = False
+        self._user_killed_processes: Set[str] = set()
         try:
             self._loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
         except RuntimeError:
@@ -200,15 +201,24 @@ class JsonRpcHandler:
     def _handle_process_exit_threadsafe(self, info: dict):
         self.notify("process/exited", info)
         session_id = info.get("session_id")
+        pid_str = info.get("process_id", "")
+        was_user_killed = pid_str in self._user_killed_processes
+        if was_user_killed:
+            self._user_killed_processes.discard(pid_str)
         if session_id:
             exit_code = info.get("exit_code", 0)
-            pid_str = info.get("process_id", "")
             cmd_str = info.get("command", "")
-            prompt_content = (
-                f"[Background Process Notification]:\n"
-                f"Process '{pid_str}' (Command: `{cmd_str}`) has finished with exit code {exit_code}.\n"
-                f"Use shell_read('{pid_str}') to review its final output if needed."
-            )
+            if was_user_killed:
+                prompt_content = (
+                    f"[User Action]: Background process '{pid_str}' (Command: `{cmd_str}`) "
+                    f"was manually stopped by the user."
+                )
+            else:
+                prompt_content = (
+                    f"[Background Process Notification]:\n"
+                    f"Process '{pid_str}' (Command: `{cmd_str}`) has finished with exit code {exit_code}.\n"
+                    f"Use shell_read('{pid_str}') to review its final output if needed."
+                )
             coro = self._handle_auto_awake(
                 target_session_id=session_id,
                 from_session=f"bg_proc_{pid_str}",
@@ -395,6 +405,7 @@ class JsonRpcHandler:
         process_id = params.get("process_id", "")
         if not process_id:
             raise ValueError("process_id is required")
+        self._user_killed_processes.add(process_id)
         from andromity.core.tools import shell_kill
         result = shell_kill(process_id)
         return {"status": "ok", "message": result, "process_id": process_id}
