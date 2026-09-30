@@ -41,6 +41,7 @@ import { getWaterfallScript } from "../src/providers/waterfall/waterfallScript.j
 import { getChatAmbientScript } from "../src/providers/chatview/chatAmbientScript.js";
 import { getChatActivityScript } from "../src/providers/chatview/chatActivityRow.js";
 import { getChatActivityStyles } from "../src/providers/chatview/chatActivityStyles.js";
+import { BackgroundTaskPanel } from "../src/panels/BackgroundTaskPanel.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -1452,10 +1453,12 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     });
     assert.ok(chatHtml.includes('id="bg-process-strip"'), "Chat HTML must include bg-process-strip upside prompt box");
     assert.ok(chatHtml.includes('id="btn-bg-stop-all"'), "Chat HTML must include btn-bg-stop-all 1-click stop button");
+    assert.ok(chatHtml.includes('id="btn-bg-open-tab"'), "Chat HTML must include btn-bg-open-tab to open task logs tab");
     assert.ok(chatHtml.includes('id="bg-process-list"'), "Chat HTML must include bg-process-list");
 
     const chatStyles = getChatStyles();
     assert.ok(chatStyles.includes('.bg-process-strip'), "Chat styles must include .bg-process-strip");
+    assert.ok(chatStyles.includes('.bg-process-item'), "Chat styles must include minimal .bg-process-item");
     assert.ok(chatStyles.includes('.btn-bg-stop-all'), "Chat styles must include .btn-bg-stop-all");
     assert.ok(chatStyles.includes('.bg-strip-dot'), "Chat styles must include pulsing .bg-strip-dot");
 
@@ -1469,6 +1472,10 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     });
     assert.ok(clientScript.includes('updateBgProcessStripUI'), "Client script must include updateBgProcessStripUI");
     assert.ok(clientScript.includes('activeBgProcesses'), "Client script must manage activeBgProcesses");
+    assert.ok(clientScript.includes('open_bg_task_tab'), "Client script must dispatch open_bg_task_tab to view logs in editor tab");
+    assert.ok(clientScript.includes('bg-item-logs-btn'), "Client script must render minimal bg-item-logs-btn");
+
+    assert.equal(BackgroundTaskPanel.viewType, "andromity.backgroundTaskTab", "BackgroundTaskPanel must have viewType andromity.backgroundTaskTab");
   });
 });
 

@@ -904,27 +904,31 @@ ${styles}
         <div class="tracker-todos-list" id="tracker-todos-list"></div>
       </div>
 
-      <!-- Collapsible Background Process Strip (Merged upside Prompt Box, like Todos) -->
+      <!-- Collapsible Background Process Strip (Merged directly above Prompt Box, zero cheap borders) -->
       <div class="bg-process-strip" id="bg-process-strip" style="display:none;">
-        <div class="bg-strip-header" id="bg-strip-header" title="Click to collapse / expand running processes">
-          <div class="bg-strip-info" id="bg-strip-info">
-            <span class="bg-strip-chevron" id="bg-strip-chevron">
+        <div class="tracker-row" id="bg-strip-header" title="Click to collapse / expand running processes">
+          <div class="tracker-info" id="bg-strip-info">
+            <span class="tracker-chevron" id="bg-strip-chevron">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
             </span>
-            <span class="bg-strip-icon">
+            <span class="tracker-icon bg-strip-icon">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
             </span>
-            <span class="bg-strip-title" id="bg-strip-title">Background Tasks</span>
-            <span class="bg-strip-badge"><span class="bg-strip-dot"></span><span id="bg-strip-count">1 running</span></span>
+            <span class="tracker-title" id="bg-strip-title">Background Tasks</span>
+            <span class="tracker-count bg-strip-badge"><span class="bg-strip-dot"></span><span id="bg-strip-count">1 running</span></span>
             <span class="bg-strip-timer" id="bg-strip-timer">0s</span>
           </div>
-          <div class="bg-strip-actions">
-            <button class="btn-bg-stop-all" id="btn-bg-stop-all" title="Stop running background processes">
-              <span class="codicon codicon-debug-stop"></span> Stop
+          <div class="tracker-actions">
+            <button class="btn-tracker-open" id="btn-bg-open-tab" aria-label="Open task logs in editor tab" title="Open Task Logs in Editor Tab">
+              <span>View Logs</span>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 13v6a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-6"></path><polyline points="9 3 3 3 3 9"></polyline><line x1="14" y1="14" x2="3" y2="3"></line></svg>
+            </button>
+            <button class="btn-tracker-close btn-bg-stop-all" id="btn-bg-stop-all" aria-label="Stop running background processes" title="Stop running background processes">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg>
             </button>
           </div>
         </div>
-        <div class="bg-process-list" id="bg-process-list"></div>
+        <div class="tracker-todos-list bg-process-list" id="bg-process-list"></div>
       </div>
 
       <div class="prompt-box">

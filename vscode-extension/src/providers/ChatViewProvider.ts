@@ -6,6 +6,7 @@ import { EditorBridge } from "../integrations/EditorBridge.js";
 import { SettingsPanel } from "../panels/SettingsPanel.js";
 import { SessionTabPanel } from "../panels/SessionTabPanel.js";
 import { WaterfallPanel } from "../panels/WaterfallPanel.js";
+import { BackgroundTaskPanel } from "../panels/BackgroundTaskPanel.js";
 import { ChangesReviewPanel } from "../panels/ChangesReviewPanel.js";
 import { PythonBridge } from "../server/PythonBridge.js";
 import { RpcClient } from "../server/RpcClient.js";
@@ -1903,6 +1904,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           } catch (err: any) {
             vscode.window.showErrorMessage(`Failed to stop process ${procId}: ${err?.message || err}`);
           }
+        }
+        break;
+      }
+
+      case "open_bg_task_tab": {
+        const procId = message.processId || message.process_id;
+        const cmd = message.command || "";
+        if (procId) {
+          BackgroundTaskPanel.createOrShow(
+            this._extensionUri,
+            procId,
+            this._rpcClient,
+            cmd,
+            this._currentSessionId
+          );
         }
         break;
       }

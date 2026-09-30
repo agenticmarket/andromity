@@ -399,6 +399,16 @@ class JsonRpcHandler:
         result = shell_kill(process_id)
         return {"status": "ok", "message": result, "process_id": process_id}
 
+    async def rpc_process_read(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Read output from a running or exited background process."""
+        process_id = params.get("process_id", "")
+        lines = int(params.get("lines", 200))
+        if not process_id:
+            raise ValueError("process_id is required")
+        from andromity.core.tools import shell_read
+        output = shell_read(process_id, lines=lines)
+        return {"process_id": process_id, "output": output}
+
     async def rpc_process_list(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """List active background processes."""
         from andromity.core.tools import _bg_processes, _bg_lock, _bg_project_key

@@ -10,6 +10,7 @@ import { SessionTreeProvider } from "./providers/SessionTreeProvider.js";
 import { SettingsPanel } from "./panels/SettingsPanel.js";
 import { PlanEditorPanel } from "./panels/PlanEditorPanel.js";
 import { WaterfallPanel, WaterfallTraceStore } from "./panels/WaterfallPanel.js";
+import { BackgroundTaskPanel } from "./panels/BackgroundTaskPanel.js";
 import { ChangesReviewPanel } from "./panels/ChangesReviewPanel.js";
 import { PythonBridge, formatTimestamp } from "./server/PythonBridge.js";
 import { RpcClient } from "./server/RpcClient.js";

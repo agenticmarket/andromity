@@ -132,14 +132,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           const elStr = formatElapsedSecs(el);
           const safeCmd = escapeHtml((proc.command || 'Process ' + procId).split(String.fromCharCode(10)).join(' '));
           const safeProcId = escapeHtml(procId);
-          itemsHtml += '<div class="bg-process-item" data-process-id="' + safeProcId + '">' +
+          itemsHtml += '<div class="bg-process-item" data-process-id="' + safeProcId + '" title="Click to view live logs and management in editor tab">' +
             '<div class="bg-item-left">' +
               '<span class="bg-item-id">' + safeProcId + '</span>' +
               '<span class="bg-item-cmd" title="' + safeCmd + '">' + safeCmd + '</span>' +
             '</div>' +
             '<div class="bg-item-right">' +
               '<span class="bg-item-elapsed" id="bg-elapsed-' + safeProcId + '">' + elStr + '</span>' +
-              '<button class="bg-item-stop-btn" data-process-id="' + safeProcId + '">Stop</button>' +
+              '<button class="btn-tracker-open bg-item-logs-btn" data-process-id="' + safeProcId + '" title="Open task logs in editor tab">Logs</button>' +
+              '<button class="btn-tracker-close bg-item-stop-btn" data-process-id="' + safeProcId + '" title="Stop process"><svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg></button>' +
             '</div>' +
           '</div>';
         });
@@ -169,11 +170,28 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       });
     }
 
+    const btnBgOpenTab = document.getElementById('btn-bg-open-tab');
+    if (btnBgOpenTab) {
+      btnBgOpenTab.addEventListener('click', function(ev) {
+        ev.stopPropagation();
+        if (activeBgProcesses.size > 0) {
+          const first = activeBgProcesses.values().next().value;
+          if (first) {
+            vscode.postMessage({
+              type: 'open_bg_task_tab',
+              processId: first.process_id,
+              command: first.command || ''
+            });
+          }
+        }
+      });
+    }
+
     if (btnBgStopAll) {
       btnBgStopAll.addEventListener('click', function(ev) {
         ev.stopPropagation();
         btnBgStopAll.disabled = true;
-        btnBgStopAll.textContent = 'Stopping...';
+        btnBgStopAll.innerHTML = '<span class="codicon codicon-loading codicon-modifier-spin"></span>';
         activeBgProcesses.forEach(function(proc, procId) {
           vscode.postMessage({ type: 'kill_process', processId: procId });
         });
@@ -188,8 +206,24 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           const procId = stopBtn.getAttribute('data-process-id');
           if (procId) {
             stopBtn.disabled = true;
-            stopBtn.textContent = 'Stopping...';
+            stopBtn.innerHTML = '<span class="codicon codicon-loading codicon-modifier-spin"></span>';
             vscode.postMessage({ type: 'kill_process', processId: procId });
+          }
+          return;
+        }
+
+        const logsBtn = ev.target.closest('.bg-item-logs-btn');
+        const item = ev.target.closest('.bg-process-item');
+        if (logsBtn || item) {
+          const target = logsBtn || item;
+          const procId = target.getAttribute('data-process-id');
+          if (procId) {
+            const proc = activeBgProcesses.get(procId);
+            vscode.postMessage({
+              type: 'open_bg_task_tab',
+              processId: procId,
+              command: proc ? proc.command : ''
+            });
           }
         }
       });
@@ -8046,10 +8080,21 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   }
 
                   if ((msg.tool_name === 'shell_kill') && msg.success !== false) {
+                    let kPid = '';
                     const km = String(msg.result || '').match(/Process '([^']+)'/);
-                    const kPid = km ? km[1] : '';
+                    if (km) kPid = km[1];
+                    if (!kPid && targetTool) {
+                      try {
+                        const rawArgs = targetTool.getAttribute('data-tool-args');
+                        const parsed = JSON.parse(rawArgs || '{}');
+                        if (parsed.process_id) kPid = parsed.process_id;
+                      } catch (e) {}
+                    }
                     if (kPid && activeBgProcesses.has(kPid)) {
                       activeBgProcesses.delete(kPid);
+                      updateBgProcessStripUI();
+                    } else if (!kPid && activeBgProcesses.size === 1) {
+                      activeBgProcesses.clear();
                       updateBgProcessStripUI();
                     }
                     if (typeof window.handleProcessExitedUI === 'function') {

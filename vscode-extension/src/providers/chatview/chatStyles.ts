@@ -1221,6 +1221,7 @@ export function getChatStyles(): string {
     }
 
     /* ─── Background Process Strip (Merged seamlessly with Prompt Box) ──────── */
+    /* ─── Background Process Strip (Merged seamlessly with Prompt Box, zero cheap borders) ──────── */
     .bg-process-strip {
       margin: 0;
       padding: 7px 12px 6px 12px;
@@ -1246,11 +1247,8 @@ export function getChatStyles(): string {
     .bg-process-strip.collapsed .bg-process-list {
       display: none !important;
     }
-    .bg-process-strip.collapsed .bg-strip-chevron svg {
+    .bg-process-strip.collapsed .tracker-chevron {
       transform: rotate(-90deg);
-    }
-    .bg-strip-chevron svg {
-      transition: transform 0.15s ease;
     }
     .has-bg-process .prompt-box,
     .composer-container:has(.bg-process-strip:not([style*="display: none"]):not([style*="display:none"])) .prompt-box {
@@ -1263,41 +1261,19 @@ export function getChatStyles(): string {
       border-top-right-radius: 0 !important;
       border-top: none !important;
     }
-    .bg-strip-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      user-select: none;
+    .composer-container.has-bg-process:focus-within .bg-process-strip,
+    .composer-container:has(.prompt-box:focus-within) .bg-process-strip {
+      border-color: rgba(255, 255, 255, 0.18);
+      border-bottom-color: rgba(255, 255, 255, 0.07);
     }
-    .bg-strip-info {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      font-size: 12px;
-      color: var(--vscode-foreground, #e4e4e7);
-      min-width: 0;
-      flex: 1;
-      cursor: pointer;
-    }
-    .bg-strip-chevron {
-      color: var(--vscode-descriptionForeground, #a1a1aa);
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
+    .bg-process-strip:hover {
+      border-color: var(--vscode-focusBorder, rgba(255, 255, 255, 0.15));
     }
     .bg-strip-icon {
       color: var(--accent, #58a6ff);
       display: inline-flex;
       align-items: center;
       justify-content: center;
-    }
-    .bg-strip-title {
-      font-weight: 500;
-      font-size: 11px;
-      letter-spacing: -0.01em;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
     }
     .bg-strip-badge {
       display: inline-flex;
@@ -1307,9 +1283,9 @@ export function getChatStyles(): string {
       font-weight: 600;
       padding: 1px 6px;
       border-radius: 9999px;
-      background: rgba(56, 189, 248, 0.14);
+      background: rgba(56, 189, 248, 0.12);
       color: #38bdf8;
-      border: 1px solid rgba(56, 189, 248, 0.25);
+      border: 1px solid rgba(56, 189, 248, 0.22);
     }
     .bg-strip-dot {
       width: 6px;
@@ -1328,50 +1304,44 @@ export function getChatStyles(): string {
       color: var(--vscode-descriptionForeground, #a1a1aa);
       margin-left: 2px;
     }
-    .bg-strip-actions {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
     .btn-bg-stop-all {
-      background: rgba(248, 81, 73, 0.12);
-      color: #f85149;
-      border: 1px solid rgba(248, 81, 73, 0.25);
-      border-radius: 4px;
-      padding: 2px 7px;
-      font-size: 11px;
-      font-weight: 500;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
+      color: #f85149 !important;
+      opacity: 0.8;
       transition: all 0.12s ease;
     }
     .btn-bg-stop-all:hover {
-      background: rgba(248, 81, 73, 0.22);
-      border-color: rgba(248, 81, 73, 0.45);
+      opacity: 1;
+      background: rgba(248, 81, 73, 0.15) !important;
+      color: #ff7b72 !important;
     }
     .btn-bg-stop-all:disabled {
-      opacity: 0.6;
+      opacity: 0.5;
       cursor: wait;
     }
     .bg-process-list {
       display: flex;
       flex-direction: column;
-      gap: 4px;
-      padding-top: 4px;
-      border-top: 1px solid rgba(255, 255, 255, 0.05);
-      margin-top: 2px;
+      margin-top: 4px;
+      max-height: 180px;
+      overflow-y: auto;
+      padding-right: 2px;
     }
     .bg-process-item {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
-      padding: 3px 6px;
+      padding: 5px 6px;
+      font-size: 11.5px;
+      line-height: 1.4;
+      color: var(--vscode-foreground, #e4e4e7);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
       border-radius: 4px;
-      background: rgba(255, 255, 255, 0.02);
-      font-size: 11px;
+      transition: background 0.12s ease;
+      cursor: pointer;
+    }
+    .bg-process-item:last-child {
+      border-bottom: none;
     }
     .bg-process-item:hover {
       background: rgba(255, 255, 255, 0.04);
@@ -1379,7 +1349,7 @@ export function getChatStyles(): string {
     .bg-item-left {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 7px;
       min-width: 0;
       flex: 1;
     }
@@ -1388,9 +1358,11 @@ export function getChatStyles(): string {
       font-size: 10px;
       color: #38bdf8;
       background: rgba(56, 189, 248, 0.1);
-      padding: 1px 4px;
+      border: 1px solid rgba(56, 189, 248, 0.2);
+      padding: 0px 5px;
       border-radius: 3px;
       flex-shrink: 0;
+      font-weight: 500;
     }
     .bg-item-cmd {
       font-family: var(--font-mono, monospace);
@@ -1399,6 +1371,8 @@ export function getChatStyles(): string {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      flex: 1;
+      min-width: 0;
     }
     .bg-item-right {
       display: flex;
@@ -1408,21 +1382,22 @@ export function getChatStyles(): string {
     }
     .bg-item-elapsed {
       font-family: var(--font-mono, monospace);
-      font-size: 10px;
+      font-size: 10.5px;
       color: var(--vscode-descriptionForeground, #a1a1aa);
     }
-    .bg-item-stop-btn {
-      background: rgba(248, 81, 73, 0.12);
-      color: #f85149;
-      border: 1px solid rgba(248, 81, 73, 0.25);
+    .bg-item-logs-btn {
+      padding: 1px 6px;
+      font-size: 10.5px;
       border-radius: 3px;
-      padding: 1px 5px;
-      font-size: 10px;
-      cursor: pointer;
+    }
+    .bg-item-stop-btn {
+      padding: 2px 4px;
+      border-radius: 3px;
+      color: #f85149;
     }
     .bg-item-stop-btn:hover {
-      background: rgba(248, 81, 73, 0.22);
-      border-color: rgba(248, 81, 73, 0.45);
+      background: rgba(248, 81, 73, 0.15);
+      color: #ff7b72;
     }
 
     /* ─── Compaction In-Progress Indicator Banner ────────────────────────────── */
