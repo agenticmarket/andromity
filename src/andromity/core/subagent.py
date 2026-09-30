@@ -108,8 +108,10 @@ class SubAgent:
         progress_callback: Optional[Any] = None,
         context_snapshot: Optional[Any] = None,
         permission_mode: Optional[str] = None,
+        turn_id: Optional[str] = None,
     ):
         self.parent_session_id = parent_session_id
+        self.turn_id = turn_id
         self.role = role.lower().strip()
         self.task = task
         self.project_path = project_path
@@ -417,6 +419,7 @@ class SubAgent:
                 "tools": self.allowed_tools if self.allowed_tools else None,
                 "provider_name": self.provider,
                 "model": self.model,
+                "turn_id": self.turn_id,
             }
 
             msgs = [

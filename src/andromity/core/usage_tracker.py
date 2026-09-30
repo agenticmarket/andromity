@@ -35,14 +35,10 @@ class UsageTracker:
     def get_summary(self, time_range: TimeRange = "all",
                     project_path: str | None = None) -> UsageSummary:
         db_sessions = self._load_sessions_from_db(project_path)
-        disk_sessions = self._load_sessions(project_path)
-        
-        known_ids = {s.session_id for s in db_sessions}
-        sessions = list(db_sessions)
-        for s in disk_sessions:
-            if s.session_id not in known_ids:
-                sessions.append(s)
-                known_ids.add(s.session_id)
+        if db_sessions:
+            sessions = db_sessions
+        else:
+            sessions = self._load_sessions(project_path)
 
         cutoff = self._cutoff(time_range)
         summary = UsageSummary()

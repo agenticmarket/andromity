@@ -21,6 +21,7 @@ class SubAgentOrchestrator:
         self._results: Dict[str, SubAgentResult] = {}
         self._max_concurrent = SubAgentConfigManager.get_max_concurrent()
         self._semaphore = asyncio.Semaphore(self._max_concurrent)
+        self.current_turn_id: Optional[str] = None
 
     async def spawn(
         self,
@@ -36,8 +37,10 @@ class SubAgentOrchestrator:
         progress_callback: Optional[Any] = None,
         context_snapshot: Optional[Any] = None,
         permission_mode: Optional[str] = None,
+        turn_id: Optional[str] = None,
     ) -> SubAgentResult:
         """Spawn a sub-agent. If wait=True, waits for completion and returns SubAgentResult."""
+        resolved_turn_id = turn_id or self.current_turn_id
         subagent = SubAgent(
             parent_session_id=self.parent_session_id,
             role=role,
@@ -52,6 +55,7 @@ class SubAgentOrchestrator:
             progress_callback=progress_callback,
             context_snapshot=context_snapshot,
             permission_mode=permission_mode or self.permission_mode,
+            turn_id=resolved_turn_id,
         )
         self._agents[subagent.id] = subagent
         log.info("SubAgent spawned: id=%s role=%s model=%s provider=%s", subagent.id, subagent.role, subagent.model, subagent.provider)

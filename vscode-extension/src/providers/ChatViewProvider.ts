@@ -1,3 +1,4 @@
+import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { DiffManager } from "../integrations/DiffManager.js";
@@ -11,6 +12,7 @@ import { RpcClient } from "../server/RpcClient.js";
 import {
   ClarifyingQuestionsEvent,
   ModelInfo,
+  PinnedModelInfo,
   ProviderInfo,
   SessionInfo,
   SubAgentEvent,
@@ -45,6 +47,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _currentMode: string = "safe";
   private _currentReasoning: string = "medium";
   private _models: ModelInfo[] = [];
+  private _pinnedModels: PinnedModelInfo[] = [];
   private _providers: ProviderInfo[] = [];
   private _currentPlan: any = null;
   private _sessionPlans: Map<string, any> = new Map();
@@ -472,28 +475,141 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.openReviewWebview(filePath);
   }
 
-  /** Open a file directly in VS Code's editor, optionally jumping to a specific line. */
+  /** Open a file directly in VS Code's editor in a new tab, or reveal a folder in the Explorer sidebar. */
   public async openFile(filePath: string, line?: number): Promise<void> {
     try {
-      const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      let cleanPath = filePath;
+      if (!filePath) return;
+      let cleanPath = filePath.trim();
+      cleanPath = cleanPath.replace(/^[`'"]+|[`'"]+$/g, "");
       const match = cleanPath.match(/^(.+?):(\d+)(?::\d+)?$/);
       if (match) {
         cleanPath = match[1];
         if (!line) line = parseInt(match[2], 10);
       }
-      const absPath = path.isAbsolute(cleanPath) ? cleanPath : (ws ? path.join(ws, cleanPath) : cleanPath);
-      const uri = vscode.Uri.file(absPath);
+      const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      let resolvedPath = path.isAbsolute(cleanPath) ? cleanPath : (ws ? path.join(ws, cleanPath) : cleanPath);
+
+      if (!fs.existsSync(resolvedPath)) {
+        let found = false;
+        if (vscode.workspace.workspaceFolders) {
+          for (const wf of vscode.workspace.workspaceFolders) {
+            const candidate = path.join(wf.uri.fsPath, cleanPath);
+            if (fs.existsSync(candidate)) {
+              resolvedPath = candidate;
+              found = true;
+              break;
+            }
+          }
+        }
+        if (!found) {
+          const matchDir = this._findWorkspaceDirectory(cleanPath);
+          if (matchDir) {
+            resolvedPath = matchDir;
+            found = true;
+          }
+        }
+        if (!found) {
+          const files = await vscode.workspace.findFiles(`**/${cleanPath}`, "**/node_modules/**", 1);
+          if (files && files.length > 0) {
+            resolvedPath = files[0].fsPath;
+            found = true;
+          }
+        }
+      }
+
+      const uri = vscode.Uri.file(resolvedPath);
+
+      // If directory/folder: reveal in Explorer sidebar view
+      if (fs.existsSync(resolvedPath) && fs.statSync(resolvedPath).isDirectory()) {
+        try {
+          await vscode.commands.executeCommand("workbench.view.explorer");
+        } catch {}
+        await vscode.commands.executeCommand("revealInExplorer", uri);
+        return;
+      }
+
+      // If file: open in editor in a new tab (preview: false)
       const doc = await vscode.workspace.openTextDocument(uri);
-      const editor = await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: false });
+      const editor = await vscode.window.showTextDocument(doc, { preview: false, preserveFocus: false });
       if (line && line > 0) {
         const pos = new vscode.Position(line - 1, 0);
         editor.selection = new vscode.Selection(pos, pos);
         editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
       }
     } catch (err: any) {
-      vscode.window.showErrorMessage(`Failed to open file: ${err.message}`);
+      vscode.window.showErrorMessage(`Failed to open: ${err.message}`);
     }
+  }
+
+  private _findWorkspaceDirectory(dirName: string): string | null {
+    const wsFolders = vscode.workspace.workspaceFolders;
+    if (!wsFolders || !dirName) return null;
+    const target = dirName.replace(/[\\/]+$/, "").toLowerCase();
+    const ignore = new Set(["node_modules", ".git", ".venv", "venv", "dist", "build", ".pytest_cache", "__pycache__"]);
+
+    for (const wf of wsFolders) {
+      const root = wf.uri.fsPath;
+      if (path.basename(root).toLowerCase() === target) return root;
+      const queue = [root];
+      while (queue.length > 0) {
+        const current = queue.shift()!;
+        try {
+          const entries = fs.readdirSync(current, { withFileTypes: true });
+          for (const entry of entries) {
+            if (entry.isDirectory()) {
+              if (ignore.has(entry.name) || entry.name.includes("venv") || entry.name.includes("cache")) continue;
+              const full = path.join(current, entry.name);
+              const rel = path.relative(root, full).replace(/\\/g, "/");
+              if (entry.name.toLowerCase() === target || rel.toLowerCase() === target) {
+                return full;
+              }
+              queue.push(full);
+            }
+          }
+        } catch {}
+      }
+    }
+    return null;
+  }
+
+  public getWorkspacePaths(): { files: string[]; dirs: string[] } {
+    const wsFolders = vscode.workspace.workspaceFolders;
+    if (!wsFolders || wsFolders.length === 0) return { files: [], dirs: [] };
+    const files = new Set<string>();
+    const dirs = new Set<string>();
+    const ignore = new Set(["node_modules", ".git", ".venv", "venv", "dist", "build", ".pytest_cache", "__pycache__", ".session_cache", ".pyinstaller-build"]);
+
+    for (const wf of wsFolders) {
+      const root = wf.uri.fsPath;
+      try {
+        const traverse = (currentDir: string, depth = 0) => {
+          if (depth > 4) return;
+          let entries: fs.Dirent[] = [];
+          try {
+            entries = fs.readdirSync(currentDir, { withFileTypes: true });
+          } catch {
+            return;
+          }
+          for (const entry of entries) {
+            const name = entry.name;
+            if (name.startsWith(".") && name !== ".github" && name !== ".vscode" && name !== ".andromity" && name !== ".kilo") continue;
+            const full = path.join(currentDir, name);
+            const rel = path.relative(root, full).replace(/\\/g, "/");
+            if (entry.isDirectory()) {
+              if (ignore.has(name) || name.includes("venv") || name.includes("cache")) continue;
+              dirs.add(name);
+              dirs.add(rel);
+              traverse(full, depth + 1);
+            } else if (entry.isFile()) {
+              files.add(name);
+              files.add(rel);
+            }
+          }
+        };
+        traverse(root);
+      } catch {}
+    }
+    return { files: Array.from(files), dirs: Array.from(dirs) };
   }
 
   /** Attach a file as prompt context in the webview. */
@@ -533,7 +649,159 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  /** Open a session in a dedicated editor tab (side-by-side parallel view). */
+  /** Open onboarding or login card in webview. */
+  public showOnboardingOrLogin() {
+    if (this._view) {
+      this._view.show?.(true);
+      this._postToWebview({ type: "show_onboarding_guide" });
+    }
+  }
+
+  public async handleAuthToken(token: string, username?: string, email?: string) {
+    if (!token) return;
+    try {
+      if (this._context?.secrets) {
+        await this._context.secrets.store("andromity.authToken", token);
+        if (username) await this._context.secrets.store("andromity.userName", username);
+        if (email) await this._context.secrets.store("andromity.userEmail", email);
+      }
+      if (this._rpcClient) {
+        try {
+          await this._rpcClient.call("config.set_api_key", { provider: "andromity", api_key: token });
+          await this._rpcClient.call("config.set", { section: "default", key: "provider", value: "andromity" });
+          await this._rpcClient.call("config.set", { section: "default", key: "model", value: "auto" });
+          if (username) await this._rpcClient.call("config.set", { section: "default", key: "user_name", value: username });
+          if (email) await this._rpcClient.call("config.set", { section: "default", key: "user_email", value: email });
+        } catch {}
+      }
+      this._currentProvider = "andromity";
+      this._currentModel = "auto";
+      this.broadcastToWebviews({
+        type: "auth_state_changed",
+        isAuthenticated: true,
+        plan: "authenticated",
+        username: username || "Developer",
+        token: token.slice(0, 8) + "...",
+      });
+      await this.fetchUsage();
+      if (SettingsPanel.currentPanel) {
+        await SettingsPanel.currentPanel.loadData(true);
+      }
+      vscode.window.showInformationMessage("Successfully signed in to AgenticMarket!");
+      await this.refreshConfig();
+    } catch (e: any) {
+      vscode.window.showErrorMessage(`Failed to activate login: ${e.message}`);
+    }
+  }
+
+  public async logout() {
+    if (this._context?.secrets) {
+      await this._context.secrets.delete("andromity.authToken");
+      await this._context.secrets.delete("andromity.userName");
+      await this._context.secrets.delete("andromity.userEmail");
+    }
+    if (this._rpcClient) {
+      try {
+        await this._rpcClient.call("auth.logout", {});
+        await this._rpcClient.call("config.set_api_key", { provider: "andromity", api_key: "" });
+      } catch {}
+    }
+    this.broadcastToWebviews({
+      type: "auth_state_changed",
+      isAuthenticated: false,
+      plan: "anonymous",
+      username: "Anonymous",
+    });
+    await this.fetchUsage();
+    if (SettingsPanel.currentPanel) {
+      await SettingsPanel.currentPanel.loadData(true);
+    }
+    vscode.window.showInformationMessage("Signed out of AgenticMarket account. Reverted to anonymous trial.");
+    await this.refreshConfig();
+  }
+
+  public async openLogin() {
+    let state = "";
+    try {
+      const crypto = await import("crypto");
+      state = crypto.randomBytes(24).toString("hex");
+    } catch {
+      state = Array.from(Array(48), () => Math.floor(Math.random() * 16).toString(16)).join("");
+    }
+    if (this._context?.secrets) {
+      await this._context.secrets.store("andromity.oauth_state", state);
+    }
+    const scheme = vscode.env.uriScheme || "vscode";
+    const callbackUrl = `${scheme}://agenticmarket.andromity-agent/auth?state=${state}`;
+    const base = await this._getWebAppBaseUrl();
+    const targetUrl = `${base}/auth/connect?callback=${encodeURIComponent(callbackUrl)}`;
+    await vscode.env.openExternal(vscode.Uri.parse(targetUrl));
+  }
+
+  public async _getWebAppBaseUrl(): Promise<string> {
+    const configured = vscode.workspace.getConfiguration("andromity").get<string>("webAppUrl");
+    if (configured && configured.trim().length > 0) {
+      return configured.trim().replace(/\/+$/, "");
+    }
+    return "https://agenticmarket.dev";
+  }
+
+  public _getGatewayBaseUrl(): string {
+    const configured = vscode.workspace.getConfiguration("andromity").get<string>("gatewayUrl");
+    if (configured && configured.trim().length > 0) {
+      return configured.trim().replace(/\/+$/, "");
+    }
+    return "https://gateway.agenticmarket.dev";
+  }
+
+  public async fetchUsage(): Promise<any> {
+    const token = await this._context?.secrets.get("andromity.authToken");
+    const username = (await this._context?.secrets.get("andromity.userName")) || "anonymous";
+    const gatewayUrl = this._getGatewayBaseUrl();
+
+    try {
+      const headers: Record<string, string> = {
+        "User-Agent": "Andromity",
+        "x-andromity-client-id": username,
+      };
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+      const res = await fetch(`${gatewayUrl}/v1/user/usage`, {
+        headers,
+        signal: AbortSignal.timeout(3500),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const effectiveUser = (await this._context?.secrets.get("andromity.userName")) || data.username || username;
+        this.broadcastToWebviews({
+          type: "usage_updated",
+          ...data,
+          username: effectiveUser,
+        });
+        return data;
+      }
+    } catch {}
+
+    const isAuthed = Boolean(token);
+    const fallback = {
+      user_id: username,
+      username: isAuthed ? (await this._context?.secrets.get("andromity.userName")) || "Developer" : "Anonymous",
+      plan: isAuthed ? "authenticated" : "anonymous",
+      turns_today: 0,
+      limit_today: null,
+      turns_remaining: -1,
+      status: "active",
+      last_model: "auto",
+    };
+    this.broadcastToWebviews({
+      type: "usage_updated",
+      ...fallback,
+    });
+    return fallback;
+  }
+
+  /** Open a session in a dedicated editor tab (pop-out editor view). */
   public openSessionInTab(sessionId?: string, sessionName?: string) {
     const sid = sessionId || this._currentSessionId;
     if (sid) {
@@ -545,6 +813,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this._context!,
         this
       );
+      void vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar").then(undefined, () => {});
     }
   }
 
@@ -1278,6 +1547,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return null;
   }
 
+  public broadcastToWebviews(msg: any) {
+    this._postToWebview(msg);
+    for (const tab of SessionTabPanel.getAllPanels()) {
+      try {
+        tab.postMessage(msg);
+      } catch {}
+    }
+  }
+
   private _postToWebview(msg: any) {
     if (this._view) {
       this._view.webview.postMessage(msg);
@@ -1298,11 +1576,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this._rpcClient.call<any[]>("skills.list", { project_path: workspaceFolder }).catch(() => []),
       ]);
 
-      this._models = models || [];
+      this._models = (models || []).filter(m => m.provider !== "andromity" || m.id === "auto");
       this._providers = providers || [];
+      if (!this._providers.some(p => p.id === "andromity")) {
+        this._providers.unshift({
+          id: "andromity",
+          name: "Andromity Auto",
+          has_key: true,
+          portal: "https://agenticmarket.dev",
+        });
+      }
+      if (!this._models.some(m => m.id === "auto" && m.provider === "andromity")) {
+        this._models.unshift({
+          id: "auto",
+          name: "Andromity Auto",
+          provider: "andromity",
+          desc: "Autonomous intelligence engine optimized for agentic coding",
+          context: "256K",
+          is_free: true,
+          tags: ["auto", "recommended"],
+        } as any);
+      }
       this._configData = configData || {};
-      this._currentProvider = configData?.default_provider || "openrouter";
-      this._currentModel = configData?.default_model || "anthropic/claude-3.7-sonnet";
+      this._pinnedModels = Array.isArray(configData?.pinned_models) && configData.pinned_models.length > 0
+        ? configData.pinned_models
+        : [
+            { id: "auto", provider: "andromity", name: "Andromity Auto" },
+            { id: "anthropic/claude-3.7-sonnet", provider: "openrouter", name: "Claude 3.7 Sonnet" },
+          ];
+      this._currentProvider = configData?.default_provider || "andromity";
+      this._currentModel = configData?.default_model || "auto";
       this._currentProfile = configData?.default_profile || "builder";
       this._currentReasoning = configData?.reasoning_effort || "medium";
       this._currentMode = configData?.permission_mode || "safe";
@@ -1404,6 +1707,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         mode: this._currentMode,
         reasoningEffort: this._currentReasoning,
         models: this._models,
+        pinnedModels: this._pinnedModels,
         providers: this._providers,
         skills: skills || [],
         sessions: sessions || [],
@@ -1416,6 +1720,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         ollamaDetectedModel: detectedOllama,
         ollamaStatus: this._lastOllamaStatus,
       });
+
+      const storedToken = await this._context?.secrets.get("andromity.authToken");
+      const storedUser = await this._context?.secrets.get("andromity.userName");
+      const isAuthed = Boolean(storedToken);
+      this._postToWebview({
+        type: "auth_state_changed",
+        isAuthenticated: isAuthed,
+        plan: isAuthed ? "authenticated" : "anonymous",
+        username: storedUser || (isAuthed ? "Developer" : "Anonymous"),
+      });
+      void this.fetchUsage();
     } catch (e: any) {
       console.error("[Andromity Chat] Initial config load failed:", e);
     }
@@ -1482,6 +1797,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this._postToWebview({ type: "backend_ready" });
         await this._loadInitialConfig(true);
       }
+      const wsPaths = this.getWorkspacePaths();
+      this._postToWebview({
+        type: "workspace_files_updated",
+        files: wsPaths.files,
+        dirs: wsPaths.dirs,
+      });
       return;
     }
 
@@ -1883,6 +2204,65 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "activate_andromity_free": {
+        try {
+          if (this._rpcClient) {
+            await this._rpcClient.call("config.set", {
+              section: "default",
+              key: "provider",
+              value: "andromity",
+            });
+            await this._rpcClient.call("config.set", {
+              section: "default",
+              key: "model",
+              value: "auto",
+            });
+          }
+          this._currentProvider = "andromity";
+          this._currentModel = "auto";
+          void this._rpcClient?.call("telemetry.recordFeature", {
+            feature: "onboarding_free_trial_started",
+            session_id: this._currentSessionId,
+          }).catch(() => {});
+          vscode.window.showInformationMessage(
+            "⚡ Andromity Free Trial activated! You're ready to code."
+          );
+          await this._loadInitialConfig(false);
+          this._postToWebview({
+            type: "key_configured_success",
+            provider: "andromity",
+            model: "auto",
+          });
+        } catch (err: any) {
+          vscode.window.showErrorMessage(`Failed to activate free trial: ${err.message}`);
+          this._postToWebview({
+            type: "key_configure_failed",
+            error: err.message,
+          });
+        }
+        break;
+      }
+
+      case "open_login":
+      case "open_github_login": {
+        try {
+          await this.openLogin();
+        } catch (err: any) {
+          vscode.window.showErrorMessage(`Could not open login page: ${err.message}`);
+        }
+        break;
+      }
+
+      case "logout_account": {
+        await this.logout();
+        break;
+      }
+
+      case "refresh_usage": {
+        await this.fetchUsage();
+        break;
+      }
+
       case "start_ollama_server": {
         const ok = await this.startOllamaServer();
         const status = await this.probeOllama();
@@ -2001,7 +2381,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "cycle_mode": {
         const modes = ["safe", "trust", "full", "yolo"];
         const nextIdx = (modes.indexOf(this._currentMode) + 1) % modes.length;
-        let nextMode = modes[nextIdx];
+        let nextMode = (message.nextMode && modes.includes(message.nextMode.toLowerCase()))
+          ? message.nextMode.toLowerCase()
+          : modes[nextIdx];
 
         if (nextMode === "yolo") {
           const confirm = await vscode.window.showWarningMessage(
@@ -2011,7 +2393,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             "Keep Safe Mode"
           );
           if (confirm !== "Enable YOLO Mode") {
-            nextMode = "safe";
+            nextMode = this._currentMode || "safe";
           }
         }
 
@@ -2032,7 +2414,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "cycle_profile":
       case "update_profile": {
-        const profiles = ["builder", "coder", "architect", "reviewer", "tester", "writer"];
+        const profiles = ["builder", "coder", "planner", "reviewer"];
         if (message.value && profiles.includes(message.value.toLowerCase())) {
           this._currentProfile = message.value.toLowerCase();
         } else {
@@ -2264,6 +2646,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               seedMessages: message.seedMessages || [],
             }
           );
+          void vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar").then(undefined, () => {});
           // If shifting the active session from the sidebar to an editor tab,
           // give the sidebar a fresh new session so it starts clean!
           if (sid === this._currentSessionId) {
@@ -2634,10 +3017,35 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         console.error("[Andromity Webview Error]", message);
         break;
       }
+
+      case "toggle_pin": {
+        const { modelId, provider, name } = message;
+        if (modelId) {
+          const idx = this._pinnedModels.findIndex(
+            (p) => p.id === modelId && (!provider || !p.provider || p.provider === provider)
+          );
+          if (idx >= 0) {
+            this._pinnedModels.splice(idx, 1);
+          } else {
+            this._pinnedModels.push({
+              id: modelId,
+              provider: provider || "openrouter",
+              name: name || modelId,
+            });
+          }
+          void this._rpcClient?.call("config.toggle_pin", { modelId, provider, name }).catch(() => {});
+          this._postToWebview({
+            type: "update_pinned_models",
+            pinnedModels: this._pinnedModels,
+          });
+        }
+        break;
+      }
     }
   }
 
   public _getHtmlForWebview(webview: vscode.Webview, customState?: Partial<ChatViewState>): string {
+    const wsPaths = this.getWorkspacePaths();
     return getChatViewHtml(webview, this._extensionUri, {
       currentSessionId: customState?.currentSessionId ?? this._currentSessionId,
       currentModel: customState?.currentModel ?? this._currentModel,
@@ -2646,8 +3054,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       currentProfile: customState?.currentProfile ?? this._currentProfile,
       currentReasoning: customState?.currentReasoning ?? this._currentReasoning,
       models: customState?.models ?? this._models,
+      pinnedModels: customState?.pinnedModels ?? this._pinnedModels,
       wallpaperConfig: customState?.wallpaperConfig ?? this.getWallpaperConfig(webview),
       defaultWallpaperUri: customState?.defaultWallpaperUri ?? webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, "media", "wildcat-panther-dusk.jpg")).toString(),
+      workspaceFiles: customState?.workspaceFiles ?? wsPaths.files,
+      workspaceFolders: customState?.workspaceFolders ?? wsPaths.dirs,
+      extensionVersion: customState?.extensionVersion ?? (this._context?.extension?.packageJSON?.version || "0.2.12"),
     });
   }
 }

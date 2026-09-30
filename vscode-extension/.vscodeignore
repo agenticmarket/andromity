@@ -1,4 +1,12 @@
 .vscode/**
+.env*
+**/.env*
+.dev.vars
+**/.dev.vars
+credentials.json
+service_account.json
+*.pem
+*.key
 .vscode-test/**
 src/**
 test/**

@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 from typing import AsyncGenerator, List, Dict, Any, Optional
 
 from andromity.config import config
@@ -189,6 +190,9 @@ def sanitize_messages_for_api(messages: List[Dict[str, Any]]) -> List[Dict[str, 
     return sanitized
 
 
+STREAM_BACKOFF_DELAYS = [5.0, 10.0, 20.0]
+
+
 async def stream_completion(
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]] = None,
@@ -196,6 +200,7 @@ async def stream_completion(
     model: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
     first_token_timeout: Optional[float] = None,
+    turn_id: Optional[str] = None,
 ) -> AsyncGenerator[StreamEvent, None]:
     # Lazy-import litellm — it has a heavy import chain (~2-4s), so we defer
     # it until the first actual AI call rather than paying the cost at startup.
@@ -242,11 +247,30 @@ async def stream_completion(
         clean_model = model.lstrip("~") if model else model
         litellm_model = f"openrouter/{clean_model}" if not clean_model.startswith("openrouter/") else clean_model
         base_url = provider_cfg.get("base_url") if provider_cfg else None
+    elif provider_name == "opencode":
+        # OpenCode Zen inference gateway — OpenAI-compatible, requires User-Agent header
+        litellm_model = f"openai/{model}" if not model.startswith("openai/") else model
+        base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "https://opencode.ai/inference/openai/v1"
+    elif provider_name == "andromity":
+        clean_model = model or "auto"
+        litellm_model = f"openai/{clean_model}"
+        base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "https://gateway.agenticmarket.dev/v1"
     else:
         litellm_model = f"{provider_name}/{model}" if not model.startswith(f"{provider_name}/") else model
         base_url = provider_cfg.get("base_url") if provider_cfg else None
 
     api_key = config.get_api_key(provider_name)
+    if provider_name == "andromity" and not api_key:
+        api_key = "anonymous_trial"
+    if provider_name == "opencode" and not api_key:
+        # Auto-read token from OpenCode's local auth store (set by `opencode auth login`)
+        try:
+            import json as _json
+            _auth_path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
+            _auth = _json.loads(_auth_path.read_text(encoding="utf-8"))
+            api_key = _auth.get("opencode", {}).get("key") or _auth.get("openrouter", {}).get("key")
+        except Exception:
+            pass
 
     kwargs = {
         "model": litellm_model,
@@ -265,12 +289,22 @@ async def stream_completion(
     if provider_name == "ollama" and _num_ctx:
         kwargs.setdefault("options", {})["num_ctx"] = _num_ctx
 
+    if provider_name == "andromity":
+        andromity_headers = {
+            "User-Agent": "Andromity",
+            "x-andromity-client-id": config.get("user", "anonymous_id", "local_client"),
+            "x-andromity-version": "0.2.12",
+        }
+        if turn_id:
+            andromity_headers["x-andromity-turn-id"] = turn_id
+        kwargs["extra_headers"] = andromity_headers
+
     # OpenRouter: send app identity headers so the dashboard shows "Andromity"
     # instead of "litellm". See https://openrouter.ai/docs#provider-routing
     if provider_name == "openrouter":
         kwargs["extra_headers"] = {
             "User-Agent": "Andromity",
-            "HTTP-Referer": "https://github.com/agenticmarket/andromity",
+            "HTTP-Referer": "https://andromity.agenticmarket.dev",
             "X-Title": "Andromity",
             "X-OpenRouter-Title": "Andromity",
             "X-OpenRouter-Categories": "cli-agent",
@@ -280,182 +314,211 @@ async def stream_completion(
         kwargs["extra_body"].setdefault("provider", {})
         kwargs["extra_body"]["provider"]["allow_fallbacks"] = True
 
+    # OpenCode Zen: Cloudflare requires User-Agent matching the official client
+    if provider_name == "opencode":
+        kwargs["extra_headers"] = {"User-Agent": "opencode/1.0.0"}
+
     log.info("stream_completion start: provider=%s model=%s litellm_model=%s",
              provider_name, model, litellm_model)
 
-    try:
-        if "z-ai/" in model or "glm-" in model:
+    if "z-ai/" in model or "glm-" in model:
+        kwargs.setdefault("extra_body", {})
+        kwargs["extra_body"]["chat_template_kwargs"] = {
+            "enable_thinking": True,
+            "clear_thinking": False
+        }
+
+    # Inject reasoning effort when set
+    if reasoning_effort and reasoning_effort != "off":
+        if provider_name == "openrouter":
             kwargs.setdefault("extra_body", {})
-            kwargs["extra_body"]["chat_template_kwargs"] = {
-                "enable_thinking": True,
-                "clear_thinking": False
-            }
+            kwargs["extra_body"]["reasoning"] = {"effort": reasoning_effort, "exclude": False}
+        else:
+            # OpenAI o-series and compatible providers
+            kwargs["reasoning_effort"] = reasoning_effort
 
-        # Inject reasoning effort when set
-        if reasoning_effort and reasoning_effort != "off":
-            if provider_name == "openrouter":
-                kwargs.setdefault("extra_body", {})
-                kwargs["extra_body"]["reasoning"] = {"effort": reasoning_effort, "exclude": False}
-            else:
-                # OpenAI o-series and compatible providers
-                kwargs["reasoning_effort"] = reasoning_effort
+    # Upstream retry with backoff for stalls, rate limits, and transient drops
+    STREAM_BACKOFF_DELAYS = [5.0, 10.0, 20.0]
+    total_attempts = len(STREAM_BACKOFF_DELAYS) + 1
 
-        max_retries = 3
-        for attempt in range(max_retries + 1):
-            try:
-                response_stream = await acompletion(**kwargs)
-                break
-            except Exception as e:
-                msg = str(e).lower()
-                is_429 = "429" in msg or "rate limit" in msg or "ratelimit" in msg or "quota" in msg
-                is_transient_5xx = any(code in msg for code in ("500", "502", "503", "504", "serviceunavailable", "service_unavailable", "service unavailable", "bad gateway", "gateway timeout", "internal server error"))
-                is_conn_error = any(term in msg for term in ("connection error", "connection reset", "connection refused", "apiconnectionerror", "timeout", "timed out"))
-                if (is_429 or is_transient_5xx or is_conn_error) and attempt < max_retries:
-                    import re, random
-                    if is_429:
-                        wait_s = 2.0 * (attempt + 1)
-                        m = re.search(r"retry in ([\d.]+)s", msg)
-                        if m:
-                            try:
-                                wait_s = min(max(float(m.group(1)), 1.0), 8.0)
-                            except Exception:
-                                pass
-                        log.warning("Rate limit on initial call, retrying in %.1fs (attempt %d/%d)...", wait_s, attempt + 1, max_retries)
-                    else:
-                        wait_s = (1.5 * (2 ** attempt)) + random.uniform(0.1, 0.5)
-                        log.warning("Transient upstream error (%s), retrying in %.1fs (attempt %d/%d)...", type(e).__name__, wait_s, attempt + 1, max_retries)
-                    await asyncio.sleep(wait_s)
-                    continue
-                raise
-    except Exception as e:
-        log.error("acompletion initial error: %s", e, exc_info=True)
-        yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-        yield Done()
-        return
-
-    # ── First-token watchdog (see _first_token_guard) ────────────────────────
-    # Cloud gateways (e.g. OpenRouter) send SSE keep-alive comments while an
-    # upstream is queued/overloaded; those bytes reset the client read timeout,
-    # so `timeout=90` never fires and the stream can stay silent forever. Abort
-    # unless the first chunk arrives in time. Local Ollama servers may take
-    # minutes to cold-load a model, so they get a generous window.
     if first_token_timeout is None:
         first_token_timeout = (
             600.0 if (provider_name == "ollama" or _is_local_base_url(base_url)) else 60.0
         )
-    log.info("stream_completion first-token watchdog: %.0fs (provider=%s model=%s)",
-             first_token_timeout, provider_name, model)
-    response_stream = _first_token_guard(response_stream, first_token_timeout)
 
-    # Map tool_call index → tool_id for interleaved parallel tool call streams
-    open_tools: dict[int, str] = {}
-    usage = None
-    in_thinking = False
+    for attempt in range(total_attempts):
+        has_emitted_content = False
+        open_tools: dict[int, str] = {}
+        usage = None
+        in_thinking = False
+        response_stream = None
 
-    try:
-        async for chunk in response_stream:
-            if not chunk.choices:
+        try:
+            # 1. Start acompletion stream
+            try:
+                response_stream = await acompletion(**kwargs)
+            except Exception as e:
+                msg = str(e).lower()
+                is_daily_quota = (
+                    "daily_limit_reached" in msg
+                    or "quota_exceeded" in msg
+                    or "free trial requests" in msg
+                    or "daily limit" in msg
+                    or "upgrade_url" in msg
+                    or "sign in with github" in msg
+                )
+                if is_daily_quota:
+                    log.info("Daily quota reached upstream. Failing fast without retries.")
+                    yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
+                    yield Done()
+                    return
+
+                is_429 = "429" in msg or "rate limit" in msg or "ratelimit" in msg or "quota" in msg
+                if attempt < len(STREAM_BACKOFF_DELAYS):
+                    wait_s = STREAM_BACKOFF_DELAYS[attempt]
+                    if is_429:
+                        import re
+                        m = re.search(r"retry in ([\d.]+)s", msg)
+                        if m:
+                            try:
+                                wait_s = min(max(float(m.group(1)), 1.0), 30.0)
+                            except Exception:
+                                pass
+                    log.warning(
+                        "Upstream call error (%s). Retrying in %.1fs (attempt %d/%d)...",
+                        type(e).__name__, wait_s, attempt + 1, total_attempts
+                    )
+                    await asyncio.sleep(wait_s)
+                    continue
+                else:
+                    log.error("acompletion initial error after %d attempts: %s", total_attempts, e, exc_info=True)
+                    yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
+                    yield Done()
+                    return
+
+            # 2. Watchdog: guard against upstream queue stall
+            response_stream = _first_token_guard(response_stream, first_token_timeout)
+
+            # 3. Stream chunks
+            async for chunk in response_stream:
+                if not chunk.choices:
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        from andromity.core.usage import normalize_usage
+                        usage = normalize_usage(chunk.usage)
+                    continue
+
+                delta = chunk.choices[0].delta
+
+                if getattr(delta, "tool_calls", None):
+                    has_emitted_content = True
+                    for tool_call in delta.tool_calls:
+                        idx = getattr(tool_call, "index", 0) or 0
+                        if tool_call.id:
+                            if idx in open_tools:
+                                yield ToolCallEnd(tool_id=open_tools[idx])
+                            open_tools[idx] = tool_call.id
+                            yield ToolCallStart(tool_name=tool_call.function.name, tool_id=tool_call.id)
+                        if tool_call.function and getattr(tool_call.function, "arguments", None):
+                            current_id = open_tools.get(idx)
+                            if current_id:
+                                yield ToolCallDelta(tool_id=current_id, args_json_chunk=tool_call.function.arguments)
+                elif any(getattr(delta, attr, None) for attr in ["content", "thinking", "reasoning_content", "reasoning", "thought"]):
+                    for attr in ["thinking", "reasoning_content", "reasoning", "thought"]:
+                        val = getattr(delta, attr, None)
+                        if val:
+                            has_emitted_content = True
+                            yield ThinkingDelta(text=val)
+                            break
+
+                    if getattr(delta, "content", None) and not open_tools:
+                        text = delta.content
+                        has_emitted_content = True
+                        while text:
+                            if "<think>" in text:
+                                in_thinking = True
+                                text = text.split("<think>", 1)[1]
+                                continue
+                            if "</think>" in text:
+                                in_thinking = False
+                                parts = text.split("</think>", 1)
+                                if parts[0]:
+                                    yield ThinkingDelta(text=parts[0])
+                                text = parts[1] if len(parts) > 1 else ""
+                                continue
+                            if in_thinking:
+                                yield ThinkingDelta(text=text)
+                            else:
+                                yield TextDelta(text=text)
+                            break
+
+                finish_reason = chunk.choices[0].finish_reason
+                if finish_reason:
+                    for tid in list(open_tools.values()):
+                        yield ToolCallEnd(tool_id=tid)
+                    open_tools.clear()
+
                 if hasattr(chunk, "usage") and chunk.usage:
                     from andromity.core.usage import normalize_usage
                     usage = normalize_usage(chunk.usage)
+
+            # Successful stream completion!
+            yield Done(usage=usage)
+            return
+
+        except asyncio.CancelledError:
+            log.info("stream_completion cancelled by user — closing provider stream")
+            if response_stream:
+                try:
+                    if hasattr(response_stream, 'aclose'):
+                        await response_stream.aclose()
+                    elif hasattr(response_stream, 'close'):
+                        response_stream.close()
+                except Exception:
+                    pass
+            for tid in list(open_tools.values()):
+                try:
+                    yield ToolCallEnd(tool_id=tid)
+                except Exception:
+                    pass
+            raise
+        except (ProviderStalledError, litellm.RateLimitError, Exception) as e:
+            if response_stream:
+                try:
+                    if hasattr(response_stream, 'aclose'):
+                        await response_stream.aclose()
+                    elif hasattr(response_stream, 'close'):
+                        response_stream.close()
+                except Exception:
+                    pass
+
+            # If stalled or failed BEFORE emitting any tokens, retry with backoff!
+            if not has_emitted_content and attempt < len(STREAM_BACKOFF_DELAYS):
+                wait_s = STREAM_BACKOFF_DELAYS[attempt]
+                log.warning(
+                    "Upstream stalled or failed before emitting tokens (%s: %s). Retrying in %.0fs (attempt %d/%d)...",
+                    type(e).__name__, e, wait_s, attempt + 1, total_attempts
+                )
+                await asyncio.sleep(wait_s)
                 continue
 
-            delta = chunk.choices[0].delta
-
-            if getattr(delta, "tool_calls", None):
-                for tool_call in delta.tool_calls:
-                    idx = getattr(tool_call, "index", 0) or 0
-                    if tool_call.id:
-                        # New tool call starting at this index
-                        if idx in open_tools:
-                            yield ToolCallEnd(tool_id=open_tools[idx])
-                        open_tools[idx] = tool_call.id
-                        yield ToolCallStart(tool_name=tool_call.function.name, tool_id=tool_call.id)
-                    if tool_call.function and getattr(tool_call.function, "arguments", None):
-                        current_id = open_tools.get(idx)
-                        if current_id:
-                            yield ToolCallDelta(tool_id=current_id, args_json_chunk=tool_call.function.arguments)
-            elif any(getattr(delta, attr, None) for attr in ["content", "thinking", "reasoning_content", "reasoning", "thought"]):
-                for attr in ["thinking", "reasoning_content", "reasoning", "thought"]:
-                    val = getattr(delta, attr, None)
-                    if val:
-                        yield ThinkingDelta(text=val)
-                        break
-                
-                if getattr(delta, "content", None) and not open_tools:
-                    text = delta.content
-                    # Handle <think>...</think> tag boundaries across chunks
-                    while text:
-                        if "<think>" in text:
-                            in_thinking = True
-                            text = text.split("<think>", 1)[1]
-                            continue
-                        if "</think>" in text:
-                            in_thinking = False
-                            parts = text.split("</think>", 1)
-                            if parts[0]:
-                                yield ThinkingDelta(text=parts[0])
-                            text = parts[1] if len(parts) > 1 else ""
-                            continue
-                        if in_thinking:
-                            yield ThinkingDelta(text=text)
-                        else:
-                            yield TextDelta(text=text)
-                        break
-
-            finish_reason = chunk.choices[0].finish_reason
-            if finish_reason:
-                for tid in list(open_tools.values()):
-                    yield ToolCallEnd(tool_id=tid)
-                open_tools.clear()
-
-            if hasattr(chunk, "usage") and chunk.usage:
-                from andromity.core.usage import normalize_usage
-                usage = normalize_usage(chunk.usage)
-
-    except asyncio.CancelledError:
-        log.info("stream_completion cancelled by user — closing provider stream")
-        try:
-            # Attempt graceful close of litellm stream (closes httpx / aiohttp)
-            if hasattr(response_stream, 'aclose'):
-                await response_stream.aclose()
-            elif hasattr(response_stream, 'close'):
-                response_stream.close()
-        except Exception:
-            pass
-        # Clean up any open tool spans before exit
-        for tid in list(open_tools.values()):
-            try:
-                yield ToolCallEnd(tool_id=tid)
-            except Exception:
-                pass
-        raise
-    except ProviderStalledError as e:
-        log.error("Provider stalled: %s (provider=%s model=%s)", e, provider_name, model)
-        yield TextDelta(text=_format_stall_text(provider_name, model, e.timeout))
-        yield Done(usage=usage)
-        return
-    except litellm.RateLimitError as e:
-        yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-    except Exception as e:
-        log.error("Mid-stream error (%s): %s", type(e).__name__, e, exc_info=True)
-        yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-    finally:
-        # Always ensure Done is emitted even on cancel? No — caller handles CancelledError
-        # Only emit Done on normal/error paths; CancelledError already re-raised above.
-        pass
-
-    yield Done(usage=usage)
+            log.error("Provider stream error (%s): %s", type(e).__name__, e, exc_info=True)
+            if isinstance(e, ProviderStalledError):
+                yield TextDelta(text=_format_stall_text(provider_name, model, e.timeout))
+            else:
+                yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
+            yield Done(usage=usage)
+            return
 
 
-def classify_and_format_error(
+def classify_error_info(
     e: Exception,
     provider: str = "",
     model: str = "",
     has_images: bool = False,
-) -> str:
+) -> dict:
     import html
     import re
+    from datetime import datetime, timezone, timedelta
 
     msg = str(e) or type(e).__name__
     low = msg.lower()
@@ -469,7 +532,15 @@ def classify_and_format_error(
         or any(k in low for k in ("image", "vision", "multimodal", "modality", "does not support image"))
     ) and any(k in low for k in ("image", "vision", "multimodal", "modality", "support", "400", "payload"))
 
-    is_rate = "429" in msg or "rate limit" in low or "ratelimit" in low or "quota" in low
+    is_rate = (
+        "429" in msg
+        or "rate limit" in low
+        or "ratelimit" in low
+        or "quota" in low
+        or "daily_limit" in low
+        or "daily limit" in low
+        or "free trial" in low
+    )
     is_upstream = any(k in low for k in (
         "midstreamfallbackerror", "serviceunavailable", "service_unavailable", "service unavailable",
         "503", "502", "500", "504", "bad gateway", "gateway timeout",
@@ -485,105 +556,227 @@ def classify_and_format_error(
     icon_compact = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>'
     icon_plus = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>'
     icon_settings = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>'
+    icon_account = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>'
+
+    timer_text = ""
+    timer_html = ""
 
     if is_vision:
         err_type = "vision_unsupported"
         badge = "IMAGE NOT SUPPORTED"
         title = "Model Does Not Support Images"
-        desc = (
+        desc_text = (
+            f"The model '{disp_model}' does not support image inputs. "
+            "Switch to a vision-capable model (e.g. Claude 3.7 Sonnet, GPT-4o, Gemini 2.0 Flash) or retry with text only."
+        )
+        desc_html = (
             f"The model <strong>{html.escape(disp_model)}</strong> does not support image inputs. "
             "Switch to a vision-capable model (e.g. Claude 3.7 Sonnet, GPT-4o, Gemini 2.0 Flash) or retry with text only."
         )
-        actions = (
+        actions_html = (
             f'<button class="btn-error-retry" data-action="retry-without-image" title="Retry prompt with image removed">'
             f'{icon_retry}Retry without Image</button>'
             f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Choose a vision-capable model">'
             f'{icon_model}Switch Model</button>'
         )
+        actions_tui = [
+            "Retry prompt without image attachments",
+            "Press Ctrl+M to switch to a vision model (e.g. Claude 3.7 Sonnet, GPT-4o)",
+        ]
     elif is_upstream:
         err_type = "provider_unavailable"
         badge = "SERVICE DISRUPTED"
         title = "Upstream Service Interruption"
-        desc = (
+        desc_text = (
+            f"The upstream provider ({disp_prov}) experienced a temporary service disruption or mid-stream disconnect. "
+            "This is usually transient—retry to continue."
+        )
+        desc_html = (
             f"The upstream provider ({html.escape(disp_prov)}) experienced a temporary service disruption or mid-stream disconnect. "
             "This is usually transient—click Retry to continue."
         )
-        actions = (
+        actions_html = (
             f'<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn immediately">'
             f'{icon_retry}Retry Turn</button>'
             f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another provider/model">'
             f'{icon_model}Switch Model</button>'
         )
+        actions_tui = [
+            "Type /retry to re-send this turn",
+            "Press Ctrl+M to switch to another provider or model",
+        ]
     elif is_rate:
-        err_type = "rate_limit"
-        badge = "RATE LIMIT"
-        title = "Rate Limit / Quota Reached"
-        retry_hint = ""
-        m = re.search(r"retry in ([\d.]+)s", msg, re.IGNORECASE)
-        if m:
-            retry_hint = f" (wait ~{int(float(m.group(1)))}s)"
-        desc = (
-            f"The provider ({html.escape(disp_prov)}) returned HTTP 429 rate limit or quota exceeded{retry_hint}. "
-            "Please wait a moment and click Retry."
+        is_daily_quota = (
+            "daily_limit_reached" in low
+            or "quota_exceeded" in low
+            or "free trial requests" in low
+            or "daily limit" in low
+            or "upgrade_url" in low
+            or "sign in with github" in low
         )
-        actions = (
-            f'<button class="btn-error-retry" data-action="retry-turn" title="Retry after waiting">'
-            f'{icon_retry}Retry Turn</button>'
-            f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to an alternate model">'
-            f'{icon_model}Switch Model</button>'
-        )
+        if is_daily_quota:
+            now = datetime.now(timezone.utc)
+            tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            secs = int((tomorrow - now).total_seconds())
+            h = max(0, secs // 3600)
+            m = max(0, (secs % 3600) // 60)
+            timer_text = f"Quota resets in {h}h {m}m (00:00 UTC)"
+            timer_html = (
+                f'<div style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-family:var(--font-mono,monospace);color:#10b981;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.22);padding:3px 9px;border-radius:4px;margin-top:8px;">'
+                f'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>'
+                f'{timer_text}'
+                f'</div>'
+            )
+            err_type = "quota_exceeded"
+            badge = "QUOTA LIMIT"
+            title = "Daily Limit Reached"
+            is_authed = bool(config.get_api_key("andromity") or config.get("default", "user_email", "") or config.get("user", "token", ""))
+            if is_authed:
+                desc_text = (
+                    "You have reached your daily gateway limit. "
+                    "Add your BYOK key in Settings for unlimited requests, or adjust your quota in the panel."
+                )
+                desc_html = (
+                    f"<div>{desc_text}</div>"
+                    f"{timer_html}"
+                )
+                actions_html = (
+                    f'<button class="btn-error-retry" data-action="open-settings" title="Configure BYOK">'
+                    f'{icon_settings}Open Settings</button>'
+                    f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to an alternate model">'
+                    f'{icon_model}Switch Model</button>'
+                )
+                actions_tui = [
+                    "Press Ctrl+P -> Settings to configure BYOK for unlimited usage",
+                    "Press Ctrl+M to switch model",
+                ]
+            else:
+                desc_text = (
+                    "You have reached your daily free trial limit. "
+                    "Sign in with your AgenticMarket account to activate your account, or add a BYOK key in Settings."
+                )
+                desc_html = (
+                    f"<div>{desc_text}</div>"
+                    f"{timer_html}"
+                )
+                actions_html = (
+                    f'<button class="btn-error-retry" data-action="open-account-login" title="Sign in with AgenticMarket">'
+                    f'{icon_account}Sign In</button>'
+                    f'<button class="btn-error-secondary" data-action="open-settings" title="Configure BYOK">'
+                    f'{icon_settings}Open Settings</button>'
+                )
+                actions_tui = [
+                    "Run 'andromity auth login' or sign in via Hub",
+                    "Press Ctrl+P -> Settings to configure BYOK for unlimited usage",
+                ]
+        else:
+            err_type = "rate_limit"
+            badge = "RATE LIMIT"
+            title = "Rate Limit / Quota Reached"
+            retry_hint = ""
+            m = re.search(r"retry in ([\d.]+)s", msg, re.IGNORECASE)
+            if m:
+                retry_hint = f" (wait ~{int(float(m.group(1)))}s)"
+            desc_text = (
+                f"The provider ({disp_prov}) returned HTTP 429 rate limit or quota exceeded{retry_hint}. "
+                "Please wait a moment and retry."
+            )
+            desc_html = (
+                f"The provider ({html.escape(disp_prov)}) returned HTTP 429 rate limit or quota exceeded{retry_hint}. "
+                "Please wait a moment and click Retry."
+            )
+            actions_html = (
+                f'<button class="btn-error-retry" data-action="retry-turn" title="Retry after waiting">'
+                f'{icon_retry}Retry Turn</button>'
+                f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to an alternate model">'
+                f'{icon_model}Switch Model</button>'
+            )
+            actions_tui = [
+                "Wait a moment and type /retry",
+                "Press Ctrl+M to switch model",
+            ]
     elif is_context:
         err_type = "context_exceeded"
         badge = "CONTEXT LIMIT"
         title = "Context Window Limit Reached"
-        desc = (
+        desc_text = (
+            f"This conversation has reached the context limit for '{disp_model}'. "
+            "Compact the conversation to preserve key details, or start a fresh session."
+        )
+        desc_html = (
             f"This conversation has reached the context limit for <strong>{html.escape(disp_model)}</strong>. "
             "Compact the conversation to preserve key details, or start a fresh session."
         )
-        actions = (
+        actions_html = (
             f'<button class="btn-error-retry" data-action="trigger-compact" title="Compact previous context">'
             f'{icon_compact}Compact Context</button>'
             f'<button class="btn-error-secondary" data-action="new-session" title="Start a new session">'
             f'{icon_plus}New Session</button>'
         )
+        actions_tui = [
+            "Type /compact to summarize context",
+            "Press Ctrl+N to start a fresh session",
+        ]
     elif is_auth:
         err_type = "auth_error"
         badge = "AUTHENTICATION"
         title = "Authentication Error"
-        desc = (
+        desc_text = (
+            f"Invalid or missing API key for {disp_prov}. "
+            "Please configure your API key in Settings."
+        )
+        desc_html = (
             f"Invalid or missing API key for <strong>{html.escape(disp_prov)}</strong>. "
             "Please configure your API key in Settings."
         )
-        actions = (
+        actions_html = (
             f'<button class="btn-error-retry" data-action="open-settings" title="Open Settings to enter API key">'
             f'{icon_settings}Open Settings</button>'
         )
+        actions_tui = [
+            f"Press Ctrl+P -> Settings to configure key for {disp_prov}",
+        ]
     elif is_ollama_off:
         err_type = "ollama_offline"
         badge = "OFFLINE"
         title = "Local Ollama Not Running"
-        desc = (
+        desc_text = (
+            "Could not connect to local Ollama on port 11434. "
+            "Ensure the Ollama service is active ('ollama serve')."
+        )
+        desc_html = (
             "Could not connect to local Ollama on port 11434. "
             "Ensure the Ollama service is active (<code>ollama serve</code>)."
         )
-        actions = (
+        actions_html = (
             f'<button class="btn-error-retry" data-action="retry-turn" title="Retry connection">'
             f'{icon_retry}Retry Turn</button>'
         )
+        actions_tui = [
+            "Run 'ollama serve' in terminal, then type /retry",
+        ]
     elif is_stall:
         err_type = "timeout"
         badge = "TIMED OUT"
         title = "Provider Connection Timed Out"
-        desc = (
+        desc_text = (
+            f"{disp_prov}/{disp_model} sent no response within the timeout period. "
+            "The server may be overloaded. Retry to try again."
+        )
+        desc_html = (
             f"{html.escape(disp_prov)}/{html.escape(disp_model)} sent no response within the timeout period. "
             "The server may be overloaded. Click Retry to try again."
         )
-        actions = (
+        actions_html = (
             f'<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">'
             f'{icon_retry}Retry Turn</button>'
             f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">'
             f'{icon_model}Switch Model</button>'
         )
+        actions_tui = [
+            "Type /retry to re-send this turn",
+            "Press Ctrl+M to switch to another model",
+        ]
     else:
         err_type = "generic"
         badge = "ERROR"
@@ -591,37 +784,143 @@ def classify_and_format_error(
         first_line = msg.splitlines()[0] if msg else err_cls
         if len(first_line) > 140:
             first_line = first_line[:137] + "..."
-        desc = (
+        desc_text = (
+            f"An error interrupted communication with {disp_prov}: {first_line}. "
+            "Retry to re-send this turn."
+        )
+        desc_html = (
             f"An error interrupted communication with <strong>{html.escape(disp_prov)}</strong>: {html.escape(first_line)}. "
             "Click Retry to re-send this turn."
         )
-        actions = (
+        actions_html = (
             f'<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">'
             f'{icon_retry}Retry Turn</button>'
         )
+        actions_tui = [
+            "Type /retry to re-send this turn",
+        ]
 
-    raw_preview = html.escape(msg[:500] + ("..." if len(msg) > 500 else ""))
+    clean_msg = re.sub(r'\bof \d+ (?:requests|turns)\b', '', msg)
+    raw_preview = clean_msg[:500] + ("..." if len(clean_msg) > 500 else "")
+
+    return {
+        "type": err_type,
+        "badge": badge,
+        "title": title,
+        "desc_text": desc_text,
+        "desc_html": desc_html,
+        "timer_text": timer_text,
+        "timer_html": timer_html,
+        "actions_html": actions_html,
+        "actions_tui": actions_tui,
+        "raw_preview": raw_preview,
+        "err_cls": err_cls,
+    }
+
+
+def format_error_html(info: dict) -> str:
+    """Format classified error as an interactive HTML card for webviews (e.g. VS Code extension)."""
+    import html
     icon_alert = '<span class="error-header-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span>'
 
+    details_block = ""
+    if info["type"] != "quota_exceeded" and info.get("raw_preview"):
+        raw_esc = html.escape(info["raw_preview"])
+        details_block = (
+            f'  <details class="error-details">\n'
+            f'    <summary>Technical Details ({info["err_cls"]})</summary>\n'
+            f'    <pre class="error-code"><code>{raw_esc}</code></pre>\n'
+            f'  </details>\n'
+        )
+
     return (
-        f'\n<div class="andromity-error-card" data-error-type="{err_type}" data-retryable="true">\n'
+        f'\n<div class="andromity-error-card" data-error-type="{info["type"]}" data-retryable="true">\n'
         f'  <div class="error-card-header">\n'
         f'    <div class="error-header-left">\n'
         f'      {icon_alert}\n'
-        f'      <span class="error-badge">{badge}</span>\n'
-        f'      <span class="error-title">{title}</span>\n'
+        f'      <span class="error-badge">{info["badge"]}</span>\n'
+        f'      <span class="error-title">{info["title"]}</span>\n'
         f'    </div>\n'
         f'  </div>\n'
-        f'  <div class="error-card-body">{desc}</div>\n'
-        f'  <details class="error-details">\n'
-        f'    <summary>Technical Details ({err_cls})</summary>\n'
-        f'    <pre class="error-code"><code>{raw_preview}</code></pre>\n'
-        f'  </details>\n'
+        f'  <div class="error-card-body">{info["desc_html"]}</div>\n'
+        f'{details_block}'
         f'  <div class="error-card-actions">\n'
-        f'    {actions}\n'
+        f'    {info["actions_html"]}\n'
         f'  </div>\n'
         f'</div>\n'
     )
+
+
+def format_error_terminal(info: dict) -> str:
+    """Format classified error as clean, beautiful Markdown blockquotes for terminal TUI and CLI.
+
+    Zero HTML tags, zero raw <button> or <svg> elements.
+    """
+    badge = info["badge"]
+    title = info["title"]
+    desc = info["desc_text"]
+    timer = info.get("timer_text", "")
+    actions = info.get("actions_tui", [])
+    raw_preview = info.get("raw_preview", "")
+    err_cls = info.get("err_cls", "")
+    err_type = info.get("type", "")
+
+    lines = [
+        f"> **[{badge}] {title}**",
+        ">",
+        f"> {desc}",
+    ]
+    if timer:
+        lines.extend([
+            ">",
+            f"> ⏱ **{timer}**",
+        ])
+    if actions:
+        lines.extend([
+            ">",
+            "> **Actions:**",
+        ])
+        for act in actions:
+            lines.append(f"> • {act}")
+
+    if err_type != "quota_exceeded" and raw_preview:
+        clean_prev = raw_preview.replace("\n", " ")[:200]
+        lines.extend([
+            ">",
+            f"> *Details ({err_cls}): {clean_prev}*",
+        ])
+
+    return "\n" + "\n".join(lines) + "\n"
+
+
+def classify_and_format_error(
+    e: Exception,
+    provider: str = "",
+    model: str = "",
+    has_images: bool = False,
+    output_format: str = "auto",
+) -> str:
+    """Classify an LLM/gateway error and format it for the appropriate frontend.
+
+    - Under VS Code server (ANDROMITY_CLIENT="server") or pytest: outputs HTML card.
+    - Under TUI or CLI: outputs clean, tag-free terminal Markdown.
+    """
+    import os
+
+    info = classify_error_info(e, provider=provider, model=model, has_images=has_images)
+
+    if output_format == "html":
+        return format_error_html(info)
+    if output_format in ("terminal", "text", "markdown", "cli"):
+        return format_error_terminal(info)
+
+    # Auto-detection:
+    # VS Code daemon or pytest expects HTML cards
+    if os.environ.get("ANDROMITY_CLIENT") == "server" or os.environ.get("PYTEST_CURRENT_TEST"):
+        return format_error_html(info)
+
+    # TUI, CLI, and standalone callers receive terminal markdown
+    return format_error_terminal(info)
 
 
 def _format_error_text(e: Exception) -> str:
@@ -630,4 +929,5 @@ def _format_error_text(e: Exception) -> str:
 
 def _handle_rate_limit(e: Exception) -> TextDelta:
     return TextDelta(text=classify_and_format_error(e))
+
 

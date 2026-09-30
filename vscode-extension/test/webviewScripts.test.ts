@@ -1071,4 +1071,98 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(scriptCode.includes("session-pulse-dot"), "Script must render pulse dot for watching session");
     assert.ok(scriptCode.includes("<span>Watching</span>"), "Script must render Watching label in title case");
   });
+
+  it("should render 1-click seamless onboarding hero, instant free trial button, and GitHub OAuth login button", () => {
+    const mockWebview: any = {
+      asWebviewUri: (uri: any) => ({ toString: () => uri.fsPath || "uri" }),
+      cspSource: "vscode-webview-resource:",
+    };
+    const state: ChatViewState = {
+      currentSessionId: "sess-test",
+      currentModel: "auto",
+      currentProvider: "andromity",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "medium",
+    };
+    const html = getChatViewHtml(mockWebview, mockVscode.Uri.file("/ext"), state);
+    const styles = getChatStyles();
+    const scriptCode = getChatClientScript("icon.svg", state);
+
+    // HTML asserts
+    assert.ok(html.includes("onboarding-instant-hero"), "HTML must include .onboarding-instant-hero");
+    assert.ok(html.includes("btn-onboarding-instant-start"), "HTML must include #btn-onboarding-instant-start");
+    assert.ok(html.includes("btn-onboarding-github-login"), "HTML must include #btn-onboarding-github-login");
+    assert.ok(html.includes("btn-onboarding-andromity-activate"), "HTML must include #btn-onboarding-andromity-activate");
+    assert.ok(html.includes('data-provider="andromity"'), "HTML must include data-provider='andromity' chip");
+    assert.ok(html.includes("onboarding-andromity-form"), "HTML must include #onboarding-andromity-form");
+
+    // CSS asserts
+    assert.ok(styles.includes(".onboarding-instant-hero"), "Styles must define .onboarding-instant-hero");
+    assert.ok(styles.includes(".btn-onboarding-instant-start"), "Styles must define .btn-onboarding-instant-start");
+    assert.ok(styles.includes(".btn-onboarding-github-login"), "Styles must define .btn-onboarding-github-login");
+    assert.ok(styles.includes(".onboarding-or-divider"), "Styles must define .onboarding-or-divider");
+
+    // Script asserts
+    assert.ok(scriptCode.includes("handleActivateAndromityFree"), "Script must define handleActivateAndromityFree");
+    assert.ok(scriptCode.includes("activate_andromity_free"), "Script must dispatch activate_andromity_free message");
+    assert.ok(scriptCode.includes("open_github_login"), "Script must dispatch open_github_login message");
+    assert.ok(scriptCode.includes("isAndromityActive"), "Script must check isAndromityActive to auto-dismiss onboarding");
+  });
+
+  it("should render clean popover dropdown menus for permission modes and agent profiles with zero emojis", () => {
+    const state: ChatViewState = {
+      currentSessionId: "sess-popovers",
+      currentModel: "anthropic/claude-3.7-sonnet",
+      currentProvider: "anthropic",
+      currentMode: "full",
+      currentProfile: "coder",
+      currentReasoning: "high",
+    };
+    const mockWebview: any = {
+      cspSource: "vscode-webview:",
+      asWebviewUri: (u: any) => "vscode-resource://" + (u.fsPath || u.path || String(u)),
+    };
+    const html = getChatViewHtml(mockWebview, mockVscode.Uri.file("/ext"), state);
+    const styles = getChatStyles();
+    const scriptCode = getChatClientScript("icon.svg", state);
+
+    // 1. Permission Mode popover assertions
+    assert.ok(html.includes('id="mode-popover"'), "Chat HTML must contain #mode-popover");
+    assert.ok(html.includes('id="btn-prompt-mode"'), "Chat HTML must contain #btn-prompt-mode");
+    assert.ok(html.includes('data-mode="safe"'), "Mode popover must contain safe mode");
+    assert.ok(html.includes('data-mode="trust"'), "Mode popover must contain trust mode");
+    assert.ok(html.includes('data-mode="full"'), "Mode popover must contain full mode");
+    assert.ok(html.includes('data-mode="yolo"'), "Mode popover must contain yolo mode");
+
+    // 2. Profile popover assertions (strictly the 4 official profiles)
+    assert.ok(html.includes('id="profile-popover"'), "Chat HTML must contain #profile-popover");
+    assert.ok(html.includes('id="btn-prompt-profile"'), "Chat HTML must contain #btn-prompt-profile");
+    assert.ok(html.includes('data-profile="builder"'), "Profile popover must contain builder profile");
+    assert.ok(html.includes('data-profile="coder"'), "Profile popover must contain coder profile");
+    assert.ok(html.includes('data-profile="planner"'), "Profile popover must contain planner profile");
+    assert.ok(html.includes('data-profile="reviewer"'), "Profile popover must contain reviewer profile");
+    assert.ok(!html.includes('data-profile="tester"'), "Profile popover must NOT contain tester profile");
+    assert.ok(!html.includes('data-profile="writer"'), "Profile popover must NOT contain writer profile");
+
+    // 3. Zero Emojis check in popover markup
+    const emojiRegex = /[\u{1F300}-\u{1F6FF}\u{1F900}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u;
+    const modePopoverSlice = html.slice(html.indexOf('id="mode-popover"'), html.indexOf('id="btn-prompt-mode"'));
+    const profilePopoverSlice = html.slice(html.indexOf('id="profile-popover"'), html.indexOf('id="token-capacity-widget"'));
+    assert.ok(!emojiRegex.test(modePopoverSlice), "Mode popover must not contain emojis");
+    assert.ok(!emojiRegex.test(profilePopoverSlice), "Profile popover must not contain emojis");
+
+    // 4. CSS Styles assertions
+    assert.ok(styles.includes('.menu-popover'), "Styles must define .menu-popover");
+    assert.ok(styles.includes('.mode-popover'), "Styles must define .mode-popover");
+    assert.ok(styles.includes('.profile-popover'), "Styles must define .profile-popover");
+    assert.ok(styles.includes('.menu-popover-item'), "Styles must define .menu-popover-item");
+    assert.ok(styles.includes('.menu-popover-check'), "Styles must define .menu-popover-check");
+
+    // 5. Script logic assertions
+    assert.ok(scriptCode.includes("function toggleModePopover"), "Script must define toggleModePopover");
+    assert.ok(scriptCode.includes("function toggleProfilePopover"), "Script must define toggleProfilePopover");
+    assert.ok(scriptCode.includes("updateModeBadge"), "Script must define updateModeBadge");
+    assert.ok(scriptCode.includes("updateProfileBadge"), "Script must define updateProfileBadge");
+  });
 });

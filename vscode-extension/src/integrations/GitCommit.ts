@@ -42,10 +42,72 @@ export function extractCommitMessage(raw: string): string {
 }
 
 /**
+ * Resolve target Git repository from SCM button context, active editor, or changes.
+ */
+export function resolveTargetRepository(git: any, target?: any): any {
+  if (!git || !git.repositories || git.repositories.length === 0) return null;
+
+  // 1. Direct repository or SourceControl passed from SCM title/inputBox action
+  if (target) {
+    if (git.repositories.includes(target)) return target;
+
+    const targetUri = target.rootUri || target._rootUri;
+    if (targetUri) {
+      const match = git.repositories.find((r: any) =>
+        r.rootUri && r.rootUri.fsPath.toLowerCase() === targetUri.fsPath.toLowerCase()
+      );
+      if (match) return match;
+    }
+
+    if (target.repository && git.repositories.includes(target.repository)) {
+      return target.repository;
+    }
+  }
+
+  // 2. Active editor's repository
+  const activeDocUri = vscode.window.activeTextEditor?.document.uri;
+  if (activeDocUri) {
+    try {
+      const repo = git.getRepository(activeDocUri);
+      if (repo) return repo;
+    } catch {}
+  }
+
+  // 3. Repository with staged changes, or workingTreeChanges
+  const repoWithStaged = git.repositories.find((r: any) => (r.state?.indexChanges?.length || 0) > 0);
+  if (repoWithStaged) return repoWithStaged;
+
+  const repoWithChanges = git.repositories.find((r: any) => (r.state?.workingTreeChanges?.length || 0) > 0);
+  if (repoWithChanges) return repoWithChanges;
+
+  // 4. Default to first repository
+  return git.repositories[0];
+}
+
+function isLikelyErrorOutput(text: string): boolean {
+  if (!text) return true;
+  const low = text.toLowerCase().trim();
+  return (
+    low.startsWith("error:") ||
+    low.startsWith("failed to") ||
+    low.startsWith("exception:") ||
+    low.startsWith("traceback") ||
+    low.startsWith("ratelimiterror") ||
+    low.includes("rate limit exceeded") ||
+    low.includes("quota exceeded") ||
+    low.includes("daily limit reached") ||
+    low.includes("invalid api key") ||
+    low.includes("401 unauthorized") ||
+    low.includes("503 service unavailable") ||
+    low.includes("connection refused")
+  );
+}
+
+/**
  * Generate AI commit message via Andromity daemon.
  * Uses vscode.git API to get diff, then asks daemon for Conventional Commit.
  */
-export async function generateCommitMessage(rpcClient: RpcClient | null): Promise<void> {
+export async function generateCommitMessage(rpcClient: RpcClient | null, sourceControlOrRepo?: any): Promise<void> {
   if (!rpcClient) {
     vscode.window.showErrorMessage("Andromity engine not connected. Try: Andromity: Restart Server");
     return;
@@ -58,11 +120,13 @@ export async function generateCommitMessage(rpcClient: RpcClient | null): Promis
   }
 
   const git = gitExtension.getAPI(1);
-  const repo = git.repositories?.[0];
+  const repo = resolveTargetRepository(git, sourceControlOrRepo);
   if (!repo) {
     vscode.window.showErrorMessage("No Git repository found in workspace.");
     return;
   }
+
+  const repoPath = repo.rootUri?.fsPath || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
   await vscode.window.withProgress(
     {
@@ -74,36 +138,35 @@ export async function generateCommitMessage(rpcClient: RpcClient | null): Promis
       try {
         // Build file change summary from Git API
         const changedFiles: string[] = [];
-        for (const c of repo.state.indexChanges || []) {
+        for (const c of repo.state?.indexChanges || []) {
           changedFiles.push(`staged: ${vscode.workspace.asRelativePath(c.uri)}`);
         }
-        for (const c of repo.state.workingTreeChanges || []) {
+        for (const c of repo.state?.workingTreeChanges || []) {
           changedFiles.push(`unstaged: ${vscode.workspace.asRelativePath(c.uri)}`);
         }
         const fileListSummary = changedFiles.length > 0
           ? `Changed files (${changedFiles.length}):\n${changedFiles.slice(0, 40).map(f => `- ${f}`).join("\n")}\n\n`
           : "";
 
-        // Prefer staged changes; fallback to working tree diff via daemon git.diff
+        // Prefer staged changes; fallback to unstaged changes
         let diff = "";
-        const hasStaged = (repo.state.indexChanges || []).length > 0;
-        // Try git extension diff (staged if any, else all)
+        const hasStaged = (repo.state?.indexChanges || []).length > 0;
         try {
-          // vscode.git API: repo.diff(true) = staged, diff(false) = unstaged
-          const staged = hasStaged ? await repo.diff(true) : "";
-          const unstaged = await repo.diff(false);
-          diff = (staged || "") + "\n" + (unstaged || "");
+          if (hasStaged) {
+            diff = await repo.diff(true);
+          } else {
+            diff = await repo.diff(false);
+          }
         } catch {
           // ignore, fallback below
         }
 
-        // Fallback to daemon git.diff which returns HEAD diff
+        // Fallback to daemon git.diff scoped to this exact repository path
         if (!diff || diff.trim().length < 10) {
-          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           const res = await rpcClient.call<{ diff: string }>("git.diff", {
-            project_path: workspaceFolder,
+            project_path: repoPath,
           }, 15000);
-          diff = res.diff || "";
+          diff = res?.diff || "";
         }
 
         if (!diff || diff.trim().length === 0) {
@@ -121,7 +184,7 @@ export async function generateCommitMessage(rpcClient: RpcClient | null): Promis
 ${fileListSummary}
 STRICT FORMAT RULES:
 1. You MUST enclose your final commit message strictly inside <commit_message> and </commit_message> tags.
-2. Put ONLY the commit message inside <commit_message>...</commit_message> â€” no markdown code fences, no backticks, no quotes, no explanations.
+2. Put ONLY the commit message inside <commit_message>...</commit_message> — no markdown code fences, no backticks, no quotes, no explanations.
 3. Any thinking, analysis, reasoning, or draft notes MUST remain OUTSIDE the <commit_message> tags.
 
 Example of correct output:
@@ -135,14 +198,14 @@ feat(portfolio): add portfolio and project implementations
 Diff:
 ${diff.slice(0, 8000)}`;
 
-        // Use daemon quickPrompt with the user's active model & provider
+        // Use daemon quickPrompt with the user's active model & provider scoped to repoPath
         let commitMessage = "";
         try {
           const res = await rpcClient.call<any>(
             "agent.quickPrompt",
             {
               prompt,
-              project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+              project_path: repoPath,
               model: activeModel,
               provider: activeProvider,
             },
@@ -163,12 +226,12 @@ ${diff.slice(0, 8000)}`;
           return;
         }
 
-        // Extract clean commit message â€” strips thinking blocks, <commit_message> tags, code fences
+        // Extract clean commit message — strips thinking blocks, <commit_message> tags, code fences
         commitMessage = extractCommitMessage(commitMessage);
 
-        if (!commitMessage || commitMessage.trim().length < 5) {
-          vscode.window.showWarningMessage(
-            "Daemon returned an empty commit message. Please verify your provider API key in Settings."
+        if (!commitMessage || commitMessage.trim().length < 5 || isLikelyErrorOutput(commitMessage)) {
+          vscode.window.showErrorMessage(
+            `Failed to generate commit message: ${commitMessage || "Empty or invalid response from AI model"}. Please check your provider settings.`
           );
           return;
         }
@@ -182,7 +245,7 @@ ${diff.slice(0, 8000)}`;
           commitMessage = `${commitMessage}\n\n${coAuthorTrailer}`;
         }
 
-        // Inject into SCM inputBox (VS Code Git API)
+        // Inject into target repository's SCM inputBox (VS Code Git API)
         repo.inputBox.value = commitMessage;
         vscode.window.showInformationMessage("Andromity: Commit message generated!");
       } catch (err: any) {

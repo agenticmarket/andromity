@@ -64,7 +64,7 @@ export function getWaterfallHtml(
   <header class="wf-header">
     <div class="wf-header-row1">
       <div class="wf-title-area">
-        <span class="wf-logo"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:5px;vertical-align:-2px;"><path d="M2 12h5l3 9 4-18 3 9h5"/></svg>Waterfall Trace</span>
+        <span class="wf-logo">🌊 Waterfall Trace</span>
         <span class="wf-session-pill" title="${safeSessionName}">${safeSessionName}</span>
         <div class="wf-live-status">
           <span class="wf-live-dot" id="wf-live-dot"></span>
@@ -139,7 +139,8 @@ export function getWaterfallHtml(
   <div class="wf-modal-backdrop" id="wf-guide-modal" style="display: none;">
     <div class="wf-modal-card">
       <div class="wf-modal-header">
-        <div class="wf-modal-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px;vertical-align:-2px;"><path d="M2 12h5l3 9 4-18 3 9h5"/></svg>Waterfall Trace — Developer Guide &amp; Glossary</div>
+        <div class="wf-modal-title">
+        🌊 Waterfall Trace — Developer Guide &amp; Glossary</div>
         <button class="wf-modal-close" id="wf-guide-close" title="Close Guide (Esc)">&times;</button>
       </div>
       <div class="wf-modal-body">

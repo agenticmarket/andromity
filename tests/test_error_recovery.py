@@ -147,3 +147,34 @@ async def test_exhausted_retries_emits_friendly_error_card(monkeypatch):
     assert 'data-error-type="provider_unavailable"' in texts
     assert 'data-action="retry-turn"' in texts
     assert any(isinstance(e, Done) for e in events)
+
+
+def test_terminal_formatting_has_zero_html():
+    """Verify that terminal output for TUI/CLI contains zero raw HTML/SVG/button tags."""
+    fake_err = Exception("daily_limit_reached - free trial requests exceeded")
+    term_text = classify_and_format_error(fake_err, provider="andromity", output_format="terminal")
+
+    # Must NOT have any HTML tags
+    assert "<div" not in term_text
+    assert "<svg" not in term_text
+    assert "<button" not in term_text
+    assert "</" not in term_text
+
+    # Must contain clean markdown with title, badge, reset timer, and TUI actions
+    assert "[QUOTA LIMIT]" in term_text
+    assert "Daily Limit Reached" in term_text
+    assert "⏱ **Quota resets in" in term_text
+    assert "Actions:" in term_text
+    assert "BYOK" in term_text
+
+
+def test_quota_exceeded_omits_raw_litellm_error():
+    """Verify that raw internal litellm/OpenAIException details are NOT leaked to the user on quota limits."""
+    fake_err = Exception("litellm.RateLimitError: RateLimitError: OpenAIException - daily_limit_reached")
+    html_out = classify_and_format_error(fake_err, provider="andromity", output_format="html")
+
+    assert "Daily Limit Reached" in html_out
+    assert "Quota resets in" in html_out
+    assert "<details" not in html_out
+    assert "litellm.RateLimitError" not in html_out
+

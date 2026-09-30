@@ -1,8 +1,19 @@
 """Model catalog - available models per provider with descriptions."""
 from pathlib import Path
+import threading
 from typing import Any
 
+_DISK_CACHE_LOCK = threading.Lock()
+
 MODEL_CATALOG = {
+    "andromity": {
+        "name": "Andromity Cloud Gateway (Managed)",
+        "requires_env": None,
+        "base_url": "https://gateway.agenticmarket.dev/v1",
+        "models": [
+            {"id": "auto", "name": "Andromity Auto", "desc": "Autonomous intelligence engine optimized for agentic coding", "context": "256K", "pricing": "Included (30 turns/day)", "is_free": True, "tags": ["auto", "recommended"]},
+        ],
+    },
     "anthropic": {
         "name": "Anthropic",
         "requires_env": "ANTHROPIC_API_KEY",
@@ -125,7 +136,7 @@ def get_provider_display_name(provider_key: str):
 
 _CTX_SIZE_MAP = {
     "4K": 4_096, "8K": 8_192, "16K": 16_384, "32K": 32_768,
-    "64K": 65_536, "128K": 131_072, "200K": 200_000, "1M": 1_048_576, "Local": 0,
+    "64K": 65_536, "128K": 131_072, "200K": 200_000, "256K": 262_144, "1M": 1_048_576, "Local": 0,
 }
 
 
@@ -236,7 +247,7 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
     # ── Ollama (local daemon) ──────────────────────────────────────────────────
     if provider_key == "ollama":
         url = (base_url or "http://localhost:11434").rstrip("/") + "/api/tags"
-        data = _get(url, {}, timeout=2.5)
+        data = _get(url, {}, timeout=1.5)
         if not data:
             return []
         models = []
@@ -479,6 +490,36 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
             })
         return _cache_and_return(provider_key, models)
 
+    # ── Andromity Managed Gateway ─────────────────────────────────────────────
+    elif provider_key == "andromity":
+        url = (base_url or "https://gateway.agenticmarket.dev/v1").rstrip("/") + "/models"
+        data = _get(url, {"User-Agent": "Andromity"}, timeout=3.0)
+        models = [
+            {
+                "id": "auto",
+                "name": "Andromity Auto",
+                "desc": "Autonomous intelligence engine optimized for agentic coding",
+                "context": "256K",
+                "pricing": "Included (30 turns/day)",
+                "is_free": True,
+                "tags": ["auto", "recommended"],
+            }
+        ]
+        if data and isinstance(data.get("data"), list):
+            for item in data.get("data", []):
+                m_id = item.get("id", "")
+                if m_id and m_id != "auto":
+                    models.append({
+                        "id": m_id,
+                        "name": m_id,
+                        "desc": f"Gateway model ({item.get('owned_by', 'cloud')})",
+                        "context": "128K",
+                        "pricing": "Included in quota",
+                        "is_free": True,
+                        "tags": ["cloud"],
+                    })
+        return _cache_and_return(provider_key, models)
+
     return _cache_and_return(provider_key, [])
 
 
@@ -490,16 +531,17 @@ def _get_pricing_cache_path() -> Path:
 def _save_pricing_cache(provider_key: str, pricing_dict: dict[str, dict]):
     try:
         import json
-        cache_path = _get_pricing_cache_path()
-        cache = {}
-        if cache_path.exists():
-            with open(cache_path, "r", encoding="utf-8") as f:
-                cache = json.load(f)
-        if provider_key not in cache:
-            cache[provider_key] = {}
-        cache[provider_key].update(pricing_dict)
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(cache, f, indent=2)
+        with _DISK_CACHE_LOCK:
+            cache_path = _get_pricing_cache_path()
+            cache = {}
+            if cache_path.exists():
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    cache = json.load(f)
+            if provider_key not in cache:
+                cache[provider_key] = {}
+            cache[provider_key].update(pricing_dict)
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(cache, f, indent=2)
     except Exception:
         pass
 
@@ -550,39 +592,40 @@ def _cache_and_return(provider_key: str, models: list[dict]) -> list[dict]:
         return models
     try:
         import json
-        # 1. Save context limit cache
-        cache_path = _get_context_cache_path()
-        cache = {}
-        if cache_path.exists():
-            with open(cache_path, "r", encoding="utf-8") as f:
-                cache = json.load(f)
-        if provider_key not in cache:
-            cache[provider_key] = {}
-        for m in models:
-            ctx_str = m.get("context", "")
-            if not ctx_str or ctx_str in ("Local", "Auto", "Unknown"):
-                continue
-            tokens = _parse_ctx_shorthand(ctx_str)
-            if tokens:
-                cache[provider_key][m["id"]] = tokens
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(cache, f, indent=2)
-        global _MEM_CONTEXT_CACHE, _MEM_CONTEXT_CACHE_MTIME
-        _MEM_CONTEXT_CACHE = cache
-        try:
-            _MEM_CONTEXT_CACHE_MTIME = cache_path.stat().st_mtime
-        except Exception:
-            pass
+        with _DISK_CACHE_LOCK:
+            # 1. Save context limit cache
+            cache_path = _get_context_cache_path()
+            cache = {}
+            if cache_path.exists():
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    cache = json.load(f)
+            if provider_key not in cache:
+                cache[provider_key] = {}
+            for m in models:
+                ctx_str = m.get("context", "")
+                if not ctx_str or ctx_str in ("Local", "Auto", "Unknown"):
+                    continue
+                tokens = _parse_ctx_shorthand(ctx_str)
+                if tokens:
+                    cache[provider_key][m["id"]] = tokens
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(cache, f, indent=2)
+            global _MEM_CONTEXT_CACHE, _MEM_CONTEXT_CACHE_MTIME
+            _MEM_CONTEXT_CACHE = cache
+            try:
+                _MEM_CONTEXT_CACHE_MTIME = cache_path.stat().st_mtime
+            except Exception:
+                pass
 
-        # 2. Save full live catalog cache
-        cat_path = _get_live_catalog_cache_path()
-        cat_cache = {}
-        if cat_path.exists():
-            with open(cat_path, "r", encoding="utf-8") as f:
-                cat_cache = json.load(f)
-        cat_cache[provider_key] = models
-        with open(cat_path, "w", encoding="utf-8") as f:
-            json.dump(cat_cache, f, indent=2)
+            # 2. Save full live catalog cache
+            cat_path = _get_live_catalog_cache_path()
+            cat_cache = {}
+            if cat_path.exists():
+                with open(cat_path, "r", encoding="utf-8") as f:
+                    cat_cache = json.load(f)
+            cat_cache[provider_key] = models
+            with open(cat_path, "w", encoding="utf-8") as f:
+                json.dump(cat_cache, f, indent=2)
     except Exception:
         pass
     return models

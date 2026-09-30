@@ -2,6 +2,35 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
+## [0.2.12] — 2026-09-30
+
+### 🌿 Git & Multi-Repository Targeting
+- **Multi-Root Git Commit Generation**: Resolved target repository directly from SCM button context, preventing cross-repo diff contamination in multi-root workspaces.
+- **Dedicated Staged vs. Unstaged Diffs**: Prioritizes staged changes cleanly without polluting with unstaged modifications when generating commit messages.
+- **Commit Input Error Guard**: Blocked AI error strings and backend exceptions from ever being injected into the Git commit input box.
+
+### 💻 Terminal TUI & Clean CLI Formatting
+- **Core Error Decoupling**: Decoupled error classification from HTML presentation in `core/provider.py`.
+- **Zero-HTML Terminal Rendering**: Terminal TUI and standalone CLI output clean Markdown blockquotes and native Textual `.session-error-card` with zero raw HTML, `<svg>`, or `<button>` tags.
+- **Webview HTML Isolation**: Preserves rich interactive HTML error cards exclusively for webviews.
+
+### 🛡️ UX Hardening & Gateway Quota Transparency
+- **UTC Quota Countdown Timer**: Dynamic live countdown badge (`Quota resets in Xh Ym (00:00 UTC)`) indicating exact daily reset times.
+- **Raw Exception Suppression**: Omitted raw `litellm.RateLimitError` and internal stack traces on quota limits to maintain a clean, trustworthy developer experience.
+- **Zero Hardcoded Numbers**: Removed artificial turn counts (`30`, `5`) across all UI cards; limits and status derive directly from gateway allocations.
+
+### 🔑 Authentication & VS Code Forks
+- **Universal IDE Fork Support**: Deep-link login automatically detects editor URI schemes (`cursor://`, `vscodium://`, `windsurf://`, `trae://`, `vscode://`, `code-oss://`).
+- **Open-Redirect Hardening**: Validated callback URLs via strict pattern matching to eliminate open-redirect risks while ensuring tokens route safely to the originating editor.
+- **Cross-View Auth & Limit Sync**: Unified authentication status and live usage quotas across both sidebar and editor-tab views with bi-directional broadcast.
+- **Interactive Action Target Fix**: Wired up `[Sign In]` and `[Open Settings]` click handlers in the webview error card.
+
+### 📐 UI Dimensions & Modal Bounds
+- **Prompt-Aligned Interactive Cards**: Constrained `#interactive-slot`, permission approval cards, and clarifying question carousels to match the prompt composer bounds across wide editor layouts.
+- **Typo Fix**: Corrected CSS background property in markdown file pills.
+
+---
+
 ## [0.2.11] — 2026-09-25
 
 ### 🌊 Live Waterfall Execution Profiler

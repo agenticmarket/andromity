@@ -2,7 +2,7 @@
   "name": "andromity-agent",
   "displayName": "Andromity AI Coding Agent for VS Code",
   "description": "Autonomous AI coding agent with subagents, live plans & diffs. BYOK support for Claude 3.7, GPT-4o, DeepSeek R1, Gemini & free local Ollama. MCP & Multi-Agent ready.",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "publisher": "agenticmarket",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -205,7 +205,7 @@
       },
       {
         "command": "andromity.openSessionInTab",
-        "title": "Open Session in New Editor Tab (Side-by-Side)",
+        "title": "Open Session in Editor Tab (Pop Out)",
         "category": "Andromity",
         "icon": "$(split-horizontal)"
       },
@@ -659,7 +659,8 @@
   "scripts": {
     "vscode:prepublish": "npm run build",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
+    "watch": "node esbuild.js --watch",
+    "watch:tsc": "tsc -watch -p ./",
     "build": "node esbuild.js",
     "package": "vsce package",
     "test": "node --test dist-test/**/*.test.js",
@@ -668,6 +669,7 @@
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/codicons": "^0.0.46-24",
     "@vscode/vsce": "^2.24.0",
     "esbuild": "^0.20.0",
     "svg2ttf": "^6.1.0",

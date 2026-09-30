@@ -564,6 +564,19 @@ def get_clean_subprocess_env(extra_env: Optional[Dict[str, str]] = None) -> Dict
             cleaned_paths = [p for p in paths if p and os.path.abspath(p) != os.path.abspath(mei)]
             env["PATH"] = os.pathsep.join(cleaned_paths)
 
+    if os.environ.get("ANDROMITY_AIRGAP") == "1":
+        env["HTTP_PROXY"] = "http://127.0.0.1:9"
+        env["HTTPS_PROXY"] = "http://127.0.0.1:9"
+        env["ALL_PROXY"] = "http://127.0.0.1:9"
+        env["NO_PROXY"] = ""
+        guard_path = str(Path(__file__).parent.resolve() / "airgap_guard.py")
+        site_dir = str(Path(__file__).parent.resolve() / "airgap_sitecustomize")
+        env["PYTHONSTARTUP"] = guard_path
+        # Prepend sitecustomize directory and core_dir to PYTHONPATH
+        orig_pp = env.get("PYTHONPATH", "")
+        core_dir = str(Path(__file__).parent.parent.resolve())
+        env["PYTHONPATH"] = f"{site_dir}{os.pathsep}{core_dir}{os.pathsep}{orig_pp}" if orig_pp else f"{site_dir}{os.pathsep}{core_dir}"
+
     if extra_env:
         env.update(extra_env)
     return env
@@ -589,10 +602,52 @@ def _shell_invocation(shell: str, command: str) -> list[str]:
     return [shell, "-c", command]
 
 
+def check_airgap_violation(command: str) -> Optional[str]:
+    """Check if a shell command attempts network egress in air-gapped mode across all OSes."""
+    if os.environ.get("ANDROMITY_AIRGAP") != "1":
+        return None
+
+    import re
+    blocked_patterns = [
+        # Standard CLI downloaders & HTTP tools (Linux/macOS/Windows)
+        (r"\bcurl\b", "curl"),
+        (r"\bwget\b", "wget"),
+        (r"\b(nc|ncat|netcat|socat)\b", "raw socket utility"),
+        (r"\b(ssh|scp|sftp|ftp|telnet|rsync)\b", "remote network transfer"),
+        # Git remote operations
+        (r"\bgit\s+(clone|fetch|pull|remote|push|ls-remote)\b", "git remote network command"),
+        # Package managers fetching from registry
+        (r"\b(pip|pip3)\s+(install|download|wheel)\b", "pip network command"),
+        (r"\b(npm|npx|yarn|pnpm)\s+(install|add|i)\b", "node package manager"),
+        (r"\b(gem|cargo)\s+install\b", "package installer"),
+        # Windows PowerShell & CMD specific network utilities
+        (r"\b(Invoke-WebRequest|iwr)\b", "PowerShell Invoke-WebRequest"),
+        (r"\b(Invoke-RestMethod|irm)\b", "PowerShell Invoke-RestMethod"),
+        (r"\bStart-BitsTransfer\b", "PowerShell BitsTransfer"),
+        (r"\b(certutil\s+.*-urlcache|bitsadmin\s+/transfer)\b", "Windows binary downloader"),
+        (r"System\.Net\.(WebClient|Sockets|HttpWebRequest)", "Windows .NET WebClient"),
+        # Common language network libraries & URLs
+        (r"https?://", "http/https URL"),
+        (r"ftp://", "ftp URL"),
+        (r"\burllib(\.request)?\b", "urllib module"),
+        (r"\b(requests|httpx|aiohttp)\b", "Python HTTP client"),
+        (r"\bsocket\.(connect|create_connection|socket)\b", "Python raw socket"),
+    ]
+    for pat, desc in blocked_patterns:
+        if re.search(pat, command, re.IGNORECASE):
+            return f"Error: Command blocked by air-gap policy ({desc}). Network access is strictly disabled during benchmark evaluation."
+    return None
+
+
 def shell_exec(command: str, timeout: int = 300) -> str:
     """Executes a shell command (blocking — waits for it to finish)."""
     if not _is_trusted():
         return "Error: This folder is not trusted. Use /trust to allow shell commands."
+
+    airgap_err = check_airgap_violation(command)
+    if airgap_err:
+        return airgap_err
+
     shell = get_shell()
     try:
         cmd = _shell_invocation(shell, command)
@@ -637,6 +692,10 @@ def shell_bg(command: str, process_id: str = "") -> str:
     """
     if not _is_trusted():
         return "Error: This folder is not trusted. Use /trust to allow shell commands."
+
+    airgap_err = check_airgap_violation(command)
+    if airgap_err:
+        return airgap_err
 
     import uuid
     _cmd_tokens = command.split()
@@ -1159,6 +1218,8 @@ async def spawn_subagent_async(
             except Exception:
                 pass
 
+    turn_id = getattr(cur_sess, "current_user_turn_id", None) if cur_sess else None
+
     res = await orchestrator.spawn(
         role=role,
         task=task,
@@ -1170,6 +1231,7 @@ async def spawn_subagent_async(
         tool_id=tool_id,
         progress_callback=_on_subagent_progress,
         context_snapshot=context_snapshot,
+        turn_id=turn_id,
     )
     cur_sess = _current_session_var.get()
     if cur_sess and hasattr(res, "tokens_used") and res.tokens_used:
@@ -1566,7 +1628,7 @@ CORE_TOOLS = [
         "type": "function",
         "function": {
             "name": "ask_questions",
-            "description": "Ask the user structured clarifying questions when the request is ambiguous or important choices are missing. Pauses until answered — the user picks options or types an answer. Use sparingly: max 3 questions, and prefer good recommendations over asking when the request is clear enough.",
+            "description": "Ask the user structured clarifying questions when the request is ambiguous or important choices are missing. Pauses until answered — the user picks options or types an answer. Use sparingly: max 3-5 questions, and prefer good recommendations over asking when the request is clear enough.",
             "parameters": {
                 "type": "object",
                 "properties": {

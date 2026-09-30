@@ -426,6 +426,12 @@ class Agent:
         async for event in self._compact_context():
             yield event
 
+        user_turn_id = f"trn_{sess_id[:8] if sess_id else 'anon'}_{self._turn_count}_{int(time.time())}"
+        self.current_user_turn_id = user_turn_id
+        if self.session:
+            setattr(self.session, "current_user_turn_id", user_turn_id)
+        if hasattr(self, "orchestrator") and self.orchestrator:
+            setattr(self.orchestrator, "current_turn_id", user_turn_id)
         iteration_idx = 0
         while True:
             iteration_idx += 1
@@ -436,7 +442,7 @@ class Agent:
             assistant_thinking = ""
             last_usage = None
 
-            stream_kwargs: Dict[str, Any] = {"tools": self.allowed_tools}
+            stream_kwargs: Dict[str, Any] = {"tools": self.allowed_tools, "turn_id": user_turn_id}
             if self.provider:
                 stream_kwargs["provider_name"] = self.provider
             if self.model:
@@ -592,7 +598,15 @@ class Agent:
             self._empty_retried = False
 
             if not tool_calls_to_execute:
-                has_error = "andromity-error-card" in (assistant_content or "") or "[Error:" in (assistant_content or "")
+                has_error = (
+                    "andromity-error-card" in (assistant_content or "")
+                    or "[Error:" in (assistant_content or "")
+                    or any(tag in (assistant_content or "") for tag in (
+                        "[QUOTA LIMIT]", "[RATE LIMIT]", "[SERVICE DISRUPTED]",
+                        "[CONTEXT LIMIT]", "[AUTHENTICATION]", "[IMAGE NOT SUPPORTED]",
+                        "[OFFLINE]", "[TIMED OUT]", "[ERROR]"
+                    ))
+                )
                 yield Done(usage=last_usage)
                 self._fire_session_end(had_error=has_error)
                 break
@@ -879,6 +893,7 @@ class Agent:
             tools_override=tools_override,
             timeout=timeout,
             wait=wait,
+            turn_id=getattr(self, "current_user_turn_id", None),
         )
 
     def kill_subagents(self, reason: str = "agent_cancelled"):

@@ -2,6 +2,20 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [0.2.12] - 2026-09-30
+
+### Added & Improved
+- **🔄 Unified Cross-View Authentication & Quotas:**
+  - **Editor Tab Secrets Sync:** Synchronized AgenticMarket credentials and live usage quotas across both sidebar and editor-tab views.
+  - **Multi-Panel Event Broadcast:** Login, logout, and quota updates instantly broadcast across all active session webviews.
+- **📐 Responsive Interactive Card Bounds:**
+  - **Prompt-Aligned Modals:** Constrained `#interactive-slot`, permission approval cards, and clarifying question carousels to match the exact bounds of the prompt composer across wide editor layouts.
+- **🌿 Multi-Root Git Commit Generation:**
+  - **Context-Aware SCM Commit:** Directly targets active workspace repositories and isolates staged vs. unstaged diffs cleanly.
+- **🛡️ Error Recovery & Quota Clarity:**
+  - **UTC Daily Reset Badges:** Live countdown indicators for daily token quotas.
+  - **Sanitized Error Reporting:** Eliminated raw provider rate-limit traces in favor of actionable UI cards.
+
 ## [0.2.11] - 2026-09-25
 
 ### Added & Improved

@@ -1,6 +1,6 @@
 [project]
 name = "andromity"
-version = "0.2.11"
+version = "0.2.12"
 description = "AI coding agent with a beautiful terminal UI. Works with Claude, Gemini, GPT, Ollama and more."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -57,6 +57,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["andromity*"]
 
 [tool.setuptools.package-data]
 andromity = ["assets/sounds/*.wav", "assets/*.ico", "assets/*", "assets/**/*"]

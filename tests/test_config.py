@@ -13,7 +13,7 @@ def test_config_creation():
 def test_config_defaults():
     with tempfile.TemporaryDirectory() as tmpdir:
         cm = ConfigManager(config_dir=Path(tmpdir))
-        assert cm.get("default", "provider") == "anthropic"
+        assert cm.get("default", "provider") == "andromity"
         assert cm.get("default", "profile") == "builder"
         assert cm.get("default", "permission_mode") == "safe"
         assert "npm run dev" in cm.get("default", "allowed_commands")
@@ -30,13 +30,13 @@ def test_config_providers():
     with tempfile.TemporaryDirectory() as tmpdir:
         cm = ConfigManager(config_dir=Path(tmpdir))
         names = [p["name"] for p in cm.list_providers()]
-        assert "anthropic" in names and "ollama" in names
+        assert "andromity" in names and "ollama" in names
 
 
 def test_config_provider_lookup():
     with tempfile.TemporaryDirectory() as tmpdir:
         cm = ConfigManager(config_dir=Path(tmpdir))
-        assert cm.get_provider_config("anthropic") is not None
+        assert cm.get_provider_config("andromity") is not None
         assert cm.get_provider_config("nonexistent") is None
 
 
@@ -113,5 +113,35 @@ def test_nvidia_provider_catalog_and_key(monkeypatch):
         cm = ConfigManager(config_dir=Path(tmpdir))
         monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test123")
         assert cm.get_api_key("nvidia") == "nvapi-test123"
+
+
+def test_pinned_models_config():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cm = ConfigManager(config_dir=Path(tmpdir))
+        # Initial defaults
+        defaults = cm.get_pinned_models()
+        assert len(defaults) == 2
+        assert defaults[0]["id"] == "auto"
+
+        # Explicitly set pinned models
+        cm.set_pinned_models([])
+        assert cm.get_pinned_models() == []
+
+        # Toggle to pin
+        pinned = cm.toggle_pinned_model("anthropic/claude-3-5-sonnet", provider="openrouter", name="Claude 3.5 Sonnet")
+        assert len(pinned) == 1
+        assert pinned[0]["id"] == "anthropic/claude-3-5-sonnet"
+        assert pinned[0]["provider"] == "openrouter"
+
+        # Read back from newly created ConfigManager
+        cm2 = ConfigManager(config_dir=Path(tmpdir))
+        assert cm2.get_pinned_models() == pinned
+
+        # Toggle to unpin
+        unpinned = cm2.toggle_pinned_model("anthropic/claude-3-5-sonnet", provider="openrouter")
+        assert len(unpinned) == 0
+        assert cm2.get_pinned_models() == []
+
+
 
 

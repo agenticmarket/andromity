@@ -141,31 +141,80 @@ export function getReviewClientScript(): string {
 
     // ── Get File Icon ──────────────────────────────────────────
     function getFileIcon(fileName) {
-      const ext = fileName.split('.').pop().toLowerCase();
+      const ext = (fileName || '').split('.').pop().toLowerCase();
+      const fi = (icon, color) => ({ icon, color });
       switch (ext) {
         case 'ts':
+          return fi('file-code', 'var(--vscode-charts-blue, #38bdf8)');
         case 'tsx':
-          return 'symbol-interface';
-        case 'js':
         case 'jsx':
-          return 'symbol-keyword';
+          return fi('file-code', '#61dafb');
+        case 'js':
+        case 'mjs':
+        case 'cjs':
+          return fi('file-code', 'var(--vscode-charts-yellow, #f7df1e)');
         case 'py':
-          return 'symbol-method';
-        case 'json':
-          return 'symbol-constant';
-        case 'md':
-          return 'markdown';
+          return fi('file-code', 'var(--vscode-charts-green, #4ade80)');
+        case 'rs':
+          return fi('file-code', 'var(--vscode-charts-orange, #f97316)');
+        case 'go':
+          return fi('file-code', 'var(--vscode-charts-blue, #38bdf8)');
+        case 'java':
+        case 'kt':
+          return fi('file-code', 'var(--vscode-charts-red, #f87171)');
+        case 'cpp':
+        case 'c':
+        case 'h':
+        case 'cs':
+          return fi('file-code', 'var(--vscode-charts-purple, #a78bfa)');
+        case 'rb':
+        case 'php':
+        case 'swift':
+          return fi('file-code', 'var(--vscode-charts-orange, #fb923c)');
+        case 'html':
+        case 'htm':
+          return fi('file-code', '#fb923c');
         case 'css':
         case 'scss':
-          return 'symbol-color';
-        case 'html':
-          return 'code';
-        case 'svg':
+        case 'less':
+          return fi('file-code', 'var(--vscode-charts-purple, #c084fc)');
+        case 'json':
+        case 'jsonc':
+          return fi('json', 'var(--vscode-charts-yellow, #facc15)');
+        case 'md':
+        case 'markdown':
+          return fi('markdown', 'var(--vscode-charts-blue, #93c5fd)');
+        case 'yml':
+        case 'yaml':
+        case 'toml':
+        case 'ini':
+        case 'env':
+          return fi('settings-gear', 'var(--vscode-charts-green, #a3e635)');
+        case 'sql':
+        case 'db':
+        case 'sqlite':
+          return fi('database', 'var(--vscode-charts-purple, #a78bfa)');
         case 'png':
         case 'jpg':
-          return 'file-media';
+        case 'jpeg':
+        case 'gif':
+        case 'svg':
+        case 'webp':
+        case 'ico':
+          return fi('file-media', 'var(--vscode-charts-green, #4ade80)');
+        case 'zip':
+        case 'tar':
+        case 'gz':
+        case '7z':
+        case 'rar':
+          return fi('file-zip', 'var(--vscode-charts-orange, #f97316)');
+        case 'pdf':
+          return fi('file-pdf', 'var(--vscode-errorForeground, #f87171)');
+        case 'txt':
+        case 'log':
+          return fi('file-text', 'var(--vscode-descriptionForeground, #94a3b8)');
         default:
-          return 'file';
+          return fi('file', 'var(--vscode-descriptionForeground, #94a3b8)');
       }
     }
 
@@ -301,13 +350,13 @@ export function getReviewClientScript(): string {
           fileRow.className = 'tree-file-row ' + (isActive ? 'active' : '');
           fileRow.style.paddingLeft = (depth * 14 + 18) + 'px';
 
-          const iconName = getFileIcon(file.name);
+          const iconInfo = getFileIcon(file.name);
           const addStr = file.additions > 0 ? '<span class="stat-add">+' + file.additions + '</span>' : '';
           const delStr = file.deletions > 0 ? '<span class="stat-del">-' + file.deletions + '</span>' : '';
 
           fileRow.innerHTML =
             '<span class="file-status-badge ' + file.status + '">' + file.status + '</span>' +
-            '<span class="codicon codicon-' + iconName + '" style="font-size: 13px; opacity: 0.85;"></span>' +
+            '<span class="codicon codicon-' + iconInfo.icon + '" style="font-size: 13px; color: ' + iconInfo.color + '; flex-shrink: 0;"></span>' +
             '<span class="file-name" title="' + escapeHtml(file.path) + '">' + escapeHtml(file.name) + '</span>' +
             '<span class="file-diff-pill">' + addStr + ' ' + delStr + '</span>';
 

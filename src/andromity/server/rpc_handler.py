@@ -312,10 +312,20 @@ class JsonRpcHandler:
             log.exception("Error executing RPC method %s: %s", request.method, e)
             if request.is_notification():
                 return None
+            err_msg = str(e)
+            # Prevent leaking local system usernames, file paths, or raw DB operational queries
+            if (
+                "OperationalError" in type(e).__name__
+                or "sqlite3" in type(e).__name__.lower()
+                or "\\Users\\" in err_msg
+                or "/home/" in err_msg
+                or "/Users/" in err_msg
+            ):
+                err_msg = f"Internal server error occurred while processing {request.method}."
             return JsonRpcResponse.err(
                 request.id,
                 INTERNAL_ERROR,
-                str(e),
+                err_msg,
             )
 
     # ── MCP Manager helpers ─────────────────────────────────────────────────
@@ -488,6 +498,54 @@ class JsonRpcHandler:
                 pass
         except Exception as prune_err:
             log.warning("Auto-pruning empty sessions error: %s", prune_err)
+
+    async def rpc_initialize(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """ACP (Agent Client Protocol) initialize handshake."""
+        protocol_version = params.get("protocolVersion", 1)
+        client_info = params.get("clientInfo", {})
+        log.info("ACP handshake from %s (protocolVersion=%s)", client_info, protocol_version)
+        return {
+            "protocolVersion": protocol_version,
+            "agentCapabilities": {
+                "session": {
+                    "streaming": True,
+                    "resumption": True,
+                },
+                "tools": True,
+            },
+            "agentInfo": {
+                "name": "Andromity",
+                "version": "0.2.12",
+                "description": "Autonomous AI coding agent by AgenticMarket",
+            },
+        }
+
+    async def rpc_session_new(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """ACP session/new handler."""
+        cwd = params.get("cwd") or params.get("project_path") or str(Path.cwd().resolve())
+        session = Session(name="JetBrains AI Assistant Session", project_path=cwd)
+        session.save()
+        self._active_sessions[session.id] = session
+        return {"sessionId": session.id}
+
+    async def rpc_session_prompt(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """ACP session/prompt handler."""
+        session_id = params.get("sessionId") or params.get("session_id")
+        prompt_raw = params.get("prompt", "")
+        if isinstance(prompt_raw, list):
+            prompt_text = "\n".join(
+                b.get("text", "")
+                for b in prompt_raw
+                if isinstance(b, dict) and b.get("type") == "text"
+            )
+        else:
+            prompt_text = str(prompt_raw)
+
+        await self.rpc_agent_prompt({
+            "session_id": session_id,
+            "prompt": prompt_text,
+        })
+        return {"stopReason": "end_turn"}
 
     async def rpc_session_create(self, params: Dict[str, Any]) -> Dict[str, Any]:
         name = params.get("name", "new-session")
@@ -1080,8 +1138,22 @@ class JsonRpcHandler:
                                 "compacted_history": getattr(session, "compacted_history", []),
                             })
                         self.notify("agent/textDelta", {"session_id": session_id, "text": event.text})
+                        self.notify("session/update", {
+                            "sessionId": session_id,
+                            "update": {
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": {"type": "text", "text": event.text},
+                            },
+                        })
                     elif isinstance(event, ThinkingDelta):
                         self.notify("agent/thinkingDelta", {"session_id": session_id, "text": event.text})
+                        self.notify("session/update", {
+                            "sessionId": session_id,
+                            "update": {
+                                "sessionUpdate": "agent_thought_chunk",
+                                "content": {"type": "text", "text": event.text},
+                            },
+                        })
                     elif isinstance(event, LLMCallStart):
                         self.notify("waterfall/llmStart", {
                             "session_id": session_id,
@@ -1608,6 +1680,7 @@ class JsonRpcHandler:
             "sound_attention": config.get("default", "sound_attention", True),
             "telemetry": config.get("default", "telemetry", True),
             "is_trusted": config.is_trusted(params.get("project_path") or str(Path.cwd())) if params else False,
+            "pinned_models": config.get_pinned_models(),
         }
 
     async def rpc_profiles_list(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
@@ -1651,12 +1724,29 @@ class JsonRpcHandler:
 
         return {"success": True, "section": section, "key": key, "value": value}
 
+    async def rpc_config_get_pinned_models(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        return config.get_pinned_models()
+
+    async def rpc_config_set_pinned_models(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        pinned = params.get("pinned", [])
+        return {"success": True, "pinned": config.set_pinned_models(pinned)}
+
+    async def rpc_config_toggle_pin(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        model_id = params.get("model_id") or params.get("modelId")
+        provider = params.get("provider", "")
+        name = params.get("name", "")
+        return {"success": True, "pinned": config.toggle_pinned_model(model_id, provider, name)}
+
     async def rpc_config_list_models(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         target_provider = params.get("provider") if params else None
         force_refresh = params.get("refresh", False) if params else False
         models = []
         try:
             providers_to_check = [target_provider] if target_provider else list(MODEL_CATALOG.keys())
+            pinned_list = config.get_pinned_models()
+
+            def _is_pinned(m_id: str, p_key: str) -> bool:
+                return any(p.get("id") == m_id and (not p.get("provider") or p.get("provider") == p_key) for p in pinned_list)
 
             # If OpenRouter not cached and not force_refresh, trigger background fetch without blocking
             openrouter_cached = get_cached_live_models("openrouter")
@@ -1686,6 +1776,7 @@ class JsonRpcHandler:
                             "pricing": m.get("pricing", ""),
                             "is_free": m.get("is_free", False),
                             "tags": m.get("tags", []),
+                            "is_pinned": _is_pinned(m_id, p),
                         })
                 else:
                     # Fallback to catalog instantly
@@ -1702,15 +1793,16 @@ class JsonRpcHandler:
                             "pricing": m.get("pricing", ""),
                             "is_free": False,
                             "tags": [],
+                            "is_pinned": _is_pinned(m_id, p),
                         })
         except Exception as e:
             log.warning("Error listing models: %s", e)
         return models
 
     async def rpc_config_refresh_models(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
-        """Force refresh live models in parallel with strict timeout."""
+        """Force refresh live models in parallel with strict timeout and resilient fallback."""
         target_provider = params.get("provider") if params else None
-        providers = [target_provider] if target_provider else ["openrouter", "ollama", "anthropic", "openai", "google", "groq", "nvidia", "deepseek"]
+        providers = [target_provider] if target_provider else ["andromity", "openrouter", "ollama", "anthropic", "openai", "google", "groq", "nvidia", "deepseek"]
 
         async def _fetch_one(p: str):
             api_key = config.get_api_key(p)
@@ -1719,15 +1811,23 @@ class JsonRpcHandler:
             if p_conf and isinstance(p_conf, dict):
                 base_url = p_conf.get("base_url")
             try:
+                timeout_val = 1.5 if p == "ollama" else 3.0
                 return await asyncio.wait_for(
                     asyncio.to_thread(fetch_live_models_sync, p, api_key=api_key, base_url=base_url),
-                    timeout=3.5
+                    timeout=timeout_val
                 )
             except Exception:
                 return []
 
-        # Run all provider fetches in parallel
-        await asyncio.gather(*[_fetch_one(p) for p in providers], return_exceptions=True)
+        try:
+            # Run all provider fetches in parallel with an overall timeout of 5 seconds max
+            await asyncio.wait_for(
+                asyncio.gather(*[_fetch_one(p) for p in providers], return_exceptions=True),
+                timeout=5.0
+            )
+        except Exception as e:
+            log.warning("Parallel model refresh encountered timeout or error: %s", e)
+
         return await self.rpc_config_list_models({"provider": target_provider})
 
     async def rpc_skills_list(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
@@ -1858,8 +1958,16 @@ class JsonRpcHandler:
         config.save()
         return {"success": True, "provider": provider, "has_key": bool(api_key)}
 
+    async def rpc_auth_logout(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        config.set_api_key("andromity", "")
+        config.set("default", "user_name", "")
+        config.set("default", "user_email", "")
+        config.save()
+        return {"success": True, "authenticated": False}
+
     async def rpc_config_list_providers(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         providers = [
+            {"id": "andromity", "name": "Andromity Auto (Free Trial)", "has_key": True, "portal": "https://agenticmarket.dev"},
             {"id": "openrouter", "name": "OpenRouter", "has_key": bool(config.get_api_key("openrouter")), "portal": "https://openrouter.ai/keys"},
             {"id": "anthropic", "name": "Anthropic (Claude)", "has_key": bool(config.get_api_key("anthropic")), "portal": "https://console.anthropic.com/settings/keys"},
             {"id": "openai", "name": "OpenAI (GPT / o-series)", "has_key": bool(config.get_api_key("openai")), "portal": "https://platform.openai.com/api-keys"},
@@ -2672,6 +2780,12 @@ class JsonRpcHandler:
                 litellm_model = f"openrouter/{model}" if not model.startswith("openrouter/") else model
             elif provider == "nvidia":
                 litellm_model = f"nvidia_nim/{model}" if not model.startswith("nvidia_nim/") else model
+            elif provider == "andromity":
+                clean_model = model or "auto"
+                litellm_model = f"openai/{clean_model}"
+                base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "https://gateway.agenticmarket.dev/v1"
+                if not api_key:
+                    api_key = "anonymous_trial"
             else:
                 litellm_model = f"{provider}/{model}" if not model.startswith(f"{provider}/") else model
                 base_url = provider_cfg.get("base_url") if provider_cfg else None

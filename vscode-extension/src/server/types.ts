@@ -48,12 +48,20 @@ export interface ModelInfo {
   pricing?: string;
   is_free?: boolean;
   tags?: string[];
+  is_pinned?: boolean;
+}
+
+export interface PinnedModelInfo {
+  id: string;
+  provider: string;
+  name?: string;
 }
 
 export interface ProviderInfo {
   id: string;
   name: string;
   has_key: boolean;
+  portal?: string;
 }
 
 export interface ToolApprovalEvent {

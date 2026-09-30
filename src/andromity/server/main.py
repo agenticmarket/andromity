@@ -172,6 +172,8 @@ async def start_stdio_server():
             except Exception as e:
                 log.exception("Error processing RPC request: %s", e)
 
+    log.info("Andromity JSON-RPC stdio server ready and listening.")
+
     while True:
         try:
             line = await input_queue.get()
