@@ -21,6 +21,7 @@ ChatMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
 .session-answer { border-left: tall #3fb950; background: #3fb950 10%; margin: 1 0; padding: 0 1; }
 .session-state { border-left: tall #79c0ff; background: #79c0ff 10%; margin: 1 0; padding: 0 1; }
 .session-handoff { border-left: tall #f0883e; background: #f0883e 10%; margin: 1 0; padding: 0 1; }
+.session-error-card { border-left: tall #ef4444; background: #ef4444 12%; margin: 1 0; padding: 0 1; }
 """
     def __init__(self, role: str, content: str = "", show_header: bool = True,
                  show_footer: bool = True, sender: str = "", question_id: str = "", **kwargs):
@@ -34,6 +35,46 @@ ChatMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
         if role.startswith("session-"):
             self.add_class(role.replace("session-", "session-"))
 
+    def _compose_error_card(self, content: str) -> ComposeResult:
+        """Render error cards natively in Textual without leaking HTML tags into the terminal."""
+        badge_m = re.search(r'class="error-badge">([^<]+)<', content)
+        title_m = re.search(r'class="error-title">([^<]+)<', content)
+        desc_m = re.search(r'class="error-card-body">(.*?)</div>', content, re.DOTALL)
+        timer_m = re.search(r'Quota resets in [^<]+', content)
+
+        badge = badge_m.group(1).strip() if badge_m else "ERROR"
+        title = title_m.group(1).strip() if title_m else "Turn Interrupted"
+
+        raw_desc = desc_m.group(1).strip() if desc_m else ""
+        clean_desc = re.sub(r'<[^>]+>', ' ', raw_desc)
+        clean_desc = re.sub(r'\s+', ' ', clean_desc).strip()
+        if "Quota resets in" in clean_desc:
+            clean_desc = clean_desc.split("Quota resets in")[0].strip()
+
+        timer_str = timer_m.group(0).strip() if timer_m else ""
+
+        actions = []
+        if "open-settings" in content:
+            actions.append("Press Ctrl+P -> Settings to configure BYOK")
+        if "open-account-login" in content:
+            actions.append("Run 'andromity auth login' or sign in via Hub")
+        if "switch-model-flyout" in content:
+            actions.append("Press Ctrl+M to switch model")
+        if "retry-turn" in content:
+            actions.append("Type /retry or re-submit prompt")
+        if "trigger-compact" in content:
+            actions.append("Type /compact to reduce context")
+        if "new-session" in content:
+            actions.append("Press Ctrl+N to start a new session")
+
+        out = [f"[bold red]⚠ [{escape(badge)}] {escape(title)}[/bold red]", f"\n{escape(clean_desc)}"]
+        if timer_str:
+            out.append(f"\n[bold green]⏱ {escape(timer_str)}[/bold green]")
+        if actions:
+            out.append("\n[dim]Options:\n" + "\n".join(f"  • {a}" for a in actions) + "[/dim]")
+
+        yield Static("\n".join(out), classes="session-error-card")
+
     def compose(self) -> ComposeResult:
         if self.role == "user":
             yield Static(f"[bold cyan]◆ You:[/bold cyan] {escape(self._content)}")
@@ -41,7 +82,10 @@ ChatMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
             if self._show_header:
                 yield Static(_ASSISTANT_HEADER, classes="assistant-header")
             if self._content.strip():
-                yield Markdown(self._content)
+                if "andromity-error-card" in self._content:
+                    yield from self._compose_error_card(self._content)
+                else:
+                    yield Markdown(self._content)
             else:
                 yield Static("")
             if self._show_footer:

@@ -18,11 +18,14 @@ export class PlanEditorPanel {
     plan: any,
     rpcClient: RpcClient | null,
     onPlanAction?: (approved: boolean, feedback: string, sessionId?: string) => void,
-    sessionId?: string
+    sessionId?: string,
+    viewColumn?: vscode.ViewColumn
   ): PlanEditorPanel {
-    const column = vscode.window.activeTextEditor
-      ? vscode.ViewColumn.Beside
-      : vscode.ViewColumn.One;
+    const column =
+      viewColumn ||
+      (vscode.window.activeTextEditor
+        ? (vscode.window.activeTextEditor.viewColumn || vscode.ViewColumn.Active)
+        : vscode.ViewColumn.One);
 
     if (PlanEditorPanel.currentPanel) {
       PlanEditorPanel.currentPanel._panel.reveal(column);
@@ -201,7 +204,7 @@ export class PlanEditorPanel {
       line-height: 1.6;
     }
 
-    /* Antigravity-Style Top Action Bar */
+    /* Top Action Bar */
     .top-action-bar {
       position: sticky;
       top: 0;

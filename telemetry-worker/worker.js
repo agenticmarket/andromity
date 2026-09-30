@@ -181,11 +181,18 @@ export default {
         }
 
         const purgeBatch = await env.DB.batch([
-          env.DB.prepare(`DELETE FROM feature_events WHERE user_id = ?`).bind(targetUserId),
-          env.DB.prepare(`DELETE FROM events WHERE user_id = ?`).bind(targetUserId),
-          env.DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(targetUserId),
-          env.DB.prepare(`DELETE FROM users WHERE user_id = ?`).bind(targetUserId),
+          env.DB.prepare(`DELETE FROM feature_events WHERE user_id = ? OR user_id LIKE (? || '%')`).bind(targetUserId, targetUserId),
+          env.DB.prepare(`DELETE FROM events WHERE user_id = ? OR user_id LIKE (? || '%')`).bind(targetUserId, targetUserId),
+          env.DB.prepare(`DELETE FROM sessions WHERE user_id = ? OR user_id LIKE (? || '%')`).bind(targetUserId, targetUserId),
+          env.DB.prepare(`DELETE FROM users WHERE user_id = ? OR user_id LIKE (? || '%')`).bind(targetUserId, targetUserId),
         ]);
+
+        // Evict Edge caches so next stats query is fresh immediately
+        try {
+          const cache = caches.default;
+          await cache.delete(new Request(new URL('/api/stats', request.url).toString()));
+          await cache.delete(new Request(new URL('/stats', request.url).toString()));
+        } catch {}
 
         return new Response(JSON.stringify({
           success: true,

@@ -1687,6 +1687,12 @@ class AndromityApp(App):
                 litellm_model = f"openrouter/{model}" if not model.startswith("openrouter/") else model
             elif provider == "nvidia":
                 litellm_model = f"nvidia_nim/{model}" if not model.startswith("nvidia_nim/") else model
+            elif provider == "andromity":
+                clean_model = model or "auto"
+                litellm_model = f"openai/{clean_model}"
+                base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "https://gateway.agenticmarket.dev/v1"
+                if not api_key:
+                    api_key = "anonymous_trial"
             else:
                 litellm_model = f"{provider}/{model}" if not model.startswith(f"{provider}/") else model
                 base_url = provider_cfg.get("base_url") if provider_cfg else None

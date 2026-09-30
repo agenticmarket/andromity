@@ -160,7 +160,7 @@ async def test_settings_usage_tab_ui(tmp_path, monkeypatch):
         assert all_btn is not None
 
         # Click Today tab
-        today_btn.press()
+        screen.post_message(Button.Pressed(today_btn))
         await pilot.pause()
         assert "active" in today_btn.classes
 
@@ -171,7 +171,7 @@ async def test_settings_usage_tab_ui(tmp_path, monkeypatch):
         assert metric_tokens is not None
 
         # Switch to By Tokens metric
-        metric_tokens.press()
+        screen.post_message(Button.Pressed(metric_tokens))
         await pilot.pause()
         assert "active" in metric_tokens.classes
         assert "active" not in metric_cost.classes

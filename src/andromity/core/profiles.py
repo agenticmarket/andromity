@@ -66,6 +66,13 @@ PROFILES = {
             "shared_state_set", "shared_state_get", "write_handoff", "read_handoff"
         ]
     },
+    "benchmark": {
+        "tools": [
+            "read_file", "grep_search", "find_files", "write_file", "edit_file", "edit_file_multi",
+            "shell_exec", "shell_bg", "shell_read", "shell_kill", "shell_list", "list_dir",
+            "list_tools"
+        ]
+    },
 }
 
 
@@ -127,10 +134,11 @@ def get_system_prompt(profile: str, project_path: str | None = None) -> str:
 - Verification: Run existing tests and lint/typecheck commands (e.g. `npm test`, `pytest`, `ruff`, `tsc`) if available to verify your changes.
 
 # Tool Usage Policy
+- Repository Operating Guidelines: At the beginning of a task, inspect the workspace root for `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, or `andromity.md`. If present, read and strictly adhere to their project-specific commands, conventions, and constraints. When requirements or guidelines are ambiguous, ask the user for clarification before proceeding.
+- Architecture Ledger: Maintain `.andromity/DECISION.md` to document critical architectural decisions and design patterns. Consult it before introducing structural changes and keep it updated.
 - Batch independent tool calls in parallel within a single turn whenever possible.
 - Use `list_tools(include_description=True)` to inspect available tool schemas; never invent tool parameters.
-- Use .andromity/DECISION.md for keep report of important desicion and architecture decisions. Read it when needed.Keep updated if confuse ask user about it.
-- [IMPORTANT] For complex tasks (>2 files or architectural changes), create a structured plan using `write_plan` and keep steps updated via `update_plan_step` after everythings implemention check steps status carefully.
+- [IMPORTANT] For complex tasks (>2 files or architectural changes), create a structured plan using `write_plan` and keep steps updated in real time via `update_plan_step` as each milestone is completed and verified.
 - Tag reminders (<system-reminder>) provide environment hints; do not echo them to the user.
 - Use `spawn_subagent` for tasks that are independent, bounded, and can run in parallel or in isolation:
   - Parallel work: research, search, file scanning, or analysis that doesn't block the main task
@@ -169,6 +177,17 @@ Your role is to act as an architect and system designer. (don't edit or modify c
 - If requirements are ambiguous, use `ask_questions` (1-3 focused questions) BEFORE writing a plan.
 - Use `write_plan`: supply a thorough markdown document in `plan_md` (Overview, Goals/Non-Goals, Architecture, File-by-File Changes, Risks/Edge Cases, Testing Plan) and keep `steps` as an actionable progress checklist.
 - If files need to be written or code modified, advise the user to switch to the coder or builder profile.
+"""
+    elif profile == "benchmark":
+        extra = """
+[CURRENT PROFILE: Autonomous Benchmark SWE Engine]
+Your role is to resolve the given repository issue completely autonomously and offline.
+- Strictly offline: No external web search or network tools are permitted.
+- Read and inspect the relevant repository files to understand the root cause before editing.
+- Make the MINIMAL required changes to solve the issue; avoid extraneous refactoring.
+- Verify changes by running relevant tests with `shell_exec` if available.
+- Do NOT modify test files unless the issue explicitly requests changes to test assertions.
+- Output a concise summary of the fix and verification results upon completion.
 """
     elif profile == "coder":
         extra = """

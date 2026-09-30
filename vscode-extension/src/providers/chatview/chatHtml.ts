@@ -13,9 +13,13 @@ export interface ChatViewState {
   currentProfile: string;
   currentReasoning: string;
   models?: { id: string; name: string }[];
+  pinnedModels?: { id: string; provider: string; name?: string }[];
   wallpaperConfig?: WallpaperConfig;
   defaultWallpaperUri?: string;
   ollamaStatus?: any;
+  workspaceFiles?: string[];
+  workspaceFolders?: string[];
+  extensionVersion?: string;
 }
 
 export function formatModelDisplayName(id?: string, models?: { id: string; name: string }[]): string {
@@ -46,6 +50,20 @@ export function getModeSvg(mode?: string): string {
   }
 }
 
+export function getProfileSvg(profile?: string): string {
+  switch ((profile || "builder").toLowerCase()) {
+    case "coder":
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>';
+    case "planner":
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="10" y1="6" x2="21" y2="6"></line><line x1="10" y1="12" x2="21" y2="12"></line><line x1="10" y1="18" x2="21" y2="18"></line><polyline points="3 6 4 7 6 5"></polyline><polyline points="3 12 4 13 6 11"></polyline><polyline points="3 18 4 19 6 17"></polyline></svg>';
+    case "reviewer":
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><path d="m8 11 2 2 4-4"></path></svg>';
+    case "builder":
+    default:
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.34a1 1 0 0 0 0 1.4l1.56 1.56a1 1 0 0 0 1.4 0l3.08-3.08a4.5 4.5 0 0 1-5.78 5.78l-7.22 7.22a2 2 0 0 1-2.83 0l-.88-.88a2 2 0 0 1 0-2.83l7.22-7.22a4.5 4.5 0 0 1 5.78-5.78l-3.08 3.08Z"></path></svg>';
+  }
+}
+
 export function getNonce(): string {
   let text = "";
   const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -61,6 +79,9 @@ export function getChatViewHtml(webview: vscode.Webview, extensionUri: vscode.Ur
   const sidebarIconUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "sidebar-icon.svg"));
   const markedScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "marked.min.js"));
   const defaultWallpaperUri = state.defaultWallpaperUri || webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "wildcat-panther-dusk.jpg")).toString();
+  // Codicons: resolve the TTF font to a webview URI so @font-face src works correctly
+  // inside the isolated vscode-webview:// iframe (relative URLs in codicon.css won't resolve).
+  const codiconFontUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "codicon.ttf"));
   const styles = getChatStyles() + "\n" + getChatActivityStyles();
   const activityScript = getChatActivityScript();
   const clientScript = getChatClientScript(sidebarIconUri.toString(), state);
@@ -86,6 +107,32 @@ export function getChatViewHtml(webview: vscode.Webview, extensionUri: vscode.Ur
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..700;1,14..32,300..700&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap" rel="stylesheet">
   <style>
+    @font-face {
+      font-family: "codicon";
+      font-display: block;
+      src: url("${codiconFontUri}") format("truetype");
+    }
+    .codicon[class*="codicon-"] {
+      font: normal normal normal 14px/1 codicon;
+      display: inline-block;
+      text-decoration: none;
+      text-rendering: auto;
+      text-align: center;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      user-select: none;
+    }
+    .codicon-file::before             { content: "\\ea7b"; }
+    .codicon-file-code::before        { content: "\\eae9"; }
+    .codicon-file-media::before       { content: "\\eaea"; }
+    .codicon-file-zip::before         { content: "\\eaef"; }
+    .codicon-markdown::before         { content: "\\eb1d"; }
+    .codicon-json::before             { content: "\\eb0f"; }
+    .codicon-database::before         { content: "\\eace"; }
+    .codicon-settings-gear::before    { content: "\\eb51"; }
+    .codicon-symbol-class::before     { content: "\\eb5b"; }
+    .codicon-file-pdf::before         { content: "\\eaeb"; }
+    .codicon-file-text::before        { content: "\\ec5e"; }
 ${styles}
   </style>
 </head>
@@ -128,6 +175,14 @@ ${styles}
       <div class="session-collab-badge" id="session-collab-badge" style="display:none;" title="Co-Agent Collaboration"></div>
     </div>
     <div class="top-bar-right">
+      <button class="top-bar-icon-btn top-account-btn" id="btn-top-account" aria-label="Account & Daily Quota" title="Account & Daily Quota">
+        <svg class="account-profile-svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+          <circle cx="12" cy="7" r="4"></circle>
+        </svg>
+        <span class="account-pill-dot" id="account-pill-dot" style="display:none;"></span>
+        <span class="account-pill-text sr-only" id="account-pill-text" style="display:none;">Free</span>
+      </button>
       <button class="top-bar-icon-btn" id="btn-top-collab-inbox" style="display:none;" aria-label="Collaboration Inbox" title="Collaboration Inbox (Inter-Session Mailbox)" data-action="toggle-collab-inbox">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
@@ -135,11 +190,12 @@ ${styles}
         </svg>
         <span class="collab-inbox-badge-count" id="collab-inbox-badge" style="display:none;">0</span>
       </button>
-      <button class="top-bar-icon-btn" id="btn-top-open-tab" aria-label="Open Session in New Editor Tab (Side-by-Side)" title="Open Session in New Editor Tab (Side-by-Side)" data-action="open-current-tab">
+
+      <button class="top-bar-icon-btn" id="btn-top-open-tab" aria-label="Open Session in Editor Tab" title="Open Session in Editor Tab (Pop Out)" data-action="open-current-tab">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
-          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-          <polyline points="15 3 21 3 21 9"></polyline>
-          <line x1="10" y1="14" x2="21" y2="3"></line>
+          <path d="M6 13v6a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-6"></path>
+          <polyline points="9 3 3 3 3 9"></polyline>
+          <line x1="14" y1="14" x2="3" y2="3"></line>
         </svg>
       </button>
       <button class="top-bar-icon-btn" id="btn-top-timeline" style="display:none;" title="Conversation Timeline & Milestones" data-action="toggle-timeline">
@@ -178,6 +234,39 @@ ${styles}
           <button class="popover-action-btn" id="btn-action-wf-callout">Open Waterfall</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div class="account-popover" id="account-popover" style="display:none;" role="dialog" aria-label="AgenticMarket Account & Quota">
+    <div class="account-popover-header">
+      <div class="account-user-info">
+        <div class="account-avatar" id="account-avatar">AM</div>
+        <div class="account-titles">
+          <span class="account-username" id="account-username">Anonymous Trial</span>
+          <span class="account-plan-badge" id="account-plan-badge">Free Tier</span>
+        </div>
+      </div>
+      <button class="account-popover-close" id="btn-account-popover-close">&times;</button>
+    </div>
+    <div class="account-popover-body">
+      <div class="account-quota-row">
+        <span class="account-quota-label">Gateway Status</span>
+        <span class="account-quota-val" id="account-quota-val">Active</span>
+      </div>
+      <div class="account-quota-track">
+        <div class="account-quota-bar" id="account-quota-bar" style="width: 100%;"></div>
+      </div>
+      <div class="account-quota-meta">
+        <span id="account-reset-timer">Resets 00:00 UTC</span>
+        
+      </div>
+    </div>
+    <div class="account-popover-footer">
+      <button class="btn-account-action primary" id="btn-account-login">Sign in with AgenticMarket</button>
+      <button class="btn-account-action secondary" id="btn-account-logout" style="display:none;">Sign Out</button>
+      <button class="btn-account-refresh" id="btn-account-refresh" title="Refresh usage">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+      </button>
     </div>
   </div>
 
@@ -364,16 +453,10 @@ ${styles}
   </div>
 
   <!-- Chat Viewport Wrapper with Floating Controls -->
-  <div class="chat-viewport-wrapper" style="position:relative; flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:0; width:100%;">
+  <div class="chat-viewport-wrapper">
     <!-- Playful Mascot Exploration Perches -->
     <div class="top-header-mascot-perch" id="top-header-mascot-perch"></div>
     <div class="edge-mascot-perch" id="edge-mascot-perch"></div>
-
-    <!-- Floating Scroll-To-Bottom Button -->
-    <button class="scroll-bottom-btn" id="btn-scroll-bottom" title="Scroll to bottom" aria-label="Scroll to bottom">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
-      <span class="unread-badge" id="scroll-unread-badge"></span>
-    </button>
 
     <!-- Chat Messages Feed -->
     <div class="chat-container" id="chat-messages" role="log" aria-label="Chat messages" aria-live="polite">
@@ -394,9 +477,37 @@ ${styles}
             <h1 class="onboarding-title">Welcome to Andromity</h1>
             <p class="onboarding-subtitle">Connect your favorite AI provider to begin coding autonomously.</p>
           </div>
+          <button class="onboarding-close-btn" id="btn-onboarding-dismiss" data-action="dismiss-onboarding" title="Close onboarding guide" aria-label="Close onboarding guide">&times;</button>
         </div>
 
         <div class="onboarding-card">
+          <!-- Instant 1-Click Activation Hero Card (Zero Setup Required) -->
+          <div class="onboarding-instant-hero">
+            <div class="onboarding-instant-badge">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+              <span>Instant Setup • No Key Required</span>
+            </div>
+            <div class="onboarding-instant-headline">Start Coding in One Click</div>
+            <div class="onboarding-instant-subtext">Free trial powered by Andromity Auto Cloud Gateway with smart multi-provider fallback. Zero configuration required.</div>
+            
+            <div class="onboarding-instant-btn-group">
+              <button class="btn-onboarding-instant-start" id="btn-onboarding-instant-start" title="Start coding immediately with 1-click free trial">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                <span>Start Free Trial (1-Click)</span>
+              </button>
+              <button class="btn-onboarding-github-login" id="btn-onboarding-github-login" title="Sign in with AgenticMarket">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+                <span>Sign in with AgenticMarket</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="onboarding-or-divider">
+            <span class="onboarding-or-line"></span>
+            <span class="onboarding-or-text">OR BRING YOUR OWN KEYS / LOCAL OLLAMA</span>
+            <span class="onboarding-or-line"></span>
+          </div>
+
           <!-- Step 1: Provider selection & key form -->
           <div class="onboarding-step-view" id="onboarding-step-1">
             <div class="onboarding-card-header">
@@ -405,7 +516,11 @@ ${styles}
             </div>
 
             <div class="onboarding-providers-grid" id="onboarding-providers-grid">
-              <button class="onboarding-provider-chip active" data-provider="anthropic" data-model="claude-sonnet-4-6" data-portal="https://console.anthropic.com/settings/keys" data-name="Anthropic (Claude)">
+              <button class="onboarding-provider-chip active" data-provider="andromity" data-model="auto" data-portal="https://agenticmarket.dev" data-name="Andromity Auto (Free Trial)">
+                <span class="provider-chip-name">Andromity</span>
+                <span class="provider-chip-badge">Auto (Free)</span>
+              </button>
+              <button class="onboarding-provider-chip" data-provider="anthropic" data-model="claude-sonnet-4-6" data-portal="https://console.anthropic.com/settings/keys" data-name="Anthropic (Claude)">
                 <span class="provider-chip-name">Anthropic</span>
                 <span class="provider-chip-badge">Claude 3.7</span>
               </button>
@@ -431,8 +546,31 @@ ${styles}
               </button>
             </div>
 
+            <!-- Form area for Andromity Auto (Zero-Key Free Gateway) -->
+            <div class="onboarding-andromity-area" id="onboarding-andromity-form" style="display:flex;">
+              <div class="andromity-info-box">
+                <div class="andromity-info-icon">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                </div>
+                <div class="andromity-info-content">
+                  <div class="andromity-info-title">Andromity Cloud Gateway</div>
+                  <div class="andromity-info-desc">Instant access to managed cloud intelligence for autonomous coding. Zero setup required.</div>
+                </div>
+              </div>
+              <div class="andromity-actions" style="display:flex; flex-direction:column; gap:6px; width:100%;">
+                <button class="btn-onboarding-save" id="btn-onboarding-andromity-activate">
+                  <span>Activate Free Trial (1-Click)</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                </button>
+                <button class="btn-onboarding-save secondary" id="btn-onboarding-andromity-github">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+                  <span>Sign in with AgenticMarket</span>
+                </button>
+              </div>
+            </div>
+
             <!-- Form area for API Key providers -->
-            <div class="onboarding-form-area" id="onboarding-key-form">
+            <div class="onboarding-form-area" id="onboarding-key-form" style="display:none;">
               <div class="onboarding-input-header">
                 <span class="onboarding-label" id="onboarding-key-label">2. Paste API Key</span>
                 <a class="onboarding-portal-link" id="onboarding-portal-link" data-action="open-portal" data-url="https://console.anthropic.com/settings/keys" title="Get API Key from provider console">
@@ -543,6 +681,30 @@ ${styles}
           </div>
         </div>
 
+        <div class="zero-gateway-banner" id="zero-gateway-banner">
+          <div class="zero-gateway-info">
+            <span class="zero-gateway-pulse"></span>
+            <div class="zero-gateway-titles">
+              <span class="zero-gateway-title">Andromity Auto Cloud Gateway</span>
+              <span class="zero-gateway-sub" id="zero-gateway-sub">Multi-cloud edge fallback &bull; Instant free trial</span>
+            </div>
+          </div>
+          <div class="zero-gateway-actions">
+            <button class="btn-zero-action" data-action="open-onboarding" title="Switch provider or setup API keys">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1 2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+              <span>Setup / BYOK</span>
+            </button>
+            <button class="btn-zero-action highlight" id="zero-gateway-signin-btn" data-action="open-github-login" title="Sign in with GitHub">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+              <span>Sign In</span>
+            </button>
+            <div class="zero-gateway-active-badge" id="zero-gateway-active-badge" style="display:none;align-items:center;gap:4px;font-size:11px;font-weight:600;color:#10b981;padding:4px 8px;background:rgba(16,185,129,0.12);border-radius:4px;border:1px solid rgba(16,185,129,0.25);">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span>Active</span>
+            </div>
+          </div>
+        </div>
+
         <!-- Recent Sessions Section — skeleton until init_state -->
         <div class="recent-sessions-section" id="recent-sessions-section" style="display:flex;">
           <div class="recent-sessions-header">
@@ -599,222 +761,294 @@ ${styles}
   </div>
   </div>
 
-  <div id="interactive-slot" style="padding: 0 10px;"></div>
-
-  <!-- Collapsible Todo / Plan Tracker (above prompt input) -->
-  <div class="plan-tracker-strip" id="plan-tracker-strip" style="display:none;">
-    <div class="tracker-row" id="tracker-header-row" title="Click to collapse / expand todos">
-      <div class="tracker-info">
-        <span class="tracker-chevron" id="tracker-chevron">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
-        </span>
-        <span class="tracker-icon">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
-        </span>
-        <span class="tracker-title" id="tracker-title">Plan Tracker</span>
-        <span class="tracker-count" id="tracker-count">0/0 done</span>
-      </div>
-      <div class="tracker-actions">
-        <button class="btn-tracker-open" id="btn-tracker-open" aria-label="Open full plan in editor tab" title="Open Full Plan in Editor Tab">
-          <span>View Plan</span>
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
-        </button>
-        <button class="btn-tracker-close" id="btn-tracker-close" aria-label="Dismiss plan tracker" title="Dismiss tracker">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-        </button>
-      </div>
-    </div>
-    <div class="tracker-progress-track">
-      <div class="tracker-progress-bar" id="tracker-progress-bar" style="width:0%;"></div>
-    </div>
-    <div class="tracker-todos-list" id="tracker-todos-list"></div>
-  </div>
+  <div id="interactive-slot"></div>
 
   <div class="queue-container" id="queue-container" style="display:none;"></div>
 
   <div class="input-section" role="region" aria-label="Chat input">
-    <!-- Floating Slash Command Palette -->
-    <div class="slash-palette" id="slash-palette" style="display:none;" role="listbox" aria-label="Slash commands">
-      <div class="slash-palette-header">
-        <span>Commands</span>
-        <button class="palette-close-btn" id="btn-slash-close" aria-label="Close slash commands" title="Close (Esc)">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-        </button>
-      </div>
-      <div class="slash-palette-list" id="slash-palette-list"></div>
-    </div>
-
-    <!-- Floating @ Mention Palette (Skills & Tools) -->
-    <div class="slash-palette" id="mention-palette" style="display:none;" role="listbox" aria-label="Skills and tools">
-      <div class="slash-palette-header">
-        <span>Skills &amp; Tools</span>
-        <button class="palette-close-btn" id="btn-mention-close" aria-label="Close skills palette" title="Close (Esc)">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-        </button>
-      </div>
-      <div class="slash-palette-list" id="mention-palette-list"></div>
-    </div>
-
-    <!-- Animated Mascot Companion ("Andro-Pet") Home Slot -->
-    <div class="chat-mascot-home-slot" id="chat-mascot-home-slot">
-      <div class="chat-mascot" id="chat-mascot" title="Andro-Pet — Drag me anywhere, throw me, click to pet, Space / double-click to jump, right-click to call me home (/pet toggles)" role="button" tabindex="0" aria-label="Andro-Pet mascot companion. Drag to toss, click to pet, Space to jump, right-click to return home." aria-keyshortcuts="Enter Space" aria-roledescription="playful pet companion">
-        <div class="mascot-bubble" id="mascot-bubble" style="display:none;"></div>
-        <div class="mascot-sprite" id="mascot-sprite">
-          <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" class="mascot-svg" shape-rendering="crispEdges">
-            <!-- Antennae -->
-            <g class="mascot-antennae">
-              <rect x="7" y="2" width="3" height="3" fill="#38bdf8" class="antenna-bulb left" />
-              <rect x="8" y="3" width="1" height="1" fill="#e0f2fe" />
-              <rect x="9" y="5" width="2" height="2" fill="#0284c7" />
-              <rect x="10" y="7" width="2" height="2" fill="#0284c7" />
-              <rect x="11" y="9" width="2" height="2" fill="#0369a1" />
-
-              <rect x="22" y="2" width="3" height="3" fill="#38bdf8" class="antenna-bulb right" />
-              <rect x="23" y="3" width="1" height="1" fill="#e0f2fe" />
-              <rect x="21" y="5" width="2" height="2" fill="#0284c7" />
-              <rect x="20" y="7" width="2" height="2" fill="#0284c7" />
-              <rect x="19" y="9" width="2" height="2" fill="#0369a1" />
-            </g>
-
-            <!-- Mascot Body -->
-            <g class="mascot-body">
-              <rect x="14" y="9" width="4" height="2" fill="#38bdf8" />
-              <rect x="12" y="11" width="8" height="2" fill="#38bdf8" />
-              <rect x="10" y="13" width="12" height="2" fill="#0ea5e9" />
-              <rect x="10" y="13" width="2" height="2" fill="#38bdf8" />
-              
-              <rect x="8" y="15" width="16" height="3" fill="#0284c7" />
-              <rect x="8" y="15" width="2" height="3" fill="#38bdf8" />
-              <rect x="22" y="15" width="2" height="3" fill="#0369a1" />
-              
-              <rect x="7" y="18" width="18" height="4" fill="#0284c7" />
-              <rect x="7" y="18" width="2" height="4" fill="#38bdf8" />
-              <rect x="23" y="18" width="2" height="4" fill="#0369a1" />
-
-              <rect x="6" y="22" width="20" height="4" fill="#0284c7" />
-              <rect x="6" y="22" width="2" height="4" fill="#38bdf8" />
-              <rect x="24" y="22" width="2" height="4" fill="#0369a1" />
-
-              <rect x="5" y="26" width="22" height="3" fill="#0369a1" />
-              <rect x="5" y="26" width="2" height="3" fill="#0284c7" />
-              <rect x="25" y="26" width="2" height="3" fill="#075985" />
-              
-              <rect x="6" y="29" width="7" height="2" fill="#075985" class="mascot-foot left" />
-              <rect x="19" y="29" width="7" height="2" fill="#075985" class="mascot-foot right" />
-              <rect x="13" y="29" width="6" height="1" fill="#0369a1" />
-            </g>
-
-            <!-- Eyes Layer -->
-            <g class="mascot-eyes" id="mascot-eyes-group">
-              <rect x="12" y="17" width="2" height="5" fill="#0f172a" class="eye-pixel eye-left" />
-              <rect x="18" y="17" width="2" height="5" fill="#0f172a" class="eye-pixel eye-right" />
-              <rect x="12" y="17" width="1" height="2" fill="#e0f2fe" class="eye-pupil pupil-left" />
-              <rect x="18" y="17" width="1" height="2" fill="#e0f2fe" class="eye-pupil pupil-right" />
-            </g>
-
-            <!-- Dizzy X-Eyes Layer (revealed after hard landings) -->
-            <g class="mascot-xeyes">
-              <rect x="12" y="17" width="1" height="1" fill="#0f172a" />
-              <rect x="14" y="17" width="1" height="1" fill="#0f172a" />
-              <rect x="13" y="18" width="1" height="1" fill="#0f172a" />
-              <rect x="12" y="19" width="1" height="1" fill="#0f172a" />
-              <rect x="14" y="19" width="1" height="1" fill="#0f172a" />
-              <rect x="18" y="17" width="1" height="1" fill="#0f172a" />
-              <rect x="20" y="17" width="1" height="1" fill="#0f172a" />
-              <rect x="19" y="18" width="1" height="1" fill="#0f172a" />
-              <rect x="18" y="19" width="1" height="1" fill="#0f172a" />
-              <rect x="20" y="19" width="1" height="1" fill="#0f172a" />
-            </g>
-            
-            <rect x="9" y="21" width="2" height="1" fill="#f472b6" opacity="0.6" class="mascot-blush" />
-            <rect x="21" y="21" width="2" height="1" fill="#f472b6" opacity="0.6" class="mascot-blush" />
-          </svg>
-        </div>
-      </div>
-    </div>
-
-    <div class="prompt-box">
-      <div class="image-attachments-container" id="image-attachments-container" style="display:none;"></div>
-      <div class="drag-dropped-files-bar" id="drag-dropped-files-bar" style="display:none;"></div>
-      <textarea id="prompt-input" autofocus placeholder="Ask Andromity or type / for commands, @ for skills..." rows="1" aria-label="Ask Andromity or type slash for commands, @ for skills"></textarea>
-      
-      <!-- Stepped Reasoning Effort Popover (Clean & Minimal) -->
-      <div class="reasoning-popover" id="reasoning-popover" style="display:none;" role="dialog" aria-label="Thinking Effort">
-        <div class="reasoning-slider-container">
-          <div class="reasoning-slider-track-wrap">
-            <input type="range" class="reasoning-slider-range" id="reasoning-slider-range" min="0" max="3" step="1" value="${activeReasoning.idx}" aria-label="Thinking effort level">
-            <div class="reasoning-slider-track" id="reasoning-slider-track">
-              <div class="reasoning-slider-fill fill-${activeReasoning.label.toLowerCase()}" id="reasoning-slider-fill" style="width: ${activeReasoning.pct}%;"></div>
-            </div>
-            <div class="reasoning-slider-ticks">
-              <span class="reasoning-tick-point ${activeReasoning.idx >= 0 ? 'active' : ''}" data-level-idx="0" title="Off"></span>
-              <span class="reasoning-tick-point ${activeReasoning.idx >= 1 ? 'active' : ''}" data-level-idx="1" title="Low"></span>
-              <span class="reasoning-tick-point ${activeReasoning.idx >= 2 ? 'active' : ''}" data-level-idx="2" title="Medium"></span>
-              <span class="reasoning-tick-point ${activeReasoning.idx >= 3 ? 'active' : ''}" data-level-idx="3" title="High"></span>
-            </div>
-          </div>
-
-          <div class="reasoning-slider-labels">
-            <button type="button" class="reasoning-step-btn ${activeReasoning.idx === 0 ? 'active' : ''}" data-level="off" data-idx="0" title="Off">
-              <span class="reasoning-step-label">Off</span>
-            </button>
-            <button type="button" class="reasoning-step-btn ${activeReasoning.idx === 1 ? 'active' : ''}" data-level="low" data-idx="1" title="Low">
-              <span class="reasoning-step-label">Low</span>
-            </button>
-            <button type="button" class="reasoning-step-btn ${activeReasoning.idx === 2 ? 'active' : ''}" data-level="medium" data-idx="2" title="Medium">
-              <span class="reasoning-step-label">Medium</span>
-            </button>
-            <button type="button" class="reasoning-step-btn ${activeReasoning.idx === 3 ? 'active' : ''}" data-level="high" data-idx="3" title="High">
-              <span class="reasoning-step-label">High</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div class="prompt-box-footer">
-        <div class="prompt-left-controls">
-          <button class="prompt-btn icon-only" id="btn-attach-file" title="Attach file context" aria-label="Attach file context">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="12" y1="5" x2="12" y2="19"></line>
-              <line x1="5" y1="12" x2="19" y2="12"></line>
-            </svg>
+    <!-- Composer Container: Keeps 
+     box, palettes, mascot & scroll-to-bottom button centered with limited width -->
+    <div class="composer-container">
+      <!-- Floating Slash Command Palette -->
+      <div class="slash-palette" id="slash-palette" style="display:none;" role="listbox" aria-label="Slash commands">
+        <div class="slash-palette-header">
+          <span>Commands</span>
+          <button class="palette-close-btn" id="btn-slash-close" aria-label="Close slash commands" title="Close (Esc)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
           </button>
+        </div>
+        <div class="slash-palette-list" id="slash-palette-list"></div>
+      </div>
 
-          <button class="prompt-btn mode-${(state.currentMode || 'safe').toLowerCase()}" id="btn-prompt-mode" title="Permission Governance Mode (Click to cycle)" aria-label="Permission mode">
-            <span id="prompt-mode-icon" class="prompt-mode-icon">
-              ${getModeSvg(state.currentMode)}
+      <!-- Floating @ Mention Palette (Skills & Tools) -->
+      <div class="slash-palette" id="mention-palette" style="display:none;" role="listbox" aria-label="Skills and tools">
+        <div class="slash-palette-header">
+          <span>Skills &amp; Tools</span>
+          <button class="palette-close-btn" id="btn-mention-close" aria-label="Close skills palette" title="Close (Esc)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+        <div class="slash-palette-list" id="mention-palette-list"></div>
+      </div>
+
+      <!-- Animated Mascot Companion ("Andro-Pet") Home Slot -->
+      <div class="chat-mascot-home-slot" id="chat-mascot-home-slot">
+        <div class="chat-mascot" id="chat-mascot" title="Andro-Pet — Drag me anywhere, throw me, click to pet, Space / double-click to jump, right-click to call me home (/pet toggles)" role="button" tabindex="0" aria-label="Andro-Pet mascot companion. Drag to toss, click to pet, Space to jump, right-click to return home." aria-keyshortcuts="Enter Space" aria-roledescription="playful pet companion">
+          <div class="mascot-bubble" id="mascot-bubble" style="display:none;"></div>
+          <div class="mascot-sprite" id="mascot-sprite">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" class="mascot-svg" shape-rendering="crispEdges">
+              <!-- Antennae -->
+              <g class="mascot-antennae">
+                <rect x="7" y="2" width="3" height="3" fill="#38bdf8" class="antenna-bulb left" />
+                <rect x="8" y="3" width="1" height="1" fill="#e0f2fe" />
+                <rect x="9" y="5" width="2" height="2" fill="#0284c7" />
+                <rect x="10" y="7" width="2" height="2" fill="#0284c7" />
+                <rect x="11" y="9" width="2" height="2" fill="#0369a1" />
+
+                <rect x="22" y="2" width="3" height="3" fill="#38bdf8" class="antenna-bulb right" />
+                <rect x="23" y="3" width="1" height="1" fill="#e0f2fe" />
+                <rect x="21" y="5" width="2" height="2" fill="#0284c7" />
+                <rect x="20" y="7" width="2" height="2" fill="#0284c7" />
+                <rect x="19" y="9" width="2" height="2" fill="#0369a1" />
+              </g>
+
+              <!-- Mascot Body -->
+              <g class="mascot-body">
+                <rect x="14" y="9" width="4" height="2" fill="#38bdf8" />
+                <rect x="12" y="11" width="8" height="2" fill="#38bdf8" />
+                <rect x="10" y="13" width="12" height="2" fill="#0ea5e9" />
+                <rect x="10" y="13" width="2" height="2" fill="#38bdf8" />
+                
+                <rect x="8" y="15" width="16" height="3" fill="#0284c7" />
+                <rect x="8" y="15" width="2" height="3" fill="#38bdf8" />
+                <rect x="22" y="15" width="2" height="3" fill="#0369a1" />
+                
+                <rect x="7" y="18" width="18" height="4" fill="#0284c7" />
+                <rect x="7" y="18" width="2" height="4" fill="#38bdf8" />
+                <rect x="23" y="18" width="2" height="4" fill="#0369a1" />
+
+                <rect x="6" y="22" width="20" height="4" fill="#0284c7" />
+                <rect x="6" y="22" width="2" height="4" fill="#38bdf8" />
+                <rect x="24" y="22" width="2" height="4" fill="#0369a1" />
+
+                <rect x="5" y="26" width="22" height="3" fill="#0369a1" />
+                <rect x="5" y="26" width="2" height="3" fill="#0284c7" />
+                <rect x="25" y="26" width="2" height="3" fill="#075985" />
+                
+                <rect x="6" y="29" width="7" height="2" fill="#075985" class="mascot-foot left" />
+                <rect x="19" y="29" width="7" height="2" fill="#075985" class="mascot-foot right" />
+                <rect x="13" y="29" width="6" height="1" fill="#0369a1" />
+              </g>
+
+              <!-- Eyes Layer -->
+              <g class="mascot-eyes" id="mascot-eyes-group">
+                <rect x="12" y="17" width="2" height="5" fill="#0f172a" class="eye-pixel eye-left" />
+                <rect x="18" y="17" width="2" height="5" fill="#0f172a" class="eye-pixel eye-right" />
+                <rect x="12" y="17" width="1" height="2" fill="#e0f2fe" class="eye-pupil pupil-left" />
+                <rect x="18" y="17" width="1" height="2" fill="#e0f2fe" class="eye-pupil pupil-right" />
+              </g>
+
+              <!-- Dizzy X-Eyes Layer (revealed after hard landings) -->
+              <g class="mascot-xeyes">
+                <rect x="12" y="17" width="1" height="1" fill="#0f172a" />
+                <rect x="14" y="17" width="1" height="1" fill="#0f172a" />
+                <rect x="13" y="18" width="1" height="1" fill="#0f172a" />
+                <rect x="12" y="19" width="1" height="1" fill="#0f172a" />
+                <rect x="14" y="19" width="1" height="1" fill="#0f172a" />
+                <rect x="18" y="17" width="1" height="1" fill="#0f172a" />
+                <rect x="20" y="17" width="1" height="1" fill="#0f172a" />
+                <rect x="19" y="18" width="1" height="1" fill="#0f172a" />
+                <rect x="18" y="19" width="1" height="1" fill="#0f172a" />
+                <rect x="20" y="19" width="1" height="1" fill="#0f172a" />
+              </g>
+              
+              <rect x="9" y="21" width="2" height="1" fill="#f472b6" opacity="0.6" class="mascot-blush" />
+              <rect x="21" y="21" width="2" height="1" fill="#f472b6" opacity="0.6" class="mascot-blush" />
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- Floating Scroll-To-Bottom Button -->
+      <button class="scroll-bottom-btn" id="btn-scroll-bottom" title="Scroll to bottom" aria-label="Scroll to bottom">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        <span class="unread-badge" id="scroll-unread-badge"></span>
+      </button>
+
+      <!-- Collapsible Todo / Plan Tracker (Merged directly with Prompt Box) -->
+      <div class="plan-tracker-strip" id="plan-tracker-strip" style="display:none;">
+        <div class="tracker-row" id="tracker-header-row" title="Click to collapse / expand todos">
+          <div class="tracker-info">
+            <span class="tracker-chevron" id="tracker-chevron">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
             </span>
-            <span id="prompt-mode-label">${(state.currentMode || 'SAFE').toUpperCase()}</span>
-          </button>
+            <span class="tracker-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+            </span>
+            <span class="tracker-title" id="tracker-title">Plan Tracker</span>
+            <span class="tracker-count" id="tracker-count">0/0 done</span>
+          </div>
+          <div class="tracker-actions">
+            <button class="btn-tracker-open" id="btn-tracker-open" aria-label="Open full plan in editor tab" title="Open Full Plan in Editor Tab">
+              <span>View Plan</span>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 13v6a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-6"></path><polyline points="9 3 3 3 3 9"></polyline><line x1="14" y1="14" x2="3" y2="3"></line></svg>
+            </button>
+            <button class="btn-tracker-close" id="btn-tracker-close" aria-label="Dismiss plan tracker" title="Dismiss tracker">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+          </div>
+        </div>
+        <div class="tracker-progress-track">
+          <div class="tracker-progress-bar" id="tracker-progress-bar" style="width:0%;"></div>
+        </div>
+        <div class="tracker-todos-list" id="tracker-todos-list"></div>
+      </div>
+
+      <div class="prompt-box">
+        <div class="image-attachments-container" id="image-attachments-container" style="display:none;"></div>
+        <div class="drag-dropped-files-bar" id="drag-dropped-files-bar" style="display:none;"></div>
+        <textarea id="prompt-input" autofocus placeholder="Ask Andromity or type / for commands, @ for skills..." rows="1" aria-label="Ask Andromity or type slash for commands, @ for skills"></textarea>
+        
+        <!-- Stepped Reasoning Effort Popover (Clean & Minimal) -->
+        <div class="reasoning-popover" id="reasoning-popover" style="display:none;" role="dialog" aria-label="Thinking Effort">
+          <div class="reasoning-slider-container">
+            <div class="reasoning-slider-track-wrap">
+              <input type="range" class="reasoning-slider-range" id="reasoning-slider-range" min="0" max="3" step="1" value="${activeReasoning.idx}" aria-label="Thinking effort level">
+              <div class="reasoning-slider-track" id="reasoning-slider-track">
+                <div class="reasoning-slider-fill fill-${activeReasoning.label.toLowerCase()}" id="reasoning-slider-fill" style="width: ${activeReasoning.pct}%;"></div>
+              </div>
+              <div class="reasoning-slider-ticks">
+                <span class="reasoning-tick-point ${activeReasoning.idx >= 0 ? 'active' : ''}" data-level-idx="0" title="Off"></span>
+                <span class="reasoning-tick-point ${activeReasoning.idx >= 1 ? 'active' : ''}" data-level-idx="1" title="Low"></span>
+                <span class="reasoning-tick-point ${activeReasoning.idx >= 2 ? 'active' : ''}" data-level-idx="2" title="Medium"></span>
+                <span class="reasoning-tick-point ${activeReasoning.idx >= 3 ? 'active' : ''}" data-level-idx="3" title="High"></span>
+              </div>
+            </div>
+
+            <div class="reasoning-slider-labels">
+              <button type="button" class="reasoning-step-btn ${activeReasoning.idx === 0 ? 'active' : ''}" data-level="off" data-idx="0" title="Off">
+                <span class="reasoning-step-label">Off</span>
+              </button>
+              <button type="button" class="reasoning-step-btn ${activeReasoning.idx === 1 ? 'active' : ''}" data-level="low" data-idx="1" title="Low">
+                <span class="reasoning-step-label">Low</span>
+              </button>
+              <button type="button" class="reasoning-step-btn ${activeReasoning.idx === 2 ? 'active' : ''}" data-level="medium" data-idx="2" title="Medium">
+                <span class="reasoning-step-label">Medium</span>
+              </button>
+              <button type="button" class="reasoning-step-btn ${activeReasoning.idx === 3 ? 'active' : ''}" data-level="high" data-idx="3" title="High">
+                <span class="reasoning-step-label">High</span>
+              </button>
+            </div>
+          </div>
         </div>
 
-        <div class="prompt-right-controls">
-          <button class="prompt-btn" id="btn-prompt-model" title="Select or search model" aria-label="Select AI model">
-            <span id="prompt-model-label" class="skeleton skeleton-text" style="min-width:92px;" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
-            <svg class="chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </button>
-          <button class="prompt-btn" id="btn-prompt-reasoning" title="Reasoning / Thinking Effort: ${activeReasoning.label} (Click to adjust)" aria-label="Reasoning effort" aria-haspopup="dialog" aria-expanded="false">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"></path>
-              <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"></path>
-              <path d="M12 5v13"></path>
-            </svg>
-            <span id="prompt-reasoning-label">${activeReasoning.label}</span>
-            <svg class="chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </button>
-          <button class="codex-cancel-btn" id="btn-cancel" title="Stop Generation" style="display:none;" aria-label="Cancel agent turn">
-            <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>
-          </button>
-          <button class="codex-send-btn" id="btn-send" title="Send (Enter)" aria-label="Send message">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="12" y1="19" x2="12" y2="5"></line>
-              <polyline points="5 12 12 5 19 12"></polyline>
-            </svg>
-          </button>
+        <!-- Permission Mode Popover Menu -->
+        <div class="menu-popover mode-popover" id="mode-popover" style="display:none;" role="menu" aria-label="Permission Governance Mode">
+          <div class="menu-popover-header">Permission Governance</div>
+          <div class="menu-popover-list">
+            <button type="button" class="menu-popover-item ${(!state.currentMode || state.currentMode.toLowerCase() === 'safe') ? 'active' : ''}" data-mode="safe" role="menuitem">
+              <span class="menu-popover-icon mode-safe">${getModeSvg('safe')}</span>
+              <div class="menu-popover-content">
+                <div class="menu-popover-title-row">
+                  <span class="menu-popover-title">Safe</span>
+                  <span class="menu-popover-tag">Default</span>
+                </div>
+                <span class="menu-popover-desc">Prompt before running commands or modifying files</span>
+              </div>
+              <svg class="menu-popover-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            </button>
+            <button type="button" class="menu-popover-item ${state.currentMode?.toLowerCase() === 'trust' ? 'active' : ''}" data-mode="trust" role="menuitem">
+              <span class="menu-popover-icon mode-trust">${getModeSvg('trust')}</span>
+              <div class="menu-popover-content">
+                <div class="menu-popover-title-row">
+                  <span class="menu-popover-title">Trust</span>
+                  <span class="menu-popover-tag">Workspace</span>
+                </div>
+                <span class="menu-popover-desc">Auto-run workspace tools; prompt on external tools</span>
+              </div>
+              <svg class="menu-popover-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            </button>
+            <button type="button" class="menu-popover-item ${state.currentMode?.toLowerCase() === 'full' ? 'active' : ''}" data-mode="full" role="menuitem">
+              <span class="menu-popover-icon mode-full">${getModeSvg('full')}</span>
+              <div class="menu-popover-content">
+                <div class="menu-popover-title-row">
+                  <span class="menu-popover-title">Full</span>
+                  <span class="menu-popover-tag">Autonomous</span>
+                </div>
+                <span class="menu-popover-desc">Execute standard tools with safety boundaries</span>
+              </div>
+              <svg class="menu-popover-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            </button>
+            <button type="button" class="menu-popover-item ${state.currentMode?.toLowerCase() === 'yolo' ? 'active' : ''}" data-mode="yolo" role="menuitem">
+              <span class="menu-popover-icon mode-yolo">${getModeSvg('yolo')}</span>
+              <div class="menu-popover-content">
+                <div class="menu-popover-title-row">
+                  <span class="menu-popover-title">YOLO</span>
+                  <span class="menu-popover-tag warn">Unrestricted</span>
+                </div>
+                <span class="menu-popover-desc">Full autonomous execution without confirmations</span>
+              </div>
+              <svg class="menu-popover-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="prompt-box-footer">
+          <div class="prompt-left-controls">
+            <button class="prompt-btn icon-only" id="btn-attach-file" title="Attach file context" aria-label="Attach file context">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+            </button>
+
+            <button class="prompt-btn mode-${(state.currentMode || 'safe').toLowerCase()}" id="btn-prompt-mode" title="Permission Governance Mode" aria-label="Permission mode" aria-haspopup="menu" aria-expanded="false">
+              <span id="prompt-mode-icon" class="prompt-mode-icon">
+                ${getModeSvg(state.currentMode)}
+              </span>
+              <span id="prompt-mode-label">${(state.currentMode || 'SAFE').toUpperCase()}</span>
+              <svg class="chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </button>
+          </div>
+
+          <div class="prompt-right-controls">
+            <button class="prompt-btn" id="btn-prompt-model" title="Select or search model" aria-label="Select AI model">
+              <span id="prompt-model-label" class="skeleton skeleton-text" style="min-width:92px;" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
+              <svg class="chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </button>
+            <button class="prompt-btn" id="btn-prompt-reasoning" title="Reasoning / Thinking Effort: ${activeReasoning.label} (Click to adjust)" aria-label="Reasoning effort" aria-haspopup="dialog" aria-expanded="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"></path>
+                <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"></path>
+                <path d="M12 5v13"></path>
+              </svg>
+              <span id="prompt-reasoning-label">${activeReasoning.label}</span>
+              <svg class="chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </button>
+            <button class="codex-cancel-btn" id="btn-cancel" title="Stop Generation" style="display:none;" aria-label="Cancel agent turn">
+              <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>
+            </button>
+            <button class="codex-send-btn" id="btn-send" title="Send (Enter)" aria-label="Send message">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="19" x2="12" y2="5"></line>
+                <polyline points="5 12 12 5 19 12"></polyline>
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -823,20 +1057,75 @@ ${styles}
   <!-- Status Bar Footer -->
   <div class="status-bar" id="status-bar-footer">
     <div class="status-bar-left">
-      <button class="prompt-pill-btn" id="btn-prompt-profile" title="Agent Profile (Click to cycle: Builder → Coder → Reviewer → Planner)" aria-label="Agent profile">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-          <circle cx="12" cy="7" r="4"></circle>
-        </svg>
+      <button class="prompt-pill-btn" id="btn-prompt-profile" title="Agent Profile" aria-label="Agent profile" aria-haspopup="menu" aria-expanded="false">
+        <span id="prompt-profile-icon" class="prompt-profile-icon">
+          ${getProfileSvg(state.currentProfile)}
+        </span>
         <span id="prompt-profile-label" class="skeleton skeleton-text" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
-        <svg class="cycle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="m17 2 4 4-4 4"></path>
-          <path d="M3 11v-1a4 4 0 0 1 4-4h14"></path>
-          <path d="m7 22-4-4 4-4"></path>
-          <path d="M21 13v1a4 4 0 0 1-4 4H3"></path>
+        <svg class="chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9"></polyline>
         </svg>
         <span class="profile-mascot-perch" id="profile-mascot-perch"></span>
       </button>
+
+      <!-- Agent Profile Popover Menu -->
+      <div class="menu-popover profile-popover" id="profile-popover" style="display:none;" role="menu" aria-label="Agent Profile">
+        <div class="menu-popover-header">Agent Profile</div>
+        <div class="menu-popover-list">
+          <button type="button" class="menu-popover-item ${(!state.currentProfile || state.currentProfile.toLowerCase() === 'builder') ? 'active' : ''}" data-profile="builder" role="menuitem">
+            <span class="menu-popover-icon">${getProfileSvg('builder')}</span>
+            <div class="menu-popover-content">
+              <div class="menu-popover-title-row">
+                <span class="menu-popover-title">Builder</span>
+                <span class="menu-popover-tag">Default</span>
+              </div>
+              <span class="menu-popover-desc">Plans first, then implements step by step</span>
+            </div>
+            <svg class="menu-popover-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+          </button>
+          <button type="button" class="menu-popover-item ${state.currentProfile?.toLowerCase() === 'coder' ? 'active' : ''}" data-profile="coder" role="menuitem">
+            <span class="menu-popover-icon">${getProfileSvg('coder')}</span>
+            <div class="menu-popover-content">
+              <div class="menu-popover-title-row">
+                <span class="menu-popover-title">Coder</span>
+                <span class="menu-popover-tag">Direct</span>
+              </div>
+              <span class="menu-popover-desc">Direct implementation, skips planning</span>
+            </div>
+            <svg class="menu-popover-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+          </button>
+          <button type="button" class="menu-popover-item ${state.currentProfile?.toLowerCase() === 'planner' ? 'active' : ''}" data-profile="planner" role="menuitem">
+            <span class="menu-popover-icon">${getProfileSvg('planner')}</span>
+            <div class="menu-popover-content">
+              <div class="menu-popover-title-row">
+                <span class="menu-popover-title">Planner</span>
+                <span class="menu-popover-tag">Architect</span>
+              </div>
+              <span class="menu-popover-desc">Produces plans only, touches no code</span>
+            </div>
+            <svg class="menu-popover-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+          </button>
+          <button type="button" class="menu-popover-item ${state.currentProfile?.toLowerCase() === 'reviewer' ? 'active' : ''}" data-profile="reviewer" role="menuitem">
+            <span class="menu-popover-icon">${getProfileSvg('reviewer')}</span>
+            <div class="menu-popover-content">
+              <div class="menu-popover-title-row">
+                <span class="menu-popover-title">Reviewer</span>
+                <span class="menu-popover-tag">Audit</span>
+              </div>
+              <span class="menu-popover-desc">Read-only audit, produces security & code findings</span>
+            </div>
+            <svg class="menu-popover-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+          </button>
+        </div>
+      </div>
       <div class="token-capacity-widget" id="token-capacity-widget" tabindex="0" role="button" aria-label="Token Usage & Model Capacity">
         <span id="token-label" class="skeleton skeleton-text" style="min-width:56px;" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
         <div class="token-mini-track" id="token-mini-track">

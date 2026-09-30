@@ -4,6 +4,12 @@
  */
 export function getReviewStyles(): string {
   return `
+    @keyframes codicon-spin {
+      100% { transform: rotate(360deg); }
+    }
+    .codicon-modifier-spin {
+      animation: codicon-spin 1.5s steps(30) infinite;
+    }
     :root {
       --review-font: var(--vscode-editor-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif);
       --review-code-font: var(--vscode-editor-font-family, Menlo, Monaco, "Courier New", monospace);
@@ -295,29 +301,18 @@ export function getReviewStyles(): string {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 16px;
-      height: 16px;
-      border-radius: 3px;
+      width: 12px;
       font-size: 10px;
-      font-weight: 700;
+      font-weight: 600;
+      font-family: var(--vscode-editor-font-family, monospace);
       flex-shrink: 0;
+      opacity: 0.85;
     }
 
-    .file-status-badge.M {
-      color: #e3b341;
-      background: rgba(227, 179, 65, 0.15);
-    }
-
-    .file-status-badge.A,
-    .file-status-badge.U {
-      color: #3fb950;
-      background: rgba(63, 185, 80, 0.15);
-    }
-
-    .file-status-badge.D {
-      color: #f85149;
-      background: rgba(248, 81, 73, 0.15);
-    }
+    .file-status-badge.M { color: #e3b341; }
+    .file-status-badge.A { color: #3fb950; }
+    .file-status-badge.U { color: #3fb950; }
+    .file-status-badge.D { color: #f85149; }
 
     .file-name {
       flex: 1;

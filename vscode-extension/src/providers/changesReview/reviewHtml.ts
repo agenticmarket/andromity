@@ -15,6 +15,7 @@ export function getReviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
   const nonce = getNonce();
   const styles = getReviewStyles();
   const script = getReviewClientScript();
+  const codiconFontUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "codicon.ttf"));
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -27,62 +28,55 @@ export function getReviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
-    ${styles}
-
-    /* Embedded Minimal Icon Fallbacks */
-    .codicon {
+    @font-face {
+      font-family: "codicon";
+      font-display: block;
+      src: url("${codiconFontUri}") format("truetype");
+    }
+    .codicon[class*="codicon-"] {
+      font-family: "codicon";
+      font-weight: normal;
+      font-style: normal;
       display: inline-block;
-      vertical-align: middle;
+      text-rendering: auto;
+      text-align: center;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
       line-height: 1;
+      vertical-align: middle;
+      user-select: none;
     }
-    .codicon-chevron-down::before { content: "▼"; font-size: 8px; }
-    .codicon-chevron-down.collapsed::before { content: "▶"; font-size: 8px; }
-    .codicon-folder::before {
-      content: "";
-      display: inline-block;
-      width: 12px;
-      height: 12px;
-      vertical-align: -1px;
-      background: currentColor;
-      mask: url("data:image/svg+xml;utf8,<svg viewBox='0 0 24 24' fill='black' xmlns='http://www.w3.org/2000/svg'><path d='M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z'/></svg>") center/contain no-repeat;
-      -webkit-mask: url("data:image/svg+xml;utf8,<svg viewBox='0 0 24 24' fill='black' xmlns='http://www.w3.org/2000/svg'><path d='M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z'/></svg>") center/contain no-repeat;
-    }
-    .codicon-file::before {
-      content: "";
-      display: inline-block;
-      width: 12px;
-      height: 12px;
-      vertical-align: -1px;
-      background: currentColor;
-      mask: url("data:image/svg+xml;utf8,<svg viewBox='0 0 24 24' fill='black' xmlns='http://www.w3.org/2000/svg'><path d='M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z'/></svg>") center/contain no-repeat;
-      -webkit-mask: url("data:image/svg+xml;utf8,<svg viewBox='0 0 24 24' fill='black' xmlns='http://www.w3.org/2000/svg'><path d='M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z'/></svg>") center/contain no-repeat;
-    }
-    .codicon-diff::before { content: "±"; font-weight: bold; }
-    .codicon-check-all::before {
-      content: "";
-      display: inline-block;
-      width: 12px;
-      height: 12px;
-      vertical-align: -1px;
-      background: currentColor;
-      mask: url("data:image/svg+xml;utf8,<svg viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' xmlns='http://www.w3.org/2000/svg'><polyline points='20 6 9 17 4 12'/></svg>") center/contain no-repeat;
-      -webkit-mask: url("data:image/svg+xml;utf8,<svg viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' xmlns='http://www.w3.org/2000/svg'><polyline points='20 6 9 17 4 12'/></svg>") center/contain no-repeat;
-    }
-    .codicon-go-to-file::before { content: "↗"; font-size: 14px; }
-    .codicon-diff-single::before { content: "◫"; font-size: 13px; }
-    .codicon-discard::before { content: "↩"; font-size: 13px; }
-    .codicon-unfold::before { content: "↕"; }
-    .codicon-refresh::before { content: "↻"; }
-    .codicon-loading::before {
-      content: "";
-      display: inline-block;
-      width: 11px;
-      height: 11px;
-      border: 2px solid currentColor;
-      border-top-color: transparent;
-      border-radius: 50%;
-      vertical-align: -1px;
-    }
+    /* Chevrons */
+    .codicon-chevron-down::before    { content: "\\eab4"; }
+    .codicon-chevron-down.collapsed::before { content: "\\eab7"; }
+    .codicon-chevron-right::before   { content: "\\eab6"; }
+    .codicon-chevron-up::before      { content: "\\eab7"; }
+    /* Folder */
+    .codicon-folder::before          { content: "\\ea83"; }
+    .codicon-folder-opened::before   { content: "\\eaf7"; }
+    /* File types */
+    .codicon-file::before            { content: "\\ea7b"; }
+    .codicon-file-code::before       { content: "\\eae9"; }
+    .codicon-file-media::before      { content: "\\eaea"; }
+    .codicon-file-zip::before        { content: "\\eaef"; }
+    .codicon-markdown::before        { content: "\\eb1d"; }
+    .codicon-json::before            { content: "\\eb0f"; }
+    .codicon-database::before        { content: "\\eace"; }
+    .codicon-settings-gear::before   { content: "\\eb51"; }
+    .codicon-file-pdf::before        { content: "\\eaeb"; }
+    .codicon-file-text::before       { content: "\\ec5e"; }
+    .codicon-symbol-class::before    { content: "\\eb5b"; }
+    /* Actions / UI */
+    .codicon-diff::before            { content: "\\eae1"; }
+    .codicon-diff-single::before     { content: "\\eae1"; }
+    .codicon-go-to-file::before      { content: "\\ea94"; }
+    .codicon-discard::before         { content: "\\eae2"; }
+    .codicon-refresh::before         { content: "\\eb37"; }
+    .codicon-unfold::before          { content: "\\eb73"; }
+    .codicon-check-all::before       { content: "\\ebb1"; }
+    .codicon-git-branch::before      { content: "\\ec6f"; }
+    .codicon-loading::before         { content: "\\eb19"; }
+    ${styles}
   </style>
 </head>
 <body>
@@ -90,7 +84,6 @@ export function getReviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
   <header class="review-header">
     <div class="header-left">
       <div class="branch-pill">
-        <span class="codicon codicon-git-branch branch-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg></span>
         <span id="branch-label">HEAD</span>
       </div>
       <span class="target-badge">↔ Working Tree</span>

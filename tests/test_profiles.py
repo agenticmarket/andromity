@@ -50,5 +50,5 @@ def test_slash_profile_accepts_every_registered_profile():
     from andromity.core.profiles import PROFILES
 
     for name in PROFILES:
-        assert name in ("builder", "coder", "reviewer", "planner"), name
+        assert name in ("builder", "coder", "reviewer", "planner", "benchmark"), name
         assert get_system_prompt(name)  # every registered profile has a prompt

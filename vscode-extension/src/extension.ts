@@ -109,6 +109,8 @@ export async function activate(context: vscode.ExtensionContext) {
   // 3. Register Providers
   const chatProvider = new ChatViewProvider(context.extensionUri, context);
   chatProvider.setPythonBridge(pythonBridge);
+  SettingsPanel.extensionContext = context;
+  SettingsPanel.chatProvider = chatProvider;
   const planProvider = new PlanViewProvider(context.extensionUri);
   chatProvider.setPlanViewProvider(planProvider);
   const sessionTreeProvider = new SessionTreeProvider();
@@ -123,6 +125,120 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, chatProvider, {
       webviewOptions: { retainContextWhenHidden: true },
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.window.registerUriHandler({
+      async handleUri(uri: vscode.Uri) {
+        log(`[Andromity] Received protocol URI: ${uri.toString()}`);
+        const fullUriStr = uri.toString(true);
+        let decodedStr = fullUriStr;
+        try {
+          while (decodedStr.includes("%3F") || decodedStr.includes("%3D") || decodedStr.includes("%26")) {
+            const next = decodeURIComponent(decodedStr);
+            if (next === decodedStr) break;
+            decodedStr = next;
+          }
+        } catch {}
+
+        const pathPart = uri.path.replace(/^\//, "");
+        const isAuthUri =
+          pathPart === "auth" ||
+          pathPart.startsWith("auth") ||
+          pathPart === "login" ||
+          pathPart === "oauth" ||
+          uri.path.includes("/auth") ||
+          decodedStr.includes("/auth");
+
+        if (isAuthUri) {
+          const queryParams = new URLSearchParams(uri.query);
+          const qMatches = decodedStr.match(/[?&](state|token|key|session|api_key|code|username|user|name|email)=([^&?#]+)/g) || [];
+          for (const m of qMatches) {
+            const eqIdx = m.indexOf("=");
+            if (eqIdx !== -1) {
+              const k = m.slice(1, eqIdx);
+              const v = decodeURIComponent(m.slice(eqIdx + 1));
+              if (!queryParams.has(k)) {
+                queryParams.set(k, v);
+              }
+            }
+          }
+
+          const state = queryParams.get("state");
+          const expectedState = context.secrets ? await context.secrets.get("andromity.oauth_state") : null;
+
+          // Verify state nonce if an expected state was registered to prevent CSRF / session fixation
+          if (expectedState) {
+            if (!state || state !== expectedState) {
+              log("[Andromity] OAuth CSRF state verification failed");
+              vscode.window.showErrorMessage("Andromity authentication rejected: OAuth state mismatch or expired (potential CSRF).");
+              return;
+            }
+            await context.secrets.delete("andromity.oauth_state");
+          }
+
+          const rawToken = queryParams.get("token") || queryParams.get("key") || queryParams.get("session") || queryParams.get("api_key") || queryParams.get("code");
+          const token = rawToken ? rawToken.trim() : null;
+          const rawUsername = queryParams.get("username") || queryParams.get("user") || queryParams.get("name") || undefined;
+          const username = rawUsername ? rawUsername.trim().replace(/[^a-zA-Z0-9_\-\.]/g, "").slice(0, 64) : undefined;
+          const rawEmail = queryParams.get("email") || undefined;
+          const email = rawEmail ? rawEmail.trim().slice(0, 128) : undefined;
+
+          // Validate token character set and length to prevent control character / payload injection
+          if (token && !/^[a-zA-Z0-9_\-\.]{12,512}$/.test(token)) {
+            log("[Andromity] Rejected malformed token in auth URI callback");
+            vscode.window.showErrorMessage("Andromity authentication rejected: Malformed token format received.");
+            return;
+          }
+
+          if (token) {
+            log("[Andromity] OAuth token received via 1-click URI handler");
+            const rpc = pythonBridge ? (pythonBridge.getClient() || (await pythonBridge.waitForClient(3000))) : null;
+            if (rpc) {
+              await rpc.call("config.set_api_key", {
+                provider: "andromity",
+                api_key: token,
+              });
+              await rpc.call("config.set", {
+                section: "default",
+                key: "provider",
+                value: "andromity",
+              });
+              await rpc.call("config.set", {
+                section: "default",
+                key: "model",
+                value: "auto",
+              });
+              if (username) {
+                await rpc.call("config.set", {
+                  section: "default",
+                  key: "user_name",
+                  value: username,
+                });
+              }
+              if (email) {
+                await rpc.call("config.set", {
+                  section: "default",
+                  key: "user_email",
+                  value: email,
+                });
+              }
+            }
+            if (context.secrets) {
+              await context.secrets.store("andromity.authToken", token);
+              if (username) await context.secrets.store("andromity.userName", username);
+              if (email) await context.secrets.store("andromity.userEmail", email);
+            }
+            await chatProvider.handleAuthToken(token, username, email);
+            if (SettingsPanel.currentPanel) {
+              await SettingsPanel.currentPanel.loadData(true);
+            }
+          } else {
+            vscode.window.showWarningMessage("Andromity auth callback received but no token was present in the URL.");
+          }
+        }
+      },
     })
   );
 
@@ -812,12 +928,12 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand("andromity.generateCommitMessage", async () => {
+    vscode.commands.registerCommand("andromity.generateCommitMessage", async (...args: any[]) => {
       let client = pythonBridge?.getClient() || null;
       if (!client && pythonBridge) {
         client = await pythonBridge.waitForClient(5000);
       }
-      await generateCommitMessage(client);
+      await generateCommitMessage(client, args[0]);
     }),
 
     vscode.commands.registerCommand("andromity.explainTerminalSelection", async () => {
@@ -880,6 +996,20 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }, 300);
   }
+
+
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("andromity.login", async () => {
+      await chatProvider.openLogin();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("andromity.logout", async () => {
+      await chatProvider.logout();
+    })
+  );
 }
 
 

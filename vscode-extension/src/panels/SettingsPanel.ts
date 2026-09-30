@@ -16,6 +16,8 @@ export class SettingsPanel {
   private _initialTab: string = "models";
   private _loadingPromise: Promise<void> | null = null;
 
+  public static extensionContext?: vscode.ExtensionContext;
+  public static chatProvider?: any;
   public static _cachedState: any = null;
   private static _prewarmPromise: Promise<void> | null = null;
 
@@ -26,6 +28,20 @@ export class SettingsPanel {
     SettingsPanel._prewarmPromise = (async () => {
       try {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        let account = { isAuthenticated: false, username: "", email: "", plan: "free" };
+        if (SettingsPanel.extensionContext) {
+          const token = await SettingsPanel.extensionContext.secrets.get("andromity.authToken");
+          const username = await SettingsPanel.extensionContext.secrets.get("andromity.userName");
+          const email = await SettingsPanel.extensionContext.secrets.get("andromity.userEmail");
+          const plan = await SettingsPanel.extensionContext.secrets.get("andromity.userPlan");
+          account = {
+            isAuthenticated: !!token,
+            username: username || "",
+            email: email || "",
+            plan: plan || "free"
+          };
+        }
+
         const [configData, models, providers, skills, mcpServers, usage, systemInfo, trustData, crons] = await Promise.all([
           rpcClient.call<any>("config.get", { project_path: workspaceFolder }, 8000).catch(() => ({})),
           rpcClient.call<ModelInfo[]>("config.list_models", {}, 8000).catch(() => []),
@@ -45,7 +61,9 @@ export class SettingsPanel {
           type: "state_loaded",
           config: { ...configData, permission_mode: permissionMode },
           models: models || [],
+          pinnedModels: configData?.pinned_models || [],
           providers: providers || [],
+          account,
           skills: skills || [],
           remoteSkills: SettingsPanel._cachedState?.remoteSkills || [],
           mcpServers: mcpServers || [],
@@ -84,8 +102,12 @@ export class SettingsPanel {
     extensionUri: vscode.Uri,
     rpcClient: RpcClient | null,
     initialTab: "models" | "skills" | "mcp" | "usage" | "keys" | "general" | "trust" | "about" | "crons" | "personalisation" = "models",
-    onConfigChange?: () => void
+    onConfigChange?: () => void,
+    context?: vscode.ExtensionContext,
+    chatProvider?: any
   ) {
+    if (context) SettingsPanel.extensionContext = context;
+    if (chatProvider) SettingsPanel.chatProvider = chatProvider;
     const column = vscode.window.activeTextEditor
       ? vscode.window.activeTextEditor.viewColumn
       : undefined;
@@ -183,7 +205,20 @@ export class SettingsPanel {
       try {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
-        // 1. FAST PATH (instant diagnostics & configuration, renders within < 25ms)
+        let account = { isAuthenticated: false, username: "", email: "", plan: "free" };
+        if (SettingsPanel.extensionContext) {
+          const token = await SettingsPanel.extensionContext.secrets.get("andromity.authToken");
+          const username = await SettingsPanel.extensionContext.secrets.get("andromity.userName");
+          const email = await SettingsPanel.extensionContext.secrets.get("andromity.userEmail");
+          const plan = await SettingsPanel.extensionContext.secrets.get("andromity.userPlan");
+          account = {
+            isAuthenticated: !!token,
+            username: username || "",
+            email: email || "",
+            plan: plan || "free"
+          };
+        }
+
         const fastPromise = Promise.all([
           this._rpcClient!.call<any>("config.get", { project_path: workspaceFolder }, 6000).catch(() => ({})),
           this._rpcClient!.call<ProviderInfo[]>("config.list_providers", {}, 6000).catch(() => []),
@@ -197,6 +232,7 @@ export class SettingsPanel {
             type: "fast_state_loaded",
             config: { ...configData, permission_mode: permissionMode },
             providers: providers || [],
+            account,
             systemInfo: systemInfo || {},
             trustData: trustData || { is_trusted: true, trusted_projects: [] },
             currentWorkspace: workspaceFolder || "",
@@ -231,8 +267,9 @@ export class SettingsPanel {
         const fullState = {
           type: "state_loaded",
           config: { ...fastRes.configData, permission_mode: fastRes.permissionMode },
-          models: models || [],
+          models: (models || []).filter(m => m.provider !== "andromity" || m.id === "auto"),
           providers: fastRes.providers || [],
+          account,
           skills: skills || [],
           remoteSkills: SettingsPanel._cachedState?.remoteSkills || [],
           mcpServers: mcpServers || [],
@@ -283,6 +320,47 @@ export class SettingsPanel {
   }
 
   private async _handleMessage(message: any) {
+    if (message.type === "login_account") {
+      try {
+        if (SettingsPanel.chatProvider) {
+          await SettingsPanel.chatProvider.openLogin();
+        } else {
+          const scheme = vscode.env.uriScheme || "vscode";
+          const callbackUrl = `${scheme}://agenticmarket.andromity-agent/auth`;
+          const configured = vscode.workspace.getConfiguration("andromity").get<string>("webAppUrl");
+          const base = (configured && configured.trim().length > 0)
+            ? configured.trim().replace(/\/+$/, "")
+            : "https://agenticmarket.dev";
+          await vscode.env.openExternal(vscode.Uri.parse(`${base}/auth/connect?callback=${encodeURIComponent(callbackUrl)}`));
+        }
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Failed to open login: ${err.message}`);
+      }
+      return;
+    }
+
+    if (message.type === "logout_account") {
+      try {
+        if (SettingsPanel.chatProvider) {
+          await SettingsPanel.chatProvider.logout();
+        } else if (SettingsPanel.extensionContext) {
+          await SettingsPanel.extensionContext.secrets.delete("andromity.authToken");
+          await SettingsPanel.extensionContext.secrets.delete("andromity.userName");
+          await SettingsPanel.extensionContext.secrets.delete("andromity.userEmail");
+          await SettingsPanel.extensionContext.secrets.delete("andromity.userPlan");
+        }
+        await this.loadData(true);
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Failed to sign out: ${err.message}`);
+      }
+      return;
+    }
+
+    if (message.type === "refresh_auth") {
+      await this.loadData(true);
+      return;
+    }
+
     if (!this._rpcClient) {
       if (message.type === "ready") {
         this.setInitialTab(this._initialTab);
@@ -318,17 +396,32 @@ export class SettingsPanel {
 
       case "refresh_models": {
         try {
-          const models = await this._rpcClient.call<ModelInfo[]>("config.refresh_models", {
-            provider: message.provider || undefined,
-          }, 30000);
+          if (!this._rpcClient) {
+            vscode.window.showWarningMessage("Andromity daemon is not connected yet.");
+            this._panel.webview.postMessage({ type: "refresh_failed" });
+            break;
+          }
+          let models: ModelInfo[] = [];
+          try {
+            models = await this._rpcClient.call<ModelInfo[]>("config.refresh_models", {
+              provider: message.provider || undefined,
+            }, 8000);
+          } catch (refreshErr) {
+            // Gracefully fall back to local cached catalog if network refresh times out
+            models = await this._rpcClient.call<ModelInfo[]>("config.list_models", {
+              provider: message.provider || undefined,
+            }, 3000).catch(() => []);
+          }
+
+          const filtered = (models || []).filter(m => m.provider !== "andromity" || m.id === "auto");
           this._panel.webview.postMessage({
             type: "models_refreshed",
-            models: models || [],
+            models: filtered,
           });
-          vscode.window.showInformationMessage(`Refreshed live model catalog (${models?.length || 0} models available).`);
+          vscode.window.showInformationMessage(`Refreshed live model catalog (${filtered.length} models available).`);
           this._onConfigChangeCallback?.();
         } catch (err: any) {
-          vscode.window.showErrorMessage(`Failed to refresh models: ${err.message}`);
+          vscode.window.showWarningMessage("Unable to refresh models. Please verify your connection.");
           this._panel.webview.postMessage({ type: "refresh_failed" });
         }
         break;
@@ -357,6 +450,25 @@ export class SettingsPanel {
           this._onConfigChangeCallback?.();
         } catch (err: any) {
           vscode.window.showErrorMessage(`Failed to switch model: ${err.message}`);
+        }
+        break;
+      }
+
+      case "toggle_pin": {
+        try {
+          const res = await this._rpcClient.call<any>("config.toggle_pin", {
+            modelId: message.modelId,
+            provider: message.provider,
+            name: message.name,
+          });
+          const updatedPinned = res?.pinned || [];
+          this._panel.webview.postMessage({
+            type: "update_pinned_models",
+            pinnedModels: updatedPinned,
+          });
+          this._onConfigChangeCallback?.();
+        } catch (err: any) {
+          vscode.window.showErrorMessage(`Failed to update pinned model: ${err.message}`);
         }
         break;
       }
@@ -842,12 +954,31 @@ export class SettingsPanel {
     }
   }
 
+  private _getNonce(): string {
+    let text = "";
+    const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    for (let i = 0; i < 32; i++) {
+      text += possible.charAt(Math.floor(Math.random() * possible.length));
+    }
+    return text;
+  }
+
   private _getHtmlForWebview(): string {
     const iconUri = this._panel.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, "media", "sidebar-icon.svg"));
+    const nonce = this._getNonce();
+    let extVersion = "0.2.12";
+    try {
+      const ext = vscode.extensions.getExtension("agenticmarket.andromity-agent") ||
+                  SettingsPanel.extensionContext?.extension;
+      if (ext?.packageJSON?.version) {
+        extVersion = ext.packageJSON.version;
+      }
+    } catch {}
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${this._panel.webview.cspSource} 'unsafe-inline' https://fonts.googleapis.com; script-src 'nonce-${nonce}' ${this._panel.webview.cspSource}; img-src ${this._panel.webview.cspSource} https: data:; font-src ${this._panel.webview.cspSource} https://fonts.gstatic.com data:;">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Andromity Hub</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1474,6 +1605,37 @@ export class SettingsPanel {
     .badge.purple { background: var(--tag-purple-bg); color: var(--tag-purple-fg); }
     .badge.orange { background: var(--tag-orange-bg); color: var(--tag-orange-fg); }
 
+    .pin-card-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      padding: 2px 6px;
+      font-size: 10.5px;
+      border-radius: 4px;
+      border: 1px solid var(--card-border);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .pin-card-btn:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: #f59e0b;
+      border-color: rgba(245, 158, 11, 0.35);
+    }
+    .pin-card-btn.pinned {
+      background: rgba(245, 158, 11, 0.12);
+      border-color: rgba(245, 158, 11, 0.35);
+      color: #f59e0b;
+      font-weight: 500;
+    }
+    .pin-card-btn.pinned:hover {
+      background: rgba(239, 68, 68, 0.12);
+      border-color: rgba(239, 68, 68, 0.35);
+      color: #ef4444;
+    }
+
     .model-card-bottom {
       display: flex;
       align-items: center;
@@ -2013,6 +2175,7 @@ export class SettingsPanel {
         <div class="filter-chips">
           <span class="chip-label">Category:</span>
           <div class="chip active" data-category="all">All</div>
+          <div class="chip" data-category="pinned">📌 Pinned</div>
           <div class="chip" data-category="free">Free Tier</div>
           <div class="chip" data-category="coding">Coding & Agentic</div>
           <div class="chip" data-category="reasoning">Reasoning / Thinking</div>
@@ -2023,6 +2186,7 @@ export class SettingsPanel {
         <div class="filter-chips">
           <span class="chip-label">Provider:</span>
           <div class="chip active" data-provider="all">All Providers</div>
+          <div class="chip" data-provider="andromity">Andromity</div>
           <div class="chip" data-provider="openrouter">OpenRouter</div>
           <div class="chip" data-provider="anthropic">Anthropic</div>
           <div class="chip" data-provider="openai">OpenAI</div>
@@ -2556,7 +2720,7 @@ export class SettingsPanel {
             <div>
               <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                 <span style="font-size: 16px; font-weight: 700; color: var(--text); letter-spacing: -0.2px;">Andromity AI Coding Agent</span>
-                <span class="badge green" style="font-weight: 600;">v0.2.9</span>
+                <span class="badge green" style="font-weight: 600;">v${extVersion}</span>
                 <span class="badge blue">Production Build</span>
               </div>
               <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
@@ -2777,7 +2941,7 @@ SOFTWARE.</pre>
 
   </div>
 
-  <script>
+  <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
 
     window.onerror = function(msg, url, lineNo, columnNo, error) {
@@ -2798,6 +2962,7 @@ SOFTWARE.</pre>
 
     let allModels = [];
     let allProviders = [];
+    let pinnedModels = [];
     let allSkills = [];
     let allRemoteSkills = [];
     let allMcpServers = [];
@@ -2813,6 +2978,7 @@ SOFTWARE.</pre>
     let usageData = {};
     let currentUsageRange = "all";
     let currentUsageScope = "global";
+    let currentAccount = { isAuthenticated: false, username: "", email: "", plan: "free" };
 
     // Tabs Navigation
     const tabButtons = document.querySelectorAll(".nav-tab");
@@ -3035,6 +3201,8 @@ SOFTWARE.</pre>
       
       if (action === "select-model") {
         selectModel(btn.dataset.id, btn.dataset.provider);
+      } else if (action === "toggle-pin") {
+        togglePin(btn.dataset.id, btn.dataset.provider, btn.dataset.name);
       } else if (action === "save-key") {
         saveKey(btn.dataset.id);
       } else if (action === "open-portal" || action === "open-url") {
@@ -3097,7 +3265,25 @@ SOFTWARE.</pre>
         btn.disabled = true;
         btn.innerHTML = '<span class="spinning-loader"></span> Authenticating in browser...';
         vscode.postMessage({ type: "mcp_auth", name: btn.dataset.name });
+      } else if (action === "login-account") {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinning-loader"></span> Connecting...';
+        vscode.postMessage({ type: "login_account" });
+        setTimeout(() => {
+          if (btn && (!currentAccount || !currentAccount.isAuthenticated)) {
+            btn.disabled = false;
+            btn.innerHTML = 'Sign In with AgenticMarket';
+          }
+        }, 15000);
+      } else if (action === "logout-account") {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinning-loader"></span> Signing out...';
+        vscode.postMessage({ type: "logout_account" });
       }
+    });
+
+    window.addEventListener("focus", () => {
+      vscode.postMessage({ type: "refresh_auth" });
     });
 
     const usageScopeChips = document.getElementById("usage-scope-chips");
@@ -3132,6 +3318,7 @@ SOFTWARE.</pre>
       if (msg.currentWorkspace || trustInfo.project_path) currentWorkspacePath = msg.currentWorkspace || trustInfo.project_path || "";
       if (currentConfig.default_model) activeModelId = currentConfig.default_model;
       if (currentConfig.default_provider) activeModelProvider = (currentConfig.default_provider || "").toLowerCase();
+      if (msg.account) currentAccount = msg.account;
 
       const setEl = (id, val) => {
         const el = document.getElementById(id);
@@ -3215,8 +3402,9 @@ SOFTWARE.</pre>
           break;
         }
         case "state_loaded": {
-          allModels = msg.models || [];
+          allModels = (msg.models || []).filter(m => m.provider !== "andromity" || m.id === "auto");
           allProviders = msg.providers || [];
+          pinnedModels = msg.pinnedModels || (msg.config && msg.config.pinned_models) || [];
           allSkills = msg.skills || [];
           allRemoteSkills = msg.remoteSkills || [];
           allMcpServers = msg.mcpServers || [];
@@ -3250,6 +3438,11 @@ SOFTWARE.</pre>
           renderUsage();
           break;
         }
+        case "update_pinned_models": {
+          pinnedModels = msg.pinnedModels || [];
+          renderModels();
+          break;
+        }
         case "usage_loaded": {
           usageData = msg.usage || {};
           renderUsage();
@@ -3258,7 +3451,7 @@ SOFTWARE.</pre>
         case "models_refreshed": {
           iconRefresh.classList.remove("spinning");
           refreshLabel.textContent = "Refresh Catalog";
-          allModels = msg.models || [];
+          allModels = (msg.models || []).filter(m => m.provider !== "andromity" || m.id === "auto");
           document.getElementById("model-count-badge").textContent = allModels.length;
           renderModels();
           break;
@@ -3358,7 +3551,7 @@ SOFTWARE.</pre>
                           '<button class="btn btn-secondary" data-action="open-session" data-session-id="' + escapeHtml(sId) + '" data-session-name="' + escapeHtml(runSessionName) + '" style="font-size:10.5px; padding:2px 8px;" title="Open this run session in chat sidebar">' +
                             '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11" style="margin-right:4px; vertical-align:-1.5px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>Show Session' +
                           '</button>' +
-                          '<button class="btn btn-secondary" data-action="open-session-tab" data-session-id="' + escapeHtml(sId) + '" data-session-name="' + escapeHtml(runSessionName) + '" style="padding:2px 6px; font-size:10.5px;" title="Open this run session in side-by-side editor tab">' +
+                          '<button class="btn btn-secondary" data-action="open-session-tab" data-session-id="' + escapeHtml(sId) + '" data-session-name="' + escapeHtml(runSessionName) + '" style="padding:2px 6px; font-size:10.5px;" title="Open this run session in editor tab">' +
                             '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11" style="vertical-align:-1.5px;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="12" y1="3" x2="12" y2="21"></line></svg>' +
                           '</button>' +
                           '<span style="font-family:var(--font-mono); font-size:10px; color:var(--text-muted);">' + escapeHtml(sId.slice(0, 18)) + '…</span>' +
@@ -3420,6 +3613,18 @@ SOFTWARE.</pre>
       renderModels();
       updateActiveBanner();
       vscode.postMessage({ type: "select_model", modelId, provider });
+    };
+
+    window.togglePin = function(modelId, provider, name) {
+      if (!modelId) return;
+      const idx = pinnedModels.findIndex(p => p.id === modelId && (!provider || !p.provider || p.provider === provider));
+      if (idx >= 0) {
+        pinnedModels.splice(idx, 1);
+      } else {
+        pinnedModels.push({ id: modelId, provider: provider || "openrouter", name: name || modelId });
+      }
+      vscode.postMessage({ type: "toggle_pin", modelId, provider, name });
+      renderModels();
     };
 
     window.saveKey = function(providerId) {
@@ -3530,12 +3735,17 @@ SOFTWARE.</pre>
         }
 
         if (activeCategory !== "all") {
-          const tags = m.tags || [];
-          if (activeCategory === "free" && !m.is_free && !tags.includes("free")) return false;
-          if (activeCategory === "coding" && !tags.includes("coding")) return false;
-          if (activeCategory === "reasoning" && !tags.includes("reasoning")) return false;
-          if (activeCategory === "vision" && !tags.includes("vision")) return false;
-          if (activeCategory === "flagship" && !tags.includes("flagship")) return false;
+          if (activeCategory === "pinned") {
+            const isPinned = pinnedModels.some(p => p.id === m.id && (!p.provider || p.provider === m.provider));
+            if (!isPinned) return false;
+          } else {
+            const tags = m.tags || [];
+            if (activeCategory === "free" && !m.is_free && !tags.includes("free")) return false;
+            if (activeCategory === "coding" && !tags.includes("coding")) return false;
+            if (activeCategory === "reasoning" && !tags.includes("reasoning")) return false;
+            if (activeCategory === "vision" && !tags.includes("vision")) return false;
+            if (activeCategory === "flagship" && !tags.includes("flagship")) return false;
+          }
         }
 
         if (searchQuery) {
@@ -3552,13 +3762,14 @@ SOFTWARE.</pre>
             '<circle cx="11" cy="11" r="8"></circle>' +
             '<line x1="21" y1="21" x2="16.65" y2="16.65"></line>' +
           '</svg>' +
-          '<div>No matching models found. Try clearing filters or refreshing catalog.</div>' +
+          '<div>' + (activeCategory === "pinned" ? 'No pinned models yet. Click the pin icon on any model card to pin it!' : 'No matching models found. Try clearing filters or refreshing catalog.') + '</div>' +
         '</div>';
         return;
       }
 
       grid.innerHTML = filtered.map(m => {
         const isActive = m.id === activeModelId && (m.provider||"").toLowerCase() === activeModelProvider.toLowerCase();
+        const isPinned = pinnedModels.some(p => p.id === m.id && (!p.provider || p.provider === m.provider));
         const ctxStr = m.context || formatCtx(m.context_limit);
         const pricingStr = m.is_free ? "Free Tier" : (m.pricing || "");
 
@@ -3569,7 +3780,12 @@ SOFTWARE.</pre>
                 '<div class="model-name">' + escapeHtml(m.name || m.id) + '</div>' +
                 '<div class="model-id">' + escapeHtml(m.id) + '</div>' +
               '</div>' +
-              '<span class="badge blue">' + escapeHtml(m.provider) + '</span>' +
+              '<div style="display:flex; align-items:center; gap:6px;">' +
+                '<button class="pin-card-btn ' + (isPinned ? 'pinned' : '') + '" data-action="toggle-pin" data-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider) + '" data-name="' + escapeHtml(m.name || m.id) + '" title="' + (isPinned ? 'Unpin model' : 'Pin model to quick list') + '">' +
+                  '<svg width="13" height="13" viewBox="0 0 24 24" fill="' + (isPinned ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2"><line x1="12" y1="17" x2="12" y2="22"></line><path d="M5 17h14v-1.76l-1.8-1.79A2 2 0 0 1 16.6 12V5a2 2 0 0 0-2-2h-5.2a2 2 0 0 0-2 2v7a2 2 0 0 1-.6 1.45L5 15.24z"></path></svg>' +
+                '</button>' +
+                '<span class="badge blue">' + escapeHtml(m.provider) + '</span>' +
+              '</div>' +
             '</div>' +
             '<div class="model-desc">' + escapeHtml(m.desc || "High-performance AI model.") + '</div>' +
             '<div class="model-badges">' +
@@ -3594,6 +3810,7 @@ SOFTWARE.</pre>
       const grid = document.getElementById("keys-grid");
       if (!grid) return;
       const providerMeta = {
+        andromity: { name: "Andromity Cloud Gateway", desc: "Managed cloud intelligence for autonomous coding. Zero setup required.", portal: "https://agenticmarket.dev" },
         openrouter: { name: "OpenRouter", desc: "Access 396+ models across Claude, GPT, Gemini, Llama, DeepSeek with unified billing.", portal: "https://openrouter.ai/keys" },
         anthropic: { name: "Anthropic", desc: "Direct access to Claude Opus 4.6, Claude Sonnet 4.6/3.7, and Claude Haiku.", portal: "https://console.anthropic.com/settings/keys" },
         openai: { name: "OpenAI", desc: "Direct access to GPT-4o, GPT-4.1, o1, o3, and o4-mini models.", portal: "https://platform.openai.com/api-keys" },
@@ -3601,12 +3818,56 @@ SOFTWARE.</pre>
         deepseek: { name: "DeepSeek", desc: "DeepSeek V3 and DeepSeek R1 reasoning models.", portal: "https://platform.deepseek.com/api_keys" },
         groq: { name: "Groq Cloud", desc: "Ultra-low-latency inference for Llama 3.3 70B and Mixtral.", portal: "https://console.groq.com/keys" },
         nvidia: { name: "NVIDIA NIM", desc: "NVIDIA GPU cloud hardware accelerated open models.", portal: "https://build.nvidia.com/" },
-        ollama: { name: "Ollama (Local)", desc: "Local offline models running on your machine.", portal: "https://ollama.com" }
+        ollama: { name: "Ollama (Local Offline)", desc: "Local offline models running on your machine with zero data leaves your device.", portal: "https://ollama.com" }
       };
 
-      grid.innerHTML = allProviders.map(p => {
+      const defaultProviders = [
+        { id: 'andromity', name: 'Andromity Cloud Gateway', has_key: true },
+        { id: 'openrouter', name: 'OpenRouter', has_key: false },
+        { id: 'anthropic', name: 'Anthropic', has_key: false },
+        { id: 'openai', name: 'OpenAI', has_key: false },
+        { id: 'google', name: 'Google Gemini', has_key: false },
+        { id: 'deepseek', name: 'DeepSeek', has_key: false },
+        { id: 'groq', name: 'Groq Cloud', has_key: false },
+        { id: 'nvidia', name: 'NVIDIA NIM', has_key: false },
+        { id: 'ollama', name: 'Ollama (Local Offline)', has_key: true }
+      ];
+
+      const displayList = (allProviders && allProviders.length > 0) ? [...allProviders] : defaultProviders;
+      if (!displayList.some(p => p.id === 'andromity')) {
+        displayList.unshift({ id: 'andromity', name: 'Andromity Cloud Gateway', has_key: true });
+      }
+
+      grid.innerHTML = displayList.map(p => {
         const meta = providerMeta[p.id] || { name: p.name || p.id, desc: "AI Provider API", portal: p.portal || "" };
-        const hasKey = p.has_key || p.id === "ollama";
+        const hasKey = p.has_key || p.id === "ollama" || p.id === "andromity";
+
+        if (p.id === 'andromity') {
+          const isAuthed = currentAccount && currentAccount.isAuthenticated;
+          const uname = isAuthed ? (currentAccount.username || "User") : "";
+          const planBadge = isAuthed ? (currentAccount.plan === "pro" ? "Pro Plan" : "Community") : "Anonymous Free Trial";
+
+          return '<div class="item-card">' +
+            '<div class="item-card-top">' +
+              '<div class="item-card-title">' +
+                '<span class="status-dot ' + (isAuthed ? 'connected' : '') + '"></span>' +
+                '<span>' + escapeHtml(meta.name) + '</span>' +
+              '</div>' +
+              '<span class="badge ' + (isAuthed ? 'green' : '') + '">' + (isAuthed ? 'Connected' : 'Free Trial') + '</span>' +
+            '</div>' +
+            '<div class="item-card-desc">' + escapeHtml(meta.desc) + '</div>' +
+            '<div style="margin: 10px 0; padding: 10px 12px; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">' +
+              '<div>' +
+                '<div style="font-size: 12px; font-weight: 600; color: var(--fg);">' + (isAuthed ? '✓ ' + escapeHtml(uname) : 'AgenticMarket Account') + '</div>' +
+                '<div style="font-size: 11px; color: var(--fg-muted); margin-top: 2px;">' + planBadge + '</div>' +
+              '</div>' +
+              (isAuthed
+                ? '<button class="btn btn-secondary" style="font-size: 11px; padding: 4px 10px;" data-action="logout-account">Sign Out</button>'
+                : '<button class="btn" style="font-size: 11px; padding: 4px 12px;" data-action="login-account">Sign In with AgenticMarket</button>'
+              ) +
+            '</div>' +
+          '</div>';
+        }
 
         return '<div class="item-card">' +
           '<div class="item-card-top">' +
@@ -3614,7 +3875,7 @@ SOFTWARE.</pre>
               '<span class="status-dot ' + (hasKey ? 'connected' : '') + '"></span>' +
               '<span>' + escapeHtml(meta.name) + '</span>' +
             '</div>' +
-            '<span class="badge ' + (hasKey ? 'green' : '') + '">' + (hasKey ? 'Connected' : 'Missing Key') + '</span>' +
+            '<span class="badge ' + (hasKey ? 'green' : '') + '">' + (hasKey ? 'Active' : 'Optional Key') + '</span>' +
           '</div>' +
           '<div class="item-card-desc">' + escapeHtml(meta.desc) + '</div>' +
           (p.id !== 'ollama'
@@ -3623,7 +3884,7 @@ SOFTWARE.</pre>
                 '<button class="btn" data-action="save-key" data-id="' + escapeHtml(p.id) + '">Save</button>' +
               '</div>' +
               (meta.portal ? '<a class="portal-link" data-action="open-portal" data-url="' + escapeHtml(meta.portal) + '">Get API Key &rarr;</a>' : '')
-            : '<div class="item-card-desc" style="color: var(--tag-green-fg); font-weight: 500;">Ready (No key required for local Ollama daemon)</div>'
+            : '<div class="item-card-desc" style="color: var(--tag-green-fg); font-weight: 500;">✓ Ready (Managed by local daemon)</div>'
           ) +
         '</div>';
       }).join("");

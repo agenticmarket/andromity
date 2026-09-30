@@ -85,7 +85,10 @@ src/andromity/tui/panels/filetree.py
 src/andromity/tui/panels/plan.py
 tests/test_adversarial_security.py
 tests/test_agent.py
+tests/test_andromity_provider.py
 tests/test_audit_remediation.py
+tests/test_auto_awake.py
+tests/test_auto_awake_robust.py
 tests/test_ci_action.py
 tests/test_command_palette.py
 tests/test_config.py

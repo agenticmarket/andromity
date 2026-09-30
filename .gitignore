@@ -1,4 +1,5 @@
 .andromity/
+.kilo/
 __pycache__/
 *.py[cod]
 *$py.class
@@ -57,3 +58,24 @@ security_audit/
 *.mov
 *.webm
 
+# Production Secrets, Private Keys & Environment Variables (Zero Public Exposure)
+.dev.vars
+**/.dev.vars
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+service_account.json
+gateway-worker/
+gateway-blueprint/
+webApp/.env*
+webApp/.next/
+webApp/node_modules/
+logs/
+jetbrains-plugin/
+.github/workflows/build-jetbrains.yml
+scripts/export_jetbrains_webview.js
+AGENTS.md
+.agents/

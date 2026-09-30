@@ -48,11 +48,17 @@ export class SessionTabPanel {
     context: vscode.ExtensionContext,
     viewProvider: ChatViewProvider,
     initialQueue?: any[],
-    tabState?: { draft?: string; images?: string[]; seedMessages?: any[] }
+    tabState?: { draft?: string; images?: string[]; seedMessages?: any[] },
+    viewColumn?: vscode.ViewColumn
   ): SessionTabPanel {
     if (rpcClient) {
       void rpcClient.call("telemetry.recordFeature", { feature: "side_by_side", session_id: sessionId }).catch(() => {});
     }
+
+    const targetColumn =
+      viewColumn ||
+      (vscode.window.activeTextEditor ? vscode.window.activeTextEditor.viewColumn : undefined) ||
+      vscode.ViewColumn.One;
 
     // If a tab for this session is already open, reveal it
     if (SessionTabPanel._panels.has(sessionId)) {
@@ -71,14 +77,14 @@ export class SessionTabPanel {
         images: tabState?.images || [],
         seedMessages: tabState?.seedMessages || [],
       });
-      existing._panel.reveal(vscode.ViewColumn.Beside);
+      existing._panel.reveal(targetColumn);
       return existing;
     }
 
     const panel = vscode.window.createWebviewPanel(
       SessionTabPanel.viewType,
       sessionName || "Chat Session",
-      vscode.ViewColumn.Beside,
+      targetColumn,
       {
         enableScripts: true,
         retainContextWhenHidden: true,
@@ -534,7 +540,7 @@ export class SessionTabPanel {
 
       case "cycle_profile":
       case "update_profile": {
-        const profiles = ["builder", "coder", "architect", "reviewer", "tester", "writer"];
+        const profiles = ["builder", "coder", "planner", "reviewer"];
         if (message.value && profiles.includes(message.value.toLowerCase())) {
           this._currentProfile = message.value.toLowerCase();
         } else {
@@ -823,6 +829,36 @@ export class SessionTabPanel {
         break;
       }
 
+      case "open_settings": {
+        vscode.commands.executeCommand("andromity.openSettings");
+        break;
+      }
+
+      case "open_model_hub": {
+        vscode.commands.executeCommand("andromity.openModelHub");
+        break;
+      }
+
+      case "open_login":
+      case "open_github_login": {
+        try {
+          await this._viewProvider.openLogin();
+        } catch (err: any) {
+          vscode.window.showErrorMessage(`Could not open login page: ${err.message}`);
+        }
+        break;
+      }
+
+      case "logout_account": {
+        await this._viewProvider.logout();
+        break;
+      }
+
+      case "refresh_usage": {
+        await this._viewProvider.fetchUsage();
+        break;
+      }
+
       case "request_rename_session": {
         if (message.sessionId && message.name) {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -901,6 +937,21 @@ export class SessionTabPanel {
       this._initialDraft = "";
       this._initialImages = [];
       this._initialSeedMessages = [];
+
+      // Sync auth state & account quota with the tab webview
+      const storedToken = await this._context?.secrets.get("andromity.authToken");
+      const storedUser = await this._context?.secrets.get("andromity.userName");
+      const isAuthed = Boolean(storedToken);
+      this._postMessage({
+        type: "auth_state_changed",
+        isAuthenticated: isAuthed,
+        plan: isAuthed ? "authenticated" : "anonymous",
+        username: storedUser || (isAuthed ? "Developer" : "Anonymous"),
+      });
+
+      if (this._viewProvider) {
+        void this._viewProvider.fetchUsage();
+      }
     } catch (err) {
       console.error("[Andromity SessionTab] Failed to load session:", err);
     }

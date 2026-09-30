@@ -124,8 +124,8 @@ class ConfigManager:
     def _create_default_config(self):
         default_config = {
             "default": {
-                "provider": "anthropic",
-                "model": "claude-sonnet-4-6",
+                "provider": "andromity",
+                "model": "auto",
                 "profile": "builder",
                 "permission_mode": "safe",
                 "reasoning_effort": "medium",
@@ -133,7 +133,8 @@ class ConfigManager:
                 "allowed_commands": ["npm run", "npm test", "npm list", "npm run dev", "git status", "git diff", "git log", "ls", "dir", "cat", "echo"]
             },
             "providers": [
-                {"name": "anthropic", "type": "anthropic"},
+                {"name": "andromity", "type": "andromity", "base_url": "https://gateway.agenticmarket.dev/v1"},
+                {"name": "openrouter", "type": "openrouter"},
                 {"name": "ollama", "type": "ollama", "base_url": "http://localhost:11434"},
             ],
         }
@@ -141,8 +142,14 @@ class ConfigManager:
 
     def save(self, config_data: Optional[Dict[str, Any]] = None):
         import os
+        import time
+        if os.environ.get("ANDROMITY_SKIP_CONFIG_SAVE") == "1":
+            if config_data is not None:
+                self._config_cache = config_data
+            return
+
         data_to_save = config_data if config_data is not None else self._config_cache
-        tmp_path = self.config_path.with_suffix(".tmp")
+        tmp_path = self.config_path.with_name(f"{self.config_path.stem}_{os.getpid()}_{time.time_ns()}.tmp")
         try:
             with open(tmp_path, "wb") as f:
                 tomli_w.dump(data_to_save, f)
@@ -156,7 +163,16 @@ class ConfigManager:
                     os.chmod(tmp_path, 0o600)
                 except OSError:
                     pass
-            os.replace(str(tmp_path), str(self.config_path))
+
+            for attempt in range(10):
+                try:
+                    os.replace(str(tmp_path), str(self.config_path))
+                    break
+                except (PermissionError, OSError):
+                    if attempt == 9:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
+
             if platform.system() != "Windows":
                 try:
                     os.chmod(self.config_path, 0o600)
@@ -171,6 +187,7 @@ class ConfigManager:
             raise
         if config_data is not None:
             self._config_cache = config_data
+
 
     def get(self, section: str, key: str, default: Any = None, fallback: Any = None) -> Any:
         eff_default = default if fallback is None else fallback
@@ -191,6 +208,41 @@ class ConfigManager:
     def set_root(self, key: str, value: Any):
         self._config_cache[key] = value
         self.save()
+
+    def get_pinned_models(self) -> list:
+        sec = self._config_cache.get("models", {})
+        if isinstance(sec, dict) and "pinned" in sec and isinstance(sec["pinned"], list):
+            return sec["pinned"]
+        return [
+            {"id": "auto", "provider": "andromity", "name": "Andromity Auto"},
+            {"id": "anthropic/claude-3.7-sonnet", "provider": "openrouter", "name": "Claude 3.7 Sonnet"},
+        ]
+
+    def set_pinned_models(self, pinned: list) -> list:
+        if "models" not in self._config_cache or not isinstance(self._config_cache["models"], dict):
+            self._config_cache["models"] = {}
+        self._config_cache["models"]["pinned"] = pinned
+        self.save()
+        return pinned
+
+    def toggle_pinned_model(self, model_id: str, provider: str = "", name: str = "") -> list:
+        if not model_id:
+            return self.get_pinned_models()
+        pinned = list(self.get_pinned_models())
+        match_idx = -1
+        for idx, item in enumerate(pinned):
+            if item.get("id") == model_id and (not provider or item.get("provider") == provider):
+                match_idx = idx
+                break
+        if match_idx >= 0:
+            pinned.pop(match_idx)
+        else:
+            pinned.append({
+                "id": model_id,
+                "provider": provider or "openrouter",
+                "name": name or model_id,
+            })
+        return self.set_pinned_models(pinned)
 
     def get_provider_config(self, provider_name: str) -> Optional[Dict[str, Any]]:
         providers = self._config_cache.get("providers", [])
@@ -217,6 +269,7 @@ class ConfigManager:
             "groq": "GROQ_API_KEY",
             "openrouter": "OPENROUTER_API_KEY",
             "nvidia": "NVIDIA_API_KEY",
+            "andromity": "ANDROMITY_API_KEY",
         }
         if provider_name == "google":
             return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -450,11 +503,14 @@ class ConfigManager:
         key = self._trust_key(path)
         if "trusted_projects" not in self._config_cache:
             self._config_cache["trusted_projects"] = {}
+        if key in self._config_cache["trusted_projects"]:
+            return
         self._config_cache["trusted_projects"][key] = {
             "path": resolved,
             "trusted_at": datetime.now(timezone.utc).isoformat(),
         }
         self.save()
+
 
     def revoke_trust(self, path: str):
         key = self._trust_key(path)

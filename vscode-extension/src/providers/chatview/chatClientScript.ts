@@ -5,6 +5,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const vscode = acquireVsCodeApi();
     window.__vscodeApi = vscode;
     const sidebarIconUri = "${sidebarIconUri}";
+    const extensionVersion = "${state.extensionVersion || '0.2.12'}";
 
     window.onerror = function(msg, url, lineNo, columnNo, error) {
       console.error("[Andromity Webview Error]", msg, lineNo, columnNo, error);
@@ -28,6 +29,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         });
       } catch(e) {}
     });
+
+    let workspaceFiles = new Set(${JSON.stringify((state.workspaceFiles || []).map(f => String(f).toLowerCase()))});
+    let workspaceFolders = new Set(${JSON.stringify((state.workspaceFolders || []).map(d => String(d).toLowerCase()))});
 
     const chatContainer = document.getElementById('chat-messages');
     const zeroState = document.getElementById('zero-state');
@@ -56,6 +60,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const trackerCount = document.getElementById('tracker-count');
     const trackerProgressBar = document.getElementById('tracker-progress-bar');
     const trackerTodosList = document.getElementById('tracker-todos-list');
+    let isPlanTrackerCollapsed = false;
+    try {
+      isPlanTrackerCollapsed = localStorage.getItem('andromity_plan_tracker_collapsed') === 'true';
+    } catch {}
+    if (isPlanTrackerCollapsed && planTrackerStrip) {
+      planTrackerStrip.classList.add('collapsed');
+    }
+    let isPlanTrackerDismissed = false;
+
+    function hidePlanTracker() {
+      if (planTrackerStrip) planTrackerStrip.style.display = 'none';
+      document.querySelector('.composer-container')?.classList.remove('has-plan-tracker');
+    }
     const zeroWorkspaceLabel = document.getElementById('zero-workspace-label');
     const recentSessionsSection = document.getElementById('recent-sessions-section');
     const recentSessionsList = document.getElementById('recent-sessions-list');
@@ -80,6 +97,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const onboardingProvidersGrid = document.getElementById('onboarding-providers-grid');
     const onboardingKeyForm = document.getElementById('onboarding-key-form');
     const onboardingOllamaForm = document.getElementById('onboarding-ollama-form');
+    const onboardingAndromityForm = document.getElementById('onboarding-andromity-form');
+    const btnOnboardingInstantStart = document.getElementById('btn-onboarding-instant-start');
+    const btnOnboardingGithubLogin = document.getElementById('btn-onboarding-github-login');
+    const btnOnboardingAndromityActivate = document.getElementById('btn-onboarding-andromity-activate');
+    const btnOnboardingAndromityGithub = document.getElementById('btn-onboarding-andromity-github');
     const onboardingKeyInput = document.getElementById('onboarding-key-input');
     const onboardingKeyLabel = document.getElementById('onboarding-key-label');
     const onboardingPortalLink = document.getElementById('onboarding-portal-link');
@@ -326,8 +348,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       toggleCollabInbox(true);
     });
 
-    let selectedOnboardingProvider = 'anthropic';
-    let selectedOnboardingModel = 'claude-sonnet-4-6';
+    let selectedOnboardingProvider = 'andromity';
+    let selectedOnboardingModel = 'auto';
 
     const slashPalette = document.getElementById('slash-palette');
     const slashPaletteList = document.getElementById('slash-palette-list');
@@ -573,24 +595,21 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     let currentSessionId = ${JSON.stringify(state.currentSessionId || "")};
-    let currentModel = ${JSON.stringify(state.currentModel || "anthropic/claude-3.7-sonnet")};
-    let currentProvider = ${JSON.stringify(state.currentProvider || "openrouter")};
+    let currentModel = ${JSON.stringify(state.currentModel || "auto")};
+    let currentProvider = ${JSON.stringify(state.currentProvider || "andromity")};
     let currentMode = ${JSON.stringify(state.currentMode || "safe")};
     let currentProfile = ${JSON.stringify(state.currentProfile || "builder")};
     let currentReasoning = ${JSON.stringify(state.currentReasoning || "medium")};
+    let isAndromityActive = false;
     const DEFAULT_POPULAR_MODELS = [
-      { id: 'anthropic/claude-3.7-sonnet', name: 'Claude 3.7 Sonnet', provider: 'openrouter', pricing: '$3.00/M' },
-      { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet', provider: 'openrouter', pricing: '$3.00/M' },
-      { id: 'openai/gpt-4o', name: 'GPT-4o', provider: 'openrouter', pricing: '$2.50/M' },
-      { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini', provider: 'openrouter', pricing: '$0.15/M' },
-      { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'openrouter', pricing: '$1.25/M' },
-      { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'openrouter', pricing: '$0.10/M' },
-      { id: 'deepseek/deepseek-r1', name: 'DeepSeek R1', provider: 'openrouter', pricing: '$0.55/M' },
-      { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3', provider: 'openrouter', pricing: '$0.14/M' },
-      { id: 'qwen/qwen-2.5-coder-32b-instruct', name: 'Qwen 2.5 Coder 32B', provider: 'openrouter', pricing: '$0.07/M' },
-      { id: 'meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B', provider: 'openrouter', pricing: '$0.12/M' }
+      { id: 'auto', name: 'Andromity Auto (Smart Router)', provider: 'andromity', pricing: 'Free' },
+      { id: 'qwen/qwen-2.5-coder-32b-instruct:free', name: 'Qwen 2.5 Coder 32B Free', provider: 'openrouter', pricing: 'Free' },
+      { id: 'deepseek/deepseek-r1:free', name: 'DeepSeek R1 Free', provider: 'openrouter', pricing: 'Free' },
+      { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B Free', provider: 'openrouter', pricing: 'Free' },
+      { id: 'openrouter/auto', name: 'OpenRouter Auto (Frontier)', provider: 'openrouter', pricing: 'Free' }
     ];
     let allModels = [...DEFAULT_POPULAR_MODELS];
+    let pinnedModels = ${JSON.stringify(state.pinnedModels || [])};
     let isRunning = false;
     const promptQueue = [];
     const sentPromptsHistory = [];
@@ -1376,12 +1395,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (e.target && (e.target.closest('#btn-tracker-open') || e.target.closest('#btn-tracker-close'))) {
         return;
       }
-      planTrackerStrip?.classList.toggle('collapsed');
+      isPlanTrackerCollapsed = Boolean(planTrackerStrip?.classList.toggle('collapsed'));
+      try {
+        localStorage.setItem('andromity_plan_tracker_collapsed', isPlanTrackerCollapsed ? 'true' : 'false');
+      } catch {}
     });
 
     document.getElementById('btn-tracker-close')?.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (planTrackerStrip) planTrackerStrip.style.display = 'none';
+      isPlanTrackerDismissed = true;
+      hidePlanTracker();
     });
 
     // ─── Mascot Companion Controller ("Andro-Pet") ─────────────────────────────
@@ -2577,6 +2600,23 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       });
     }
 
+    let userDismissedOnboarding = false;
+
+    function toggleOnboarding(forceShow) {
+      if (!onboardingSection || !readyHeroSection) return;
+      const willShow = (typeof forceShow === 'boolean') ? forceShow : (onboardingSection.style.display === 'none');
+      if (willShow) {
+        userDismissedOnboarding = false;
+        onboardingSection.style.display = 'flex';
+        readyHeroSection.style.display = 'none';
+        showOnboardingKeyStep();
+      } else {
+        userDismissedOnboarding = true;
+        onboardingSection.style.display = 'none';
+        readyHeroSection.style.display = 'flex';
+      }
+    }
+
     function updateOnboardingVisibility() {
       if (!onboardingSection || !readyHeroSection) return;
       const isChatActive = isRunning || (chatContainer && chatContainer.querySelectorAll('.message').length > 0);
@@ -2585,9 +2625,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         readyHeroSection.style.display = 'none';
         return;
       }
-      const hasAnyKey = (allProviders || []).some(p => p.has_key && p.id !== 'ollama');
+      if (userDismissedOnboarding) {
+        onboardingSection.style.display = 'none';
+        readyHeroSection.style.display = 'flex';
+        return;
+      }
+      const hasAnyKey = (allProviders || []).some(p => p.has_key && p.id !== 'ollama' && p.id !== 'andromity');
       const isOllamaActive = currentProvider === 'ollama';
-      if (!hasAnyKey && !isOllamaActive) {
+      const isAndromityActive = currentProvider === 'andromity';
+      if (!hasAnyKey && !isOllamaActive && !isAndromityActive) {
         onboardingSection.style.display = 'flex';
         readyHeroSection.style.display = 'none';
         if (!window.__onboarding_viewed_tracked) {
@@ -2604,8 +2650,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       chip.addEventListener('click', () => {
         onboardingProvidersGrid.querySelectorAll('.onboarding-provider-chip').forEach(c => c.classList.remove('active'));
         chip.classList.add('active');
-        selectedOnboardingProvider = chip.dataset.provider || 'anthropic';
-        selectedOnboardingModel = chip.dataset.model || '';
+        selectedOnboardingProvider = chip.dataset.provider || 'andromity';
+        selectedOnboardingModel = chip.dataset.model || 'auto';
         vscode.postMessage({ type: 'telemetry_feature', feature: 'onboard_prov_' + selectedOnboardingProvider });
         const name = chip.dataset.name || 'AI Provider';
         const portal = chip.dataset.portal || '';
@@ -2620,14 +2666,105 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         if (selectedOnboardingProvider === 'ollama') {
           if (onboardingKeyForm) onboardingKeyForm.style.display = 'none';
+          if (onboardingAndromityForm) onboardingAndromityForm.style.display = 'none';
           if (onboardingOllamaForm) onboardingOllamaForm.style.display = 'flex';
           vscode.postMessage({ type: 'check_ollama_status' });
+        } else if (selectedOnboardingProvider === 'andromity') {
+          if (onboardingKeyForm) onboardingKeyForm.style.display = 'none';
+          if (onboardingOllamaForm) onboardingOllamaForm.style.display = 'none';
+          if (onboardingAndromityForm) onboardingAndromityForm.style.display = 'flex';
         } else {
           if (onboardingKeyForm) onboardingKeyForm.style.display = 'flex';
           if (onboardingOllamaForm) onboardingOllamaForm.style.display = 'none';
+          if (onboardingAndromityForm) onboardingAndromityForm.style.display = 'none';
           if (onboardingKeyInput) setTimeout(() => onboardingKeyInput.focus(), 50);
         }
       });
+    });
+
+    function handleActivateAndromityFree(btn) {
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span>Activating Free Trial...</span>';
+      }
+      vscode.postMessage({ type: 'activate_andromity_free' });
+    }
+
+    btnOnboardingInstantStart?.addEventListener('click', () => {
+      handleActivateAndromityFree(btnOnboardingInstantStart);
+    });
+
+    btnOnboardingAndromityActivate?.addEventListener('click', () => {
+      handleActivateAndromityFree(btnOnboardingAndromityActivate);
+    });
+
+    btnOnboardingGithubLogin?.addEventListener('click', () => {
+      vscode.postMessage({ type: 'open_github_login' });
+    });
+
+    btnOnboardingAndromityGithub?.addEventListener('click', () => {
+      vscode.postMessage({ type: 'open_github_login' });
+    });
+
+    const btnTopAccount = document.getElementById('btn-top-account');
+    const accountPillDot = document.getElementById('account-pill-dot');
+    const accountPillText = document.getElementById('account-pill-text');
+    const accountPopover = document.getElementById('account-popover');
+    const btnAccountPopoverClose = document.getElementById('btn-account-popover-close');
+    const accountAvatar = document.getElementById('account-avatar');
+    const accountUsername = document.getElementById('account-username');
+    const accountPlanBadge = document.getElementById('account-plan-badge');
+    const accountQuotaVal = document.getElementById('account-quota-val');
+    const accountQuotaBar = document.getElementById('account-quota-bar');
+    const accountResetTimer = document.getElementById('account-reset-timer');
+    const accountLatencyText = document.getElementById('account-latency-text');
+    const btnAccountLogin = document.getElementById('btn-account-login');
+    const btnAccountLogout = document.getElementById('btn-account-logout');
+    const btnAccountRefresh = document.getElementById('btn-account-refresh');
+
+    btnTopAccount?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!accountPopover) return;
+      const isOpen = accountPopover.style.display !== 'none';
+      accountPopover.style.display = isOpen ? 'none' : 'flex';
+      if (!isOpen) {
+        vscode.postMessage({ type: 'refresh_usage' });
+      }
+    });
+
+    btnAccountPopoverClose?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (accountPopover) accountPopover.style.display = 'none';
+    });
+
+    document.addEventListener('click', (e) => {
+      if (accountPopover && accountPopover.style.display !== 'none' && !accountPopover.contains(e.target) && e.target !== btnTopAccount && !btnTopAccount?.contains(e.target)) {
+        accountPopover.style.display = 'none';
+      }
+    });
+
+    btnAccountLogin?.addEventListener('click', () => {
+      vscode.postMessage({ type: 'open_login' });
+      if (accountPopover) accountPopover.style.display = 'none';
+    });
+
+    btnAccountLogout?.addEventListener('click', () => {
+      vscode.postMessage({ type: 'logout_account' });
+      if (accountPopover) accountPopover.style.display = 'none';
+    });
+
+    btnAccountRefresh?.addEventListener('click', () => {
+      btnAccountRefresh.style.transform = 'rotate(180deg)';
+      setTimeout(() => { if (btnAccountRefresh) btnAccountRefresh.style.transform = ''; }, 300);
+      vscode.postMessage({ type: 'refresh_usage' });
+    });
+
+    document.getElementById('btn-onboarding-dismiss')?.addEventListener('click', () => {
+      toggleOnboarding(false);
+    });
+
+    document.getElementById('btn-top-onboarding')?.addEventListener('click', () => {
+      toggleOnboarding();
     });
 
     btnToggleKeyVis?.addEventListener('click', () => {
@@ -3404,16 +3541,23 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function updatePlanTracker(plan) {
       if (!planTrackerStrip) return;
+      if (isPlanTrackerDismissed) return;
       if (!plan || (!plan.title && (!plan.steps || plan.steps.length === 0) && (!plan.todos || plan.todos.length === 0))) {
-        planTrackerStrip.style.display = 'none';
+        hidePlanTracker();
         return;
       }
       const steps = plan.steps || plan.todos || [];
       if (steps.length === 0 && !plan.title) {
-        planTrackerStrip.style.display = 'none';
+        hidePlanTracker();
         return;
       }
       planTrackerStrip.style.display = 'flex';
+      document.querySelector('.composer-container')?.classList.add('has-plan-tracker');
+      if (isPlanTrackerCollapsed) {
+        planTrackerStrip.classList.add('collapsed');
+      } else {
+        planTrackerStrip.classList.remove('collapsed');
+      }
       if (trackerTitle) trackerTitle.textContent = plan.title || 'Plan Tasks';
 
       let completed = 0;
@@ -3609,8 +3753,49 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (timelineFlyout) timelineFlyout.style.display = 'none';
     });
 
-    document.getElementById('btn-prompt-mode')?.addEventListener('click', () => {
-      vscode.postMessage({ type: 'cycle_mode' });
+    const modePopover = document.getElementById('mode-popover');
+    const btnPromptMode = document.getElementById('btn-prompt-mode');
+
+    function toggleModePopover(forceState) {
+      if (!modePopover) return;
+      const isVisible = modePopover.style.display !== 'none';
+      const show = typeof forceState === 'boolean' ? forceState : !isVisible;
+      if (show) {
+        if (reasoningPopover) {
+          reasoningPopover.style.display = 'none';
+          document.getElementById('btn-prompt-reasoning')?.classList.remove('active');
+          document.getElementById('btn-prompt-reasoning')?.setAttribute('aria-expanded', 'false');
+        }
+        const profPop = document.getElementById('profile-popover');
+        if (profPop) {
+          profPop.style.display = 'none';
+          document.getElementById('btn-prompt-profile')?.classList.remove('active');
+          document.getElementById('btn-prompt-profile')?.setAttribute('aria-expanded', 'false');
+        }
+        if (modelFlyout) modelFlyout.style.display = 'none';
+      }
+      modePopover.style.display = show ? 'flex' : 'none';
+      if (btnPromptMode) {
+        btnPromptMode.setAttribute('aria-expanded', show ? 'true' : 'false');
+        btnPromptMode.classList.toggle('active', show);
+      }
+    }
+
+    btnPromptMode?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleModePopover();
+    });
+
+    document.querySelectorAll('.mode-popover .menu-popover-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const selectedMode = item.getAttribute('data-mode');
+        if (selectedMode) {
+          updateModeBadge(selectedMode);
+          vscode.postMessage({ type: 'cycle_mode', nextMode: selectedMode });
+        }
+        toggleModePopover(false);
+      });
     });
 
     document.getElementById('btn-model-picker')?.addEventListener('click', (e) => {
@@ -3638,6 +3823,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const isPicker = e.target.closest('#btn-model-picker') || e.target.closest('#btn-prompt-model');
       if (modelFlyout && !modelFlyout.contains(e.target) && !isPicker) {
         modelFlyout.style.display = 'none';
+      }
+      const isModeTrigger = e.target.closest('#btn-prompt-mode');
+      if (modePopover && !modePopover.contains(e.target) && !isModeTrigger) {
+        modePopover.style.display = 'none';
+        btnPromptMode?.classList.remove('active');
+        btnPromptMode?.setAttribute('aria-expanded', 'false');
+      }
+      const isProfileTrigger = e.target.closest('#btn-prompt-profile');
+      const profilePopover = document.getElementById('profile-popover');
+      if (profilePopover && !profilePopover.contains(e.target) && !isProfileTrigger) {
+        profilePopover.style.display = 'none';
+        document.getElementById('btn-prompt-profile')?.classList.remove('active');
+        document.getElementById('btn-prompt-profile')?.setAttribute('aria-expanded', 'false');
       }
       const isReasoningTrigger = e.target.closest('#btn-prompt-reasoning');
       if (reasoningPopover && !reasoningPopover.contains(e.target) && !isReasoningTrigger) {
@@ -3736,7 +3934,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (sId) {
             sessionsFlyout.style.display = 'none';
             if (collabInboxPopover) collabInboxPopover.style.display = 'none';
-            if (planTrackerStrip) planTrackerStrip.style.display = 'none';
+            hidePlanTracker();
+            isPlanTrackerDismissed = false;
             if (sId === currentSessionId) {
               userScrolledUp = false;
               scrollToBottom(false);
@@ -3828,6 +4027,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         }
         case 'open-file': {
+          if (e.preventDefault) e.preventDefault();
           const fPath = target.getAttribute('data-file-path') || target.closest('[data-file-path]')?.getAttribute('data-file-path');
           const lineStr = target.getAttribute('data-line') || target.closest('[data-line]')?.getAttribute('data-line');
           if (fPath) {
@@ -3992,6 +4192,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           vscode.postMessage({ type: 'compact_session' });
           break;
         }
+        case 'open-account-login': {
+          vscode.postMessage({ type: 'open_login' });
+          break;
+        }
         case 'open-settings': {
           vscode.postMessage({ type: 'open_settings' });
           break;
@@ -4065,9 +4269,30 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'open-model-hub':
           vscode.postMessage({ type: 'open_model_hub' });
           break;
+        case 'open-onboarding':
+          toggleOnboarding(true);
+          break;
+        case 'dismiss-onboarding':
+          toggleOnboarding(false);
+          break;
+        case 'toggle-onboarding':
+          toggleOnboarding();
+          break;
+        case 'open-github-login':
+          vscode.postMessage({ type: 'open_github_login' });
+          break;
         case 'pick-model':
           pickModel(target.getAttribute('data-model-id'), target.getAttribute('data-provider'));
           break;
+        case 'toggle-pin': {
+          const mId = target.getAttribute('data-model-id') || target.getAttribute('data-id');
+          const pId = target.getAttribute('data-provider');
+          const mName = target.getAttribute('data-name');
+          if (mId && window.togglePinModel) {
+            window.togglePinModel(mId, pId, mName);
+          }
+          break;
+        }
         case 'remove-queued':
           removeQueued(parseInt(target.getAttribute('data-idx') || '0', 10));
           break;
@@ -4152,6 +4377,27 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     }
 
+    function isModelPinned(modelId, provider) {
+      if (!pinnedModels || !Array.isArray(pinnedModels)) return false;
+      return pinnedModels.some(p => p.id === modelId && (!provider || !p.provider || p.provider === provider));
+    }
+
+    window.togglePinModel = function(modelId, provider, name) {
+      if (!modelId) return;
+      if (!pinnedModels || !Array.isArray(pinnedModels)) pinnedModels = [];
+      const idx = pinnedModels.findIndex(p => p.id === modelId && (!provider || !p.provider || p.provider === provider));
+      let isPinned = false;
+      if (idx >= 0) {
+        pinnedModels.splice(idx, 1);
+        isPinned = false;
+      } else {
+        pinnedModels.push({ id: modelId, provider: provider || 'openrouter', name: name || modelId });
+        isPinned = true;
+      }
+      vscode.postMessage({ type: 'toggle_pin', modelId, provider, name, isPinned });
+      renderFlyoutList(flyoutSearch ? flyoutSearch.value.toLowerCase().trim() : '');
+    };
+
     function renderFlyoutList(query) {
       if (!flyoutList) return;
       const modelsPool = (allModels && allModels.length > 0) ? allModels : DEFAULT_POPULAR_MODELS;
@@ -4159,23 +4405,53 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (!query) return true;
         const hay = ((m.name || '') + ' ' + (m.id || '') + ' ' + (m.provider || '')).toLowerCase();
         return hay.includes(query);
-      }).slice(0, 50);
+      });
 
       if (filtered.length === 0) {
         flyoutList.innerHTML = '<div style="padding:14px; text-align:center; color:var(--muted); font-size:11.5px;">No matching models found.<br><button class="prompt-pill-btn" data-action="open-model-hub" style="margin-top:8px;">Browse Model Hub</button></div>';
         return;
       }
 
-      flyoutList.innerHTML = filtered.map(m => {
+      function renderFlyoutItem(m) {
         const isActive = m.id === currentModel;
+        const isPinned = isModelPinned(m.id, m.provider);
         return '<div class="flyout-item ' + (isActive ? 'active' : '') + '" data-action="pick-model" data-model-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || 'openrouter') + '">' +
           '<div class="flyout-item-info">' +
             (isActive ? '<span class="flyout-active-dot"></span>' : '') +
             '<span class="flyout-item-name">' + escapeHtml(m.name || m.id) + '</span>' +
           '</div>' +
-          '<span class="flyout-item-meta">' + escapeHtml(m.provider || 'openrouter') + (m.pricing ? ' · ' + escapeHtml(m.pricing) : '') + '</span>' +
+          '<div class="flyout-item-actions">' +
+            '<span class="flyout-item-meta">' + escapeHtml(m.provider || 'openrouter') + (m.pricing ? ' · ' + escapeHtml(m.pricing) : '') + '</span>' +
+            '<button class="flyout-pin-btn ' + (isPinned ? 'pinned' : '') + '" data-action="toggle-pin" data-model-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || 'openrouter') + '" data-name="' + escapeHtml(m.name || m.id) + '" title="' + (isPinned ? 'Unpin model' : 'Pin to top of picker') + '">' +
+              '<svg width="11" height="11" viewBox="0 0 24 24" fill="' + (isPinned ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
+                '<line x1="12" y1="17" x2="12" y2="22"></line>' +
+                '<path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path>' +
+              '</svg>' +
+            '</button>' +
+          '</div>' +
         '</div>';
-      }).join('');
+      }
+
+      if (!query) {
+        const pinnedItems = filtered.filter(m => isModelPinned(m.id, m.provider));
+        const otherItems = filtered.filter(m => !isModelPinned(m.id, m.provider)).slice(0, 45);
+
+        let html = '';
+        if (pinnedItems.length > 0) {
+          html += '<div class="flyout-section-title"><span>PINNED</span><span class="flyout-section-count">' + pinnedItems.length + '</span></div>';
+          html += pinnedItems.map(renderFlyoutItem).join('');
+          html += '<div class="flyout-section-title"><span>ALL MODELS</span></div>';
+        }
+        html += otherItems.map(renderFlyoutItem).join('');
+        flyoutList.innerHTML = html;
+      } else {
+        const sorted = [...filtered].sort((a, b) => {
+          const aPin = isModelPinned(a.id, a.provider) ? 1 : 0;
+          const bPin = isModelPinned(b.id, b.provider) ? 1 : 0;
+          return bPin - aPin;
+        }).slice(0, 50);
+        flyoutList.innerHTML = sorted.map(renderFlyoutItem).join('');
+      }
     }
 
     window.pickModel = function(modelId, provider) {
@@ -4229,48 +4505,85 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function getFileIconBadge(fileName) {
       const ext = (fileName || '').split('.').pop().toLowerCase();
+      // Returns { badge: '<i class="codicon ..."></i>', color: string, isHtml: true }
+      // Callers must use innerHTML (not textContent) when isHtml is true.
+      const icon = (cls, color) => ({
+        badge: '<i class="codicon ' + cls + '" aria-hidden="true"></i>',
+        color,
+        isHtml: true,
+      });
       switch (ext) {
+        case 'ts':
+          return icon('codicon-file-code', 'var(--vscode-charts-blue, #38bdf8)');
         case 'tsx':
         case 'jsx':
-          return { badge: 'JSX', color: '#61dafb' };
-        case 'ts':
-          return { badge: 'TS', color: '#38bdf8' };
+          return icon('codicon-file-code', 'var(--vscode-charts-blue, #61dafb)');
         case 'js':
         case 'mjs':
         case 'cjs':
-          return { badge: 'JS', color: '#f7df1e' };
+          return icon('codicon-file-code', 'var(--vscode-charts-yellow, #f7df1e)');
         case 'py':
-          return { badge: 'PY', color: '#4ade80' };
+          return icon('codicon-file-code', 'var(--vscode-charts-green, #4ade80)');
+        case 'rs':
+          return icon('codicon-file-code', 'var(--vscode-charts-orange, #f97316)');
+        case 'go':
+          return icon('codicon-file-code', 'var(--vscode-charts-blue, #38bdf8)');
+        case 'java':
+        case 'kt':
+          return icon('codicon-file-code', 'var(--vscode-charts-red, #f87171)');
+        case 'cpp':
+        case 'c':
+        case 'h':
+        case 'cs':
+          return icon('codicon-file-code', 'var(--vscode-charts-purple, #a78bfa)');
+        case 'rb':
+        case 'php':
+        case 'swift':
+          return icon('codicon-file-code', 'var(--vscode-charts-orange, #fb923c)');
         case 'html':
         case 'htm':
-          return { badge: 'HTML', color: '#fb923c' };
+          return icon('codicon-file-code', 'var(--vscode-charts-orange, #fb923c)');
         case 'css':
         case 'scss':
         case 'less':
-          return { badge: 'CSS', color: '#c084fc' };
+          return icon('codicon-file-code', 'var(--vscode-charts-purple, #c084fc)');
         case 'json':
-          return { badge: '{}', color: '#facc15' };
+        case 'jsonc':
+          return icon('codicon-json', 'var(--vscode-charts-yellow, #facc15)');
         case 'md':
         case 'markdown':
-          return { badge: 'MD', color: '#93c5fd' };
-        case 'rs':
-          return { badge: 'RS', color: '#f97316' };
-        case 'go':
-          return { badge: 'GO', color: '#38bdf8' };
-        case 'java':
-        case 'kt':
-          return { badge: 'JAVA', color: '#f87171' };
-        case 'sql':
-          return { badge: 'SQL', color: '#a78bfa' };
-        case 'txt':
-        case 'log':
-          return { badge: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>', color: '#94a3b8' };
+          return icon('codicon-markdown', 'var(--vscode-charts-blue, #93c5fd)');
         case 'yml':
         case 'yaml':
         case 'toml':
-          return { badge: 'CFG', color: '#a3e635' };
+        case 'ini':
+        case 'env':
+          return icon('codicon-settings-gear', 'var(--vscode-charts-green, #a3e635)');
+        case 'sql':
+        case 'db':
+        case 'sqlite':
+          return icon('codicon-database', 'var(--vscode-charts-purple, #a78bfa)');
+        case 'png':
+        case 'jpg':
+        case 'jpeg':
+        case 'gif':
+        case 'svg':
+        case 'webp':
+        case 'ico':
+          return icon('codicon-file-media', 'var(--vscode-charts-green, #4ade80)');
+        case 'zip':
+        case 'tar':
+        case 'gz':
+        case '7z':
+        case 'rar':
+          return icon('codicon-file-zip', 'var(--vscode-charts-orange, #f97316)');
+        case 'pdf':
+          return icon('codicon-file-pdf', 'var(--vscode-errorForeground, #f87171)');
+        case 'txt':
+        case 'log':
+          return icon('codicon-file-text', 'var(--vscode-descriptionForeground, #94a3b8)');
         default:
-          return { badge: '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>', color: '#94a3b8' };
+          return icon('codicon-file', 'var(--vscode-descriptionForeground, #94a3b8)');
       }
     }
 
@@ -4338,11 +4651,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     }
 
+    const PROFILE_ICONS = {
+      builder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.34a1 1 0 0 0 0 1.4l1.56 1.56a1 1 0 0 0 1.4 0l3.08-3.08a4.5 4.5 0 0 1-5.78 5.78l-7.22 7.22a2 2 0 0 1-2.83 0l-.88-.88a2 2 0 0 1 0-2.83l7.22-7.22a4.5 4.5 0 0 1 5.78-5.78l-3.08 3.08Z"></path></svg>',
+      coder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>',
+      planner: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="10" y1="6" x2="21" y2="6"></line><line x1="10" y1="12" x2="21" y2="12"></line><line x1="10" y1="18" x2="21" y2="18"></line><polyline points="3 6 4 7 6 5"></polyline><polyline points="3 12 4 13 6 11"></polyline><polyline points="3 18 4 19 6 17"></polyline></svg>',
+      reviewer: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><path d="m8 11 2 2 4-4"></path></svg>'
+    };
+
     function updateProfileBadge() {
       const lbl = document.getElementById('prompt-profile-label');
+      const iconEl = document.getElementById('prompt-profile-icon');
+      const p = (currentProfile || 'builder').toLowerCase();
+      const display = p.charAt(0).toUpperCase() + p.slice(1);
+
       if (lbl) {
-        const p = (currentProfile || 'builder').toLowerCase();
-        const display = p.charAt(0).toUpperCase() + p.slice(1);
         lbl.textContent = display.toUpperCase();
         if (typeof lbl.removeAttribute === 'function') {
           lbl.removeAttribute('aria-busy');
@@ -4351,12 +4673,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           lbl.classList.remove('skeleton', 'skeleton-text');
         }
         if (lbl.parentElement) {
-          const nextIdx = (availableProfiles.indexOf(p) + 1) % availableProfiles.length;
-          const nextP = availableProfiles[nextIdx] || 'builder';
-          const nextDisplay = nextP.charAt(0).toUpperCase() + nextP.slice(1);
-          lbl.parentElement.title = 'Agent Profile: ' + display + ' (Click to switch to ' + nextDisplay + ' • Builder → Coder → Reviewer → Planner)';
+          lbl.parentElement.title = 'Agent Profile: ' + display + ' (Click to choose)';
         }
       }
+      if (iconEl && PROFILE_ICONS[p]) {
+        iconEl.innerHTML = PROFILE_ICONS[p];
+      }
+      document.querySelectorAll('.profile-popover .menu-popover-item').forEach(item => {
+        const itemProf = item.getAttribute('data-profile');
+        item.classList.toggle('active', itemProf === p);
+      });
     }
 
     function getReasoningLevelIndex(val) {
@@ -4521,14 +4847,52 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     const btnProfileEl = document.getElementById('btn-prompt-profile');
+    const profilePopover = document.getElementById('profile-popover');
+
+    function toggleProfilePopover(forceState) {
+      if (!profilePopover) return;
+      const isVisible = profilePopover.style.display !== 'none';
+      const show = typeof forceState === 'boolean' ? forceState : !isVisible;
+      if (show) {
+        if (reasoningPopover) {
+          reasoningPopover.style.display = 'none';
+          document.getElementById('btn-prompt-reasoning')?.classList.remove('active');
+          document.getElementById('btn-prompt-reasoning')?.setAttribute('aria-expanded', 'false');
+        }
+        if (modePopover) {
+          modePopover.style.display = 'none';
+          document.getElementById('btn-prompt-mode')?.classList.remove('active');
+          document.getElementById('btn-prompt-mode')?.setAttribute('aria-expanded', 'false');
+        }
+        if (modelFlyout) modelFlyout.style.display = 'none';
+      }
+      profilePopover.style.display = show ? 'flex' : 'none';
+      if (btnProfileEl) {
+        btnProfileEl.setAttribute('aria-expanded', show ? 'true' : 'false');
+        btnProfileEl.classList.toggle('active', show);
+      }
+    }
+
     if (btnProfileEl) {
-      btnProfileEl.addEventListener('click', () => {
-        const nextIdx = (availableProfiles.indexOf(currentProfile.toLowerCase()) + 1) % availableProfiles.length;
-        currentProfile = availableProfiles[nextIdx];
-        updateProfileBadge();
-        vscode.postMessage({ type: 'update_config', key: 'profile', value: currentProfile });
+      btnProfileEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleProfilePopover();
       });
     }
+
+    document.querySelectorAll('.profile-popover .menu-popover-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const selectedProfile = item.getAttribute('data-profile');
+        if (selectedProfile && availableProfiles.includes(selectedProfile.toLowerCase())) {
+          currentProfile = selectedProfile.toLowerCase();
+          updateProfileBadge();
+          vscode.postMessage({ type: 'update_profile', value: currentProfile });
+          vscode.postMessage({ type: 'update_config', key: 'profile', value: currentProfile });
+        }
+        toggleProfilePopover(false);
+      });
+    });
 
     const btnReasoningEl = document.getElementById('btn-prompt-reasoning');
     const btnReasoningClose = document.getElementById('btn-reasoning-close');
@@ -4638,7 +5002,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         '<div class="skills-card-header">' +
           '<div class="skills-card-title">' +
             '<span style="font-weight:600;">Andromity AI Coding Agent</span>' +
-            '<span style="color:var(--muted); font-size:11px; border:1px solid var(--border); padding:1px 5px; border-radius:3px; margin-left:4px;">v0.2.9</span>' +
+            '<span style="color:var(--muted); font-size:11px; border:1px solid var(--border); padding:1px 5px; border-radius:3px; margin-left:4px;">v' + extensionVersion + '</span>' +
           '</div>' +
           '<button class="palette-close-btn" data-action="close-about-card" title="Close"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>' +
         '</div>' +
@@ -4907,9 +5271,101 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       return escaped;
     }
 
+    function detectPathType(text) {
+      if (!text || typeof text !== 'string') return null;
+      var str = text.trim();
+      if (!str || str.length > 250 || str.indexOf('\\n') !== -1 || str.indexOf('\\r') !== -1) return null;
+      if (str.indexOf('*') !== -1 || str.indexOf('?') !== -1) return null;
+      if (/^\\.[a-zA-Z0-9]+$/.test(str)) return null;
+      if (/^[a-zA-Z0-9_-]+\\s*\\(.*?\\)$/.test(str)) return null;
+      if (/[;{}<>=!|&]/.test(str)) return null;
+      if (str.startsWith('-') || str.startsWith('--')) return null;
+      if (str.indexOf(' ') !== -1 && !str.startsWith('/') && !str.startsWith('./') && !/^[a-zA-Z]:[\\\\/]/.test(str)) {
+        return null;
+      }
+
+      var clean = str.replace(/[?#].*$/, '');
+      var lower = clean.toLowerCase();
+
+      if (clean.endsWith('/') || clean.endsWith('\\\\')) {
+        return { type: 'folder', path: clean.replace(/[\\\\/]+$/, '') };
+      }
+
+      if (typeof workspaceFolders !== 'undefined' && workspaceFolders && workspaceFolders.has(lower)) {
+        return { type: 'folder', path: clean };
+      }
+
+      if (typeof workspaceFiles !== 'undefined' && workspaceFiles && workspaceFiles.has(lower)) {
+        return { type: 'file', path: clean };
+      }
+
+      var commonFolders = new Set([
+        '_internal', 'test', 'tests', 'walkthroughs', 'media', 'assets', 'src', 'bin',
+        'dist', 'build', 'scripts', 'docs', 'components', 'utils', 'lib', 'packages',
+        'pages', 'styles', 'public', 'views', 'panels', 'providers', 'integrations'
+      ]);
+      if (commonFolders.has(lower)) {
+        return { type: 'folder', path: clean };
+      }
+
+      var fileExtRegex = /\\.(tsx?|jsx?|mjs|cjs|py|pyw|html?|css|scss|sass|less|json|md|markdown|rs|go|c|cpp|h|hpp|java|kt|kts|sql|sh|bash|ps1|bat|cmd|yml|yaml|toml|ini|cfg|env|lock|svg|png|jpg|jpeg|gif|webp|ico|spec|dockerfile|gitignore)$/i;
+      if (fileExtRegex.test(clean)) {
+        return { type: 'file', path: clean };
+      }
+
+      var genericExtMatch = clean.match(/^([a-zA-Z0-9_\\-\\.\\/\\\\~]+)\\.([a-zA-Z0-9]{1,6})(:\\d+)?$/);
+      if (genericExtMatch && !clean.startsWith('http://') && !clean.startsWith('https://')) {
+        var ext = genericExtMatch[2].toLowerCase();
+        if ((!/^\\d+$/.test(ext) && ['com', 'org', 'net', 'io', 'dev', 'app', 'ai'].indexOf(ext) === -1) || clean.indexOf('/') !== -1 || clean.indexOf('\\\\') !== -1) {
+          return { type: 'file', path: clean };
+        }
+      }
+
+      if (clean.indexOf('/') !== -1 || clean.indexOf('\\\\') !== -1) {
+        var lastSeg = clean.split(/[\\\\/]/).pop() || '';
+        if (lastSeg.indexOf('.') !== -1 && !lastSeg.startsWith('.')) {
+          return { type: 'file', path: clean };
+        }
+        return { type: 'folder', path: clean };
+      }
+
+      return null;
+    }
+
+    function renderFileOrFolderChip(detected, originalText) {
+      var isDir = detected.type === 'folder';
+      var cleanPath = detected.path;
+      var safePath = escapeHtml(cleanPath);
+      var safeDisplay = escapeHtml(originalText || cleanPath);
+
+      if (isDir) {
+        var folderSvg = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.85; flex-shrink:0;"><path d="M1.5 13.5v-9a1 1 0 0 1 1-1h3.5l1.5 1.5h6a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z"></path><path d="M1.5 7h13"></path></svg>';
+        return '<span class="md-file-pill is-dir" data-action="open-file" data-file-path="' + safePath + '" title="Click to reveal folder in Explorer sidebar (' + safePath + ')">' +
+          '<span class="pill-icon folder-icon">' + folderSvg + '</span>' +
+          '<span class="pill-name">' + safeDisplay + '</span>' +
+        '</span>';
+      }
+
+      var badgeInfo = typeof getFileIconBadge === 'function' ? getFileIconBadge(cleanPath) : { badge: '<i class="codicon codicon-file" aria-hidden="true"></i>', color: '#94a3b8', isHtml: true };
+      var badgeHtml = '<span class="pill-icon file-icon" style="color:' + badgeInfo.color + ';">' + badgeInfo.badge + '</span>';
+
+      return '<span class="md-file-pill is-file" data-action="open-file" data-file-path="' + safePath + '" title="Click to open file in new tab (' + safePath + ')">' +
+        badgeHtml +
+        '<span class="pill-name">' + safeDisplay + '</span>' +
+      '</span>';
+    }
+
     try {
       if (typeof marked !== 'undefined') {
         const markedRenderer = {
+          codespan(token) {
+            const text = token && typeof token === 'object' ? (token.text || '') : String(token || '');
+            const detected = detectPathType(text);
+            if (detected) {
+              return renderFileOrFolderChip(detected, text);
+            }
+            return '<code>' + escapeHtml(text) + '</code>';
+          },
           code(token) {
             const text = token && typeof token === 'object' ? (token.text || '') : String(token || '');
             const lang = token && typeof token === 'object' ? (token.lang || 'code') : 'code';
@@ -4959,6 +5415,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               var hashMatch = href.match(/#L(\d+)/i);
               if (hashMatch) line = parseInt(hashMatch[1], 10);
               return '<a href="#" class="md-file-link" data-action="open-file" data-file-path="' + escapeHtml(fpath) + '"' + (line ? (' data-line="' + line + '"') : '') + ' style="color:var(--accent); text-decoration:underline;"' + (title ? (' title="' + escapeHtml(title) + '"') : '') + '>' + text + '</a>';
+            }
+            if (!href.startsWith('http://') && !href.startsWith('https://') && !href.startsWith('mailto:') && !href.startsWith('#')) {
+              return '<a href="#" class="md-file-link" data-action="open-file" data-file-path="' + escapeHtml(href) + '" style="color:var(--accent); text-decoration:underline;"' + (title ? (' title="' + escapeHtml(title) + '"') : '') + '>' + text + '</a>';
             }
             return '<a href="' + escapeHtml(href) + '" target="_blank" style="color:var(--accent); text-decoration:underline;"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + text + '</a>';
           },
@@ -5021,7 +5480,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       // 7. Restore inline code
       for (var i = 0; i < codeSpans.length; i++) {
         var token = String.fromCharCode(1) + 'CODE_' + i + String.fromCharCode(1);
-        t = t.split(token).join('<code>' + escapeHtml(codeSpans[i]) + '</code>');
+        var rawCode = codeSpans[i];
+        var detected = detectPathType(rawCode);
+        var repl = detected ? renderFileOrFolderChip(detected, rawCode) : ('<code>' + escapeHtml(rawCode) + '</code>');
+        t = t.split(token).join(repl);
       }
       return t;
     }
@@ -5497,7 +5959,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
           const iconSpan = document.createElement('span');
           iconSpan.className = 'chip-icon';
-          iconSpan.textContent = badgeInfo.badge;
+          iconSpan.style.color = badgeInfo.color;
+          iconSpan.innerHTML = badgeInfo.badge; // badge is an HTML string (<i class="codicon ...">)
           chip.appendChild(iconSpan);
 
           const nameSpan = document.createElement('span');
@@ -6014,13 +6477,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
 
       const titles = {
-        safe: 'SAFE Mode: Confirms before every file edit and shell command (Click to cycle)',
-        trust: 'TRUST Mode: Auto-approves file writes in workspace; prompts for commands (Click to cycle)',
-        full: 'FULL Mode: Auto-approves all tool actions and logs to stream (Click to cycle)',
-        yolo: 'YOLO Mode: Autonomous silent execution (Click to cycle)'
+        safe: 'SAFE Mode: Confirms before every file edit and shell command (Click to choose)',
+        trust: 'TRUST Mode: Auto-approves file writes in workspace; prompts for commands (Click to choose)',
+        full: 'FULL Mode: Auto-approves all tool actions and logs to stream (Click to choose)',
+        yolo: 'YOLO Mode: Autonomous silent execution (Click to choose)'
       };
-      const title = titles[currentMode] || 'Permission Governance Mode (Click to cycle)';
+      const title = titles[currentMode] || 'Permission Governance Mode (Click to choose)';
       if (promptModeBtn) promptModeBtn.title = title;
+
+      document.querySelectorAll('.mode-popover .menu-popover-item').forEach(item => {
+        const itemMode = item.getAttribute('data-mode');
+        item.classList.toggle('active', itemMode === currentMode);
+      });
 
       const modeBtn = document.getElementById('btn-mode-cycle');
       if (modeBtn) {
@@ -6300,6 +6768,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     window.addEventListener('message', event => {
       const msg = event.data;
       switch (msg.type) {
+        case 'workspace_files_updated': {
+          if (Array.isArray(msg.files)) {
+            workspaceFiles = new Set(msg.files.map(f => String(f).toLowerCase()));
+          }
+          if (Array.isArray(msg.dirs)) {
+            workspaceFolders = new Set(msg.dirs.map(d => String(d).toLowerCase()));
+          }
+          break;
+        }
         case 'file_attached': {
           if (msg.file) {
             addDroppedFileAttachment(msg.file);
@@ -6349,6 +6826,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           clearSkeletonState();
           currentSessionId = msg.sessionId;
           allModels = msg.models || [];
+          if (msg.pinnedModels) {
+            pinnedModels = msg.pinnedModels;
+          }
           if (msg.skills) {
             allSkills = msg.skills;
           }
@@ -6390,17 +6870,35 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           if (msg.currentPlan && msg.currentPlan.steps && msg.currentPlan.steps.length > 0) {
             updatePlanTracker(msg.currentPlan);
-          } else if (planTrackerStrip) {
-            planTrackerStrip.style.display = 'none';
+          } else {
+            hidePlanTracker();
           }
           if (msg.models && msg.models.length > 0) {
-            allModels = msg.models;
+            allModels = msg.models.filter(m => m.provider !== 'andromity' || m.id === 'auto');
           }
           if (msg.providers) {
             allProviders = msg.providers;
           }
           updateModelBadge();
           updateOnboardingVisibility();
+          const btnSignInInit = document.getElementById('zero-gateway-signin-btn');
+          const badgeActiveInit = document.getElementById('zero-gateway-active-badge');
+          const gatewaySubInit = document.getElementById('zero-gateway-sub');
+          let isInitialAuthed = isAndromityActive;
+          try {
+            if (typeof localStorage !== 'undefined' && localStorage.getItem('andromity_active_status') === 'true') {
+              isInitialAuthed = true;
+            }
+          } catch {}
+          if (btnSignInInit) {
+            btnSignInInit.style.display = isInitialAuthed ? 'none' : 'inline-flex';
+          }
+          if (badgeActiveInit) {
+            badgeActiveInit.style.display = isInitialAuthed ? 'inline-flex' : 'none';
+          }
+          if (gatewaySubInit && isInitialAuthed) {
+            gatewaySubInit.innerHTML = '&bull; Active Gateway';
+          }
           if (msg.ollamaDetectedModel) {
             showOllamaBanner(msg.ollamaDetectedModel);
           }
@@ -6416,6 +6914,97 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         case 'ollama_status_updated': {
           updateOllamaStatusUI(msg.status);
+          break;
+        }
+
+        case 'auth_state_changed': {
+          const isAuthed = !!msg.isAuthenticated;
+          isAndromityActive = isAuthed;
+          try {
+            localStorage.setItem('andromity_active_status', isAuthed ? 'true' : 'false');
+            localStorage.setItem('andromity_plan', msg.plan || (isAuthed ? 'authenticated' : 'anonymous'));
+          } catch {}
+          if (onboardingHero) {
+            onboardingHero.style.display = isAuthed ? 'none' : 'flex';
+          }
+          const btnSignIn = document.getElementById('zero-gateway-signin-btn');
+          const badgeActive = document.getElementById('zero-gateway-active-badge');
+          const gatewaySub = document.getElementById('zero-gateway-sub');
+          if (btnSignIn) {
+            btnSignIn.style.display = isAuthed ? 'none' : 'inline-flex';
+          }
+          if (badgeActive) {
+            badgeActive.style.display = isAuthed ? 'inline-flex' : 'none';
+          }
+          if (gatewaySub) {
+            gatewaySub.innerHTML = isAuthed
+              ? 'Edge Gateway Active'
+              : 'Multi-cloud edge fallback &bull; Instant free trial';
+          }
+          if (accountPillDot) accountPillDot.classList.toggle('authed', isAuthed);
+          if (accountPillText) accountPillText.textContent = isAuthed ? 'Pro' : 'Free';
+          if (btnTopAccount) btnTopAccount.setAttribute('title', isAuthed ? 'Account (Pro) — Click for usage & quota' : 'Account — Click for usage & quota');
+          if (accountUsername) accountUsername.textContent = msg.username || (isAuthed ? 'Authenticated Developer' : 'Anonymous Trial');
+          if (accountPlanBadge) accountPlanBadge.textContent = isAuthed ? 'Community Account' : 'Free Tier';
+          if (btnAccountLogin) btnAccountLogin.style.display = isAuthed ? 'none' : 'block';
+          if (btnAccountLogout) btnAccountLogout.style.display = isAuthed ? 'block' : 'none';
+          if (accountAvatar) {
+            const name = (msg.username || (isAuthed ? 'AM' : 'AT')).replace(/[^a-zA-Z0-9]/g, '');
+            accountAvatar.textContent = (name.slice(0, 2) || 'AM').toUpperCase();
+          }
+          if (isAuthed) {
+            appendSystemNote('✅ Signed in with AgenticMarket account. Authenticated access is now active.');
+          } else {
+            appendSystemNote('Signed out of AgenticMarket. Switched to anonymous free tier.');
+          }
+          break;
+        }
+
+        case 'usage_updated': {
+          const isAuthed = msg.plan === 'authenticated';
+          const hasDailyLimit = typeof msg.limit_today === 'number' && msg.limit_today > 0;
+          const limit = hasDailyLimit ? msg.limit_today : null;
+          const remaining = (typeof msg.turns_remaining === 'number' && msg.turns_remaining >= 0) ? msg.turns_remaining : null;
+          const used = typeof msg.turns_today === 'number' ? msg.turns_today : 0;
+          const isLimitReached = msg.status === 'limit_reached' || (hasDailyLimit && remaining === 0);
+
+          if (accountPillDot) {
+            accountPillDot.classList.toggle('authed', isAuthed);
+            accountPillDot.classList.toggle('limit', isLimitReached);
+          }
+          if (accountPillText) {
+            accountPillText.textContent = isAuthed ? 'Pro' : 'Free';
+          }
+          if (btnTopAccount) {
+            btnTopAccount.setAttribute('title', isAuthed ? 'Account (Pro) — Click for usage & quota' : 'Account — Click for usage & quota');
+          }
+          if (accountUsername && msg.username) accountUsername.textContent = msg.username;
+          if (accountPlanBadge) {
+            accountPlanBadge.textContent = isAuthed ? 'Community Account' : 'Free Tier';
+          }
+          if (accountQuotaVal) {
+            accountQuotaVal.textContent = isLimitReached ? 'Daily Limit Reached' : 'Active';
+            accountQuotaVal.style.color = isLimitReached ? '#ef4444' : '#10b981';
+          }
+          if (accountQuotaBar) {
+            if (hasDailyLimit && limit) {
+              const pct = Math.min(100, Math.max(0, Math.round(((remaining ?? 0) / limit) * 100)));
+              accountQuotaBar.style.width = pct + '%';
+              accountQuotaBar.style.background = pct <= 20 ? '#ef4444' : pct <= 50 ? '#eab308' : '#10b981';
+            } else {
+              accountQuotaBar.style.width = isLimitReached ? '0%' : '100%';
+              accountQuotaBar.style.background = isLimitReached ? '#ef4444' : '#10b981';
+            }
+          }
+          if (btnAccountLogin) btnAccountLogin.style.display = isAuthed ? 'none' : 'block';
+          if (btnAccountLogout) btnAccountLogout.style.display = isAuthed ? 'block' : 'none';
+          if (accountAvatar) {
+            const name = (msg.username || 'AM').replace(/[^a-zA-Z0-9]/g, '');
+            accountAvatar.textContent = (name.slice(0, 2) || 'AM').toUpperCase();
+          }
+          if (accountLatencyText && typeof msg.last_latency_ms === 'number' && msg.last_latency_ms > 0) {
+            accountLatencyText.textContent = msg.last_latency_ms + 'ms Edge';
+          }
           break;
         }
 
@@ -6510,7 +7099,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           updateCollabInboxBadge();
           renderCollabInbox();
           interactiveSlot.innerHTML = '';
-          if (planTrackerStrip) planTrackerStrip.style.display = 'none';
+          hidePlanTracker();
+          isPlanTrackerDismissed = false;
           {
             const sessState = sessionsState[currentSessionId];
             if (sessState && sessState.pendingApproval) {
@@ -6712,7 +7302,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                       currentTurnToolBody.className = 'tool-seq-body';
                       seqEl.appendChild(currentTurnToolBody);
                     }
-                    currentAssistantWrap.appendChild(seqEl);
+                    const seqWrap = document.createElement('div');
+                    seqWrap.className = 'tool-sequence-wrap';
+                    seqWrap.appendChild(seqEl);
+                    const mascotPerch = document.createElement('div');
+                    mascotPerch.className = 'tool-seq-mascot-perch';
+                    seqWrap.appendChild(mascotPerch);
+                    currentAssistantWrap.appendChild(seqWrap);
                   }
 
                   for (const tc of m.tool_calls) {
@@ -6862,11 +7458,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             updateTokenDisplay(msg.session);
             if (msg.session && msg.session.plan && msg.session.plan.steps && msg.session.plan.steps.length > 0) {
               updatePlanTracker(msg.session.plan);
-            } else if (planTrackerStrip) {
-              planTrackerStrip.style.display = 'none';
-          // Anchor the newest answer's meta strip; older ones stay hover-only
-          pinLatestMessageFooter();
-
+            } else {
+              hidePlanTracker();
+              // Anchor the newest answer's meta strip; older ones stay hover-only
+              pinLatestMessageFooter();
             }
           }
           // Replay any live buffered deltas that arrived while this session was in background
@@ -7736,14 +8331,23 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           if (msg.plan && msg.plan.steps && msg.plan.steps.length > 0) {
             updatePlanTracker(msg.plan);
-          } else if (planTrackerStrip) {
-            planTrackerStrip.style.display = 'none';
+          } else {
+            hidePlanTracker();
           }
           // Only show the pill in the chat if a plan tool was explicitly called
           // this turn (not on session restore / disk load which fires outside a turn)
           if (msg.plan && msg.plan.title && planToolCalledInTurn) {
             renderPlanPill(msg.plan);
           }
+          break;
+
+        case 'update_pinned_models':
+          pinnedModels = msg.pinnedModels || [];
+          renderFlyoutList(flyoutSearch ? flyoutSearch.value.toLowerCase().trim() : '');
+          break;
+
+        case 'show_onboarding_guide':
+          toggleOnboarding(true);
           break;
 
         case 'key_configured_select_model': {
@@ -8630,6 +9234,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (btnReasoningEl) {
             btnReasoningEl.setAttribute('aria-expanded', 'false');
             btnReasoningEl.classList.remove('active');
+          }
+        }
+        if (modePopover && modePopover.style.display !== 'none') {
+          modePopover.style.display = 'none';
+          btnPromptMode?.setAttribute('aria-expanded', 'false');
+          btnPromptMode?.classList.remove('active');
+        }
+        const profPopover = document.getElementById('profile-popover');
+        if (profPopover && profPopover.style.display !== 'none') {
+          profPopover.style.display = 'none';
+          const btnProf = document.getElementById('btn-prompt-profile');
+          if (btnProf) {
+            btnProf.setAttribute('aria-expanded', 'false');
+            btnProf.classList.remove('active');
           }
         }
       }
