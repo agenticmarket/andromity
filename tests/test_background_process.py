@@ -171,3 +171,51 @@ async def test_rpc_process_exit_auto_wake(tmp_path, monkeypatch):
     exit_notifs = [n for n in notifications if n.method == "process/exited"]
     assert len(exit_notifs) == 1
     assert exit_notifs[0].params["process_id"] == "proc_auto_wake"
+
+
+@pytest.mark.asyncio
+async def test_shell_kill_cross_project_and_async_notification(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools_mod, "_is_trusted", lambda: True)
+    proj_a = tmp_path / "projA"
+    proj_a.mkdir(parents=True, exist_ok=True)
+    proj_b = tmp_path / "projB"
+    proj_b.mkdir(parents=True, exist_ok=True)
+
+    # Background process started with project_path A
+    monkeypatch.setattr(tools_mod, "_get_project_root", lambda: proj_a)
+
+    received_notifications = []
+
+    async def async_send_notif(notif):
+        await asyncio.sleep(0.01)
+        received_notifications.append(notif)
+
+    handler = JsonRpcHandler(send_notification=async_send_notif)
+
+    sleep_cmd = "ping 127.0.0.1 -n 15" if sys.platform == "win32" else "sleep 15"
+    start_res = tools_mod.shell_bg(sleep_cmd, process_id="bg_cross_test")
+    assert "Background process started" in start_res
+
+    # Now change inferred project root to B (simulating RPC caller having different or no context)
+    monkeypatch.setattr(tools_mod, "_get_project_root", lambda: proj_b)
+
+    # Killing by process_id must succeed even when proj_key doesn't match
+    kill_res = await handler.handle_request(JsonRpcRequest(
+        id=99,
+        method="process/kill",
+        params={"process_id": "bg_cross_test"},
+    ))
+    assert kill_res is not None
+    assert kill_res.error is None
+    assert "terminated" in kill_res.result["message"].lower()
+
+    # Wait for async notifications to flush
+    for _ in range(30):
+        if any(n.method == "process/exited" for n in received_notifications):
+            break
+        await asyncio.sleep(0.1)
+
+    exited = [n for n in received_notifications if n.method == "process/exited"]
+    assert len(exited) >= 1
+    assert exited[0].params["process_id"] == "bg_cross_test"
+

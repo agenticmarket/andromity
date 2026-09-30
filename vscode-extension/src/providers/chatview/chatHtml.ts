@@ -904,6 +904,29 @@ ${styles}
         <div class="tracker-todos-list" id="tracker-todos-list"></div>
       </div>
 
+      <!-- Collapsible Background Process Strip (Merged upside Prompt Box, like Todos) -->
+      <div class="bg-process-strip" id="bg-process-strip" style="display:none;">
+        <div class="bg-strip-header" id="bg-strip-header" title="Click to collapse / expand running processes">
+          <div class="bg-strip-info" id="bg-strip-info">
+            <span class="bg-strip-chevron" id="bg-strip-chevron">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </span>
+            <span class="bg-strip-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+            </span>
+            <span class="bg-strip-title" id="bg-strip-title">Background Tasks</span>
+            <span class="bg-strip-badge"><span class="bg-strip-dot"></span><span id="bg-strip-count">1 running</span></span>
+            <span class="bg-strip-timer" id="bg-strip-timer">0s</span>
+          </div>
+          <div class="bg-strip-actions">
+            <button class="btn-bg-stop-all" id="btn-bg-stop-all" title="Stop running background processes">
+              <span class="codicon codicon-debug-stop"></span> Stop
+            </button>
+          </div>
+        </div>
+        <div class="bg-process-list" id="bg-process-list"></div>
+      </div>
+
       <div class="prompt-box">
         <div class="image-attachments-container" id="image-attachments-container" style="display:none;"></div>
         <div class="drag-dropped-files-bar" id="drag-dropped-files-bar" style="display:none;"></div>

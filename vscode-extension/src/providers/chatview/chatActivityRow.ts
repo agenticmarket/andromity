@@ -400,13 +400,15 @@ export function getChatActivityScript(): string {
 
       window.handleProcessExitedUI = function(msg) {
         var procId = msg.process_id;
-        if (!procId) return;
-        var wraps = document.querySelectorAll('[data-process-id="' + procId + '"]');
+        var wraps = procId ? document.querySelectorAll('[data-process-id="' + procId + '"]') : [];
+        if (!wraps || wraps.length === 0) {
+          wraps = document.querySelectorAll('.bg-proc-wrap:has(.bg-proc-badge.running), .bg-proc-wrap.running');
+        }
         wraps.forEach(function(wrap) {
           var badge = wrap.querySelector('.bg-proc-badge');
           if (badge) {
             badge.className = 'bg-proc-badge ' + (msg.exit_code === 0 ? 'done' : 'stopped');
-            badge.textContent = msg.exit_code === 0 ? 'DONE (BG)' : ('STOPPED (' + msg.exit_code + ')');
+            badge.textContent = msg.exit_code === 0 ? 'DONE (BG)' : ('STOPPED (' + (msg.exit_code !== undefined ? msg.exit_code : '') + ')');
           }
           var stopBtn = wrap.querySelector('.bg-proc-stop-btn');
           if (stopBtn) {
@@ -418,11 +420,14 @@ export function getChatActivityScript(): string {
           if (out) {
             var dur = typeof msg.duration === 'number' ? (' in ' + msg.duration + 's') : '';
             out.textContent = (out.textContent ? (out.textContent + String.fromCharCode(10)) : '') +
-              '[Process finished with exit code ' + msg.exit_code + dur + ']';
+              '[Process finished with exit code ' + (msg.exit_code !== undefined ? msg.exit_code : 0) + dur + ']';
           }
         });
 
-        var toolCards = document.querySelectorAll('.tool-card[data-process-id="' + procId + '"]');
+        var toolCards = procId ? document.querySelectorAll('.tool-card[data-process-id="' + procId + '"]') : [];
+        if (!toolCards || toolCards.length === 0) {
+          toolCards = document.querySelectorAll('.tool-card[data-tool-name="shell_bg"]');
+        }
         toolCards.forEach(function(tc) {
           var tag = tc.querySelector('.tool-tag');
           if (tag) {

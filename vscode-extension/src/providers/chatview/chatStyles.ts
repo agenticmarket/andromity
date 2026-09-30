@@ -1220,6 +1220,211 @@ export function getChatStyles(): string {
       word-break: break-word;
     }
 
+    /* ─── Background Process Strip (Merged seamlessly with Prompt Box) ──────── */
+    .bg-process-strip {
+      margin: 0;
+      padding: 7px 12px 6px 12px;
+      background: var(--vscode-editorWidget-background, rgba(24, 24, 27, 0.95));
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      border-top-left-radius: 12px;
+      border-top-right-radius: 12px;
+      border-bottom-left-radius: 0;
+      border-bottom-right-radius: 0;
+      box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.15);
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      width: 100%;
+      box-sizing: border-box;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+    .bg-process-strip.collapsed {
+      padding-bottom: 5px;
+    }
+    .bg-process-strip.collapsed .bg-process-list {
+      display: none !important;
+    }
+    .bg-process-strip.collapsed .bg-strip-chevron svg {
+      transform: rotate(-90deg);
+    }
+    .bg-strip-chevron svg {
+      transition: transform 0.15s ease;
+    }
+    .has-bg-process .prompt-box,
+    .composer-container:has(.bg-process-strip:not([style*="display: none"]):not([style*="display:none"])) .prompt-box {
+      border-top-left-radius: 0 !important;
+      border-top-right-radius: 0 !important;
+      border-top: none !important;
+    }
+    .composer-container:has(.plan-tracker-strip:not([style*="display: none"]):not([style*="display:none"])):has(.bg-process-strip:not([style*="display: none"]):not([style*="display:none"])) .bg-process-strip {
+      border-top-left-radius: 0 !important;
+      border-top-right-radius: 0 !important;
+      border-top: none !important;
+    }
+    .bg-strip-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      user-select: none;
+    }
+    .bg-strip-info {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      color: var(--vscode-foreground, #e4e4e7);
+      min-width: 0;
+      flex: 1;
+      cursor: pointer;
+    }
+    .bg-strip-chevron {
+      color: var(--vscode-descriptionForeground, #a1a1aa);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .bg-strip-icon {
+      color: var(--accent, #58a6ff);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .bg-strip-title {
+      font-weight: 500;
+      font-size: 11px;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .bg-strip-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 9999px;
+      background: rgba(56, 189, 248, 0.14);
+      color: #38bdf8;
+      border: 1px solid rgba(56, 189, 248, 0.25);
+    }
+    .bg-strip-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #38bdf8;
+      animation: bg-dot-pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes bg-dot-pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.8); }
+    }
+    .bg-strip-timer {
+      font-size: 10px;
+      font-family: var(--font-mono, monospace);
+      color: var(--vscode-descriptionForeground, #a1a1aa);
+      margin-left: 2px;
+    }
+    .bg-strip-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-bg-stop-all {
+      background: rgba(248, 81, 73, 0.12);
+      color: #f85149;
+      border: 1px solid rgba(248, 81, 73, 0.25);
+      border-radius: 4px;
+      padding: 2px 7px;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.12s ease;
+    }
+    .btn-bg-stop-all:hover {
+      background: rgba(248, 81, 73, 0.22);
+      border-color: rgba(248, 81, 73, 0.45);
+    }
+    .btn-bg-stop-all:disabled {
+      opacity: 0.6;
+      cursor: wait;
+    }
+    .bg-process-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding-top: 4px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      margin-top: 2px;
+    }
+    .bg-process-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 3px 6px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.02);
+      font-size: 11px;
+    }
+    .bg-process-item:hover {
+      background: rgba(255, 255, 255, 0.04);
+    }
+    .bg-item-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      flex: 1;
+    }
+    .bg-item-id {
+      font-family: var(--font-mono, monospace);
+      font-size: 10px;
+      color: #38bdf8;
+      background: rgba(56, 189, 248, 0.1);
+      padding: 1px 4px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+    .bg-item-cmd {
+      font-family: var(--font-mono, monospace);
+      font-size: 11px;
+      color: var(--vscode-foreground, #e4e4e7);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .bg-item-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .bg-item-elapsed {
+      font-family: var(--font-mono, monospace);
+      font-size: 10px;
+      color: var(--vscode-descriptionForeground, #a1a1aa);
+    }
+    .bg-item-stop-btn {
+      background: rgba(248, 81, 73, 0.12);
+      color: #f85149;
+      border: 1px solid rgba(248, 81, 73, 0.25);
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-size: 10px;
+      cursor: pointer;
+    }
+    .bg-item-stop-btn:hover {
+      background: rgba(248, 81, 73, 0.22);
+      border-color: rgba(248, 81, 73, 0.45);
+    }
+
     /* ─── Compaction In-Progress Indicator Banner ────────────────────────────── */
     .compaction-banner {
       display: flex;

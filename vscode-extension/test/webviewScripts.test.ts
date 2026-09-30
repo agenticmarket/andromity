@@ -1436,6 +1436,39 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(waterfallScript.includes("case 'process_started':"), "Waterfall must handle process_started event");
     assert.ok(waterfallScript.includes("case 'process_exited':"), "Waterfall must handle process_exited event");
     assert.ok(waterfallScript.includes("isBgProc"), "Waterfall must track isBgProc for shell_bg");
+
+    // 5. Verify Background Process Strip upside Prompt Box
+    const mockWebview: any = {
+      cspSource: "vscode-webview:",
+      asWebviewUri: (uri: any) => uri,
+    };
+    const chatHtml = getChatViewHtml(mockWebview, mockVscode.Uri.file("/ext"), {
+      currentSessionId: "sess-test",
+      currentModel: "claude-sonnet",
+      currentProvider: "anthropic",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "medium",
+    });
+    assert.ok(chatHtml.includes('id="bg-process-strip"'), "Chat HTML must include bg-process-strip upside prompt box");
+    assert.ok(chatHtml.includes('id="btn-bg-stop-all"'), "Chat HTML must include btn-bg-stop-all 1-click stop button");
+    assert.ok(chatHtml.includes('id="bg-process-list"'), "Chat HTML must include bg-process-list");
+
+    const chatStyles = getChatStyles();
+    assert.ok(chatStyles.includes('.bg-process-strip'), "Chat styles must include .bg-process-strip");
+    assert.ok(chatStyles.includes('.btn-bg-stop-all'), "Chat styles must include .btn-bg-stop-all");
+    assert.ok(chatStyles.includes('.bg-strip-dot'), "Chat styles must include pulsing .bg-strip-dot");
+
+    const clientScript = getChatClientScript("icon.svg", {
+      currentSessionId: "sess-test",
+      currentModel: "claude-sonnet",
+      currentProvider: "anthropic",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "medium",
+    });
+    assert.ok(clientScript.includes('updateBgProcessStripUI'), "Client script must include updateBgProcessStripUI");
+    assert.ok(clientScript.includes('activeBgProcesses'), "Client script must manage activeBgProcesses");
   });
 });
 

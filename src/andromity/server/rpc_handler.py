@@ -93,6 +93,10 @@ class JsonRpcHandler:
         self._active_agents: Dict[str, Any] = {}
         self._mcp_manager: Optional[Any] = None
         self._mcp_started: bool = False
+        try:
+            self._loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
         from andromity.core.session_bus import SessionBus
         SessionBus.get_instance().subscribe(self._on_session_bus_event)
         from andromity.core import tools as _tools_mod
@@ -182,17 +186,15 @@ class JsonRpcHandler:
                     ))
 
     def _on_process_started(self, info: dict):
-        try:
-            loop = asyncio.get_running_loop()
-            loop.call_soon_threadsafe(self.notify, "process/started", info)
-        except RuntimeError:
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self.notify, "process/started", info)
+        else:
             self.notify("process/started", info)
 
     def _on_process_exited(self, info: dict):
-        try:
-            loop = asyncio.get_running_loop()
-            loop.call_soon_threadsafe(self._handle_process_exit_threadsafe, info)
-        except RuntimeError:
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._handle_process_exit_threadsafe, info)
+        else:
             self._handle_process_exit_threadsafe(info)
 
     def _handle_process_exit_threadsafe(self, info: dict):
@@ -207,13 +209,24 @@ class JsonRpcHandler:
                 f"Process '{pid_str}' (Command: `{cmd_str}`) has finished with exit code {exit_code}.\n"
                 f"Use shell_read('{pid_str}') to review its final output if needed."
             )
-            asyncio.create_task(self._handle_auto_awake(
+            coro = self._handle_auto_awake(
                 target_session_id=session_id,
                 from_session=f"bg_proc_{pid_str}",
                 from_session_id="",
                 prompt_content=prompt_content,
                 trigger_type="process_exit",
-            ))
+            )
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(coro)
+            except RuntimeError:
+                if self._loop and self._loop.is_running():
+                    asyncio.run_coroutine_threadsafe(coro, self._loop)
+                else:
+                    try:
+                        coro.close()
+                    except Exception:
+                        pass
 
     async def _handle_auto_awake(
         self,
@@ -316,12 +329,23 @@ class JsonRpcHandler:
             log.exception("Auto-wake execution failed for session %s: %s", session.id, e)
 
     def notify(self, method: str, params: Dict[str, Any]):
-        """Send a JSON-RPC notification to the client."""
-        if self.send_notification:
-            notif = JsonRpcNotification(method=method, params=params)
-            res = self.send_notification(notif)
-            if inspect.isawaitable(res):
-                asyncio.create_task(res)
+        """Send a JSON-RPC notification to the client in a thread-safe manner."""
+        if not self.send_notification:
+            return
+        notif = JsonRpcNotification(method=method, params=params)
+        res = self.send_notification(notif)
+        if inspect.isawaitable(res):
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(res)
+            except RuntimeError:
+                if self._loop and self._loop.is_running():
+                    asyncio.run_coroutine_threadsafe(res, self._loop)
+                else:
+                    try:
+                        res.close()
+                    except Exception:
+                        pass
 
     async def handle_request(self, request: JsonRpcRequest) -> Optional[JsonRpcResponse]:
         """Dispatch a single JSON-RPC request to its corresponding handler."""

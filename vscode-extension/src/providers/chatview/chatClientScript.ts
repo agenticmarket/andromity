@@ -73,6 +73,127 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (planTrackerStrip) planTrackerStrip.style.display = 'none';
       document.querySelector('.composer-container')?.classList.remove('has-plan-tracker');
     }
+
+    const bgProcessStrip = document.getElementById('bg-process-strip');
+    const bgStripInfo = document.getElementById('bg-strip-info');
+    const bgStripTitle = document.getElementById('bg-strip-title');
+    const bgStripCount = document.getElementById('bg-strip-count');
+    const bgStripTimer = document.getElementById('bg-strip-timer');
+    const btnBgStopAll = document.getElementById('btn-bg-stop-all');
+    const bgProcessList = document.getElementById('bg-process-list');
+    let isBgStripCollapsed = false;
+    const activeBgProcesses = new Map(); // procId -> { process_id, pid, command, startTime }
+    let bgTimerInterval = null;
+
+    function formatElapsedSecs(sec) {
+      if (sec < 60) return sec + 's';
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      return m + 'm ' + s + 's';
+    }
+
+    function updateBgProcessStripUI() {
+      if (!bgProcessStrip) return;
+      if (activeBgProcesses.size === 0) {
+        bgProcessStrip.style.display = 'none';
+        document.querySelector('.composer-container')?.classList.remove('has-bg-process');
+        if (bgTimerInterval) {
+          clearInterval(bgTimerInterval);
+          bgTimerInterval = null;
+        }
+        if (btnBgStopAll) {
+          btnBgStopAll.disabled = false;
+          btnBgStopAll.innerHTML = '<span class="codicon codicon-debug-stop"></span> Stop';
+        }
+        return;
+      }
+
+      bgProcessStrip.style.display = 'flex';
+      document.querySelector('.composer-container')?.classList.add('has-bg-process');
+
+      const count = activeBgProcesses.size;
+      if (bgStripCount) bgStripCount.textContent = count === 1 ? '1 running' : (count + ' running');
+
+      if (count === 1) {
+        const first = activeBgProcesses.values().next().value;
+        const shortCmd = (first && first.command ? first.command : 'Background Task').trim().split(String.fromCharCode(10)).join(' ');
+        if (bgStripTitle) bgStripTitle.textContent = shortCmd.length > 28 ? (shortCmd.slice(0, 26) + '...') : shortCmd;
+      } else {
+        if (bgStripTitle) bgStripTitle.textContent = 'Background Tasks';
+      }
+
+      if (bgProcessList) {
+        let itemsHtml = '';
+        let maxElapsed = 0;
+        const now = Date.now();
+        activeBgProcesses.forEach(function(proc, procId) {
+          const el = Math.max(0, Math.floor((now - (proc.startTime || now)) / 1000));
+          if (el > maxElapsed) maxElapsed = el;
+          const elStr = formatElapsedSecs(el);
+          const safeCmd = escapeHtml((proc.command || 'Process ' + procId).split(String.fromCharCode(10)).join(' '));
+          const safeProcId = escapeHtml(procId);
+          itemsHtml += '<div class="bg-process-item" data-process-id="' + safeProcId + '">' +
+            '<div class="bg-item-left">' +
+              '<span class="bg-item-id">' + safeProcId + '</span>' +
+              '<span class="bg-item-cmd" title="' + safeCmd + '">' + safeCmd + '</span>' +
+            '</div>' +
+            '<div class="bg-item-right">' +
+              '<span class="bg-item-elapsed" id="bg-elapsed-' + safeProcId + '">' + elStr + '</span>' +
+              '<button class="bg-item-stop-btn" data-process-id="' + safeProcId + '">Stop</button>' +
+            '</div>' +
+          '</div>';
+        });
+        bgProcessList.innerHTML = itemsHtml;
+        if (bgStripTimer) bgStripTimer.textContent = formatElapsedSecs(maxElapsed);
+      }
+
+      if (!bgTimerInterval) {
+        bgTimerInterval = setInterval(function() {
+          let maxElapsed = 0;
+          const now = Date.now();
+          activeBgProcesses.forEach(function(proc, procId) {
+            const el = Math.max(0, Math.floor((now - (proc.startTime || now)) / 1000));
+            if (el > maxElapsed) maxElapsed = el;
+            const elSpan = document.getElementById('bg-elapsed-' + procId);
+            if (elSpan) elSpan.textContent = formatElapsedSecs(el);
+          });
+          if (bgStripTimer) bgStripTimer.textContent = formatElapsedSecs(maxElapsed);
+        }, 1000);
+      }
+    }
+
+    if (bgStripInfo) {
+      bgStripInfo.addEventListener('click', function() {
+        isBgStripCollapsed = !isBgStripCollapsed;
+        if (bgProcessStrip) bgProcessStrip.classList.toggle('collapsed', isBgStripCollapsed);
+      });
+    }
+
+    if (btnBgStopAll) {
+      btnBgStopAll.addEventListener('click', function(ev) {
+        ev.stopPropagation();
+        btnBgStopAll.disabled = true;
+        btnBgStopAll.textContent = 'Stopping...';
+        activeBgProcesses.forEach(function(proc, procId) {
+          vscode.postMessage({ type: 'kill_process', processId: procId });
+        });
+      });
+    }
+
+    if (bgProcessList) {
+      bgProcessList.addEventListener('click', function(ev) {
+        const stopBtn = ev.target.closest('.bg-item-stop-btn');
+        if (stopBtn) {
+          ev.stopPropagation();
+          const procId = stopBtn.getAttribute('data-process-id');
+          if (procId) {
+            stopBtn.disabled = true;
+            stopBtn.textContent = 'Stopping...';
+            vscode.postMessage({ type: 'kill_process', processId: procId });
+          }
+        }
+      });
+    }
     const zeroWorkspaceLabel = document.getElementById('zero-workspace-label');
     const recentSessionsSection = document.getElementById('recent-sessions-section');
     const recentSessionsList = document.getElementById('recent-sessions-list');
@@ -7104,6 +7225,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           // Clear per-session diff state so it doesn't leak into the target session
           turnEditedFiles.clear();
           globalDiffStats = {};
+          activeBgProcesses.clear();
+          updateBgProcessStripUI();
           if (msg.sessionId) {
             currentSessionId = msg.sessionId;
           }
@@ -7891,6 +8014,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     tag.style.color = 'var(--accent, #58a6ff)';
                     if (procId) {
                       targetTool.setAttribute('data-process-id', procId);
+                      if (!activeBgProcesses.has(procId)) {
+                        activeBgProcesses.set(procId, {
+                          process_id: procId,
+                          pid: '',
+                          command: targetTool.getAttribute('data-tool-args') || '',
+                          startTime: Date.now()
+                        });
+                        updateBgProcessStripUI();
+                      }
                       const hdr = targetTool.querySelector('.tool-header');
                       if (hdr && !hdr.querySelector('.bg-proc-stop-btn')) {
                         const sBtn = document.createElement('button');
@@ -7911,6 +8043,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     tag.textContent = msg.success === false ? 'FAILED' : 'DONE';
                     tag.style.background = msg.success === false ? 'rgba(248, 81, 73, 0.2)' : 'rgba(63, 185, 80, 0.2)';
                     tag.style.color = msg.success === false ? 'var(--red)' : 'var(--green)';
+                  }
+
+                  if ((msg.tool_name === 'shell_kill') && msg.success !== false) {
+                    const km = String(msg.result || '').match(/Process '([^']+)'/);
+                    const kPid = km ? km[1] : '';
+                    if (kPid && activeBgProcesses.has(kPid)) {
+                      activeBgProcesses.delete(kPid);
+                      updateBgProcessStripUI();
+                    }
+                    if (typeof window.handleProcessExitedUI === 'function') {
+                      window.handleProcessExitedUI({ process_id: kPid, exit_code: 0 });
+                    }
                   }
                 }
                 targetTool.removeAttribute('data-start-ts');
@@ -8165,14 +8309,34 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           break;
 
-        case 'process_started':
+        case 'process_started': {
+          const procId = msg.process_id;
+          if (procId) {
+            activeBgProcesses.set(procId, {
+              process_id: procId,
+              pid: msg.pid,
+              command: msg.command || '',
+              startTime: (msg.started ? msg.started * 1000 : Date.now())
+            });
+            updateBgProcessStripUI();
+          }
           break;
+        }
 
-        case 'process_exited':
+        case 'process_exited': {
+          const procId = msg.process_id;
+          if (procId) {
+            activeBgProcesses.delete(procId);
+            updateBgProcessStripUI();
+          } else {
+            activeBgProcesses.clear();
+            updateBgProcessStripUI();
+          }
           if (typeof window.handleProcessExitedUI === 'function') {
             window.handleProcessExitedUI(msg);
           }
           break;
+        }
 
         case 'init_queue':
           if (Array.isArray(msg.queue) && msg.queue.length > 0) {

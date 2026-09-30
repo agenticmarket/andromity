@@ -1092,6 +1092,38 @@ export function getWaterfallScript(sessionId: string): string {
                 span.status = msg.success === false ? 'error' : 'done';
                 span.result = msg.result || '';
                 addLog('TOOL-END', span.name + ' finished in ' + formatMs(span.durationMs) + ' (' + span.status + ')');
+
+                if ((span.name === 'shell_kill' || msg.tool_name === 'shell_kill') && msg.success !== false) {
+                  let kPid = '';
+                  try {
+                    const kArgs = typeof span.args === 'string' ? JSON.parse(span.args) : (span.args || {});
+                    kPid = kArgs.process_id || '';
+                  } catch (e) {}
+                  if (!kPid && typeof msg.result === 'string') {
+                    const km = msg.result.match(/Process '([^']+)'/);
+                    if (km) kPid = km[1];
+                  }
+                  state.bgProcessMap = state.bgProcessMap || new Map();
+                  let bgSpanId = kPid ? state.bgProcessMap.get(kPid) : null;
+                  let bgSpan = bgSpanId ? state.spans.get(bgSpanId) : null;
+                  if (!bgSpan) {
+                    for (const s of state.spans.values()) {
+                      if (s.name === 'shell_bg' && (s.processId === kPid || s.status === 'running')) {
+                        bgSpan = s;
+                        break;
+                      }
+                    }
+                  }
+                  if (bgSpan && bgSpan.status === 'running') {
+                    bgSpan.endTime = Date.now();
+                    bgSpan.durationMs = Math.max(50, bgSpan.endTime - bgSpan.startTime);
+                    bgSpan.status = 'done';
+                    bgSpan.isBackground = false;
+                    updateTimingBars(bgSpan.turnId);
+                    recalcTotals();
+                    updateSummaryStats();
+                  }
+                }
               }
             }
 
@@ -1333,6 +1365,7 @@ export function getWaterfallScript(sessionId: string): string {
               span.endTime = now;
               span.durationMs = typeof msg.duration === 'number' ? (msg.duration * 1000) : Math.max(50, span.endTime - span.startTime);
               span.status = (msg.exit_code === 0) ? 'done' : 'error';
+              span.isBackground = false;
               if (msg.exit_code !== undefined) {
                 span.result = (span.result ? (span.result + String.fromCharCode(10, 10)) : "") + "[Process (" + procId + ") exited with code " + msg.exit_code + "]";
               }

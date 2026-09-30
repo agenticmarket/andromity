@@ -853,11 +853,13 @@ def shell_read(process_id: str, lines: int = 50) -> str:
     proj_key = _bg_project_key()
     with _bg_lock:
         entry = _bg_processes.get((proj_key, process_id))
-        # Fallback scan for legacy unscoped entries or cross-project debug
+        # Fallback scan for legacy unscoped entries or cross-session invocations
         if entry is None:
-            for (pk, pid), e in _bg_processes.items():
-                if pid == process_id and pk == proj_key:
+            for k, e in _bg_processes.items():
+                if (isinstance(k, tuple) and k[1] == process_id) or k == process_id:
                     entry = e
+                    if isinstance(k, tuple):
+                        proj_key = k[0]
                     break
         scoped_ids = [pid for (pk, pid) in _bg_processes.keys() if pk == proj_key]
     if not entry:
@@ -887,11 +889,13 @@ def shell_kill(process_id: str) -> str:
     with _bg_lock:
         entry = _bg_processes.get(target_key)
         if entry is None:
-            # legacy fallback: try bare pid
+            # Match by process_id in current project or globally across sessions
             for k in list(_bg_processes.keys()):
-                if (isinstance(k, tuple) and k[1] == process_id and k[0] == proj_key) or k == process_id:
+                if (isinstance(k, tuple) and k[1] == process_id) or k == process_id:
                     entry = _bg_processes.get(k)
                     target_key = k
+                    if isinstance(k, tuple):
+                        proj_key = k[0]
                     break
     if not entry:
         return f"Error: No background process with id '{process_id}'."
