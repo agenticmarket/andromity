@@ -1165,4 +1165,210 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(scriptCode.includes("updateModeBadge"), "Script must define updateModeBadge");
     assert.ok(scriptCode.includes("updateProfileBadge"), "Script must define updateProfileBadge");
   });
+
+  it("should render error cards strictly from agent_error events with native action buttons and not from AI text tokens", () => {
+    const state: ChatViewState = {
+      currentSessionId: "sess-error-card",
+      currentModel: "andromity/auto",
+      currentProvider: "andromity",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "medium",
+    };
+    const scriptCode = getChatClientScript("icon.svg", state);
+
+    // 1. Verify appendErrorCard defines the quota limit actions and UI elements
+    assert.ok(scriptCode.includes("function appendErrorCard("), "Script must define appendErrorCard");
+    assert.ok(scriptCode.includes('data-action="open-account-login"'), "Quota error card must render Sign In button");
+    assert.ok(scriptCode.includes('data-action="open-settings"'), "Quota error card must render Open Settings button");
+    assert.ok(scriptCode.includes('data-action="switch-model-flyout"'), "Quota error card must render Switch Model button");
+    assert.ok(scriptCode.includes("badge = 'QUOTA LIMIT'"), "Quota error card must badge as QUOTA LIMIT");
+    assert.ok(scriptCode.includes("title = 'Daily Limit Reached'"), "Quota error card must title as Daily Limit Reached");
+    assert.ok(scriptCode.includes("Quota resets in"), "Quota error card must detect countdown timer");
+
+    // 2. Safeguard check: endAssistantTurn must NEVER regex-scan assistant response text for QUOTA LIMIT or RATE LIMIT
+    const endTurnIdx = scriptCode.indexOf("function endAssistantTurn(");
+    assert.ok(endTurnIdx > 0, "Script must define endAssistantTurn");
+    const endTurnBody = scriptCode.slice(endTurnIdx, endTurnIdx + 1200);
+    assert.ok(!endTurnBody.includes("includes('[QUOTA LIMIT]')"), "endAssistantTurn must not convert [QUOTA LIMIT] text into error card");
+    assert.ok(!endTurnBody.includes("includes('[RATE LIMIT]')"), "endAssistantTurn must not convert [RATE LIMIT] text into error card");
+    assert.ok(!endTurnBody.includes("appendErrorCard"), "endAssistantTurn must never call appendErrorCard from normal text stream");
+
+    // 3. Verify agent_error handler strictly routes to appendErrorCard
+    const agentErrorIdx = scriptCode.indexOf("case 'agent_error':");
+    assert.ok(agentErrorIdx > 0, "Script must handle agent_error message");
+    const agentErrorBlock = scriptCode.slice(agentErrorIdx, agentErrorIdx + 1200);
+    assert.ok(agentErrorBlock.includes("appendErrorCard(msg.error"), "agent_error case must invoke appendErrorCard");
+  });
+
+  it("executes appendErrorCard in VM mock DOM on agent_error and renders action buttons without triggering on normal text", () => {
+    const state: ChatViewState = {
+      currentSessionId: "sess-error-vm",
+      currentModel: "andromity/auto",
+      currentProvider: "andromity",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "medium",
+    };
+    const scriptCode = getChatClientScript("icon.svg", state);
+
+    let messageListener: any = null;
+    const appendedElements: any[] = [];
+    const mockChatContainer: any = {
+      appendChild: (el: any) => appendedElements.push(el),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      scrollHeight: 1000,
+      scrollTop: 0,
+      clientHeight: 500,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+    };
+
+    const mockDoc: any = {
+      getElementById: (id: string) => {
+        if (id === 'chat-messages' || id === 'chat-container') return mockChatContainer;
+        return {
+          addEventListener: () => {},
+          classList: { add: () => {}, remove: () => {}, contains: () => false, toggle: () => {} },
+          style: {},
+          setAttribute: () => {},
+          removeAttribute: () => {},
+          remove: () => {},
+          getBoundingClientRect: () => ({ top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0 }),
+          querySelector: () => null,
+          querySelectorAll: () => [],
+          appendChild: () => {},
+        };
+      },
+      createElement: (tag: string) => {
+        const el: any = {
+          tagName: tag.toUpperCase(),
+          children: [],
+          classList: { add: () => {}, remove: () => {}, contains: () => false, toggle: () => {} },
+          style: {},
+          setAttribute: () => {},
+          removeAttribute: () => {},
+          remove: () => {},
+          getBoundingClientRect: () => ({ top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0 }),
+          querySelector: () => null,
+          querySelectorAll: () => [],
+          appendChild: (c: any) => el.children.push(c),
+        };
+        Object.defineProperty(el, 'innerHTML', {
+          set(val: string) {
+            el._innerHTML = val;
+            el.firstElementChild = {
+              className: 'andromity-error-card',
+              innerHTML: val,
+              getAttribute: () => null,
+            };
+          },
+          get() {
+            return el._innerHTML || '';
+          }
+        });
+        return el;
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      querySelectorAll: () => [],
+      querySelector: () => null,
+      body: { classList: { add: () => {}, remove: () => {} } },
+    };
+
+    const mockWindow: any = {
+      addEventListener: (evt: string, fn: any) => {
+        if (evt === 'message') messageListener = fn;
+      },
+      removeEventListener: () => {},
+      dispatchEvent: () => {},
+    };
+
+    const sandbox: any = {
+      acquireVsCodeApi: () => ({ postMessage: () => {}, getState: () => ({}), setState: () => {} }),
+      document: mockDoc,
+      window: mockWindow,
+      console: { log: () => {}, warn: () => {}, error: () => {}, info: () => {} },
+      setTimeout: (fn: Function) => { fn(); },
+      setInterval: () => 1,
+      clearInterval: () => {},
+      clearTimeout: () => {},
+      requestAnimationFrame: (fn: Function) => { fn(); },
+      cancelAnimationFrame: () => {},
+      marked: { parse: (s: string) => s, use: () => {} },
+      navigator: { clipboard: { writeText: () => Promise.resolve() } },
+      encodeURIComponent,
+      decodeURIComponent,
+      Math,
+      Date,
+      JSON,
+      String,
+      Number,
+      Array,
+      Object,
+      RegExp,
+      Set,
+      Map,
+    };
+
+    vm.createContext(sandbox);
+    vm.runInContext(scriptCode, sandbox);
+
+    assert.ok(typeof messageListener === 'function', "Script must register window message listener");
+
+    // 1. Simulate an agent_error with quota limit
+    messageListener({
+      data: {
+        type: 'agent_error',
+        error: 'daily_limit_reached (Quota resets in 14h 10m)'
+      }
+    });
+
+    assert.ok(appendedElements.length > 0, "Error card element must be appended to chatContainer");
+    const lastAppended = appendedElements[appendedElements.length - 1];
+    const cardHtml = lastAppended.innerHTML || (lastAppended.firstElementChild && lastAppended.firstElementChild.innerHTML) || '';
+
+    // Verify error card contents
+    assert.ok(cardHtml.includes('QUOTA LIMIT'), "Card must include QUOTA LIMIT badge");
+    assert.ok(cardHtml.includes('Daily Limit Reached'), "Card must include Daily Limit Reached title");
+    assert.ok(cardHtml.includes('data-action="open-account-login"'), "Unauthed quota error card must include Sign In button");
+    assert.ok(cardHtml.includes('data-action="open-settings"'), "Card must include Open Settings button");
+    assert.ok(cardHtml.includes('data-action="switch-model-flyout"'), "Card must include Switch Model button");
+    assert.ok(cardHtml.includes('Quota resets in 14h 10m'), "Card must render quota reset timer");
+
+    // 2. Simulate daily gateway limit when user IS authed / signed in
+    messageListener({
+      data: {
+        type: 'agent_error',
+        error: 'You have reached your daily gateway limit. (Quota resets in 12h 00m)'
+      }
+    });
+    const authedAppended = appendedElements[appendedElements.length - 1];
+    const authedHtml = authedAppended.innerHTML || (authedAppended.firstElementChild && authedAppended.firstElementChild.innerHTML) || '';
+    assert.ok(!authedHtml.includes('data-action="open-account-login"'), "Authed gateway error card must NOT include Sign In or Account button");
+    assert.ok(authedHtml.includes('data-action="open-settings"'), "Authed gateway card must include Open Settings button");
+    assert.ok(authedHtml.includes('data-action="switch-model-flyout"'), "Authed gateway card must include Switch Model button");
+
+    // 3. Simulate LiteLLM NotFoundError with OpenRouter JSON payload
+    messageListener({
+      data: {
+        type: 'agent_error',
+        error: 'litellm.NotFoundError: NotFoundError: OpenrouterException - {"error":{"message":"No endpoints found for anthropic/claude-3.7-sonnet.","code":404},"user_id":"user_3EiZCW01tlR9E6IjromZ0smUe31"}'
+      }
+    });
+    const nfAppended = appendedElements[appendedElements.length - 1];
+    const nfHtml = nfAppended.innerHTML || (nfAppended.firstElementChild && nfAppended.firstElementChild.innerHTML) || '';
+    assert.ok(nfHtml.includes('Model Not Available'), "404 must badge/title as Model Not Available");
+    assert.ok(nfHtml.includes('No endpoints found for anthropic/claude-3.7-sonnet.'), "Must extract clean JSON message");
+    assert.ok(!nfHtml.includes('user_3EiZCW01tlR9E6IjromZ0smUe31'), "Must strip internal user_id from visible error card");
+    assert.ok(nfHtml.includes('data-action="switch-model-flyout"'), "404 error must provide Switch Model button");
+
+    // 4. Verify model flyout width styles and prompt box matching
+    const styles = getChatStyles();
+    assert.ok(styles.includes('max-width: var(--chat-max-width, 860px)'), "Model flyout must expand up to chat-max-width");
+    assert.ok(scriptCode.includes('modelFlyout.style.width = Math.round(pbRect.width) + \'px\''), "Script must sync flyout width to prompt box");
+  });
 });
+
+

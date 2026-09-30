@@ -21,6 +21,7 @@ src/andromity/ci/runner.py
 src/andromity/ci/task_runner.py
 src/andromity/core/__init__.py
 src/andromity/core/agent.py
+src/andromity/core/airgap_guard.py
 src/andromity/core/audio.py
 src/andromity/core/context_menu.py
 src/andromity/core/cron.py
@@ -54,6 +55,7 @@ src/andromity/core/updater.py
 src/andromity/core/usage.py
 src/andromity/core/usage_tracker.py
 src/andromity/core/web.py
+src/andromity/core/airgap_sitecustomize/sitecustomize.py
 src/andromity/server/__init__.py
 src/andromity/server/__main__.py
 src/andromity/server/main.py

@@ -1455,7 +1455,8 @@ export function getChatStyles(): string {
       margin-left: auto;
       margin-right: auto;
       width: calc(100% - 24px);
-      max-width: 540px;
+      max-width: var(--chat-max-width, 860px);
+      box-sizing: border-box;
       background: var(--card-bg, #18181b);
       border: 1px solid rgba(255, 255, 255, 0.1);
       border-radius: 10px;

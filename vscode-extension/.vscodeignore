@@ -7,6 +7,13 @@ credentials.json
 service_account.json
 *.pem
 *.key
+*.crt
+!**/cacert.pem
+.andromity/**
+**/.andromity/**
+bin/**/andromity-serverb*
+bin/**/*b.exe
+bin/**/_internal/litellm/proxy/**
 .vscode-test/**
 src/**
 test/**
@@ -15,6 +22,8 @@ scripts/**
 esbuild.js
 tsconfig*.json
 node_modules/**
+**/__pycache__/**
+**/*.pyc
 *.map
 *.vsix
 .git/**

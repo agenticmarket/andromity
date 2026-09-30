@@ -965,8 +965,8 @@ export class SettingsPanel {
 
   private _getHtmlForWebview(): string {
     const iconUri = this._panel.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, "media", "sidebar-icon.svg"));
-    const nonce = this._getNonce();
-    let extVersion = "0.2.12";
+    const nonce = typeof this._getNonce === "function" ? this._getNonce() : "mock-nonce";
+    let extVersion = "0.2.14";
     try {
       const ext = vscode.extensions.getExtension("agenticmarket.andromity-agent") ||
                   SettingsPanel.extensionContext?.extension;
@@ -1237,34 +1237,50 @@ export class SettingsPanel {
       font-size: 13px;
       line-height: 1.5;
       display: flex;
-      flex-direction: column;
+      flex-direction: row;
       height: 100vh;
       overflow: hidden;
     }
 
-    /* Top Navigation Bar */
-    .top-nav {
+    /* Vertical Navigation Sidebar */
+    .side-nav {
+      display: flex;
+      flex-direction: column;
+      width: 228px;
+      height: 100vh;
+      background: var(--card-bg);
+      border-right: 1px solid var(--card-border);
+      flex-shrink: 0;
+      transition: width 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+      user-select: none;
+      z-index: 50;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .sidebar-header {
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      gap: 10px;
+      padding: 14px 16px;
       border-bottom: 1px solid var(--card-border);
-      padding: 8px 20px;
-      background: var(--card-bg);
       flex-shrink: 0;
-      gap: 12px;
-      overflow-x: auto;
+      min-height: 52px;
+      overflow: hidden;
     }
 
     .brand-group {
       display: flex;
       align-items: center;
-      gap: 9px;
+      gap: 10px;
       flex-shrink: 0;
+      min-width: 0;
+      cursor: default;
     }
 
     .brand-avatar {
-      width: 22px;
-      height: 22px;
+      width: 24px;
+      height: 24px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -1272,29 +1288,61 @@ export class SettingsPanel {
     }
 
     .brand-icon {
-      width: 30px;
-      height: 30px;
+      width: 24px;
+      height: 24px;
       object-fit: contain;
       display: block;
     }
 
+    .brand-info {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      overflow: hidden;
+    }
+
     .brand-title {
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 600;
-      letter-spacing: 0.3px;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--text);
+      line-height: 1.2;
+    }
+
+    .brand-subtitle {
+      font-size: 10px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      white-space: nowrap;
+      line-height: 1.2;
     }
 
     .nav-tabs {
       display: flex;
-      gap: 4px;
-      flex-wrap: nowrap;
+      flex-direction: column;
+      gap: 3px;
+      padding: 10px 8px;
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    .nav-tabs::-webkit-scrollbar {
+      width: 4px;
+    }
+    .nav-tabs::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 4px;
     }
 
     .nav-tab {
       display: flex;
       align-items: center;
-      gap: 6px;
-      padding: 6px 12px;
+      gap: 10px;
+      padding: 8px 10px;
       border-radius: 4px;
       cursor: pointer;
       font-size: 12px;
@@ -1304,30 +1352,217 @@ export class SettingsPanel {
       background: transparent;
       white-space: nowrap;
       transition: all 0.15s ease;
+      text-align: left;
+      width: 100%;
+      box-sizing: border-box;
+      position: relative;
     }
 
     .nav-tab:hover {
       color: var(--text);
-      background: rgba(255, 255, 255, 0.04);
+      background: rgba(255, 255, 255, 0.05);
     }
 
     .nav-tab.active {
       color: var(--text);
       background: var(--bg);
       border-color: var(--card-border);
-      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+      box-shadow: inset 2px 0 0 var(--card-hover-border), 0 1px 3px rgba(0,0,0,0.15);
+      font-weight: 600;
     }
 
     .nav-tab svg {
+      width: 15px;
+      height: 15px;
+      flex-shrink: 0;
+      transition: transform 0.15s ease;
+    }
+
+    .nav-tab:hover svg {
+      transform: scale(1.05);
+    }
+
+    .nav-tab-label {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .nav-tab-badge {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      font-weight: 600;
+      margin-left: auto;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+
+    .nav-tab.active .nav-tab-badge {
+      background: rgba(255, 255, 255, 0.15);
+      color: var(--text);
+    }
+
+    /* Sidebar Footer with collapse toggle */
+    .sidebar-footer {
+      padding: 8px;
+      border-top: 1px solid var(--card-border);
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .sidebar-toggle-btn {
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    .sidebar-toggle-btn:hover {
+      color: var(--text);
+    }
+
+    .sidebar-toggle-icon {
       width: 14px;
       height: 14px;
+      transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    /* Collapsed / Low Space Styles */
+    .side-nav.collapsed,
+    .side-nav.auto-compact {
+      width: 52px;
+    }
+
+    .side-nav.collapsed .sidebar-header,
+    .side-nav.auto-compact .sidebar-header {
+      padding: 14px 0;
+      justify-content: center;
+    }
+
+    .side-nav.collapsed .brand-info,
+    .side-nav.auto-compact .brand-info,
+    .side-nav.collapsed .nav-tab-label,
+    .side-nav.auto-compact .nav-tab-label,
+    .side-nav.collapsed .nav-tab-badge,
+    .side-nav.auto-compact .nav-tab-badge {
+      display: none !important;
+    }
+
+    .side-nav.collapsed .nav-tabs,
+    .side-nav.auto-compact .nav-tabs {
+      padding: 10px 6px;
+    }
+
+    .side-nav.collapsed .nav-tab,
+    .side-nav.auto-compact .nav-tab {
+      justify-content: center;
+      padding: 9px 0;
+      gap: 0;
+    }
+
+    .side-nav.collapsed .nav-tab svg,
+    .side-nav.auto-compact .nav-tab svg {
+      margin: 0;
+    }
+
+    .side-nav.collapsed .sidebar-toggle-icon,
+    .side-nav.auto-compact .sidebar-toggle-icon {
+      transform: rotate(180deg);
+    }
+
+    /* Pure CSS Media Query for narrow viewports */
+    @media (max-width: 820px) {
+      .side-nav {
+        width: 52px !important;
+      }
+      .side-nav .sidebar-header {
+        padding: 14px 0 !important;
+        justify-content: center !important;
+      }
+      .side-nav .brand-info,
+      .side-nav .nav-tab-label,
+      .side-nav .nav-tab-badge {
+        display: none !important;
+      }
+      .side-nav .nav-tabs {
+        padding: 10px 6px !important;
+      }
+      .side-nav .nav-tab {
+        justify-content: center !important;
+        padding: 9px 0 !important;
+        gap: 0 !important;
+      }
+      .side-nav .nav-tab svg {
+        margin: 0 !important;
+      }
+      .side-nav .sidebar-toggle-icon {
+        transform: rotate(180deg);
+      }
+    }
+
+    /* Floating Tooltip */
+    .nav-floating-tooltip {
+      position: fixed;
+      z-index: 99999;
+      pointer-events: none;
+      background: var(--card-bg, #252526);
+      color: var(--text, #cccccc);
+      border: 1px solid var(--card-hover-border, #007fd4);
+      padding: 6px 11px;
+      font-size: 11.5px;
+      font-weight: 500;
+      white-space: nowrap;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+      border-radius: 4px !important;
+      opacity: 0;
+      visibility: hidden;
+      transform: translateX(-6px);
+      transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s ease;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .nav-floating-tooltip.visible {
+      opacity: 1;
+      visibility: visible;
+      transform: translateX(0);
+    }
+
+    .nav-floating-tooltip::before {
+      content: '';
+      position: absolute;
+      left: -5px;
+      top: 50%;
+      transform: translateY(-50%) rotate(45deg);
+      width: 8px;
+      height: 8px;
+      background: var(--card-bg, #252526);
+      border-left: 1px solid var(--card-hover-border, #007fd4);
+      border-bottom: 1px solid var(--card-hover-border, #007fd4);
+    }
+
+    .nav-floating-tooltip .tooltip-badge {
+      font-size: 10px;
+      background: rgba(255, 255, 255, 0.12);
+      padding: 1px 5px;
+      border-radius: 3px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
     }
 
     /* Main Container */
     .main-content {
       flex: 1;
+      min-width: 0;
+      height: 100vh;
       overflow-y: auto;
-      padding: 20px 28px 48px;
+      padding: 24px 32px 56px;
     }
 
     .tab-pane {
@@ -2087,58 +2322,76 @@ export class SettingsPanel {
 </head>
 <body>
 
-  <!-- Top Navigation -->
-  <div class="top-nav">
-    <div class="brand-group">
-      <div class="brand-avatar">
-        <img class="brand-icon" src="${iconUri}" alt="Andromity" />
+  <!-- Vertical Navigation Sidebar -->
+  <aside class="side-nav" id="side-nav">
+    <div class="sidebar-header">
+      <div class="brand-group" id="brand-group" data-tooltip="Andromity Hub v${extVersion}">
+        <div class="brand-avatar">
+          <img class="brand-icon" src="${iconUri}" alt="Andromity" />
+        </div>
+        <div class="brand-info">
+          <span class="brand-title">Andromity Hub</span>
+          <span class="brand-subtitle">v${extVersion}</span>
+        </div>
       </div>
-      <span class="brand-title">Andromity Hub</span>
     </div>
 
-    <div class="nav-tabs">
-      <button class="nav-tab active" data-tab="models" id="tab-btn-models">
+    <div class="nav-tabs" id="nav-tabs-container">
+      <button class="nav-tab active" data-tab="models" id="tab-btn-models" data-tooltip="Model Hub" aria-label="Model Hub">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
-        Model Hub (<span id="model-count-badge">0</span>)
+        <span class="nav-tab-label">Model Hub</span>
+        <span class="nav-tab-badge" id="model-count-badge">0</span>
       </button>
-      <button class="nav-tab" data-tab="crons" id="tab-btn-crons">
+      <button class="nav-tab" data-tab="crons" id="tab-btn-crons" data-tooltip="Cron Jobs" aria-label="Cron Jobs">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-        Cron Jobs (<span id="crons-count-badge">0</span>)
+        <span class="nav-tab-label">Cron Jobs</span>
+        <span class="nav-tab-badge" id="crons-count-badge">0</span>
       </button>
-      <button class="nav-tab" data-tab="keys" id="tab-btn-keys">
+      <button class="nav-tab" data-tab="keys" id="tab-btn-keys" data-tooltip="API Keys & Connectors" aria-label="API Keys & Connectors">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path></svg>
-        API Keys & Connectors
+        <span class="nav-tab-label">API Keys & Connectors</span>
       </button>
-      <button class="nav-tab" data-tab="skills" id="tab-btn-skills">
+      <button class="nav-tab" data-tab="skills" id="tab-btn-skills" data-tooltip="Skills & Packs" aria-label="Skills & Packs">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-        Skills & Packs (<span id="skills-count-badge">0</span>)
+        <span class="nav-tab-label">Skills & Packs</span>
+        <span class="nav-tab-badge" id="skills-count-badge">0</span>
       </button>
-      <button class="nav-tab" data-tab="mcp" id="tab-btn-mcp">
+      <button class="nav-tab" data-tab="mcp" id="tab-btn-mcp" data-tooltip="MCP Servers" aria-label="MCP Servers">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M9 9h6v6H9z"></path></svg>
-        MCP Servers
+        <span class="nav-tab-label">MCP Servers</span>
       </button>
-      <button class="nav-tab" data-tab="usage" id="tab-btn-usage">
+      <button class="nav-tab" data-tab="usage" id="tab-btn-usage" data-tooltip="Usage & Costs" aria-label="Usage & Costs">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
-        Usage & Costs
+        <span class="nav-tab-label">Usage & Costs</span>
       </button>
-      <button class="nav-tab" data-tab="trust" id="tab-btn-trust">
+      <button class="nav-tab" data-tab="trust" id="tab-btn-trust" data-tooltip="Trust & Security" aria-label="Trust & Security">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-        Trust & Security
+        <span class="nav-tab-label">Trust & Security</span>
       </button>
-      <button class="nav-tab" data-tab="general" id="tab-btn-general">
+      <button class="nav-tab" data-tab="general" id="tab-btn-general" data-tooltip="Preferences" aria-label="Preferences">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-        Preferences
+        <span class="nav-tab-label">Preferences</span>
       </button>
-      <button class="nav-tab" data-tab="personalisation" id="tab-btn-personalisation">
+      <button class="nav-tab" data-tab="personalisation" id="tab-btn-personalisation" data-tooltip="Personalisation" aria-label="Personalisation">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"></circle><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"></circle><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"></circle><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"></circle><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.563-2.512 5.563-5.563C22 6.5 17.5 2 12 2z"></path></svg>
-        Personalisation
+        <span class="nav-tab-label">Personalisation</span>
       </button>
-      <button class="nav-tab" data-tab="about" id="tab-btn-about">
+      <button class="nav-tab" data-tab="about" id="tab-btn-about" data-tooltip="About & Diagnostics" aria-label="About & Diagnostics">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
-        About & Diagnostics
+        <span class="nav-tab-label">About & Diagnostics</span>
       </button>
     </div>
-  </div>
+
+    <div class="sidebar-footer">
+      <button class="nav-tab sidebar-toggle-btn" id="sidebar-toggle-btn" data-tooltip="Toggle Navigation" aria-label="Toggle Navigation">
+        <svg class="sidebar-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="11 17 6 12 11 7"></polyline><polyline points="18 17 13 12 18 7"></polyline></svg>
+        <span class="nav-tab-label">Collapse Sidebar</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Floating Tooltip Container -->
+  <div class="nav-floating-tooltip" id="nav-floating-tooltip"></div>
 
   <!-- Main Body Content -->
   <div class="main-content">
@@ -2981,22 +3234,122 @@ SOFTWARE.</pre>
     let currentAccount = { isAuthenticated: false, username: "", email: "", plan: "free" };
 
     // Tabs Navigation
+    const sideNav = document.getElementById("side-nav");
     const tabButtons = document.querySelectorAll(".nav-tab");
     const panes = document.querySelectorAll(".tab-pane");
+    const sidebarToggleBtn = document.getElementById("sidebar-toggle-btn");
+    const toggleLabel = sidebarToggleBtn ? sidebarToggleBtn.querySelector(".nav-tab-label") : null;
+    const navTooltip = document.getElementById("nav-floating-tooltip");
 
     tabButtons.forEach(btn => {
       btn.addEventListener("click", () => {
         const tab = btn.dataset.tab;
-        switchTab(tab);
+        if (tab) {
+          switchTab(tab);
+        }
       });
     });
 
     function switchTab(tab) {
-      tabButtons.forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+      tabButtons.forEach(b => {
+        if (b.dataset.tab) {
+          b.classList.toggle("active", b.dataset.tab === tab);
+        }
+      });
       panes.forEach(p => p.classList.toggle("active", p.id === "pane-" + tab));
       try {
         vscode.postMessage({ type: "tab_switched", tab: tab });
       } catch (e) {}
+    }
+
+    // Sidebar Manual Collapse & Auto Low-Space Detection
+    function setSidebarCollapsed(collapsed) {
+      if (!sideNav) return;
+      if (collapsed) {
+        sideNav.classList.add("collapsed");
+        if (toggleLabel) toggleLabel.textContent = "Expand Sidebar";
+        if (sidebarToggleBtn) sidebarToggleBtn.setAttribute("data-tooltip", "Expand Sidebar");
+      } else {
+        sideNav.classList.remove("collapsed");
+        if (toggleLabel) toggleLabel.textContent = "Collapse Sidebar";
+        if (sidebarToggleBtn) sidebarToggleBtn.setAttribute("data-tooltip", "Collapse Sidebar");
+      }
+    }
+
+    if (sidebarToggleBtn) {
+      sidebarToggleBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const nextState = !sideNav.classList.contains("collapsed");
+        setSidebarCollapsed(nextState);
+        try {
+          const state = (typeof vscode !== "undefined" && vscode.getState) ? (vscode.getState() || {}) : {};
+          state.settingsNavCollapsed = nextState;
+          if (typeof vscode !== "undefined" && vscode.setState) vscode.setState(state);
+        } catch (e) {}
+      });
+    }
+
+    // Restore saved collapse state
+    try {
+      const savedState = (typeof vscode !== "undefined" && vscode.getState) ? vscode.getState() : null;
+      if (savedState && savedState.settingsNavCollapsed) {
+        setSidebarCollapsed(true);
+      }
+    } catch (e) {}
+
+    // Auto-detect low space on resize
+    function handleNavResize() {
+      if (!sideNav) return;
+      if (window.innerWidth < 820) {
+        sideNav.classList.add("auto-compact");
+      } else {
+        sideNav.classList.remove("auto-compact");
+      }
+    }
+    window.addEventListener("resize", handleNavResize);
+    handleNavResize();
+
+    // Floating Tooltip on hover (especially when low space / collapsed)
+    if (navTooltip) {
+      const tooltipTargets = document.querySelectorAll("[data-tooltip]");
+      tooltipTargets.forEach(el => {
+        el.addEventListener("mouseenter", () => {
+          const isCompact = sideNav && (
+            sideNav.classList.contains("collapsed") ||
+            sideNav.classList.contains("auto-compact") ||
+            window.innerWidth < 820
+          );
+          if (!isCompact && !el.classList.contains("sidebar-toggle-btn")) {
+            return;
+          }
+          const text = el.getAttribute("data-tooltip");
+          if (!text) return;
+          const badgeEl = el.querySelector(".nav-tab-badge");
+          const count = badgeEl && badgeEl.textContent && badgeEl.textContent !== "0"
+            ? ' <span class="tooltip-badge">' + badgeEl.textContent + '</span>'
+            : "";
+          navTooltip.innerHTML = text + count;
+          const rect = el.getBoundingClientRect();
+          navTooltip.style.left = (rect.right + 10) + "px";
+          navTooltip.style.top = Math.round(rect.top + (rect.height / 2) - 13) + "px";
+          navTooltip.classList.add("visible");
+        });
+
+        el.addEventListener("mouseleave", () => {
+          navTooltip.classList.remove("visible");
+        });
+
+        el.addEventListener("click", () => {
+          navTooltip.classList.remove("visible");
+        });
+      });
+
+      const navContainer = document.getElementById("nav-tabs-container");
+      if (navContainer) {
+        navContainer.addEventListener("scroll", () => {
+          navTooltip.classList.remove("visible");
+        });
+      }
     }
 
     // Refresh button

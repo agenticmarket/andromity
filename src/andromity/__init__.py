@@ -1,2 +1,2 @@
 """Andromity: autonomous coding agent with terminal UI."""
-__version__ = "0.2.12"
+__version__ = "0.2.14"

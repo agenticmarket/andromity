@@ -367,8 +367,23 @@ async def stream_completion(
                     or "upgrade_url" in msg
                     or "sign in with github" in msg
                 )
-                if is_daily_quota:
-                    log.info("Daily quota reached upstream. Failing fast without retries.")
+                is_auth_error = (
+                    isinstance(e, (litellm.AuthenticationError, litellm.PermissionDeniedError))
+                    or any(k in msg for k in (
+                        "missing credentials", "please pass an `api_key`", "please pass an api_key",
+                        "invalid api key", "invalid_api_key", "unauthorized", "401", "forbidden", "403",
+                        "no api key", "missing api key"
+                    ))
+                )
+                is_bad_request = (
+                    isinstance(e, (litellm.BadRequestError, litellm.NotFoundError, litellm.ContextWindowExceededError, litellm.UnsupportedParamsError))
+                    or any(k in msg for k in (
+                        "context_length_exceeded", "maximum context length", "model not found", "does not exist"
+                    ))
+                )
+
+                if is_daily_quota or is_auth_error or is_bad_request:
+                    log.info("Non-retryable error (%s: %s). Failing fast without retries.", type(e).__name__, e)
                     yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
                     yield Done()
                     return
@@ -491,8 +506,27 @@ async def stream_completion(
                 except Exception:
                     pass
 
-            # If stalled or failed BEFORE emitting any tokens, retry with backoff!
-            if not has_emitted_content and attempt < len(STREAM_BACKOFF_DELAYS):
+            msg = str(e).lower()
+            is_non_retryable = (
+                isinstance(e, (
+                    litellm.AuthenticationError,
+                    litellm.PermissionDeniedError,
+                    litellm.BadRequestError,
+                    litellm.NotFoundError,
+                    litellm.ContextWindowExceededError,
+                    litellm.UnsupportedParamsError,
+                ))
+                or any(k in msg for k in (
+                    "missing credentials", "please pass an `api_key`", "please pass an api_key",
+                    "invalid api key", "invalid_api_key", "unauthorized", "401", "forbidden", "403",
+                    "no api key", "missing api key",
+                    "daily_limit_reached", "quota_exceeded", "free trial requests", "daily limit",
+                    "context_length_exceeded", "maximum context length", "model not found"
+                ))
+            )
+
+            # If stalled or failed BEFORE emitting any tokens, retry with backoff ONLY for transient errors
+            if not has_emitted_content and not is_non_retryable and attempt < len(STREAM_BACKOFF_DELAYS):
                 wait_s = STREAM_BACKOFF_DELAYS[attempt]
                 log.warning(
                     "Upstream stalled or failed before emitting tokens (%s: %s). Retrying in %.0fs (attempt %d/%d)...",
@@ -510,6 +544,53 @@ async def stream_completion(
             return
 
 
+def extract_clean_error_message(err_or_text: Any) -> str:
+    """Extract a user-friendly error message from raw LiteLLM/provider exception strings.
+    Strips raw python exception prefixes, extracts JSON error messages, and removes internal IDs."""
+    import json
+    import re
+
+    raw = str(err_or_text) if err_or_text is not None else ""
+    if not raw:
+        return ""
+
+    # 1. Look for embedded JSON error payload (e.g. {"error": {"message": "..."}})
+    json_match = re.search(r'(\{[\s\S]*\})', raw)
+    if json_match:
+        try:
+            data = json.loads(json_match.group(1))
+            if isinstance(data, dict):
+                err_val = data.get("error")
+                if isinstance(err_val, dict) and err_val.get("message"):
+                    return str(err_val["message"]).strip()
+                elif isinstance(err_val, str) and err_val.strip():
+                    return err_val.strip()
+                elif data.get("message") and isinstance(data["message"], str):
+                    return data["message"].strip()
+                elif data.get("detail") and isinstance(data["detail"], str):
+                    return data["detail"].strip()
+        except Exception:
+            pass
+
+    # 2. Strip leading LiteLLM / Provider exception boilerplate
+    cleaned = raw.strip()
+    cleaned = re.sub(r'^(?:litellm\.)?\w*(?:Error|Exception):\s*', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'^(?:litellm\.)?\w*(?:Error|Exception):\s*', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'^\w+Exception\s*[-:]\s*', '', cleaned, flags=re.IGNORECASE)
+
+    # 3. Strip trailing raw JSON or user_id dumps
+    cleaned = re.sub(r'\{[\s\S]*\}', '', cleaned).strip()
+    cleaned = re.sub(r'["\']user_id["\']\s*:\s*["\'][^"\']+["\']', '', cleaned, flags=re.IGNORECASE).strip()
+
+    # 4. Strip leftover punctuation
+    cleaned = cleaned.lstrip('- :').strip()
+
+    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+    if lines:
+        return lines[0]
+    return raw.strip()
+
+
 def classify_error_info(
     e: Exception,
     provider: str = "",
@@ -523,6 +604,7 @@ def classify_error_info(
     msg = str(e) or type(e).__name__
     low = msg.lower()
     err_cls = type(e).__name__
+    clean_msg = extract_clean_error_message(e)
 
     disp_model = model or "the selected model"
     disp_prov = (provider or "AI provider").capitalize()
@@ -531,6 +613,15 @@ def classify_error_info(
         has_images
         or any(k in low for k in ("image", "vision", "multimodal", "modality", "does not support image"))
     ) and any(k in low for k in ("image", "vision", "multimodal", "modality", "support", "400", "payload"))
+
+    is_not_found = (
+        "notfound" in low
+        or "not found" in low
+        or "no endpoints found" in low
+        or "model_not_found" in low
+        or "does not exist" in low
+        or ("404" in msg and ("model" in low or "endpoint" in low or "not found" in low))
+    )
 
     is_rate = (
         "429" in msg
@@ -546,8 +637,12 @@ def classify_error_info(
         "503", "502", "500", "504", "bad gateway", "gateway timeout",
         "upstream error", "apiconnectionerror", "connection reset", "broken pipe"
     ))
-    is_context = any(k in low for k in ("context length", "maximum context", "token limit", "context_length_exceeded", "prompt is too long"))
-    is_auth = any(k in low for k in ("401", "403", "unauthorized", "invalid api key", "authentication error", "invalid_api_key", "forbidden"))
+    is_context = any(k in low for k in ("context length", "maximum context", "token limit", "context_length_exceeded", "prompt is too long", "context window"))
+    is_auth = any(k in low for k in (
+        "401", "403", "unauthorized", "invalid api key", "authentication error",
+        "invalid_api_key", "forbidden", "missing credentials", "please pass an `api_key`",
+        "please pass an api_key", "no api key", "missing api key"
+    ))
     is_ollama_off = ("connection refused" in low or "failed to connect" in low) and ("11434" in low or provider == "ollama")
     is_stall = "stalled" in low or "watchdog" in low or "first token" in low
 
@@ -664,6 +759,8 @@ def classify_error_info(
                     f'{icon_account}Sign In</button>'
                     f'<button class="btn-error-secondary" data-action="open-settings" title="Configure BYOK">'
                     f'{icon_settings}Open Settings</button>'
+                    f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to an alternate model">'
+                    f'{icon_model}Switch Model</button>'
                 )
                 actions_tui = [
                     "Run 'andromity auth login' or sign in via Hub",
@@ -777,31 +874,53 @@ def classify_error_info(
             "Type /retry to re-send this turn",
             "Press Ctrl+M to switch to another model",
         ]
+    elif is_not_found:
+        err_type = "model_not_found"
+        badge = "NOT FOUND"
+        title = "Model Not Available"
+        clean_detail = clean_msg or f"No endpoints found for {disp_model}."
+        desc_text = (
+            f"{disp_prov}: {clean_detail} Please switch to another model."
+        )
+        desc_html = (
+            f"<strong>{html.escape(disp_prov)}</strong>: {html.escape(clean_detail)} Please switch to another model."
+        )
+        actions_html = (
+            f'<button class="btn-error-retry" data-action="switch-model-flyout" title="Switch to another model">'
+            f'{icon_model}Switch Model</button>'
+            f'<button class="btn-error-secondary" data-action="retry-turn" title="Retry this turn">'
+            f'{icon_retry}Retry Turn</button>'
+        )
+        actions_tui = [
+            "Press Ctrl+M to switch to another model",
+            "Type /retry to re-send this turn",
+        ]
     else:
         err_type = "generic"
         badge = "ERROR"
-        title = f"Turn Interrupted ({err_cls})"
-        first_line = msg.splitlines()[0] if msg else err_cls
-        if len(first_line) > 140:
-            first_line = first_line[:137] + "..."
+        title = "Turn Interrupted"
+        user_err_msg = clean_msg or (msg.splitlines()[0] if msg else err_cls)
+        if len(user_err_msg) > 180:
+            user_err_msg = user_err_msg[:177] + "..."
         desc_text = (
-            f"An error interrupted communication with {disp_prov}: {first_line}. "
-            "Retry to re-send this turn."
+            f"{disp_prov}: {user_err_msg}. Retry to re-send this turn."
         )
         desc_html = (
-            f"An error interrupted communication with <strong>{html.escape(disp_prov)}</strong>: {html.escape(first_line)}. "
+            f"<strong>{html.escape(disp_prov)}</strong>: {html.escape(user_err_msg)}. "
             "Click Retry to re-send this turn."
         )
         actions_html = (
             f'<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">'
             f'{icon_retry}Retry Turn</button>'
+            f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">'
+            f'{icon_model}Switch Model</button>'
         )
         actions_tui = [
-            "Type /retry to re-send this turn",
+            "Press Ctrl+M to switch to another model",
         ]
 
-    clean_msg = re.sub(r'\bof \d+ (?:requests|turns)\b', '', msg)
-    raw_preview = clean_msg[:500] + ("..." if len(clean_msg) > 500 else "")
+    clean_msg_raw = re.sub(r'\bof \d+ (?:requests|turns)\b', '', msg)
+    raw_preview = clean_msg_raw[:500] + ("..." if len(clean_msg_raw) > 500 else "")
 
     return {
         "type": err_type,
@@ -915,8 +1034,9 @@ def classify_and_format_error(
         return format_error_terminal(info)
 
     # Auto-detection:
-    # VS Code daemon or pytest expects HTML cards
-    if os.environ.get("ANDROMITY_CLIENT") == "server" or os.environ.get("PYTEST_CURRENT_TEST"):
+    # VS Code daemon (ANDROMITY_CLIENT in "server", "vscode") or pytest expects HTML cards
+    client_env = (os.environ.get("ANDROMITY_CLIENT") or "").lower()
+    if client_env in ("server", "vscode") or os.environ.get("PYTEST_CURRENT_TEST"):
         return format_error_html(info)
 
     # TUI, CLI, and standalone callers receive terminal markdown

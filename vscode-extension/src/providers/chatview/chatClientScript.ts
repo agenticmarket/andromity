@@ -4370,12 +4370,32 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (isVisible) {
         modelFlyout.style.display = 'none';
       } else {
+        const promptBoxEl = document.querySelector('.prompt-box');
+        if (promptBoxEl) {
+          const pbRect = promptBoxEl.getBoundingClientRect();
+          if (pbRect.width > 0) {
+            modelFlyout.style.width = Math.round(pbRect.width) + 'px';
+            modelFlyout.style.maxWidth = Math.round(pbRect.width) + 'px';
+          }
+        }
         modelFlyout.style.display = 'flex';
         if (flyoutSearch) flyoutSearch.value = '';
         renderFlyoutList('');
         if (flyoutSearch) setTimeout(() => flyoutSearch.focus(), 50);
-      }
     }
+
+    window.addEventListener('resize', () => {
+      if (modelFlyout && modelFlyout.style.display === 'flex') {
+        const promptBoxEl = document.querySelector('.prompt-box');
+        if (promptBoxEl) {
+          const pbRect = promptBoxEl.getBoundingClientRect();
+          if (pbRect.width > 0) {
+            modelFlyout.style.width = Math.round(pbRect.width) + 'px';
+            modelFlyout.style.maxWidth = Math.round(pbRect.width) + 'px';
+          }
+        }
+      }
+    });
 
     function isModelPinned(modelId, provider) {
       if (!pinnedModels || !Array.isArray(pinnedModels)) return false;
@@ -8495,6 +8515,44 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     });
 
+    function extractCleanErrorMessage(raw) {
+      if (!raw) return '';
+      let str = String(raw).trim();
+      const firstBrace = str.indexOf('{');
+      const lastBrace = str.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        try {
+          const parsed = JSON.parse(str.slice(firstBrace, lastBrace + 1));
+          if (parsed) {
+            if (parsed.error && typeof parsed.error === 'object' && parsed.error.message) {
+              return String(parsed.error.message).trim();
+            }
+            if (parsed.error && typeof parsed.error === 'string') {
+              return String(parsed.error).trim();
+            }
+            if (parsed.message && typeof parsed.message === 'string') {
+              return String(parsed.message).trim();
+            }
+            if (parsed.detail && typeof parsed.detail === 'string') {
+              return String(parsed.detail).trim();
+            }
+          }
+        } catch (e) {}
+      }
+      str = str.replace(/^(?:litellm\.)?[a-zA-Z]*(?:Error|Exception):\s*/gi, '')
+               .replace(/^[a-zA-Z]*(?:Error|Exception):\s*/gi, '')
+               .replace(/^[a-zA-Z]+Exception\s*[-:]\s*/gi, '')
+               .trim();
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        str = (str.slice(0, firstBrace) + str.slice(lastBrace + 1)).trim();
+      }
+      const uIdIdx = str.toLowerCase().indexOf('"user_id"');
+      if (uIdIdx !== -1) str = str.slice(0, uIdIdx).trim();
+      str = str.replace(/^[- :]+/, '').trim();
+      const firstLine = str.split(String.fromCharCode(10))[0].replace(String.fromCharCode(13), '');
+      return (firstLine && firstLine.trim()) || str;
+    }
+
     function appendErrorCard(text, rawError, errorType) {
       if (!text) text = 'An unexpected agent error occurred.';
       const trimmed = String(text).trim();
@@ -8507,21 +8565,58 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         return;
       }
 
+      const cleanMsg = extractCleanErrorMessage(trimmed);
       const low = trimmed.toLowerCase();
       let badge = 'ERROR';
       let title = 'Turn Interrupted';
-      let desc = trimmed;
+      let desc = cleanMsg || trimmed;
+      let timerHtml = '';
       let eType = errorType || 'generic';
 
       const iconRetry = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>';
       const iconModel = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>';
       const iconCompact = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>';
       const iconPlus = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>';
-      const iconSettings = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>';
+      const iconSettings = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83-2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>';
+      const iconAccount = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>';
 
       let actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">' + iconRetry + 'Retry Turn</button>';
 
-      if (low.includes('image') || low.includes('vision') || low.includes('multimodal') || low.includes('does not support')) {
+      if (low.includes('daily limit') || low.includes('daily_limit') || low.includes('free trial limit') || low.includes('quota limit') || low.includes('quota resets in')) {
+        badge = 'QUOTA LIMIT';
+        title = 'Daily Limit Reached';
+        const isUserAuthed = isAndromityActive ||
+          (typeof localStorage !== 'undefined' && localStorage.getItem('andromity_active_status') === 'true') ||
+          low.includes('daily gateway limit');
+
+        desc = isUserAuthed
+          ? 'You have reached your daily gateway limit. Add your BYOK key in Settings for unlimited requests, or adjust your quota in the panel.'
+          : 'You have reached your daily free trial limit. Sign in with your AgenticMarket account to activate your account, or add a BYOK key in Settings.';
+
+        const timerMatch = text.match(/Quota resets in [^\\r\\n\\)]+\\)/i);
+        if (timerMatch) {
+          timerHtml = '<br><div style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-family:var(--font-mono,monospace);color:#10b981;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.22);padding:3px 9px;border-radius:4px;margin-top:8px;">' +
+            '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
+            escapeHtml(timerMatch[0]) +
+            '</div>';
+        }
+        eType = 'quota_exceeded';
+        if (isUserAuthed) {
+          actionsHtml = '<button class="btn-error-retry" data-action="open-settings" title="Configure BYOK">' + iconSettings + 'Open Settings</button>' +
+            '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">' + iconModel + 'Switch Model</button>';
+        } else {
+          actionsHtml = '<button class="btn-error-retry" data-action="open-account-login" title="Sign in with AgenticMarket">' + iconAccount + 'Sign In</button>' +
+            '<button class="btn-error-secondary" data-action="open-settings" title="Configure BYOK">' + iconSettings + 'Open Settings</button>' +
+            '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">' + iconModel + 'Switch Model</button>';
+        }
+      } else if (low.includes('notfound') || low.includes('not found') || low.includes('no endpoints found') || low.includes('model_not_found') || (low.includes('404') && (low.includes('model') || low.includes('endpoint')))) {
+        badge = 'NOT FOUND';
+        title = 'Model Not Available';
+        desc = (cleanMsg || 'The requested model was not found or has no active endpoints.') + ' Please switch to another model.';
+        eType = 'model_not_found';
+        actionsHtml = '<button class="btn-error-retry" data-action="switch-model-flyout" title="Switch to another model">' + iconModel + 'Switch Model</button>' +
+          '<button class="btn-error-secondary" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>';
+      } else if (low.includes('image') || low.includes('vision') || low.includes('multimodal') || low.includes('does not support')) {
         badge = 'IMAGE NOT SUPPORTED';
         title = 'Model Does Not Support Images';
         desc = 'The active model does not accept image attachments. Switch to a vision model (e.g. Claude 3.7 Sonnet, GPT-4o, Gemini 2.0 Flash) or retry with text only.';
@@ -8531,14 +8626,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       } else if (low.includes('429') || low.includes('rate limit') || low.includes('quota')) {
         badge = 'RATE LIMIT';
         title = 'Rate Limit Reached';
-        desc = 'Rate limit or quota threshold reached for the model provider. Please wait a moment and click Retry.';
+        desc = (cleanMsg || 'Rate limit or quota threshold reached for the model provider.') + ' Please wait a moment and click Retry.';
         eType = 'rate_limit';
         actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>' +
           '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch model">' + iconModel + 'Switch Model</button>';
       } else if (low.includes('midstream') || low.includes('503') || low.includes('502') || low.includes('500') || low.includes('serviceunavailable') || low.includes('service unavailable') || low.includes('bad gateway') || low.includes('upstream error')) {
         badge = 'SERVICE DISRUPTED';
         title = 'Upstream Service Interruption';
-        desc = 'The upstream provider experienced a temporary service disruption or disconnect. This is usually transient—click Retry to continue.';
+        desc = (cleanMsg || 'The upstream provider experienced a temporary service disruption or disconnect.') + ' This is usually transient—click Retry to continue.';
         eType = 'provider_unavailable';
         actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>' +
           '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch model">' + iconModel + 'Switch Model</button>';
@@ -8549,12 +8644,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         eType = 'context_exceeded';
         actionsHtml = '<button class="btn-error-retry" data-action="trigger-compact" title="Compact context">' + iconCompact + 'Compact Context</button>' +
           '<button class="btn-error-secondary" data-action="new-session" title="New session">' + iconPlus + 'New Session</button>';
-      } else if (low.includes('401') || low.includes('403') || low.includes('unauthorized') || low.includes('api key')) {
+      } else if (low.includes('401') || low.includes('403') || low.includes('unauthorized') || low.includes('api key') || low.includes('missing credentials') || low.includes('pass an api_key') || low.includes('no api key')) {
         badge = 'AUTHENTICATION';
         title = 'Authentication Error';
-        desc = 'Invalid or missing API key. Please check your provider settings.';
+        desc = (cleanMsg || 'Invalid or missing API key.') + ' Please check your provider settings.';
         eType = 'auth_error';
         actionsHtml = '<button class="btn-error-retry" data-action="open-settings" title="Open settings">' + iconSettings + 'Open Settings</button>';
+      } else {
+        desc = cleanMsg || trimmed;
+        actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">' + iconRetry + 'Retry Turn</button>' +
+          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">' + iconModel + 'Switch Model</button>';
       }
 
       const iconAlert = '<span class="error-header-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span>';
@@ -8568,10 +8667,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               '<span class="error-title">' + escapeHtml(title) + '</span>' +
             '</div>' +
           '</div>' +
-          '<div class="error-card-body">' + escapeHtml(desc) + '</div>' +
+          '<div class="error-card-body">' + escapeHtml(desc) + timerHtml + '</div>' +
           '<details class="error-details">' +
             '<summary>Technical Details</summary>' +
-            '<pre class="error-code"><code>' + escapeHtml(rawError || text) + '</code></pre>' +
+            '<pre class="error-code"><code>' + escapeHtml(String(rawError || text || '').replace(/"user_id"\s*:\s*"[^"]+"/gi, '"user_id":"[redacted]"')) + '</code></pre>' +
           '</details>' +
           '<div class="error-card-actions">' +
             actionsHtml +
