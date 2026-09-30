@@ -492,9 +492,8 @@ class ConfigManager:
         return "p" + hashlib.sha256(resolved.encode()).hexdigest()[:15]
 
     def is_trusted(self, path: str) -> bool:
-        mode = self._config_cache.get("default", {}).get("permission_mode", "safe")
-        if mode in ("full", "yolo"):
-            return True
+        if not path:
+            return False
         key = self._trust_key(path)
         return key in self._config_cache.get("trusted_projects", {})
 

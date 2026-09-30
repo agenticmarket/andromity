@@ -683,14 +683,23 @@ class Agent:
             final_results: dict[str, str] = {}  # call_id → result/rejection for ALL calls
             _MUTATING_TOOLS = {"write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill"}
             for tool_call in other_calls:
-                tool_name = tool_call["function"]["name"]
+                tool_name = (tool_call["function"]["name"] or "").strip()
+                t_lower = tool_name.lower()
                 try:
                     args = json.loads(tool_call["function"]["arguments"])
                 except json.JSONDecodeError:
                     args = {}
 
+                # Dry-run mode: purely simulated preview, does not execute tools or mutate disk
+                if self.dry_run:
+                    dry_msg = f"[DRY RUN] Would execute {tool_name}({json.dumps(args, indent=2)})"
+                    final_results[tool_call["id"]] = dry_msg
+                    yield ToolResult(tool_id=tool_call["id"], result=dry_msg, duration_ms=0.0, success=True, ts=time.time())
+                    continue
+
                 # Hard Gate: Profile confinement (planner and reviewer cannot execute mutating tools)
-                if (self.profile or "").lower() in ("planner", "reviewer") and tool_name in _MUTATING_TOOLS:
+                prof = (self.profile or "").strip().lower()
+                if prof in ("planner", "reviewer") and t_lower in _MUTATING_TOOLS:
                     rejection = (
                         f"TOOL BLOCKED: Profile '{self.profile}' is strictly restricted from executing mutating tool '{tool_name}'.\n"
                         f"Do NOT retry this tool call.\n"
@@ -702,7 +711,7 @@ class Agent:
 
                 # Hard Gate: Folder trust boundary (untrusted folder unconditionally blocks mutations)
                 project_dir = getattr(self.session, "project_path", "") if self.session else ""
-                if project_dir and not config.is_trusted(project_dir) and tool_name in _MUTATING_TOOLS:
+                if project_dir and not config.is_trusted(project_dir) and (t_lower in _MUTATING_TOOLS or t_lower == "spawn_subagent"):
                     rejection = (
                         f"TOOL BLOCKED: Workspace folder ({project_dir}) is untrusted.\n"
                         f"File modifications and terminal commands are blocked across all permission modes until trust is granted via /trust."
@@ -776,11 +785,13 @@ class Agent:
                         return tool_call["id"], f"[DRY RUN] Would execute {tool_name}({json.dumps(args, indent=2)})", dur, True
 
                     # Defense in depth: runtime check in _execute
-                    if (self.profile or "").lower() in ("planner", "reviewer") and tool_name in _MUTATING_TOOLS:
+                    prof_run = (self.profile or "").strip().lower()
+                    t_run = (tool_name or "").strip().lower()
+                    if prof_run in ("planner", "reviewer") and t_run in _MUTATING_TOOLS:
                         dur = round((time.time() - t0) * 1000, 2)
                         return tool_call["id"], f"Error: Tool '{tool_name}' is forbidden for profile '{self.profile}'.", dur, False
                     p_dir = getattr(self.session, "project_path", "") if self.session else ""
-                    if p_dir and not config.is_trusted(p_dir) and tool_name in _MUTATING_TOOLS:
+                    if p_dir and not config.is_trusted(p_dir) and (t_run in _MUTATING_TOOLS or t_run == "spawn_subagent"):
                         dur = round((time.time() - t0) * 1000, 2)
                         return tool_call["id"], f"Error: Workspace is untrusted. Tool '{tool_name}' is blocked.", dur, False
 

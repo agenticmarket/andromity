@@ -943,14 +943,17 @@ class JsonRpcHandler:
 
         # Create callbacks for interactive approval and clarifying questions
         async def _on_tool_approval(tool_name: str, args: Dict[str, Any]) -> bool:
+            t_lower = (tool_name or "").strip().lower()
+            prof_lower = (profile or "").strip().lower()
+
             # 1. Profile confinement check (hard gate: planner/reviewer cannot mutate files or execute shell)
-            if (profile or "").lower() in ("planner", "reviewer") and tool_name in ("write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill"):
+            if prof_lower in ("planner", "reviewer") and t_lower in ("write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill"):
                 log.warning("Tool '%s' blocked — profile %s is read-only", tool_name, profile)
                 return (False, f"TOOL BLOCKED: Profile '{profile}' is restricted from executing mutating tool '{tool_name}'.")
 
             # 2. Untrusted workspace security check (hard fence: blocks writes across all modes)
             if not is_trusted_workspace:
-                if tool_name in ("write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill", "spawn_subagent"):
+                if t_lower in ("write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill", "spawn_subagent"):
                     log.warning("Tool '%s' blocked — workspace %s is untrusted", tool_name, session.project_path)
                     return (False, "TOOL BLOCKED: Workspace is untrusted. Grant trust in Andromity Hub (Trust & Security) to permit file edits or terminal commands.")
 
