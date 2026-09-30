@@ -1143,6 +1143,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this._postToWebview({ type: "subagent_failed", ...params });
     });
 
+    bind("process/started", (params: any) => {
+      this._postToWebview({ type: "process_started", ...params });
+    });
+
+    bind("process/exited", (params: any) => {
+      this._postToWebview({ type: "process_exited", ...params });
+    });
+
     bind("agent/done", (params: any) => {
       const sid = params?.session_id || this._currentSessionId;
       if (sid) {
@@ -1886,6 +1894,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     switch (message.type) {
+
+      case "kill_process": {
+        const procId = message.processId || message.process_id;
+        if (procId && this._rpcClient) {
+          try {
+            await this._rpcClient.call("process.kill", { process_id: procId });
+          } catch (err: any) {
+            vscode.window.showErrorMessage(`Failed to stop process ${procId}: ${err?.message || err}`);
+          }
+        }
+        break;
+      }
 
       case "send_prompt": {
         let promptText = message.prompt || "";

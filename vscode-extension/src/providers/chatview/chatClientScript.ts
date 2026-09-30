@@ -4382,6 +4382,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (flyoutSearch) flyoutSearch.value = '';
         renderFlyoutList('');
         if (flyoutSearch) setTimeout(() => flyoutSearch.focus(), 50);
+      }
     }
 
     window.addEventListener('resize', () => {
@@ -7373,7 +7374,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     if (typeof window.renderAntigravityActivityRow === 'function') {
                       renderedActivity = window.renderAntigravityActivityRow(toolName, toolArgs, 'done');
                     }
-                    if (!renderedActivity && typeof window.renderCommandActivityRow === 'function' && /^(shell_exec|run_command|bash|exec|cmd)$/i.test(toolName)) {
+                    if (!renderedActivity && typeof window.renderBackgroundProcessActivityRow === 'function' && /^shell_bg$/i.test(toolName)) {
+                      renderedActivity = window.renderBackgroundProcessActivityRow(toolName, toolArgs, 'running_bg', (typeof m !== 'undefined' && m ? m.result : ''));
+                    } else if (!renderedActivity && typeof window.renderCommandActivityRow === 'function' && /^(shell_exec|run_command|bash|exec|cmd)$/i.test(toolName)) {
                       renderedActivity = window.renderCommandActivityRow(toolName, toolArgs, 'done');
                     }
 
@@ -7863,7 +7866,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               if (typeof window.renderAntigravityActivityRow === 'function') {
                 activityEl = window.renderAntigravityActivityRow(toolName, rawArgs, msg.success === false ? 'error' : 'done');
               }
-              if (!activityEl && typeof window.renderCommandActivityRow === 'function' && /^(shell_exec|run_command|bash|exec|cmd)$/i.test(toolName)) {
+              if (!activityEl && typeof window.renderBackgroundProcessActivityRow === 'function' && /^shell_bg$/i.test(toolName)) {
+                activityEl = window.renderBackgroundProcessActivityRow(toolName, rawArgs, msg.success === false ? 'error' : 'running_bg', msg.result);
+              } else if (!activityEl && typeof window.renderCommandActivityRow === 'function' && /^(shell_exec|run_command|bash|exec|cmd)$/i.test(toolName)) {
                 activityEl = window.renderCommandActivityRow(toolName, rawArgs, msg.success === false ? 'error' : 'done', msg.result);
               }
 
@@ -7872,11 +7877,41 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 targetTool.removeAttribute('data-start-ts');
                 targetTool.replaceWith(activityEl);
               } else {
+                const isBg = /^shell_bg$/i.test(toolName);
+                let procId = '';
+                if (isBg && msg.result) {
+                  const m = String(msg.result).match(/with id '([^']+)'/);
+                  if (m) procId = m[1];
+                }
                 const tag = targetTool.querySelector('.tool-tag');
                 if (tag) {
-                  tag.textContent = msg.success === false ? 'FAILED' : 'DONE';
-                  tag.style.background = msg.success === false ? 'rgba(248, 81, 73, 0.2)' : 'rgba(63, 185, 80, 0.2)';
-                  tag.style.color = msg.success === false ? 'var(--red)' : 'var(--green)';
+                  if (isBg && msg.success !== false) {
+                    tag.textContent = 'RUNNING (BG)';
+                    tag.style.background = 'rgba(88, 166, 255, 0.2)';
+                    tag.style.color = 'var(--accent, #58a6ff)';
+                    if (procId) {
+                      targetTool.setAttribute('data-process-id', procId);
+                      const hdr = targetTool.querySelector('.tool-header');
+                      if (hdr && !hdr.querySelector('.bg-proc-stop-btn')) {
+                        const sBtn = document.createElement('button');
+                        sBtn.className = 'bg-proc-stop-btn';
+                        sBtn.setAttribute('data-process-id', procId);
+                        sBtn.title = 'Stop background process';
+                        sBtn.innerHTML = '<span class="codicon codicon-debug-stop"></span> Stop';
+                        sBtn.onclick = function(ev) {
+                          ev.stopPropagation();
+                          sBtn.disabled = true;
+                          sBtn.textContent = 'Stopping...';
+                          vscode.postMessage({ type: 'kill_process', processId: procId });
+                        };
+                        hdr.appendChild(sBtn);
+                      }
+                    }
+                  } else {
+                    tag.textContent = msg.success === false ? 'FAILED' : 'DONE';
+                    tag.style.background = msg.success === false ? 'rgba(248, 81, 73, 0.2)' : 'rgba(63, 185, 80, 0.2)';
+                    tag.style.color = msg.success === false ? 'var(--red)' : 'var(--green)';
+                  }
                 }
                 targetTool.removeAttribute('data-start-ts');
                 targetTool.classList.remove('expanded', 'stuck');
@@ -8127,6 +8162,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               timestamp: msg.timestamp || new Date().toISOString(),
               unread: true
             });
+          }
+          break;
+
+        case 'process_started':
+          break;
+
+        case 'process_exited':
+          if (typeof window.handleProcessExitedUI === 'function') {
+            window.handleProcessExitedUI(msg);
           }
           break;
 

@@ -95,6 +95,9 @@ class JsonRpcHandler:
         self._mcp_started: bool = False
         from andromity.core.session_bus import SessionBus
         SessionBus.get_instance().subscribe(self._on_session_bus_event)
+        from andromity.core import tools as _tools_mod
+        _tools_mod.register_process_started_callback(self._on_process_started)
+        _tools_mod.register_process_exited_callback(self._on_process_exited)
 
     def _on_session_bus_event(self, event: StreamEvent):
         if isinstance(event, SessionMessageReceived):
@@ -178,6 +181,40 @@ class JsonRpcHandler:
                         trigger_type="handoff",
                     ))
 
+    def _on_process_started(self, info: dict):
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon_threadsafe(self.notify, "process/started", info)
+        except RuntimeError:
+            self.notify("process/started", info)
+
+    def _on_process_exited(self, info: dict):
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon_threadsafe(self._handle_process_exit_threadsafe, info)
+        except RuntimeError:
+            self._handle_process_exit_threadsafe(info)
+
+    def _handle_process_exit_threadsafe(self, info: dict):
+        self.notify("process/exited", info)
+        session_id = info.get("session_id")
+        if session_id:
+            exit_code = info.get("exit_code", 0)
+            pid_str = info.get("process_id", "")
+            cmd_str = info.get("command", "")
+            prompt_content = (
+                f"[Background Process Notification]:\n"
+                f"Process '{pid_str}' (Command: `{cmd_str}`) has finished with exit code {exit_code}.\n"
+                f"Use shell_read('{pid_str}') to review its final output if needed."
+            )
+            asyncio.create_task(self._handle_auto_awake(
+                target_session_id=session_id,
+                from_session=f"bg_proc_{pid_str}",
+                from_session_id="",
+                prompt_content=prompt_content,
+                trigger_type="process_exit",
+            ))
+
     async def _handle_auto_awake(
         self,
         target_session_id: str,
@@ -236,10 +273,11 @@ class JsonRpcHandler:
 
         # 4. Increment circuit breaker counter and record collaborator link
         session.consecutive_auto_wakes = current_wakes + 1
-        if not hasattr(session, "collaborators") or session.collaborators is None:
-            session.collaborators = []
-        if from_session and from_session not in session.collaborators:
-            session.collaborators.append(from_session)
+        if trigger_type != "process_exit":
+            if not hasattr(session, "collaborators") or session.collaborators is None:
+                session.collaborators = []
+            if from_session and from_session not in session.collaborators:
+                session.collaborators.append(from_session)
         session.save()
 
         # Update sender's collaborators as well for bidirectional UI link
@@ -327,6 +365,41 @@ class JsonRpcHandler:
                 INTERNAL_ERROR,
                 err_msg,
             )
+
+    async def rpc_process_kill(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Kill a background process started with shell_bg."""
+        process_id = params.get("process_id", "")
+        if not process_id:
+            raise ValueError("process_id is required")
+        from andromity.core.tools import shell_kill
+        result = shell_kill(process_id)
+        return {"status": "ok", "message": result, "process_id": process_id}
+
+    async def rpc_process_list(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """List active background processes."""
+        from andromity.core.tools import _bg_processes, _bg_lock, _bg_project_key
+        proj_key = params.get("project_path") or _bg_project_key()
+        with _bg_lock:
+            entries = []
+            for key, entry in _bg_processes.items():
+                if isinstance(key, tuple):
+                    pk, pid = key
+                    if pk != proj_key and proj_key != "__global__":
+                        continue
+                else:
+                    pid = key
+                proc = entry["proc"]
+                alive = proc.poll() is None
+                entries.append({
+                    "process_id": pid,
+                    "pid": proc.pid,
+                    "command": entry.get("cmd", ""),
+                    "status": "running" if alive else f"exited ({proc.returncode})",
+                    "started": entry.get("started", 0),
+                    "elapsed": int(time.time() - entry.get("started", time.time())),
+                    "session_id": entry.get("session_id", ""),
+                })
+        return {"processes": entries}
 
     # ── MCP Manager helpers ─────────────────────────────────────────────────
     def _get_mcp_manager(self, project_path: Optional[str] = None):

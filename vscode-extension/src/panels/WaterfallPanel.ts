@@ -77,6 +77,8 @@ export class WaterfallTraceStore {
     bind("session/answerReceived", "session_answer_received", (p) => p?.to_session_id || p?.from_session_id);
     bind("session/sharedStateChanged", "session_shared_state_changed");
     bind("session/handoffWritten", "session_handoff_written", (p) => p?.to_session_id || p?.from_session_id);
+    bind("process/started", "process_started", (p) => p?.session_id);
+    bind("process/exited", "process_exited", (p) => p?.session_id);
   }
 
   public static getEvents(sessionId: string): any[] {
@@ -334,6 +336,16 @@ export class WaterfallPanel {
     });
     bind("session/handoffWritten", (params: any) => {
       if (isSessionTarget(params)) this._postMessage({ type: "session_handoff_written", ...params });
+    });
+    bind("process/started", (params: any) => {
+      if (!params?.session_id || params.session_id === this._sessionId) {
+        this._postMessage({ type: "process_started", ...params });
+      }
+    });
+    bind("process/exited", (params: any) => {
+      if (!params?.session_id || params.session_id === this._sessionId) {
+        this._postMessage({ type: "process_exited", ...params });
+      }
     });
   }
 

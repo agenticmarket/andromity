@@ -302,5 +302,63 @@ export function getChatActivityStyles(): string {
       white-space: pre-wrap;
       word-break: break-all;
     }
+
+    /* Background Process Badges & 1-Click Stop Button */
+    .bg-proc-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 4px;
+      letter-spacing: 0.03em;
+      white-space: nowrap;
+    }
+    .bg-proc-badge.running {
+      background: rgba(88, 166, 255, 0.18);
+      color: var(--accent, #58a6ff);
+      border: 1px solid rgba(88, 166, 255, 0.35);
+    }
+    .bg-proc-badge.done {
+      background: rgba(63, 185, 80, 0.18);
+      color: var(--green, #3fb950);
+      border: 1px solid rgba(63, 185, 80, 0.35);
+    }
+    .bg-proc-badge.stopped {
+      background: rgba(248, 81, 73, 0.18);
+      color: var(--red, #f85149);
+      border: 1px solid rgba(248, 81, 73, 0.35);
+    }
+
+    .bg-proc-stop-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 2px 7px;
+      font-size: 10.5px;
+      font-weight: 600;
+      border-radius: 4px;
+      border: 1px solid rgba(248, 81, 73, 0.35);
+      background: rgba(248, 81, 73, 0.12);
+      color: #ff7b72;
+      cursor: pointer;
+      line-height: 1;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+    .bg-proc-stop-btn:hover {
+      background: rgba(248, 81, 73, 0.28);
+      border-color: rgba(248, 81, 73, 0.6);
+      color: #ffa198;
+    }
+    .bg-proc-stop-btn:active {
+      transform: scale(0.97);
+    }
+    .bg-proc-stop-btn[disabled] {
+      opacity: 0.6;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
   `;
 }

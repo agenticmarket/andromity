@@ -27,11 +27,13 @@ _SUBAGENT_PROGRESS_CALLBACKS: List[Callable] = []  # list of callables(StreamEve
 _current_session_var: contextvars.ContextVar[Any] = contextvars.ContextVar("current_session", default=None)
 _mcp_manager = None  # global MCPClientManager instance
 
-# ── Background process registry ────────────────────────────────────────────────
+# ── Background process registry & lifecycle callbacks ──────────────────────────
 # Scoped by project_path to prevent cross-project leak.
-# Maps (project_key, process_id) → {"proc": Popen, "buf": deque, "cmd": str, "started": float}
+# Maps (project_key, process_id) → {"proc": Popen, "buf": deque, "cmd": str, "started": float, "session_id": str, "notified_exit": bool}
 _bg_processes: Dict[tuple, Any] = {}
 _bg_lock = threading.Lock()
+_PROCESS_STARTED_CALLBACKS: List[Callable] = []  # callables(dict) to notify when a bg process starts
+_PROCESS_EXITED_CALLBACKS: List[Callable] = []   # callables(dict) to notify when a bg process exits
 
 def _bg_project_key() -> str:
     try:
@@ -41,6 +43,70 @@ def _bg_project_key() -> str:
 
 def _bg_full_key(pid: str) -> tuple:
     return (_bg_project_key(), pid)
+
+
+def register_process_started_callback(cb: Callable):
+    if cb not in _PROCESS_STARTED_CALLBACKS:
+        _PROCESS_STARTED_CALLBACKS.append(cb)
+
+
+def unregister_process_started_callback(cb: Callable):
+    if cb in _PROCESS_STARTED_CALLBACKS:
+        _PROCESS_STARTED_CALLBACKS.remove(cb)
+
+
+def register_process_exited_callback(cb: Callable):
+    if cb not in _PROCESS_EXITED_CALLBACKS:
+        _PROCESS_EXITED_CALLBACKS.append(cb)
+
+
+def unregister_process_exited_callback(cb: Callable):
+    if cb in _PROCESS_EXITED_CALLBACKS:
+        _PROCESS_EXITED_CALLBACKS.remove(cb)
+
+
+def _notify_process_started(info: Dict[str, Any]):
+    for cb in list(_PROCESS_STARTED_CALLBACKS):
+        try:
+            cb(info)
+        except Exception:
+            pass
+
+
+def _notify_process_exited(info: Dict[str, Any]):
+    for cb in list(_PROCESS_EXITED_CALLBACKS):
+        try:
+            cb(info)
+        except Exception:
+            pass
+
+
+def _fire_exit_notification(target_key: Any, pid: str, os_pid: int, command: str, exit_code: int, session_id: Optional[str], proj_key: str):
+    duration = 0.0
+    with _bg_lock:
+        entry = _bg_processes.get(target_key)
+        if entry is None:
+            for k, v in _bg_processes.items():
+                if (isinstance(k, tuple) and k[1] == pid) or k == pid:
+                    entry = v
+                    break
+        if entry:
+            if entry.get("notified_exit"):
+                return
+            entry["notified_exit"] = True
+            started = entry.get("started", _time.time())
+            duration = round(_time.time() - started, 2)
+            if not session_id:
+                session_id = entry.get("session_id")
+    _notify_process_exited({
+        "process_id": pid,
+        "pid": os_pid,
+        "command": command,
+        "exit_code": exit_code,
+        "duration": duration,
+        "session_id": session_id,
+        "project_path": proj_key,
+    })
 
 
 def register_plan_callback(cb: Callable):
@@ -734,6 +800,9 @@ def shell_bg(command: str, process_id: str = "") -> str:
     except Exception as e:
         return f"Error starting background process: {e}"
 
+    session = _current_session_var.get()
+    session_id = getattr(session, "id", None) or getattr(session, "session_id", None)
+
     buf: collections.deque = collections.deque(maxlen=500)  # keep last 500 lines
 
     def _reader():
@@ -744,19 +813,33 @@ def shell_bg(command: str, process_id: str = "") -> str:
         except Exception:
             pass
         finally:
-            buf.append(f"[process '{pid}' exited with code {proc.wait()}]")
+            exit_code = proc.wait()
+            buf.append(f"[process '{pid}' exited with code {exit_code}]")
+            _fire_exit_notification(full_key, pid, proc.pid, command, exit_code, session_id, proj_key)
 
     t = threading.Thread(target=_reader, daemon=True, name=f"bg-reader-{pid}")
     t.start()
 
+    start_time = _time.time()
     with _bg_lock:
         _bg_processes[full_key] = {
             "proc": proc,
             "buf": buf,
             "cmd": command,
-            "started": _time.time(),
+            "started": start_time,
             "project": proj_key,
+            "session_id": session_id,
+            "notified_exit": False,
         }
+
+    _notify_process_started({
+        "process_id": pid,
+        "pid": proc.pid,
+        "command": command,
+        "started": start_time,
+        "session_id": session_id,
+        "project_path": proj_key,
+    })
 
     return (
         f"Background process started with id '{pid}' (PID {proc.pid}).\n"
@@ -800,29 +883,48 @@ def shell_read(process_id: str, lines: int = 50) -> str:
 def shell_kill(process_id: str) -> str:
     """Kill a background process started with shell_bg."""
     proj_key = _bg_project_key()
+    target_key = (proj_key, process_id)
     with _bg_lock:
-        entry = _bg_processes.pop((proj_key, process_id), None)
+        entry = _bg_processes.get(target_key)
         if entry is None:
             # legacy fallback: try bare pid
             for k in list(_bg_processes.keys()):
-                if k[1] == process_id and k[0] == proj_key:
-                    entry = _bg_processes.pop(k, None)
-                    break
-                if k == process_id:  # bare string legacy
-                    entry = _bg_processes.pop(k, None)
+                if (isinstance(k, tuple) and k[1] == process_id and k[0] == proj_key) or k == process_id:
+                    entry = _bg_processes.get(k)
+                    target_key = k
                     break
     if not entry:
         return f"Error: No background process with id '{process_id}'."
     proc = entry["proc"]
+    cmd = entry.get("cmd", "")
+    session_id = entry.get("session_id")
+    pid = process_id
+
     try:
+        if sys.platform == "win32":
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    capture_output=True,
+                    timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+            except Exception:
+                pass
         proc.terminate()
         try:
-            proc.wait(timeout=5)
+            exit_code = proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
             proc.kill()
-        return f"Process '{process_id}' (PID {proc.pid}) terminated."
+            exit_code = proc.wait(timeout=2)
     except Exception as e:
         return f"Error killing process '{process_id}': {e}"
+    finally:
+        _fire_exit_notification(target_key, pid, proc.pid, cmd, getattr(proc, "returncode", -1) or -1, session_id, proj_key)
+        with _bg_lock:
+            _bg_processes.pop(target_key, None)
+
+    return f"Process '{process_id}' (PID {proc.pid}) terminated."
 
 
 def shell_list() -> str:

@@ -1072,10 +1072,27 @@ export function getWaterfallScript(sessionId: string): string {
               if (!span.result && msg.result) span.result = msg.result;
               break;
             } else {
-              span.endTime = msg.ts ? msg.ts * 1000 : Date.now();
-              span.durationMs = msg.duration_ms || (span.endTime - span.startTime);
-              span.status = msg.success === false ? 'error' : 'done';
-              span.result = msg.result || '';
+              const isBgProc = (span.name === 'shell_bg' || msg.tool_name === 'shell_bg');
+              if (isBgProc && msg.success !== false) {
+                const procMatch = String(msg.result || '').match(/with id '([^']+)'/);
+                const procId = procMatch ? procMatch[1] : (span.processId || '');
+                if (procId) {
+                  span.processId = procId;
+                  state.bgProcessMap = state.bgProcessMap || new Map();
+                  state.bgProcessMap.set(procId, span.id);
+                }
+                span.isBackground = true;
+                span.status = 'running';
+                span.result = msg.result || '';
+                span.endTime = null;
+                addLog('BG-START', 'Background process started with id ' + (procId || 'bg'));
+              } else {
+                span.endTime = msg.ts ? msg.ts * 1000 : Date.now();
+                span.durationMs = msg.duration_ms || (span.endTime - span.startTime);
+                span.status = msg.success === false ? 'error' : 'done';
+                span.result = msg.result || '';
+                addLog('TOOL-END', span.name + ' finished in ' + formatMs(span.durationMs) + ' (' + span.status + ')');
+              }
             }
 
             if (span.name === 'spawn_subagent' && msg.result) {
@@ -1276,6 +1293,55 @@ export function getWaterfallScript(sessionId: string): string {
                 updateSpanDetailsContent(span);
               }
               addLog('SUBAGENT-FAILED', \`Subagent \${span.name} failed: \${span.result}\`);
+              updateSummaryStats();
+            }
+            break;
+          }
+
+          case 'process_started': {
+            const procId = msg.process_id;
+            state.bgProcessMap = state.bgProcessMap || new Map();
+            if (procId && !state.bgProcessMap.has(procId)) {
+              for (const s of state.spans.values()) {
+                if (s.name === 'shell_bg' && s.status === 'running' && !s.processId) {
+                  s.processId = procId;
+                  s.isBackground = true;
+                  state.bgProcessMap.set(procId, s.id);
+                  break;
+                }
+              }
+            }
+            addLog('BG-PROC', 'Process ' + procId + ' started (PID ' + (msg.pid || '') + ')');
+            break;
+          }
+
+          case 'process_exited': {
+            const procId = msg.process_id;
+            state.bgProcessMap = state.bgProcessMap || new Map();
+            let spanId = state.bgProcessMap.get(procId);
+            let span = spanId ? state.spans.get(spanId) : null;
+            if (!span) {
+              for (const s of state.spans.values()) {
+                if (s.name === 'shell_bg' && (s.processId === procId || s.status === 'running')) {
+                  span = s;
+                  break;
+                }
+              }
+            }
+            if (span) {
+              const now = Date.now();
+              span.endTime = now;
+              span.durationMs = typeof msg.duration === 'number' ? (msg.duration * 1000) : Math.max(50, span.endTime - span.startTime);
+              span.status = (msg.exit_code === 0) ? 'done' : 'error';
+              if (msg.exit_code !== undefined) {
+                span.result = (span.result ? (span.result + String.fromCharCode(10, 10)) : "") + "[Process (" + procId + ") exited with code " + msg.exit_code + "]";
+              }
+              updateTimingBars(span.turnId);
+              recalcTotals();
+              if (span.element && span.element.classList.contains('expanded')) {
+                updateSpanDetailsContent(span);
+              }
+              addLog('BG-EXIT', 'Process ' + procId + ' exited with code ' + msg.exit_code + ' (' + formatMs(span.durationMs) + ')');
               updateSummaryStats();
             }
             break;

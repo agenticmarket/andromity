@@ -39,6 +39,8 @@ import { getChatStyles } from "../src/providers/chatview/chatStyles.js";
 import { getWaterfallHtml } from "../src/providers/waterfall/waterfallHtml.js";
 import { getWaterfallScript } from "../src/providers/waterfall/waterfallScript.js";
 import { getChatAmbientScript } from "../src/providers/chatview/chatAmbientScript.js";
+import { getChatActivityScript } from "../src/providers/chatview/chatActivityRow.js";
+import { getChatActivityStyles } from "../src/providers/chatview/chatActivityStyles.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -1368,6 +1370,72 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     const styles = getChatStyles();
     assert.ok(styles.includes('max-width: var(--chat-max-width, 860px)'), "Model flyout must expand up to chat-max-width");
     assert.ok(scriptCode.includes('modelFlyout.style.width = Math.round(pbRect.width) + \'px\''), "Script must sync flyout width to prompt box");
+  });
+
+  it("should render real-time background process row with 1-click stop button and update on process exit", () => {
+    const activityScript = getChatActivityScript();
+    const activityStyles = getChatActivityStyles();
+    const waterfallScript = getWaterfallScript("test-session");
+
+    // 1. Verify CSS styles for background process controls
+    assert.ok(activityStyles.includes('.bg-proc-badge'), "Activity styles must define .bg-proc-badge");
+    assert.ok(activityStyles.includes('.bg-proc-stop-btn'), "Activity styles must define .bg-proc-stop-btn");
+
+    // 2. Execute activityScript in a mock VM sandbox
+    const sandbox: any = {
+      window: {},
+      document: {
+        addEventListener: () => {},
+        querySelectorAll: () => [],
+        createElement: (tag: string) => {
+          const el: any = {
+            tagName: tag,
+            className: '',
+            _innerHTML: '',
+            get innerHTML() {
+              if (this._innerHTML) return this._innerHTML;
+              return this.children.map((c: any) => c.innerHTML || '').join('');
+            },
+            set innerHTML(v: string) { this._innerHTML = v; },
+            style: {},
+            children: [] as any[],
+            appendChild: (c: any) => el.children.push(c),
+            setAttribute: (k: string, v: string) => { el._attrs = el._attrs || {}; el._attrs[k] = v; },
+            getAttribute: (k: string) => el._attrs ? el._attrs[k] : null,
+            querySelector: () => null,
+            querySelectorAll: () => [],
+          };
+          return el;
+        },
+      },
+      escapeHtml: (s: string) => s,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(activityScript, sandbox);
+
+    assert.equal(typeof sandbox.window.renderBackgroundProcessActivityRow, 'function', "Must expose renderBackgroundProcessActivityRow");
+    assert.equal(typeof sandbox.window.handleProcessExitedUI, 'function', "Must expose handleProcessExitedUI");
+
+    // 3. Render a running background process row
+    const rowEl = sandbox.window.renderBackgroundProcessActivityRow(
+      "shell_bg",
+      JSON.stringify({ command: "npm run dev", process_id: "dev-server" }),
+      "running_bg",
+      "Background process started with id 'dev-server' (PID 4321)."
+    );
+    assert.ok(rowEl, "renderBackgroundProcessActivityRow should return an element");
+    assert.ok(rowEl.className.includes("bg-proc-wrap"), "Row wrap must have bg-proc-wrap class");
+    assert.equal(rowEl.getAttribute("data-process-id"), "dev-server", "Row must store data-process-id");
+
+    const innerHtml = rowEl.innerHTML;
+    assert.ok(innerHtml.includes("RUNNING (BG)"), "Must display RUNNING (BG) status badge");
+    assert.ok(innerHtml.includes("bg-proc-stop-btn"), "Must render 1-click Stop button");
+    assert.ok(!innerHtml.includes("View Logs"), "Must STRICTLY NOT contain any View Logs button (per user constraint)");
+
+    // 4. Verify Waterfall script handles process_started and process_exited
+    assert.ok(waterfallScript.includes("case 'process_started':"), "Waterfall must handle process_started event");
+    assert.ok(waterfallScript.includes("case 'process_exited':"), "Waterfall must handle process_exited event");
+    assert.ok(waterfallScript.includes("isBgProc"), "Waterfall must track isBgProc for shell_bg");
   });
 });
 
