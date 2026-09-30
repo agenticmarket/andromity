@@ -37,16 +37,67 @@ Type these in the chat bar.
 
 ---
 
-## Permission modes
+## Security Architecture & 3-Gate Enforcement Model
 
-| Mode | Plans | File writes | Shell commands |
-|------|-------|-------------|----------------|
-| **SAFE** (default) | Approve before running | Batch review overlay after turn | Approve before running |
-| **TRUST** | Approve before running | Written directly, no review | Written directly, no review |
-| **FULL** | Auto-approved | Written directly, no review | Written directly, no review |
-| **YOLO** | Auto-approved (shown as FYI) | Silent, no review | Silent, no review |
+Andromity operates on a strict, defense-in-depth 3-tier security gate hierarchy. Every tool invocation must successfully pass all three gates sequentially before execution is permitted.
 
-Permission mode only applies inside a trusted folder. In an untrusted folder, no writes or shell commands happen regardless of mode.
+```
+       [ Tool Call Initiated ]
+                  │
+                  ▼
+┌───────────────────────────────────────────┐
+│ GATE 1: Folder Trust Boundary (Hard Fence)│
+│  - Untrusted: Reads allowed               │
+│  - Writes / Shell / Mutating tools BLOCKED│
+│  - CANNOT be bypassed by FULL or YOLO     │
+└─────────────────────┬─────────────────────┘
+                      │ Passed
+                      ▼
+┌───────────────────────────────────────────┐
+│ GATE 2: Profile Confinement & Subagents   │
+│  - planner / reviewer: Read-only          │
+│  - Mutating tools stripped & blocked      │
+│  - Subagents strictly inherit confinement │
+│  - Anti-forking: nested subagents blocked │
+└─────────────────────┬─────────────────────┘
+                      │ Passed
+                      ▼
+┌───────────────────────────────────────────┐
+│ GATE 3: Permission Mode Execution Gate    │
+│  - SAFE: Interactive approval required    │
+│  - TRUST: Direct writes & allowlisted cmd │
+│  - FULL / YOLO: Autonomous execution      │
+└─────────────────────┬─────────────────────┘
+                      │ Approved
+                      ▼
+            [ Execute Tool ]
+```
+
+### Gate 1: Folder Trust Boundary (Hard Fence)
+- Folders are untrusted by default until explicitly trusted via `/trust` or the Hub UI.
+- In an untrusted folder:
+  - Non-mutating read and search operations (`read_file`, `list_dir`, `grep_search`, `find_files`) are allowed so users can audit unfamiliar codebases safely.
+  - All mutating tools (`write_file`, `edit_file`, `edit_file_multi`), shell commands (`shell_exec`, `shell_bg`, `shell_kill`), and subagents with mutating capabilities are **unconditionally blocked**.
+  - Folder trust is an absolute boundary: neither `FULL` mode nor `YOLO` mode can bypass an untrusted folder.
+
+### Gate 2: Agent Profile Confinement (Least Privilege)
+- Profile capabilities define the strict boundary of what an agent may execute:
+  - `builder` (default): Full lifecycle (plan, read, search, write, edit, shell, web, tools).
+  - `coder`: Implementation focused (read, search, write, edit, shell, web, tools; skips plan writing).
+  - `reviewer`: Read-only audit (read, search, list, web; mutating tools and shell commands are stripped and blocked).
+  - `planner`: Planning only (read, search, list, write_plan; mutating tools and shell commands are stripped and blocked).
+- **Subagent Confinement Inheritance**: When a parent agent spawns a subagent via `spawn_subagent`, the child strictly inherits the parent's profile confinement. Subagents spawned under `planner` or `reviewer` have all mutating tools stripped upfront from their schemas and blocked at execution time.
+- **Anti-Forking Protection**: Subagents are strictly forbidden from spawning nested subagents (`spawn_subagent` is stripped from their toolsets).
+
+### Gate 3: Permission Mode Workflow (User In The Loop)
+- Permission modes govern interactive human approval inside trusted workspaces:
+
+| Mode | Plans | File writes | Shell commands | External URLs & MCP |
+|------|-------|-------------|----------------|----------------------|
+| **SAFE** (default) | Approve before running | Batch review overlay after turn | Approve before running | Approve before running |
+| **TRUST** | Approve before running | Written directly, no review | Allowlisted run directly; unlisted prompt | Allowlisted domains run directly; unlisted prompt |
+| **FULL** | Auto-approved | Written directly, no review | Written directly, no review | Auto-approved |
+| **YOLO** | Auto-approved (shown as FYI) | Silent, no review | Silent, no review | Silent, no review |
 
 ---
 
@@ -54,33 +105,50 @@ Permission mode only applies inside a trusted folder. In an untrusted folder, no
 
 Switch with `/profile` or `Ctrl+J`.
 
-| Profile | What it does | Tools available |
-|---------|-------------|-----------------|
+| Profile | What it does | Allowed Tools |
+|---------|-------------|---------------|
 | `builder` (default) | Plans, then implements step by step | read, search, write, edit, shell, web, tools, plans |
 | `coder` | Direct implementation, skips planning | read, search, write, edit, shell, web, tools |
-| `reviewer` | Read-only audit, produces HIGH/MED/LOW findings | read, search, list, web, tools |
-| `planner` | Produces plans only, touches nothing | read, search, list, tools, write_plan |
+| `reviewer` | Read-only audit, produces findings | read, search, list, web, tools (no writes/shell) |
+| `planner` | Produces plans only, touches nothing | read, search, list, tools, write_plan (no writes/shell) |
 
 ---
 
 ## Agent tools
 
-| Tool | What it does |
-|------|-------------|
-| `read_file` | Read a file or specific line range |
-| `write_file` | Create or overwrite a file in the workspace |
-| `edit_file` | Replace a specific string inside a file |
-| `edit_file_multi` | Apply multiple non-contiguous edits to a file in one call |
-| `shell_exec` | Run a shell command in the project directory |
-| `list_dir` | List directory contents |
-| `grep_search` | Ripgrep-style search across the codebase |
-| `find_files` | Find files matching a glob pattern |
-| `write_plan` | Create a step-by-step plan for approval |
-| `list_tools` | Discover connected MCP servers and available tools |
-| `web_search` | Search the web |
-| `fetch_url` | Fetch a URL and convert it to readable markdown |
+| Tool | Category | What it does |
+|------|----------|-------------|
+| `read_file` | Filesystem | Read a file or specific line range (with optional AST symbols outline) |
+| `write_file` | Filesystem | Create or overwrite a file in the workspace |
+| `edit_file` | Filesystem | Replace a specific string inside a file with multi-tier matching |
+| `edit_file_multi` | Filesystem | Apply multiple non-contiguous edits to a file in one call |
+| `list_dir` | Filesystem | List directory contents |
+| `grep_search` | Search | Ripgrep-style search across the codebase respecting `.gitignore` |
+| `find_files` | Search | Find files matching a glob pattern |
+| `shell_exec` | Execution | Run a shell command synchronously in the project directory |
+| `shell_bg` | Execution | Start a long-running background command (returns `process_id`) |
+| `shell_read` | Execution | Read buffered output of a running or completed background process |
+| `shell_kill` | Execution | Terminate a running background process and its process tree |
+| `shell_list` | Execution | List all active and recent background processes for the project |
+| `spawn_subagent` | Multi-Agent | Spawn a specialized subagent scoped to a specific task |
+| `write_plan` | Planning | Create a step-by-step plan for approval |
+| `update_plan_step` | Planning | Update the status of an existing plan step |
+| `ask_questions` | Interaction | Ask the user one or more interactive clarifying questions |
+| `list_tools` | MCP / Catalog | Discover connected MCP servers and available deferred tools |
+| `web_search` | Web | Search the web |
+| `fetch_url` | Web | Fetch a URL and convert it to readable markdown |
 
-All write, edit, and shell tools require explicit approval in SAFE mode.
+---
+
+## Background Process System (`shell_bg`)
+
+Andromity provides resilient background process management for dev servers (`npm run dev`, `docker compose up`), test runners, and long-running compilers:
+
+1. **Non-Blocking Launch**: `shell_bg` starts the process detached with a unique, project-scoped ID and returns immediately. The tool call tag displays `RUNNING (BG)` rather than falsely marking the task complete.
+2. **Interactive UI Controls**: In the VS Code extension and TUI, running background processes display an active badge with a direct **[⏹ Stop]** button to terminate the process at any time without asking the AI.
+3. **Waterfall Timeline Integration**: Background processes remain active spans on the Waterfall timeline throughout their entire lifetime, tracking exact execution duration until exit.
+4. **Reactive Auto-Wake**: When a background command exits (either successfully or with an error), the agent automatically wakes up to process the exit code, duration, and output logs, continuing the workflow seamlessly.
+5. **Clean Teardown**: `shell_kill` terminates the entire process group tree across Windows (`taskkill /F /T`) and POSIX (`SIGTERM` -> `SIGKILL`), preventing leaked background or zombie processes.
 
 ---
 

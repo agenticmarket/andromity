@@ -931,6 +931,7 @@ class JsonRpcHandler:
             session.save()
 
         profile = params.get("profile") or config.get("default", "profile", "builder")
+        session.profile = profile
         model = params.get("model") or config.get("default", "model", "claude-sonnet-4-6")
         provider = params.get("provider") or config.get("default", "provider", "anthropic")
         reasoning_effort = params.get("reasoning_effort") or config.get("default", "reasoning_effort", "medium")
@@ -942,14 +943,19 @@ class JsonRpcHandler:
 
         # Create callbacks for interactive approval and clarifying questions
         async def _on_tool_approval(tool_name: str, args: Dict[str, Any]) -> bool:
-            # 1. Untrusted workspace security check (matching TUI app.py:534)
-            if not is_trusted_workspace and mode not in ("full", "yolo"):
+            # 1. Profile confinement check (hard gate: planner/reviewer cannot mutate files or execute shell)
+            if (profile or "").lower() in ("planner", "reviewer") and tool_name in ("write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill"):
+                log.warning("Tool '%s' blocked — profile %s is read-only", tool_name, profile)
+                return (False, f"TOOL BLOCKED: Profile '{profile}' is restricted from executing mutating tool '{tool_name}'.")
+
+            # 2. Untrusted workspace security check (hard fence: blocks writes across all modes)
+            if not is_trusted_workspace:
                 if tool_name in ("write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill", "spawn_subagent"):
                     log.warning("Tool '%s' blocked — workspace %s is untrusted", tool_name, session.project_path)
                     return (False, "TOOL BLOCKED: Workspace is untrusted. Grant trust in Andromity Hub (Trust & Security) to permit file edits or terminal commands.")
 
-            # 2. YOLO / FULL mode auto-approves all actions
-            if auto_approve or mode in ("full", "yolo"):
+            # 3. YOLO / FULL mode auto-approves all actions once security gates pass
+            if mode in ("full", "yolo"):
                 return True
 
             from andromity.core.security import is_sensitive_path
@@ -1084,7 +1090,7 @@ class JsonRpcHandler:
         agent = Agent(
             session=session,
             profile=profile,
-            auto_approve=auto_approve,
+            auto_approve=False,
             on_tool_approval=_on_tool_approval,
             on_questions=_on_questions,
             reasoning_effort=reasoning_effort,
@@ -2369,6 +2375,10 @@ class JsonRpcHandler:
 
     def _make_cron_approval(self, cron_job):
         async def _approval(tool_name: str, args: dict) -> bool:
+            cron_proj = getattr(cron_job, "project_path", None)
+            if cron_proj and not config.is_trusted(cron_proj):
+                if tool_name in ("write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill", "spawn_subagent"):
+                    return False
             if cron_job.mode == "yolo":
                 return True
             from andromity.core.security import is_sensitive_path
@@ -2426,23 +2436,19 @@ class JsonRpcHandler:
             pass
 
         # ── Trust Governance Gate ──────────────────────────────────────────────
-        from andromity.core.session import normalize_project_path
-        trusted_projects = config.get("trust", "trusted_projects", [])
-        if project_path and trusted_projects:
-            norm_path = normalize_project_path(project_path)
-            if norm_path not in [normalize_project_path(p) for p in trusted_projects]:
-                error_msg = f"Workspace folder is untrusted. Trust this workspace in Andromity to allow autonomous cron runs."
-                run.status = "failed"
-                run.error = error_msg
-                run.finished_at = datetime.now(timezone.utc).isoformat()
-                run_store.save_run(run)
-                self.notify("cron/run_completed", {"job_id": job.id, "run": run.to_dict(), "job": job.to_dict()})
-                return run.to_dict()
+        if project_path and not config.is_trusted(project_path):
+            error_msg = f"Workspace folder is untrusted. Trust this workspace in Andromity to allow autonomous cron runs."
+            run.status = "failed"
+            run.error = error_msg
+            run.finished_at = datetime.now(timezone.utc).isoformat()
+            run_store.save_run(run)
+            self.notify("cron/run_completed", {"job_id": job.id, "run": run.to_dict(), "job": job.to_dict()})
+            return run.to_dict()
 
         agent = Agent(
             session=cron_session,
             profile="builder",
-            auto_approve=(job.mode in ("trust", "yolo", "full")),
+            auto_approve=False,
             on_tool_approval=self._make_cron_approval(job),
             reasoning_effort="medium",
             provider=job.provider,

@@ -8,9 +8,21 @@ def _isolate_test_env(tmp_path, monkeypatch):
     test_conf = tmp_path / "global_conf" / ".andromity"
     test_conf.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("ANDROMITY_CONFIG_DIR", str(test_conf))
+    from andromity.config import config
+    old_dir = config.config_dir
+    old_path = config.config_path
+    old_cache = dict(config._config_cache)
+    config.config_dir = test_conf
+    config.config_path = test_conf / "config.toml"
+    config._config_cache = {}
+    config._load()
+
     from andromity.core.db import set_custom_db_path
     set_custom_db_path(test_conf / "test_andromity.db")
     register_session(None)
     yield
     register_session(None)
     set_custom_db_path(None)
+    config.config_dir = old_dir
+    config.config_path = old_path
+    config._config_cache = old_cache

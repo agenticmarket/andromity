@@ -109,8 +109,10 @@ class SubAgent:
         context_snapshot: Optional[Any] = None,
         permission_mode: Optional[str] = None,
         turn_id: Optional[str] = None,
+        parent_profile: Optional[str] = None,
     ):
         self.parent_session_id = parent_session_id
+        self.parent_profile = (parent_profile or "").lower().strip()
         self.turn_id = turn_id
         self.role = role.lower().strip()
         self.task = task
@@ -142,6 +144,20 @@ class SubAgent:
         tool_names = set(tools_override or self.role_cfg.tools)
         tool_names.discard("spawn_subagent")  # Hard-block nested subagent spawning
 
+        # Least-privilege profile and trust confinement
+        mutating_tools = {
+            "write_file", "edit_file", "edit_file_multi",
+            "shell_exec", "shell_bg", "shell_kill",
+        }
+        # A: If parent profile is read-only / planning (planner, reviewer), strip mutating tools
+        if self.parent_profile in ("planner", "reviewer"):
+            tool_names = {t for t in tool_names if t not in mutating_tools}
+
+        # B: If folder is untrusted, strip mutating tools unconditionally
+        from andromity.config import config as _cfg
+        if self.project_path and not _cfg.is_trusted(self.project_path):
+            tool_names = {t for t in tool_names if t not in mutating_tools}
+
         self.allowed_tools = [
             t for t in CORE_TOOLS
             if t["function"]["name"] in tool_names
@@ -153,6 +169,7 @@ class SubAgent:
             project_path=self.project_path
         )
         self.session.parent_session = parent_session_id
+        self.session.profile = self.parent_profile
 
         # Initialize system prompt
         sys_prompt = self.role_cfg.system_prompt or (
@@ -328,10 +345,15 @@ class SubAgent:
         write_tools = {"write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill", "spawn_subagent"}
         
         from andromity.config import config
-        if self.permission_mode == "safe" and tname in write_tools:
-            res_str = f"TOOL BLOCKED: Subagents cannot execute mutating tool '{tname}' in SAFE mode without user confirmation. Use read-only tools or switch permission mode to TRUST."
-        elif self.project_path and not config.is_trusted(self.project_path) and self.permission_mode not in ("full", "yolo") and tname in write_tools:
+        # Gate 1: Folder Trust Boundary (unconditional - blocks writes in untrusted folder regardless of mode)
+        if self.project_path and not config.is_trusted(self.project_path) and tname in write_tools:
             res_str = f"TOOL BLOCKED: Subagents cannot execute mutating tool '{tname}' in an untrusted workspace folder ({self.project_path})."
+        # Gate 2: Parent Profile Confinement (least privilege)
+        elif self.parent_profile in ("planner", "reviewer") and tname in write_tools:
+            res_str = f"SECURITY BLOCKED: Tool '{tname}' cannot be executed by subagent because parent profile '{self.parent_profile}' is restricted to read-only/planning."
+        # Gate 3: Permission Mode evaluation
+        elif self.permission_mode == "safe" and tname in write_tools:
+            res_str = f"TOOL BLOCKED: Subagents cannot execute mutating tool '{tname}' in SAFE mode without user confirmation. Use read-only tools or switch permission mode to TRUST."
 
         if res_str is None:
             if self.permission_mode == "trust" and tname in {"write_file", "edit_file", "edit_file_multi"}:
@@ -367,6 +389,8 @@ class SubAgent:
         t_start = time.time()
         if res_str is None:
             try:
+                from andromity.core.tools import register_session
+                register_session(self.session)
                 res_str = await execute_tool_async(tname, targs)
             except Exception as ex:
                 res_str = f"Error: Tool {tname} failed: {ex}"

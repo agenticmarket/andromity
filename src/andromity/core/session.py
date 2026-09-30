@@ -79,6 +79,7 @@ class Session:
         self.permission_mode = config.get("default", "permission_mode", "safe")
         self.provider = config.get("default", "provider", "")
         self.model = config.get("default", "model", "")
+        self.profile = config.get("default", "profile", "builder")
         sessions_root = get_config_dir() / "sessions"
         sessions_root.mkdir(parents=True, exist_ok=True)
         sessions_root = sessions_root.resolve()
@@ -715,29 +716,28 @@ class Session:
                 s.messages = [{}] * cnt
         known_ids = {s.id for s in db_sessions}
 
-        # 2. Also check for any unmigrated JSON session files only if database has no sessions
-        if not db_sessions:
-            sessions_root = get_config_dir() / "sessions"
-            if sessions_root.exists():
-                unmigrated_files = []
-                for h in hashes_to_check:
-                    p_dir = sessions_root / h
-                    if p_dir.exists() and p_dir.is_dir():
-                        for f in p_dir.glob("*.json"):
-                            stem = f.stem
-                            if stem not in known_ids:
-                                known_ids.add(stem)
-                                unmigrated_files.append(f)
+        # 2. Also check for any unmigrated JSON session files
+        sessions_root = get_config_dir() / "sessions"
+        if sessions_root.exists():
+            unmigrated_files = []
+            for h in hashes_to_check:
+                p_dir = sessions_root / h
+                if p_dir.exists() and p_dir.is_dir():
+                    for f in p_dir.glob("*.json"):
+                        stem = f.stem
+                        if stem not in known_ids:
+                            known_ids.add(stem)
+                            unmigrated_files.append(f)
 
-                for f in unmigrated_files:
-                    try:
-                        s = cls.load(f)
-                        s._save_to_db()  # Auto-migrate to SQLite
-                        if not include_subagents and s.parent_session:
-                            continue
-                        db_sessions.append(s)
-                    except Exception:
+            for f in unmigrated_files:
+                try:
+                    s = cls.load(f)
+                    s._save_to_db()  # Auto-migrate to SQLite
+                    if not include_subagents and s.parent_session:
                         continue
+                    db_sessions.append(s)
+                except Exception:
+                    continue
 
         db_sessions.sort(key=lambda s: getattr(s, "updated_at", s.created_at), reverse=True)
         return db_sessions[:limit]

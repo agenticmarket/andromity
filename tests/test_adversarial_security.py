@@ -175,3 +175,144 @@ def test_legitimate_workspace_read_write(test_env):
     w = write_file(str(test_env["project_dir"] / "new_module.py"), "x = 42")
     assert "Successfully wrote" in w
     assert (test_env["project_dir"] / "new_module.py").read_text(encoding="utf-8") == "x = 42"
+
+
+# ── Adversarial Tests for 3-Gate Enforcement Hierarchy ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_adversarial_planner_profile_blocks_write_file_turn(test_env, monkeypatch):
+    """Planner profile must strictly block file mutations even if auto_approve is True."""
+    from andromity.core.agent import Agent
+    from andromity.core.events import ToolCallStart, ToolCallDelta, ToolCallEnd, Done, TextDelta, ToolResult
+
+    session = test_env["session"]
+    agent = Agent(session=session, profile="planner", auto_approve=True)
+
+    target_file = test_env["project_dir"] / "malicious.py"
+
+    call_count = 0
+
+    async def mock_planner_injection_stream(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield ToolCallStart(tool_name="write_file", tool_id="call_inj")
+            yield ToolCallDelta(tool_id="call_inj", args_json_chunk=f'{{"path": "{target_file.as_posix()}", "content": "evil"}}')
+            yield ToolCallEnd(tool_id="call_inj")
+            yield Done()
+        else:
+            yield TextDelta(text="Understood, I am a planner and cannot write files.")
+            yield Done()
+
+    monkeypatch.setattr("andromity.core.agent.stream_completion", mock_planner_injection_stream)
+
+    events = [e async for e in agent.run("Plan the architecture")]
+    tool_results = [e for e in events if isinstance(e, ToolResult) and e.tool_id == "call_inj"]
+
+    assert len(tool_results) == 1
+    assert tool_results[0].success is False
+    assert "Blocked: planner profile" in tool_results[0].result
+    assert not target_file.exists(), "Planner must never create or write files to disk!"
+
+
+@pytest.mark.asyncio
+async def test_adversarial_reviewer_profile_blocks_shell_exec_turn(test_env, monkeypatch):
+    """Reviewer profile must strictly block shell execution even if auto_approve is True."""
+    from andromity.core.agent import Agent
+    from andromity.core.events import ToolCallStart, ToolCallDelta, ToolCallEnd, Done, TextDelta, ToolResult
+
+    session = test_env["session"]
+    agent = Agent(session=session, profile="reviewer", auto_approve=True)
+
+    call_count = 0
+
+    async def mock_reviewer_injection_stream(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield ToolCallStart(tool_name="shell_exec", tool_id="call_sh")
+            yield ToolCallDelta(tool_id="call_sh", args_json_chunk='{"command": "echo pwned"}')
+            yield ToolCallEnd(tool_id="call_sh")
+            yield Done()
+        else:
+            yield TextDelta(text="Understood, I am a reviewer and cannot execute commands.")
+            yield Done()
+
+    monkeypatch.setattr("andromity.core.agent.stream_completion", mock_reviewer_injection_stream)
+
+    events = [e async for e in agent.run("Review the security")]
+    tool_results = [e for e in events if isinstance(e, ToolResult) and e.tool_id == "call_sh"]
+
+    assert len(tool_results) == 1
+    assert tool_results[0].success is False
+    assert "Blocked: reviewer profile" in tool_results[0].result
+
+
+@pytest.mark.asyncio
+async def test_adversarial_untrusted_folder_blocks_in_full_mode_turn(tmp_path, monkeypatch):
+    """Untrusted workspace folder unconditionally blocks mutating tools in FULL mode."""
+    from andromity.core.agent import Agent
+    from andromity.core.events import ToolCallStart, ToolCallDelta, ToolCallEnd, Done, TextDelta, ToolResult
+    from andromity.config import config
+
+    untrusted_dir = tmp_path / "untrusted_repo"
+    untrusted_dir.mkdir()
+    config.revoke_trust(str(untrusted_dir))
+    assert not config.is_trusted(str(untrusted_dir))
+
+    session = Session(session_id="untrusted-sess", project_path=str(untrusted_dir))
+    agent = Agent(session=session, profile="builder", auto_approve=True)
+
+    target_file = untrusted_dir / "exploit.py"
+    call_count = 0
+
+    async def mock_untrusted_stream(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield ToolCallStart(tool_name="write_file", tool_id="call_untrusted")
+            yield ToolCallDelta(tool_id="call_untrusted", args_json_chunk=f'{{"path": "{target_file.as_posix()}", "content": "blocked"}}')
+            yield ToolCallEnd(tool_id="call_untrusted")
+            yield Done()
+        else:
+            yield TextDelta(text="Workspace is untrusted.")
+            yield Done()
+
+    monkeypatch.setattr("andromity.core.agent.stream_completion", mock_untrusted_stream)
+
+    events = [e async for e in agent.run("Write exploit in untrusted folder")]
+    tool_results = [e for e in events if isinstance(e, ToolResult) and e.tool_id == "call_untrusted"]
+
+    assert len(tool_results) == 1
+    assert tool_results[0].success is False
+    assert "Untrusted Workspace" in tool_results[0].result
+    assert not target_file.exists(), "Untrusted workspace must never allow writes even in FULL mode!"
+
+
+@pytest.mark.asyncio
+async def test_adversarial_cron_empty_trusted_projects_blocked(tmp_path):
+    """Cron execution in an untrusted workspace must be blocked even when trusted_projects is empty."""
+    from andromity.core.cron import CronJob
+    from andromity.server.rpc_handler import JsonRpcHandler
+    from andromity.config import config
+
+    untrusted_dir = tmp_path / "cron_untrusted"
+    untrusted_dir.mkdir()
+    config.set("trust", "trusted_projects", [])
+    assert not config.is_trusted(str(untrusted_dir))
+
+    job = CronJob(
+        id="cron_untrusted_job",
+        name="Untrusted Cron",
+        prompt="run scheduled task",
+        mode="yolo",
+        project_path=str(untrusted_dir),
+    )
+
+    handler = JsonRpcHandler()
+    res = await handler._execute_cron_job(str(untrusted_dir), job, is_manual=True)
+
+    assert res["status"] == "failed"
+    assert "Workspace folder is untrusted" in res["error"]
+

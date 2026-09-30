@@ -1205,11 +1205,20 @@ async def spawn_subagent_async(
     proj_path = getattr(cur_sess, "project_path", None) if cur_sess else None
     
     orchestrator = getattr(cur_sess, "_orchestrator", None) if cur_sess else None
+    parent_profile = getattr(cur_sess, "profile", None) or config.get("default", "profile", "builder")
     if not orchestrator:
         perm_mode = getattr(cur_sess, "permission_mode", None) if cur_sess else None
-        orchestrator = SubAgentOrchestrator(parent_session_id=parent_id, project_path=proj_path, permission_mode=perm_mode)
+        orchestrator = SubAgentOrchestrator(
+            parent_session_id=parent_id,
+            project_path=proj_path,
+            permission_mode=perm_mode,
+            parent_profile=parent_profile,
+        )
         if cur_sess:
             cur_sess._orchestrator = orchestrator
+    else:
+        orchestrator.permission_mode = getattr(cur_sess, "permission_mode", None) if cur_sess else None
+        orchestrator.parent_profile = parent_profile
 
     def _on_subagent_progress(evt):
         for cb in list(_SUBAGENT_PROGRESS_CALLBACKS):
@@ -1232,6 +1241,7 @@ async def spawn_subagent_async(
         progress_callback=_on_subagent_progress,
         context_snapshot=context_snapshot,
         turn_id=turn_id,
+        parent_profile=parent_profile,
     )
     cur_sess = _current_session_var.get()
     if cur_sess and hasattr(res, "tokens_used") and res.tokens_used:

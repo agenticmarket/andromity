@@ -12,10 +12,11 @@ log = get_logger("subagent_orchestrator")
 class SubAgentOrchestrator:
     """Manages the lifecycle, concurrency, and result aggregation of sub-agents."""
 
-    def __init__(self, parent_session_id: str, project_path: Optional[str] = None, permission_mode: Optional[str] = None):
+    def __init__(self, parent_session_id: str, project_path: Optional[str] = None, permission_mode: Optional[str] = None, parent_profile: Optional[str] = None):
         self.parent_session_id = parent_session_id
         self.project_path = project_path
         self.permission_mode = permission_mode
+        self.parent_profile = parent_profile
         self._agents: Dict[str, SubAgent] = {}
         self._tasks: Dict[str, asyncio.Task] = {}
         self._results: Dict[str, SubAgentResult] = {}
@@ -38,6 +39,7 @@ class SubAgentOrchestrator:
         context_snapshot: Optional[Any] = None,
         permission_mode: Optional[str] = None,
         turn_id: Optional[str] = None,
+        parent_profile: Optional[str] = None,
     ) -> SubAgentResult:
         """Spawn a sub-agent. If wait=True, waits for completion and returns SubAgentResult."""
         resolved_turn_id = turn_id or self.current_turn_id
@@ -56,6 +58,7 @@ class SubAgentOrchestrator:
             context_snapshot=context_snapshot,
             permission_mode=permission_mode or self.permission_mode,
             turn_id=resolved_turn_id,
+            parent_profile=parent_profile or self.parent_profile,
         )
         self._agents[subagent.id] = subagent
         log.info("SubAgent spawned: id=%s role=%s model=%s provider=%s", subagent.id, subagent.role, subagent.model, subagent.provider)
