@@ -4,17 +4,7 @@ import { RpcClient } from "../server/RpcClient.js";
 import { HEAD_SCHEME } from "../integrations/DiffManager.js";
 import { getReviewHtml } from "../providers/changesReview/reviewHtml.js";
 
-interface GitStatusResult {
-  is_git: boolean;
-  branch: string | null;
-  dirty: boolean;
-  untracked_files: string[];
-  modified_files: string[];
-}
-
-interface DiffNumstatResult {
-  files: Record<string, { additions: number; deletions: number }>;
-}
+import { GitStatusResult, DiffNumstatResult, ReviewFile } from "../providers/changesReview/types.js";
 
 export class ChangesReviewPanel {
   public static currentPanel: ChangesReviewPanel | undefined;
@@ -26,9 +16,15 @@ export class ChangesReviewPanel {
   private _disposables: vscode.Disposable[] = [];
   private _initialFilePath?: string;
   private _turnFiles?: string[];
+  private _repositoryRoot?: string;
+  private _projectPath?: string;
+  private _refreshVersion = 0;
+  private _diffVersion = 0;
+  private _knownFiles = new Set<string>();
+  private _deletedFiles = new Set<string>();
 
   public setTurnFiles(files?: string[]) {
-    this._turnFiles = files && files.length > 0 ? files : undefined;
+    this._turnFiles = files;
   }
 
   public static createOrShow(
@@ -44,9 +40,7 @@ export class ChangesReviewPanel {
     if (ChangesReviewPanel.currentPanel) {
       ChangesReviewPanel.currentPanel._panel.reveal(column);
       ChangesReviewPanel.currentPanel._rpcClient = rpcClient;
-      if (turnFiles !== undefined) {
-        ChangesReviewPanel.currentPanel._turnFiles = turnFiles;
-      }
+      ChangesReviewPanel.currentPanel._turnFiles = turnFiles;
       if (initialFilePath) {
         ChangesReviewPanel.currentPanel.selectFile(initialFilePath);
       } else {
@@ -96,6 +90,9 @@ export class ChangesReviewPanel {
     this._rpcClient = rpcClient;
     this._initialFilePath = initialFilePath;
     this._turnFiles = turnFiles;
+    this._projectPath = initialFilePath && path.isAbsolute(initialFilePath)
+      ? vscode.workspace.getWorkspaceFolder(vscode.Uri.file(initialFilePath))?.uri.fsPath
+      : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
     this._panel.webview.html = getReviewHtml(this._panel.webview, this._extensionUri);
 
@@ -156,11 +153,14 @@ export class ChangesReviewPanel {
 
   public async loadChanges(selectFilePath?: string) {
     if (this._isDisposed) return;
-    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const version = ++this._refreshVersion;
+    ++this._diffVersion;
+    const ws = this._projectPath || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!ws || !this._rpcClient) {
       this._postMessage({
         type: "set_changes",
-        branch: "detached",
+        branch: "Offline",
+        turnFiles: null,
         files: [],
         totalAdditions: 0,
         totalDeletions: 0,
@@ -171,15 +171,17 @@ export class ChangesReviewPanel {
     try {
       const [statusRes, numstatRes] = await Promise.all([
         this._rpcClient.call<GitStatusResult>("git.status", { project_path: ws }),
-        this._rpcClient.call<DiffNumstatResult>("git.diff_numstat", { project_path: ws }).catch(() => ({ files: {} })),
+        this._rpcClient.call<DiffNumstatResult>("git.diff_numstat", { project_path: ws }),
       ]);
 
-      if (this._isDisposed) return;
+      if (this._isDisposed || version !== this._refreshVersion) return;
+      this._repositoryRoot = statusRes?.repository_root || ws;
 
       if (!statusRes?.is_git) {
         this._postMessage({
           type: "set_changes",
-          branch: "Not a git repo",
+          branch: "Not a Git repository",
+          turnFiles: null,
           files: [],
           totalAdditions: 0,
           totalDeletions: 0,
@@ -187,13 +189,8 @@ export class ChangesReviewPanel {
         return;
       }
 
-      const filesMap = new Map<
-        string,
-        { path: string; name: string; status: "M" | "A" | "D" | "U"; additions: number; deletions: number }
-      >();
-
-      const numstats: Record<string, { additions: number; deletions: number }> =
-        numstatRes?.files || {};
+      const filesMap = new Map<string, ReviewFile>();
+      const numstats = numstatRes.files;
 
       // Process modified files
       for (const m of statusRes.modified_files || []) {
@@ -202,9 +199,11 @@ export class ChangesReviewPanel {
         filesMap.set(norm, {
           path: norm,
           name: path.basename(norm),
-          status: "M",
+          status: statusRes.files?.find(file => file.path === norm)?.status || "M",
           additions: stats.additions,
           deletions: stats.deletions,
+          binary: stats.binary,
+          omitted: stats.omitted,
         });
       }
 
@@ -218,6 +217,8 @@ export class ChangesReviewPanel {
           status: "U",
           additions: stats.additions,
           deletions: stats.deletions,
+          binary: stats.binary,
+          omitted: stats.omitted,
         });
       }
 
@@ -227,15 +228,19 @@ export class ChangesReviewPanel {
           filesMap.set(norm, {
             path: norm,
             name: path.basename(norm),
-            status: "M",
+            status: "D",
             additions: stats.additions,
             deletions: stats.deletions,
+            binary: stats.binary,
+            omitted: stats.omitted,
           });
         }
       }
 
       const files = Array.from(filesMap.values()).sort((a, b) => a.path.localeCompare(b.path));
 
+      this._knownFiles = new Set(files.map(file => file.path));
+      this._deletedFiles = new Set(files.filter(file => file.status === "D").map(file => file.path));
       let totalAdditions = 0;
       let totalDeletions = 0;
       for (const f of files) {
@@ -250,79 +255,39 @@ export class ChangesReviewPanel {
         totalAdditions,
         totalDeletions,
         selectFile: selectFilePath,
-        turnFiles: this._turnFiles,
+        turnFiles: this._turnFiles?.map(file => path.relative(this._repositoryRoot || ws,
+          path.isAbsolute(file) ? file : path.join(ws, file)).replace(/\\/g, "/")) || null,
       });
     } catch (e: any) {
       if (this._isDisposed) return;
-      vscode.window.showErrorMessage(`Failed to load git changes: ${e.message}`);
-      this._postMessage({ type: "refresh_done" });
+      if (version !== this._refreshVersion) return;
+      this._postMessage({ type: "review_error", error: "Unable to load changes. Check workspace trust and the daemon connection, then refresh." });
     }
   }
 
   public async loadFileDiff(filePath: string) {
-    if (this._isDisposed) return;
-    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!ws || !this._rpcClient) return;
-
+    if (this._isDisposed || !this._knownFiles.has(filePath)) return;
+    const version = ++this._diffVersion;
+    const ws = this._repositoryRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!ws || !this._rpcClient) {
+      this._postMessage({ type: "set_file_diff", filePath, notice: "Reconnect the daemon to view this diff.", diff: "" });
+      return;
+    }
     try {
-      const res = await this._rpcClient.call<{ diff: string }>("git.file_diff", {
-        project_path: ws,
-        path: filePath,
+      const res = await this._rpcClient.call<{ diff: string; notice?: string }>("git.file_diff", {
+        project_path: this._projectPath || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath, path: filePath,
       });
-
-      let diffText = res?.diff || "";
-
-      // If diff is empty, check if it's an untracked new file or deleted file
-      if (!diffText) {
-        const absPath = path.isAbsolute(filePath) ? filePath : path.join(ws, filePath);
-        try {
-          const fileUri = vscode.Uri.file(absPath);
-          const stat = await vscode.workspace.fs.stat(fileUri);
-          if (stat && stat.type === vscode.FileType.File) {
-            // Guard against massive files freezing the webview
-            if (stat.size > 1_000_000) {
-              diffText = `@@ -0,0 +1,1 @@\n+ [Large file (${Math.round(stat.size / 1024)} KB) - text diff omitted for performance]`;
-            } else {
-              const bytes = await vscode.workspace.fs.readFile(fileUri);
-              let isBinary = false;
-              for (let i = 0; i < Math.min(bytes.length, 4096); i++) {
-                if (bytes[i] === 0) { isBinary = true; break; }
-              }
-              if (isBinary) {
-                diffText = `@@ -0,0 +1,1 @@\n+ [Binary file - text diff omitted]`;
-              } else {
-                const text = new TextDecoder("utf-8").decode(bytes);
-                const lines = text.split(/\r?\n/);
-                const previewLines = lines.slice(0, 5000);
-                diffText = `@@ -0,0 +1,${previewLines.length} @@\n` + previewLines.map((l) => `+${l}`).join("\n");
-                if (lines.length > 5000) {
-                  diffText += `\n+ ... [${lines.length - 5000} more lines omitted for performance]`;
-                }
-              }
-            }
-          }
-        } catch {
-          // File might be deleted or unreadable
-        }
-      }
-
-      this._postMessage({
-        type: "set_file_diff",
-        filePath,
-        diff: diffText,
-      });
-    } catch (e: any) {
-      this._postMessage({
-        type: "set_file_diff",
-        filePath,
-        diff: `Error loading diff: ${e.message}`,
-      });
+      if (version !== this._diffVersion || this._isDisposed) return;
+      this._postMessage({ type: "set_file_diff", filePath, diff: res.diff || "", notice: res.notice || "" });
+    } catch {
+      if (version !== this._diffVersion) return;
+      this._postMessage({ type: "set_file_diff", filePath, diff: "", notice: "Unable to load this diff. Refresh and try again." });
     }
   }
 
   private async _openFileInEditor(filePath: string) {
-    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!ws) return;
+    const ws = this._repositoryRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!ws || !this._knownFiles.has(filePath)) return;
     try {
       const absPath = path.isAbsolute(filePath) ? filePath : path.join(ws, filePath);
       const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(absPath));
@@ -333,16 +298,11 @@ export class ChangesReviewPanel {
   }
 
   private async _openNativeDiff(filePath: string, isUntracked: boolean) {
-    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!ws) return;
+    const ws = this._repositoryRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!ws || !this._knownFiles.has(filePath)) return;
     const absPath = path.isAbsolute(filePath) ? filePath : path.join(ws, filePath);
     const fileUri = vscode.Uri.file(absPath);
     const fileName = path.basename(filePath);
-
-    if (isUntracked) {
-      await vscode.window.showTextDocument(fileUri, { preview: true });
-      return;
-    }
 
     try {
       const posixPath = absPath.replace(/\\/g, "/");
@@ -350,13 +310,13 @@ export class ChangesReviewPanel {
       const headUri = vscode.Uri.from({
         scheme: HEAD_SCHEME,
         path: uriPath,
-        query: `ref=HEAD`,
-        fragment: ws,
+        query: "ref=" + (isUntracked ? "EMPTY" : "HEAD") + "&v=" + Date.now(),
+        fragment: this._projectPath || ws,
       });
       await vscode.commands.executeCommand(
         "vscode.diff",
         headUri,
-        fileUri,
+        this._deletedFiles.has(filePath) ? vscode.Uri.from({ scheme: HEAD_SCHEME, path: uriPath, query: "ref=EMPTY", fragment: ws }) : fileUri,
         `${fileName} (Working Tree Diff)`
       );
     } catch {
@@ -365,37 +325,30 @@ export class ChangesReviewPanel {
   }
 
   private async _revertFile(filePath: string) {
+    if (!this._knownFiles.has(filePath)) return;
+    if (!this._rpcClient) {
+      vscode.window.showErrorMessage("Reconnect the daemon before discarding changes.");
+      return;
+    }
+    const absPath = path.join(this._repositoryRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "", filePath);
+    const dirty = vscode.workspace.textDocuments?.find(doc => doc.uri.fsPath === absPath && doc.isDirty);
+    if (dirty) {
+      vscode.window.showWarningMessage("Save or close the unsaved editor before discarding this file's changes.");
+      return;
+    }
     const confirm = await vscode.window.showWarningMessage(
-      `Revert all local changes in "${path.basename(filePath)}"? This cannot be undone.`,
-      { modal: true },
-      "Revert Changes"
-    );
-    if (confirm !== "Revert Changes") return;
-
-    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!ws) return;
-
+      `Discard all staged and unstaged changes in "${filePath}"? New files will be deleted.`,
+      { modal: true }, "Discard Changes");
+    if (confirm !== "Discard Changes") return;
     try {
-      if (this._rpcClient) {
-        const res = await this._rpcClient.call<{ success: boolean; action: string }>("git.revert_file", {
-          project_path: ws,
-          path: filePath,
-        });
-        if (res?.success) {
-          vscode.window.showInformationMessage(`Reverted ${path.basename(filePath)}`);
-          await this.loadChanges();
-          return;
-        }
-      }
-
-      // Fallback
-      const absPath = path.isAbsolute(filePath) ? filePath : path.join(ws, filePath);
-      const uri = vscode.Uri.file(absPath);
-      await vscode.workspace.fs.delete(uri, { recursive: true, useTrash: true });
-      vscode.window.showInformationMessage(`Reverted ${path.basename(filePath)}`);
+      const res = await this._rpcClient.call<{ success: boolean }>("git.revert_file", {
+        project_path: this._projectPath || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath, path: filePath,
+      });
+      if (!res.success) throw new Error("discard failed");
+      void vscode.commands.executeCommand("git.refresh");
       await this.loadChanges();
-    } catch (e: any) {
-      vscode.window.showErrorMessage(`Failed to revert file: ${e.message}`);
+    } catch {
+      vscode.window.showErrorMessage("Could not discard changes. Check workspace trust and wait for agent turns to finish.");
     }
   }
 

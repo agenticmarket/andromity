@@ -531,14 +531,8 @@
         },
         "andromity.reasoningEffort": {
           "type": "string",
-          "default": "medium",
-          "enum": [
-            "off",
-            "low",
-            "medium",
-            "high"
-          ],
-          "description": "Reasoning/Thinking effort for thinking models."
+          "default": "auto",
+          "description": "Model-specific thinking effort. Auto uses the provider default. Choose supported values in the chat picker, or budget:<tokens> for a model with a thinking token budget."
         },
         "andromity.soundNotifications": {
           "type": "boolean",

@@ -5,7 +5,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Static, Button, RadioButton, RadioSet, Input
 from textual.reactive import reactive
 from andromity.config import config
-from andromity.core.models import MODEL_CATALOG, fetch_live_models_sync
+from andromity.core.models import MODEL_CATALOG, provider_catalog, fetch_live_models_sync
 
 
 class ModelPickerScreen(ModalScreen):
@@ -114,7 +114,7 @@ ModelPickerScreen {
                 yield Static("[bold]Choose a provider:[/]", id="mp-providers-header")
                 with VerticalScroll(id="mp-providers"):
                     with RadioSet(id="mp-providers-radioset"):
-                        for key, info in MODEL_CATALOG.items():
+                        for key, info in provider_catalog().items():
                             env = info.get("requires_env", "")
                             label = f" {info['name']}"
                             if env:
@@ -175,7 +175,7 @@ ModelPickerScreen {
         self._step = 2
         self._selected_provider = provider_key
         self._selected_model_idx = -1
-        provider = MODEL_CATALOG.get(provider_key, {})
+        provider = provider_catalog().get(provider_key, {})
 
         self.query_one("#mp-title").update(
             f" Step 2: Select Model — {provider.get('name', provider_key)} "
@@ -218,7 +218,7 @@ ModelPickerScreen {
             return
         self.query_one("#mp-models-header").update(header_text)
 
-        if req_env and has_key:
+        if has_key or provider.get("base_url"):
             self._fetch_live_models_worker(provider_key)
 
     def _focus_key_input(self):
@@ -239,7 +239,7 @@ ModelPickerScreen {
             self._key_just_connected = True
             self.query_one("#mp-key-row", Horizontal).remove_class("visible")
             self.query_one("#mp-key-hint", Static).remove_class("visible")
-            provider = MODEL_CATALOG.get(provider_key, {})
+            provider = provider_catalog().get(provider_key, {})
             self.query_one("#mp-models-header").update(
                 f"[bold]{provider.get('name', provider_key)} — Select a model:[/] [dim](fetching live models...)[/]"
             )
@@ -288,7 +288,7 @@ ModelPickerScreen {
     @work(thread=True)
     def _fetch_live_models_worker(self, provider_key: str):
         api_key = config.get_api_key(provider_key)
-        provider = MODEL_CATALOG.get(provider_key, {})
+        provider = provider_catalog().get(provider_key, {})
         base_url = provider.get("base_url")
         live_models = fetch_live_models_sync(provider_key, api_key=api_key, base_url=base_url)
         # Always call back — even with empty list (so Ollama offline is shown)
@@ -298,7 +298,7 @@ ModelPickerScreen {
         if self._step != 2 or self._selected_provider != provider_key:
             return
 
-        provider = MODEL_CATALOG.get(provider_key, {})
+        provider = provider_catalog().get(provider_key, {})
 
         if not live_models:
             # Ollama offline OR API failed — show clear error
@@ -384,7 +384,7 @@ ModelPickerScreen {
 
         # Warn if API key missing
         if self._selected_provider:
-            provider_info = MODEL_CATALOG.get(self._selected_provider, {})
+            provider_info = provider_catalog().get(self._selected_provider, {})
             api_key = config.get_api_key(self._selected_provider)
             req_env = provider_info.get("requires_env")
             if req_env and not api_key:

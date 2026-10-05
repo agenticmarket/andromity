@@ -94,18 +94,23 @@ def test_click_model_segment_opens_model_picker():
     asyncio.run(_run())
 
 
-def test_click_effort_segment_cycles_effort():
+def test_click_effort_segment_cycles_effort(monkeypatch):
+    from andromity.core.reasoning import ReasoningCapability, ReasoningMode
+    values = ["low", "xhigh"]
+    monkeypatch.setattr("andromity.core.reasoning.get_model_reasoning_capability",
+                        lambda *args: ReasoningCapability(ReasoningMode.CONFIGURABLE, supported_efforts=values))
     async def _run():
         async with HostApp().run_test(size=(120, 30)) as pilot:
             await _settle(pilot)
             app = pilot.app
             sb = app.query_one(StatusBar)
+            sb._effort = "auto"
             initial = sb._effort
             await pilot.click("#seg-effort")
             await _settle(pilot)
             assert sb._effort != initial
             # Cycle through remaining states to return to initial
-            for _ in range(len(StatusBar._EFFORT_LEVELS) - 1):
+            for _ in range(len(values)):
                 await pilot.click("#seg-effort")
                 await _settle(pilot)
             assert sb._effort == initial

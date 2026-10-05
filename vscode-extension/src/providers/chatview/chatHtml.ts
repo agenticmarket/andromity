@@ -87,14 +87,7 @@ export function getChatViewHtml(webview: vscode.Webview, extensionUri: vscode.Ur
   const clientScript = getChatClientScript(sidebarIconUri.toString(), state);
   const ambientScript = getChatAmbientScript(defaultWallpaperUri, state.wallpaperConfig);
 
-  const reasoningVal = (state.currentReasoning || "medium").toLowerCase();
-  const reasoningMap: Record<string, { label: string; idx: number; pct: number; desc: string }> = {
-    off: { label: "Off", idx: 0, pct: 0, desc: "Direct responses • zero reasoning overhead" },
-    low: { label: "Low", idx: 1, pct: 33.33, desc: "Fast & concise thoughts • minimal latency" },
-    medium: { label: "Medium", idx: 2, pct: 66.66, desc: "Balanced reasoning for coding & architecture" },
-    high: { label: "High", idx: 3, pct: 100, desc: "Deep step-by-step reflection • complex tasks" },
-  };
-  const activeReasoning = reasoningMap[reasoningVal] || reasoningMap.medium;
+  const activeReasoning = { label: "Auto", idx: 0, pct: 0 };
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -919,10 +912,6 @@ ${styles}
             <span class="bg-strip-timer" id="bg-strip-timer">0s</span>
           </div>
           <div class="tracker-actions">
-            <button class="btn-tracker-open" id="btn-bg-open-tab" aria-label="Open task logs in editor tab" title="Open Task Logs in Editor Tab">
-              <span>View Logs</span>
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 13v6a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-6"></path><polyline points="9 3 3 3 3 9"></polyline><line x1="14" y1="14" x2="3" y2="3"></line></svg>
-            </button>
             <button class="btn-tracker-close btn-bg-stop-all" id="btn-bg-stop-all" aria-label="Stop running background processes" title="Stop running background processes">
               <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg>
             </button>
@@ -940,31 +929,17 @@ ${styles}
         <div class="reasoning-popover" id="reasoning-popover" style="display:none;" role="dialog" aria-label="Thinking Effort">
           <div class="reasoning-slider-container">
             <div class="reasoning-slider-track-wrap">
-              <input type="range" class="reasoning-slider-range" id="reasoning-slider-range" min="0" max="3" step="1" value="${activeReasoning.idx}" aria-label="Thinking effort level">
+              <input type="range" class="reasoning-slider-range" id="reasoning-slider-range" min="0" max="0" step="1" value="${activeReasoning.idx}" aria-label="Thinking effort level">
               <div class="reasoning-slider-track" id="reasoning-slider-track">
                 <div class="reasoning-slider-fill fill-${activeReasoning.label.toLowerCase()}" id="reasoning-slider-fill" style="width: ${activeReasoning.pct}%;"></div>
               </div>
-              <div class="reasoning-slider-ticks">
-                <span class="reasoning-tick-point ${activeReasoning.idx >= 0 ? 'active' : ''}" data-level-idx="0" title="Off"></span>
-                <span class="reasoning-tick-point ${activeReasoning.idx >= 1 ? 'active' : ''}" data-level-idx="1" title="Low"></span>
-                <span class="reasoning-tick-point ${activeReasoning.idx >= 2 ? 'active' : ''}" data-level-idx="2" title="Medium"></span>
-                <span class="reasoning-tick-point ${activeReasoning.idx >= 3 ? 'active' : ''}" data-level-idx="3" title="High"></span>
-              </div>
+              <div class="reasoning-slider-ticks" id="reasoning-slider-ticks"></div>
             </div>
-
-            <div class="reasoning-slider-labels">
-              <button type="button" class="reasoning-step-btn ${activeReasoning.idx === 0 ? 'active' : ''}" data-level="off" data-idx="0" title="Off">
-                <span class="reasoning-step-label">Off</span>
-              </button>
-              <button type="button" class="reasoning-step-btn ${activeReasoning.idx === 1 ? 'active' : ''}" data-level="low" data-idx="1" title="Low">
-                <span class="reasoning-step-label">Low</span>
-              </button>
-              <button type="button" class="reasoning-step-btn ${activeReasoning.idx === 2 ? 'active' : ''}" data-level="medium" data-idx="2" title="Medium">
-                <span class="reasoning-step-label">Medium</span>
-              </button>
-              <button type="button" class="reasoning-step-btn ${activeReasoning.idx === 3 ? 'active' : ''}" data-level="high" data-idx="3" title="High">
-                <span class="reasoning-step-label">High</span>
-              </button>
+            <div class="reasoning-slider-labels" id="reasoning-slider-labels"></div>
+            <div id="reasoning-budget-row" hidden>
+              <label for="reasoning-budget-input">Thinking tokens</label>
+              <input type="number" id="reasoning-budget-input" step="1" aria-label="Thinking token budget">
+              <button type="button" id="reasoning-budget-apply">Apply</button>
             </div>
           </div>
         </div>
@@ -1055,7 +1030,7 @@ ${styles}
                 <polyline points="6 9 12 15 18 9"></polyline>
               </svg>
             </button>
-            <button class="prompt-btn" id="btn-prompt-reasoning" title="Reasoning / Thinking Effort: ${activeReasoning.label} (Click to adjust)" aria-label="Reasoning effort" aria-haspopup="dialog" aria-expanded="false">
+            <button class="prompt-btn is-unsupported" id="btn-prompt-reasoning" title="Loading model thinking controls" aria-label="Reasoning effort" aria-haspopup="dialog" aria-expanded="false" aria-disabled="true" disabled>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"></path>
                 <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"></path>

@@ -434,6 +434,10 @@ SettingsScreen {
                                 placeholder=f"Paste new {provider} key…" if current_key else f"Paste {provider} key…",
                                 id=f"key-{provider}",
                                 classes="settings-input")
+                        yield Label("Custom providers", classes="settings-label")
+                        yield Button("Add custom provider", id="connection-add")
+                        with Vertical(id="custom-connections"):
+                            yield from self._connection_rows()
 
                     # ── 3. Model ──────────────────────────────────────────────
                     with VerticalScroll(id="pane-model", classes="settings-pane"):
@@ -1356,10 +1360,38 @@ SettingsScreen {
 
     # ── Button handlers ───────────────────────────────────────────────────────
 
+    def _connection_rows(self):
+        from andromity.core.connections import provider_info
+        for connection in provider_info():
+            if connection["custom"]:
+                yield Horizontal(
+                    Static(connection["name"]),
+                    Button("Edit", id=f"connection-edit-{connection['id']}"),
+                    Button("Remove", id=f"connection-remove-{connection['id']}"),
+                    classes="connection-row")
+
+    def _refresh_connections(self, _result=None):
+        container = self.query_one("#custom-connections", Vertical)
+        container.remove_children()
+        container.mount_all(list(self._connection_rows()))
+
     @on(Button.Pressed)
     async def _on_button_pressed(self, event: Button.Pressed):
         event.stop()
         btn_id = event.button.id or ""
+
+        if btn_id == "connection-add" or btn_id.startswith("connection-edit-"):
+            from andromity.tui.overlays.connection import ProviderConnectionScreen
+            provider = btn_id[len("connection-edit-"):] if btn_id.startswith("connection-edit-") else ""
+            self.app.push_screen(ProviderConnectionScreen(provider), self._refresh_connections)
+            return
+        if btn_id.startswith("connection-remove-"):
+            try:
+                config.delete_provider(btn_id[len("connection-remove-"):])
+                self._refresh_connections()
+            except ValueError as exc:
+                self.app.notify(str(exc), severity="warning")
+            return
 
         if btn_id == "settings-cancel":
             try:

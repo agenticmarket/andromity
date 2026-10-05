@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import AsyncGenerator, List, Dict, Any, Optional
 
@@ -223,77 +224,36 @@ async def stream_completion(
         provider_name = config.get("default", "provider", "anthropic")
     if model is None:
         model = config.get("default", "model", "claude-sonnet-4-6")
-    provider_cfg = config.get_provider_config(provider_name)
-
-    if provider_name == "google":
-        # LiteLLM routes Google AI Studio Gemini API via the 'gemini/' prefix
-        litellm_model = f"gemini/{model}" if not model.startswith("gemini/") else model
-        base_url = provider_cfg.get("base_url") if provider_cfg else None
-    elif provider_name == "ollama":
-        # LiteLLM routes Ollama chat endpoint via 'ollama_chat/' or 'ollama/'
-        litellm_model = f"ollama_chat/{model}" if not (model.startswith("ollama/") or model.startswith("ollama_chat/")) else model
-        base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "http://localhost:11434"
+    from andromity.core.connections import provider_request
+    resolved = provider_request(provider_name, model)
+    litellm_model = resolved["model"]
+    base_url = resolved.get("api_base")
+    _num_ctx = 0
+    if litellm_model.startswith(("ollama/", "ollama_chat/")):
         from andromity.core.models import get_ollama_num_ctx
-        _num_ctx = get_ollama_num_ctx(model, base_url)
-        log.info("Ollama num_ctx=%d for model=%s", _num_ctx, model)
-    elif provider_name == "nvidia":
-        # Route natively via litellm's nvidia_nim provider (handles auth and endpoints automatically)
-        litellm_model = f"nvidia_nim/{model}" if not model.startswith("nvidia_nim/") else model
-        base_url = (provider_cfg.get("base_url") if provider_cfg else None)
-    elif provider_cfg and provider_cfg.get("type") and provider_cfg.get("type") != provider_name:
-        litellm_model = f"{provider_cfg.get('type')}/{model}"
-        base_url = provider_cfg.get("base_url")
-    elif provider_name == "openrouter":
-        clean_model = model.lstrip("~") if model else model
-        litellm_model = f"openrouter/{clean_model}" if not clean_model.startswith("openrouter/") else clean_model
-        base_url = provider_cfg.get("base_url") if provider_cfg else None
-    elif provider_name == "opencode":
-        # OpenCode Zen inference gateway — OpenAI-compatible, requires User-Agent header
-        litellm_model = f"openai/{model}" if not model.startswith("openai/") else model
-        base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "https://opencode.ai/inference/openai/v1"
-    elif provider_name == "andromity":
-        clean_model = model or "auto"
-        litellm_model = f"openai/{clean_model}"
-        base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "https://gateway.agenticmarket.dev/v1"
-    else:
-        litellm_model = f"{provider_name}/{model}" if not model.startswith(f"{provider_name}/") else model
-        base_url = provider_cfg.get("base_url") if provider_cfg else None
-
-    api_key = config.get_api_key(provider_name)
-    if provider_name == "andromity" and not api_key:
-        api_key = "anonymous_trial"
-    if provider_name == "opencode" and not api_key:
-        # Auto-read token from OpenCode's local auth store (set by `opencode auth login`)
-        try:
-            import json as _json
-            _auth_path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
-            _auth = _json.loads(_auth_path.read_text(encoding="utf-8"))
-            api_key = _auth.get("opencode", {}).get("key") or _auth.get("openrouter", {}).get("key")
-        except Exception:
-            pass
-
+        _num_ctx = get_ollama_num_ctx(model, base_url or "http://localhost:11434")
     kwargs = {
-        "model": litellm_model,
+        **resolved,
         "messages": sanitized_messages,
         "stream": True,
         "stream_options": {"include_usage": True},
     }
-    if api_key:
-        kwargs["api_key"] = api_key
-    if base_url:
-        kwargs["api_base"] = base_url
     if tools:
         kwargs["tools"] = tools
 
     # Custom kwargs per provider
-    if provider_name == "ollama" and _num_ctx:
+    if _num_ctx:
         kwargs.setdefault("options", {})["num_ctx"] = _num_ctx
 
     if provider_name == "andromity":
+        try:
+            from andromity import __version__ as _pkg_ver
+        except Exception:
+            _pkg_ver = "0.2.14"
         andromity_headers = {
             "User-Agent": "Andromity",
             "x-andromity-client-id": config.get("user", "anonymous_id", "local_client"),
-            "x-andromity-version": "0.2.12",
+            "x-andromity-version": _pkg_ver,
         }
         if turn_id:
             andromity_headers["x-andromity-turn-id"] = turn_id
@@ -302,12 +262,16 @@ async def stream_completion(
     # OpenRouter: send app identity headers so the dashboard shows "Andromity"
     # instead of "litellm". See https://openrouter.ai/docs#provider-routing
     if provider_name == "openrouter":
+        client_env = (os.environ.get("ANDROMITY_CLIENT") or "").lower()
+        is_vscode = client_env in ("server", "vscode") or bool(os.environ.get("VSCODE_PID"))
+        categories = "ide-extension,cli-agent" if is_vscode else "cli-agent,ide-extension"
+
         kwargs["extra_headers"] = {
             "User-Agent": "Andromity",
             "HTTP-Referer": "https://andromity.agenticmarket.dev",
             "X-Title": "Andromity",
             "X-OpenRouter-Title": "Andromity",
-            "X-OpenRouter-Categories": "cli-agent",
+            "X-OpenRouter-Categories": categories,
         }
         # Enable provider fallbacks so overloaded endpoints do not stall in queue
         kwargs.setdefault("extra_body", {})
@@ -321,21 +285,11 @@ async def stream_completion(
     log.info("stream_completion start: provider=%s model=%s litellm_model=%s",
              provider_name, model, litellm_model)
 
-    if "z-ai/" in model or "glm-" in model:
-        kwargs.setdefault("extra_body", {})
-        kwargs["extra_body"]["chat_template_kwargs"] = {
-            "enable_thinking": True,
-            "clear_thinking": False
-        }
-
-    # Inject reasoning effort when set
-    if reasoning_effort and reasoning_effort != "off":
-        if provider_name == "openrouter":
-            kwargs.setdefault("extra_body", {})
-            kwargs["extra_body"]["reasoning"] = {"effort": reasoning_effort, "exclude": False}
-        else:
-            # OpenAI o-series and compatible providers
-            kwargs["reasoning_effort"] = reasoning_effort
+    from andromity.core.reasoning import (
+        apply_reasoning_to_request, discover_model_reasoning_capability,
+    )
+    capability = await asyncio.to_thread(discover_model_reasoning_capability, provider_name, model)
+    apply_reasoning_to_request(provider_name, model, reasoning_effort, kwargs, capability)
 
     # Upstream retry with backoff for stalls, rate limits, and transient drops
     STREAM_BACKOFF_DELAYS = [5.0, 10.0, 20.0]
@@ -385,7 +339,7 @@ async def stream_completion(
                 if is_daily_quota or is_auth_error or is_bad_request:
                     log.info("Non-retryable error (%s: %s). Failing fast without retries.", type(e).__name__, e)
                     yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-                    yield Done()
+                    yield Done(outcome="error")
                     return
 
                 is_429 = "429" in msg or "rate limit" in msg or "ratelimit" in msg or "quota" in msg
@@ -408,7 +362,7 @@ async def stream_completion(
                 else:
                     log.error("acompletion initial error after %d attempts: %s", total_attempts, e, exc_info=True)
                     yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-                    yield Done()
+                    yield Done(outcome="error")
                     return
 
             # 2. Watchdog: guard against upstream queue stall
@@ -540,7 +494,7 @@ async def stream_completion(
                 yield TextDelta(text=_format_stall_text(provider_name, model, e.timeout))
             else:
                 yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-            yield Done(usage=usage)
+            yield Done(usage=usage, outcome="error")
             return
 
 
@@ -1024,8 +978,6 @@ def classify_and_format_error(
     - Under VS Code server (ANDROMITY_CLIENT="server") or pytest: outputs HTML card.
     - Under TUI or CLI: outputs clean, tag-free terminal Markdown.
     """
-    import os
-
     info = classify_error_info(e, provider=provider, model=model, has_images=has_images)
 
     if output_format == "html":

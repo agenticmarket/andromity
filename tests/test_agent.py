@@ -118,3 +118,18 @@ async def test_agent_waterfall_events(session):
     assert tool_results[0].duration_ms >= 0
     assert tool_results[0].ts > 0
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("effort", ["off", "auto", "xhigh"])
+async def test_agent_forwards_explicit_effort_including_off(session, effort):
+    captured = []
+    async def stream(messages, **kwargs):
+        captured.append(kwargs.get("reasoning_effort"))
+        yield TextDelta(text="done")
+        yield Done()
+    agent = Agent(session, profile="coder", auto_approve=True, reasoning_effort=effort)
+    with patch("andromity.core.agent.stream_completion", side_effect=stream):
+        async for _ in agent.run("hello"):
+            pass
+    assert captured == [effort]

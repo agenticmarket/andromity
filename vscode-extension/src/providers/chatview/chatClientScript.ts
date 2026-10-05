@@ -169,22 +169,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       });
     }
 
-    const btnBgOpenTab = document.getElementById('btn-bg-open-tab');
-    if (btnBgOpenTab) {
-      btnBgOpenTab.addEventListener('click', function(ev) {
-        ev.stopPropagation();
-        if (activeBgProcesses.size > 0) {
-          const first = activeBgProcesses.values().next().value;
-          if (first) {
-            vscode.postMessage({
-              type: 'open_bg_task_tab',
-              processId: first.process_id,
-              command: first.command || ''
-            });
-          }
-        }
-      });
-    }
+
 
     if (btnBgStopAll) {
       btnBgStopAll.addEventListener('click', function(ev) {
@@ -764,6 +749,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let pinnedModels = ${JSON.stringify(state.pinnedModels || [])};
     let isRunning = false;
     const promptQueue = [];
+    const serverQueues = {};
+    const appliedInputIds = new Set();
+    let queueSupported = false;
+    let pendingInputDraft = null;
+
+    function requestQueueSnapshot() {
+      if (currentSessionId) vscode.postMessage({ type: 'queue_snapshot', sessionId: currentSessionId });
+    }
     const sentPromptsHistory = [];
     let promptHistoryIndex = 0;
     let tempPromptDraft = '';
@@ -1291,6 +1284,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
     if (promptInput) {
       promptInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+          e.preventDefault();
+          if (queueSupported) sendCurrentPrompt('steer');
+          else appendSystemNote('Update the Andromity server to use safe steering.');
+          return;
+        }
         // Mentions navigation
         if (mentionPalette && mentionPalette.style.display === 'flex' && currentMentionMatches.length > 0) {
           if (e.key === 'ArrowDown') {
@@ -4307,31 +4306,33 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
         case 'retry-turn': {
           const errCard = target.closest('.andromity-error-card, .error-card');
+          if (errCard?.dataset.retryPending === 'true') break;
           if (errCard) {
             errCard.style.opacity = '0.5';
-            errCard.style.pointerEvents = 'none';
+            errCard.dataset.retryPending = 'true';
             const btn = errCard.querySelector('.btn-error-retry');
             if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>Retrying...';
           }
           vscode.postMessage({
             type: 'retry_turn',
             sessionId: currentSessionId,
-            stripImages: false,
+            stripImages: false, model: currentModel, provider: currentProvider, reasoningEffort: currentReasoning,
           });
           break;
         }
         case 'retry-without-image': {
           const errCard = target.closest('.andromity-error-card, .error-card');
+          if (errCard?.dataset.retryPending === 'true') break;
           if (errCard) {
             errCard.style.opacity = '0.5';
-            errCard.style.pointerEvents = 'none';
+            errCard.dataset.retryPending = 'true';
             const btn = errCard.querySelector('.btn-error-retry');
             if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>Retrying without image...';
           }
           vscode.postMessage({
             type: 'retry_turn',
             sessionId: currentSessionId,
-            stripImages: true,
+            stripImages: true, model: currentModel, provider: currentProvider, reasoningEffort: currentReasoning,
           });
           break;
         }
@@ -4446,7 +4447,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         }
         case 'remove-queued':
-          removeQueued(parseInt(target.getAttribute('data-idx') || '0', 10));
+          if (queueSupported) vscode.postMessage({ type: 'queue_remove', sessionId: currentSessionId, inputId: target.getAttribute('data-input-id') });
+          else removeQueued(parseInt(target.getAttribute('data-idx') || '0', 10));
+          break;
+        case 'steer-queued':
+          vscode.postMessage({ type: 'queue_promote', sessionId: currentSessionId, inputId: target.getAttribute('data-input-id') });
+          break;
+        case 'resume-queue':
+          vscode.postMessage({ type: 'queue_resume', sessionId: currentSessionId });
           break;
         case 'copy-code':
           copyCode(target);
@@ -4630,12 +4638,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     window.pickModel = function(modelId, provider) {
       currentModel = modelId;
       if (provider) currentProvider = provider;
+      // Invalidate capability of previous model so UI does not stay locked in stale state
+      currentModelReasoningCapability = null;
+      const newCap = getActiveModelReasoningCapability();
+      if (newCap.mode !== 'none' && (!currentReasoning || currentReasoning === 'off')) {
+        currentReasoning = newCap.default_effort || 'medium';
+      }
       updateModelBadge();
       modelFlyout.style.display = 'none';
-      vscode.postMessage({ type: 'update_config', key: 'model', value: modelId });
-      if (provider) {
-        vscode.postMessage({ type: 'update_config', key: 'provider', value: provider });
-      }
+      vscode.postMessage({ type: 'update_config', key: 'model', value: modelId, provider: provider || currentProvider });
     };
 
     window.openModelHub = function() {
@@ -4660,13 +4671,47 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     let availableProfiles = ['builder', 'coder', 'reviewer', 'planner'];
-    const REASONING_LEVELS = [
-      { id: 'off', label: 'Off', desc: 'Direct responses • zero reasoning overhead', pct: 0 },
-      { id: 'low', label: 'Low', desc: 'Fast & concise thoughts • minimal latency', pct: 33.33 },
-      { id: 'medium', label: 'Medium', desc: 'Balanced reasoning for coding & architecture', pct: 66.66 },
-      { id: 'high', label: 'High', desc: 'Deep step-by-step reflection • complex tasks', pct: 100 }
-    ];
-    let availableReasoningEfforts = REASONING_LEVELS.map(l => l.id);
+    let REASONING_LEVELS = [];
+    let currentModelReasoningCapability = null;
+
+    function getActiveModelReasoningCapability() {
+      if (currentModelReasoningCapability && currentModelReasoningCapability._modelId === currentModel &&
+          currentModelReasoningCapability._providerId === currentProvider) {
+        return currentModelReasoningCapability;
+      }
+      const found = (allModels || []).find(m => m.id === currentModel && m.provider === currentProvider);
+      return found?.reasoning || { mode: 'unknown', supported_efforts: [], default_effort: 'auto' };
+    }
+
+    function getReasoningChoices(cap) {
+      const ids = ['auto'];
+      (cap.supported_efforts || []).forEach(value => {
+        if (typeof value !== 'string') return;
+        const id = value === 'none' ? 'off' : value;
+        if (cap.is_mandatory && id === 'off') return;
+        if (!ids.includes(id)) ids.push(id);
+      });
+      const ascending = ['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'on'];
+      const rank = id => ascending.includes(id) ? ascending.indexOf(id) : ascending.length;
+      ids.sort((a, b) => rank(a) - rank(b));
+      return ids.map((id, idx) => ({
+        id, label: id === 'auto' ? 'Auto' : id.charAt(0).toUpperCase() + id.slice(1),
+        pct: ids.length > 1 ? idx * 100 / (ids.length - 1) : 0,
+      }));
+    }
+
+    function hasReasoningControls(cap) {
+      return (Array.isArray(cap.supported_efforts) && cap.supported_efforts.length > 0) ||
+        (cap.supports_max_tokens === true && Number.isInteger(cap.budget_min) && Number.isInteger(cap.budget_max));
+    }
+
+    function validReasoningBudget(cap, value) {
+      if (!cap.supports_max_tokens || !['google_budget', 'anthropic_budget'].includes(cap.request_format)) return false;
+      if (!/^budget:[0-9]+$/.test(value || '')) return false;
+      const budget = Number(value.slice(7));
+      return Number.isInteger(cap.budget_min) && Number.isInteger(cap.budget_max) &&
+        budget >= cap.budget_min && budget <= cap.budget_max && (budget !== 0 || cap.supported_efforts.includes('off'));
+    }
     let attachedImages = [];
     let attachedFiles = [];
     let currentActiveEditorContext = null;
@@ -4840,7 +4885,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (lbl) {
         lbl.textContent = display.toUpperCase();
         if (typeof lbl.removeAttribute === 'function') {
-          lbl.removeAttribute('aria-busy');
+          if (typeof lbl.removeAttribute === 'function') lbl.removeAttribute('aria-busy');
         }
         if (lbl.classList && typeof lbl.classList.remove === 'function') {
           lbl.classList.remove('skeleton', 'skeleton-text');
@@ -4859,80 +4904,103 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function getReasoningLevelIndex(val) {
-      const v = (val || 'medium').toLowerCase();
-      const idx = REASONING_LEVELS.findIndex(l => l.id === v);
-      return idx >= 0 ? idx : 2;
+      const idx = REASONING_LEVELS.findIndex(l => l.id === val);
+      return idx >= 0 ? idx : 0;
     }
 
     function setReasoningLevel(levelId, notifyExtension) {
-      const idx = getReasoningLevelIndex(levelId);
-      const lvl = REASONING_LEVELS[idx];
-      currentReasoning = lvl.id;
-      updateReasoningUI(lvl);
+      const cap = getActiveModelReasoningCapability();
+      if (!hasReasoningControls(cap)) return;
+      const choices = getReasoningChoices(cap);
+      if (!choices.some(level => level.id === levelId) && !validReasoningBudget(cap, levelId)) return;
+      currentReasoning = levelId;
+      updateReasoningUI();
       if (notifyExtension) {
         vscode.postMessage({ type: 'update_config', key: 'reasoningEffort', value: currentReasoning });
       }
     }
 
-    function updateReasoningUI(lvl) {
-      if (!lvl) {
-        const idx = getReasoningLevelIndex(currentReasoning);
-        lvl = REASONING_LEVELS[idx];
+    function updateReasoningUI() {
+      const cap = getActiveModelReasoningCapability();
+      const controlsAvailable = hasReasoningControls(cap);
+      REASONING_LEVELS = getReasoningChoices(cap);
+      if (!REASONING_LEVELS.some(level => level.id === currentReasoning) && !validReasoningBudget(cap, currentReasoning)) {
+        currentReasoning = cap.default_effort && REASONING_LEVELS.some(level => level.id === cap.default_effort)
+          ? cap.default_effort : 'auto';
       }
-      const idx = REASONING_LEVELS.indexOf(lvl);
-
-      // 1. Update prompt button label & title
+      const idx = getReasoningLevelIndex(currentReasoning);
+      const lvl = REASONING_LEVELS[idx];
+      const isBudget = validReasoningBudget(cap, currentReasoning);
+      const label = controlsAvailable
+        ? (isBudget ? currentReasoning.slice(7) + ' tokens' : lvl.label)
+        : 'N/A';
+      const btn = document.getElementById('btn-prompt-reasoning');
+      if (btn) {
+        btn.classList.toggle('is-unsupported', !controlsAvailable);
+        btn.disabled = !controlsAvailable;
+        btn.setAttribute('aria-disabled', controlsAvailable ? 'false' : 'true');
+        btn.title = controlsAvailable
+          ? (cap.description || 'Thinking effort: ' + label)
+          : 'Thinking controls are unavailable for this model';
+      }
+      const activeReasoningPopover = document.getElementById('reasoning-popover');
+      if (!controlsAvailable && activeReasoningPopover) {
+        activeReasoningPopover.style.display = 'none';
+        if (btn) {
+          btn.classList.remove('active');
+          btn.setAttribute('aria-expanded', 'false');
+        }
+      }
       const lbl = document.getElementById('prompt-reasoning-label');
       if (lbl) {
-        lbl.textContent = lvl.label;
-        if (typeof lbl.removeAttribute === 'function') {
-          lbl.removeAttribute('aria-busy');
-        }
-        if (lbl.classList && typeof lbl.classList.remove === 'function') {
-          lbl.classList.remove('skeleton', 'skeleton-text');
-        }
-        if (lbl.parentElement) {
-          lbl.parentElement.title = 'Reasoning Effort: ' + lvl.label + ' (Click to adjust)';
-        }
+        lbl.textContent = label;
+        if (typeof lbl.removeAttribute === 'function') lbl.removeAttribute('aria-busy');
+        lbl.classList.remove('skeleton', 'skeleton-text');
       }
-
-      // 2. Update popover badge
-      const badge = document.getElementById('reasoning-popover-badge');
-      if (badge) {
-        badge.textContent = lvl.label;
-        badge.className = 'reasoning-popover-badge badge-' + lvl.id;
-      }
-
-      // 3. Update description text
-      const desc = document.getElementById('reasoning-popover-desc');
-      if (desc) {
-        desc.textContent = lvl.desc;
-      }
-
-      // 4. Update slider input value
       const slider = document.getElementById('reasoning-slider-range');
-      if (slider && Number(slider.value) !== idx) {
+      if (slider) {
+        slider.min = '0';
+        slider.max = String(REASONING_LEVELS.length - 1);
         slider.value = String(idx);
+        slider.disabled = REASONING_LEVELS.length < 2;
       }
-
-      // 5. Update slider track fill width & style
       const fill = document.getElementById('reasoning-slider-fill');
       if (fill) {
         fill.style.width = lvl.pct + '%';
-        fill.className = 'reasoning-slider-fill fill-' + lvl.id;
+        fill.className = 'reasoning-slider-fill';
       }
-
-      // 6. Update step button states
-      document.querySelectorAll('.reasoning-step-btn').forEach(btn => {
-        const bLevel = btn.getAttribute('data-level');
-        btn.classList.toggle('active', bLevel === lvl.id);
+      const labels = document.getElementById('reasoning-slider-labels');
+      const ticks = document.getElementById('reasoning-slider-ticks');
+      if (labels) labels.innerHTML = "";
+      if (ticks) ticks.innerHTML = "";
+      REASONING_LEVELS.forEach((level, levelIdx) => {
+        if (labels) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'reasoning-step-btn' + (currentReasoning === level.id ? ' active' : '');
+          button.setAttribute("data-level", level.id);
+          button.textContent = level.label;
+          if (typeof button.addEventListener === 'function') button.addEventListener('click', () => setReasoningLevel(level.id, true));
+          labels.appendChild(button);
+        }
+        if (ticks) {
+          const tick = document.createElement('span');
+          tick.className = 'reasoning-tick-point' + (levelIdx <= idx ? ' active' : '');
+          tick.title = level.label;
+          if (typeof tick.addEventListener === 'function') tick.addEventListener('click', () => setReasoningLevel(level.id, true));
+          ticks.appendChild(tick);
+        }
       });
-
-      // 7. Update tick point indicator states
-      document.querySelectorAll('.reasoning-tick-point').forEach(tp => {
-        const tIdx = parseInt(tp.getAttribute('data-level-idx') || '0', 10);
-        tp.classList.toggle('active', tIdx <= idx);
-      });
+      const budgetInput = document.getElementById('reasoning-budget-input');
+      const budgetRow = document.getElementById('reasoning-budget-row');
+      const hasBudget = cap.supports_max_tokens && Number.isInteger(cap.budget_min) && Number.isInteger(cap.budget_max);
+      if (budgetRow) budgetRow.hidden = !hasBudget;
+      if (budgetInput && hasBudget) {
+        budgetInput.min = String(cap.budget_min);
+        budgetInput.max = String(cap.budget_max);
+        budgetInput.value = isBudget ? currentReasoning.slice(7) : '';
+        budgetInput.placeholder = cap.budget_min + '–' + cap.budget_max;
+      }
     }
 
     function updateReasoningBadge() {
@@ -5073,6 +5141,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function toggleReasoningPopover(forceState) {
       if (!reasoningPopover) return;
+      if (!hasReasoningControls(getActiveModelReasoningCapability())) {
+        reasoningPopover.style.display = 'none';
+        if (btnReasoningEl) {
+          btnReasoningEl.classList.remove('active');
+          btnReasoningEl.setAttribute('aria-expanded', 'false');
+        }
+        return;
+      }
       const isVisible = reasoningPopover.style.display !== 'none';
       const show = typeof forceState === 'boolean' ? forceState : !isVisible;
       reasoningPopover.style.display = show ? 'flex' : 'none';
@@ -5105,30 +5181,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     if (reasoningSlider) {
       reasoningSlider.addEventListener('input', (e) => {
         const valIdx = parseInt(e.target.value, 10);
-        const lvl = REASONING_LEVELS[valIdx] || REASONING_LEVELS[2];
-        setReasoningLevel(lvl.id, true);
+        const lvl = REASONING_LEVELS[valIdx];
+        if (lvl) setReasoningLevel(lvl.id, true);
       });
     }
 
-    document.querySelectorAll('.reasoning-step-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const lvlId = btn.getAttribute('data-level');
-        if (lvlId) {
-          setReasoningLevel(lvlId, true);
-        }
-      });
-    });
-
-    document.querySelectorAll('.reasoning-tick-point').forEach(tp => {
-      tp.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const tIdx = parseInt(tp.getAttribute('data-level-idx') || '0', 10);
-        const lvl = REASONING_LEVELS[tIdx];
-        if (lvl) {
-          setReasoningLevel(lvl.id, true);
-        }
-      });
+    document.getElementById('reasoning-budget-apply')?.addEventListener('click', () => {
+      const input = document.getElementById('reasoning-budget-input');
+      if (input && input.value && input.checkValidity()) setReasoningLevel('budget:' + String(Number(input.value)), true);
     });
 
     function appendHelpCard() {
@@ -5267,7 +5327,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
     updateModelBadge();
 
-    function sendCurrentPrompt() {
+    function sendCurrentPrompt(delivery) {
+      if (pendingInputDraft) return;
       const text = promptInput.value.trim();
       const imagesToSend = [...attachedImages];
       const filesToSend = [...attachedFiles];
@@ -5300,6 +5361,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         tempPromptDraft = '';
       }
 
+      if (!queueSupported) {
       promptInput.value = '';
       promptInput.style.height = 'auto';
       sendBtn.classList.remove('has-text');
@@ -5307,6 +5369,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       renderImageAttachments();
       attachedFiles = [];
       renderAttachedFiles();
+      }
 
       let fullText = text;
       if (filesToSend.length > 0) {
@@ -5318,6 +5381,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       const promptPayload = fullText || (imagesToSend.length > 0 ? 'Please inspect attached image' : 'Please inspect attached files');
 
+      if (queueSupported) {
+        const requestId = 'input-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+        pendingInputDraft = { requestId, text, images: imagesToSend, files: filesToSend, sessionId: currentSessionId };
+        dispatchPrompt(promptPayload, true, imagesToSend, delivery === 'steer' ? 'steer' : 'queue', requestId);
+        return;
+      }
+
       if (isRunning) {
         promptQueue.push({ text: promptPayload, images: imagesToSend, sessionId: currentSessionId });
         renderQueue();
@@ -5326,8 +5396,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       dispatchPrompt(promptPayload, true, imagesToSend);
     }
 
-    function dispatchPrompt(text, attachContext, images) {
+    function dispatchPrompt(text, attachContext, images, delivery, requestId) {
       try {
+        if (queueSupported) {
+          vscode.postMessage({
+            type: 'submit_input', requestId: requestId || ('input-' + Date.now() + '-' + Math.random().toString(36).slice(2)),
+            prompt: text, sessionId: currentSessionId, images: images || [],
+            delivery: delivery || 'queue', attachContext,
+            profile: currentProfile, mode: currentMode, model: currentModel,
+            provider: currentProvider, reasoningEffort: currentReasoning,
+          });
+          return;
+        }
         console.log('[Andromity webview] dispatchPrompt sending:', text.slice(0,120));
         lastTurnPrompt = {
           text: text,
@@ -5370,6 +5450,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function flushQueue() {
+      if (queueSupported) return;
       if (promptQueue.length === 0) return;
       const idx = promptQueue.findIndex(q => !q.sessionId || q.sessionId === currentSessionId);
       if (idx === -1) return;
@@ -5383,6 +5464,29 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function renderQueue() {
+      if (queueSupported) {
+        const state = serverQueues[currentSessionId];
+        const items = state ? state.items : [];
+        queueContainer.style.display = items.length ? 'flex' : 'none';
+        const steerIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20v-7a4 4 0 0 1 4-4h12"/><path d="m15 4 5 5-5 5"/></svg>';
+        const removeIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';
+        const playIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>';
+        queueContainer.innerHTML = '<div class="queue-header"><span>Queued <span class="queue-count">' + items.length + '</span></span>' +
+          (state && state.paused ? '<button class="queue-resume" data-action="resume-queue" title="Resume pending messages">' + playIcon + 'Resume</button>' : '') + '</div><div class="queue-items">' +
+          items.map(function(item, index) {
+            const id = escapeHtml(item.id);
+            const steering = item.delivery === 'steer';
+            const text = escapeHtml(item.prompt || 'Image message');
+            return '<div class="queue-chip' + (steering ? ' is-steering' : '') + '"><span class="queue-index">' + (index + 1) + '</span>' +
+              '<span class="queue-text" title="' + text + '">' + text + '</span>' +
+              (item.image_count ? '<span class="queue-attachment" title="Attached images">' + item.image_count + ' img</span>' : '') +
+              (steering ? '<span class="queue-status" title="Waiting for the current response and tool operations to finish">Next safe point</span>' : '') +
+              '<div class="queue-actions"><button class="queue-action queue-steer" data-action="steer-queued" data-input-id="' + id + '"' + (steering ? ' disabled' : '') +
+              ' title="Steer at the next safe point" aria-label="Steer queued message at the next safe point">' + steerIcon + '</button>' +
+              '<button class="queue-action queue-remove" data-action="remove-queued" data-input-id="' + id + '" title="Remove from queue" aria-label="Remove queued message">' + removeIcon + '</button></div></div>';
+          }).join('') + '</div>';
+        return;
+      }
       const sessionQueue = promptQueue.filter(q => !q.sessionId || q.sessionId === currentSessionId);
       if (sessionQueue.length === 0) {
         queueContainer.style.display = 'none';
@@ -6052,7 +6156,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       const wrap = document.createElement('div');
       wrap.className = 'message-wrap user';
-      const existingUserCount = chatContainer.querySelectorAll('.message-wrap.user').length;
+      const normalUserCount = chatContainer.querySelectorAll('.message-wrap.user:not([data-steering])').length;
+      const existingUserCount = opts && opts.turnIndex !== undefined ? opts.turnIndex : (opts && opts.steering ? Math.max(0, normalUserCount - 1) : normalUserCount);
+      if (opts && opts.steering) wrap.setAttribute('data-steering', 'true');
       wrap.setAttribute('data-turn-index', String(existingUserCount));
 
       const actionsDiv = document.createElement('div');
@@ -6938,8 +7044,21 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       } catch {}
     }
 
-    window.addEventListener('message', event => {
-      const msg = event.data;
+    window.addEventListener('message', event => handleBackendMessage(event.data));
+
+    function rememberInteraction(msg) {
+      const sid = msg.session_id || currentSessionId;
+      const state = sessionsState[sid] = sessionsState[sid] || {};
+      state.interactions = state.interactions || Object.create(null);
+      const id = msg.approval_id || msg.question_id || 'plan';
+      state.interactions[id] = msg;
+      if (sid === currentSessionId) {
+        interactiveSlot.dataset.interactionId = id;
+        delete interactiveSlot.dataset.submitting;
+      }
+    }
+
+    function handleBackendMessage(msg) {
       switch (msg.type) {
         case 'workspace_files_updated': {
           if (Array.isArray(msg.files)) {
@@ -6998,6 +7117,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'init_state':
           clearSkeletonState();
           currentSessionId = msg.sessionId;
+          requestQueueSnapshot();
           allModels = msg.models || [];
           if (msg.pinnedModels) {
             pinnedModels = msg.pinnedModels;
@@ -7014,10 +7134,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             currentProfile = msg.profile;
             updateProfileBadge();
           }
+          if (msg.modelReasoningCapability) {
+            currentModelReasoningCapability = {
+              ...msg.modelReasoningCapability,
+              _modelId: msg.model || currentModel,
+              _providerId: msg.provider || currentProvider,
+            };
+          } else {
+            currentModelReasoningCapability = null;
+          }
           if (msg.reasoningEffort) {
             currentReasoning = msg.reasoningEffort;
-            updateReasoningBadge();
           }
+          updateReasoningBadge();
           if (typeof msg.mascotEnabled === 'boolean') {
             setMascotEnabled(msg.mascotEnabled);
           }
@@ -7202,18 +7331,24 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'config_updated':
           if (msg.key === 'mode') {
             updateModeBadge(msg.value);
-            if (msg.value !== 'safe') {
-              const appCard = interactiveSlot.querySelector('.permission-card, .approval-card');
-              if (appCard) {
-                interactiveSlot.innerHTML = '';
-                appendSystemNote('Mode switched to ' + msg.value.toUpperCase() + ' -- pending tool auto-approved.');
-              }
-            }
           } else if (msg.key === 'model') {
             currentModel = msg.value;
+            if (msg.provider) currentProvider = msg.provider;
+            if (msg.reasoningCapability) {
+              currentModelReasoningCapability = {
+                ...msg.reasoningCapability,
+                _modelId: msg.value,
+                _providerId: msg.provider || currentProvider,
+              };
+            } else {
+              currentModelReasoningCapability = null;
+            }
             updateModelBadge();
+            updateReasoningBadge();
           } else if (msg.key === 'provider') {
             currentProvider = msg.value;
+            currentModelReasoningCapability = null;
+            updateReasoningBadge();
             updateModelBadge();
           } else if (msg.key === 'profile') {
             currentProfile = msg.value;
@@ -7274,15 +7409,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           updateCollabInboxBadge();
           renderCollabInbox();
           interactiveSlot.innerHTML = '';
+          delete interactiveSlot.dataset.interactionId;
+          delete interactiveSlot.dataset.submitting;
+          activePendingApprovalId = null;
+          activePendingToolName = '';
+          activePendingPlan = false;
           hidePlanTracker();
           isPlanTrackerDismissed = false;
           {
             const sessState = sessionsState[currentSessionId];
-            if (sessState && sessState.pendingApproval) {
-              interactiveSlot.innerHTML = renderPermissionCard(sessState.pendingApproval);
-            } else if (sessState && sessState.pendingPlanApproval) {
-              interactiveSlot.innerHTML = renderPlanApprovalCard(sessState.pendingPlanApproval);
-            }
+            const pending = Object.values(sessState?.interactions || {})[0];
+            if (pending) handleBackendMessage(pending);
             if (sessState && sessState.isRunning) {
               isRunning = true;
               cancelBtn.style.display = 'flex';
@@ -7304,6 +7441,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
 
         case 'session_loaded':
+          if (msg.session?.id && currentSessionId && msg.session.id !== currentSessionId) break;
           userScrolledUp = false;
           _isUserActivelyScrolling = false;
           _lastUserScrollTime = 0;
@@ -7316,19 +7454,34 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           finishCurrentThinking();
           chatContainer.innerHTML = '';
           interactiveSlot.innerHTML = '';
+          delete interactiveSlot.dataset.interactionId;
+          activePendingApprovalId = null;
+          activePendingToolName = '';
+          activePendingPlan = false;
+          currentTurnAssistantDiv = null;
+          currentAssistantContent = null;
+          currentThinkingDiv = null;
+          currentThinkingContent = null;
+          currentToolSequence = null;
+          const runtime = msg.session?.runtime;
+          if (runtime) sessionLiveBuffer.delete(currentSessionId);
+          const liveToolIds = new Set((runtime?.tools || []).map(tool => tool.tool_id));
+          activeBgProcesses.clear();
+          updateBgProcessStripUI();
           // Reset diff stats — they belong to the previous session's history and must not
           // accumulate into the newly loaded session's tool call replay.
           globalDiffStats = {};
           turnEditedFiles.clear();
           if (msg.session && msg.session.id) {
             currentSessionId = msg.session.id;
+            requestQueueSnapshot();
           }
           if (msg.session) {
             updateSessionCollabBadge(msg.session);
           }
           updateCollabInboxBadge();
           renderCollabInbox();
-          const sessionIsRunning = Boolean(
+          const sessionIsRunning = runtime ? runtime.is_running === true : Boolean(
             (msg.session && (msg.session.status === 'running' || msg.session.is_running)) ||
             (sessionsState[currentSessionId] && sessionsState[currentSessionId].isRunning)
           );
@@ -7402,7 +7555,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   appendCompactionSummaryCard(uContent);
                 } else {
                   try {
-                    appendUserMessage(uContent, m.images || [], m.ts, { skipDedupe: true });
+                    appendUserMessage(uContent, m.images || [], m.ts, { skipDedupe: true, steering: Boolean(m.steering) });
                   } catch (userRenderErr) {
                     console.error('[Andromity webview] Failed to render user prompt', userRenderErr);
                   }
@@ -7443,7 +7596,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 }
 
                 // 2. Tool calls (grouped into a single unified sector per turn)
-                if (m.tool_calls && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+                if (m.tool_calls && Array.isArray(m.tool_calls) && m.tool_calls.some(tc => !liveToolIds.has(tc.id))) {
                   if (!currentTurnToolSeq) {
                     currentTurnToolSeq = document.createElement('div');
                     currentTurnToolSeq.className = 'tool-sequence collapsed';
@@ -7487,6 +7640,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   }
 
                   for (const tc of m.tool_calls) {
+                    if (liveToolIds.has(tc.id)) continue;
                     currentTurnToolCount++;
                     const fn = tc.function || {};
                     const toolName = fn.name || 'tool';
@@ -7713,6 +7867,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             // second wrapper here — that caused the "new turn" visual break after session switch.
             startAssistantTurn();
           }
+          if (runtime) handleBackendMessage({ type: 'session_runtime', session_id: currentSessionId, runtime });
           renderConversationTimeline();
           userScrolledUp = false;
           scrollToBottom(false);
@@ -7725,6 +7880,60 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               scrollToBottom(false);
             }, 180);
           });
+          break;
+
+        case 'session_runtime': {
+          if (msg.session_id !== currentSessionId) break;
+          const state = sessionsState[currentSessionId] = sessionsState[currentSessionId] || {};
+          state.interactions = Object.create(null);
+          delete state.pendingApproval;
+          delete state.pendingQuestions;
+          delete state.pendingPlanApproval;
+          state.isRunning = msg.runtime.is_running === true;
+          isRunning = state.isRunning;
+          cancelBtn.style.display = isRunning ? 'flex' : 'none';
+          sendBtn.style.display = isRunning ? 'none' : 'flex';
+          document.querySelector('.prompt-box')?.classList.toggle('is-generating', isRunning);
+          if (!isRunning) removeTurnLoader();
+          if (msg.runtime.thinking) handleBackendMessage({ type: 'thinking_delta', text: msg.runtime.thinking });
+          if (msg.runtime.text) handleBackendMessage({ type: 'text_delta', text: msg.runtime.text });
+          for (const tool of msg.runtime.tools || []) {
+            handleBackendMessage({ type: 'tool_start', ...tool });
+            handleBackendMessage({ type: 'tool_delta', tool_id: tool.tool_id, chunk: tool.args_json });
+          }
+          activeBgProcesses.clear();
+          for (const process of msg.runtime.processes || []) handleBackendMessage({ type: 'process_started', ...process });
+          updateBgProcessStripUI();
+          for (const interaction of msg.runtime.interactions || []) handleBackendMessage(interaction);
+          break;
+        }
+        case 'session_load_failed':
+          if (msg.session_id === currentSessionId) appendSystemNote('Could not load this session. Reconnect and try again.');
+          clearSkeletonState();
+          break;
+        case 'action_failed':
+          if (msg.session_id === currentSessionId) appendSystemNote(msg.error);
+          break;
+        case 'interaction_resolved': {
+          const sid = msg.session_id || currentSessionId;
+          const state = sessionsState[sid];
+          if (state?.interactions) delete state.interactions[msg.interaction_id];
+          if (sid !== currentSessionId || interactiveSlot.dataset.interactionId !== msg.interaction_id) break;
+          interactiveSlot.innerHTML = '';
+          delete interactiveSlot.dataset.interactionId;
+          delete interactiveSlot.dataset.submitting;
+          activePendingApprovalId = null;
+          activePendingToolName = '';
+          activePendingPlan = false;
+          const next = Object.values(state?.interactions || {})[0];
+          if (next) handleBackendMessage(next);
+          break;
+        }
+        case 'interaction_failed':
+          if (msg.session_id !== currentSessionId) break;
+          delete interactiveSlot.dataset.submitting;
+          interactiveSlot.querySelectorAll('button, input, textarea').forEach(control => { control.disabled = false; });
+          appendSystemNote(msg.error);
           break;
 
         case 'play_sound':
@@ -8142,6 +8351,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break; }
 
         case 'tool_approval_required': {
+          rememberInteraction(msg);
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
             sessionsState[msg.session_id].isRunning = true;
@@ -8153,12 +8363,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break; }
 
         case 'ask_questions': {
+          rememberInteraction(msg);
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
             sessionsState[msg.session_id].isRunning = true;
             sessionsState[msg.session_id].pendingQuestions = msg;
             break;
           }
+          activePendingApprovalId = null;
+          activePendingToolName = '';
+          activePendingPlan = false;
           let questions = msg.questions || [];
           if (typeof questions === 'string') {
             try {
@@ -8237,6 +8451,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
 
         case 'plan_approval':
+          rememberInteraction(msg);
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
             sessionsState[msg.session_id].isRunning = true;
@@ -8352,6 +8567,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
 
         case 'process_started': {
+          if (msg.session_id && msg.session_id !== currentSessionId) break;
           const procId = msg.process_id;
           if (procId) {
             activeBgProcesses.set(procId, {
@@ -8366,6 +8582,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
 
         case 'process_exited': {
+          if (msg.session_id && msg.session_id !== currentSessionId) break;
           const procId = msg.process_id;
           if (procId) {
             activeBgProcesses.delete(procId);
@@ -8380,7 +8597,61 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         }
 
+        case 'retry_result': {
+          if (msg.session_id && msg.session_id !== currentSessionId) break;
+          document.querySelectorAll('[data-retry-pending="true"]').forEach(card => {
+            delete card.dataset.retryPending;
+            card.style.opacity = '';
+            const button = card.querySelector('.btn-error-retry');
+            if (button) button.textContent = button.dataset.action === 'retry-without-image' ? 'Retry without Image' : 'Retry';
+          });
+          if (!msg.success) appendSystemNote(msg.error || 'Retry could not start. Try again.');
+          break;
+        }
+        case 'input_session':
+          currentSessionId = msg.session_id;
+          break;
+        case 'queue_state': {
+          queueSupported = true;
+          const previous = serverQueues[msg.session_id];
+          if (!previous || msg.epoch !== previous.epoch || msg.revision >= previous.revision) serverQueues[msg.session_id] = msg;
+          renderQueue();
+          break;
+        }
+        case 'queue_unavailable':
+          if (msg.unsupported) queueSupported = false;
+          break;
+        case 'input_accepted':
+          if (pendingInputDraft && msg.request_id === pendingInputDraft.requestId) {
+            if (currentSessionId === pendingInputDraft.sessionId && promptInput.value.trim() === pendingInputDraft.text &&
+                JSON.stringify(attachedImages) === JSON.stringify(pendingInputDraft.images) &&
+                JSON.stringify(attachedFiles) === JSON.stringify(pendingInputDraft.files)) {
+              promptInput.value = '';
+              promptInput.style.height = 'auto';
+              attachedImages = []; attachedFiles = [];
+              renderImageAttachments(); renderAttachedFiles();
+              sendBtn.classList.remove('has-text');
+            }
+            pendingInputDraft = null;
+          }
+          break;
+        case 'input_rejected':
+          if (pendingInputDraft && msg.request_id === pendingInputDraft.requestId) pendingInputDraft = null;
+          appendSystemNote(msg.error || 'Message was not accepted. Your draft is preserved.');
+          break;
+        case 'input_applied':
+          if (msg.session_id !== currentSessionId || appliedInputIds.has(msg.input_id)) break;
+          appliedInputIds.add(msg.input_id);
+          endAssistantTurn();
+          interactiveSlot.innerHTML = '';
+          activePendingApprovalId = null;
+          activePendingToolName = '';
+          activePendingPlan = false;
+          appendUserMessage(msg.prompt, msg.image_uris || [], Date.now(), { skipDedupe: true, steering: true, turnIndex: msg.turn_index });
+          startAssistantTurn();
+          break;
         case 'init_queue':
+          if (queueSupported) { requestQueueSnapshot(); break; }
           if (Array.isArray(msg.queue) && msg.queue.length > 0) {
             promptQueue.push(...msg.queue);
             renderQueue();
@@ -8399,7 +8670,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             msg.seedMessages.forEach(function(m) {
               if (!m) return;
               if (m.role === 'user') {
-                appendUserMessage(extractMessageText(m.content), m.images || [], m.ts, { skipDedupe: true });
+                appendUserMessage(extractMessageText(m.content), m.images || [], m.ts, { skipDedupe: true, steering: Boolean(m.steering) });
               } else if (m.role === 'assistant' && extractMessageText(m.content).trim()) {
                 const wrap = document.createElement('div');
                 wrap.className = 'message-wrap assistant';
@@ -8426,6 +8697,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             updateSessionActivityIndicator();
           }
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
+          if (msg.input_id && !appliedInputIds.has(msg.input_id)) {
+            appliedInputIds.add(msg.input_id);
+            hideZeroState();
+            appendUserMessage(msg.prompt, msg.image_uris || [], Date.now(), { skipDedupe: true });
+            startAssistantTurn();
+            break;
+          }
           if (msg.prompt) {
             const parsed = parseUserPromptDisplay(msg.prompt);
             const cleanText = normalizePromptText(parsed.userText || '');
@@ -8521,6 +8799,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             context_tokens: msg.context_tokens,
             cost_usd: msg.cost_usd,
           });
+          const pendingPlan = sessionsState[currentSessionId]?.interactions?.plan;
+          if (pendingPlan) handleBackendMessage(pendingPlan);
           flushQueue();
           break; }
 
@@ -8547,7 +8827,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               cost_usd: msg.cost_usd,
             });
           }
-          flushQueue();
           break;
         }
 
@@ -8570,7 +8849,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           endAssistantTurn();
           interactiveSlot.innerHTML = '';
           appendErrorCard(msg.error || 'Unknown agent error.');
-          flushQueue();
           break;
         }
 
@@ -8596,6 +8874,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
 
         case 'plan_updated':
+          if (msg.plan?.status !== 'pending') handleBackendMessage({ type: 'interaction_resolved', session_id: msg.session_id, interaction_id: 'plan' });
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
             break;
           }
@@ -8763,7 +9042,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         }
       }
-    });
+    }
 
     function extractCleanErrorMessage(raw) {
       if (!raw) return '';
@@ -9108,7 +9387,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       let subPath = '';
 
       const lowerTool = toolName.toLowerCase();
-      if (lowerTool === 'shell_exec' || lowerTool === 'run_command' || lowerTool === 'bash' || lowerTool === 'exec' || lowerTool === 'cmd') {
+      const canRemember = /^(shell_exec|shell_bg|fetch_url)$/.test(lowerTool);
+      if (lowerTool === 'shell_exec' || lowerTool === 'shell_bg' || lowerTool === 'run_command' || lowerTool === 'bash' || lowerTool === 'exec' || lowerTool === 'cmd') {
         actionTitle = 'Running command';
         iconClass = 'command';
         iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>';
@@ -9116,7 +9396,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const isWin = typeof navigator !== 'undefined' && ((navigator.platform && navigator.platform.indexOf('Win') > -1) || (navigator.userAgent && /win/i.test(navigator.userAgent)));
         const shellName = isWin ? 'powershell' : 'bash';
         codeDisplay = (shellName + ': ' + cmd).trim();
-        subPath = toolArgs.cwd || toolArgs.Cwd || (zeroWorkspaceLabel ? zeroWorkspaceLabel.textContent : '') || '';
+        subPath = cmd;
       } else if (lowerTool === 'edit_file' || lowerTool === 'write_to_file' || lowerTool === 'replace_file_content' || lowerTool === 'multi_replace_file_content' || lowerTool === 'create_file') {
         actionTitle = 'Edit file';
         iconClass = 'file';
@@ -9145,7 +9425,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         iconClass = 'web';
         iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>';
         codeDisplay = 'url: ' + (toolArgs.url || toolArgs.Url || '');
-        subPath = toolArgs.url || '';
+        try { subPath = new URL(toolArgs.url || '').hostname; } catch { subPath = toolArgs.url || ''; }
       } else {
         actionTitle = 'Execute ' + toolName;
         iconClass = 'command';
@@ -9204,20 +9484,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             '</div>' +
           '</div>' +
 
-          '<div class="permission-option-row" data-action="approve-tool-session" data-approval-id="' + escapeHtml(approvalId) + '" data-tool="' + escapeHtml(toolName) + '" tabindex="0" role="button">' +
+          '<div class="permission-option-row" data-action="approve-tool-session" data-approval-id="' + escapeHtml(approvalId) + '" data-tool="' + escapeHtml(toolName) + '" tabindex="0" role="button"' + (canRemember ? '' : ' style="display:none;"') + '>' +
             '<div class="option-row-main">' +
               '<div class="option-row-title">Allow for remainder of this session</div>' +
-              '<div class="option-row-sub">path: ' + escapeHtml(subPath) + '</div>' +
+              '<div class="option-row-sub">' + (lowerTool === 'fetch_url' ? 'domain: ' : 'command: ') + escapeHtml(subPath) + '</div>' +
             '</div>' +
             '<div class="option-row-badge">' +
               '<kbd class="perm-kbd">Ctrl</kbd> <kbd class="perm-kbd">Alt</kbd> <kbd class="perm-kbd">Y</kbd>' +
             '</div>' +
           '</div>' +
 
-          '<div class="permission-option-row" data-action="approve-tool-always" data-approval-id="' + escapeHtml(approvalId) + '" data-tool="' + escapeHtml(toolName) + '" tabindex="0" role="button">' +
+          '<div class="permission-option-row" data-action="approve-tool-always" data-approval-id="' + escapeHtml(approvalId) + '" data-tool="' + escapeHtml(toolName) + '" tabindex="0" role="button"' + (canRemember ? '' : ' style="display:none;"') + '>' +
             '<div class="option-row-main">' +
               '<div class="option-row-title">Always allow</div>' +
-              '<div class="option-row-sub">path: ' + escapeHtml(subPath) + '</div>' +
+              '<div class="option-row-sub">' + (lowerTool === 'fetch_url' ? 'domain: ' : 'command: ') + escapeHtml(subPath) + '</div>' +
             '</div>' +
             '<div class="option-row-badge">' +
               '<kbd class="perm-kbd">Ctrl</kbd> <kbd class="perm-kbd">Shift</kbd> <kbd class="perm-kbd">Y</kbd>' +
@@ -9447,16 +9727,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     });
 
     window.approveTool = function(approvalId, scope, toolName) {
-      interactiveSlot.innerHTML = '';
-      activePendingApprovalId = null;
-      activePendingToolName = '';
+      if (scope && scope !== 'once' && !/^(shell_exec|shell_bg|fetch_url)$/.test(toolName || activePendingToolName)) return;
+      if (interactiveSlot.dataset.submitting) return;
+      interactiveSlot.dataset.submitting = 'true';
+      interactiveSlot.querySelectorAll('button').forEach(button => { button.disabled = true; });
       vscode.postMessage({ type: 'approve_tool', approvalId, scope: scope || 'once', toolName });
     };
 
     window.rejectTool = function(approvalId) {
-      interactiveSlot.innerHTML = '';
-      activePendingApprovalId = null;
-      activePendingToolName = '';
+      if (interactiveSlot.dataset.submitting) return;
+      interactiveSlot.dataset.submitting = 'true';
+      interactiveSlot.querySelectorAll('button').forEach(button => { button.disabled = true; });
       vscode.postMessage({ type: 'reject_tool', approvalId });
     };
 
@@ -9519,6 +9800,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     };
 
     window.submitQuestions = function(questionId, totalQ) {
+      if (interactiveSlot.dataset.submitting) return;
+      interactiveSlot.dataset.submitting = 'true';
       const answers = [];
       for (let i = 0; i < totalQ; i++) {
         const checked = document.querySelectorAll('input[name="q_' + i + '"]:checked');
@@ -9530,7 +9813,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           answers.push(textIn ? textIn.value.trim() : '');
         }
       }
-      interactiveSlot.innerHTML = '';
+      interactiveSlot.querySelectorAll('button, input, textarea').forEach(control => { control.disabled = true; });
       vscode.postMessage({ type: 'answer_question', questionId, answers: answers.join(', ') });
     };
 

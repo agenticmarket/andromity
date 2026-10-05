@@ -118,19 +118,37 @@ def get_provider_list():
     """Get list of available providers."""
     return [
         {"key": k, "name": v["name"], "requires_env": v.get("requires_env")}
-        for k, v in MODEL_CATALOG.items()
+        for k, v in provider_catalog().items()
     ]
+
+
+def provider_catalog() -> dict:
+    from andromity.config import config
+    result = {key: dict(value) for key, value in MODEL_CATALOG.items()}
+    for saved in config.list_providers():
+        name = saved.get("name")
+        if not name:
+            continue
+        info = {**result.get(name, {}), "name": saved.get("display_name") or result.get(name, {}).get("name", name)}
+        if saved.get("base_url"):
+            info["base_url"] = saved["base_url"]
+        models = list(info.get("models", []))
+        if saved.get("model") and not any(m["id"] == saved["model"] for m in models):
+            models.insert(0, {"id": saved["model"], "name": saved["model"], "desc": "Configured model", "context": "Auto"})
+        info["models"] = models
+        result[name] = info
+    return result
 
 
 def get_models_for_provider(provider_key: str):
     """Get available models for a provider."""
-    provider = MODEL_CATALOG.get(provider_key, {})
+    provider = provider_catalog().get(provider_key, {})
     return provider.get("models", [])
 
 
 def get_provider_display_name(provider_key: str):
     """Get display name for a provider."""
-    provider = MODEL_CATALOG.get(provider_key, {})
+    provider = provider_catalog().get(provider_key, {})
     return provider.get("name", provider_key)
 
 
@@ -244,6 +262,20 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
         except Exception:
             return None
 
+    from andromity.config import config
+    saved = config.get_provider_config(provider_key) or {}
+    adapter = saved.get("type") or provider_key
+    base_url = base_url or saved.get("base_url")
+    if base_url and adapter == "openai":
+        data = _get(base_url.rstrip("/") + "/models", {"Authorization": f"Bearer {api_key}"} if api_key else {})
+        if not data:
+            return []
+        models = [{"id": item["id"], "name": item.get("name") or item["id"], "desc": "Endpoint model", "context": "Auto"}
+                  for item in data.get("data", []) if isinstance(item, dict) and item.get("id")]
+        return _cache_and_return(provider_key, models)
+    if provider_key not in MODEL_CATALOG and adapter in MODEL_CATALOG:
+        return _cache_and_return(provider_key, fetch_live_models_sync(adapter, api_key, base_url))
+
     # ── Ollama (local daemon) ──────────────────────────────────────────────────
     if provider_key == "ollama":
         url = (base_url or "http://localhost:11434").rstrip("/") + "/api/tags"
@@ -288,6 +320,8 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
                 "name": m_name,
                 "desc": "Anthropic model",
                 "context": "200K+",
+                "capabilities": item.get("capabilities"),
+                "max_tokens": item.get("max_tokens"),
             })
         return _cache_and_return(provider_key, models)
 
@@ -300,7 +334,7 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
         if not data:
             return []
         # Only keep chat-capable models; exclude embedding, tts, whisper, dall-e etc.
-        CHAT_PREFIXES = ("gpt-4", "gpt-5", "o1", "o3", "o4", "chatgpt")
+        CHAT_PREFIXES = ("gpt-", "o1", "o3", "o4", "chatgpt")
         models = []
         for item in sorted(data.get("data", []), key=lambda x: x.get("created", 0), reverse=True):
             m_id = item.get("id", "")
@@ -310,6 +344,8 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
                     "name": m_id,
                     "desc": "OpenAI chat model",
                     "context": "Auto",
+                    "reasoning": item.get("reasoning"),
+                    "capabilities": item.get("capabilities"),
                 })
         return _cache_and_return(provider_key, models)
 
@@ -460,6 +496,9 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
                 "is_free": is_free,
                 "tags": tags,
             }
+            m_entry["supported_parameters"] = item.get("supported_parameters")
+            if isinstance(item.get("reasoning"), dict):
+                m_entry["reasoning"] = item["reasoning"]
             if pricing_str:
                 m_entry["pricing"] = pricing_str
             models.append(m_entry)
@@ -590,6 +629,8 @@ def _cache_and_return(provider_key: str, models: list[dict]) -> list[dict]:
     """Save context limits and full catalog to cache before returning the models."""
     if not models:
         return models
+    from andromity.core.effort import invalidate_reasoning_capabilities
+    invalidate_reasoning_capabilities(provider_key)
     try:
         import json
         with _DISK_CACHE_LOCK:

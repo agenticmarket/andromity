@@ -161,7 +161,7 @@ def init_schema() -> None:
             except sqlite3.OperationalError:
                 pass  # column already exists
 
-        for col_name, col_type in (("images", "TEXT"), ("duration", "REAL")):
+        for col_name, col_type in (("images", "TEXT"), ("duration", "REAL"), ("turn_id", "TEXT"), ("steering", "INTEGER NOT NULL DEFAULT 0")):
             try:
                 conn.execute(f"ALTER TABLE session_messages ADD COLUMN {col_name} {col_type};")
             except sqlite3.OperationalError:

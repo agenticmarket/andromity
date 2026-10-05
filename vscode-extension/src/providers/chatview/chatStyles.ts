@@ -17,6 +17,13 @@ export function getChatStyles(): string {
       --red: #f85149;
       --purple: #bc8cff;
       --muted: var(--vscode-descriptionForeground, #888888);
+      /* Theme-aware surfaces (resolve per VS Code color theme, incl. light) */
+      --surface-hover: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+      --surface-active: var(--vscode-list-activeSelectionBackground, rgba(255, 255, 255, 0.1));
+      --surface-header: var(--vscode-sideBar-background, rgba(24, 24, 27, 0.78));
+      --popover-bg: var(--vscode-editorWidget-background, rgba(24, 24, 27, 0.98));
+      --popover-border: var(--vscode-widget-border, rgba(255, 255, 255, 0.1));
+      --popover-shadow: var(--vscode-widget-shadow, rgba(0, 0, 0, 0.65));
       --radius: 5px;
       --chat-max-width: 900px;
       --font-ui: 'Inter', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
@@ -144,7 +151,8 @@ export function getChatStyles(): string {
       justify-content: space-between;
       padding: 7px 10px;
       border-bottom: 1px solid var(--border);
-      background: rgba(24, 24, 27, 0.78);
+      background: var(--surface-header);
+      color: var(--fg);
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
       gap: 6px;
@@ -194,8 +202,8 @@ export function getChatStyles(): string {
 
     .top-bar-icon-btn:hover {
       color: var(--fg);
-      background: rgba(255, 255, 255, 0.08);
-      border-color: rgba(255, 255, 255, 0.12);
+      background: var(--surface-hover);
+      border-color: var(--popover-border);
     }
 
     /* Session Badge */
@@ -221,7 +229,7 @@ export function getChatStyles(): string {
       user-select: none;
     }
     .session-badge-btn:hover {
-      background: rgba(255, 255, 255, 0.06);
+      background: var(--surface-hover);
     }
     .session-badge-icon {
       width: 13px;
@@ -347,15 +355,16 @@ export function getChatStyles(): string {
       right: 0;
       margin-left: auto;
       margin-right: auto;
-      width: calc(100% - 24px);
-      background: var(--card-bg, #18181b);
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      width: min(560px, calc(100% - 24px));
+      background: var(--popover-bg);
+      border: 1px solid var(--popover-border);
       border-radius: 10px;
-      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.05);
+      box-shadow: 0 16px 40px var(--popover-shadow), 0 0 0 1px var(--popover-border);
+      color: var(--fg);
       z-index: 120;
       display: flex;
       flex-direction: column;
-      max-height: 480px;
+      max-height: min(420px, calc(100vh - 160px));
       overflow: hidden;
       animation: flyoutSlideDown 0.16s cubic-bezier(0.16, 1, 0.3, 1);
     }
@@ -370,15 +379,15 @@ export function getChatStyles(): string {
       align-items: center;
       gap: 8px;
       padding: 10px 12px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-      background: rgba(255, 255, 255, 0.02);
+      border-bottom: 1px solid var(--popover-border);
+      background: var(--surface-hover);
     }
 
     .sessions-search {
       flex: 1;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      color: var(--fg);
+      background: var(--vscode-input-background, var(--vscode-editorWidget-background, transparent));
+      border: 1px solid var(--vscode-input-border, var(--popover-border));
+      color: var(--vscode-input-foreground, var(--fg));
       padding: 7px 11px;
       border-radius: 6px;
       font-size: 12.5px;
@@ -387,13 +396,12 @@ export function getChatStyles(): string {
       font-family: inherit;
     }
     .sessions-search:focus {
-      border-color: rgba(56, 189, 248, 0.5);
-      background: rgba(255, 255, 255, 0.06);
-      box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.12);
+      border-color: var(--vscode-focusBorder, #38bdf8);
+      box-shadow: 0 0 0 2px var(--accent-glow);
     }
     .sessions-search::placeholder {
-      color: var(--muted);
-      opacity: 0.65;
+      color: var(--vscode-input-placeholderForeground, var(--fg));
+      opacity: 0.6;
     }
 
     .sessions-new-btn {
@@ -402,9 +410,9 @@ export function getChatStyles(): string {
       gap: 5px;
       height: 32px;
       padding: 0 12px;
-      background: rgba(56, 189, 248, 0.12);
-      color: #38bdf8;
-      border: 1px solid rgba(56, 189, 248, 0.28);
+      background: var(--vscode-button-background, #0a66c2);
+      color: var(--vscode-button-foreground, #ffffff);
+      border: 1px solid var(--vscode-button-background, #0a66c2);
       border-radius: 6px;
       font-size: 12px;
       font-weight: 600;
@@ -413,16 +421,16 @@ export function getChatStyles(): string {
       transition: all 0.15s ease;
     }
     .sessions-new-btn:hover {
-      background: rgba(56, 189, 248, 0.22);
-      border-color: rgba(56, 189, 248, 0.45);
-      color: #7dd3fc;
+      background: var(--vscode-button-hoverBackground, #0a66c2);
+      border-color: var(--vscode-button-hoverBackground, #0a66c2);
+      color: var(--vscode-button-foreground, #ffffff);
     }
 
     .sessions-filter-tabs {
       display: flex;
       gap: 6px;
       padding: 8px 12px 6px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      border-bottom: 1px solid var(--popover-border);
       background: transparent;
     }
     .sessions-filter-tab {
@@ -435,7 +443,8 @@ export function getChatStyles(): string {
       border-radius: 6px;
       border: 1px solid transparent;
       background: transparent;
-      color: var(--muted);
+      color: var(--fg);
+      opacity: 0.8;
       font-size: 12px;
       font-weight: 500;
       cursor: pointer;
@@ -443,26 +452,42 @@ export function getChatStyles(): string {
     }
     .sessions-filter-tab:hover {
       color: var(--fg);
-      background: rgba(255, 255, 255, 0.04);
+      background: var(--surface-hover);
+      opacity: 1;
     }
     .sessions-filter-tab.active {
-      background: rgba(255, 255, 255, 0.06);
+      background: var(--surface-active);
       color: var(--fg);
-      border-color: rgba(255, 255, 255, 0.1);
+      border-color: var(--popover-border);
+      opacity: 1;
       font-weight: 600;
     }
     .sessions-filter-tab .filter-count {
       font-size: 11px;
       padding: 1px 6px;
       border-radius: 10px;
-      background: rgba(255, 255, 255, 0.08);
-      color: var(--muted);
+      background: var(--surface-active);
+      color: var(--fg);
+      opacity: 0.85;
       font-weight: 500;
     }
     .sessions-filter-tab.active .filter-count {
-      background: #38bdf8;
-      color: #0c4a6e;
+      background: var(--vscode-focusBorder, #38bdf8);
+      color: var(--vscode-button-foreground, #0c4a6e);
+      opacity: 1;
       font-weight: 600;
+    }
+    body.vscode-light .sessions-filter-tab.active .filter-count,
+    body.vscode-light .sessions-new-btn {
+      background: var(--vscode-button-background, #0a66c2);
+      color: var(--vscode-button-foreground, #ffffff);
+      border-color: var(--vscode-button-background, #0a66c2);
+    }
+    body.vscode-light .sessions-filter-tab:hover .filter-count {
+      background: var(--vscode-button-hoverBackground, #0a66c2);
+    }
+    body.vscode-light .sessions-search {
+      background: var(--vscode-input-background, #ffffff);
     }
 
     .sessions-list {
@@ -486,13 +511,19 @@ export function getChatStyles(): string {
       gap: 8px;
     }
     .session-item:hover {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: rgba(255, 255, 255, 0.06);
+      background: var(--surface-hover);
+      border-color: var(--popover-border);
     }
     .session-item.active {
-      background: rgba(56, 189, 248, 0.08);
-      border-color: rgba(56, 189, 248, 0.22);
-      color: #f4f4f5;
+      background: var(--vscode-list-activeSelectionBackground, rgba(56, 189, 248, 0.12));
+      border-color: var(--vscode-focusBorder, rgba(56, 189, 248, 0.35));
+      color: var(--vscode-list-activeSelectionForeground, var(--fg));
+      font-weight: 600;
+    }
+    body.vscode-highContrast .session-item.active {
+      background: var(--vscode-list-activeSelectionBackground, Highlight);
+      color: var(--vscode-list-activeSelectionForeground, HighlightText);
+      border-color: var(--vscode-focusBorder, Highlight);
     }
 
     .session-item-info {
@@ -507,6 +538,7 @@ export function getChatStyles(): string {
       font-weight: 500;
       font-size: 13px;
       line-height: 1.35;
+      color: inherit;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -554,9 +586,10 @@ export function getChatStyles(): string {
       letter-spacing: 0.2px;
       padding: 1.5px 7px;
       border-radius: 999px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.09);
-      color: var(--muted, #a1a1aa);
+      background: var(--surface-hover);
+      border: 1px solid var(--popover-border);
+      color: var(--fg);
+      opacity: 0.8;
       flex-shrink: 0;
       line-height: 1.3;
       white-space: nowrap;
@@ -615,14 +648,16 @@ export function getChatStyles(): string {
     }
     .session-item-meta {
       font-size: 11px;
-      color: var(--muted);
+      color: var(--fg);
+      opacity: 0.62;
       display: flex;
       align-items: center;
       gap: 10px;
       margin-top: 1px;
     }
     .session-item-time {
-      color: var(--muted);
+      color: var(--fg);
+      opacity: 0.62;
       font-size: 11px;
       white-space: nowrap;
       display: inline-flex;
@@ -695,8 +730,8 @@ export function getChatStyles(): string {
       padding: 5px 8px;
       font-size: 11px;
       border-radius: 4px;
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid rgba(255, 255, 255, 0.04);
+      background: var(--surface-hover);
+      border: 1px solid var(--popover-border);
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -705,13 +740,14 @@ export function getChatStyles(): string {
       transition: background 0.12s, border-color 0.12s;
     }
     .session-subsession-item:hover {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: rgba(255, 255, 255, 0.08);
+      background: var(--surface-active);
+      border-color: var(--vscode-focusBorder, var(--popover-border));
     }
     .session-subsession-item.active {
-      background: rgba(6, 182, 212, 0.08);
-      border-color: rgba(6, 182, 212, 0.25);
-      color: var(--accent);
+      background: var(--vscode-list-activeSelectionBackground, rgba(6, 182, 212, 0.12));
+      border-color: var(--vscode-focusBorder, rgba(6, 182, 212, 0.3));
+      color: var(--vscode-list-activeSelectionForeground, var(--fg));
+      font-weight: 600;
     }
     .subsession-branch-symbol {
       color: var(--muted);
@@ -764,7 +800,7 @@ export function getChatStyles(): string {
       padding: 6px 8px;
       text-align: center;
       border-top: 1px solid var(--border);
-      background: rgba(255, 255, 255, 0.01);
+      background: var(--surface-hover);
     }
     .btn-load-more-sessions {
       display: inline-flex;
@@ -1929,14 +1965,14 @@ export function getChatStyles(): string {
       justify-content: space-between;
       gap: 10px;
       padding: 10px 12px;
-      background: var(--vscode-editorWidget-background, rgba(255, 255, 255, 0.02));
-      border: 1px solid var(--vscode-widget-border, var(--border, rgba(255, 255, 255, 0.08)));
+      background: var(--vscode-editorWidget-background, transparent);
+      border: 1px solid var(--popover-border);
       border-radius: var(--radius, 6px);
       box-sizing: border-box;
       transition: border-color 0.15s ease;
     }
     .zero-gateway-banner:hover {
-      border-color: rgba(16, 185, 129, 0.35);
+      border-color: var(--vscode-focusBorder, #007fd4);
     }
     .zero-gateway-info {
       display: flex;
@@ -1961,14 +1997,15 @@ export function getChatStyles(): string {
     .zero-gateway-title {
       font-size: 11.5px;
       font-weight: 600;
-      color: var(--fg, #ffffff);
+      color: var(--fg);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
     .zero-gateway-sub {
       font-size: 10.5px;
-      color: var(--muted, #888888);
+      color: var(--fg);
+      opacity: 0.7;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -1985,9 +2022,9 @@ export function getChatStyles(): string {
       gap: 5px;
       font-size: 11px;
       font-weight: 500;
-      color: var(--fg, #ffffff);
-      background: var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.06));
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+      color: var(--fg);
+      background: var(--vscode-button-secondaryBackground, transparent);
+      border: 1px solid var(--vscode-button-secondaryBorder, var(--popover-border));
       border-radius: 4px;
       padding: 4px 8px;
       cursor: pointer;
@@ -2892,7 +2929,7 @@ export function getChatStyles(): string {
       font-size: 26px;
       font-weight: 600;
       line-height: 1.25;
-      color: #f4f4f5;
+      color: var(--fg);
       letter-spacing: -0.6px;
       margin: 0;
       font-family: var(--font);
@@ -2901,10 +2938,15 @@ export function getChatStyles(): string {
     .zero-statement-sub {
       font-size: 13px;
       font-weight: 400;
-      color: var(--muted, #888888);
+      color: var(--fg);
+      opacity: 0.72;
       line-height: 1.4;
       margin: 0;
       letter-spacing: -0.1px;
+    }
+    body.vscode-highContrast .zero-statement-main,
+    body.vscode-highContrast .zero-statement-sub {
+      opacity: 1;
     }
 
     /* ─── Recent Sessions Section ────────────────────────────────────────── */
@@ -2927,7 +2969,8 @@ export function getChatStyles(): string {
     .recent-header-label {
       font-size: 11px;
       font-weight: 600;
-      color: var(--muted, #71717a);
+      color: var(--fg);
+      opacity: 0.75;
       text-transform: uppercase;
       letter-spacing: 0.8px;
     }
@@ -2942,9 +2985,9 @@ export function getChatStyles(): string {
       display: inline-flex;
       align-items: center;
       gap: 4px;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      color: var(--fg, #e4e4e7);
+      background: var(--surface-hover);
+      border: 1px solid var(--popover-border);
+      color: var(--fg);
       font-size: 11px;
       font-weight: 500;
       cursor: pointer;
@@ -2954,8 +2997,8 @@ export function getChatStyles(): string {
     }
 
     .recent-header-btn:hover {
-      background: rgba(255, 255, 255, 0.09);
-      border-color: rgba(255, 255, 255, 0.18);
+      background: var(--surface-active);
+      border-color: var(--vscode-focusBorder, #007fd4);
     }
 
     .recent-sessions-list {
@@ -2971,8 +3014,8 @@ export function getChatStyles(): string {
       justify-content: space-between;
       gap: 12px;
       padding: 9px 12px;
-      background: rgba(255, 255, 255, 0.025);
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+      background: var(--vscode-editorWidget-background, transparent);
+      border: 1px solid var(--popover-border);
       border-radius: 7px;
       cursor: pointer;
       text-align: left;
@@ -2980,8 +3023,8 @@ export function getChatStyles(): string {
     }
 
     .recent-session-card:hover {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: rgba(9, 249, 148, 0.4);
+      background: var(--surface-hover);
+      border-color: var(--vscode-focusBorder, #007fd4);
       transform: translateX(2px);
     }
 
@@ -2996,7 +3039,7 @@ export function getChatStyles(): string {
     .recent-session-title {
       font-size: 12.5px;
       font-weight: 500;
-      color: var(--fg, #e4e4e7);
+      color: var(--fg);
       line-height: 1.35;
       white-space: nowrap;
       overflow: hidden;
@@ -3004,12 +3047,13 @@ export function getChatStyles(): string {
     }
 
     .recent-session-card:hover .recent-session-title {
-      color: #ffffff;
+      color: var(--vscode-textLink-foreground, var(--fg));
     }
 
     .recent-session-sub {
       font-size: 11px;
-      color: var(--muted, #71717a);
+      color: var(--fg);
+      opacity: 0.68;
       display: flex;
       align-items: center;
       gap: 6px;
@@ -3024,7 +3068,8 @@ export function getChatStyles(): string {
 
     .recent-session-date {
       font-size: 11px;
-      color: var(--muted, #71717a);
+      color: var(--fg);
+      opacity: 0.68;
       white-space: nowrap;
     }
 
@@ -3041,11 +3086,12 @@ export function getChatStyles(): string {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      background: rgba(255, 255, 255, 0.025);
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+      background: var(--vscode-editorWidget-background, transparent);
+      border: 1px solid var(--popover-border);
       border-radius: 6px;
       padding: 6px 10px;
-      color: var(--muted, #a1a1aa);
+      color: var(--fg);
+      opacity: 0.82;
       font-size: 11.5px;
       font-weight: 500;
       cursor: pointer;
@@ -3054,19 +3100,28 @@ export function getChatStyles(): string {
     }
 
     .starter-chip svg {
-      color: var(--muted, #71717a);
+      color: currentColor;
+      opacity: 0.7;
       flex-shrink: 0;
-      transition: color 0.15s ease;
+      transition: color 0.15s ease, opacity 0.15s ease;
     }
 
     .starter-chip:hover {
-      background: rgba(255, 255, 255, 0.06);
-      border-color: rgba(255, 255, 255, 0.14);
-      color: var(--fg, #f4f4f5);
+      background: var(--surface-hover);
+      border-color: var(--vscode-focusBorder, #007fd4);
+      color: var(--fg);
+      opacity: 1;
     }
 
     .starter-chip:hover svg {
-      color: #09F994;
+      color: var(--vscode-textLink-foreground, var(--accent));
+      opacity: 1;
+    }
+    body.vscode-highContrast .starter-chip,
+    body.vscode-highContrast .zero-gateway-banner,
+    body.vscode-highContrast .recent-session-card {
+      background: transparent;
+      border-width: 1px;
     }
 
     /* ”--€ Status Bar Footer ”----------------------------------------------€ */
@@ -4895,9 +4950,9 @@ export function getChatStyles(): string {
     .queue-container {
       display: flex;
       flex-direction: column;
-      gap: 4px;
-      padding: 4px 10px;
-      background: rgba(255, 255, 255, 0.03);
+      gap: 3px;
+      padding: 8px 10px 6px;
+      background: transparent;
       border-top: 1px solid var(--border);
       width: calc(100% - 20px);
       max-width: var(--chat-max-width, 860px);
@@ -4908,16 +4963,32 @@ export function getChatStyles(): string {
     .queue-chip {
       display: flex;
       align-items: center;
-      gap: 6px;
-      font-size: 11px;
-      color: var(--muted);
-      background: var(--input-bg);
-      padding: 3px 8px;
-      border-radius: 4px;
+      gap: 8px;
+      min-height: 28px;
+      font-size: 12px;
+      color: var(--text);
+      padding: 2px 4px;
+      border-radius: 6px;
+      min-width: 0;
     }
-
-    .queue-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .queue-remove { background: transparent; border: none; color: var(--muted); cursor: pointer; }
+    .queue-chip:hover { background: var(--vscode-list-hoverBackground, rgba(127, 127, 127, 0.08)); }
+    .queue-header { display: flex; align-items: center; justify-content: space-between; min-height: 22px; padding: 0 4px; font-size: 11px; color: var(--muted); }
+    .queue-count { margin-left: 4px; opacity: 0.7; font-variant-numeric: tabular-nums; }
+    .queue-items { max-height: 156px; overflow-y: auto; }
+    .queue-index { width: 14px; flex: 0 0 14px; text-align: center; font-size: 10px; color: var(--muted); opacity: 0.7; font-variant-numeric: tabular-nums; }
+    .queue-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .queue-attachment, .queue-status { flex: 0 0 auto; font-size: 10px; color: var(--muted); white-space: nowrap; }
+    .queue-status { color: var(--vscode-textLink-foreground, var(--muted)); }
+    .queue-actions { display: flex; flex: 0 0 auto; gap: 2px; }
+    .queue-action, .queue-resume { display: inline-flex; align-items: center; justify-content: center; padding: 0; border: none; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
+    .queue-action { width: 24px; height: 24px; }
+    .queue-action svg { width: 14px; height: 14px; pointer-events: none; }
+    .queue-action:hover, .queue-resume:hover { color: var(--text); background: var(--vscode-toolbar-hoverBackground, rgba(127, 127, 127, 0.12)); }
+    .queue-remove:hover { color: var(--vscode-errorForeground, #e36b6b); }
+    .queue-action:focus-visible, .queue-resume:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+    .queue-action:disabled { cursor: default; opacity: 0.45; background: transparent; }
+    .queue-resume { gap: 4px; padding: 3px 5px; font-size: 11px; }
+    .queue-resume svg { width: 12px; height: 12px; }
 
     /* ─── Animated Pixel-Art Mascot Companion ("Andro-Pet") ─────────────── */
     .chat-mascot-home-slot {
@@ -5840,8 +5911,8 @@ export function getChatStyles(): string {
     }
     .prompt-btn:hover,
     .prompt-pill-btn:hover {
-      color: var(--fg, #e6edf3);
-      background: rgba(255, 255, 255, 0.06);
+      color: var(--fg);
+      background: var(--surface-hover);
     }
     .prompt-btn.icon-only,
     .prompt-pill-btn.icon-only {
@@ -5879,8 +5950,8 @@ export function getChatStyles(): string {
     #btn-prompt-model { max-width: 160px; }
     #btn-prompt-reasoning { min-width: 58px; justify-content: center; gap: 4px; }
     #btn-prompt-reasoning.active {
-      background: rgba(255, 255, 255, 0.09);
-      color: var(--fg, #f4f4f5);
+      background: var(--surface-active);
+      color: var(--fg);
       border-radius: 4px;
     }
     #btn-prompt-reasoning #prompt-reasoning-label { min-width: 24px; text-align: center; }
@@ -5891,7 +5962,7 @@ export function getChatStyles(): string {
       position: absolute;
       bottom: calc(100% + 8px);
       right: 4px;
-      width: 204px;
+      width: 340px;
       max-width: calc(100vw - 28px);
       background: var(--vscode-editorWidget-background, rgba(24, 24, 27, 0.96));
       border: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.12));
@@ -6041,9 +6112,36 @@ export function getChatStyles(): string {
 
     .reasoning-slider-labels {
       display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
       justify-content: space-between;
       align-items: center;
       margin-top: 1px;
+    }
+
+    #reasoning-budget-row:not([hidden]) {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 8px;
+      font-size: 11px;
+    }
+    #reasoning-budget-input {
+      min-width: 0;
+      width: 110px;
+      padding: 4px;
+      color: var(--vscode-input-foreground);
+      background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border, transparent);
+      border-radius: 4px;
+    }
+    #reasoning-budget-apply {
+      padding: 4px 8px;
+      color: var(--vscode-button-foreground);
+      background: var(--vscode-button-background);
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
     }
 
     .reasoning-step-btn {
@@ -6059,13 +6157,38 @@ export function getChatStyles(): string {
       transition: all 0.15s ease;
     }
     .reasoning-step-btn:hover {
-      color: var(--fg, #e4e4e7);
-      background: rgba(255, 255, 255, 0.05);
+      color: var(--fg);
+      background: var(--surface-hover);
     }
     .reasoning-step-btn.active {
-      color: var(--fg, #ffffff);
+      color: var(--fg);
       font-weight: 600;
-      background: rgba(255, 255, 255, 0.1);
+      background: var(--surface-active);
+    }
+    #btn-prompt-reasoning.is-unsupported {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    .reasoning-popover-badge.badge-unsupported {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--muted, #a1a1aa);
+      border-color: rgba(255, 255, 255, 0.12);
+    }
+    .reasoning-popover-badge.badge-mandatory {
+      background: rgba(234, 179, 8, 0.12);
+      color: #facc15;
+      border-color: rgba(234, 179, 8, 0.3);
+    }
+    .reasoning-step-btn.disabled,
+    .reasoning-tick-point.disabled {
+      opacity: 0.28;
+      pointer-events: none;
+      cursor: not-allowed;
+      text-decoration: line-through;
+    }
+    .reasoning-slider-range:disabled {
+      opacity: 0.25;
+      cursor: not-allowed;
     }
 
     /* Seamless Permission Mode Indicator (Clean Minimal, Merged with Prompt Bar) */
@@ -6118,7 +6241,7 @@ export function getChatStyles(): string {
     }
     #btn-prompt-mode:hover,
     #btn-prompt-mode.active {
-      background: rgba(255, 255, 255, 0.06);
+      background: var(--surface-hover);
     }
 
     #btn-prompt-mode.mode-safe {
@@ -6160,11 +6283,12 @@ export function getChatStyles(): string {
     /* ─── Shared Clean Popover Menus (Mode & Profile) ───────────────────────── */
     .menu-popover {
       position: absolute;
-      background: var(--vscode-editorWidget-background, rgba(24, 24, 27, 0.98));
-      border: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.1));
+      background: var(--popover-bg);
+      border: 1px solid var(--popover-border);
       border-radius: 8px;
       padding: 5px;
-      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.04);
+      color: var(--fg);
+      box-shadow: 0 12px 32px var(--popover-shadow), 0 0 0 1px var(--popover-border);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
       z-index: 310;
@@ -6205,7 +6329,8 @@ export function getChatStyles(): string {
       font-weight: 600;
       letter-spacing: 0.6px;
       text-transform: uppercase;
-      color: var(--vscode-descriptionForeground, rgba(255, 255, 255, 0.4));
+      color: var(--fg);
+      opacity: 0.6;
       padding: 5px 8px 4px;
       user-select: none;
     }
@@ -6234,11 +6359,11 @@ export function getChatStyles(): string {
     }
 
     .menu-popover-item:hover {
-      background: rgba(255, 255, 255, 0.05);
+      background: var(--surface-hover);
     }
 
     .menu-popover-item.active {
-      background: rgba(255, 255, 255, 0.08);
+      background: var(--surface-active);
     }
 
     .menu-popover-icon {
@@ -6249,7 +6374,7 @@ export function getChatStyles(): string {
       justify-content: center;
       flex-shrink: 0;
       margin-top: 1px;
-      color: var(--vscode-foreground, #e4e4e7);
+      color: var(--fg);
       opacity: 0.85;
     }
 
@@ -6281,7 +6406,7 @@ export function getChatStyles(): string {
     .menu-popover-title {
       font-size: 11.5px;
       font-weight: 500;
-      color: var(--vscode-foreground, #e4e4e7);
+      color: var(--fg);
       line-height: 1.2;
     }
 
@@ -6292,19 +6417,22 @@ export function getChatStyles(): string {
       letter-spacing: 0.3px;
       padding: 0 4px;
       border-radius: 3px;
-      background: rgba(255, 255, 255, 0.06);
-      color: rgba(255, 255, 255, 0.55);
+      background: var(--surface-hover);
+      color: var(--fg);
+      opacity: 0.75;
       line-height: 14px;
     }
 
     .menu-popover-tag.warn {
-      background: rgba(240, 136, 62, 0.12);
-      color: #ffa657;
+      background: rgba(240, 136, 62, 0.14);
+      color: var(--vscode-editorWarning-foreground, #b45309);
+      opacity: 1;
     }
 
     .menu-popover-desc {
       font-size: 10.5px;
-      color: rgba(255, 255, 255, 0.45);
+      color: var(--fg);
+      opacity: 0.68;
       line-height: 1.3;
       white-space: normal;
     }
@@ -6323,6 +6451,45 @@ export function getChatStyles(): string {
 
     .menu-popover-item.active .menu-popover-check {
       opacity: 1;
+    }
+
+    /* ─── Light Theme Adjustments ─────────────────────────────────────────── */
+    body.vscode-light .menu-popover-header {
+      opacity: 0.75;
+    }
+    body.vscode-light .menu-popover-title,
+    body.vscode-highContrast .menu-popover-title {
+      font-weight: 600;
+    }
+    body.vscode-light .menu-popover-desc {
+      opacity: 0.8;
+    }
+    body.vscode-light .menu-popover-tag {
+      opacity: 0.85;
+    }
+    body.vscode-light .menu-popover {
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 0 0 1px var(--popover-border);
+    }
+    body.vscode-highContrast .menu-popover {
+      border-width: 2px;
+      box-shadow: none;
+    }
+    body.vscode-light .menu-popover-check {
+      color: var(--vscode-textLink-foreground, #0a66c2);
+    }
+    body.vscode-light .menu-popover-icon.mode-safe { color: #1a7f37; }
+    body.vscode-light .menu-popover-icon.mode-trust { color: #0a66c2; }
+    body.vscode-light .menu-popover-icon.mode-full { color: #7c3aed; }
+    body.vscode-light .menu-popover-icon.mode-yolo { color: #b45309; }
+    body.vscode-light #btn-prompt-mode.mode-safe { color: #1a7f37; }
+    body.vscode-light #btn-prompt-mode.mode-trust { color: #0a66c2; }
+    body.vscode-light #btn-prompt-mode.mode-full { color: #7c3aed; }
+    body.vscode-light #btn-prompt-mode.mode-yolo { color: #b45309; }
+    body.vscode-light .top-bar {
+      background: var(--vscode-sideBar-background, #f3f3f3);
+    }
+    body.vscode-highContrast .top-bar {
+      background: var(--vscode-sideBar-background, transparent);
     }
 
     .user-attached-chips {

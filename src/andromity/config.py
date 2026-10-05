@@ -128,7 +128,7 @@ class ConfigManager:
                 "model": "auto",
                 "profile": "builder",
                 "permission_mode": "safe",
-                "reasoning_effort": "medium",
+                "reasoning_effort": "auto",
                 "expand_tools_while_working": True,
                 "allowed_commands": ["npm run", "npm test", "npm list", "npm run dev", "git status", "git diff", "git log", "ls", "dir", "cat", "echo"]
             },
@@ -309,6 +309,27 @@ class ConfigManager:
 
     def list_providers(self) -> list:
         return self._config_cache.get("providers", [])
+
+    def save_provider(self, values: Dict[str, Any]) -> str:
+        from andromity.core.connections import validate_connection
+        saved = validate_connection(values)
+        existing = self.get_provider_config(saved["name"]) or {}
+        saved = {**existing, **saved}
+        if "api_key" in values:
+            saved["api_key"] = str(values["api_key"] or "").strip()
+        providers = [p for p in self.list_providers() if p.get("name") != saved["name"]]
+        self._config_cache["providers"] = [*providers, saved]
+        self.save()
+        return saved["name"]
+
+    def delete_provider(self, provider: str) -> None:
+        from andromity.core.connections import PRESETS
+        if provider in PRESETS:
+            raise ValueError("Built-in presets cannot be removed.")
+        if self.get("default", "provider", "") == provider:
+            raise ValueError("Select another provider before removing the active connection.")
+        self._config_cache["providers"] = [p for p in self.list_providers() if p.get("name") != provider]
+        self.save()
 
     # ─── User Management ─────────────────────────────────────────────────
     def get_user(self) -> Dict[str, str]:

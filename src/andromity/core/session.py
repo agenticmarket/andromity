@@ -223,7 +223,7 @@ class Session:
                     thinking: Optional[str] = None,
                     images: Optional[List[str]] = None,
                     duration: Optional[float] = None,
-                    turn_id: Optional[str] = None):
+                    turn_id: Optional[str] = None, steering: bool = False):
         msg: Dict[str, Any] = {"role": role, "ts": datetime.now(timezone.utc).isoformat()}
         if role == "tool":
             # Tool messages MUST always have a non-empty content string for LLM providers
@@ -246,6 +246,8 @@ class Session:
             msg["duration"] = duration
         if turn_id is not None:
             msg["turn_id"] = turn_id
+        if steering:
+            msg["steering"] = True
         with self._save_lock:
             self.messages.append(msg)
             need_save = not self.file_path.exists()
@@ -333,7 +335,7 @@ class Session:
 
     def get_user_turn_indices(self) -> List[int]:
         """Return the 0-based indices in self.messages that correspond to user prompt turns."""
-        return [i for i, m in enumerate(self.messages) if m.get("role") == "user"]
+        return [i for i, m in enumerate(self.messages) if m.get("role") == "user" and not m.get("steering")]
 
     def rollback_to_turn(self, target_turn_index: int) -> tuple[int, int, Optional[Dict[str, Any]]]:
         """Rollback session messages and undo stack to before the given user turn index (0-based).
@@ -369,7 +371,10 @@ class Session:
             # Extract matching pre-turn snapshot from undo_stack if available
             target_snapshot = None
             if hasattr(self, "undo_stack") and self.undo_stack:
-                if target_idx < len(self.undo_stack):
+                if all("turn_index" in record for record in self.undo_stack):
+                    target_snapshot = next((record for record in self.undo_stack if record["turn_index"] == target_idx), None)
+                    self.undo_stack = [record for record in self.undo_stack if record["turn_index"] < target_idx]
+                elif target_idx < len(self.undo_stack):
                     target_snapshot = self.undo_stack[target_idx]
                     self.undo_stack = self.undo_stack[:target_idx]
                 else:
@@ -473,14 +478,16 @@ class Session:
                             m.get("ts", self.updated_at),
                             j(m["images"]) if "images" in m else None,
                             m.get("duration"),
+                            m.get("turn_id"),
+                            int(bool(m.get("steering"))),
                         )
                         for seq, m in enumerate(self.messages[start_idx:], start=start_idx)
                     ]
                     conn.executemany("""
                         INSERT OR REPLACE INTO session_messages (
                             session_id, seq, role, content, tool_calls,
-                            thinking, name, tool_call_id, ts, images, duration
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            thinking, name, tool_call_id, ts, images, duration, turn_id, steering
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, rows_to_insert)
         except Exception as e:
             log.exception("Failed to persist session %s to SQLite: %s", getattr(self, "id", "unknown"), e)
@@ -612,6 +619,10 @@ class Session:
                 m["images"] = uj(mr["images"], [])
             if "duration" in mr_keys and mr["duration"] is not None:
                 m["duration"] = mr["duration"]
+            if "turn_id" in mr_keys and mr["turn_id"]:
+                m["turn_id"] = mr["turn_id"]
+            if "steering" in mr_keys and mr["steering"]:
+                m["steering"] = True
             msgs.append(m)
         session.messages = msgs
 

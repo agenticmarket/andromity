@@ -312,7 +312,6 @@ StatusBar {
     tokens: reactive[int] = reactive(0)
     cost: reactive[float] = reactive(0.0)
 
-    _EFFORT_LEVELS = ["off", "low", "medium", "high", "xhigh", "max"]
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -326,7 +325,8 @@ StatusBar {
         self._hint: str = ""
         self._todo_done: int = 0
         self._todo_total: int = 0
-        self._effort: str = config.get("default", "reasoning_effort", "medium")
+        self._capability_key = None
+        self._effort: str = config.get("default", "reasoning_effort", "auto")
 
     def compose(self) -> ComposeResult:
         yield Static("", id="seg-stream", classes="status-seg")
@@ -453,9 +453,15 @@ StatusBar {
                 pass
 
     def _cycle_effort(self):
-        """Cycle reasoning effort: off → low → medium → high → xhigh → max → off."""
+        """Cycle only controls verified for the selected provider/model."""
         try:
-            levels = self._EFFORT_LEVELS
+            from andromity.core.reasoning import get_model_reasoning_capability, ordered_reasoning_efforts
+            provider = self._provider or config.get("default", "provider", "anthropic")
+            cap = get_model_reasoning_capability(provider, self._model)
+            if not cap.supported_efforts and not cap.supports_max_tokens:
+                self.show_hint("Thinking controls unavailable for this model")
+                return
+            levels = ordered_reasoning_efforts(cap.supported_efforts)
             idx = levels.index(self._effort) if self._effort in levels else 0
             self._effort = levels[(idx + 1) % len(levels)]
             # Persist reasoning effort in config
@@ -509,6 +515,16 @@ StatusBar {
         else:
             self._provider = ""
             self._model = model
+        provider = self._provider or config.get("default", "provider", "anthropic")
+        from andromity.core.reasoning import get_model_reasoning_capability
+        from andromity.core.effort import is_valid_effort
+        cap = get_model_reasoning_capability(provider, self._model)
+        if not is_valid_effort(cap, self._effort):
+            self._effort = cap.default_effort
+        key = (provider, self._model)
+        if self._model and key != self._capability_key:
+            self._capability_key = key
+            self.run_worker(self._discover_effort(*key), group="effort-capability", exclusive=True)
         self._refresh_text()
 
     def update_todo_progress(self, done: int, total: int):
@@ -529,6 +545,16 @@ StatusBar {
                 except Exception:
                     pass
                 self._spinner_timer = None
+            self._refresh_text()
+
+    async def _discover_effort(self, provider: str, model: str):
+        import asyncio
+        from andromity.core.reasoning import discover_model_reasoning_capability
+        from andromity.core.effort import is_valid_effort
+        cap = await asyncio.to_thread(discover_model_reasoning_capability, provider, model)
+        if (provider, model) == self._capability_key:
+            if not is_valid_effort(cap, self._effort):
+                self._effort = cap.default_effort
             self._refresh_text()
 
     def show_hint(self, text: str, duration: float = 2.0):
@@ -637,10 +663,9 @@ class ChatInput(TextArea):
             self._history_idx = -1
             self._draft = ""
             self.post_message(InputBar.Submitted(text, images))
-            self.text = ""
 
     def action_steer(self):
-        """Ctrl+Enter / Ctrl+J: immediately interrupt/steer active agent or submit prompt."""
+        """Ctrl+Enter / Ctrl+J: steer at the next safe execution boundary."""
         text = self.text.strip()
         images = getattr(self.parent, "attachments", None) or []
         if text or images:
@@ -649,7 +674,6 @@ class ChatInput(TextArea):
             self._history_idx = -1
             self._draft = ""
             self.post_message(InputBar.Submitted(text, images, steer=True))
-            self.text = ""
 
     def action_paste_image_or_text(self):
         try:
@@ -802,11 +826,12 @@ QueuePanel.has-items { display: block; }
     text-style: bold;
 }
 .queue-del-btn:hover, .queue-item Button:hover {
-    background: $error 30% !important;
-    color: $error-lighten-2 !important;
+    background: $panel-lighten-2 !important;
+    color: $text !important;
 }
+.queue-del-btn:hover { color: $error !important; }
 .queue-del-btn:focus, .queue-item Button:focus {
-    background: $error 40% !important;
+    background: $panel-lighten-2 !important;
     color: $text !important;
     border: none !important;
 }
@@ -814,18 +839,30 @@ QueuePanel.has-items { display: block; }
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="queue-list")
 
-    def update_queue(self, items: list[str]):
+    def update_queue(self, state: dict):
         try:
+            items = state["items"]
             container = self.query_one("#queue-list", VerticalScroll)
             container.remove_children()
             if not items:
                 self.remove_class("has-items")
                 return
+            if state["paused"]:
+                container.mount(Button("▷ Resume", id="q-resume"))
+            container.mount(Static(f"[dim]Queued · {len(items)}[/]"))
             for i, item in enumerate(items):
-                short = item if len(item) <= 50 else item[:47] + "..."
+                text = item["prompt"] or "Image message"
+                short = text if len(text) <= 50 else text[:47] + "..."
+                input_id = item["id"]
+                steering = item["delivery"] == "steer"
+                steer_button = Button("↱", id=f"q-steer-{input_id}", disabled=steering)
+                steer_button.tooltip = "Waiting for safe point" if steering else "Steer at the next safe point"
+                remove_button = Button("×", id=f"q-del-{input_id}", classes="queue-del-btn")
+                remove_button.tooltip = "Remove from queue"
                 row = Horizontal(
-                    Static(f"[yellow]#{i+1}[/] [dim]{escape(short)}[/]"),
-                    Button("✕", id=f"q-del-{i}", classes="queue-del-btn"),
+                    Static(f"[dim]{i+1}[/] {escape(short)}" + (" [dim]· Next safe point[/]" if steering else "")),
+                    steer_button,
+                    remove_button,
                     classes="queue-item",
                 )
                 container.mount(row)
@@ -834,12 +871,15 @@ QueuePanel.has-items { display: block; }
             log.warning("QueuePanel.update_queue error: %s", e)
 
     def on_button_pressed(self, event: Button.Pressed):
-        if event.button.id and event.button.id.startswith("q-del-"):
-            try:
-                idx = int(event.button.id.split("-")[-1])
-                self.app._remove_from_queue(idx)
-            except Exception:
-                pass
+        button_id = event.button.id or ""
+        if button_id.startswith("q-"):
+            event.stop()
+            if button_id == "q-resume":
+                self.app._resume_inputs()
+            elif button_id.startswith("q-del-"):
+                self.app._remove_from_queue(button_id[6:])
+            elif button_id.startswith("q-steer-"):
+                self.app._steer_from_queue(button_id[8:])
 
 class CronStatusPanel(Widget):
     """Sidebar panel showing active cron jobs and recent status notifications."""
@@ -1057,9 +1097,8 @@ InputBar {
         return True
 
     def on_input_bar_submitted(self, event: "InputBar.Submitted"):
-        # The send consumed the attachments — clear the chip strip.
-        self._attachments.clear()
-        self._update_attachment_bar()
+        # The application clears attachments only after accepting the input.
+        pass
 
     def on_attachment_bar_remove_requested(self, event: AttachmentBar.RemoveRequested):
         if 0 <= event.index < len(self._attachments):

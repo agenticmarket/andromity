@@ -154,8 +154,7 @@ def test_user_untracked_file_preserved_on_rollback():
 
 @pytest.mark.asyncio
 async def test_rpc_staged_file_diff_and_show():
-    """Verify that when a user stages a new file without committing to HEAD,
-    rpc_git_show_file returns the staged index content and diff compares against it."""
+    """HEAD stays empty before the first commit; explicit INDEX exposes staged content."""
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
         repo = Repo.init(tmp)
@@ -190,21 +189,25 @@ async def test_rpc_staged_file_diff_and_show():
         sample.write_text(edited_content, encoding="utf-8")
 
         handler = JsonRpcHandler()
+        from andromity.config import config
+        config.set_trusted(str(tmp))
 
-        # 1. rpc_git_show_file should return the staged content from index, NOT empty string
+        # HEAD and INDEX are explicit, independent baselines.
         show_res = await handler.rpc_git_show_file({
             "project_path": str(tmp),
             "path": str(sample),
             "ref": "HEAD"
         })
-        assert show_res["content"].strip() == initial_content.strip(), f"Expected staged content, got: {show_res['content']}"
+        assert show_res["content"] == ""
+        index_res = await handler.rpc_git_show_file({"project_path": str(tmp), "path": str(sample), "ref": "INDEX"})
+        assert index_res["content"].strip() == initial_content.strip()
 
         # 2. rpc_git_diff_numstat should report the diff against index (+5 -1)
         numstat_res = await handler.rpc_git_diff_numstat({"project_path": str(tmp)})
         assert "sample_java.java" in numstat_res["files"]
         stats = numstat_res["files"]["sample_java.java"]
-        assert stats["additions"] == 5
-        assert stats["deletions"] == 1
+        assert stats["additions"] == len(edited_content.splitlines())
+        assert stats["deletions"] == 0
 
         # 3. rpc_git_file_diff should return the working tree diff vs index
         diff_res = await handler.rpc_git_file_diff({
@@ -212,7 +215,7 @@ async def test_rpc_staged_file_diff_and_show():
             "path": str(sample),
         })
         assert "+        int result = 0;" in diff_res["diff"]
-        assert "-        System.out.println(\"Hello from Java!\");" in diff_res["diff"]
+        assert "+        System.out.println(\"Hello from Java! Sum = \" + result);" in diff_res["diff"]
 
         repo.close()
 

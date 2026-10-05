@@ -138,6 +138,7 @@ export class BackgroundTaskPanel {
     try {
       const res = await this._rpcClient.call("process.read", {
         process_id: this._processId,
+        session_id: this._sessionId || undefined,
         lines: 300,
       });
       if (res && typeof res.output === "string") {
@@ -153,7 +154,7 @@ export class BackgroundTaskPanel {
   private async _killProcess() {
     if (!this._rpcClient) return;
     try {
-      await this._rpcClient.call("process.kill", { process_id: this._processId });
+      await this._rpcClient.call("process.kill", { process_id: this._processId, session_id: this._sessionId || undefined });
       this._handleExited(1, undefined, true);
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to terminate task ${this._processId}: ${err?.message || err}`);

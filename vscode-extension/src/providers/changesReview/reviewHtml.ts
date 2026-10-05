@@ -21,12 +21,9 @@ export function getReviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline' https://fonts.googleapis.com; script-src 'nonce-${nonce}' ${webview.cspSource}; img-src ${webview.cspSource} https: data:; font-src ${webview.cspSource} https://fonts.gstatic.com data:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${webview.cspSource}; img-src ${webview.cspSource} https: data:; font-src ${webview.cspSource} data:;">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Changes Review</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     @font-face {
       font-family: "codicon";
@@ -94,7 +91,7 @@ export function getReviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
       </div>
 
       <div class="view-toggles">
-        <button id="btn-unified" class="view-btn active" title="Unified diff view">Unified</button>
+        <button id="btn-unified" class="view-btn active" title="Unified diff view" aria-label="Unified diff">Unified</button>
         <button id="btn-split" class="view-btn" title="Side-by-side split view">Split</button>
       </div>
 
@@ -117,7 +114,7 @@ export function getReviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
     <!-- Left Sidebar: Changed Files Tree -->
     <aside class="review-sidebar" id="review-sidebar">
       <div class="sidebar-search-box">
-        <input type="text" id="search-input" class="sidebar-search-input" placeholder="Filter changed files..." />
+        <input type="text" id="search-input" class="sidebar-search-input" placeholder="Filter files" aria-label="Filter changed files" />
       </div>
       <div class="tree-scroll-area" id="tree-scroll-area">
         <!-- Tree rendered dynamically by script -->

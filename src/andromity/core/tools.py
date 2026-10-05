@@ -192,6 +192,8 @@ def _is_sensitive_path(resolved: Path) -> bool:
 
 def _assert_safe_write_path(p: Path) -> Path:
     """Strictly verify that path is within the project directory for modifying/deleting operations."""
+    if not _is_trusted():
+        raise PermissionError("Workspace is untrusted. Use /trust to allow workspace tools.")
     root = _get_project_root()
     resolved = p.resolve() if p.is_absolute() else (root / p).resolve()
     try:
@@ -206,6 +208,8 @@ def _assert_safe_write_path(p: Path) -> Path:
 
 def _assert_safe_read_path(p: Path) -> Path:
     """Verify that path is safe to read: inside workspace, in approved skill roots, or explicitly attached."""
+    if not _is_trusted():
+        raise PermissionError("Workspace is untrusted. Use /trust to allow workspace tools.")
     root = _get_project_root()
     resolved = p.resolve() if p.is_absolute() else (root / p).resolve()
 
@@ -243,6 +247,14 @@ def _assert_safe_read_path(p: Path) -> Path:
 
 
 _assert_safe_path = _assert_safe_write_path
+
+
+def requires_workspace_trust(name: str) -> bool:
+    return name not in {
+        "ask_questions", "ask_question", "list_tools", "web_search", "fetch_url",
+        "session_list", "session_read_messages", "session_send_message", "session_ask_question",
+        "session_answer_question", "session_watch", "shared_state_get", "shared_state_set",
+    }
 
 
 def _is_trusted() -> bool:
@@ -854,14 +866,15 @@ def shell_read(process_id: str, lines: int = 50) -> str:
     with _bg_lock:
         entry = _bg_processes.get((proj_key, process_id))
         # Fallback scan for legacy unscoped entries or cross-session invocations
-        if entry is None:
+        if entry is None and get_current_session() is None:
             for k, e in _bg_processes.items():
                 if (isinstance(k, tuple) and k[1] == process_id) or k == process_id:
                     entry = e
                     if isinstance(k, tuple):
                         proj_key = k[0]
                     break
-        scoped_ids = [pid for (pk, pid) in _bg_processes.keys() if pk == proj_key]
+        scoped_ids = [key[1] if isinstance(key, tuple) else key for key in _bg_processes
+                      if not isinstance(key, tuple) or key[0] == proj_key]
     if not entry:
         hint = f" Running ids (this project): {scoped_ids}" if scoped_ids else " No background processes are running."
         return f"Error: No background process with id '{process_id}'.{hint}"
@@ -888,7 +901,7 @@ def shell_kill(process_id: str) -> str:
     target_key = (proj_key, process_id)
     with _bg_lock:
         entry = _bg_processes.get(target_key)
-        if entry is None:
+        if entry is None and get_current_session() is None:
             # Match by process_id in current project or globally across sessions
             for k in list(_bg_processes.keys()):
                 if (isinstance(k, tuple) and k[1] == process_id) or k == process_id:
@@ -2134,6 +2147,8 @@ def _run_coro_sync(coro):
 
 
 def execute_tool(name: str, args: Dict[str, Any]) -> str:
+    if requires_workspace_trust(name) and not _is_trusted():
+        return "Error: Workspace is untrusted. Use /trust to allow workspace tools."
     """Execute any tool (Core, Web, Coordination, or MCP) with logging and error handling."""
     log.debug("TOOL CALL: %s(%s)", name, {k: (str(v)[:80] + '...' if isinstance(v, str) and len(v) > 80 else v) for k, v in args.items()})
 
@@ -2237,6 +2252,8 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
 
 async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[str] = None, timeout: Optional[float] = None) -> str:
     """Asynchronous tool execution (natively awaits MCP tools and async coordination tools, dispatches core tools)."""
+    if requires_workspace_trust(name) and not _is_trusted():
+        return "Error: Workspace is untrusted. Use /trust to allow workspace tools."
     # Dynamically resolve effective timeout if not explicitly passed
     if timeout is not None:
         effective_timeout = float(timeout)
@@ -2301,7 +2318,22 @@ async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[
                 res = session_watch(**args)
             else:
                 # Run blocking core tools in a background thread to prevent freezing the Textual UI
-                res = await asyncio.to_thread(execute_tool, name, args)
+                worker = asyncio.create_task(asyncio.to_thread(execute_tool, name, args))
+                try:
+                    res = await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    # Cancelling a to_thread await does not stop its OS thread.
+                    # Do not release the session to a new run while it can still write.
+                    while not worker.done():
+                        try:
+                            await asyncio.shield(worker)
+                        except asyncio.CancelledError:
+                            continue
+                        except Exception:
+                            break
+                    if worker.done() and not worker.cancelled():
+                        worker.exception()
+                    raise
     except asyncio.TimeoutError:
         log.warning("Tool %s timed out after %ss", name, effective_timeout)
         return f"Error: Tool '{name}' timed out after {effective_timeout:.0f} seconds."

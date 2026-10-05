@@ -23,7 +23,7 @@ export class GitRefContentProvider implements vscode.TextDocumentContentProvider
     if (process.platform === "win32" && filePath.startsWith("/") && /^\/[a-zA-Z]:/.test(filePath)) {
       filePath = filePath.substring(1);
     }
-    const ref = uri.query.replace(/^ref=/, "") || "HEAD";
+    const ref = new URLSearchParams(uri.query).get("ref") || "HEAD";
     if (ref === "EMPTY") {
       return Promise.resolve("");
     }
@@ -35,7 +35,7 @@ export class GitRefContentProvider implements vscode.TextDocumentContentProvider
         project_path: projectPath,
       })
       .then((res) => res.content || "")
-      .catch(() => "");
+      .catch(() => { throw new Error("Unable to load the Git version. Check workspace trust and reconnect the daemon."); });
   }
 }
 
@@ -123,7 +123,7 @@ export class DiffManager {
     const leftUri = vscode.Uri.from({
       scheme: HEAD_SCHEME,
       path: uriPath,
-      query: isUntracked ? "ref=SNAPSHOT" : "ref=HEAD",
+      query: "ref=" + (isUntracked ? "EMPTY" : "HEAD") + "&v=" + Date.now(),
       fragment: ws.uri.fsPath,
     });
 
@@ -196,6 +196,10 @@ export class DiffManager {
   }
 
   public async undoLastTurn(sessionId: string, turnIndex?: number, turnsToUndo?: number): Promise<boolean> {
+    if (vscode.workspace.textDocuments?.some(document => document.isDirty)) {
+      vscode.window.showWarningMessage("Save or close unsaved editors before undoing file changes.");
+      return false;
+    }
     const numTurns = turnsToUndo && turnsToUndo > 1 ? turnsToUndo : 1;
     const promptText = numTurns > 1
       ? `Undo ${numTurns} turns (rollback all file modifications made in those turns)?`
@@ -216,6 +220,7 @@ export class DiffManager {
         turns_undone?: number;
         target_turn_index?: number;
         git_status: string;
+        error?: string;
       }>(
         "session.undo",
         {
@@ -239,9 +244,10 @@ export class DiffManager {
         );
         return true;
       }
+      vscode.window.showWarningMessage(res.error || "Undo could not complete. Review your file changes and try again.");
       return false;
     } catch (e: any) {
-      vscode.window.showErrorMessage(`Failed to undo turn: ${e.message}`);
+      vscode.window.showErrorMessage("Undo could not complete. Check workspace trust and the daemon connection.");
       return false;
     }
   }

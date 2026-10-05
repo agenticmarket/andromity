@@ -42,8 +42,34 @@ import { getChatAmbientScript } from "../src/providers/chatview/chatAmbientScrip
 import { getChatActivityScript } from "../src/providers/chatview/chatActivityRow.js";
 import { getChatActivityStyles } from "../src/providers/chatview/chatActivityStyles.js";
 import { BackgroundTaskPanel } from "../src/panels/BackgroundTaskPanel.js";
+import { handleInputMessage } from "../src/server/inputBridge.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
+
+describe("Shared sidebar and session-tab retry transport", () => {
+  it("uses the selected session and server retry without undoing files", async () => {
+    const calls: any[] = [];
+    const posts: any[] = [];
+    const rpc: any = { call: async (method: string, params: any) => { calls.push({ method, params }); return {}; } };
+    assert.equal(await handleInputMessage(rpc, { type: "retry_turn", sessionId: "tab", stripImages: true },
+      "sidebar", message => posts.push(message)), true);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].method, "agent.retry");
+    assert.equal(calls[0].params.session_id, "tab");
+    assert.equal(calls[0].params.strip_images, true);
+    assert.equal(posts[0].type, "retry_result");
+    assert.equal(posts[0].success, true);
+  });
+
+  it("returns a retry failure acknowledgement without leaking provider details", async () => {
+    const posts: any[] = [];
+    const rpc: any = { call: async () => { throw new Error("internal secret provider error"); } };
+    await handleInputMessage(rpc, { type: "retry_turn", stripImages: true }, "tab", message => posts.push(message));
+    assert.equal(posts[0].type, "retry_result");
+    assert.equal(posts[0].success, false);
+    assert.equal(posts[0].error, "Retry could not start. Reconnect and try again.");
+  });
+});
 
 describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
   it("ChatViewProvider client script should compile with 0 syntax errors", () => {
@@ -126,6 +152,8 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     const postedMessages: any[] = [];
     const mockDoc: any = {
       getElementById: () => ({
+        setAttribute: () => {},
+        removeAttribute: () => {},
         addEventListener: () => {},
         classList: { add: () => {}, remove: () => {}, contains: () => false, toggle: () => {} },
         style: {},
@@ -226,6 +254,10 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
       new vm.Script(scriptMatch[1], { filename: "extractedWaterfallScript.js" });
     }, "Extracted waterfall script must parse with 0 syntax errors");
   });
+
+
+
+
 
   it("Ambient wallpaper script should compile with 0 syntax errors for both enabled and disabled states", () => {
     // Disabled (default)
@@ -1032,10 +1064,9 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(html.includes('id="reasoning-slider-fill"'), "Chat HTML must contain reasoning-slider-fill");
     assert.ok(!html.includes('id="reasoning-popover-desc"'), "Minimal popover must omit description text box");
     assert.ok(!html.includes('id="reasoning-popover-badge"'), "Minimal popover must omit title/badge header");
-    assert.ok(html.includes('data-level="off"'), "Popover must contain Off step");
-    assert.ok(html.includes('data-level="low"'), "Popover must contain Low step");
-    assert.ok(html.includes('data-level="medium"'), "Popover must contain Medium step");
-    assert.ok(html.includes('data-level="high"'), "Popover must contain High step");
+    assert.ok(html.includes('id="reasoning-slider-labels"'), "Steps must be populated from capabilities");
+    assert.ok(!html.includes('data-level="off"'), "Off must not be offered before capability discovery");
+    assert.ok(html.includes('id="reasoning-budget-input"'), "Budget models need a token input");
 
     // 2. CSS styles validation
     assert.ok(styles.includes('.reasoning-popover'), "Styles must define .reasoning-popover");
@@ -1453,7 +1484,7 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     });
     assert.ok(chatHtml.includes('id="bg-process-strip"'), "Chat HTML must include bg-process-strip upside prompt box");
     assert.ok(chatHtml.includes('id="btn-bg-stop-all"'), "Chat HTML must include btn-bg-stop-all 1-click stop button");
-    assert.ok(chatHtml.includes('id="btn-bg-open-tab"'), "Chat HTML must include btn-bg-open-tab to open task logs tab");
+
     assert.ok(chatHtml.includes('id="bg-process-list"'), "Chat HTML must include bg-process-list");
 
     const chatStyles = getChatStyles();
@@ -1478,6 +1509,8 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
 
     assert.equal(BackgroundTaskPanel.viewType, "andromity.backgroundTaskTab", "BackgroundTaskPanel must have viewType andromity.backgroundTaskTab");
   });
+
+
 });
 
 

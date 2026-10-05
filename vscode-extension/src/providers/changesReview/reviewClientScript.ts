@@ -9,26 +9,28 @@ export function getReviewClientScript(): string {
 
     // ── State ──────────────────────────────────────────────────
     let state = {
-      branch: 'main',
+      branch: 'HEAD',
       files: [],
       turnFiles: null,
       scope: 'turn',
       activeFilePath: null,
-      fileDiffs: {},
+      fileDiffs: Object.create(null),
+      fileNotices: Object.create(null),
       viewMode: 'unified',
       searchQuery: '',
-      collapsedFolders: {},
+      collapsedFolders: Object.create(null),
       expandedBlocks: {}, // key: filePath + ":" + blockIndex -> boolean
     };
 
     // Restore previous state if any
     const previousState = vscode.getState();
     if (previousState) {
-      state = { ...state, ...previousState };
+      state = { ...state, ...previousState, fileDiffs: Object.create(null), fileNotices: Object.create(null),
+        collapsedFolders: Object.assign(Object.create(null), previousState.collapsedFolders) };
     }
 
     function saveState() {
-      vscode.setState(state);
+      vscode.setState({ ...state, fileDiffs: {}, fileNotices: {} });
     }
 
     // ── DOM References ─────────────────────────────────────────
@@ -83,6 +85,7 @@ export function getReviewClientScript(): string {
         if (!visible.some(function (f) { return f.path === state.activeFilePath; }) && visible.length > 0) {
           selectFile(visible[0].path);
         } else {
+          if (visible.length === 0) state.activeFilePath = null;
           renderTree();
           renderActiveDiff();
         }
@@ -220,7 +223,7 @@ export function getReviewClientScript(): string {
 
     // ── Build Hierarchical Tree ────────────────────────────────
     function buildTree(files) {
-      const root = { name: '', isDir: true, children: {}, files: [] };
+      const root = { name: '', isDir: true, children: Object.create(null), files: [] };
       files.forEach(function (f) {
         const parts = f.path.split('/');
         let curr = root;
@@ -231,7 +234,7 @@ export function getReviewClientScript(): string {
               name: folder,
               path: parts.slice(0, i + 1).join('/'),
               isDir: true,
-              children: {},
+              children: Object.create(null),
               files: [],
             };
           }
@@ -244,7 +247,7 @@ export function getReviewClientScript(): string {
 
     // ── Scope Helpers ──────────────────────────────────────────
     function isTurnFile(filePath, turnFiles) {
-      if (!turnFiles || turnFiles.length === 0) return true;
+      if (!turnFiles) return true;
       const normTarget = (filePath || '').replace(/\\\\/g, '/').toLowerCase().trim();
       return turnFiles.some(function (tf) {
         const normTf = (tf || '').replace(/\\\\/g, '/').toLowerCase().trim();
@@ -258,7 +261,7 @@ export function getReviewClientScript(): string {
 
     function getActiveFileList() {
       let list = state.files;
-      if (state.scope === 'turn' && state.turnFiles && state.turnFiles.length > 0) {
+      if (state.scope === 'turn' && state.turnFiles) {
         list = list.filter(function (f) {
           return isTurnFile(f.path, state.turnFiles);
         });
@@ -275,15 +278,17 @@ export function getReviewClientScript(): string {
         dels += (f.deletions || 0);
       });
       totalFilesEl.textContent = activeList.length + ' File' + (activeList.length === 1 ? '' : 's') + ' Changed';
-      totalAdditionsEl.textContent = '+' + adds;
+      const incomplete = activeList.some(file => file.omitted);
+      totalAdditionsEl.title = incomplete ? 'Counts exclude files whose preview is omitted' : 'Added lines';
+      totalAdditionsEl.textContent = '+' + adds + (incomplete ? '*' : '');
       totalDeletionsEl.textContent = '-' + dels;
 
-      if (state.turnFiles && state.turnFiles.length > 0 && scopeTogglesEl) {
+      if (state.turnFiles && scopeTogglesEl) {
         scopeTogglesEl.style.display = 'inline-flex';
         const turnCount = state.files.filter(function (f) {
           return isTurnFile(f.path, state.turnFiles);
         }).length;
-        if (turnFilesCountEl) turnFilesCountEl.textContent = turnCount || state.turnFiles.length;
+        if (turnFilesCountEl) turnFilesCountEl.textContent = String(turnCount);
         if (allFilesCountEl) allFilesCountEl.textContent = state.files.length;
         if (state.scope === 'turn') {
           if (btnScopeTurn) btnScopeTurn.classList.add('active');
@@ -321,6 +326,10 @@ export function getReviewClientScript(): string {
 
           const folderRow = document.createElement('div');
           folderRow.className = 'tree-folder-row';
+          folderRow.tabIndex = 0;
+          folderRow.setAttribute('role', 'button');
+          folderRow.setAttribute('aria-expanded', String(!isCollapsed));
+          folderRow.addEventListener('keydown', function (event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); folderRow.click(); } });
           folderRow.style.paddingLeft = (depth * 14 + 6) + 'px';
           folderRow.innerHTML =
             '<span class="folder-chevron codicon codicon-chevron-down ' + (isCollapsed ? 'collapsed' : '') + '"></span>' +
@@ -348,17 +357,22 @@ export function getReviewClientScript(): string {
           const isActive = file.path === state.activeFilePath;
           const fileRow = document.createElement('div');
           fileRow.className = 'tree-file-row ' + (isActive ? 'active' : '');
+          fileRow.tabIndex = 0;
+          fileRow.setAttribute('role', 'button');
+          fileRow.setAttribute('aria-label', file.path + ', ' + file.status);
+          fileRow.addEventListener('keydown', function (event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectFile(file.path); } });
           fileRow.style.paddingLeft = (depth * 14 + 18) + 'px';
 
           const iconInfo = getFileIcon(file.name);
           const addStr = file.additions > 0 ? '<span class="stat-add">+' + file.additions + '</span>' : '';
+          const fileNotice = file.binary ? 'Binary' : file.omitted ? 'Preview omitted' : '';
           const delStr = file.deletions > 0 ? '<span class="stat-del">-' + file.deletions + '</span>' : '';
 
           fileRow.innerHTML =
-            '<span class="file-status-badge ' + file.status + '">' + file.status + '</span>' +
+            '<span class="file-status-badge ' + file.status + '" data-status="' + file.status + '">' + file.status + '</span>' +
             '<span class="codicon codicon-' + iconInfo.icon + '" style="font-size: 13px; color: ' + iconInfo.color + '; flex-shrink: 0;"></span>' +
             '<span class="file-name" title="' + escapeHtml(file.path) + '">' + escapeHtml(file.name) + '</span>' +
-            '<span class="file-diff-pill">' + addStr + ' ' + delStr + '</span>';
+            '<span class="file-diff-pill">' + (fileNotice || addStr + ' ' + delStr) + '</span>';
 
           fileRow.addEventListener('click', function () {
             selectFile(file.path);
@@ -378,7 +392,7 @@ export function getReviewClientScript(): string {
       renderTree();
 
       // If diff is not loaded yet, request from backend
-      if (!state.fileDiffs[filePath]) {
+      if (!Object.prototype.hasOwnProperty.call(state.fileDiffs, filePath)) {
         showLoadingDiff(filePath);
         vscode.postMessage({ type: 'get_file_diff', filePath: filePath });
       } else {
@@ -440,7 +454,7 @@ export function getReviewClientScript(): string {
             newLine: null,
             text: line.substring(1),
           });
-        } else if (line.startsWith(' ') || line === '') {
+        } else if (line.startsWith(' ')) {
           currentHunk.lines.push({
             type: 'context',
             oldLine: oldLine++,
@@ -504,6 +518,7 @@ export function getReviewClientScript(): string {
 
       const fileObj = state.files.find(function (f) { return f.path === state.activeFilePath; });
       const diffData = state.fileDiffs[state.activeFilePath] || '';
+      const notice = (state.fileNotices || {})[state.activeFilePath];
 
       // Build Header
       const headerHtml =
@@ -514,13 +529,13 @@ export function getReviewClientScript(): string {
             (fileObj ? '<span class="file-diff-pill"><span class="stat-add">+' + fileObj.additions + '</span> <span class="stat-del">-' + fileObj.deletions + '</span></span>' : '') +
           '</div>' +
           '<div class="diff-file-actions">' +
-            '<button class="icon-btn" id="action-open-editor" title="Open file in VS Code editor">' +
+            '<button class="icon-btn" id="action-open-editor" title="Open file in editor" aria-label="Open file in editor">' +
               '<span class="codicon codicon-go-to-file"></span>' +
             '</button>' +
-            '<button class="icon-btn" id="action-native-diff" title="Open in native VS Code diff editor">' +
+            '<button class="icon-btn" id="action-native-diff" title="Open native diff" aria-label="Open native diff">' +
               '<span class="codicon codicon-diff-single"></span>' +
             '</button>' +
-            '<button class="icon-btn" id="action-revert-file" title="Revert changes in this file">' +
+            '<button class="icon-btn" id="action-revert-file" title="Discard all changes in this file" aria-label="Discard file changes">' +
               '<span class="codicon codicon-discard"></span>' +
             '</button>' +
           '</div>' +
@@ -530,7 +545,9 @@ export function getReviewClientScript(): string {
 
       let diffContentHtml = '';
 
-      if (hunks.length === 0) {
+      if (notice) {
+        diffContentHtml = '<div class="empty-state"><p>' + escapeHtml(notice) + '</p></div>';
+      } else if (hunks.length === 0) {
         if (diffData.trim()) {
           // Plain text fallback (e.g. untracked file or raw text)
           const rawLines = diffData.split(/\\r?\\n/);
@@ -591,13 +608,13 @@ export function getReviewClientScript(): string {
           if (hIdx === 0 && hunk.oldStart > 1) {
             const gap = hunk.oldStart - 1;
             const blockKey = state.activeFilePath + ':hunk_start';
-            const isExpanded = !!state.expandedBlocks[blockKey];
+            const isExpanded = false;
             if (!isExpanded) {
               diffContentHtml +=
-                '<div class="unmodified-banner" data-block="' + blockKey + '">' +
+                '<div class="unmodified-banner" data-block="' + escapeHtml(blockKey) + '">' +
                   '<span><span class="codicon codicon-unfold" style="margin-right: 6px;"></span>' + gap + ' unmodified lines</span>' +
                   '<div class="unmodified-controls">' +
-                    '<button class="expand-btn" data-block="' + blockKey + '">Expand</button>' +
+                    '<button class="expand-btn" data-block="' + escapeHtml(blockKey) + '">Open context</button>' +
                   '</div>' +
                 '</div>';
             }
@@ -607,13 +624,13 @@ export function getReviewClientScript(): string {
             const gap = hunk.oldStart - prevEnd;
             if (gap > 0) {
               const blockKey = state.activeFilePath + ':gap_' + hIdx;
-              const isExpanded = !!state.expandedBlocks[blockKey];
+              const isExpanded = false;
               if (!isExpanded) {
                 diffContentHtml +=
-                  '<div class="unmodified-banner" data-block="' + blockKey + '">' +
+                  '<div class="unmodified-banner" data-block="' + escapeHtml(blockKey) + '">' +
                     '<span><span class="codicon codicon-unfold" style="margin-right: 6px;"></span>' + gap + ' unmodified lines</span>' +
                     '<div class="unmodified-controls">' +
-                      '<button class="expand-btn" data-block="' + blockKey + '">Expand</button>' +
+                      '<button class="expand-btn" data-block="' + escapeHtml(blockKey) + '">Open context</button>' +
                     '</div>' +
                   '</div>';
               }
@@ -649,15 +666,15 @@ export function getReviewClientScript(): string {
           if (hIdx === 0 && hunk.oldStart > 1) {
             const gap = hunk.oldStart - 1;
             const blockKey = state.activeFilePath + ':hunk_start';
-            const isExpanded = !!state.expandedBlocks[blockKey];
+            const isExpanded = false;
 
             if (!isExpanded) {
               diffContentHtml +=
                 '<tr><td colspan="4">' +
-                  '<div class="unmodified-banner" data-block="' + blockKey + '">' +
+                  '<div class="unmodified-banner" data-block="' + escapeHtml(blockKey) + '">' +
                     '<span><span class="codicon codicon-unfold" style="margin-right: 6px;"></span>' + gap + ' unmodified lines</span>' +
                     '<div class="unmodified-controls">' +
-                      '<button class="expand-btn" data-block="' + blockKey + '">Expand</button>' +
+                      '<button class="expand-btn" data-block="' + escapeHtml(blockKey) + '">Open context</button>' +
                     '</div>' +
                   '</div>' +
                 '</td></tr>';
@@ -668,15 +685,15 @@ export function getReviewClientScript(): string {
             const gap = hunk.oldStart - prevEnd;
             if (gap > 0) {
               const blockKey = state.activeFilePath + ':gap_' + hIdx;
-              const isExpanded = !!state.expandedBlocks[blockKey];
+              const isExpanded = false;
 
               if (!isExpanded) {
                 diffContentHtml +=
                   '<tr><td colspan="4">' +
-                    '<div class="unmodified-banner" data-block="' + blockKey + '">' +
+                    '<div class="unmodified-banner" data-block="' + escapeHtml(blockKey) + '">' +
                       '<span><span class="codicon codicon-unfold" style="margin-right: 6px;"></span>' + gap + ' unmodified lines</span>' +
                       '<div class="unmodified-controls">' +
-                        '<button class="expand-btn" data-block="' + blockKey + '">Expand</button>' +
+                        '<button class="expand-btn" data-block="' + escapeHtml(blockKey) + '">Open context</button>' +
                       '</div>' +
                     '</div>' +
                   '</td></tr>';
@@ -734,9 +751,8 @@ export function getReviewClientScript(): string {
         b.addEventListener('click', function (e) {
           const blockKey = b.getAttribute('data-block');
           if (blockKey) {
-            state.expandedBlocks[blockKey] = true;
-            saveState();
-            renderActiveDiff();
+            e.stopPropagation();
+            vscode.postMessage({ type: 'open_native_diff', filePath: state.activeFilePath, isUntracked: fileObj?.status === 'U' });
           }
         });
       });
@@ -750,10 +766,12 @@ export function getReviewClientScript(): string {
           refreshBtn.disabled = false;
           refreshBtn.innerHTML = '<span class="codicon codicon-refresh"></span> Refresh';
 
-          state.branch = msg.branch || 'main';
+          state.fileDiffs = Object.create(null);
+          state.fileNotices = Object.create(null);
+          state.branch = msg.branch || 'HEAD';
           state.files = msg.files || [];
           if (msg.turnFiles !== undefined) {
-            state.turnFiles = (Array.isArray(msg.turnFiles) && msg.turnFiles.length > 0) ? msg.turnFiles : null;
+            state.turnFiles = Array.isArray(msg.turnFiles) ? msg.turnFiles : null;
             if (state.turnFiles) {
               state.scope = 'turn';
             } else if (state.scope === 'turn') {
@@ -795,18 +813,26 @@ export function getReviewClientScript(): string {
 
         case 'set_file_diff':
           state.fileDiffs[msg.filePath] = msg.diff || '';
+          state.fileNotices[msg.filePath] = msg.notice || '';
           saveState();
           if (state.activeFilePath === msg.filePath) {
             renderActiveDiff();
           }
           break;
 
+        case 'review_error':
+          diffContainer.innerHTML = '<div class="empty-state"><p>' + escapeHtml(msg.error) + '</p></div>';
+          // Reset the refresh control after a failed request.
         case 'refresh_done':
           refreshBtn.disabled = false;
           refreshBtn.innerHTML = '<span class="codicon codicon-refresh"></span> Refresh';
           break;
       }
     });
+
+    btnUnified.classList.toggle('active', state.viewMode === 'unified');
+    btnSplit.classList.toggle('active', state.viewMode === 'split');
+    searchInput.value = state.searchQuery;
 
     // Notify extension host that webview is ready
     vscode.postMessage({ type: 'webview_ready' });

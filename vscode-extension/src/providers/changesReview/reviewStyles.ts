@@ -11,15 +11,15 @@ export function getReviewStyles(): string {
       animation: codicon-spin 1.5s steps(30) infinite;
     }
     :root {
-      --review-font: var(--vscode-editor-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif);
+      --review-font: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif);
       --review-code-font: var(--vscode-editor-font-family, Menlo, Monaco, "Courier New", monospace);
       --review-font-size: var(--vscode-editor-font-size, 13px);
       --diff-add-bg: var(--vscode-diffEditor-insertedLineBackground, rgba(46, 160, 67, 0.15));
       --diff-del-bg: var(--vscode-diffEditor-removedLineBackground, rgba(248, 81, 73, 0.15));
       --diff-add-gutter: var(--vscode-diffEditor-insertedTextBackground, rgba(46, 160, 67, 0.35));
       --diff-del-gutter: var(--vscode-diffEditor-removedTextBackground, rgba(248, 81, 73, 0.35));
-      --diff-add-text: #3fb950;
-      --diff-del-text: #f85149;
+      --diff-add-text: var(--vscode-gitDecoration-addedResourceForeground, #3fb950);
+      --diff-del-text: var(--vscode-gitDecoration-deletedResourceForeground, #f85149);
       --border-color: var(--vscode-panel-border, rgba(128, 128, 128, 0.2));
       --hover-bg: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.05));
       --active-bg: var(--vscode-list-activeSelectionBackground, rgba(255, 255, 255, 0.1));
@@ -636,6 +636,22 @@ export function getReviewStyles(): string {
       font-size: 13px;
       max-width: 400px;
       line-height: 1.4;
+    }
+
+    button:focus-visible, input:focus-visible, .tree-file-row:focus-visible, .tree-folder-row:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px;
+    }
+    .line-content { user-select: text; }
+    .diff-file-title { min-width: 0; }
+    .diff-file-title > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .review-header { min-height: 44px; height: auto; padding: 8px 12px; flex-wrap: wrap; }
+    .header-left { flex-wrap: wrap; gap: 8px; min-width: 0; }
+    .file-status-badge.R { color: var(--vscode-gitDecoration-renamedResourceForeground); }
+    .file-status-badge[data-status="!"] { color: var(--vscode-gitDecoration-conflictingResourceForeground); }
+    @media (max-width: 650px) {
+      .review-sidebar { width: 190px; min-width: 150px; }
+      .target-badge { display: none; }
+      .metrics-summary { font-size: 11px; }
     }
   `;
 }

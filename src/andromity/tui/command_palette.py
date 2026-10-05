@@ -20,7 +20,7 @@ COMMAND_DESCRIPTIONS = {
     "/help":     "Show all commands & shortcuts",
     "/model":    "Switch provider & model (Ctrl+L)",
     "/profile":  "Switch profile — builder / reviewer / planner (Ctrl+J)",
-    "/reason":   "Set reasoning effort — off / low / medium / high / max",
+    "/reason":   "Set model-specific effort; auto uses the provider default",
     "/mode":     "Set permission mode — safe / trust / full / yolo",
     "/undo":     "Undo last prompt & revert all file changes",
     "/keys":     "View status of all provider API keys",

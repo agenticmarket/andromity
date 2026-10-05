@@ -473,6 +473,31 @@ export class SettingsPanel {
         break;
       }
 
+      case "save_provider":
+      case "delete_provider":
+      case "test_provider": {
+        try {
+          if (message.type === "test_provider") {
+            const result = await this._rpcClient.call<{ success: boolean; message: string }>("config.test_provider", {
+              provider: message.provider,
+            }, 35000);
+            this._panel.webview.postMessage({ type: "provider_result", ...result });
+          } else {
+            const result = await this._rpcClient.call<{ providers: ProviderInfo[] }>(
+              message.type === "save_provider" ? "config.save_provider" : "config.delete_provider",
+              message.type === "save_provider" ? message.connection : { provider: message.provider });
+            this._panel.webview.postMessage({ type: "providers_updated", providers: result.providers });
+            this._panel.webview.postMessage({ type: "provider_result", success: true, saved: message.type === "save_provider", message: "Connection updated." });
+            this._onConfigChangeCallback?.();
+          }
+        } catch (error: unknown) {
+          const text = error instanceof Error ? error.message : String(error);
+          this._panel.webview.postMessage({ type: "provider_result", success: false,
+            message: text.includes("-32601") ? "Update the Andromity server to configure custom providers." : text });
+        }
+        break;
+      }
+
       case "set_api_key": {
         try {
           await this._rpcClient.call("config.set_api_key", {
@@ -2447,6 +2472,7 @@ export class SettingsPanel {
           <div class="chip" data-provider="deepseek">DeepSeek</div>
           <div class="chip" data-provider="groq">Groq</div>
           <div class="chip" data-provider="ollama">Ollama (Local)</div>
+          <span id="custom-provider-chips" style="display:contents;"></span>
           <div class="chip" data-provider="nvidia">NVIDIA NIM</div>
         </div>
 
@@ -2551,9 +2577,34 @@ export class SettingsPanel {
       <div class="section-header">
         <div>
           <h2 class="section-title">API Keys & Provider Connectors</h2>
-          <p class="section-desc">Manage API credentials securely on your machine. Keys are encrypted and stored in local config.</p>
+          <p class="section-desc">Manage provider connections and credentials in your local configuration.</p>
+        </div>
+        <button class="btn btn-secondary" data-action="add-provider">Add custom provider</button>
+      </div>
+      <div class="cron-form" id="connection-editor" style="display:none; margin-bottom:16px;">
+        <div class="cron-form-row">
+          <div class="cron-form-col"><label for="connection-id">Connection ID</label><input id="connection-id" placeholder="local-models"></div>
+          <div class="cron-form-col"><label for="connection-name">Display name</label><input id="connection-name" placeholder="Local models"></div>
+        </div>
+        <div class="cron-form-row">
+          <div class="cron-form-col"><label for="connection-url">Base URL</label><input id="connection-url" placeholder="http://localhost:1234/v1"></div>
+          <div class="cron-form-col"><label for="connection-model">Model ID</label><input id="connection-model" placeholder="provider/model-name"></div>
+        </div>
+        <label for="connection-key">API key · optional; leave blank to keep a saved key</label>
+        <input type="password" id="connection-key" autocomplete="off">
+        <details style="margin:12px 0;"><summary>Advanced</summary>
+          <div class="cron-form-row" style="margin-top:10px;">
+            <div class="cron-form-col"><label for="connection-type">LiteLLM provider type</label><input id="connection-type" value="openai" placeholder="openai"></div>
+            <div class="cron-form-col"><label for="connection-version">API version · optional</label><input id="connection-version"></div>
+          </div>
+          <p class="setting-desc">OpenAI-compatible is the default. Other adapters can use the runtime's standard environment credentials.</p>
+        </details>
+        <div style="display:flex; justify-content:flex-end; gap:8px;">
+          <button class="btn btn-secondary" data-action="cancel-provider">Cancel</button>
+          <button class="btn" data-action="save-provider">Save connection</button>
         </div>
       </div>
+      <div id="provider-status" role="status" aria-live="polite" class="setting-desc" style="margin-bottom:10px;"></div>
       <div class="cards-grid" id="keys-grid"></div>
     </div>
 
@@ -2781,12 +2832,9 @@ export class SettingsPanel {
 
         <div class="settings-card">
           <div class="setting-label">Reasoning Effort</div>
-          <div class="setting-desc">Effort level for models supporting extended thinking (o1, o3, Claude 3.7).</div>
+          <div class="setting-desc">Controls supported by the selected model. Auto uses the provider default.</div>
           <select class="setting-select" id="setting-reasoning">
-            <option value="off">Off — Zero reasoning overhead</option>
-            <option value="low">Low — Fast concise reasoning</option>
-            <option value="medium">Medium — Balanced depth</option>
-            <option value="high">High — In-depth architectural reasoning</option>
+            <option value="auto">Auto — Provider default</option>
           </select>
         </div>
 
@@ -3558,6 +3606,26 @@ SOFTWARE.</pre>
         togglePin(btn.dataset.id, btn.dataset.provider, btn.dataset.name);
       } else if (action === "save-key") {
         saveKey(btn.dataset.id);
+      } else if (action === "add-provider" || action === "edit-provider") {
+        editProvider(action === "edit-provider" ? btn.dataset.id : "");
+      } else if (action === "cancel-provider") {
+        document.getElementById("connection-editor").style.display = "none";
+        document.getElementById("connection-key").value = "";
+      } else if (action === "save-provider") {
+        const value = (id) => document.getElementById(id).value.trim();
+        const connection = { id: value("connection-id"), display_name: value("connection-name"),
+          base_url: value("connection-url"), model: value("connection-model"),
+          type: value("connection-type") || "openai", api_version: value("connection-version") };
+        if (value("connection-key")) connection.api_key = value("connection-key");
+        vscode.postMessage({ type: "save_provider", connection });
+      } else if (action === "test-provider") {
+        document.getElementById("provider-status").textContent = "Testing connection…";
+        vscode.postMessage({ type: "test_provider", provider: btn.dataset.id });
+      } else if (action === "delete-provider") {
+        vscode.postMessage({ type: "delete_provider", provider: btn.dataset.id });
+      } else if (action === "use-provider") {
+        const provider = allProviders.find(p => p.id === btn.dataset.id);
+        if (provider && provider.model) selectModel(provider.model, provider.id);
       } else if (action === "open-portal" || action === "open-url") {
         openExternalUrl(btn.dataset.url);
       } else if (action === "open-license-file") {
@@ -3684,7 +3752,27 @@ SOFTWARE.</pre>
       if (typeof msg.waterfallAutoOpen !== "undefined" && selectWaterfallAutoOpen) {
         selectWaterfallAutoOpen.value = msg.waterfallAutoOpen !== false ? "enabled" : "disabled";
       }
-      if (currentConfig.reasoning_effort && selectReasoning) selectReasoning.value = currentConfig.reasoning_effort;
+      if (selectReasoning) {
+        selectReasoning.innerHTML = '';
+        const efforts = ['auto', ...(currentConfig.available_reasoning_efforts || []).filter(value => value !== 'auto')];
+        const ascending = ['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'on'];
+        const rank = value => ascending.includes(value) ? ascending.indexOf(value) : ascending.length;
+        efforts.sort((a, b) => rank(a) - rank(b));
+        efforts.forEach(value => {
+          const option = document.createElement('option');
+          option.value = value;
+          option.textContent = value === 'auto' ? 'Auto — Provider default' : value.charAt(0).toUpperCase() + value.slice(1);
+          selectReasoning.appendChild(option);
+        });
+        const selected = currentConfig.reasoning_effort;
+        if (selected && selected.startsWith('budget:')) {
+          const option = document.createElement('option');
+          option.value = selected;
+          option.textContent = selected.slice(7) + ' thinking tokens';
+          selectReasoning.appendChild(option);
+        }
+        selectReasoning.value = efforts.includes(selected) || (selected && selected.startsWith('budget:')) ? selected : 'auto';
+      }
       if (currentConfig.user_name && inputUserName) inputUserName.value = currentConfig.user_name;
       if (currentConfig.user_email && inputUserEmail) inputUserEmail.value = currentConfig.user_email;
       if (currentConfig.max_subagents && selectMaxSubagents) selectMaxSubagents.value = String(currentConfig.max_subagents);
@@ -3826,6 +3914,14 @@ SOFTWARE.</pre>
             selectMode.value = msg.value.toLowerCase();
           } else if (msg.key === "startupSession" && selectStartupSession) {
             selectStartupSession.value = msg.value;
+          }
+          break;
+        }
+        case "provider_result": {
+          document.getElementById("provider-status").textContent = msg.message || "";
+          if (msg.success && msg.saved) {
+            document.getElementById("connection-editor").style.display = "none";
+            document.getElementById("connection-key").value = "";
           }
           break;
         }
@@ -4159,6 +4255,18 @@ SOFTWARE.</pre>
       }).join("");
     }
 
+    function editProvider(id) {
+      const provider = allProviders.find(p => p.id === id) || {};
+      const fields = { "connection-id": provider.id || "", "connection-name": provider.name || "",
+        "connection-url": provider.base_url || "", "connection-model": provider.model || "",
+        "connection-type": provider.type || "openai", "connection-version": provider.api_version || "", "connection-key": "" };
+      Object.keys(fields).forEach(key => document.getElementById(key).value = fields[key]);
+      document.getElementById("connection-id").disabled = Boolean(id);
+      document.getElementById("connection-editor").style.display = "block";
+      document.getElementById(id ? "connection-url" : "connection-id").focus();
+      document.getElementById("provider-status").textContent = "";
+    }
+
     function renderProviders() {
       const grid = document.getElementById("keys-grid");
       if (!grid) return;
@@ -4187,6 +4295,14 @@ SOFTWARE.</pre>
       ];
 
       const displayList = (allProviders && allProviders.length > 0) ? [...allProviders] : defaultProviders;
+      const customChips = document.getElementById("custom-provider-chips");
+      if (customChips) {
+        customChips.innerHTML = displayList.filter(p => p.custom).map(p => '<button class="chip" data-provider="' + escapeHtml(p.id) + '">' + escapeHtml(p.name) + '</button>').join('');
+        customChips.querySelectorAll('[data-provider]').forEach(chip => chip.addEventListener('click', () => {
+          document.querySelectorAll('.chip[data-provider]').forEach(c => c.classList.remove('active'));
+          chip.classList.add('active'); activeProvider = chip.dataset.provider; renderModels();
+        }));
+      }
       if (!displayList.some(p => p.id === 'andromity')) {
         displayList.unshift({ id: 'andromity', name: 'Andromity Cloud Gateway', has_key: true });
       }
@@ -4194,6 +4310,16 @@ SOFTWARE.</pre>
       grid.innerHTML = displayList.map(p => {
         const meta = providerMeta[p.id] || { name: p.name || p.id, desc: "AI Provider API", portal: p.portal || "" };
         const hasKey = p.has_key || p.id === "ollama" || p.id === "andromity";
+        if (p.custom) {
+          const id = escapeHtml(p.id);
+          return '<div class="item-card"><div class="item-card-top"><div class="item-card-title">' + escapeHtml(p.name) + '</div><span class="badge">Custom</span></div>' +
+            '<div class="item-card-desc">' + escapeHtml(p.base_url || p.type) + '<br>' + escapeHtml(p.model || '') + '</div>' +
+            '<div style="display:flex; gap:6px; flex-wrap:wrap;">' +
+            '<button class="btn" data-action="use-provider" data-id="' + id + '">Use model</button>' +
+            '<button class="btn btn-secondary" data-action="edit-provider" data-id="' + id + '">Edit</button>' +
+            '<button class="btn btn-secondary" data-action="test-provider" data-id="' + id + '">Test</button>' +
+            '<button class="btn btn-secondary" data-action="delete-provider" data-id="' + id + '">Remove</button></div></div>';
+        }
 
         if (p.id === 'andromity') {
           const isAuthed = currentAccount && currentAccount.isAuthenticated;
