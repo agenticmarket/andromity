@@ -2286,13 +2286,13 @@ class JsonRpcHandler:
         return {"success": True, "providers": await self.rpc_config_list_providers()}
 
     async def rpc_config_test_provider(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        from andromity.core.connections import test_connection
+        from andromity.core.connections import connection_failure, test_connection
         try:
             return await asyncio.wait_for(test_connection(params["provider"], params.get("model", "")), 30)
         except asyncio.TimeoutError:
-            return {"success": False, "message": "Connection timed out. Check that the endpoint is reachable."}
+            return connection_failure("timeout")
         except Exception:
-            return {"success": False, "message": "Connection failed. Check your endpoint, model ID, and provider type."}
+            return connection_failure("generic")
 
     async def rpc_system_info(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Return system runtime details, version, python executable, tools count, etc."""
@@ -2955,7 +2955,7 @@ Your output must be:
                         "context_tokens": session.context_tokens,
                     })
         except Exception as e:
-            log.debug("Failed to generate AI session name: %s", e)
+            log.debug("Failed to generate AI session name: %s (HTTP %s)", type(e).__name__, getattr(e, "status_code", "unknown"))
 
     # ── MCP & Skills ────────────────────────────────────────────────────────────
 

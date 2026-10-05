@@ -2590,6 +2590,7 @@ export class SettingsPanel {
           <div class="cron-form-col"><label for="connection-url">Base URL</label><input id="connection-url" placeholder="http://localhost:1234/v1"></div>
           <div class="cron-form-col"><label for="connection-model">Model ID</label><input id="connection-model" placeholder="provider/model-name"></div>
         </div>
+        <p class="setting-desc">Use the API root, for example https://your-provider/v1. Pasted /chat/completions endpoints are converted automatically.</p>
         <label for="connection-key">API key · optional; leave blank to keep a saved key</label>
         <input type="password" id="connection-key" autocomplete="off">
         <details style="margin:12px 0;"><summary>Advanced</summary>

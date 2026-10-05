@@ -337,9 +337,9 @@ async def stream_completion(
                 )
 
                 if is_daily_quota or is_auth_error or is_bad_request:
-                    log.info("Non-retryable error (%s: %s). Failing fast without retries.", type(e).__name__, e)
+                    log.info("Non-retryable provider error: %s (HTTP %s).", type(e).__name__, getattr(e, "status_code", "unknown"))
                     yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-                    yield Done(outcome="error")
+                    yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"])
                     return
 
                 is_429 = "429" in msg or "rate limit" in msg or "ratelimit" in msg or "quota" in msg
@@ -360,9 +360,9 @@ async def stream_completion(
                     await asyncio.sleep(wait_s)
                     continue
                 else:
-                    log.error("acompletion initial error after %d attempts: %s", total_attempts, e, exc_info=True)
+                    log.error("Provider call failed after %d attempts: %s (HTTP %s).", total_attempts, type(e).__name__, getattr(e, "status_code", "unknown"))
                     yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-                    yield Done(outcome="error")
+                    yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"])
                     return
 
             # 2. Watchdog: guard against upstream queue stall
@@ -483,18 +483,18 @@ async def stream_completion(
             if not has_emitted_content and not is_non_retryable and attempt < len(STREAM_BACKOFF_DELAYS):
                 wait_s = STREAM_BACKOFF_DELAYS[attempt]
                 log.warning(
-                    "Upstream stalled or failed before emitting tokens (%s: %s). Retrying in %.0fs (attempt %d/%d)...",
-                    type(e).__name__, e, wait_s, attempt + 1, total_attempts
+                    "Upstream stalled or failed before emitting tokens (%s). Retrying in %.0fs (attempt %d/%d)...",
+                    type(e).__name__, wait_s, attempt + 1, total_attempts
                 )
                 await asyncio.sleep(wait_s)
                 continue
 
-            log.error("Provider stream error (%s): %s", type(e).__name__, e, exc_info=True)
+            log.error("Provider stream error: %s (HTTP %s).", type(e).__name__, getattr(e, "status_code", "unknown"))
             if isinstance(e, ProviderStalledError):
                 yield TextDelta(text=_format_stall_text(provider_name, model, e.timeout))
             else:
                 yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-            yield Done(usage=usage, outcome="error")
+            yield Done(usage=usage, outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"])
             return
 
 
@@ -507,6 +507,8 @@ def extract_clean_error_message(err_or_text: Any) -> str:
     raw = str(err_or_text) if err_or_text is not None else ""
     if not raw:
         return ""
+    if re.search(r"<(?:!doctype\s+html|html\b|head\b|body\b)", raw, re.IGNORECASE):
+        return "The endpoint returned a web page instead of an API response. Check the provider base URL."
 
     # 1. Look for embedded JSON error payload (e.g. {"error": {"message": "..."}})
     json_match = re.search(r'(\{[\s\S]*\})', raw)
@@ -559,6 +561,7 @@ def classify_error_info(
     low = msg.lower()
     err_cls = type(e).__name__
     clean_msg = extract_clean_error_message(e)
+    is_html = bool(re.search(r"<(?:!doctype\s+html|html\b|head\b|body\b)", msg, re.IGNORECASE))
 
     disp_model = model or "the selected model"
     disp_prov = (provider or "AI provider").capitalize()
@@ -569,7 +572,9 @@ def classify_error_info(
     ) and any(k in low for k in ("image", "vision", "multimodal", "modality", "support", "400", "payload"))
 
     is_not_found = (
-        "notfound" in low
+        getattr(e, "status_code", None) == 404
+        or err_cls == "NotFoundError"
+        or "notfound" in low
         or "not found" in low
         or "no endpoints found" in low
         or "model_not_found" in low
@@ -578,7 +583,8 @@ def classify_error_info(
     )
 
     is_rate = (
-        "429" in msg
+        getattr(e, "status_code", None) == 429
+        or "429" in msg
         or "rate limit" in low
         or "ratelimit" in low
         or "quota" in low
@@ -586,19 +592,19 @@ def classify_error_info(
         or "daily limit" in low
         or "free trial" in low
     )
-    is_upstream = any(k in low for k in (
+    is_upstream = getattr(e, "status_code", None) in (500, 502, 503, 504) or any(k in low for k in (
         "midstreamfallbackerror", "serviceunavailable", "service_unavailable", "service unavailable",
         "503", "502", "500", "504", "bad gateway", "gateway timeout",
         "upstream error", "apiconnectionerror", "connection reset", "broken pipe"
     ))
     is_context = any(k in low for k in ("context length", "maximum context", "token limit", "context_length_exceeded", "prompt is too long", "context window"))
-    is_auth = any(k in low for k in (
+    is_auth = getattr(e, "status_code", None) in (401, 403) or err_cls in ("AuthenticationError", "PermissionDeniedError") or any(k in low for k in (
         "401", "403", "unauthorized", "invalid api key", "authentication error",
         "invalid_api_key", "forbidden", "missing credentials", "please pass an `api_key`",
         "please pass an api_key", "no api key", "missing api key"
     ))
     is_ollama_off = ("connection refused" in low or "failed to connect" in low) and ("11434" in low or provider == "ollama")
-    is_stall = "stalled" in low or "watchdog" in low or "first token" in low
+    is_stall = err_cls in ("TimeoutError", "Timeout", "ProviderStalledError") or any(k in low for k in ("stalled", "watchdog", "first token", "timed out"))
 
     icon_retry = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>'
     icon_model = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>'
@@ -610,7 +616,18 @@ def classify_error_info(
     timer_text = ""
     timer_html = ""
 
-    if is_vision:
+    if is_html and is_not_found:
+        err_type = "endpoint_not_found"
+        badge = "INVALID ENDPOINT"
+        title = "API Endpoint Not Found"
+        desc_text = "The provider returned an HTML 404 page. Check the base URL in Settings; OpenAI-compatible connections use the API root (for example, https://your-provider/v1), without /chat/completions."
+        desc_html = html.escape(desc_text)
+        actions_html = (
+            f'<button class="btn-error-retry" data-action="open-settings" title="Correct the provider base URL">'
+            f'{icon_settings}Open Settings</button>'
+        )
+        actions_tui = ["Open Settings and correct the provider base URL"]
+    elif is_vision:
         err_type = "vision_unsupported"
         badge = "IMAGE NOT SUPPORTED"
         title = "Model Does Not Support Images"
@@ -875,6 +892,8 @@ def classify_error_info(
 
     clean_msg_raw = re.sub(r'\bof \d+ (?:requests|turns)\b', '', msg)
     raw_preview = clean_msg_raw[:500] + ("..." if len(clean_msg_raw) > 500 else "")
+    if is_html:
+        raw_preview = "HTML response received instead of an API response."
 
     return {
         "type": err_type,

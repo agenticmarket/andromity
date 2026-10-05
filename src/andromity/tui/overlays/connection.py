@@ -32,6 +32,7 @@ ProviderConnectionScreen { align: center middle; }
             yield Input(value=self.saved.get("display_name", ""), placeholder="Local models", id="connection-name")
             yield Label("Base URL")
             yield Input(value=self.saved.get("base_url", ""), placeholder="http://localhost:1234/v1", id="connection-url")
+            yield Static("Use the API root, for example https://your-provider/v1. Pasted /chat/completions endpoints are converted automatically.")
             yield Label("API key (optional; blank keeps the saved key)")
             yield Input(password=True, id="connection-key")
             yield Label("Model ID")

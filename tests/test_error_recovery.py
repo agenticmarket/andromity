@@ -270,6 +270,28 @@ def test_classify_not_found_error():
     assert "user_3EiZCW" not in body_part
 
 
+def test_html_404_is_an_endpoint_error_in_both_interfaces():
+    from andromity.core.provider import classify_error_info, format_error_html, format_error_terminal
+
+    error = Exception("NotFoundError: <!DOCTYPE html><html><head>private-page-marker</head><body>404 image quota 500</body></html>")
+    info = classify_error_info(error, provider="custom", model="custom-model", has_images=True)
+    assert info["type"] == "endpoint_not_found"
+    for rendered in (format_error_html(info), format_error_terminal(info)):
+        assert "API Endpoint Not Found" in rendered
+        assert "/chat/completions" in rendered
+        assert "private-page-marker" not in rendered
+    assert 'data-action="open-settings"' in format_error_html(info)
+
+
+@pytest.mark.parametrize("status,expected", [(401, "auth_error"), (403, "auth_error"), (429, "rate_limit"), (503, "provider_unavailable")])
+def test_provider_status_code_does_not_require_error_message_keywords(status, expected):
+    from andromity.core.provider import classify_error_info
+
+    error = Exception("Request rejected")
+    error.status_code = status
+    assert classify_error_info(error)["type"] == expected
+
+
 def test_authed_quota_omits_account_button(monkeypatch):
     """When the user is authenticated, quota limit card must NOT show Account or Sign In button."""
     from andromity.config import config
