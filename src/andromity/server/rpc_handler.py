@@ -2040,6 +2040,20 @@ class JsonRpcHandler:
             providers_to_check = [target_provider] if target_provider else [p["id"] for p in provider_info()]
             pinned_list = config.get_pinned_models()
 
+            async def _discover_connection(p: str) -> None:
+                saved = config.get_provider_config(p) or {}
+                if not force_refresh and get_cached_live_models(p):
+                    return
+                if force_refresh or (saved.get("type") in ("openai", "anthropic") and saved.get("base_url")):
+                    try:
+                        await asyncio.wait_for(asyncio.to_thread(
+                            fetch_live_models_sync, p, api_key=config.get_api_key(p), base_url=saved.get("base_url"),
+                        ), timeout=6.0)
+                    except Exception:
+                        pass
+
+            await asyncio.gather(*[_discover_connection(p) for p in providers_to_check])
+
             def _is_pinned(m_id: str, p_key: str) -> bool:
                 return any(p.get("id") == m_id and (not p.get("provider") or p.get("provider") == p_key) for p in pinned_list)
 
@@ -2054,7 +2068,7 @@ class JsonRpcHandler:
                     pass
 
             for p in providers_to_check:
-                cached = get_cached_live_models(p) if not force_refresh else []
+                cached = get_cached_live_models(p)
                 if p == "openrouter" and openrouter_cached and not cached:
                     cached = openrouter_cached
 
@@ -2070,7 +2084,7 @@ class JsonRpcHandler:
                             "context": m.get("context", ""),
                             "context_limit": m.get("context_limit") or get_context_limit_for_model(p, m_id),
                             "pricing": m.get("pricing", ""),
-                            "is_free": m.get("is_free", False),
+                            "is_free": m.get("is_free", False) or m_id.lower().endswith(":free"),
                             "tags": m.get("tags", []),
                             "is_pinned": _is_pinned(m_id, p),
                             "reasoning": get_model_reasoning_capability(p, m_id, m).to_dict(),
@@ -2089,8 +2103,8 @@ class JsonRpcHandler:
                             "context": m.get("context", ""),
                             "context_limit": ctx,
                             "pricing": m.get("pricing", ""),
-                            "is_free": False,
-                            "tags": [],
+                            "is_free": m.get("is_free", False) or m_id.lower().endswith(":free"),
+                            "tags": m.get("tags", []),
                             "is_pinned": _is_pinned(m_id, p),
                             "reasoning": get_model_reasoning_capability(p, m_id, m).to_dict(),
                         })
@@ -2119,7 +2133,7 @@ class JsonRpcHandler:
             if p_conf and isinstance(p_conf, dict):
                 base_url = p_conf.get("base_url")
             try:
-                timeout_val = 1.5 if p == "ollama" else 3.0
+                timeout_val = 2.0 if p == "ollama" else 6.0
                 return await asyncio.wait_for(
                     asyncio.to_thread(fetch_live_models_sync, p, api_key=api_key, base_url=base_url),
                     timeout=timeout_val
@@ -2128,10 +2142,10 @@ class JsonRpcHandler:
                 return []
 
         try:
-            # Run all provider fetches in parallel with an overall timeout of 5 seconds max
+            # Fetch providers in parallel while keeping the model hub responsive.
             await asyncio.wait_for(
                 asyncio.gather(*[_fetch_one(p) for p in providers], return_exceptions=True),
-                timeout=5.0
+                timeout=7.0
             )
         except Exception as e:
             log.warning("Parallel model refresh encountered timeout or error: %s", e)

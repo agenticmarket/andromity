@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import * as vm from "node:vm";
 
 // Mock vscode module for Node testing
 // @ts-ignore
@@ -137,5 +138,28 @@ describe("Settings Panel Vertical Navigation & Responsive Low-Space Tests", () =
     // Tooltip handlers
     assert.ok(html.includes("navTooltip.classList.add(\"visible\")"), "Script must show floating tooltip on hover");
     assert.ok(html.includes("navTooltip.classList.remove(\"visible\")"), "Script must hide floating tooltip on mouseleave");
+  });
+
+  it("keeps other providers when a connector discovers or removes its models", () => {
+    const html: string = (SettingsPanel.prototype as any)._getHtmlForWebview.call(mockContext);
+    const match = html.match(/case "models_refreshed": \{([\s\S]*?)\n        \}/);
+    assert.ok(match);
+    const count = { textContent: "" };
+    const context = vm.createContext({
+      allModels: [{ id: "keep", provider: "other" }, { id: "old", provider: "custom" }],
+      msg: { provider: "custom", models: [{ id: "exact:free", provider: "custom", is_free: true }] },
+      iconRefresh: { classList: { remove() {} } }, refreshLabel: {},
+      document: { getElementById: () => count }, renderModels() {},
+    });
+    const script = new vm.Script('switch ("models_refreshed") { case "models_refreshed": {' + match[1] + '} }');
+    script.runInContext(context);
+    assert.equal(context.allModels.length, 2);
+    assert.equal(context.allModels[0].id, "keep");
+    assert.equal(context.allModels[1].id, "exact:free");
+    assert.equal(context.allModels[1].is_free, true);
+    context.msg.models = [];
+    script.runInContext(context);
+    assert.equal(context.allModels.length, 1);
+    assert.equal(context.allModels[0].id, "keep");
   });
 });

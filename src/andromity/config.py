@@ -320,6 +320,8 @@ class ConfigManager:
         providers = [p for p in self.list_providers() if p.get("name") != saved["name"]]
         self._config_cache["providers"] = [*providers, saved]
         self.save()
+        from andromity.core.models import invalidate_model_catalog
+        invalidate_model_catalog(saved["name"])
         return saved["name"]
 
     def delete_provider(self, provider: str) -> None:

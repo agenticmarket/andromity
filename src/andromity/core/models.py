@@ -134,7 +134,7 @@ def provider_catalog() -> dict:
             info["base_url"] = saved["base_url"]
         models = list(info.get("models", []))
         if saved.get("model") and not any(m["id"] == saved["model"] for m in models):
-            models.insert(0, {"id": saved["model"], "name": saved["model"], "desc": "Configured model", "context": "Auto"})
+            models.insert(0, normalize_endpoint_model({"id": saved["model"], "description": "Configured model"}, name))
         info["models"] = models
         result[name] = info
     return result
@@ -246,6 +246,42 @@ def get_ollama_num_ctx(model: str, base_url: str = "http://localhost:11434") -> 
         return 32768
 
 
+def normalize_endpoint_model(item: dict[str, Any], provider_key: str) -> dict[str, Any]:
+    """Normalize documented catalog metadata without assuming unknown costs are free."""
+    import math
+
+    model_id = item["id"]
+    pricing = item.get("pricing")
+    rates: dict[str, float] = {}
+    if isinstance(pricing, dict):
+        try:
+            rates = {field: float(pricing[field]) for field in ("prompt", "completion")}
+            if not all(math.isfinite(rate) and rate >= 0 for rate in rates.values()):
+                rates = {}
+        except (KeyError, TypeError, ValueError):
+            rates = {}
+    is_free = model_id.lower().endswith(":free") or item.get("is_free") is True or (bool(rates) and all(rate == 0 for rate in rates.values()))
+    tags = [tag for tag in item.get("tags", []) if isinstance(tag, str) and tag != "free"] if isinstance(item.get("tags"), list) else []
+    if is_free:
+        tags.append("free")
+    context = item.get("context_length") or item.get("context_window") or item.get("max_input_tokens")
+    name = item.get("name") or item.get("display_name")
+    model = {
+        "id": model_id, "name": name if isinstance(name, str) else model_id,
+        "desc": str(item.get("description") or "Endpoint model")[:180],
+        "provider": provider_key, "context": str(context) if isinstance(context, int) and context > 0 else "Auto",
+        "is_free": is_free, "tags": list(dict.fromkeys(tags)),
+        "pricing": "Free" if is_free else (f"${rates['prompt'] * 1_000_000:.3f}/${rates['completion'] * 1_000_000:.3f} per MTok" if rates else "Pricing unavailable"),
+    }
+    if isinstance(context, int) and context > 0:
+        model["context_limit"] = context
+    if isinstance(item.get("supported_parameters"), list):
+        model["supported_parameters"] = item["supported_parameters"]
+    if isinstance(item.get("reasoning"), dict):
+        model["reasoning"] = item["reasoning"]
+    return model
+
+
 def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str = None) -> list[dict]:
     """Fetch live models from provider API. Returns list of model dicts or empty list on failure.
     Caches the context windows to disk for future use.
@@ -259,20 +295,55 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
             req = urllib.request.Request(url, headers={"User-Agent": "Andromity/1.0", **headers})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
-        except Exception:
+        except Exception as exc:
+            from andromity.core.debug_log import get_logger
+            get_logger("models").warning("Model discovery failed: provider=%s error=%s HTTP=%s", provider_key, type(exc).__name__, getattr(exc, "code", "unknown"))
             return None
 
     from andromity.config import config
     saved = config.get_provider_config(provider_key) or {}
     adapter = saved.get("type") or provider_key
     base_url = base_url or saved.get("base_url")
-    if base_url and adapter == "openai":
-        data = _get(base_url.rstrip("/") + "/models", {"Authorization": f"Bearer {api_key}"} if api_key else {})
-        if not data:
-            return []
-        models = [{"id": item["id"], "name": item.get("name") or item["id"], "desc": "Endpoint model", "context": "Auto"}
-                  for item in data.get("data", []) if isinstance(item, dict) and item.get("id")]
-        return _cache_and_return(provider_key, models)
+    if api_key is None:
+        api_key = config.get_api_key(provider_key)
+    if base_url and adapter in ("openai", "anthropic"):
+        from andromity.core.connections import normalize_base_url
+        root = normalize_base_url(base_url, adapter)
+        if adapter == "anthropic" and not root.endswith("/v1"):
+            root += "/v1"
+        if adapter == "anthropic":
+            headers = {"anthropic-version": "2023-06-01"}
+            if api_key:
+                headers["x-api-key"] = api_key
+        else:
+            headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        endpoint = root + "/models"
+        models = []
+        seen = set()
+        from urllib.parse import urlencode
+        url = endpoint
+        for _ in range(20):
+            data = _get(url, headers)
+            if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+                return []
+            page_ids = []
+            for item in data["data"]:
+                if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"].strip() or item["id"] in seen:
+                    continue
+                seen.add(item["id"])
+                page_ids.append(item["id"])
+                models.append(normalize_endpoint_model(item, provider_key))
+            if not data.get("has_more"):
+                if not models and not data["data"]:
+                    invalidate_model_catalog(provider_key)
+                return _cache_and_return(provider_key, models)
+            # Build cursors against this endpoint, never follow a supplied external URL.
+            if not page_ids:
+                return []
+            url = endpoint + "?" + urlencode({"after_id" if adapter == "anthropic" else "after": page_ids[-1]})
+        return []
+    if provider_key not in MODEL_CATALOG and base_url and adapter not in ("ollama", "ollama_chat"):
+        return []  # Unsupported catalog protocol: preserve manual entry, never send its key elsewhere.
     if provider_key not in MODEL_CATALOG and adapter in MODEL_CATALOG:
         return _cache_and_return(provider_key, fetch_live_models_sync(adapter, api_key, base_url))
 
@@ -587,6 +658,25 @@ def _save_pricing_cache(provider_key: str, pricing_dict: dict[str, dict]):
 def _get_live_catalog_cache_path() -> Path:
     from andromity.config import get_config_dir
     return get_config_dir() / "model_live_catalog_cache.json"
+
+
+def invalidate_model_catalog(provider_key: str) -> None:
+    """An edited connection must not inherit the old endpoint's model list."""
+    import json
+    global _MEM_CATALOG_CACHE, _MEM_CATALOG_CACHE_MTIME
+
+    with _DISK_CACHE_LOCK:
+        _MEM_CATALOG_CACHE.pop(provider_key, None)
+        _MEM_CATALOG_CACHE_MTIME = 0.0
+        path = _get_live_catalog_cache_path()
+        if path.exists():
+            try:
+                cache = json.loads(path.read_text(encoding="utf-8"))
+                cache.pop(provider_key, None)
+                path.write_text(json.dumps(cache, indent=2), encoding="utf-8")
+                _MEM_CATALOG_CACHE = cache
+            except (OSError, ValueError, TypeError):
+                pass
 
 _MEM_CATALOG_CACHE: dict = {}
 _MEM_CATALOG_CACHE_MTIME: float = 0.0

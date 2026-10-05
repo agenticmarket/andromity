@@ -5,7 +5,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Static, Button, RadioButton, RadioSet, Input
 from textual.reactive import reactive
 from andromity.config import config
-from andromity.core.models import MODEL_CATALOG, provider_catalog, fetch_live_models_sync
+from andromity.core.models import MODEL_CATALOG, provider_catalog, fetch_live_models_sync, get_cached_live_models
 
 
 class ModelPickerScreen(ModalScreen):
@@ -196,7 +196,7 @@ ModelPickerScreen {
             return
 
         # Cloud providers: show curated catalog immediately, fetch live in background
-        models = provider.get("models", [])
+        models = get_cached_live_models(provider_key) or provider.get("models", [])
         self._populate_models(models, provider_key)
 
         header_text = f"[bold]{provider.get('name', provider_key)} — Select a model:[/]"
@@ -282,6 +282,8 @@ ModelPickerScreen {
             label = f" {m['name']}  [dim]{m['id']}[/]"
             if m["id"] == current_model:
                 label = f"[green]✓[/] {m['name']}  [dim]{m['id']}[/] [green](current)[/]"
+            if m.get("is_free") or m["id"].lower().endswith(":free"):
+                label += "  [green]Free[/]"
             # NO set_timer auto-select — user must click
             rset.mount(RadioButton(label, id=f"m-{gen}-{idx}"))
 

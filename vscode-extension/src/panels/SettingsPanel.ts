@@ -483,12 +483,19 @@ export class SettingsPanel {
             }, 35000);
             this._panel.webview.postMessage({ type: "provider_result", ...result });
           } else {
-            const result = await this._rpcClient.call<{ providers: ProviderInfo[] }>(
+            const result = await this._rpcClient.call<{ provider: string; providers: ProviderInfo[] }>(
               message.type === "save_provider" ? "config.save_provider" : "config.delete_provider",
               message.type === "save_provider" ? message.connection : { provider: message.provider });
             this._panel.webview.postMessage({ type: "providers_updated", providers: result.providers });
             this._panel.webview.postMessage({ type: "provider_result", success: true, saved: message.type === "save_provider", message: "Connection updated." });
             this._onConfigChangeCallback?.();
+            const provider = result.provider || message.provider;
+            if (message.type === "save_provider") {
+              const models = await this._rpcClient.call<ModelInfo[]>("config.refresh_models", { provider }, 10000).catch(() => []);
+              this._panel.webview.postMessage({ type: "models_refreshed", provider, models });
+            } else {
+              this._panel.webview.postMessage({ type: "models_refreshed", provider, models: [] });
+            }
           }
         } catch (error: unknown) {
           const text = error instanceof Error ? error.message : String(error);
@@ -1099,6 +1106,21 @@ export class SettingsPanel {
       font-size: 12.5px;
       font-family: inherit;
     }
+
+    #connection-editor .cron-form-col { min-width: min(220px, 100%); }
+    #connection-editor input {
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 34px;
+      border-radius: 4px;
+      outline: none;
+    }
+    #connection-editor input:focus {
+      border-color: var(--vscode-focusBorder);
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: -1px;
+    }
+    #connection-editor .setting-desc { margin: 0; }
 
     .cron-list {
       display: flex;
@@ -2426,7 +2448,7 @@ export class SettingsPanel {
       <div class="section-header">
         <div>
           <h2 class="section-title">Live Model Hub</h2>
-          <p class="section-desc">Search, filter, and switch between 396+ OpenRouter and provider models in real-time.</p>
+          <p class="section-desc">Discover models from your connected providers. Filter free routes or choose an exact model ID.</p>
         </div>
         <button class="btn btn-secondary" id="btn-refresh-models">
           <svg id="icon-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -2591,8 +2613,13 @@ export class SettingsPanel {
           <div class="cron-form-col"><label for="connection-model">Model ID</label><input id="connection-model" placeholder="provider/model-name"></div>
         </div>
         <p class="setting-desc">Use the API root, for example https://your-provider/v1. Pasted /chat/completions endpoints are converted automatically.</p>
-        <label for="connection-key">API key · optional; leave blank to keep a saved key</label>
-        <input type="password" id="connection-key" autocomplete="off">
+        <div class="cron-form-row">
+          <div class="cron-form-col">
+            <label for="connection-key">API key</label>
+            <input type="password" id="connection-key" autocomplete="off" spellcheck="false" placeholder="Enter API key" aria-describedby="connection-key-hint">
+            <p class="setting-desc" id="connection-key-hint">Optional. Leave blank to keep the saved key.</p>
+          </div>
+        </div>
         <details style="margin:12px 0;"><summary>Advanced</summary>
           <div class="cron-form-row" style="margin-top:10px;">
             <div class="cron-form-col"><label for="connection-type">LiteLLM provider type</label><input id="connection-type" value="openai" placeholder="openai"></div>
@@ -3893,7 +3920,8 @@ SOFTWARE.</pre>
         case "models_refreshed": {
           iconRefresh.classList.remove("spinning");
           refreshLabel.textContent = "Refresh Catalog";
-          allModels = (msg.models || []).filter(m => m.provider !== "andromity" || m.id === "auto");
+          const incoming = (msg.models || []).filter(m => m.provider !== "andromity" || m.id === "auto");
+          allModels = msg.provider ? allModels.filter(m => m.provider !== msg.provider).concat(incoming) : incoming;
           document.getElementById("model-count-badge").textContent = allModels.length;
           renderModels();
           break;
