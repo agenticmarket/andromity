@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { getChatStyles } from "./chatStyles.js";
 import { getChatActivityStyles } from "./chatActivityStyles.js";
+import { getChatPolishStyles } from "./chatPolishStyles.js";
 import { getChatClientScript } from "./chatClientScript.js";
 import { getChatActivityScript } from "./chatActivityRow.js";
 import { getChatAmbientScript, WallpaperConfig } from "./chatAmbientScript.js";
@@ -82,7 +83,7 @@ export function getChatViewHtml(webview: vscode.Webview, extensionUri: vscode.Ur
   // Codicons: resolve the TTF font to a webview URI so @font-face src works correctly
   // inside the isolated vscode-webview:// iframe (relative URLs in codicon.css won't resolve).
   const codiconFontUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "codicon.ttf"));
-  const styles = getChatStyles() + "\n" + getChatActivityStyles();
+  const styles = getChatStyles() + "\n" + getChatActivityStyles() + "\n" + getChatPolishStyles();
   const activityScript = getChatActivityScript();
   const clientScript = getChatClientScript(sidebarIconUri.toString(), state);
   const ambientScript = getChatAmbientScript(defaultWallpaperUri, state.wallpaperConfig);
@@ -168,13 +169,13 @@ ${styles}
       <div class="session-collab-badge" id="session-collab-badge" style="display:none;" title="Co-Agent Collaboration"></div>
     </div>
     <div class="top-bar-right">
-      <button class="top-bar-icon-btn top-account-btn" id="btn-top-account" aria-label="Account & Daily Quota" title="Account & Daily Quota">
+      <button class="top-bar-icon-btn top-account-btn" id="btn-top-account" aria-label="Cloud account" title="Cloud account — usage and daily allowance">
         <svg class="account-profile-svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
           <circle cx="12" cy="7" r="4"></circle>
         </svg>
         <span class="account-pill-dot" id="account-pill-dot" style="display:none;"></span>
-        <span class="account-pill-text sr-only" id="account-pill-text" style="display:none;">Free</span>
+        <span class="account-pill-text sr-only" id="account-pill-text" style="display:none;">Guest</span>
       </button>
       <button class="top-bar-icon-btn" id="btn-top-collab-inbox" style="display:none;" aria-label="Collaboration Inbox" title="Collaboration Inbox (Inter-Session Mailbox)" data-action="toggle-collab-inbox">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
@@ -230,34 +231,36 @@ ${styles}
     </div>
   </div>
 
-  <div class="account-popover" id="account-popover" style="display:none;" role="dialog" aria-label="AgenticMarket Account & Quota">
+  <div class="account-popover" id="account-popover" style="display:none;" role="dialog" aria-label="Cloud account and daily allowance">
+    <div class="account-section-label">Cloud account</div>
     <div class="account-popover-header">
       <div class="account-user-info">
-        <div class="account-avatar" id="account-avatar">AM</div>
+        <div class="account-avatar" id="account-avatar">GU</div>
         <div class="account-titles">
-          <span class="account-username" id="account-username">Anonymous Trial</span>
-          <span class="account-plan-badge" id="account-plan-badge">Free Tier</span>
+          <span class="account-username" id="account-username">Guest</span>
+          <span class="account-plan-badge" id="account-plan-badge">Cloud trial</span>
         </div>
       </div>
-      <button class="account-popover-close" id="btn-account-popover-close">&times;</button>
+      <button class="account-popover-close" id="btn-account-popover-close" aria-label="Close cloud account">&times;</button>
     </div>
     <div class="account-popover-body">
       <div class="account-quota-row">
-        <span class="account-quota-label">Gateway Status</span>
-        <span class="account-quota-val" id="account-quota-val">Active</span>
+        <span class="account-quota-label">Cloud access</span>
+        <span class="account-quota-val" id="account-quota-val" role="status">Checking…</span>
       </div>
-      <div class="account-quota-track">
-        <div class="account-quota-bar" id="account-quota-bar" style="width: 100%;"></div>
+      <div class="account-quota-track" id="account-quota-track" style="display:none;" role="progressbar" aria-label="Cloud trial allowance remaining" aria-valuemin="0" aria-valuemax="100">
+        <div class="account-quota-bar" id="account-quota-bar" style="width:0%;"></div>
       </div>
       <div class="account-quota-meta">
-        <span id="account-reset-timer">Resets 00:00 UTC</span>
-        
+        <span id="account-reset-timer"></span>
+
       </div>
     </div>
+    <p class="account-scope-note">Cloud allowance only. Your API keys and Ollama use their own limits.</p>
     <div class="account-popover-footer">
       <button class="btn-account-action primary" id="btn-account-login">Sign in with AgenticMarket</button>
       <button class="btn-account-action secondary" id="btn-account-logout" style="display:none;">Sign Out</button>
-      <button class="btn-account-refresh" id="btn-account-refresh" title="Refresh usage">
+      <button class="btn-account-refresh" id="btn-account-refresh" title="Refresh cloud usage" aria-label="Refresh cloud usage">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
       </button>
     </div>
@@ -455,7 +458,7 @@ ${styles}
     <div class="chat-container" id="chat-messages" role="log" aria-label="Chat messages" aria-live="polite">
     <!-- Clean Minimalist Zero State & Onboarding Guide -->
     <div class="zero-state" id="zero-state">
-      
+
       <!-- ONBOARDING SETUP GUIDE (Visible when no API keys are configured) -->
       <div class="onboarding-guide-section" id="onboarding-guide-section" style="display:none;">
         <div class="onboarding-hero">
@@ -465,57 +468,27 @@ ${styles}
           <div class="onboarding-title-wrap">
             <div class="onboarding-step-pill" id="onboarding-step-pill">
               <span class="step-dot"></span>
-              <span id="onboarding-step-text">Step 1 of 2 · Quick Setup</span>
+              <span id="onboarding-step-text">Choose how to connect</span>
             </div>
-            <h1 class="onboarding-title">Welcome to Andromity</h1>
-            <p class="onboarding-subtitle">Connect your favorite AI provider to begin coding autonomously.</p>
+            <h1 class="onboarding-title">Connect your AI</h1>
+            <p class="onboarding-subtitle">Bring your API key or run locally with Ollama. Choose the provider that works for you.</p>
           </div>
           <button class="onboarding-close-btn" id="btn-onboarding-dismiss" data-action="dismiss-onboarding" title="Close onboarding guide" aria-label="Close onboarding guide">&times;</button>
         </div>
 
         <div class="onboarding-card">
-          <!-- Instant 1-Click Activation Hero Card (Zero Setup Required) -->
-          <div class="onboarding-instant-hero">
-            <div class="onboarding-instant-badge">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-              <span>Instant Setup • No Key Required</span>
-            </div>
-            <div class="onboarding-instant-headline">Start Coding in One Click</div>
-            <div class="onboarding-instant-subtext">Free trial powered by Andromity Auto Cloud Gateway with smart multi-provider fallback. Zero configuration required.</div>
-            
-            <div class="onboarding-instant-btn-group">
-              <button class="btn-onboarding-instant-start" id="btn-onboarding-instant-start" title="Start coding immediately with 1-click free trial">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-                <span>Start Free Trial (1-Click)</span>
-              </button>
-              <button class="btn-onboarding-github-login" id="btn-onboarding-github-login" title="Sign in with AgenticMarket">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-                <span>Sign in with AgenticMarket</span>
-              </button>
-            </div>
-          </div>
-
-          <div class="onboarding-or-divider">
-            <span class="onboarding-or-line"></span>
-            <span class="onboarding-or-text">OR BRING YOUR OWN KEYS / LOCAL OLLAMA</span>
-            <span class="onboarding-or-line"></span>
-          </div>
-
+          <section class="onboarding-own-provider" id="onboarding-own-provider" aria-label="Connect your own AI provider">
           <!-- Step 1: Provider selection & key form -->
           <div class="onboarding-step-view" id="onboarding-step-1">
             <div class="onboarding-card-header">
-              <span class="onboarding-label">1. Choose AI Provider</span>
-              <span class="onboarding-sublabel">Select where your models run</span>
+              <span class="onboarding-label">Your provider</span>
+              <span class="onboarding-sublabel">Use your own API key, or choose Ollama for local models</span>
             </div>
 
             <div class="onboarding-providers-grid" id="onboarding-providers-grid">
-              <button class="onboarding-provider-chip active" data-provider="andromity" data-model="auto" data-portal="https://agenticmarket.dev" data-name="Andromity Auto (Free Trial)">
-                <span class="provider-chip-name">Andromity</span>
-                <span class="provider-chip-badge">Auto (Free)</span>
-              </button>
               <button class="onboarding-provider-chip" data-provider="anthropic" data-model="claude-sonnet-4-6" data-portal="https://console.anthropic.com/settings/keys" data-name="Anthropic (Claude)">
                 <span class="provider-chip-name">Anthropic</span>
-                <span class="provider-chip-badge">Claude 3.7</span>
+                <span class="provider-chip-badge">Claude</span>
               </button>
               <button class="onboarding-provider-chip" data-provider="openai" data-model="gpt-4o" data-portal="https://platform.openai.com/api-keys" data-name="OpenAI (GPT-4o)">
                 <span class="provider-chip-name">OpenAI</span>
@@ -523,11 +496,11 @@ ${styles}
               </button>
               <button class="onboarding-provider-chip" data-provider="google" data-model="gemini-2.5-flash" data-portal="https://aistudio.google.com/app/apikey" data-name="Google Gemini">
                 <span class="provider-chip-name">Google</span>
-                <span class="provider-chip-badge">Free Tier</span>
+                <span class="provider-chip-badge">Gemini</span>
               </button>
               <button class="onboarding-provider-chip" data-provider="openrouter" data-model="anthropic/claude-3.7-sonnet" data-portal="https://openrouter.ai/keys" data-name="OpenRouter">
                 <span class="provider-chip-name">OpenRouter</span>
-                <span class="provider-chip-badge">396+ Models</span>
+                <span class="provider-chip-badge">Model catalog</span>
               </button>
               <button class="onboarding-provider-chip" data-provider="ollama" data-model="llama3.2:latest" data-portal="https://ollama.com" data-name="Ollama (Local)">
                 <span class="provider-chip-name">Ollama</span>
@@ -539,33 +512,10 @@ ${styles}
               </button>
             </div>
 
-            <!-- Form area for Andromity Auto (Zero-Key Free Gateway) -->
-            <div class="onboarding-andromity-area" id="onboarding-andromity-form" style="display:flex;">
-              <div class="andromity-info-box">
-                <div class="andromity-info-icon">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-                </div>
-                <div class="andromity-info-content">
-                  <div class="andromity-info-title">Andromity Cloud Gateway</div>
-                  <div class="andromity-info-desc">Instant access to managed cloud intelligence for autonomous coding. Zero setup required.</div>
-                </div>
-              </div>
-              <div class="andromity-actions" style="display:flex; flex-direction:column; gap:6px; width:100%;">
-                <button class="btn-onboarding-save" id="btn-onboarding-andromity-activate">
-                  <span>Activate Free Trial (1-Click)</span>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>
-                </button>
-                <button class="btn-onboarding-save secondary" id="btn-onboarding-andromity-github">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-                  <span>Sign in with AgenticMarket</span>
-                </button>
-              </div>
-            </div>
-
             <!-- Form area for API Key providers -->
             <div class="onboarding-form-area" id="onboarding-key-form" style="display:none;">
               <div class="onboarding-input-header">
-                <span class="onboarding-label" id="onboarding-key-label">2. Paste API Key</span>
+                <span class="onboarding-label" id="onboarding-key-label">Paste your API key</span>
                 <a class="onboarding-portal-link" id="onboarding-portal-link" data-action="open-portal" data-url="https://console.anthropic.com/settings/keys" title="Get API Key from provider console">
                   <span>Get API Key</span>
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
@@ -628,6 +578,31 @@ ${styles}
             </div>
           </div>
 
+          </section>
+
+          <!-- Instant 1-Click Activation Hero Card (Zero Setup Required) -->
+          <div class="onboarding-instant-hero" id="onboarding-trial-section">
+            <div class="onboarding-instant-badge">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+              <span>No API key needed</span>
+            </div>
+            <div class="onboarding-instant-headline">Prefer to try the cloud first?</div>
+            <div class="onboarding-instant-subtext">Activate the cloud trial and start a conversation. Andromity selects the model for you.</div>
+
+            <div class="onboarding-instant-btn-group">
+              <button class="btn-onboarding-instant-start" id="btn-onboarding-instant-start" title="Activate the Andromity cloud trial">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                <span>Start free trial</span>
+              </button>
+              <button class="btn-onboarding-github-login" id="btn-onboarding-github-login" title="Sign in with AgenticMarket">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+                <span>Sign in with AgenticMarket</span>
+              </button>
+            </div>
+          </div>
+
+
+
           <!-- Step 2: Inline Model Selection (No modal, 100% inside card) -->
           <div class="onboarding-step-view" id="onboarding-step-2" style="display:none;">
             <div class="onboarding-card-header">
@@ -635,10 +610,10 @@ ${styles}
                 <span class="onboarding-step2-badge" id="onboarding-step2-badge">Connected</span>
                 <button class="onboarding-step2-back" id="btn-onboarding-step2-back" title="Back to Provider Setup">
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"></polyline></svg>
-                  <span>Change Key</span>
+                  <span>Change provider</span>
                 </button>
               </div>
-              <span class="onboarding-label">2. Select Starting Model</span>
+              <span class="onboarding-label">Choose a starting model</span>
               <span class="onboarding-sublabel">Choose your coding model. You can switch models anytime.</span>
             </div>
 
@@ -669,8 +644,59 @@ ${styles}
             <img class="zero-logo-img" src="${sidebarIconUri}" width="32" height="32" alt="Andromity" />
           </div>
           <div class="zero-statement-wrap">
-            <h1 class="zero-statement-main" id="zero-statement-main">Make it work.<br>Make it right.</h1>
-            <p class="zero-statement-sub" id="zero-statement-sub">Precision in every iteration.</p>
+            <h1 class="zero-statement-main" id="zero-statement-main">What are we<br>building today?</h1>
+            <p class="zero-statement-sub" id="zero-statement-sub">Bring an idea, a bug, or a question. Let's work through it.</p>
+          </div>
+        </div>
+
+        <div class="minimal-starters-row">
+          <button class="starter-chip" data-action="send-starter" data-prompt="Explain the architecture of this project in detail" role="button" tabindex="0" aria-label="Explain architecture">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+              <polyline points="2 17 12 22 22 17"></polyline>
+              <polyline points="2 12 12 17 22 12"></polyline>
+            </svg>
+            <span class="starter-copy"><span class="starter-title">Explore the code</span><span class="starter-description">Understand the architecture</span></span>
+          </button>
+          <button class="starter-chip" data-action="send-starter" data-prompt="Analyze diagnostics and fix any syntax or type errors or security issue in the current project" role="button" tabindex="0" aria-label="Fix diagnostics & errors">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
+            </svg>
+            <span class="starter-copy"><span class="starter-title">Fix a problem</span><span class="starter-description">Find and resolve errors</span></span>
+          </button>
+          <button class="starter-chip" data-action="send-starter" data-prompt="Write comprehensive unit tests with edge cases for the active code" role="button" tabindex="0" aria-label="Generate unit tests">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 3h6v3H9zM10 6v7.3a4 4 0 1 0 4 0V6"></path>
+              <circle cx="12" cy="17" r="1.5" fill="currentColor"></circle>
+            </svg>
+            <span class="starter-copy"><span class="starter-title">Add tests</span><span class="starter-description">Cover the edge cases</span></span>
+          </button>
+          <button class="starter-chip" data-action="open-model-hub" role="button" tabindex="0" aria-label="Browse model catalog">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
+            </svg>
+            <span class="starter-copy"><span class="starter-title">Choose a model</span><span class="starter-description">Find your coding partner</span></span>
+          </button>
+        </div>
+
+        <!-- Recent Sessions Section — skeleton until init_state -->
+        <div class="recent-sessions-section" id="recent-sessions-section" style="display:flex;">
+          <div class="recent-sessions-header">
+            <div class="recent-header-left">
+              <span class="recent-header-label">Recent Sessions</span>
+            </div>
+            <div class="recent-header-actions">
+              <button class="recent-header-btn" data-action="view-all-sessions" title="View all sessions in drawer">
+                <span>All</span>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+              </button>
+            </div>
+          </div>
+          <div class="recent-sessions-list" id="recent-sessions-list" aria-busy="true">
+            <div class="recent-session-card skeleton skeleton-card" style="height:44px;"></div>
+            <div class="recent-session-card skeleton skeleton-card" style="height:44px;"></div>
+            <div class="recent-session-card skeleton skeleton-card" style="height:44px; opacity:0.6;"></div>
           </div>
         </div>
 
@@ -698,56 +724,6 @@ ${styles}
           </div>
         </div>
 
-        <!-- Recent Sessions Section — skeleton until init_state -->
-        <div class="recent-sessions-section" id="recent-sessions-section" style="display:flex;">
-          <div class="recent-sessions-header">
-            <div class="recent-header-left">
-              <span class="recent-header-label">Recent Sessions</span>
-            </div>
-            <div class="recent-header-actions">
-              <button class="recent-header-btn" data-action="view-all-sessions" title="View all sessions in drawer">
-                <span>All</span>
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
-              </button>
-            </div>
-          </div>
-          <div class="recent-sessions-list" id="recent-sessions-list" aria-busy="true">
-            <div class="recent-session-card skeleton skeleton-card" style="height:44px;"></div>
-            <div class="recent-session-card skeleton skeleton-card" style="height:44px;"></div>
-            <div class="recent-session-card skeleton skeleton-card" style="height:44px; opacity:0.6;"></div>
-          </div>
-        </div>
-
-        <div class="minimal-starters-row">
-          <button class="starter-chip" data-action="send-starter" data-prompt="Explain the architecture of this project in detail" role="button" tabindex="0" aria-label="Explain architecture">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-              <polyline points="2 17 12 22 22 17"></polyline>
-              <polyline points="2 12 12 17 22 12"></polyline>
-            </svg>
-            <span>Architecture</span>
-          </button>
-          <button class="starter-chip" data-action="send-starter" data-prompt="Analyze diagnostics and fix any syntax or type errors or security issue in the current project" role="button" tabindex="0" aria-label="Fix diagnostics & errors">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
-            </svg>
-            <span>Fix Errors</span>
-          </button>
-          <button class="starter-chip" data-action="send-starter" data-prompt="Write comprehensive unit tests with edge cases for the active code" role="button" tabindex="0" aria-label="Generate unit tests">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M9 3h6v3H9zM10 6v7.3a4 4 0 1 0 4 0V6"></path>
-              <circle cx="12" cy="17" r="1.5" fill="currentColor"></circle>
-            </svg>
-            <span>Unit Tests</span>
-          </button>
-          <button class="starter-chip" data-action="open-model-hub" role="button" tabindex="0" aria-label="Browse model catalog">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="3"></circle>
-              <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
-            </svg>
-            <span>396+ Models</span>
-          </button>
-        </div>
       </div>
 
     </div>
@@ -811,11 +787,11 @@ ${styles}
                 <rect x="12" y="11" width="8" height="2" fill="#38bdf8" />
                 <rect x="10" y="13" width="12" height="2" fill="#0ea5e9" />
                 <rect x="10" y="13" width="2" height="2" fill="#38bdf8" />
-                
+
                 <rect x="8" y="15" width="16" height="3" fill="#0284c7" />
                 <rect x="8" y="15" width="2" height="3" fill="#38bdf8" />
                 <rect x="22" y="15" width="2" height="3" fill="#0369a1" />
-                
+
                 <rect x="7" y="18" width="18" height="4" fill="#0284c7" />
                 <rect x="7" y="18" width="2" height="4" fill="#38bdf8" />
                 <rect x="23" y="18" width="2" height="4" fill="#0369a1" />
@@ -827,7 +803,7 @@ ${styles}
                 <rect x="5" y="26" width="22" height="3" fill="#0369a1" />
                 <rect x="5" y="26" width="2" height="3" fill="#0284c7" />
                 <rect x="25" y="26" width="2" height="3" fill="#075985" />
-                
+
                 <rect x="6" y="29" width="7" height="2" fill="#075985" class="mascot-foot left" />
                 <rect x="19" y="29" width="7" height="2" fill="#075985" class="mascot-foot right" />
                 <rect x="13" y="29" width="6" height="1" fill="#0369a1" />
@@ -854,7 +830,7 @@ ${styles}
                 <rect x="18" y="19" width="1" height="1" fill="#0f172a" />
                 <rect x="20" y="19" width="1" height="1" fill="#0f172a" />
               </g>
-              
+
               <rect x="9" y="21" width="2" height="1" fill="#f472b6" opacity="0.6" class="mascot-blush" />
               <rect x="21" y="21" width="2" height="1" fill="#f472b6" opacity="0.6" class="mascot-blush" />
             </svg>
@@ -864,6 +840,7 @@ ${styles}
 
       <!-- Floating Scroll-To-Bottom Button -->
       <button class="scroll-bottom-btn" id="btn-scroll-bottom" title="Scroll to bottom" aria-label="Scroll to bottom">
+        <span class="scroll-live-wave" aria-hidden="true"><i></i><i></i><i></i></span>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
         <span class="unread-badge" id="scroll-unread-badge"></span>
       </button>
@@ -921,10 +898,11 @@ ${styles}
       </div>
 
       <div class="prompt-box">
+        <div class="agent-working" role="status"><span class="agent-working-wave" aria-hidden="true"><i></i><i></i><i></i></span><span>Working</span></div>
         <div class="image-attachments-container" id="image-attachments-container" style="display:none;"></div>
         <div class="drag-dropped-files-bar" id="drag-dropped-files-bar" style="display:none;"></div>
-        <textarea id="prompt-input" autofocus placeholder="Ask Andromity or type / for commands, @ for skills..." rows="1" aria-label="Ask Andromity or type slash for commands, @ for skills"></textarea>
-        
+        <textarea id="prompt-input" autofocus placeholder="Ask Andromity…" rows="1" aria-label="Ask Andromity or type slash for commands, @ for skills" title="Enter to send · Shift+Enter for a new line · / commands · @ skills"></textarea>
+
         <!-- Stepped Reasoning Effort Popover (Clean & Minimal) -->
         <div class="reasoning-popover" id="reasoning-popover" style="display:none;" role="dialog" aria-label="Thinking Effort">
           <div class="reasoning-slider-container">

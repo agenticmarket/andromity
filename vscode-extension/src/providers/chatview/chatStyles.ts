@@ -3358,8 +3358,6 @@ export function getChatStyles(): string {
       min-width: 0;
       box-sizing: border-box;
       position: relative;
-      content-visibility: auto;
-      contain-intrinsic-size: 0 80px;
     }
 
     .message-wrap.assistant {

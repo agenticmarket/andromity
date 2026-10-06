@@ -234,11 +234,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const onboardingProvidersGrid = document.getElementById('onboarding-providers-grid');
     const onboardingKeyForm = document.getElementById('onboarding-key-form');
     const onboardingOllamaForm = document.getElementById('onboarding-ollama-form');
-    const onboardingAndromityForm = document.getElementById('onboarding-andromity-form');
+    const onboardingOwnProvider = document.getElementById('onboarding-own-provider');
+    const onboardingTrialSection = document.getElementById('onboarding-trial-section');
     const btnOnboardingInstantStart = document.getElementById('btn-onboarding-instant-start');
     const btnOnboardingGithubLogin = document.getElementById('btn-onboarding-github-login');
-    const btnOnboardingAndromityActivate = document.getElementById('btn-onboarding-andromity-activate');
-    const btnOnboardingAndromityGithub = document.getElementById('btn-onboarding-andromity-github');
     const onboardingKeyInput = document.getElementById('onboarding-key-input');
     const onboardingKeyLabel = document.getElementById('onboarding-key-label');
     const onboardingPortalLink = document.getElementById('onboarding-portal-link');
@@ -524,18 +523,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     ];
 
     const DEVELOPER_STATEMENTS = [
-      { main: "Make it work.<br>Make it right.", sub: "First functional, then optimal." },
-      { main: "Think twice.<br>Code once.", sub: "Clarity precedes execution." },
-      { main: "First solve the problem.<br>Then write the code.", sub: "Understand deeply before building." },
-      { main: "Ship fast.<br>Break nothing.", sub: "Precision in every iteration." },
-      { main: "Simplicity is prerequisite<br>for reliability.", sub: "Keep architectures clean & focused." },
-      { main: "Leave the code<br>better than you found it.", sub: "Continuous craftsmanship." },
-      { main: "Talk is cheap.<br>Show me the code.", sub: "Let working software speak." },
-      { main: "Stay curious.<br>Build fearlessly.", sub: "What are we engineering today?" },
-      { main: "Less code.<br>Fewer bugs.", sub: "Elegance through minimalism." },
-      { main: "Design is how it works,<br>not just how it looks.", sub: "Form follows function." },
-      { main: "Premature optimization<br>is the root of all evil.", sub: "Measure before you tune." },
-      { main: "Code is read more<br>than it is written.", sub: "Optimize for readability." }
+      { main: "What are we<br>building today?", sub: "Bring an idea, a bug, or a question. Let's work through it." },
+      { main: "A fresh look.<br>A clear next step.", sub: "Explore your code, solve a problem, or start something new." },
+      { main: "Pick up where<br>you left off.", sub: "Continue a conversation or bring your next idea to life." }
     ];
 
     function setRandomStatement() {
@@ -786,13 +776,23 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let _isUserActivelyScrolling = false;
     let _userScrollDebounceTimer = null;
     let _lastUserScrollTime = 0;
+    let _scrollIntentVersion = 0;
 
     function markUserScrollActive() {
+      _scrollIntentVersion++;
       _lastUserScrollTime = Date.now();
       _isUserActivelyScrolling = true;
+      _ignoreScrollUntil = 0;
+      isProgrammaticScroll = false;
+      if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
+      if (_scrollRafId) {
+        cancelAnimationFrame(_scrollRafId);
+        _scrollRafId = null;
+      }
       if (_userScrollDebounceTimer) clearTimeout(_userScrollDebounceTimer);
       _userScrollDebounceTimer = setTimeout(() => {
         _isUserActivelyScrolling = false;
+        if (!userScrolledUp) scrollToBottomIfNeeded();
       }, 500);
     }
 
@@ -817,10 +817,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const doScroll = () => {
         if (!chatContainer) return;
         chatContainer.scrollTop = chatContainer.scrollHeight;
-        const lastEl = chatContainer.lastElementChild;
-        if (lastEl && typeof lastEl.scrollIntoView === 'function') {
-          lastEl.scrollIntoView({ block: 'end', behavior: smooth ? 'smooth' : 'auto' });
-        }
       };
 
       if (smooth) {
@@ -848,10 +844,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (scrollUnreadBadge) scrollUnreadBadge.classList.add('has-unread');
         return;
       }
+      if (_isUserActivelyScrolling) return;
 
       if (_scrollRafId) return; // Coalesce within current frame to eliminate jitter
+      const scrollSessionId = currentSessionId;
       _scrollRafId = requestAnimationFrame(() => {
         _scrollRafId = null;
+        if (currentSessionId !== scrollSessionId) return;
+        if (_isUserActivelyScrolling) return;
         if (!chatContainer || userScrolledUp) {
           if (scrollUnreadBadge) scrollUnreadBadge.classList.add('has-unread');
           return;
@@ -864,6 +864,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         programmaticScrollTimer = setTimeout(() => {
           isProgrammaticScroll = false;
         }, 120);
+      });
+    }
+
+    function settleSessionScroll() {
+      const sessionId = currentSessionId;
+      const intentVersion = _scrollIntentVersion;
+      const followLatest = () => {
+        if (currentSessionId !== sessionId || _scrollIntentVersion !== intentVersion) return;
+        scrollToBottomIfNeeded();
+      };
+      requestAnimationFrame(() => {
+        followLatest();
+        setTimeout(followLatest, 60);
+        setTimeout(followLatest, 180);
       });
     }
 
@@ -883,8 +897,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           if (btnScrollBottom) btnScrollBottom.classList.add('visible');
         } else if (e.deltaY > 0) {
-          // User scrolled DOWN: if user reached near the bottom, resume auto-scroll
-          if (isAtBottom(64)) {
+          markUserScrollActive();
+          // Resume only at the bottom; a threshold would fight native wheel momentum.
+          if (isAtBottom(2)) {
             userScrolledUp = false;
             _isUserActivelyScrolling = false;
             _lastUserScrollTime = 0;
@@ -909,6 +924,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         isProgrammaticScroll = false;
       }, { passive: true });
 
+      chatContainer.addEventListener('keydown', (e) => {
+        if (e.target?.closest('input, textarea, [contenteditable="true"]')) return;
+        if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(e.key)) {
+          markUserScrollActive();
+          _ignoreScrollUntil = 0;
+          isProgrammaticScroll = false;
+        }
+      });
+
       chatContainer.addEventListener('load', (e) => {
         if (e.target && e.target.tagName === 'IMG') {
           scrollToBottomIfNeeded();
@@ -926,15 +950,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const delta = currentScrollTop - _lastScrollTop;
         _lastScrollTop = currentScrollTop;
 
-        const atBottom = isAtBottom(64);
+        const atBottom = isAtBottom(2);
 
-        if (atBottom) {
+        if (atBottom && !(_isUserActivelyScrolling && userScrolledUp && delta <= 0)) {
           // User reached or is at bottom: auto-scroll resumes
           userScrolledUp = false;
           _isUserActivelyScrolling = false;
           _lastUserScrollTime = 0;
-        } else if (delta < -2) {
-          // User scrolled UP away from bottom: halt auto-scroll
+        } else if (!atBottom && delta !== 0 && _isUserActivelyScrolling) {
+          // Layout changes can also reduce scrollTop when a permission card closes.
           userScrolledUp = true;
           markUserScrollActive();
           if (_scrollRafId) {
@@ -953,8 +977,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
       });
 
-      // ResizeObserver: watch only sticky UI elements (planTrackerStrip, interactiveSlot).
-      // If user is scrolled up or actively scrolling, DO NOT auto-scroll!
+      // Follow viewport changes from permission cards, trackers, and composer resizing.
       if (typeof ResizeObserver !== 'undefined') {
         const ro = new ResizeObserver(() => {
           if (!userScrolledUp) {
@@ -967,11 +990,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (interactiveSlot) {
           ro.observe(interactiveSlot);
         }
+        ro.observe(chatContainer);
       }
     }
 
     btnScrollBottom?.addEventListener('click', () => {
-      scrollToBottom(true);
+      scrollToBottom(false);
+      settleSessionScroll();
     });
 
     let toolSeqDoneTools = new Set();
@@ -2807,7 +2832,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const name = chip.dataset.name || 'AI Provider';
         const portal = chip.dataset.portal || '';
 
-        if (onboardingKeyLabel) onboardingKeyLabel.textContent = '2. Paste ' + name + ' API Key';
+        if (onboardingKeyLabel) onboardingKeyLabel.textContent = 'Paste your ' + name + ' API key';
         if (onboardingKeyInput) onboardingKeyInput.placeholder = 'Paste your ' + name + ' API key...';
         if (onboardingPortalLink) {
           onboardingPortalLink.dataset.url = portal;
@@ -2817,17 +2842,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         if (selectedOnboardingProvider === 'ollama') {
           if (onboardingKeyForm) onboardingKeyForm.style.display = 'none';
-          if (onboardingAndromityForm) onboardingAndromityForm.style.display = 'none';
           if (onboardingOllamaForm) onboardingOllamaForm.style.display = 'flex';
           vscode.postMessage({ type: 'check_ollama_status' });
-        } else if (selectedOnboardingProvider === 'andromity') {
-          if (onboardingKeyForm) onboardingKeyForm.style.display = 'none';
-          if (onboardingOllamaForm) onboardingOllamaForm.style.display = 'none';
-          if (onboardingAndromityForm) onboardingAndromityForm.style.display = 'flex';
         } else {
           if (onboardingKeyForm) onboardingKeyForm.style.display = 'flex';
           if (onboardingOllamaForm) onboardingOllamaForm.style.display = 'none';
-          if (onboardingAndromityForm) onboardingAndromityForm.style.display = 'none';
           if (onboardingKeyInput) setTimeout(() => onboardingKeyInput.focus(), 50);
         }
       });
@@ -2845,17 +2864,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       handleActivateAndromityFree(btnOnboardingInstantStart);
     });
 
-    btnOnboardingAndromityActivate?.addEventListener('click', () => {
-      handleActivateAndromityFree(btnOnboardingAndromityActivate);
-    });
 
     btnOnboardingGithubLogin?.addEventListener('click', () => {
       vscode.postMessage({ type: 'open_github_login' });
     });
 
-    btnOnboardingAndromityGithub?.addEventListener('click', () => {
-      vscode.postMessage({ type: 'open_github_login' });
-    });
 
     const btnTopAccount = document.getElementById('btn-top-account');
     const accountPillDot = document.getElementById('account-pill-dot');
@@ -2867,11 +2880,58 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const accountPlanBadge = document.getElementById('account-plan-badge');
     const accountQuotaVal = document.getElementById('account-quota-val');
     const accountQuotaBar = document.getElementById('account-quota-bar');
+    const accountQuotaTrack = document.getElementById('account-quota-track');
     const accountResetTimer = document.getElementById('account-reset-timer');
     const accountLatencyText = document.getElementById('account-latency-text');
     const btnAccountLogin = document.getElementById('btn-account-login');
     const btnAccountLogout = document.getElementById('btn-account-logout');
     const btnAccountRefresh = document.getElementById('btn-account-refresh');
+
+    function renderCloudAccountUsage(msg) {
+      const isAuthed = msg.plan === 'authenticated';
+      const known = msg.status === 'active' || msg.status === 'limit_reached' || msg.status === 'blocked';
+      const hasLimit = known && Number.isFinite(msg.limit_today) && msg.limit_today > 0;
+      const hasRemaining = Number.isFinite(msg.turns_remaining) && msg.turns_remaining >= 0;
+      const remaining = hasLimit && hasRemaining ? Math.min(msg.limit_today, msg.turns_remaining) : null;
+      const reached = msg.status === 'limit_reached' || (hasLimit && remaining === 0);
+      const blocked = msg.status === 'blocked';
+      const username = msg.username && !/^anonymous$/i.test(msg.username) ? msg.username : (isAuthed ? 'Developer' : 'Guest');
+      if (accountUsername) accountUsername.textContent = username;
+      if (accountPlanBadge) accountPlanBadge.textContent = isAuthed ? 'Signed in' : 'Cloud trial';
+      if (accountAvatar) accountAvatar.textContent = username.replace(/[^a-zA-Z0-9]/g, '').slice(0, 2).toUpperCase() || 'AM';
+      if (accountPillDot) {
+        accountPillDot.classList.toggle('authed', isAuthed);
+        accountPillDot.classList.toggle('limit', reached || blocked);
+      }
+      if (accountPillText) accountPillText.textContent = isAuthed ? 'Signed in' : 'Guest';
+      if (btnTopAccount) btnTopAccount.setAttribute('title', 'Cloud account — usage and daily allowance');
+      if (accountQuotaVal) {
+        accountQuotaVal.textContent = blocked ? 'Access blocked' : reached ? 'Daily limit reached' : known ? 'Available' : msg.status === 'checking' ? 'Checking…' : 'Usage unavailable';
+        accountQuotaVal.style.color = blocked || reached ? 'var(--vscode-errorForeground, #f85149)' : known ? 'var(--cloud-success, #3fb950)' : 'var(--muted)';
+      }
+      if (accountQuotaTrack) {
+        accountQuotaTrack.style.display = remaining !== null ? 'block' : 'none';
+        if (remaining !== null) {
+          accountQuotaTrack.setAttribute('aria-valuemax', '100');
+          accountQuotaTrack.setAttribute('aria-valuenow', String(Math.round(remaining / msg.limit_today * 100)));
+        }
+      }
+      if (accountQuotaBar && remaining !== null) {
+        const pct = Math.round(remaining / msg.limit_today * 100);
+        accountQuotaBar.style.width = pct + '%';
+        accountQuotaBar.style.background = pct <= 20 ? 'var(--vscode-errorForeground, #f85149)' : pct <= 50 ? 'var(--vscode-editorWarning-foreground, #d29922)' : 'var(--cloud-success, #3fb950)';
+      }
+      if (accountResetTimer) {
+        accountResetTimer.textContent = '';
+        if (hasLimit) {
+          const now = new Date();
+          const reset = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+          accountResetTimer.textContent = 'Daily allowance resets at ' + reset.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+        }
+      }
+      if (btnAccountLogin) btnAccountLogin.style.display = isAuthed ? 'none' : 'block';
+      if (btnAccountLogout) btnAccountLogout.style.display = isAuthed ? 'block' : 'none';
+    }
 
     btnTopAccount?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -3092,8 +3152,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       onboardingSelectedLiveModel = defaultModel || (onboardingLiveModelsList[0]?.id) || '';
 
       if (onboardingStep1) onboardingStep1.style.display = 'none';
+      if (onboardingOwnProvider) onboardingOwnProvider.style.display = 'none';
+      if (onboardingTrialSection) onboardingTrialSection.style.display = 'none';
       if (onboardingStep2) onboardingStep2.style.display = 'flex';
-      if (onboardingStepText) onboardingStepText.textContent = 'Step 2 of 2 · Choose Starting Model';
+      if (onboardingStepText) onboardingStepText.textContent = 'Choose a starting model';
 
       if (onboardingStep2Badge) {
         const provName = provider ? (provider.charAt(0).toUpperCase() + provider.slice(1)) : 'AI';
@@ -3108,7 +3170,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function showOnboardingKeyStep() {
       if (onboardingStep2) onboardingStep2.style.display = 'none';
       if (onboardingStep1) onboardingStep1.style.display = 'flex';
-      if (onboardingStepText) onboardingStepText.textContent = 'Step 1 of 2 · Quick Setup';
+      if (onboardingOwnProvider) onboardingOwnProvider.style.display = 'block';
+      if (onboardingTrialSection) onboardingTrialSection.style.display = 'flex';
+      if (onboardingStepText) onboardingStepText.textContent = 'Choose how to connect';
 
       if (btnOnboardingSave) {
         btnOnboardingSave.disabled = false;
@@ -3869,6 +3933,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         node.addEventListener('click', () => {
           if (timelineFlyout) timelineFlyout.style.display = 'none';
+          userScrolledUp = true;
+          markUserScrollActive();
+          btnScrollBottom?.classList.add('visible');
           uWrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
           uWrap.style.transition = 'outline 0.15s ease';
           uWrap.style.outline = '1px solid rgba(255, 255, 255, 0.25)';
@@ -3895,6 +3962,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     document.getElementById('btn-timeline-jump-first')?.addEventListener('click', () => {
       const firstWrap = chatContainer.querySelector('.message-wrap.user');
       if (firstWrap) {
+        userScrolledUp = true;
+        markUserScrollActive();
+        btnScrollBottom?.classList.add('visible');
         firstWrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
         if (timelineFlyout) timelineFlyout.style.display = 'none';
       }
@@ -4090,9 +4160,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             if (sId === currentSessionId) {
               userScrolledUp = false;
               scrollToBottom(false);
-              requestAnimationFrame(() => {
-                scrollToBottom(false);
-              });
+              settleSessionScroll();
               break;
             }
             vscode.postMessage({ type: 'switch_session', sessionId: sId });
@@ -6802,7 +6870,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function startAssistantTurn() {
       isRunning = true;
       // Only stick to bottom if user was already at the bottom; do not steal scroll if user is reading history
-      if (isAtBottom(64)) {
+      if (!userScrolledUp && !_isUserActivelyScrolling && isAtBottom(2)) {
         userScrolledUp = false;
       }
       document.querySelector('.prompt-box')?.classList.add('is-generating');
@@ -7243,17 +7311,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               ? 'Edge Gateway Active'
               : 'Multi-cloud edge fallback &bull; Instant free trial';
           }
-          if (accountPillDot) accountPillDot.classList.toggle('authed', isAuthed);
-          if (accountPillText) accountPillText.textContent = isAuthed ? 'Pro' : 'Free';
-          if (btnTopAccount) btnTopAccount.setAttribute('title', isAuthed ? 'Account (Pro) — Click for usage & quota' : 'Account — Click for usage & quota');
-          if (accountUsername) accountUsername.textContent = msg.username || (isAuthed ? 'Authenticated Developer' : 'Anonymous Trial');
-          if (accountPlanBadge) accountPlanBadge.textContent = isAuthed ? 'Community Account' : 'Free Tier';
-          if (btnAccountLogin) btnAccountLogin.style.display = isAuthed ? 'none' : 'block';
-          if (btnAccountLogout) btnAccountLogout.style.display = isAuthed ? 'block' : 'none';
-          if (accountAvatar) {
-            const name = (msg.username || (isAuthed ? 'AM' : 'AT')).replace(/[^a-zA-Z0-9]/g, '');
-            accountAvatar.textContent = (name.slice(0, 2) || 'AM').toUpperCase();
-          }
+          renderCloudAccountUsage({ plan: isAuthed ? 'authenticated' : 'anonymous', username: msg.username, status: 'checking' });
           if (isAuthed) {
             appendSystemNote('✅ Signed in with AgenticMarket account. Authenticated access is now active.');
           } else {
@@ -7263,50 +7321,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
 
         case 'usage_updated': {
-          const isAuthed = msg.plan === 'authenticated';
-          const hasDailyLimit = typeof msg.limit_today === 'number' && msg.limit_today > 0;
-          const limit = hasDailyLimit ? msg.limit_today : null;
-          const remaining = (typeof msg.turns_remaining === 'number' && msg.turns_remaining >= 0) ? msg.turns_remaining : null;
-          const used = typeof msg.turns_today === 'number' ? msg.turns_today : 0;
-          const isLimitReached = msg.status === 'limit_reached' || (hasDailyLimit && remaining === 0);
-
-          if (accountPillDot) {
-            accountPillDot.classList.toggle('authed', isAuthed);
-            accountPillDot.classList.toggle('limit', isLimitReached);
-          }
-          if (accountPillText) {
-            accountPillText.textContent = isAuthed ? 'Pro' : 'Free';
-          }
-          if (btnTopAccount) {
-            btnTopAccount.setAttribute('title', isAuthed ? 'Account (Pro) — Click for usage & quota' : 'Account — Click for usage & quota');
-          }
-          if (accountUsername && msg.username) accountUsername.textContent = msg.username;
-          if (accountPlanBadge) {
-            accountPlanBadge.textContent = isAuthed ? 'Community Account' : 'Free Tier';
-          }
-          if (accountQuotaVal) {
-            accountQuotaVal.textContent = isLimitReached ? 'Daily Limit Reached' : 'Active';
-            accountQuotaVal.style.color = isLimitReached ? '#ef4444' : '#10b981';
-          }
-          if (accountQuotaBar) {
-            if (hasDailyLimit && limit) {
-              const pct = Math.min(100, Math.max(0, Math.round(((remaining ?? 0) / limit) * 100)));
-              accountQuotaBar.style.width = pct + '%';
-              accountQuotaBar.style.background = pct <= 20 ? '#ef4444' : pct <= 50 ? '#eab308' : '#10b981';
-            } else {
-              accountQuotaBar.style.width = isLimitReached ? '0%' : '100%';
-              accountQuotaBar.style.background = isLimitReached ? '#ef4444' : '#10b981';
-            }
-          }
-          if (btnAccountLogin) btnAccountLogin.style.display = isAuthed ? 'none' : 'block';
-          if (btnAccountLogout) btnAccountLogout.style.display = isAuthed ? 'block' : 'none';
-          if (accountAvatar) {
-            const name = (msg.username || 'AM').replace(/[^a-zA-Z0-9]/g, '');
-            accountAvatar.textContent = (name.slice(0, 2) || 'AM').toUpperCase();
-          }
-          if (accountLatencyText && typeof msg.last_latency_ms === 'number' && msg.last_latency_ms > 0) {
-            accountLatencyText.textContent = msg.last_latency_ms + 'ms Edge';
-          }
+          renderCloudAccountUsage(msg);
           break;
         }
 
@@ -7871,15 +7886,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           renderConversationTimeline();
           userScrolledUp = false;
           scrollToBottom(false);
-          requestAnimationFrame(() => {
-            scrollToBottom(false);
-            setTimeout(() => {
-              scrollToBottom(false);
-            }, 60);
-            setTimeout(() => {
-              scrollToBottom(false);
-            }, 180);
-          });
+          settleSessionScroll();
           break;
 
         case 'session_runtime': {

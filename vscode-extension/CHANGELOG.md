@@ -2,6 +2,17 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [Unreleased]
+
+### Improved
+- Show a three-dot activity wave in the composer and latest-message button while the agent is working.
+- Refresh the chat welcome screen with task cards, clearer conversation spacing, a compact theme-aware composer, and visible keyboard focus.
+- Put API key and Ollama setup first, with one cloud trial action and one sign-in button below as alternatives.
+- Clarify the cloud account panel with an allowance bar, local reset times, blocked and unavailable states, and a clear separation from BYOK usage.
+- Preserve small manual scrolls and timeline navigation in idle sessions, and use full turn heights so opening sessions and jumping to latest reach the entire conversation.
+- Keep chat pinned to the latest message through permission-card layout changes, and stop delayed session scrolling from overriding manual scrolling or a newer session.
+- Pause auto-follow during manual scroll gestures and resume at the actual bottom, avoiding jumps when browsing between turns near the latest message.
+
 ## [0.2.12] - 2026-09-30
 
 ### Added & Improved

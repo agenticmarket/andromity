@@ -71,6 +71,252 @@ describe("Shared sidebar and session-tab retry transport", () => {
   });
 });
 
+describe("Chat scroll layout and session settling", () => {
+  function harness() {
+    const script = getChatClientScript('icon.svg', {
+      currentSessionId: 'first', currentModel: 'auto', currentProvider: 'andromity',
+      currentMode: 'safe', currentProfile: 'builder', currentReasoning: 'auto',
+    });
+    const listeners: Record<string, (event: any) => void> = {};
+    const frames = new Map<number, () => void>();
+    const timers = new Map<number, () => void>();
+    let nextId = 1;
+    let now = 1000;
+    let top = 600;
+    const chat = {
+      scrollHeight: 1000, clientHeight: 400, lastElementChild: null,
+      get scrollTop() { return top; },
+      set scrollTop(value: number) { top = Math.max(0, Math.min(value, this.scrollHeight - this.clientHeight)); },
+      addEventListener: (event: string, callback: (event: any) => void) => { listeners[event] = callback; },
+      scrollTo: ({ top: value }: { top: number }) => { chat.scrollTop = value; },
+    };
+    let resize = () => {};
+    const observed: unknown[] = [];
+    const context = vm.createContext({
+      currentSessionId: 'first', chatContainer: chat, btnScrollBottom: null,
+      scrollUnreadBadge: null, planTrackerStrip: {}, interactiveSlot: {},
+      Date: { now: () => now },
+      requestAnimationFrame: (callback: () => void) => { const id = nextId++; frames.set(id, callback); return id; },
+      cancelAnimationFrame: (id: number) => frames.delete(id),
+      setTimeout: (callback: () => void) => { const id = nextId++; timers.set(id, callback); return id; },
+      clearTimeout: (id: number) => timers.delete(id),
+      ResizeObserver: class {
+        constructor(callback: () => void) { resize = callback; }
+        observe(element: unknown) { observed.push(element); }
+      },
+    });
+    vm.runInContext(script.slice(script.indexOf('    let userScrolledUp ='), script.indexOf('    let toolSeqDoneTools =')), context);
+    const flush = (queue: Map<number, () => void>) => {
+      const callbacks = [...queue.values()]; queue.clear(); callbacks.forEach(callback => callback());
+    };
+    return { chat, context, listeners, observed, resize: () => resize(),
+      frames: () => flush(frames), timers: () => { now += 600; flush(timers); },
+      sessionTimers: () => {
+        const gestureTimer = vm.runInContext('_userScrollDebounceTimer', context);
+        for (const [id, callback] of [...timers]) {
+          if (id === gestureTimer) continue;
+          timers.delete(id); callback();
+        }
+      },
+      eval: (code: string) => vm.runInContext(code, context) };
+  }
+  it('keeps following when approval removal shifts the viewport during new output', () => {
+    const h = harness();
+    assert.ok(h.observed.includes(h.chat));
+    h.chat.clientHeight = 200;
+    h.resize(); h.frames(); h.timers();
+    assert.equal(h.chat.scrollTop, 800);
+    h.chat.clientHeight = 400;
+    h.chat.scrollTop = 550;
+    h.chat.scrollHeight = 1200;
+    h.listeners.scroll({});
+    h.resize(); h.frames();
+    assert.equal(h.eval('userScrolledUp'), false);
+    assert.equal(h.chat.scrollTop, 800);
+  });
+  it('preserves manual reading when permission layout changes', () => {
+    const h = harness();
+    h.listeners.wheel({ deltaY: -1 });
+    h.chat.scrollTop = 200;
+    h.listeners.scroll({});
+    h.chat.clientHeight = 200;
+    h.resize(); h.frames();
+    assert.equal(h.chat.scrollTop, 200);
+    assert.equal(h.eval('userScrolledUp'), true);
+  });
+  it('does not force delayed session settling after the user scrolls up', () => {
+    const h = harness();
+    h.eval('settleSessionScroll();'); h.frames();
+    h.listeners.wheel({ deltaY: -1 });
+    h.chat.scrollTop = 200;
+    h.timers(); h.frames();
+    assert.equal(h.chat.scrollTop, 200);
+  });
+  it('ignores pending scroll callbacks from a previous session', () => {
+    const h = harness();
+    h.eval('settleSessionScroll();'); h.frames(); h.frames();
+    h.eval("currentSessionId = 'second';");
+    h.chat.scrollTop = 200;
+    h.timers(); h.frames();
+    assert.equal(h.chat.scrollTop, 200);
+  });
+  it('recognizes keyboard scrolling as user intent', () => {
+    const h = harness();
+    h.listeners.keydown({ key: 'PageUp', target: { closest: () => null } });
+    h.chat.scrollTop = 200;
+    h.listeners.scroll({});
+    assert.equal(h.eval('userScrolledUp'), true);
+  });
+  it('ignores a queued animation frame after switching sessions', () => {
+    const h = harness();
+    h.eval('scrollToBottomIfNeeded();');
+    h.eval("currentSessionId = 'second';");
+    h.chat.scrollTop = 200;
+    h.frames();
+    assert.equal(h.chat.scrollTop, 200);
+  });
+  it('does not resume following when reading within 64px of the latest message', () => {
+    const h = harness();
+    h.listeners.wheel({ deltaY: -12 });
+    h.chat.scrollTop = 588;
+    h.listeners.scroll({});
+    h.resize(); h.frames();
+    assert.equal(h.eval('userScrolledUp'), true);
+    assert.equal(h.chat.scrollTop, 588);
+  });
+  it('does not pull a touch or scrollbar gesture to the bottom before its scroll event', () => {
+    for (const gesture of ['touchmove', 'pointerdown']) {
+      const h = harness();
+      h.listeners[gesture]({});
+      h.chat.scrollTop = 200;
+      h.eval('scrollToBottomIfNeeded();'); h.frames();
+      assert.equal(h.chat.scrollTop, 200);
+    }
+  });
+  it('keeps native downward scrolling free until it actually reaches the bottom', () => {
+    const h = harness();
+    h.listeners.wheel({ deltaY: -1 });
+    h.chat.scrollTop = 200; h.listeners.scroll({}); h.timers();
+    h.listeners.wheel({ deltaY: 1 });
+    h.chat.scrollTop = 550; h.listeners.scroll({});
+    h.eval('scrollToBottomIfNeeded();'); h.frames();
+    assert.equal(h.chat.scrollTop, 550);
+    h.chat.scrollTop = 600; h.listeners.scroll({});
+    assert.equal(h.eval('userScrolledUp'), false);
+  });
+  it('preserves a tiny scrollbar scroll in an idle session after gesture settling', () => {
+    const h = harness();
+    h.listeners.pointerdown({});
+    h.chat.scrollTop = 597;
+    h.listeners.scroll({});
+    h.chat.scrollTop = 596;
+    h.listeners.scroll({});
+    h.timers(); h.resize(); h.frames();
+    assert.equal(h.eval('userScrolledUp'), true);
+    assert.equal(h.chat.scrollTop, 596);
+  });
+  it('does not mistake a stale bottom scroll event for resuming after a wheel-up', () => {
+    const h = harness();
+    h.listeners.wheel({ deltaY: -1 });
+    h.listeners.scroll({});
+    h.chat.scrollTop = 599;
+    h.listeners.scroll({});
+    h.timers(); h.resize(); h.frames();
+    assert.equal(h.chat.scrollTop, 599);
+    assert.equal(h.eval('userScrolledUp'), true);
+  });
+  it('abandons session settling after any manual gesture, even without a scroll event', () => {
+    const h = harness();
+    h.eval('settleSessionScroll();'); h.frames(); h.frames();
+    h.listeners.pointerdown({});
+    h.chat.scrollTop = 300;
+    h.sessionTimers(); h.frames();
+    assert.equal(h.chat.scrollTop, 300);
+  });
+  it('uses real turn heights and jumps the latest button to the complete feed', () => {
+    assert.ok(!getChatStyles().includes('content-visibility: auto'));
+    const h = harness();
+    h.chat.scrollHeight = 5000;
+    h.chat.scrollTop = 300;
+    h.eval('scrollToBottom(false); settleSessionScroll();'); h.frames(); h.frames(); h.timers(); h.frames();
+    assert.equal(h.chat.scrollTop, 4600);
+    h.eval("currentSessionId = 'second';");
+    h.chat.scrollHeight = 8000;
+    h.eval('scrollToBottom(false); settleSessionScroll();'); h.frames(); h.frames(); h.timers(); h.frames();
+    assert.equal(h.chat.scrollTop, 7600);
+  });
+});
+
+describe("Cloud account allowance", () => {
+  const script = getChatClientScript('icon.svg', {
+    currentSessionId: 'account', currentModel: 'auto', currentProvider: 'andromity',
+    currentMode: 'safe', currentProfile: 'builder', currentReasoning: 'auto',
+  });
+  const renderer = script.slice(script.indexOf('    function renderCloudAccountUsage('),
+    script.indexOf("    btnTopAccount?.addEventListener('click'"));
+  function render(msg: Record<string, unknown>) {
+    const element = () => ({ textContent: '', style: { display: '', width: '', color: '', background: '' },
+      attributes: {} as Record<string, string>, setAttribute(name: string, value: string) { this.attributes[name] = value; },
+      classList: { toggle: () => {} } });
+    const elements = Object.fromEntries(['accountUsername', 'accountPlanBadge', 'accountAvatar', 'accountPillDot',
+      'accountPillText', 'btnTopAccount', 'accountQuotaVal',
+      'accountQuotaTrack', 'accountQuotaBar', 'accountResetTimer', 'btnAccountLogin', 'btnAccountLogout'].map(key => [key, element()]));
+    const context = vm.createContext({ ...elements, msg });
+    vm.runInContext(renderer + '\nrenderCloudAccountUsage(msg);', context);
+    return elements;
+  }
+  it('shows an accessible allowance bar without visible turn counts', () => {
+    const ui = render({ plan: 'anonymous', username: 'Anonymous', status: 'active', limit_today: 30, turns_remaining: 12 });
+    assert.equal(ui.accountUsername.textContent, 'Guest');
+    assert.equal(ui.accountQuotaBar.style.width, '40%');
+    assert.equal(ui.accountQuotaTrack.attributes['aria-valuenow'], '40');
+    assert.ok(![ui.accountUsername, ui.accountPlanBadge, ui.accountQuotaVal].some(element => /12|30/.test(element.textContent)));
+    assert.ok(!renderer.includes('accountAllowanceValue'));
+    assert.match(ui.accountResetTimer.textContent, /^Daily allowance resets at /);
+  });
+  it('does not invent a full allowance when usage cannot be fetched', () => {
+    const ui = render({ plan: 'anonymous', status: 'unavailable', limit_today: null, turns_remaining: null });
+    assert.equal(ui.accountQuotaVal.textContent, 'Usage unavailable');
+    assert.equal(ui.accountQuotaTrack.style.display, 'none');
+    assert.equal(ui.accountResetTimer.textContent, '');
+  });
+  it('does not equate a signed-in account or an uncapped allowance with Pro', () => {
+    const ui = render({ plan: 'authenticated', username: 'Developer', status: 'active', limit_today: null, turns_remaining: -1 });
+    assert.equal(ui.accountPlanBadge.textContent, 'Signed in');
+    assert.equal(ui.accountQuotaTrack.style.display, 'none');
+    assert.equal(ui.accountResetTimer.textContent, '');
+    assert.equal(ui.btnAccountLogin.style.display, 'none');
+  });
+  it('distinguishes blocked access from an exhausted allowance', () => {
+    assert.equal(render({ status: 'blocked', limit_today: 30, turns_remaining: 25 }).accountQuotaVal.textContent, 'Access blocked');
+    const ui = render({ status: 'limit_reached', limit_today: 30, turns_remaining: 0 });
+    assert.equal(ui.accountQuotaVal.textContent, 'Daily limit reached');
+    assert.equal(ui.accountQuotaBar.style.width, '0%');
+  });
+  it('broadcasts unavailable usage when the gateway request fails', async () => {
+    const { ChatViewProvider } = await import('../src/providers/ChatViewProvider.js');
+    const provider: any = Object.create(ChatViewProvider.prototype);
+    const posts: any[] = [];
+    Object.assign(provider, {
+      _context: { secrets: { get: async () => undefined } },
+      _getGatewayBaseUrl: () => 'https://gateway.invalid',
+      broadcastToWebviews: (msg: any) => posts.push(msg),
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => { throw new Error('network unavailable'); };
+    try {
+      const usage = await provider.fetchUsage(true);
+      assert.equal(usage.status, 'unavailable');
+      assert.equal(usage.limit_today, null);
+      assert.equal(usage.turns_remaining, null);
+      assert.equal(posts[0].type, 'usage_updated');
+      assert.equal(posts[0].status, 'unavailable');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
   it("ChatViewProvider client script should compile with 0 syntax errors", () => {
     const state: ChatViewState = {
@@ -991,7 +1237,7 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(scriptCode.includes("function isAtBottom(threshold = 64)"), "isAtBottom should have a generous threshold of 64px");
     assert.ok(scriptCode.includes("if (userScrolledUp)"), "scrollToBottomIfNeeded should respect userScrolledUp");
     assert.ok(
-      scriptCode.includes("if (isAtBottom(64))") && scriptCode.includes("userScrolledUp = false;"),
+      scriptCode.includes("if (!userScrolledUp && !_isUserActivelyScrolling && isAtBottom(2))"),
       "startAssistantTurn must not unconditionally overwrite userScrolledUp when user is reading history"
     );
     assert.ok(
@@ -1106,7 +1352,7 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(scriptCode.includes("<span>Watching</span>"), "Script must render Watching label in title case");
   });
 
-  it("should render 1-click seamless onboarding hero, instant free trial button, and GitHub OAuth login button", () => {
+  it("puts visible BYOK providers before the single trial and sign-in actions", () => {
     const mockWebview: any = {
       asWebviewUri: (uri: any) => ({ toString: () => uri.fsPath || "uri" }),
       cspSource: "vscode-webview-resource:",
@@ -1127,9 +1373,18 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(html.includes("onboarding-instant-hero"), "HTML must include .onboarding-instant-hero");
     assert.ok(html.includes("btn-onboarding-instant-start"), "HTML must include #btn-onboarding-instant-start");
     assert.ok(html.includes("btn-onboarding-github-login"), "HTML must include #btn-onboarding-github-login");
-    assert.ok(html.includes("btn-onboarding-andromity-activate"), "HTML must include #btn-onboarding-andromity-activate");
-    assert.ok(html.includes('data-provider="andromity"'), "HTML must include data-provider='andromity' chip");
-    assert.ok(html.includes("onboarding-andromity-form"), "HTML must include #onboarding-andromity-form");
+    assert.equal((html.match(/id="btn-onboarding-instant-start"/g) || []).length, 1);
+    assert.equal((html.match(/id="btn-onboarding-github-login"/g) || []).length, 1);
+    assert.ok(!html.includes('id="btn-onboarding-andromity-activate"'));
+    assert.ok(!html.includes('id="btn-onboarding-andromity-github"'));
+    assert.ok(!html.includes('data-provider="andromity"'));
+    assert.ok(html.includes('<section class="onboarding-own-provider" id="onboarding-own-provider"'));
+    assert.ok(!html.includes('<details class="onboarding-own-provider"'));
+    assert.ok(html.indexOf('id="onboarding-own-provider"') < html.indexOf('id="onboarding-trial-section"'));
+    for (const provider of ['anthropic', 'openai', 'google', 'openrouter', 'ollama', 'deepseek']) {
+      assert.ok(html.includes('data-provider="' + provider + '"'));
+    }
+    assert.ok(!html.includes('Step 1 of 2'));
 
     // CSS asserts
     assert.ok(styles.includes(".onboarding-instant-hero"), "Styles must define .onboarding-instant-hero");
@@ -1142,6 +1397,40 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(scriptCode.includes("activate_andromity_free"), "Script must dispatch activate_andromity_free message");
     assert.ok(scriptCode.includes("open_github_login"), "Script must dispatch open_github_login message");
     assert.ok(scriptCode.includes("isAndromityActive"), "Script must check isAndromityActive to auto-dismiss onboarding");
+  });
+
+  it("keeps connection choices out of model selection and restores them when going back", () => {
+    const script = getChatClientScript('icon.svg', {
+      currentSessionId: 'setup', currentModel: 'auto', currentProvider: 'andromity',
+      currentMode: 'safe', currentProfile: 'builder', currentReasoning: 'auto',
+    });
+    const element = () => ({ style: { display: '' }, textContent: '', value: '', focus: () => {} });
+    const ownProvider = element();
+    const trial = element();
+    const step1 = element();
+    const step2 = element();
+    const label = element();
+    const context = vm.createContext({
+      onboardingPendingProvider: '', selectedOnboardingProvider: 'anthropic',
+      onboardingLiveModelsList: [], onboardingSelectedLiveModel: '',
+      onboardingStep1: step1, onboardingStep2: step2, onboardingOwnProvider: ownProvider,
+      onboardingTrialSection: trial, onboardingStepText: label,
+      onboardingStep2Badge: element(), onboardingStep2Search: element(),
+      btnOnboardingSave: null, btnOnboardingOllamaSave: null, btnStep2Confirm: null,
+      renderOnboardingStep2Models: () => {}, setTimeout: (fn: () => void) => fn(),
+    });
+    const functions = script.slice(script.indexOf('    function showOnboardingModelStep('),
+      script.indexOf('    function renderOnboardingStep2Models('));
+    vm.runInContext(functions + "\nshowOnboardingModelStep('anthropic', [], 'claude');", context);
+    assert.equal(trial.style.display, 'none');
+    assert.equal(ownProvider.style.display, 'none');
+    assert.equal(step2.style.display, 'flex');
+    assert.equal(label.textContent, 'Choose a starting model');
+    vm.runInContext('showOnboardingKeyStep();', context);
+    assert.equal(trial.style.display, 'flex');
+    assert.equal(ownProvider.style.display, 'block');
+    assert.equal(step1.style.display, 'flex');
+    assert.equal(step2.style.display, 'none');
   });
 
   it("should render clean popover dropdown menus for permission modes and agent profiles with zero emojis", () => {

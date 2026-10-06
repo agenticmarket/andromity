@@ -811,10 +811,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         user_id: clientId,
         username: isAuthed ? storedUsername || "Developer" : "Anonymous",
         plan: isAuthed ? "authenticated" : "anonymous",
-        turns_today: 0,
-        limit_today: 30,
-        turns_remaining: 30,
-        status: "active",
+        turns_today: null,
+        limit_today: null,
+        turns_remaining: null,
+        status: "unavailable",
         last_model: "auto",
       };
       this._lastUsageData = fallback;
