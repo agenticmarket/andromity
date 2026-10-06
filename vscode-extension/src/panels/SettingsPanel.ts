@@ -33,6 +33,7 @@ export class SettingsPanel {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         let account = { isAuthenticated: false, username: "", email: "", plan: "free" };
         if (SettingsPanel.extensionContext) {
+          await SettingsPanel.chatProvider?.fetchUsage();
           const token = await SettingsPanel.extensionContext.secrets.get("andromity.authToken");
           const username = await SettingsPanel.extensionContext.secrets.get("andromity.userName");
           const email = await SettingsPanel.extensionContext.secrets.get("andromity.userEmail");
@@ -215,6 +216,7 @@ export class SettingsPanel {
 
         let account = { isAuthenticated: false, username: "", email: "", plan: "free" };
         if (SettingsPanel.extensionContext) {
+          await SettingsPanel.chatProvider?.fetchUsage();
           const token = await SettingsPanel.extensionContext.secrets.get("andromity.authToken");
           const username = await SettingsPanel.extensionContext.secrets.get("andromity.userName");
           const email = await SettingsPanel.extensionContext.secrets.get("andromity.userEmail");

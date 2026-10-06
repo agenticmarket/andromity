@@ -195,42 +195,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
           if (token) {
             log("[Andromity] OAuth token received via 1-click URI handler");
-            const rpc = pythonBridge ? (pythonBridge.getClient() || (await pythonBridge.waitForClient(3000))) : null;
-            if (rpc) {
-              await rpc.call("config.set_api_key", {
-                provider: "andromity",
-                api_key: token,
-              });
-              await rpc.call("config.set", {
-                section: "default",
-                key: "provider",
-                value: "andromity",
-              });
-              await rpc.call("config.set", {
-                section: "default",
-                key: "model",
-                value: "auto",
-              });
-              if (username) {
-                await rpc.call("config.set", {
-                  section: "default",
-                  key: "user_name",
-                  value: username,
-                });
-              }
-              if (email) {
-                await rpc.call("config.set", {
-                  section: "default",
-                  key: "user_email",
-                  value: email,
-                });
-              }
-            }
-            if (context.secrets) {
-              await context.secrets.store("andromity.authToken", token);
-              if (username) await context.secrets.store("andromity.userName", username);
-              if (email) await context.secrets.store("andromity.userEmail", email);
-            }
+            if (pythonBridge) await pythonBridge.waitForClient(3000);
             await chatProvider.handleAuthToken(token, username, email);
             if (SettingsPanel.currentPanel) {
               await SettingsPanel.currentPanel.loadData(true);
@@ -1065,4 +1030,3 @@ export function deactivate() {
     pythonBridge = null;
   }
 }
-

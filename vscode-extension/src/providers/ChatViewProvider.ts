@@ -669,10 +669,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   public async handleAuthToken(token: string, username?: string, email?: string) {
     if (!token) return;
     try {
-      if (this._context?.secrets) {
-        await this._context.secrets.store("andromity.authToken", token);
-        if (username) await this._context.secrets.store("andromity.userName", username);
-        if (email) await this._context.secrets.store("andromity.userEmail", email);
+      const validation = await fetch(`${this._getGatewayBaseUrl()}/v1/user/usage`, {
+        headers: { Authorization: `Bearer ${token}`, "User-Agent": "Andromity" },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (validation.status === 401) {
+        throw new Error("AgenticMarket rejected this sign-in token. Sign in again. If it repeats, the account session needs to be checked on the gateway.");
+      }
+      if (!validation.ok) {
+        throw new Error("Could not verify AgenticMarket sign-in. Please retry when the gateway is available.");
+      }
+      const account = await validation.json();
+      if (account.plan !== "authenticated") {
+        throw new Error("AgenticMarket has not activated this account session. Retry sign-in shortly.");
+      }
+      if (!this._rpcClient) {
+        throw new Error("The Andromity daemon is unavailable. Reload VS Code and sign in again.");
       }
       if (this._rpcClient) {
         try {
@@ -681,7 +693,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           await this._rpcClient.call("config.set", { section: "default", key: "model", value: "auto" });
           if (username) await this._rpcClient.call("config.set", { section: "default", key: "user_name", value: username });
           if (email) await this._rpcClient.call("config.set", { section: "default", key: "user_email", value: email });
-        } catch {}
+        } catch {
+          throw new Error("Could not apply your sign-in to the Andromity daemon. Reload VS Code and sign in again.");
+        }
+      }
+      if (this._context?.secrets) {
+        await this._context.secrets.store("andromity.authToken", token);
+        if (username) await this._context.secrets.store("andromity.userName", username);
+        if (email) await this._context.secrets.store("andromity.userEmail", email);
       }
       this._currentProvider = "andromity";
       this._currentModel = "auto";
@@ -692,7 +711,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         username: username || "Developer",
         token: token.slice(0, 8) + "...",
       });
-      await this.fetchUsage();
+      await this.fetchUsage(true);
       if (SettingsPanel.currentPanel) {
         await SettingsPanel.currentPanel.loadData(true);
       }
@@ -780,6 +799,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const storedUsername = await this._context?.secrets.get("andromity.userName");
       const clientId = storedUsername || "local_client";
       const gatewayUrl = this._getGatewayBaseUrl();
+      let rejectedToken = false;
 
       try {
         const headers: Record<string, string> = {
@@ -793,6 +813,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           headers,
           signal: AbortSignal.timeout(3500),
         });
+        if (res.status === 401 && token) {
+          rejectedToken = true;
+          await this._context?.secrets.delete("andromity.authToken");
+          await this._context?.secrets.delete("andromity.userName");
+          await this._context?.secrets.delete("andromity.userEmail");
+          this.broadcastToWebviews({
+            type: "auth_state_changed", isAuthenticated: false,
+            plan: "anonymous", username: "Anonymous",
+          });
+          await this._rpcClient?.call("auth.logout", {}).catch(() => undefined);
+          vscode.window.showWarningMessage("Your AgenticMarket session was rejected. Please sign in again.");
+        }
         if (res.ok) {
           const data = await res.json();
           const effectiveUser = storedUsername || data.username || "Anonymous";
@@ -807,7 +839,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       } catch {}
 
-      const isAuthed = Boolean(token);
+      const isAuthed = Boolean(token) && !rejectedToken;
       const fallback = {
         user_id: clientId,
         username: isAuthed ? storedUsername || "Developer" : "Anonymous",

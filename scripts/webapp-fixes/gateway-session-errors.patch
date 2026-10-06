@@ -1,0 +1,16 @@
+diff --git a/src/index.ts b/src/index.ts
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -171,2 +171,3 @@
+         const authRes = await authenticateRequest(request, env);
++        if (authRes.errorResponse) return authRes.errorResponse;
+         if (authRes.auth) auth = authRes.auth;
+@@ -237,2 +238,8 @@
+     if (url.pathname === '/v1/auth/session' && request.method === 'POST') {
++      if (!env.GATEWAY_KV) {
++        return new Response(JSON.stringify({ error: 'Account session storage is unavailable. Please retry later.' }), {
++          status: 503,
++          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
++        });
++      }
+       try {
