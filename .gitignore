@@ -27,7 +27,6 @@ test.py
 test2.py
 scratch/
 src/test.txt
-.github/workflows/publish.yml
 dist/
 .freebuff/
 benchmark/

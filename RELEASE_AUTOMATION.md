@@ -17,3 +17,9 @@ Merge the workflow and script into `main`. Under **Settings → Actions → Gene
 With the default `GITHUB_TOKEN`, PR workflows may require a maintainer to approve runs. Check CI before merging. A GitHub App installation token or bot token can provide the desired identity and workflow triggering; neither is needed for the zero-token default setup.
 
 The separate root `action.yml` supports AI PR reviews. Its legacy `task` mode explicitly reports that coding tasks and PR creation are unavailable, instead of claiming changes were made. This release workflow demonstrates real release maintenance, not autonomous AI coding.
+
+## PyPI publishing
+
+The **Publish to PyPI** workflow publishes on new stable `vMAJOR.MINOR.PATCH` tag pushes. For an existing tag, run it manually from `main` and supply that tag, such as `v0.2.15`. It checks out the exact tag, validates the package versions and changelog, and builds a wheel and source archive. A separate job downloads those artifacts, checks their metadata, and uploads them with the repository Actions secret `PYPI_TOKEN`.
+
+Build jobs cannot access the publishing token. Upload failures remain failures; the workflow does not silently skip previously published files. Do not move an existing release tag or expect an already-pushed tag to trigger a newly added workflow. VS Code Marketplace publication remains manual, and Open VSX uses the separate platform-build workflow.
