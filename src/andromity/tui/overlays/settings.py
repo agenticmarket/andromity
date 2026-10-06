@@ -1609,7 +1609,9 @@ SettingsScreen {
             async def _do_oauth():
                 from andromity.core.oauth import full_oauth_flow
                 _set_status("🔍 Discovering endpoints…")
-                token = await full_oauth_flow(s_name, server_url, _set_status)
+                token = await full_oauth_flow(s_name, server_url, _set_status,
+                                              client_id=srv_conf.get("oauth", {}).get("client_id"),
+                                              client_secret=srv_conf.get("oauth", {}).get("client_secret"))
 
                 if not token:
                     # If OAuth fails (e.g., no metadata for Supabase), show PAT field automatically

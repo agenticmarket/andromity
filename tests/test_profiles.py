@@ -6,6 +6,18 @@ def test_builder_profile():
     assert "Builder" in get_system_prompt("builder")
 
 
+def test_builder_prompt_includes_professional_codex_execution_rules():
+    prompt = get_system_prompt("builder")
+    for rule in (
+        "professional Codex coding agent",
+        "Begin with evidence",
+        "smallest coherent change",
+        "dummy actions",
+        "Never claim that code was changed",
+    ):
+        assert rule in prompt
+
+
 def test_reviewer_profile():
     assert "Reviewer" in get_system_prompt("reviewer") and "READ-ONLY" in get_system_prompt("reviewer")
 

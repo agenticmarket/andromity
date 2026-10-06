@@ -250,6 +250,8 @@ async def test_rpc_cron_lifecycle(tmp_path):
 @pytest.mark.asyncio
 async def test_rpc_git_revert_file_via_request(tmp_path):
     import git
+    from andromity.config import config
+    config.set_trusted(str(tmp_path))
     repo = git.Repo.init(tmp_path)
     handler = JsonRpcHandler()
 

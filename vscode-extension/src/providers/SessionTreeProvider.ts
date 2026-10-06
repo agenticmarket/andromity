@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
 import { SessionInfo } from "../server/types.js";
+import { cleanPromptForDisplay } from "./promptDisplay.js";
 
 function formatRelativeTime(dateStr?: string): string {
   if (!dateStr) return "";
@@ -42,7 +43,7 @@ export class SessionTreeItem extends vscode.TreeItem {
     public readonly isSubsession: boolean = false
   ) {
     super(
-      session.name || session.id.slice(0, 8),
+      cleanPromptForDisplay(session.name) || session.id.slice(0, 8),
       hasChildren
         ? vscode.TreeItemCollapsibleState.Collapsed
         : vscode.TreeItemCollapsibleState.None

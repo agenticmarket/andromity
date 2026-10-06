@@ -1,7 +1,9 @@
 import { ChatViewState } from "./chatHtml.js";
+import { getPromptDisplayScript } from "../promptDisplay.js";
 
 export function getChatClientScript(sidebarIconUri: string, state: ChatViewState): string {
   return `
+    ${getPromptDisplayScript()}
     const vscode = acquireVsCodeApi();
     window.__vscodeApi = vscode;
     const sidebarIconUri = "${sidebarIconUri}";
@@ -3366,7 +3368,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       recentSessionsSection.style.display = 'flex';
       const recent = pastSessionsWithHistory.slice(0, 3);
       recentSessionsList.innerHTML = recent.map(s => {
-        const name = escapeHtml(s.name || s.id || 'Untitled Session');
+        const name = escapeHtml(cleanPromptForDisplay(s.name) || s.id || 'Untitled Session');
         const dateStr = formatDateBadge(s.updated_at || s.created_at);
         const msgsText = s.message_count + (s.message_count === 1 ? ' msg' : ' msgs');
         const modelTag = s.model ? escapeHtml(s.model.split('/').pop().replace(/-/g, ' ')) : '';
@@ -3446,7 +3448,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const parentName = opts.parentName || '';
 
       const isCur = s.id === currentSessionId;
-      const name = escapeHtml(s.name || s.id || (isSubsession ? 'Subagent Task' : 'Session'));
+      const name = escapeHtml(cleanPromptForDisplay(s.name) || s.id || (isSubsession ? 'Subagent Task' : 'Session'));
       const msgs = s.message_count ? (s.message_count + ' msgs') : 'Empty';
       const cost = (s.cost_usd && Number(s.cost_usd) > 0) ? ('$' + Number(s.cost_usd).toFixed(3)) : '';
       const timeStr = formatDateBadge(s.updated_at || s.created_at);
@@ -5544,7 +5546,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           items.map(function(item, index) {
             const id = escapeHtml(item.id);
             const steering = item.delivery === 'steer';
-            const text = escapeHtml(item.prompt || 'Image message');
+            const text = escapeHtml(parseUserPromptDisplay(item.prompt).userText || 'Image message');
             return '<div class="queue-chip' + (steering ? ' is-steering' : '') + '"><span class="queue-index">' + (index + 1) + '</span>' +
               '<span class="queue-text" title="' + text + '">' + text + '</span>' +
               (item.image_count ? '<span class="queue-attachment" title="Attached images">' + item.image_count + ' img</span>' : '') +
@@ -5564,7 +5566,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       queueContainer.style.display = 'flex';
       queueContainer.innerHTML = promptQueue.map((q, i) => {
         if (q.sessionId && q.sessionId !== currentSessionId) return '';
-        const text = typeof q === 'object' ? (q.text || 'Image prompt') : q;
+        const rawText = typeof q === 'object' ? q.text : q;
+        const text = parseUserPromptDisplay(rawText).userText || 'Image prompt';
         return '<div class="queue-chip">' +
           '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
           '<span class="queue-text">' + escapeHtml(text) + '</span>' +
@@ -7226,7 +7229,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           const curSess = (msg.sessions || []).find(s => s.id === msg.sessionId);
           const sessLabel = document.getElementById('active-session-name');
           if (sessLabel) {
-            sessLabel.textContent = curSess ? (curSess.name || curSess.id) : 'Main Session';
+            sessLabel.textContent = curSess ? (cleanPromptForDisplay(curSess.name) || curSess.id) : 'Main Session';
           }
           if (msg.sessions) {
             allSessions = msg.sessions;
@@ -7378,7 +7381,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.name) {
             const activeSessName = document.getElementById('active-session-name');
             if (activeSessName) {
-              activeSessName.textContent = msg.name;
+              activeSessName.textContent = cleanPromptForDisplay(msg.name);
             }
           }
           break;
@@ -7519,7 +7522,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           const activeSessName = document.getElementById('active-session-name');
           if (activeSessName && msg.session) {
-            activeSessName.textContent = msg.session.name || msg.session.id || 'Main Session';
+            activeSessName.textContent = cleanPromptForDisplay(msg.session.name) || msg.session.id || 'Main Session';
           }
           const hasCompactedHistory = msg.session && Array.isArray(msg.session.compacted_history) && msg.session.compacted_history.length > 0;
           let allMessages = [];
@@ -8964,7 +8967,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.name) {
             const activeSessName = document.getElementById('active-session-name');
             if (activeSessName && (!msg.session_id || msg.session_id === currentSessionId)) {
-              activeSessName.textContent = msg.name;
+              activeSessName.textContent = cleanPromptForDisplay(msg.name);
             }
             const sObj = allSessions.find(s => s.id === (msg.session_id || currentSessionId));
             if (sObj) {

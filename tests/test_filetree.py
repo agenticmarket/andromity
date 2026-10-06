@@ -205,3 +205,53 @@ def test_debounced_handler_ignores_noise():
     time.sleep(0.1)
 
     assert got == []
+
+
+def test_watch_events_use_project_relative_noise_and_both_move_parents(tmp_path):
+    from types import SimpleNamespace
+    project = tmp_path / ".hidden-parent" / "project"
+    project.mkdir(parents=True)
+    handler = _DebouncedFSHandler(lambda dirs: None, debounce_sec=60, project_path=project)
+    try:
+        handler.on_any_event(SimpleNamespace(event_type="moved", is_directory=False,
+            src_path=str(project / "a/old.py"), dest_path=str(project / "b/new.py")))
+        assert handler._pending == {str(project / "a"), str(project / "b")}
+        handler.on_any_event(SimpleNamespace(event_type="modified", is_directory=True,
+            src_path=str(project)))
+        assert len(handler._pending) == 2
+    finally:
+        handler.cancel()
+
+
+def test_nested_visible_lookup_and_direct_sync_do_not_cascade(tmp_path):
+    nested = tmp_path / "a" / "b"
+    nested.mkdir(parents=True)
+    panel = _make_panel(tmp_path)
+    tree = Tree("Files")
+    panel._populate_node(tree.root, tmp_path)
+    a = tree.root.children[0]
+    panel._populate_node(a, nested.parent)
+    a.expand()
+    b = a.children[0]
+    b.expand()
+    panel._loaded_paths.update({str(nested.parent), str(nested)})
+    assert panel._nearest_syncable_node(tree, nested) is b
+    with patch.object(panel, "_stat_children", wraps=panel._stat_children) as scan:
+        panel._sync_node(tree.root, tmp_path, {}, recurse=False)
+        scan.assert_called_once_with(tmp_path)
+
+
+def test_root_watch_event_uses_project_path(tmp_path):
+    panel = _make_panel(tmp_path)
+    tree = Tree("Files")
+    panel._populate_node(tree.root, tmp_path)
+    (tmp_path / "new.txt").write_text("new")
+    # Run the worker synchronously while keeping UI callbacks on this thread.
+    from types import SimpleNamespace
+    fake_app = SimpleNamespace(call_from_thread=lambda callback, *args: callback(*args))
+    with patch.object(panel, "query_one", return_value=tree), \
+         patch.object(panel, "run_worker", side_effect=lambda callback, **kwargs: callback()), \
+         patch.object(FileTreePanel, "app", new_callable=lambda: property(lambda self: fake_app)), \
+         patch.object(panel, "_ensure_git_status", return_value={}):
+        panel._apply_fs_events({str(tmp_path)})
+    assert _find_by_data(tree.root, str(tmp_path / "new.txt")) is not None

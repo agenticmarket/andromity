@@ -157,3 +157,21 @@ export interface SubAgentEvent {
   error?: string;
 }
 
+export interface IntegrationResult {
+  success: boolean;
+  error?: string;
+  name?: string;
+  status?: string;
+}
+
+export interface McpServerConfig {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  serverUrl?: string;
+  type?: string;
+  headers?: Record<string, string>;
+  oauth?: { client_id?: string; client_secret?: string };
+  disabled?: boolean;
+}

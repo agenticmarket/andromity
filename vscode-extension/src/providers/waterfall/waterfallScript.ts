@@ -1,6 +1,9 @@
+import { getPromptDisplayScript } from "../promptDisplay.js";
+
 export function getWaterfallScript(sessionId: string): string {
   return `
     (function() {
+      ${getPromptDisplayScript()}
       const vscode = acquireVsCodeApi();
 
       // State
@@ -48,6 +51,7 @@ export function getWaterfallScript(sessionId: string): string {
         btnAutoScroll: document.getElementById('btn-autoscroll'),
         btnClear: document.getElementById('btn-clear'),
         btnExport: document.getElementById('btn-export'),
+        btnFingerprint: document.getElementById('btn-fingerprint'),
         btnGuide: document.getElementById('btn-guide'),
         guideModal: document.getElementById('wf-guide-modal'),
         guideClose: document.getElementById('wf-guide-close')
@@ -95,6 +99,7 @@ export function getWaterfallScript(sessionId: string): string {
       }
 
       function ensureTurn(turnId, userQuery, startTimeMs) {
+        userQuery = cleanPromptForDisplay(userQuery);
         if (!turnId) {
           turnId = state.currentTurnId || (state.turns.size > 0 ? ('turn_' + state.turns.size) : 'turn_1');
         }
@@ -803,7 +808,7 @@ export function getWaterfallScript(sessionId: string): string {
         switch (msg.type) {
           case 'agent_started': {
             state.isRunning = true;
-            const query = msg.prompt || msg.user_input || '';
+            const query = cleanPromptForDisplay(msg.prompt || msg.user_input || '');
             const activeTurn = state.currentTurnId ? state.turns.get(state.currentTurnId) : null;
             if (!activeTurn || activeTurn.endTime) {
               const turnId = 'turn_' + (state.turns.size + 1);
@@ -1606,7 +1611,7 @@ export function getWaterfallScript(sessionId: string): string {
                   const turnNum = userTurnIndex;
                   const tId = 'turn_' + turnNum;
                   const tStart = m.ts ? new Date(m.ts).getTime() : Date.now();
-                  const turnQuery = m.content || ('Turn #' + turnNum);
+                  const turnQuery = cleanPromptForDisplay(m.content) || ('Turn #' + turnNum);
 
                   if (state.turns.has(tId)) {
                     currentTurn = state.turns.get(tId);
@@ -1991,6 +1996,14 @@ export function getWaterfallScript(sessionId: string): string {
           vscode.postMessage({
             type: 'export_waterfall',
             data: exportData
+          });
+        });
+      }
+
+      if (els.btnFingerprint) {
+        els.btnFingerprint.addEventListener('click', () => {
+          vscode.postMessage({
+            type: 'open_fingerprint'
           });
         });
       }

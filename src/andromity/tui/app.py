@@ -261,6 +261,8 @@ class AndromityApp(App):
             self.remove_class("hide-files")
 
     def on_mount(self):
+        from andromity.telemetry import send_feature_used
+        send_feature_used("app_started")
         try:
             from andromity.core.db import init_schema
             init_schema()

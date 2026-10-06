@@ -1,6 +1,10 @@
 name = "andromity-telemetry"
+account_id = "d26d1b568f27844edae405a0a103c701"
 main = "worker.js"
 compatibility_date = "2024-03-29"
+routes = [
+  { pattern = "telemetry.agenticmarket.dev", custom_domain = true }
+]
 
 [[d1_databases]]
 binding = "DB"
@@ -12,10 +16,6 @@ name = "RATE_LIMITER"
 type = "ratelimit"
 namespace_id = "1001"
 simple = { limit = 120, period = 60 }
-
-routes = [
-  { pattern = "telemetry.agenticmarket.dev", custom_domain = true }
-]
 
 [observability]
 enabled = true

@@ -548,7 +548,11 @@ class Session:
     @staticmethod
     def auto_name_from_message(text: str) -> str:
         """Generate a session name from the first user message."""
-        cleaned = text.strip().replace("\n", " ").replace("\r", "")
+        user_text = re.split(
+            r"\s+---\s*(?=\[(?:Active Document|Active Diagnostics|Selection in|Other Open Documents))",
+            text, maxsplit=1,
+        )[0]
+        cleaned = user_text.strip().replace("\n", " ").replace("\r", "")
         if len(cleaned) > 55:
             cleaned = cleaned[:52] + "..."
         return cleaned or "New Session"

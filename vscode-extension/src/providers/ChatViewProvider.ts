@@ -6,6 +6,7 @@ import { EditorBridge } from "../integrations/EditorBridge.js";
 import { SettingsPanel } from "../panels/SettingsPanel.js";
 import { SessionTabPanel } from "../panels/SessionTabPanel.js";
 import { WaterfallPanel } from "../panels/WaterfallPanel.js";
+import { FingerprintPanel } from "../panels/FingerprintPanel.js";
 import { BackgroundTaskPanel } from "../panels/BackgroundTaskPanel.js";
 import { ChangesReviewPanel } from "../panels/ChangesReviewPanel.js";
 import { PythonBridge } from "../server/PythonBridge.js";
@@ -1017,7 +1018,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             "Live Session",
             this._rpcClient,
             this._context,
-            vscode.ViewColumn.Active
+            vscode.ViewColumn.Active,
+            "auto"
           );
           this._postToWebview({ type: "dismiss_waterfall_callout" });
         }
@@ -1236,7 +1238,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (this._runningSessions.size === 0) {
         void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
       }
-      void this._rpcClient?.call("telemetry.recordFeature", { feature: "turn_cancelled", session_id: sid }).catch(() => {});
       this._postToWebview({ type: "agent_cancelled", ...params });
     });
 
@@ -1251,20 +1252,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (this._runningSessions.size === 0) {
         void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
       }
-      const errStr = String(params?.error || "").toLowerCase();
-      let cat = "error_generic";
-      if (errStr.includes("401") || errStr.includes("unauthorized") || errStr.includes("invalid api key") || errStr.includes("authentication")) {
-        cat = "error_auth";
-      } else if (errStr.includes("429") || errStr.includes("rate limit") || errStr.includes("quota")) {
-        cat = "error_rate_limit";
-      } else if (errStr.includes("context length") || errStr.includes("maximum context") || errStr.includes("token limit")) {
-        cat = "error_context_length";
-      } else if (errStr.includes("timeout") || errStr.includes("timed out")) {
-        cat = "error_timeout";
-      } else if (errStr.includes("tool") || errStr.includes("command failed")) {
-        cat = "error_tool_execution";
-      }
-      void this._rpcClient?.call("telemetry.recordFeature", { feature: cat, session_id: sid }).catch(() => {});
       this._postToWebview({ type: "agent_error", ...params });
     });
 
@@ -2532,7 +2519,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
         }
         try {
-          void this._rpcClient?.call("telemetry.recordFeature", { feature: "turn_cancelled", session_id: targetSessionId }).catch(() => {});
+          void this._rpcClient?.call("telemetry.recordFeature", { feature: "cancel_requested", session_id: targetSessionId }).catch(() => {});
           await this._rpcClient.call("agent.cancel", {
             session_id: targetSessionId,
           });
@@ -2668,11 +2655,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const sname = message.sessionName || "Chat Session";
         if (sid) {
           this._waterfallAutoOpenedSessions.add(sid);
-          void this._rpcClient?.call("telemetry.recordFeature", { feature: "waterfall", session_id: sid }).catch(() => {});
           if (this._context) {
             void this._context.globalState.update("andromity.waterfallFirstSessionShown", true);
           }
           WaterfallPanel.createOrShow(
+            this._extensionUri,
+            sid,
+            sname,
+            this._rpcClient,
+            this._context!
+          );
+        }
+        break;
+      }
+
+      case "open_fingerprint": {
+        const sid = message.sessionId || this.getCurrentSessionId();
+        const sname = message.sessionName || "Chat Session";
+        if (sid) {
+          FingerprintPanel.createOrShow(
             this._extensionUri,
             sid,
             sname,
@@ -2891,7 +2892,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this._postToWebview({ type: "turn_undone", turnsUndone: res.turns_undone, targetTurnIndex: res.target_turn_index });
           }
         }
-        void this._rpcClient?.call("telemetry.recordFeature", { feature: "turn_undone" }).catch(() => {});
+        void this._rpcClient?.call("telemetry.recordFeature", { feature: "turn_undone", session_id: this._currentSessionId }).catch(() => {});
         break;
       }
 

@@ -73,6 +73,10 @@ export function getWaterfallHtml(
       </div>
       <div class="wf-actions">
         <button class="wf-btn" id="btn-guide" title="Developer Guide & Metrics Glossary">? Guide</button>
+        <button class="wf-btn" id="btn-fingerprint" title="View AI Execution Fingerprint & Blast Radius">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><path d="M12 2a10 10 0 0 0-10 10c0 4.4 2.9 8.2 7 9.5"/><path d="M12 6a6 6 0 0 0-6 6c0 2.2 1.2 4.1 3 5.1"/><path d="M12 10a2 2 0 0 0-2 2c0 1.1.9 2 2 2s2-.9 2-2a2 2 0 0 0-2-2"/><path d="M18 10a6 6 0 0 0-6-6"/><path d="M22 12c0-5.5-4.5-10-10-10"/></svg>
+          Fingerprint
+        </button>
         <button class="wf-btn active" id="btn-autoscroll" title="Toggle Auto Scroll">Auto-scroll</button>
         <button class="wf-btn" id="btn-clear" title="Clear Trace History">Clear</button>
         <button class="wf-btn" id="btn-export" title="Export Full Execution Trace as JSON">Export JSON</button>

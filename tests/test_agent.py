@@ -133,3 +133,31 @@ async def test_agent_forwards_explicit_effort_including_off(session, effort):
         async for _ in agent.run("hello"):
             pass
     assert captured == [effort]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('outcome', ['completed', 'failed', 'cancelled'])
+async def test_task_telemetry_uses_one_run_and_records_outcome(session, outcome):
+    import asyncio
+    agent = Agent(session, profile='builder', auto_approve=True)
+
+    async def run(*args):
+        yield TextDelta(text='working')
+        if outcome == 'cancelled':
+            raise asyncio.CancelledError()
+        yield Done(outcome='success' if outcome == 'completed' else 'error')
+
+    with patch.object(agent, '_run', side_effect=run), patch('andromity.telemetry.send_task_event') as emit:
+        try:
+            async for _ in agent.run('private prompt'):
+                pass
+        except asyncio.CancelledError:
+            pass
+    assert emit.call_count == 2
+    start, finish = emit.call_args_list
+    assert start.args[0] == 'task_started'
+    assert finish.args[0] == 'task_finished'
+    assert start.args[2] == finish.args[2]
+    assert finish.kwargs['outcome'] == outcome
+    assert finish.kwargs['active_seconds'] >= 0
+    assert 'private prompt' not in str(emit.call_args_list)

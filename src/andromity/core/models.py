@@ -11,7 +11,7 @@ MODEL_CATALOG = {
         "requires_env": None,
         "base_url": "https://gateway.agenticmarket.dev/v1",
         "models": [
-            {"id": "auto", "name": "Andromity Auto", "desc": "Autonomous intelligence engine optimized for agentic coding", "context": "256K", "pricing": "Included (30 turns/day)", "is_free": True, "tags": ["auto", "recommended"]},
+            {"id": "auto", "name": "Andromity Auto", "desc": "Autonomous intelligence engine optimized for agentic coding", "context": "256K", "pricing": "Included", "is_free": True, "tags": ["auto", "recommended"]},
         ],
     },
     "anthropic": {
@@ -610,7 +610,7 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
                 "name": "Andromity Auto",
                 "desc": "Autonomous intelligence engine optimized for agentic coding",
                 "context": "256K",
-                "pricing": "Included (30 turns/day)",
+                "pricing": "Included",
                 "is_free": True,
                 "tags": ["auto", "recommended"],
             }

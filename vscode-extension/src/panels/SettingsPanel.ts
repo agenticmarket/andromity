@@ -1,8 +1,11 @@
 import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
-import { ModelInfo, ProviderInfo } from "../server/types.js";
+import { ModelInfo, ProviderInfo, IntegrationResult, McpServerConfig } from "../server/types.js";
 import { join } from "path";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
+import { homedir } from "os";
+import { getUsageScript } from "./usage/usageScript.js";
+import { decodeUsagePng } from "./usage/usageImage.js";
 
 export class SettingsPanel {
   public static currentPanel: SettingsPanel | undefined;
@@ -47,7 +50,7 @@ export class SettingsPanel {
           rpcClient.call<ModelInfo[]>("config.list_models", {}, 8000).catch(() => []),
           rpcClient.call<ProviderInfo[]>("config.list_providers", {}, 8000).catch(() => []),
           rpcClient.call<any[]>("skills.list", { project_path: workspaceFolder }, 8000).catch(() => []),
-          rpcClient.call<any[]>("mcp.list", { project_path: workspaceFolder }, 8000).catch(() => []),
+          rpcClient.call<any[]>("mcp.list", { project_path: workspaceFolder }, 120000).catch(() => []),
           rpcClient.call<any>("usage.get", { project_path: null, time_range: "all" }, 8000).catch(() => ({})),
           rpcClient.call<any>("system.info", {}, 8000).catch(() => ({})),
           rpcClient.call<any>("trust.status", { project_path: workspaceFolder }, 8000).catch(() => ({ is_trusted: true, trusted_projects: [] })),
@@ -180,6 +183,11 @@ export class SettingsPanel {
     this._rpcClient = client;
     void this._rpcClient.call("telemetry.recordFeature", { feature: "settings_opened" }).catch(() => {});
     this.loadData();
+  }
+
+  public static updateMcpServers(mcpServers: unknown[]): void {
+    if (SettingsPanel._cachedState) SettingsPanel._cachedState.mcpServers = mcpServers;
+    SettingsPanel.currentPanel?._panel.webview.postMessage({ type: "mcp_refreshed", mcpServers });
   }
 
   public setInitialTab(tab: string) {
@@ -320,6 +328,37 @@ export class SettingsPanel {
   }
 
   private async _handleMessage(message: any) {
+    if (message.type === "export_usage_image") {
+      try {
+        const bytes = decodeUsagePng(message.image);
+        const format = ["square", "landscape", "story"].includes(message.format) ? message.format : "square";
+        const kind = ["activity", "daily"].includes(message.kind) ? message.kind : "recap";
+        const target = await vscode.window.showSaveDialog({
+          defaultUri: vscode.Uri.file(join(homedir(), `andromity-${kind}-${format}-${new Date().toISOString().slice(0, 10)}.png`)),
+          filters: { "PNG image": ["png"] },
+          saveLabel: "Save usage image",
+        });
+        if (target) {
+          await vscode.workspace.fs.writeFile(target, bytes);
+          vscode.window.showInformationMessage("Exported usage image.");
+        }
+        this._panel.webview.postMessage({ type: "usage_export_result", success: !!target, cancelled: !target });
+      } catch {
+        this._panel.webview.postMessage({ type: "usage_export_result", success: false });
+        vscode.window.showErrorMessage("Could not save the usage image. Try again and choose a writable folder.");
+      }
+      return;
+    }
+    if (message.type === "copy_usage_caption") {
+      try {
+        if (typeof message.caption !== "string" || message.caption.length > 2000) return;
+        await vscode.env.clipboard.writeText(message.caption);
+        this._panel.webview.postMessage({ type: "usage_caption_copied", success: true });
+      } catch {
+        this._panel.webview.postMessage({ type: "usage_caption_copied", success: false });
+      }
+      return;
+    }
     if (message.type === "login_account") {
       try {
         if (SettingsPanel.chatProvider) {
@@ -370,6 +409,9 @@ export class SettingsPanel {
           this._panel.webview.postMessage({ type: "daemon_status", connected: false });
         }
         return;
+      }
+      if (message.type === "fetch_usage") {
+        this._panel.webview.postMessage({ type: "usage_load_failed", requestId: message.requestId });
       }
       if (message.type === "webview_error") {
         console.error("[SettingsPanel Webview Error]", message);
@@ -530,15 +572,40 @@ export class SettingsPanel {
           const res = await this._rpcClient.call<any>("skills.install", {
             name: message.name,
             source_id: message.sourceId || "anthropic",
+            project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
           }, 60000);
           if (res.success) {
             vscode.window.showInformationMessage(`Installed skill '${message.name}' successfully.`);
             await this.loadData();
+            this._onConfigChangeCallback?.();
           } else {
             vscode.window.showErrorMessage(`Failed to install skill: ${res.error || "Unknown error"}`);
           }
         } catch (err: any) {
           vscode.window.showErrorMessage(`Failed to install skill: ${err.message}`);
+        }
+        break;
+      }
+
+      case "remove_skill": {
+        try {
+          if (!vscode.workspace.isTrusted) {
+            vscode.window.showWarningMessage("Trust this workspace before removing skills.");
+            break;
+          }
+          const choice = await vscode.window.showWarningMessage(
+            `Remove skill '${message.name}' from ${message.path}?`, { modal: true }, "Remove");
+          if (choice !== "Remove") break;
+          const res = await this._rpcClient.call<IntegrationResult>("skills.remove", {
+            name: message.name, path: message.path,
+            project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+          });
+          if (!res.success) vscode.window.showWarningMessage(res.error || "Could not remove the skill.");
+          else this._onConfigChangeCallback?.();
+        } catch {
+          vscode.window.showErrorMessage("Could not remove the skill. Reconnect to an updated Andromity server and retry.");
+        } finally {
+          await this.loadData(true);
         }
         break;
       }
@@ -750,15 +817,19 @@ export class SettingsPanel {
           const usage = await this._rpcClient.call<any>("usage.get", {
             time_range: message.timeRange || "all",
             project_path: projectPath,
-          }, 15000).catch(() => ({}));
+            offset: Math.max(0, Math.floor(Number(message.offset) || 0)),
+            limit: 10,
+          }, 15000);
           this._panel.webview.postMessage({
             type: "usage_loaded",
             usage: usage || {},
             timeRange: message.timeRange || "all",
             scope: message.scope || "global",
+            requestId: message.requestId,
           });
         } catch (err: any) {
           console.error("[SettingsPanel] Failed to fetch usage:", err);
+          this._panel.webview.postMessage({ type: "usage_load_failed", requestId: message.requestId });
         }
         break;
       }
@@ -886,6 +957,61 @@ export class SettingsPanel {
         break;
       }
 
+      case "mcp_add":
+      case "mcp_remove": {
+        try {
+          const project_path = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          if (!vscode.workspace.isTrusted || !project_path) {
+            vscode.window.showWarningMessage("Open a trusted workspace before managing MCP servers.");
+            break;
+          }
+          let res: IntegrationResult;
+          if (message.type === "mcp_add") {
+            const name = await vscode.window.showInputBox({ title: "Add MCP server", prompt: "Server name", ignoreFocusOut: true,
+              validateInput: value => value.trim() ? undefined : "Enter a server name." });
+            if (!name) break;
+            const kind = await vscode.window.showQuickPick(["Remote HTTP (OAuth or access token)", "Remote SSE (legacy)", "Local command (stdio)", "Advanced JSON configuration"],
+              { title: "MCP connection type", ignoreFocusOut: true });
+            if (!kind) break;
+            let serverConfig: McpServerConfig;
+            if (kind === "Advanced JSON configuration") {
+              const raw = await vscode.window.showInputBox({ title: "MCP server configuration", password: true, ignoreFocusOut: true,
+                prompt: "Paste one server object. Supports headers, env, and oauth.client_id.",
+                validateInput: value => { try { const parsed: unknown = JSON.parse(value); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? undefined : "Enter a JSON object."; } catch { return "Enter valid JSON."; } } });
+              if (raw === undefined) break;
+              serverConfig = JSON.parse(raw) as McpServerConfig;
+            } else if (kind === "Local command (stdio)") {
+              const command = await vscode.window.showInputBox({ title: "MCP command", prompt: "Executable, such as npx, uvx, or python", ignoreFocusOut: true });
+              if (!command?.trim()) break;
+              const raw = await vscode.window.showInputBox({ title: "Command arguments", value: "[]", prompt: 'JSON array of arguments, such as ["-y", "@modelcontextprotocol/server-filesystem", "."]', ignoreFocusOut: true,
+                validateInput: value => { try { const args: unknown = JSON.parse(value); return Array.isArray(args) && args.every(arg => typeof arg === "string") ? undefined : "Enter an array of strings."; } catch { return "Enter valid JSON."; } } });
+              if (raw === undefined) break;
+              serverConfig = { command: command.trim(), args: JSON.parse(raw) as string[] };
+            } else {
+              const url = await vscode.window.showInputBox({ title: "Remote MCP URL", prompt: "For Supabase: https://mcp.supabase.com/mcp?project_ref=YOUR_PROJECT_REF", ignoreFocusOut: true,
+                validateInput: value => { try { const parsed = new URL(value); return ["https:", "http:"].includes(parsed.protocol) ? undefined : "Use HTTP or HTTPS."; } catch { return "Enter a valid URL."; } } });
+              if (!url) break;
+              const token = await vscode.window.showInputBox({ title: "Access token (optional)", prompt: "Leave empty to authenticate in your browser after adding the server.", password: true, ignoreFocusOut: true });
+              if (token === undefined) break;
+              serverConfig = { url, type: kind === "Remote SSE (legacy)" ? "sse" : "http" };
+              if (token.trim()) serverConfig.headers = { Authorization: `Bearer ${token.trim()}` };
+            }
+            res = await this._rpcClient.call<IntegrationResult>("mcp.add", { name: name.trim(), config: serverConfig, project_path }, 60000);
+          } else {
+            const choice = await vscode.window.showWarningMessage(`Remove MCP server '${message.name}' and its saved authentication?`, { modal: true }, "Remove");
+            if (choice !== "Remove") break;
+            res = await this._rpcClient.call<IntegrationResult>("mcp.remove", { name: message.name, project_path }, 60000);
+          }
+          if (!res.success) vscode.window.showWarningMessage(res.error || "Could not update MCP servers.");
+          else this._onConfigChangeCallback?.();
+        } catch {
+          vscode.window.showErrorMessage("Could not update MCP servers. Reconnect to an updated Andromity server and retry.");
+        } finally {
+          await this.loadData(true);
+        }
+        break;
+      }
+
       case "mcp_restart": {
         try {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -942,17 +1068,37 @@ export class SettingsPanel {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           const name = message.name || message.server_name;
           if (!name) throw new Error("Server name missing");
-          vscode.window.showInformationMessage(`Starting OAuth authentication for '${name}' in browser...`);
-          const res = await this._rpcClient.call<any>("mcp.authenticate", { name, project_path: workspaceFolder }, 130000);
+          if (!vscode.workspace.isTrusted) {
+            vscode.window.showWarningMessage("Trust this workspace before authenticating MCP servers.");
+            break;
+          }
+          const method = await vscode.window.showQuickPick(["Sign in with browser (OAuth)", "Use access token / PAT"],
+            { title: `Authenticate ${name}`, ignoreFocusOut: true });
+          if (!method) {
+            this._panel.webview.postMessage({ type: "mcp_refresh_failed" });
+            break;
+          }
+          let access_token: string | undefined;
+          if (method === "Use access token / PAT") {
+            access_token = await vscode.window.showInputBox({ title: `Access token for ${name}`, password: true, ignoreFocusOut: true,
+              validateInput: value => value.trim() ? undefined : "Enter an access token." });
+            if (!access_token) {
+              this._panel.webview.postMessage({ type: "mcp_refresh_failed" });
+              break;
+            }
+          }
+          vscode.window.showInformationMessage(access_token ? `Saving access token for '${name}'...` : `Starting authentication for '${name}' in browser...`);
+          const res = await this._rpcClient.call<IntegrationResult>("mcp.authenticate", { name, project_path: workspaceFolder, access_token }, 240000);
           if (res && res.success !== false) {
-            vscode.window.showInformationMessage(`MCP '${name}' authenticated successfully!`);
+            if (res.status === "running") vscode.window.showInformationMessage(`MCP '${name}' authenticated and connected.`);
+            else vscode.window.showWarningMessage(`Authentication saved for '${name}'. Connection status: ${res.status || "unknown"}. Check the server card and retry.`);
           } else {
             vscode.window.showWarningMessage(`MCP auth failed: ${res?.error || 'Unknown error'}`);
           }
           const mcpServers = await this._rpcClient.call<any[]>("mcp.list", { project_path: workspaceFolder }, 10000).catch(() => []);
           this._panel.webview.postMessage({ type: "mcp_refreshed", mcpServers: mcpServers || [] });
         } catch (e: any) {
-          vscode.window.showErrorMessage(`OAuth auth error: ${e.message}`);
+          vscode.window.showErrorMessage("Authentication could not finish. Reconnect and try Authenticate again.");
           this._panel.webview.postMessage({ type: "mcp_refresh_failed" });
         }
         break;
@@ -996,6 +1142,8 @@ export class SettingsPanel {
   }
 
   private _getHtmlForWebview(): string {
+    const logoPath = join(this._extensionUri.fsPath, "media", "icon.png");
+    const usageLogoData = existsSync(logoPath) ? "data:image/png;base64," + readFileSync(logoPath).toString("base64") : "";
     const iconUri = this._panel.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, "media", "sidebar-icon.svg"));
     const nonce = typeof this._getNonce === "function" ? this._getNonce() : "mock-nonce";
     let extVersion = "0.2.15";
@@ -2014,6 +2162,38 @@ export class SettingsPanel {
       line-height: 1.4;
     }
 
+    #mcp-grid {
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+    }
+    .mcp-card { min-width: 0; }
+    .mcp-card .item-card-top { gap: 8px; flex-wrap: wrap; }
+    .mcp-card .item-card-title { min-width: 0; overflow-wrap: anywhere; }
+    .mcp-card .status-dot { flex-shrink: 0; }
+    .mcp-endpoint, .mcp-endpoint code {
+      min-width: 0;
+      max-width: 100%;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .mcp-tools { min-width: 0; border: 1px solid var(--card-border); border-radius: 4px; }
+    .mcp-tools summary {
+      cursor: pointer;
+      padding: 8px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--primary-fg);
+      background: var(--primary);
+      border-radius: 4px;
+    }
+    .mcp-tools summary:hover { background: var(--primary-hover); }
+    .mcp-tools summary:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+    .mcp-tools-list { max-height: 280px; overflow: auto; padding: 0 10px; }
+    .mcp-tool { padding: 10px 0; border-bottom: 1px solid var(--card-border); }
+    .mcp-tool:last-child { border-bottom: 0; }
+    .mcp-tool-name { font-family: var(--font-mono); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+    .mcp-tool-description { font-size: 12px; line-height: 1.5; color: var(--text-muted); overflow-wrap: anywhere; margin: 4px 0; }
+
     .key-input-row {
       display: flex;
       gap: 8px;
@@ -2365,6 +2545,19 @@ export class SettingsPanel {
 
     @keyframes spin { 100% { transform: rotate(360deg); } }
     .spinning { animation: spin 1s linear infinite; }
+
+    .usage-share-bar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-top:16px; }
+    .usage-share-bar h2 { margin:0; }
+    .usage-pagination { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-top:14px; color:var(--text-muted); font-size:11px; }
+    .usage-pagination button:disabled { opacity:.4; cursor:default; }
+    .usage-day:hover, .usage-day:focus { stroke:var(--text, #fff); stroke-width:1.5; outline:none; }
+    .usage-share-dialog { background:var(--card-bg, #161b22); color:var(--text, #eee); border:1px solid var(--card-border); border-radius:12px; padding:20px; width:min(720px, calc(100vw - 48px)); max-height:90vh; overflow-y:auto; }
+    .usage-share-dialog::backdrop { background:rgba(0,0,0,.7); }
+    .usage-share-controls { display:flex; flex-wrap:wrap; gap:14px; margin:16px 0; align-items:center; }
+    .usage-share-controls label { font-size:12px; display:flex; gap:8px; align-items:center; }
+    .usage-share-controls select { background:var(--input-bg, #111); color:inherit; border:1px solid var(--card-border); border-radius:5px; padding:7px; max-width:100%; }
+    .usage-share-preview-wrap { padding:16px; background:rgba(0,0,0,.15); border-radius:8px; text-align:center; }
+    #usage-share-preview { max-width:100%; max-height:420px; object-fit:contain; border-radius:8px; }
   </style>
 </head>
 <body>
@@ -2664,6 +2857,7 @@ export class SettingsPanel {
           <p class="section-desc">External database connectors, tool servers, and enterprise context integrations.</p>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
+          <button class="btn" data-action="mcp_add">Add MCP Server</button>
           <button class="btn btn-secondary" id="btn-refresh-mcp">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
             <span>Refresh</span>
@@ -2713,21 +2907,38 @@ export class SettingsPanel {
         </div>
       </div>
 
-      <!-- GitHub-Style Daily Activity Chart -->
-      <div class="settings-card" style="margin-top: 14px; position: relative; z-index: 30; overflow: visible;">
-        <div class="setting-label" style="display:flex; justify-content:space-between; align-items:center;">
-          <span>Daily Token Activity (GitHub Style)</span>
-          <span style="font-size:11px; font-weight:normal; color:var(--text-muted);">Last 14 Days</span>
+      <div class="usage-share-bar">
+        <p class="setting-desc">Your progress, ready to share. Create a branded image for X or Instagram.</p>
+        <button class="btn" id="usage-share-open">Share usage ↗</button>
+      </div>
+      <p id="usage-status" class="setting-desc" role="status" aria-live="polite"></p>
+
+      <div class="settings-card" style="margin-top:14px; position:relative; overflow:visible;">
+        <div class="setting-label" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+          <span>Daily Token Activity</span>
+          <div style="display:flex;gap:12px;align-items:center;"><span id="usage-bar-period" class="setting-desc">Last 14 Days</span><button class="btn btn-secondary" data-usage-share-kind="daily">Export chart</button></div>
         </div>
-        <div id="usage-chart-container" style="margin-top: 12px; overflow: visible;"></div>
+        <div id="usage-bar-chart-container" style="margin-top:12px;overflow:visible;"></div>
       </div>
 
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-top: 14px;">
+      <!-- GitHub-Style Daily Activity Chart -->
+      <div class="settings-card" style="margin-top: 14px; position: relative; z-index: 30; overflow: visible;">
+        <div class="setting-label" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+          <span>Daily Session Activity</span><button class="btn btn-secondary" data-usage-share-kind="activity">Export graph</button>
+          <span id="usage-activity-period" style="font-size:11px; font-weight:normal; color:var(--text-muted);"></span>
+        </div>
+        <p id="usage-activity-summary" class="setting-desc"></p>
+        <div id="usage-chart-container" style="margin-top: 12px; overflow-x: auto;"></div>
+        <p class="setting-desc">Color shows token volume. Session totals are grouped by their last activity date (UTC); this is not a per-day token ledger. Streaks use days with recorded tokens.</p>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 14px; margin-top: 14px;">
         <!-- Model Distribution Breakdown -->
         <div class="settings-card">
           <div class="setting-label">Model Distribution</div>
           <div class="setting-desc">Token consumption breakdown across AI models</div>
           <div id="usage-models-breakdown" style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px;"></div>
+          <div id="usage-models-pagination" class="usage-pagination"></div>
         </div>
 
         <!-- Provider Distribution Breakdown -->
@@ -2735,6 +2946,7 @@ export class SettingsPanel {
           <div class="setting-label">Provider Distribution</div>
           <div class="setting-desc">Token share across configured API providers</div>
           <div id="usage-providers-breakdown" style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px;"></div>
+          <div id="usage-providers-pagination" class="usage-pagination"></div>
         </div>
       </div>
 
@@ -2756,7 +2968,21 @@ export class SettingsPanel {
             <tbody id="usage-sessions-body"></tbody>
           </table>
         </div>
+        <div id="usage-sessions-pagination" class="usage-pagination"></div>
       </div>
+      <dialog id="usage-share-dialog" class="usage-share-dialog" aria-labelledby="usage-share-title">
+        <img id="usage-brand-logo" src="${usageLogoData}" alt="" hidden>
+        <div class="usage-share-bar"><h2 id="usage-share-title">Share your progress</h2><button class="btn btn-secondary" id="usage-share-close" aria-label="Close share preview">Close</button></div>
+        <p class="setting-desc">Only aggregate stats appear. Session names, project paths, prompts, and account details stay private.</p>
+        <div class="usage-share-controls">
+          <label>Card <select id="usage-share-kind"><option value="recap">Usage recap</option><option value="activity">Activity & streaks</option><option value="daily">Daily token chart</option></select></label>
+          <label>Format <select id="usage-share-format"><option value="square">Square · 1080 × 1080</option><option value="landscape">X · 1200 × 675</option><option value="story">Story · 1080 × 1920</option></select></label>
+          <label><input type="checkbox" id="usage-share-cost"> Include estimated cost</label>
+        </div>
+        <div class="usage-share-preview-wrap"><img id="usage-share-preview" alt="Preview of your Andromity usage image"></div>
+        <div class="usage-share-bar"><span class="setting-desc">Save the PNG, then attach it to your post.</span><div><button class="btn btn-secondary" id="usage-share-caption">Copy caption</button> <button class="btn" id="usage-share-save">Save PNG</button></div></div>
+        <p id="usage-share-status" class="setting-desc" role="status" aria-live="polite"></p>
+      </dialog>
     </div>
 
     <!-- ── TAB 6: TRUST & SECURITY ─────────────────────────────────── -->
@@ -3714,6 +3940,10 @@ SOFTWARE.</pre>
         btn.disabled = true;
         btn.innerHTML = '<span class="spinning-loader"></span> Authenticating in browser...';
         vscode.postMessage({ type: "mcp_auth", name: btn.dataset.name });
+      } else if (action === "mcp_add" || action === "mcp_remove") {
+        vscode.postMessage({ type: action, name: btn.dataset.name });
+      } else if (action === "remove-skill") {
+        vscode.postMessage({ type: "remove_skill", name: btn.dataset.skillName, path: btn.dataset.skillPath });
       } else if (action === "login-account") {
         btn.disabled = true;
         btn.innerHTML = '<span class="spinning-loader"></span> Connecting...';
@@ -3743,7 +3973,7 @@ SOFTWARE.</pre>
         usageScopeChips.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
         chip.classList.add("active");
         currentUsageScope = chip.dataset.usageScope || "global";
-        vscode.postMessage({ type: "fetch_usage", timeRange: currentUsageRange, scope: currentUsageScope });
+        requestUsage();
       });
     }
 
@@ -3755,8 +3985,7 @@ SOFTWARE.</pre>
         usageRangeChips.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
         chip.classList.add("active");
         currentUsageRange = chip.dataset.usageRange || "all";
-        renderUsage();
-        vscode.postMessage({ type: "fetch_usage", timeRange: currentUsageRange, scope: currentUsageScope });
+        requestUsage();
       });
     }
 
@@ -3877,7 +4106,7 @@ SOFTWARE.</pre>
           allSkills = msg.skills || [];
           allRemoteSkills = msg.remoteSkills || [];
           allMcpServers = msg.mcpServers || [];
-          usageData = msg.usage || {};
+          if (usageRequestId === 0 && !usagePending && currentUsageRange === "all" && currentUsageScope === "global") usageData = msg.usage || {};
           allCrons = msg.crons || [];
 
           applySystemAndConfig(msg);
@@ -3913,8 +4142,31 @@ SOFTWARE.</pre>
           break;
         }
         case "usage_loaded": {
+          if (msg.requestId !== usageRequestId || msg.timeRange !== currentUsageRange || msg.scope !== currentUsageScope) break;
+          usagePending = false;
+          if (msg.usage && msg.usage.error) {
+            document.getElementById('usage-status').textContent = 'Could not load usage. Select a range to retry.';
+            break;
+          }
           usageData = msg.usage || {};
+          usageSessionPage = Math.floor((usageData.sessions_offset || 0) / usagePageSize);
           renderUsage();
+          break;
+        }
+        case "usage_load_failed": {
+          if (msg.requestId !== usageRequestId) break;
+          usagePending = false;
+          document.getElementById('usage-status').textContent = 'Could not load usage. Select a range to retry.';
+          break;
+        }
+        case "usage_export_result": {
+          document.getElementById('usage-share-save').disabled = false;
+          if (msg.success) document.getElementById('usage-share-dialog').close();
+          document.getElementById('usage-share-status').textContent = msg.success ? 'PNG saved. Ready to post!' : msg.cancelled ? 'Save cancelled.' : 'Could not save the PNG. Try another folder.';
+          break;
+        }
+        case "usage_caption_copied": {
+          document.getElementById('usage-share-status').textContent = msg.success ? 'Caption copied. Paste it into your post.' : 'Could not copy the caption. Try again.';
           break;
         }
         case "models_refreshed": {
@@ -4398,132 +4650,16 @@ SOFTWARE.</pre>
       }).join("");
     }
 
-    function getFilteredSessions(sessions, range) {
-      if (!Array.isArray(sessions)) return [];
-      if (range === "all") return sessions;
-      const now = Date.now();
-      const dayMs = 24 * 60 * 60 * 1000;
-      let limitMs = 30 * dayMs;
-      if (range === "month") limitMs = 30 * dayMs;
-      else if (range === "week") limitMs = 7 * dayMs;
-      else if (range === "today") limitMs = 1 * dayMs;
-
-      return sessions.filter(s => {
-        const d = new Date(s.updated_at || s.created_at || 0).getTime();
-        return (now - d) <= limitMs;
-      });
-    }
-
-    function renderUsage() {
-      const allSessionsList = usageData.sessions || [];
-      const isAllRange = currentUsageRange === "all";
-      const filteredSessions = isAllRange ? allSessionsList : getFilteredSessions(allSessionsList, currentUsageRange);
-
-      const totalTokens = (isAllRange && typeof usageData.total_tokens === "number" && usageData.total_tokens > 0)
-        ? usageData.total_tokens
-        : filteredSessions.reduce((acc, s) => acc + (s.token_total || s.tokens || 0), 0);
-
-      const totalCost = (isAllRange && typeof usageData.total_cost_usd === "number")
-        ? usageData.total_cost_usd
-        : filteredSessions.reduce((acc, s) => acc + (s.cost_usd || 0), 0.0);
-
-      const totalSessions = (isAllRange && typeof usageData.total_sessions === "number" && usageData.total_sessions > 0)
-        ? usageData.total_sessions
-        : filteredSessions.length;
-
-      const avgTokens = totalSessions > 0 ? Math.round(totalTokens / totalSessions) : 0;
-
-      const tokensEl = document.getElementById("stat-usage-tokens");
-      const costEl = document.getElementById("stat-usage-cost");
-      const sessionsEl = document.getElementById("stat-usage-sessions");
-      const avgEl = document.getElementById("stat-usage-avg");
-
-      if (tokensEl) tokensEl.textContent = formatTokens(totalTokens);
-      if (costEl) costEl.textContent = '$' + Number(totalCost).toFixed(4);
-      if (sessionsEl) sessionsEl.textContent = totalSessions;
-      if (avgEl) avgEl.textContent = formatTokens(avgTokens);
-
-      renderUsageChart(filteredSessions, currentUsageRange);
-      renderModelBreakdown(filteredSessions);
-      renderProviderBreakdown(filteredSessions);
-      renderSessionsTable(filteredSessions);
-    }
+    ${getUsageScript()}
 
     function renderUsageChart(sessions, range) {
-      const container = document.getElementById("usage-chart-container");
+      const container = document.getElementById("usage-bar-chart-container");
       if (!container) return;
 
-      const slots = [];
-      const now = new Date();
-      const numSlots = range === "today" ? 12 : (range === "week" ? 7 : (range === "month" ? 14 : 14));
-
-      if (range === "today") {
-        for (let i = 0; i < 12; i++) {
-          const slotHour = i * 2;
-          const label = String(slotHour).padStart(2, '0') + ':00';
-          slots.push({
-            idx: i,
-            label: label,
-            fullDate: 'Today, ' + label,
-            tokens: 0,
-            cost: 0,
-            count: 0
-          });
-        }
-        if (Array.isArray(sessions)) {
-          sessions.forEach(s => {
-            const d = new Date(s.updated_at || s.created_at || 0);
-            if (d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()) {
-              const hour = d.getHours();
-              const slotIdx = Math.min(11, Math.floor(hour / 2));
-              slots[slotIdx].tokens += (s.token_total || s.tokens || 0);
-              slots[slotIdx].cost += (s.cost_usd || 0);
-              slots[slotIdx].count += 1;
-            }
-          });
-        }
-      } else {
-        const dailyMap = {};
-        for (let i = numSlots - 1; i >= 0; i--) {
-          const d = new Date(now);
-          d.setDate(d.getDate() - i);
-          const iso = d.toISOString().slice(0, 10);
-          const fullDate = d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-          const label = (d.getMonth() + 1) + '/' + d.getDate();
-          const slot = {
-            idx: numSlots - 1 - i,
-            dateIso: iso,
-            label: label,
-            fullDate: fullDate,
-            dayName: d.toLocaleDateString([], { weekday: 'short' }),
-            tokens: 0,
-            cost: 0,
-            count: 0
-          };
-          slots.push(slot);
-          dailyMap[iso] = slot;
-        }
-
-        // If backend provided complete daily_activity aggregated across ALL sessions, populate chart from it
-        if (usageData.daily_activity && Object.keys(usageData.daily_activity).length > 0) {
-          for (const [dayIso, dayData] of Object.entries(usageData.daily_activity)) {
-            if (dailyMap[dayIso]) {
-              dailyMap[dayIso].tokens += (dayData.tokens || 0);
-              dailyMap[dayIso].cost += (dayData.cost || 0);
-              dailyMap[dayIso].count += (dayData.count || 0);
-            }
-          }
-        } else if (Array.isArray(sessions)) {
-          sessions.forEach(s => {
-            const sDate = (s.updated_at || s.created_at || "").slice(0, 10);
-            if (dailyMap[sDate]) {
-              dailyMap[sDate].tokens += (s.token_total || s.tokens || 0);
-              dailyMap[sDate].cost += (s.cost_usd || 0);
-              dailyMap[sDate].count += 1;
-            }
-          });
-        }
-      }
+      const period = document.getElementById('usage-bar-period');
+      if (period) period.textContent = range === 'today' ? 'Today · 2-hour intervals' : range === 'week' ? 'Last 7 Days' : 'Last 14 Days';
+      const slots = usageBarSlots(sessions, range);
+      const numSlots = slots.length;
 
       const totalTokensInChart = slots.reduce((acc, s) => acc + s.tokens, 0);
       slots.forEach(s => {
@@ -4634,12 +4770,13 @@ SOFTWARE.</pre>
       }
     }
 
+
     function renderModelBreakdown(filteredSessions) {
       const container = document.getElementById("usage-models-breakdown");
       if (!container) return;
 
       const modelMap = {};
-      if (currentUsageRange === "all" && usageData.by_model && Object.keys(usageData.by_model).length > 0) {
+      if (usageData.by_model) {
         Object.assign(modelMap, usageData.by_model);
       } else if (Array.isArray(filteredSessions) && filteredSessions.length > 0) {
         filteredSessions.forEach(s => {
@@ -4652,6 +4789,7 @@ SOFTWARE.</pre>
 
       const entries = Object.entries(modelMap);
       if (entries.length === 0) {
+        usagePagination('usage-models-pagination', 0, 0, usagePageSize);
         container.innerHTML = '<div style="color:var(--text-muted); font-size:12px; padding:6px 0;">No model usage recorded in this timeframe.</div>';
         return;
       }
@@ -4659,7 +4797,9 @@ SOFTWARE.</pre>
       entries.sort((a, b) => (b[1].tokens || 0) - (a[1].tokens || 0));
       const totalTokens = entries.reduce((acc, [, data]) => acc + (data.tokens || 0), 0) || 1;
 
-      container.innerHTML = entries.map(([modelId, data]) => {
+      usageModelPage = Math.min(usageModelPage, Math.max(0, Math.ceil(entries.length / usagePageSize) - 1));
+      usagePagination('usage-models-pagination', usageModelPage, entries.length, usagePageSize);
+      container.innerHTML = entries.slice(usageModelPage * usagePageSize, (usageModelPage + 1) * usagePageSize).map(([modelId, data]) => {
         const tokens = data.tokens || 0;
         const cost = data.cost || 0;
         const pct = Math.min(100, Math.round((tokens / totalTokens) * 100));
@@ -4689,7 +4829,7 @@ SOFTWARE.</pre>
       if (!container) return;
 
       const provMap = {};
-      if (currentUsageRange === "all" && usageData.by_provider && Object.keys(usageData.by_provider).length > 0) {
+      if (usageData.by_provider) {
         Object.assign(provMap, usageData.by_provider);
       } else if (Array.isArray(filteredSessions) && filteredSessions.length > 0) {
         filteredSessions.forEach(s => {
@@ -4703,6 +4843,7 @@ SOFTWARE.</pre>
 
       const entries = Object.entries(provMap);
       if (entries.length === 0) {
+        usagePagination('usage-providers-pagination', 0, 0, usagePageSize);
         container.innerHTML = '<div style="color:var(--text-muted); font-size:12px; padding:6px 0;">No provider activity recorded in this timeframe.</div>';
         return;
       }
@@ -4710,7 +4851,9 @@ SOFTWARE.</pre>
       entries.sort((a, b) => (b[1].tokens || 0) - (a[1].tokens || 0));
       const totalTokens = entries.reduce((acc, [, data]) => acc + (data.tokens || 0), 0) || 1;
 
-      container.innerHTML = entries.map(([provId, data]) => {
+      usageProviderPage = Math.min(usageProviderPage, Math.max(0, Math.ceil(entries.length / usagePageSize) - 1));
+      usagePagination('usage-providers-pagination', usageProviderPage, entries.length, usagePageSize);
+      container.innerHTML = entries.slice(usageProviderPage * usagePageSize, (usageProviderPage + 1) * usagePageSize).map(([provId, data]) => {
         const tokens = data.tokens || 0;
         const cost = data.cost || 0;
         const pct = Math.min(100, Math.round((tokens / totalTokens) * 100));
@@ -4744,7 +4887,8 @@ SOFTWARE.</pre>
         return;
       }
 
-      tbody.innerHTML = list.slice(0, 25).map(s => {
+      const start = typeof usageData.sessions_offset === 'number' ? 0 : usageSessionPage * usagePageSize;
+      tbody.innerHTML = list.slice(start, start + usagePageSize).map(s => {
         const sName = s.name || s.id || "Untitled Session";
         const modelStr = (s.model || "default") + (s.provider ? ' (' + s.provider + ')' : "");
         const tokens = s.token_total || s.tokens || 0;
@@ -4784,6 +4928,7 @@ SOFTWARE.</pre>
             '</div>' +
             '<div class="item-card-desc">' + escapeHtml(s.description || 'Custom agent workflow skill.') + '</div>' +
             '<div style="font-size: 11px; font-family: var(--font-mono); color: var(--text-muted); word-break: break-all;">' + escapeHtml(s.path || '') + '</div>' +
+            (s.scope === 'builtin' ? '' : '<button class="btn btn-secondary" data-action="remove-skill" data-skill-name="' + escapeHtml(s.name) + '" data-skill-path="' + escapeHtml(s.path || '') + '">Remove Skill</button>') +
           '</div>'
         ).join("");
       } else {
@@ -4822,7 +4967,7 @@ SOFTWARE.</pre>
       if (allMcpServers.length === 0) {
         grid.innerHTML = '<div class="empty-state" style="grid-column: 1 / -1;">' +
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M9 9h6v6H9z"></path></svg>' +
-          '<div>No MCP servers configured. Add servers to <code>.andromity/mcp.json</code> or <code>.vscode/mcp.json</code>.</div>' +
+          '<div>No MCP servers configured. Use Add MCP Server to connect a remote service or local tool server.</div>' +
         '</div>';
         return;
       }
@@ -4852,15 +4997,20 @@ SOFTWARE.</pre>
         const badgeStyle = isError   ? 'background:rgba(248,81,73,0.15); color:#f85149; border:1px solid rgba(248,81,73,0.3);'
                          : isDisabled ? 'background:rgba(255,255,255,0.06); color:var(--text-muted);'
                          : '';
-        const badgeLabel = isRunning  ? (s.tools_count > 0 ? s.tools_count + ' tools' : 'running')
+        const badgeLabel = isRunning  ? 'Connected'
                          : isError    ? 'error'
                          : isAuth     ? 'needs auth'
                          : isDisabled ? 'disabled'
                          : 'not started';
 
         const cmdStr = s.command ? escapeHtml(s.command) + (s.args && s.args.length ? ' ' + s.args.map(escapeHtml).join(' ') : '') : '<span style="color:var(--text-muted)">no command</span>';
+        const tools = Array.isArray(s.tools) ? s.tools : [];
+        const toolsHtml = tools.map(tool => '<div class="mcp-tool">' +
+          '<div class="mcp-tool-name">' + escapeHtml(tool.name) + '</div>' +
+          '<div class="mcp-tool-description">' + escapeHtml(tool.description || 'No description provided by this server.') + '</div>' +
+        '</div>').join('');
 
-        return '<div class="item-card">' +
+        return '<div class="item-card mcp-card">' +
           '<div class="item-card-top">' +
             '<div class="item-card-title">' +
               '<span class="status-dot ' + dotClass + '" style="' + dotStyle + '"></span>' +
@@ -4868,16 +5018,21 @@ SOFTWARE.</pre>
             '</div>' +
             '<span class="badge ' + badgeColor + '" style="' + badgeStyle + '">' + escapeHtml(badgeLabel) + '</span>' +
           '</div>' +
-          '<div class="item-card-desc"><code>' + cmdStr + '</code></div>' +
+          '<div class="item-card-desc mcp-endpoint"><code>' + cmdStr + '</code></div>' +
           (isError && s.error ? '<div style="font-size:11px; color:#f85149; margin-top:6px; padding:5px 8px; background:rgba(248,81,73,0.08); border:1px solid rgba(248,81,73,0.2);">' + escapeHtml(s.error) + '</div>' : '') +
           (isError && s.error_detail ? '<div style="font-size:10.5px; color:var(--text-muted); margin-top:4px; padding:5px 8px; background:rgba(255,255,255,0.03); border:1px solid var(--card-border); max-height:80px; overflow:auto; white-space:pre-wrap; word-break:break-word;">' + escapeHtml(s.error_detail) + '</div>' : '') +
-          (isAuth ? '<div style="margin-top:8px;"><button class="btn" style="font-size:11px; padding:4px 10px;" data-action="mcp_auth" data-name="' + escapeHtml(s.name) + '">Connect / Authenticate</button></div>' : '') +
+          (isRunning ? '<details class="mcp-tools"><summary>View tools (' + escapeHtml(String(s.tools_count || 0)) + ')</summary>' +
+            '<div class="mcp-tools-list">' + (toolsHtml || '<div class="mcp-tool-description">' +
+              (s.tools_count > 0 ? 'Tool details unavailable. Update the daemon and refresh.' : 'This server currently exposes no tools.') + '</div>') + '</div></details>' : '') +
+          (!isRunning && !isDisabled && (s.remote || isAuth) ? '<div style="margin-top:8px;"><button class="btn" style="font-size:11px; padding:4px 10px;" data-action="mcp_auth" data-name="' + escapeHtml(s.name) + '">Connect / Authenticate</button></div>' : '') +
           '<div style="display:flex; gap:6px; margin-top:10px; flex-wrap:wrap;">' +
             '<button class="btn btn-secondary" style="padding:4px 8px; font-size:11px;" data-action="mcp_restart" data-name="' + escapeHtml(s.name) + '"' + (isDisabled ? ' disabled title="Enable first to restart"' : '') + '>↺ Restart</button>' +
             (isDisabled
               ? '<button class="btn" style="padding:4px 8px; font-size:11px;" data-action="mcp_toggle" data-name="' + escapeHtml(s.name) + '" data-disabled="false">Enable</button>'
               : '<button class="btn btn-secondary" style="padding:4px 8px; font-size:11px;" data-action="mcp_toggle" data-name="' + escapeHtml(s.name) + '" data-disabled="true">Disable</button>'
             ) +
+            (isRunning && s.remote ? '<button class="btn btn-secondary" data-action="mcp_auth" data-name="' + escapeHtml(s.name) + '">Re-authenticate</button>' : '') +
+            '<button class="btn btn-secondary" data-action="mcp_remove" data-name="' + escapeHtml(s.name) + '">Remove</button>' +
           '</div>' +
         '</div>';
       }).join("");
@@ -4977,18 +5132,6 @@ SOFTWARE.</pre>
       });
     }
 
-    const skillsGrid = document.getElementById("skills-grid");
-    if (skillsGrid) {
-      skillsGrid.addEventListener("click", (e) => {
-        const btn = e.target.closest("button[data-action='install-skill']");
-        if (!btn) return;
-        const name = btn.dataset.skillName;
-        const sourceId = btn.dataset.sourceId || "anthropic";
-        btn.disabled = true;
-        btn.innerHTML = '<span style="display:inline-block; width:9px; height:9px; border:1.5px solid currentColor; border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite; margin-right:4px;"></span> Installing...';
-        vscode.postMessage({ type: "install_skill", name, sourceId });
-      });
-    }
 
     const cronContainer = document.getElementById("cron-list-container");
     if (cronContainer) {
@@ -5036,30 +5179,6 @@ SOFTWARE.</pre>
       });
     }
 
-    // ── MCP Server Controls (Restart / Enable-Disable / Refresh) ──
-    const mcpGrid = document.getElementById("mcp-grid");
-    if (mcpGrid) {
-      mcpGrid.addEventListener("click", (e) => {
-        const btn = e.target.closest("button[data-action]");
-        if (!btn) return;
-        const action = btn.dataset.action;
-        const name = btn.dataset.name;
-        if (action === "mcp_restart") {
-          btn.disabled = true;
-          const orig = btn.textContent;
-          btn.textContent = "↺ Restarting...";
-          vscode.postMessage({ type: "mcp_restart", name });
-          setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 4000);
-        } else if (action === "mcp_toggle") {
-          const disabled = btn.dataset.disabled === "true";
-          btn.disabled = true;
-          const orig = btn.textContent;
-          btn.textContent = disabled ? "Disabling..." : "Enabling...";
-          vscode.postMessage({ type: "mcp_toggle", name, disabled });
-          setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 4000);
-        }
-      });
-    }
     const btnRefreshMcp = document.getElementById("btn-refresh-mcp");
     if (btnRefreshMcp) {
       btnRefreshMcp.addEventListener("click", () => {

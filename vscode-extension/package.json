@@ -217,12 +217,18 @@
       },
       {
         "command": "andromity.openWaterfall",
-        "title": "🌊 Waterfall",
+        "title": "Waterfall Trace",
         "category": "Andromity",
         "icon": {
           "light": "media/waterfall.svg",
           "dark": "media/waterfall.svg"
         }
+      },
+      {
+        "command": "andromity.openFingerprint",
+        "title": "Fingerprint Trace & Blast Radius",
+        "category": "Andromity",
+        "icon": "$(type-hierarchy)"
       },
       {
         "command": "andromity.deleteSession",

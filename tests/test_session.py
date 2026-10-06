@@ -120,6 +120,15 @@ def test_auto_name_empty_message():
     assert Session.auto_name_from_message("   ") == "New Session"
 
 
+def test_auto_name_excludes_ide_context_before_truncation():
+    prompt = "hi what is in this file fix it\n\n---\n[Active Document: index.html (Language: html), Line: 1]\nprivate content"
+    assert Session.auto_name_from_message(prompt) == "hi what is in this file fix it"
+
+
+def test_auto_name_keeps_ordinary_separator():
+    assert Session.auto_name_from_message("compare a --- b") == "compare a --- b"
+
+
 def test_auto_name_strips_newlines():
     name = Session.auto_name_from_message("line one\nline two")
     assert "\n" not in name

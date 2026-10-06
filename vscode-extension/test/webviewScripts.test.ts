@@ -35,9 +35,39 @@ Module.prototype.require = function (reqPath: string) {
 
 import { ChatViewState, getChatViewHtml } from "../src/providers/chatview/chatHtml.js";
 import { getChatClientScript } from "../src/providers/chatview/chatClientScript.js";
+
+describe("Queued prompt display", () => {
+  it("hides ambient IDE context in server and fallback queues without changing payloads", () => {
+    const script = getChatClientScript("icon.svg", {
+      currentSessionId: "session", currentModel: "model", currentProvider: "provider",
+      currentMode: "safe", currentProfile: "builder", currentReasoning: "medium",
+    });
+    const parser = script.slice(script.indexOf("    function parseUserPromptDisplay("), script.indexOf("    function appendUserMessage("));
+    const renderer = script.slice(script.indexOf("    function renderQueue("), script.indexOf("    window.removeQueued ="));
+    const prompt = "leave it\n\n---\n[Active Document: internal-log (Language: Log)]\nprivate editor content";
+    for (const queueSupported of [true, false]) {
+      const item = { id: "input", prompt, text: prompt, sessionId: "session", image_count: 0 };
+      const container = { style: { display: "" }, innerHTML: "" };
+      const context = vm.createContext({
+        queueSupported, currentSessionId: "session", queueContainer: container,
+        serverQueues: { session: { items: [item] } }, promptQueue: [item],
+        escapeHtml: (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;"),
+        getPathBasename: (value: string) => value.split(/[\\/]/).pop(),
+      });
+      vm.runInContext(parser + renderer + "\nrenderQueue();", context);
+      assert.ok(container.innerHTML.includes("leave it"));
+      assert.ok(!container.innerHTML.includes("Active Document"));
+      assert.ok(!container.innerHTML.includes("private editor content"));
+      assert.equal(item.prompt, prompt);
+      assert.equal(item.text, prompt);
+    }
+  });
+});
 import { getChatStyles } from "../src/providers/chatview/chatStyles.js";
 import { getWaterfallHtml } from "../src/providers/waterfall/waterfallHtml.js";
 import { getWaterfallScript } from "../src/providers/waterfall/waterfallScript.js";
+import { getFingerprintHtml } from "../src/providers/fingerprint/fingerprintHtml.js";
+import { getFingerprintScript } from "../src/providers/fingerprint/fingerprintScript.js";
 import { getChatAmbientScript } from "../src/providers/chatview/chatAmbientScript.js";
 import { getChatActivityScript } from "../src/providers/chatview/chatActivityRow.js";
 import { getChatActivityStyles } from "../src/providers/chatview/chatActivityStyles.js";
@@ -501,9 +531,75 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     }, "Extracted waterfall script must parse with 0 syntax errors");
   });
 
+  it("Fingerprint client script should compile with 0 syntax errors", () => {
+    const scriptCode = getFingerprintScript("test-session-123");
+    assert.ok(scriptCode.length > 500, "Fingerprint script should be non-empty");
+    assert.ok(scriptCode.includes("setupInteractions"), "Must contain canvas and node interaction setup");
+    assert.ok(scriptCode.includes("isCanvasPanning"), "Must handle canvas panning state");
+    assert.ok(scriptCode.includes("draggingNodeId"), "Must handle node dragging state");
+    assert.ok(scriptCode.includes("renderConnections"), "Must redraw bezier curves dynamically on drag");
+    assert.ok(scriptCode.includes("bindControls"), "Must bind UI controls using DOM listeners");
+    assert.ok(scriptCode.includes("toggleLeftSidebar"), "Must provide toggle function for left turns sidebar");
+    assert.ok(scriptCode.includes("toggleInspector"), "Must provide toggle function for right inspector drawer");
 
+    assert.doesNotThrow(() => {
+      new vm.Script(scriptCode, { filename: "fingerprintScript.js" });
+    }, "fingerprintScript.js must parse with 0 syntax errors");
+  });
 
+  it("Fingerprint HTML should contain valid CSP, nonce, zero emojis, and script structure", () => {
+    const mockWebview: any = {
+      cspSource: "vscode-webview:",
+      asWebviewUri: (u: any) => "vscode-resource://" + (u.fsPath || u.path || String(u)),
+    };
 
+    const html = getFingerprintHtml(mockWebview, "test-sess", "Test Session");
+    assert.ok(html.includes("<!DOCTYPE html>"), "Must be a full HTML document");
+    assert.ok(html.includes("Content-Security-Policy"), "Must declare strict CSP");
+    assert.ok(html.includes("nonce-"), "Must have script nonce in CSP");
+    assert.ok(html.includes('<script nonce="'), "Script tags must be nonce-protected");
+    assert.ok(!html.includes("onclick="), "Must NOT contain inline onclick handlers that violate CSP");
+    assert.ok(html.includes('id="btn-safety-guard"'), "Must contain safety guard button");
+    assert.ok(html.includes('id="btn-fit-canvas"'), "Must contain fit canvas button");
+    assert.ok(html.includes('id="tab-dag"'), "Must contain Causal DAG tab button");
+    assert.ok(html.includes('id="tab-blast"'), "Must contain Blast Radius tab button");
+    assert.ok(html.includes('id="btn-zoom-fit"'), "Must contain Fit zoom button in toolbar");
+    assert.ok(html.includes('id="btn-toggle-left-sidebar"'), "Must contain toggle button for left turns sidebar");
+    assert.ok(html.includes('id="btn-toggle-right-sidebar"'), "Must contain toggle button for right inspector drawer");
+    assert.ok(html.includes('id="btn-collapse-left"'), "Must contain collapse button inside left sidebar header");
+    assert.ok(html.includes('id="btn-collapse-right"'), "Must contain collapse button inside inspector header");
+    assert.ok(html.includes('id="btn-pin-inspector"'), "Must contain pin/unpin inspector button");
+    assert.ok(html.includes('class="fp-inspector collapsed"'), "Inspector drawer must start default collapsed");
+
+    // Zero fake data verification
+    const panelPath = fs.existsSync(path.join(__dirname, "../src/panels/FingerprintPanel.ts"))
+      ? path.join(__dirname, "../src/panels/FingerprintPanel.ts")
+      : path.join(__dirname, "../../src/panels/FingerprintPanel.ts");
+    const panelSource = fs.readFileSync(panelPath, "utf8");
+    assert.ok(!panelSource.includes("_getSampleTraceData"), "FingerprintPanel must NOT contain any fake sample data stubs");
+    assert.ok(panelSource.includes("tools_called"), "FingerprintPanel must extract child tools called by subagents");
+
+    // Zero emojis check
+    const emojiRegex = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u;
+    assert.ok(!emojiRegex.test(html), "Fingerprint HTML must have 0 emojis and use SVG vector icons");
+
+    const scriptMatch = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/);
+    assert.ok(scriptMatch && scriptMatch[1], "Should extract script body");
+    assert.ok(scriptMatch[1].includes("togglePinInspector"), "Script must contain togglePinInspector function");
+    assert.ok(scriptMatch[1].includes("isInspectorPinned"), "Script must track isInspectorPinned state");
+    assert.ok(scriptMatch[1].includes("clusterCx"), "Script must compute multi-turn orbital cluster centers for blast radius view");
+    assert.ok(scriptMatch[1].includes("drilldownSubagent"), "Script must contain drilldownSubagent function");
+    assert.ok(scriptMatch[1].includes("exitSubagentDrilldown"), "Script must contain exitSubagentDrilldown function");
+    assert.ok(scriptMatch[1].includes("getCurrentDataset"), "Script must contain getCurrentDataset function for subagent isolation");
+    assert.ok(html.includes('id="subagent-breadcrumb"'), "HTML must contain subagent drilldown breadcrumb bar");
+    assert.ok(html.includes('id="btn-back-to-session"'), "HTML must contain back to main session button");
+    assert.ok(html.includes('id="crumb-subagent-role"'), "HTML must display subagent role crumb");
+    assert.ok(html.includes('id="sidebar-subagents-section"'), "HTML must include subagents section in sidebar");
+
+    assert.doesNotThrow(() => {
+      new vm.Script(scriptMatch[1], { filename: "extractedFingerprintScript.js" });
+    }, "Extracted Fingerprint script must parse with 0 syntax errors");
+  });
 
   it("Ambient wallpaper script should compile with 0 syntax errors for both enabled and disabled states", () => {
     // Disabled (default)
@@ -1799,7 +1895,26 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.equal(BackgroundTaskPanel.viewType, "andromity.backgroundTaskTab", "BackgroundTaskPanel must have viewType andromity.backgroundTaskTab");
   });
 
+  it("FingerprintPanel subagent trace extraction, drilldown dataset, and telemetry verification", () => {
+    const scriptCode = getFingerprintScript("test-session-subagents");
+    assert.ok(scriptCode.includes("drilldownSubagent"), "Must include drilldownSubagent function");
+    assert.ok(scriptCode.includes("exitSubagentDrilldown"), "Must include exitSubagentDrilldown function");
+    assert.ok(scriptCode.includes("getCurrentDataset"), "Must include getCurrentDataset function");
+    assert.ok(scriptCode.includes("telemetry_feature"), "Must post telemetry_feature messages");
+    assert.ok(scriptCode.includes("fingerprint_drilldown"), "Must track fingerprint_drilldown");
+    assert.ok(scriptCode.includes("fingerprint_blast_view"), "Must track fingerprint_blast_view");
 
+    const panelPath = fs.existsSync(path.join(__dirname, "../src/panels/FingerprintPanel.ts"))
+      ? path.join(__dirname, "../src/panels/FingerprintPanel.ts")
+      : path.join(__dirname, "../../src/panels/FingerprintPanel.ts");
+    const panelSource = fs.readFileSync(panelPath, "utf8");
+    assert.ok(panelSource.includes("subagents"), "FingerprintPanel must extract subagents trace map");
+    assert.ok(panelSource.includes("subagentsMap"), "FingerprintPanel must maintain subagentsMap");
+    assert.ok(panelSource.includes("hasSubagentDrilldown"), "Subagent nodes must have hasSubagentDrilldown flag");
+    assert.ok(panelSource.includes("tools_called"), "Subagents must extract tools_called from SubAgentResult");
+    assert.ok(panelSource.includes("recordFeature"), "FingerprintPanel must provide recordFeature");
+    assert.ok(panelSource.includes("_sessionRecordedFeatures"), "FingerprintPanel must deduplicate telemetry per session");
+  });
 });
 
 

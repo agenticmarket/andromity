@@ -4,6 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "test": "node --test measurement.test.js",
     "deploy": "node deploy.js",
     "dev": "npx wrangler dev"
   }

@@ -22,9 +22,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import html
 import json
 import logging
 import os
+import re
 import secrets
 import socket
 import stat
@@ -158,7 +160,7 @@ def _error_html(reason: str) -> bytes:
         "</style></head><body>"
         "<div class='box'>"
         "<div class='icon'>\u274c</div>"
-        f"<h1>Authentication Failed</h1><p>{reason}</p>"
+        f"<h1>Authentication Failed</h1><p>{html.escape(reason)}</p>"
         "</div></body></html>"
     ).encode("utf-8")
 
@@ -194,34 +196,76 @@ def _find_free_port(start: int = 54321, attempts: int = 10) -> int:
 # ── OAuth Metadata Discovery (RFC 9728) ───────────────────────────────────────
 
 async def discover_metadata(server_url: str) -> Optional[dict]:
-    """
-    Fetch OAuth Authorization Server Metadata.
-    Tries /.well-known/oauth-authorization-server then /.well-known/openid-configuration.
-    """
+    """Discover the resource's authorization server, including RFC 9728 challenges."""
     import httpx
-
     parsed = urllib.parse.urlparse(server_url)
-    base   = f"{parsed.scheme}://{parsed.netloc}"
-    probes = [
-        f"{base}/.well-known/oauth-authorization-server",
-        f"{base}/.well-known/openid-configuration",
-    ]
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    resource = base + parsed.path
+    probes = []
     async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        try:
+            async with client.stream("GET", server_url, headers={"Accept": "application/json, text/event-stream"}) as response:
+                challenge = response.headers.get("www-authenticate", "")
+            match = re.search(r'resource_metadata="([^"]+)"', challenge, re.I)
+            if match:
+                probes.append(match.group(1))
+        except httpx.HTTPError:
+            pass
+        if parsed.path.strip("/"):
+            probes.append(f"{base}/.well-known/oauth-protected-resource{parsed.path}")
+        probes.append(f"{base}/.well-known/oauth-protected-resource")
+        issuers = []
+        resource_scopes = None
         for url in probes:
             try:
                 r = await client.get(url)
                 if r.status_code == 200:
-                    return r.json()
-            except Exception as exc:
-                log.debug("Metadata probe %s: %s", url, exc)
+                    document = r.json()
+                    advertised = document.get("resource")
+                    if advertised != resource:
+                        continue
+                    issuers = document.get("authorization_servers", [])
+                    if issuers:
+                        resource_scopes = document.get("scopes_supported")
+                        break
+            except (httpx.HTTPError, ValueError, AttributeError):
+                continue
+        # Legacy servers publish authorization metadata directly at their origin.
+        for issuer in issuers or [base]:
+            if not isinstance(issuer, str):
+                continue
+            auth = urllib.parse.urlparse(issuer)
+            if auth.scheme not in ("https", "http") or not auth.netloc:
+                continue
+            origin = f"{auth.scheme}://{auth.netloc}"
+            path = auth.path.rstrip("/")
+            for url in dict.fromkeys([
+                f"{origin}/.well-known/oauth-authorization-server{path}",
+                f"{origin}/.well-known/openid-configuration{path}",
+                f"{issuer.rstrip('/')}/.well-known/openid-configuration",
+            ]):
+                try:
+                    r = await client.get(url)
+                    if r.status_code != 200:
+                        continue
+                    meta = r.json()
+                    if meta.get("issuer") != issuer:
+                        continue
+                    if meta.get("authorization_endpoint") and meta.get("token_endpoint"):
+                        meta["resource"] = resource
+                        if resource_scopes is not None:
+                            meta["scopes_supported"] = resource_scopes
+                        return meta
+                except (httpx.HTTPError, ValueError, AttributeError):
+                    continue
     return None
 
 
 # ── Dynamic Client Registration (RFC 7591) ────────────────────────────────────
 
-async def dynamic_register(registration_endpoint: str, redirect_uri: str) -> Optional[dict]:
+async def dynamic_register(registration_endpoint: str, redirect_uri: str, auth_method: str = "none") -> Optional[dict]:
     """
-    Register Andromity as a public OAuth 2.1 client (no client_secret — PKCE only).
+    Register Andromity using the authorization server's supported auth method.
     Returns registration dict (containing client_id) or None.
     """
     import httpx
@@ -231,7 +275,7 @@ async def dynamic_register(registration_endpoint: str, redirect_uri: str) -> Opt
         "redirect_uris":              [redirect_uri],
         "grant_types":                ["authorization_code", "refresh_token"],
         "response_types":             ["code"],
-        "token_endpoint_auth_method": "none",   # public client
+        "token_endpoint_auth_method": auth_method,
     }
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -255,6 +299,7 @@ async def run_callback_server(
     port: int,
     expected_state: str,
     timeout: float = CALLBACK_TIMEOUT_S,
+    ready: Optional[asyncio.Event] = None,
 ) -> Optional[str]:
     """
     Asyncio TCP server on 127.0.0.1:PORT.
@@ -280,23 +325,23 @@ async def run_callback_server(
             state  = qs.get("state", [""])[0]
             error  = qs.get("error", [""])[0]
 
-            if error:
+            if path.split("?")[0] not in ("/callback", "/"):
+                _http(writer, 404, b"")
+            elif not _ct_eq(state, expected_state):
+                _http(writer, 403, _error_html("Invalid state. Please retry authentication."))
+            elif error:
                 desc = qs.get("error_description", [error])[0]
                 _http(writer, 400, _error_html(urllib.parse.unquote(desc)))
                 if not code_fut.done():
                     code_fut.set_result(None)
-            elif code and _ct_eq(state, expected_state):
+            elif code:
                 _http(writer, 200, _SUCCESS_HTML, b"text/html")
                 if not code_fut.done():
                     code_fut.set_result(code)
-            elif path.split("?")[0] in ("/callback", "/"):
-                # Request is to the callback path but state mismatched — genuine CSRF.
-                _http(writer, 403, _error_html("Invalid state — possible CSRF attack."))
+            else:
+                _http(writer, 400, _error_html("Missing authorization code. Please retry."))
                 if not code_fut.done():
                     code_fut.set_result(None)
-            else:
-                # Unrelated path (favicon, OPTIONS preflight, etc.) — ignore silently.
-                _http(writer, 404, b"")
         except Exception as exc:
             log.debug("Callback handler: %s", exc)
             if not code_fut.done():
@@ -309,6 +354,8 @@ async def run_callback_server(
                 pass
 
     server = await asyncio.start_server(_handle, host="127.0.0.1", port=port)
+    if ready:
+        ready.set()
     log.debug("Callback server on 127.0.0.1:%d", port)
     try:
         async with server:
@@ -342,6 +389,9 @@ async def exchange_code(
     code_verifier: str,   # never logged
     client_id: str,
     redirect_uri: str,
+    resource: Optional[str] = None,
+    client_secret: Optional[str] = None,
+    auth_method: str = "none",
 ) -> Optional[dict]:
     import httpx
     payload = {
@@ -351,10 +401,22 @@ async def exchange_code(
         "client_id":     client_id,
         "code_verifier": code_verifier,
     }
+    if resource:
+        payload["resource"] = resource
+    auth = None
+    if auth_method == "client_secret_basic":
+        if not client_secret:
+            return None
+        auth = httpx.BasicAuth(urllib.parse.quote_plus(client_id), urllib.parse.quote_plus(client_secret))
+        payload.pop("client_id")
+    elif auth_method == "client_secret_post":
+        if not client_secret:
+            return None
+        payload["client_secret"] = client_secret
     try:
         async with httpx.AsyncClient(timeout=15.0) as c:
             r = await c.post(
-                token_endpoint, data=payload,
+                token_endpoint, data=payload, auth=auth,
                 headers={"Content-Type": "application/x-www-form-urlencoded"})
             r.raise_for_status()
             return r.json()
@@ -367,6 +429,9 @@ async def refresh_access_token(
     token_endpoint: str,
     refresh_token: str,
     client_id: str,
+    resource: Optional[str] = None,
+    client_secret: Optional[str] = None,
+    auth_method: str = "none",
 ) -> Optional[dict]:
     import httpx
     payload = {
@@ -374,10 +439,22 @@ async def refresh_access_token(
         "refresh_token": refresh_token,
         "client_id":     client_id,
     }
+    if resource:
+        payload["resource"] = resource
+    auth = None
+    if auth_method == "client_secret_basic":
+        if not client_secret:
+            return None
+        auth = httpx.BasicAuth(urllib.parse.quote_plus(client_id), urllib.parse.quote_plus(client_secret))
+        payload.pop("client_id")
+    elif auth_method == "client_secret_post":
+        if not client_secret:
+            return None
+        payload["client_secret"] = client_secret
     try:
         async with httpx.AsyncClient(timeout=15.0) as c:
             r = await c.post(
-                token_endpoint, data=payload,
+                token_endpoint, data=payload, auth=auth,
                 headers={"Content-Type": "application/x-www-form-urlencoded"})
             r.raise_for_status()
             return r.json()
@@ -447,7 +524,8 @@ def _save_store(store: dict) -> None:
         pass
 
 
-def store_token(server_name: str, token_resp: dict, client_id: str, token_endpoint: str) -> None:
+def store_token(server_name: str, token_resp: dict, client_id: str, token_endpoint: str, resource: Optional[str] = None,
+                client_secret: Optional[str] = None, auth_method: str = "none") -> None:
     store = _load_store()
     expires_in = int(token_resp.get("expires_in") or 0)
     store[server_name] = {
@@ -456,6 +534,9 @@ def store_token(server_name: str, token_resp: dict, client_id: str, token_endpoi
         "expires_at":     int(time.time()) + expires_in if expires_in else 0,
         "client_id":      client_id,
         "token_endpoint": token_endpoint,
+        "resource":       resource,
+        "client_secret":  client_secret,
+        "token_endpoint_auth_method": auth_method,
     }
     _save_store(store)
     log.info("Token stored for '%s'", server_name)
@@ -487,11 +568,15 @@ async def ensure_fresh_token(server_name: str) -> Optional[str]:
         return entry.get("access_token")
     # Refresh
     new_tok = await refresh_access_token(
-        entry["token_endpoint"], entry["refresh_token"], entry["client_id"])
+        entry["token_endpoint"], entry["refresh_token"], entry["client_id"], entry.get("resource"),
+        client_secret=entry.get("client_secret"), auth_method=entry.get("token_endpoint_auth_method", "none"))
     if not new_tok or not new_tok.get("access_token"):
         clear_token(server_name)
         return None
-    store_token(server_name, new_tok, entry["client_id"], entry["token_endpoint"])
+    if not new_tok.get("refresh_token"):
+        new_tok["refresh_token"] = entry["refresh_token"]
+    store_token(server_name, new_tok, entry["client_id"], entry["token_endpoint"], entry.get("resource"),
+                client_secret=entry.get("client_secret"), auth_method=entry.get("token_endpoint_auth_method", "none"))
     return new_tok["access_token"]
 
 
@@ -501,6 +586,8 @@ async def full_oauth_flow(
     server_name: str,
     server_url: str,
     on_status: Callable[[str], None],
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
 ) -> Optional[str]:
     """
     Complete OAuth 2.1 + PKCE + DCR flow.
@@ -529,54 +616,85 @@ async def full_oauth_flow(
         return None
 
     redirect_uri = f"http://127.0.0.1:{port}/callback"
+    methods = meta.get("token_endpoint_auth_methods_supported", ["none"])
+    auth_method = next((method for method in ("none", "client_secret_basic", "client_secret_post") if method in methods), None)
+    if auth_method is None:
+        on_status("This server's token authentication method is not supported. Use an access token.")
+        return None
 
     # Dynamic Client Registration
-    client_id = "andromity"
-    if reg_ep:
+    if reg_ep and not client_id:
         on_status("📋 Registering Andromity as OAuth client…")
-        reg = await dynamic_register(reg_ep, redirect_uri)
+        reg = await dynamic_register(reg_ep, redirect_uri, auth_method=auth_method)
         if reg and reg.get("client_id"):
             client_id = reg["client_id"]
+            client_secret = reg.get("client_secret")
+            auth_method = reg.get("token_endpoint_auth_method", auth_method)
         else:
-            on_status("ℹ Registration not supported — using default client_id")
-    else:
-        on_status("ℹ No DCR endpoint — using default client_id")
+            on_status("Client registration failed. Retry or configure oauth.client_id for a registered public client.")
+            return None
+    if not client_id:
+        on_status("This server requires a registered public client. Configure oauth.client_id or use an access token.")
+        return None
+    if auth_method not in ("none", "client_secret_basic", "client_secret_post"):
+        on_status("The registered client's authentication method is not supported.")
+        return None
+    if auth_method != "none" and not client_secret:
+        on_status("This server requires a client secret. Retry registration or configure oauth.client_secret.")
+        return None
 
     # PKCE + state
     code_verifier, code_challenge = pkce_generate()
     state = secrets.token_hex(32)
 
     # Build auth URL (resource indicator RFC 8707 binds token to this server)
-    scopes     = meta.get("scopes_supported", ["openid"])
-    scope_str  = " ".join(scopes[:8]) if isinstance(scopes, list) else str(scopes)
-    auth_url   = auth_ep + "?" + urllib.parse.urlencode({
+    scopes     = meta.get("scopes_supported", [])
+    scope_str  = " ".join(scopes) if isinstance(scopes, list) else str(scopes)
+    resource = meta.get("resource") or server_url.split("?")[0]
+    auth_params = {
         "client_id":             client_id,
         "response_type":         "code",
         "redirect_uri":          redirect_uri,
         "state":                 state,
         "code_challenge":        code_challenge,
         "code_challenge_method": "S256",
-        "scope":                 scope_str,
-        "resource":              server_url,   # RFC 8707 token binding
-    })
+        "resource":              resource,
+    }
+    if scope_str:
+        auth_params["scope"] = scope_str
+    auth_url = auth_ep + ("&" if "?" in auth_ep else "?") + urllib.parse.urlencode(auth_params)
 
     on_status(f"🌐 Opening browser… (waiting up to {CALLBACK_TIMEOUT_S}s)")
-    webbrowser.open(auth_url)
-
-    on_status("⏳ Waiting for authentication in browser…")
-    code = await run_callback_server(port, expected_state=state)
+    ready = asyncio.Event()
+    callback = asyncio.create_task(run_callback_server(port, expected_state=state, ready=ready))
+    listener_ready = asyncio.create_task(ready.wait())
+    try:
+        await asyncio.wait([callback, listener_ready], return_when=asyncio.FIRST_COMPLETED)
+        if callback.done():
+            await callback
+            return None
+        await asyncio.to_thread(webbrowser.open, auth_url)
+        on_status("⏳ Waiting for authentication in browser…")
+        code = await callback
+    finally:
+        if not callback.done():
+            callback.cancel()
+        listener_ready.cancel()
+        await asyncio.gather(callback, listener_ready, return_exceptions=True)
 
     if not code:
         on_status("⏱ Authentication timed out or was cancelled.")
         return None
 
     on_status("🔑 Exchanging authorization code for token…")
-    tok = await exchange_code(token_ep, code, code_verifier, client_id, redirect_uri)
+    tok = await exchange_code(token_ep, code, code_verifier, client_id, redirect_uri, resource,
+                              client_secret=client_secret, auth_method=auth_method)
 
     if not tok or not tok.get("access_token"):
         on_status("✕ Token exchange failed. Please try again.")
         return None
 
-    store_token(server_name, tok, client_id, token_ep)
+    store_token(server_name, tok, client_id, token_ep, resource,
+                client_secret=client_secret, auth_method=auth_method)
     on_status("✅ Authenticated! Token saved.")
     return tok["access_token"]

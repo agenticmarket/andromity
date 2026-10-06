@@ -6,7 +6,9 @@
   **Trust-governed, BYOK, autonomous coding agent with subagents, live plans, native diffs & one-click rollback.**
 
   [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.15-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white)](https://discord.gg/taPJSNy4)
   [![PyPI](https://img.shields.io/pypi/v/andromity)](https://pypi.org/project/andromity/)
+  [![GitHub Stars](https://img.shields.io/github/stars/agenticmarket/andromity?style=social)](https://github.com/agenticmarket/andromity)
   ![Python](https://img.shields.io/badge/python-3.11+-blue)
   [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -183,6 +185,53 @@ Your code goes to one place: the LLM provider you configure. Not us.
 - Opt out of telemetry: `export DO_NOT_TRACK=1`
 
 ---
+
+## 🏆 Verified Air-Gapped Benchmarking (SWE-bench Lite)
+
+Andromity is evaluated under **100% strict socket-level airgap isolation** (`ANDROMITY_AIRGAP=1`) with zero internet access, non-loopback TCP connection blocking, and sanitized git history to guarantee completely unimpeachable, contamination-free results.
+
+Evaluating the full 300 instances on the official SWE-bench Docker testbed places Andromity in the **Top 10 Globally** on the [SWE-bench Lite Leaderboard](https://www.swebench.com/):
+
+| Benchmark Suite | Evaluated Tasks | Autonomous Patches | Tests Resolved | Resolve Rate (% of 300) | Airgap Guarantee | Global Standing |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **SWE-bench Lite** | **296** | **295 (98.3%)** | **150** | **50.00% (50.68% eval)** | **100% Offline Socket Blocked** | **Global Rank #8** 🏆 |
+
+### Top Repository Resolve Rates:
+- 📈 **matplotlib/matplotlib:** **72.7%** (16 / 22)
+- 🔭 **astropy/astropy:** **66.7%** (4 / 6)
+- 🔍 **pylint-dev/pylint:** **66.7%** (4 / 6)
+- 🧪 **pytest-dev/pytest:** **64.7%** (11 / 17)
+- 🧠 **scikit-learn/scikit-learn:** **56.5%** (13 / 23)
+- 🌐 **django/django:** **54.1%** (60 / 111)
+- 📚 **sphinx-doc/sphinx:** **50.0%** (8 / 16)
+- 🔢 **sympy/sympy:** **39.0%** (30 / 77)
+
+📖 **Read the Creator & Engineering Case Study:** [Cutting the Internet Cord: How We Air-Gapped SWE-bench Lite](docs/SWE_BENCH_AIRGAP_JOURNEY.md)
+*All Docker logs, patch diffs, and reproduction commands are fully open and auditable in `logs/run_evaluation/` and `benchmark/`.*
+
+---
+
+## 🚀 #BuiltWithAndromity Showcase & Hackathons
+
+Are you building an open-source project, university coursework, or commercial application using Andromity?
+
+- **Showcase Your Work:** Tag your project or PR with **`#BuiltWithAndromity`** on X (Twitter) or drop it in the `#showcase` channel on [Discord](https://discord.gg/taPJSNy4).
+- **Get Featured:** Top community projects and contributions are spotlighted on [agenticmarket.dev](https://agenticmarket.dev) and receive official ecosystem contributor recognition and goodies.
+- **Community Hackathons:** Stay tuned in Discord for global community hackathons benefiting open-source developers worldwide.
+
+---
+
+## 💬 Community & Discord
+
+Join our growing community of autonomous AI developers, students, and engineers:
+
+- **Discord:** [Join the Andromity Community Discord](https://discord.gg/taPJSNy4) for live discussions, local Ollama setups, prompt engineering, and MCP skill sharing.
+- **Skills & MCP Hub:** Discover and publish community agent skills, custom prompts, and MCP tool servers on [AgenticMarket](https://agenticmarket.dev).
+
+⭐ **Loved the Live Waterfall profiler or saved hours debugging?** Consider giving Andromity a star on GitHub — it helps more developers discover 100% free, private, open-source AI tooling!
+
+---
+
 ## Star History
 
 <a href="https://www.star-history.com/?repos=agenticmarket%2Fandromity&type=date&legend=top-left">

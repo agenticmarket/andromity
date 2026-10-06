@@ -212,7 +212,10 @@ async def test_mcp_execute_unknown_server():
 
 
 @pytest.mark.asyncio
-async def test_mcp_live_stdio_server_integration(tmp_path):
+async def test_mcp_live_stdio_server_integration(tmp_path, monkeypatch):
+    from andromity.config import config
+    config.set_trusted(str(tmp_path))
+    monkeypatch.chdir(tmp_path)
     # 1. Create a mock MCP server python script
     server_script = tmp_path / "mock_mcp_server.py"
     server_script.write_text(MOCK_MCP_SERVER_CODE, encoding="utf-8")

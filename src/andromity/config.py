@@ -463,10 +463,7 @@ class ConfigManager:
             path.parent.mkdir(parents=True, exist_ok=True)
             data = {}
             if path.exists():
-                try:
-                    data = json.loads(path.read_text(encoding="utf-8"))
-                except Exception:
-                    data = {}
+                data = json.loads(path.read_text(encoding="utf-8"))
             servers = data.setdefault("mcpServers", {})
             servers[server_name] = conf
             path.write_text(json.dumps(data, indent=2), encoding="utf-8")

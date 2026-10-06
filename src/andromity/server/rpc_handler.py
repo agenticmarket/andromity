@@ -492,6 +492,7 @@ class JsonRpcHandler:
                     resolved = str(Path(project_path).resolve())
                     if resolved != str(Path(self._mcp_manager.project_path).resolve()):
                         self._mcp_manager.project_path = resolved
+                        self._mcp_started = False
                 except Exception:
                     pass
             return self._mcp_manager
@@ -524,14 +525,20 @@ class JsonRpcHandler:
         if not hasattr(self, "_mcp_start_lock") or self._mcp_start_lock is None:
             self._mcp_start_lock = asyncio.Lock()
         async with self._mcp_start_lock:
+            if (self._mcp_manager is not None and project_path
+                    and Path(project_path).resolve() != Path(self._mcp_manager.project_path).resolve()):
+                await self._mcp_manager.stop_all()
             mgr = self._get_mcp_manager(project_path)
             if not self._mcp_started:
                 try:
+                    # A project switch invalidates live sessions, not just cached status.
+                    if mgr.sessions:
+                        await mgr.stop_all()
                     await mgr.start_all()
+                    self._mcp_started = True
                 except Exception as e:
                     log.warning("MCP start_all failed: %s", e)
-                finally:
-                    self._mcp_started = True
+                    raise
             return mgr
 
     # ── Session Methods ─────────────────────────────────────────────────────────
@@ -1105,6 +1112,8 @@ class JsonRpcHandler:
         try:
             await self.rpc_agent_prompt(payload)
             queue.applied(item)
+            from andromity.telemetry import send_feature_used
+            send_feature_used("queue_dispatched", session_id=sid)
         except Exception:
             queue.pause()
             raise
@@ -1628,6 +1637,8 @@ class JsonRpcHandler:
                 except Exception:
                     pass
                 session.set_status("cancelled")
+                from andromity.telemetry import send_feature_used
+                send_feature_used("cancel_completed", session_id=session_id)
                 self.notify("agent/cancelled", {
                     "session_id": session_id,
                     "token_total": getattr(session, "token_total", 0),
@@ -2188,6 +2199,21 @@ class JsonRpcHandler:
             log.error("Failed to install skill %s: %s", name, e)
             return {"success": False, "error": str(e)}
 
+    async def rpc_skills_remove(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        project_path = params.get("project_path") or str(Path.cwd().resolve())
+        if not config.is_trusted(project_path):
+            return {"success": False, "error": "Trust this workspace before removing skills."}
+        try:
+            from andromity.core.skills import SkillsManager
+            name = params.get("name", "")
+            path = params.get("path")
+            if not path:
+                return {"success": False, "error": "Select an installed skill to remove."}
+            removed = await asyncio.to_thread(SkillsManager(project_path).uninstall, name, path)
+            return {"success": removed, "name": name}
+        except (ValueError, OSError):
+            return {"success": False, "error": "Could not remove this skill. Refresh the list and check folder permissions."}
+
 
     async def rpc_usage_get(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Get aggregate usage statistics and cost analytics (UsageTracker-backed)."""
@@ -2201,11 +2227,37 @@ class JsonRpcHandler:
                 time_range = "all"
             tracker = UsageTracker()
             summary = tracker.get_summary(time_range=time_range, project_path=project_path)
+            # Defaults preserve the existing latest-100 response for older clients.
+            try:
+                limit = max(1, min(100, int(params.get("limit", 100))))
+                offset = max(0, int(params.get("offset", 0)))
+            except (TypeError, ValueError, OverflowError):
+                limit, offset = 100, 0
+            if offset >= len(summary.sessions):
+                offset = max(0, (len(summary.sessions) - 1) // limit * limit)
+            from datetime import datetime, timezone
+            hourly_activity: Dict[str, Dict[str, Any]] = {}
+            for session in summary.sessions:
+                try:
+                    stamp = datetime.fromisoformat(session.updated_at or session.created_at)
+                    if stamp.tzinfo is None:
+                        stamp = stamp.replace(tzinfo=timezone.utc)
+                    hour = stamp.astimezone(timezone.utc).strftime("%Y-%m-%dT%H")
+                except (ValueError, TypeError):
+                    continue
+                bucket = hourly_activity.setdefault(hour, {"tokens": 0, "cost": 0.0, "count": 0})
+                bucket["tokens"] += session.tokens
+                bucket["cost"] += session.cost_usd
+                bucket["count"] += 1
             result: Dict[str, Any] = {
                 "total_tokens": summary.total_tokens,
                 "total_cost_usd": summary.total_cost_usd,
                 "total_sessions": summary.total_sessions,
                 "daily_activity": summary.daily_activity,
+                "hourly_activity": hourly_activity,
+                "sessions_total": len(summary.sessions),
+                "sessions_offset": offset,
+                "sessions_limit": limit,
                 "sessions": [
                     {
                         "id": s.session_id,
@@ -2218,7 +2270,7 @@ class JsonRpcHandler:
                         "updated_at": s.updated_at,
                         "project_path": s.project_path,
                     }
-                    for s in summary.sessions[:100]
+                    for s in summary.sessions[offset:offset + limit]
                 ],
                 "by_model": summary.by_model,
                 "by_provider": summary.by_provider,
@@ -2234,6 +2286,7 @@ class JsonRpcHandler:
         except Exception as exc:
             log.warning("usage.get error: %s", exc)
             return {
+                "error": "Could not load usage. Please retry.",
                 "total_tokens": 0,
                 "total_cost_usd": 0.0,
                 "total_sessions": 0,
@@ -2944,6 +2997,63 @@ Your output must be:
 
     # ── MCP & Skills ────────────────────────────────────────────────────────────
 
+    async def rpc_mcp_add(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        project_path = params.get("project_path") or str(Path.cwd().resolve())
+        if not config.is_trusted(project_path):
+            return {"success": False, "error": "Trust this workspace before adding MCP servers."}
+        name = params.get("name")
+        conf = params.get("config")
+        if not isinstance(name, str) or not name.strip() or not isinstance(conf, dict):
+            return {"success": False, "error": "A server name and configuration are required."}
+        from andromity.core.mcp import MCPClientManager
+        if name in MCPClientManager(project_path).load_config().get("mcpServers", {}):
+            return {"success": False, "error": "That server name already exists. Choose another name."}
+        command = conf.get("command")
+        url = conf.get("url") or conf.get("serverUrl")
+        from urllib.parse import urlparse
+        if bool(command) == bool(url) or (command and not isinstance(command, str)):
+            return {"success": False, "error": "Specify either a command or a remote HTTP URL."}
+        if url and (not isinstance(url, str) or urlparse(url).scheme not in ("http", "https") or not urlparse(url).netloc):
+            return {"success": False, "error": "Enter a valid HTTP or HTTPS server URL."}
+        if not isinstance(conf.get("disabled", False), bool):
+            return {"success": False, "error": "disabled must be true or false."}
+        if not isinstance(conf.get("args", []), list) or any(not isinstance(a, str) for a in conf.get("args", [])):
+            return {"success": False, "error": "Command arguments must be a JSON array of strings."}
+        for key in ("headers", "env"):
+            values = conf.get(key, {})
+            if not isinstance(values, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in values.items()):
+                return {"success": False, "error": "Headers and environment values must be strings."}
+        oauth_config = conf.get("oauth", {})
+        if not isinstance(oauth_config, dict) or any(not isinstance(oauth_config.get(key, ""), str) for key in ("client_id", "client_secret")):
+            return {"success": False, "error": "OAuth client credentials must be strings."}
+        if not config.add_mcp_server(project_path, name, conf):
+            return {"success": False, "error": "Could not save MCP configuration. Check the file and folder permissions."}
+        mgr = await self._ensure_mcp_started(project_path)
+        if name not in mgr.server_status:
+            await mgr.start_server(name)
+        status = dict(mgr.server_status.get(name, {}))
+        self.notify("mcp/statusChanged", {"name": name, "status": status})
+        return {"success": True, "name": name, "status": status.get("status", "unknown")}
+
+    async def rpc_mcp_remove(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        project_path = params.get("project_path") or str(Path.cwd().resolve())
+        if not config.is_trusted(project_path):
+            return {"success": False, "error": "Trust this workspace before removing MCP servers."}
+        name = params.get("name")
+        if not isinstance(name, str) or not name:
+            return {"success": False, "error": "Select an MCP server to remove."}
+        if not config.remove_mcp_server(project_path, name):
+            return {"success": False, "error": "Could not remove this server. Refresh the list and check folder permissions."}
+        mgr = self._get_mcp_manager(project_path)
+        await mgr.stop_server(name)
+        from andromity.core.oauth import clear_token
+        clear_token(name)
+        # A lower-priority config may contain another entry with the same name.
+        if name in mgr.load_config().get("mcpServers", {}):
+            await mgr.start_server(name)
+        self.notify("mcp/statusChanged", {"name": name, "status": dict(mgr.server_status.get(name, {}))})
+        return {"success": True, "name": name}
+
     async def rpc_mcp_list_servers(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """Return a list of MCP server objects with live status, tool counts, and error details."""
         try:
@@ -2953,7 +3063,7 @@ Your output must be:
             # Prefer daemon's own manager, fallback to global tools manager
             live_manager = self._mcp_manager or getattr(_tools_mod, "_mcp_manager", None)
             # Ensure manager is started at least once so status is live, but don't block on error
-            if live_manager is None:
+            if not self._mcp_started or params.get("project_path"):
                 try:
                     # lazy start for first list call
                     live_manager = await self._ensure_mcp_started(params.get("project_path"))
@@ -2984,7 +3094,7 @@ Your output must be:
                 session = live_sessions.get(name)
                 tools_count = len(session.tools) if session and hasattr(session, "tools") else status_entry.get("tools", 0)
                 status = status_entry.get("status", "unknown")
-                command = srv_conf.get("command") or srv_conf.get("serverUrl") or ""
+                command = srv_conf.get("command") or srv_conf.get("serverUrl") or srv_conf.get("url") or ""
                 args = srv_conf.get("args", [])
                 result.append({
                     "name": name,
@@ -2992,9 +3102,12 @@ Your output must be:
                     "args": args,
                     "status": status,
                     "tools_count": tools_count,
+                    "tools": [{"name": tool.name, "description": tool.description}
+                              for tool in session.tools] if session and hasattr(session, "tools") else [],
                     "error": status_entry.get("error") or srv_conf.get("error") or None,
                     "error_detail": status_entry.get("error_detail") or None,
                     "disabled": srv_conf.get("disabled", False),
+                    "remote": bool(srv_conf.get("serverUrl") or srv_conf.get("url") or "mcp-remote" in args or "mcp-remote" in str(srv_conf.get("command", ""))),
                     "updated_at": status_entry.get("updated_at") or None,
                 })
             return result
@@ -3123,6 +3236,8 @@ Your output must be:
                 raise ValueError("name is required")
 
             from andromity.core.mcp import MCPClientManager
+            if not config.is_trusted(project_path):
+                return {"success": False, "error": "Trust this workspace before authenticating MCP servers."}
             tmp_mgr = MCPClientManager(project_path)
             cfg = tmp_mgr.load_config().get("mcpServers", {}).get(name, {})
             server_url = cfg.get("serverUrl") or cfg.get("url") or ""
@@ -3140,12 +3255,23 @@ Your output must be:
 
             from andromity.core.oauth import full_oauth_flow
 
+            progress = []
             def _status_cb(msg: str):
+                progress.append(msg)
                 self.notify("mcp/authProgress", {"name": name, "status": msg})
 
-            token = await full_oauth_flow(name, server_url, _status_cb)
+            if params.get("access_token"):
+                from andromity.core.oauth import store_token
+                token = params["access_token"]
+                if not isinstance(token, str) or not token.strip():
+                    return {"success": False, "error": "Enter a valid access token."}
+                store_token(name, {"access_token": token.strip()}, "", "")
+            else:
+                token = await full_oauth_flow(name, server_url, _status_cb,
+                                              client_id=cfg.get("oauth", {}).get("client_id"),
+                                              client_secret=cfg.get("oauth", {}).get("client_secret"))
             if not token:
-                return {"success": False, "error": "OAuth authorization flow was cancelled or failed"}
+                return {"success": False, "error": progress[-1] if progress else "Authentication failed. Please retry."}
 
             # Restart the server now that token is saved in tokens.json
             mgr = await self._ensure_mcp_started(project_path)
@@ -3155,7 +3281,7 @@ Your output must be:
             return {"success": True, "name": name, "authenticated": True, "status": status.get("status", "running")}
         except Exception as e:
             log.warning("mcp.authenticate error: %s", e)
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": "Could not authenticate. Check the server configuration and retry."}
 
     async def rpc_mcp_auth(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Alias for mcp.authenticate."""

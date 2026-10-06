@@ -379,6 +379,35 @@ class Agent:
         yield TextDelta(text=f"*Context compacted successfully ({old_count} → {len(new_messages)} messages).*\n\n")
 
     async def run(self, user_input: str, images: list = None, image_uris: list = None) -> AsyncGenerator[StreamEvent, None]:
+        import asyncio
+        import uuid
+        from andromity.telemetry import send_task_event
+        run_id = uuid.uuid4().hex
+        self._telemetry_turn_start = time.monotonic()
+        first_response_ms = None
+        outcome = None
+        metadata = {"provider": self.provider, "model": self.model}
+        send_task_event("task_started", self.session.id, run_id, **metadata)
+        try:
+            async for event in self._run(user_input, images, image_uris):
+                if first_response_ms is None and isinstance(event, TextDelta):
+                    first_response_ms = int((time.monotonic() - self._telemetry_turn_start) * 1000)
+                if isinstance(event, Done):
+                    outcome = "completed" if event.outcome == "success" else "failed"
+                yield event
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        except Exception:
+            outcome = "failed"
+            raise
+        finally:
+            if outcome is not None:
+                send_task_event("task_finished", self.session.id, run_id, outcome=outcome,
+                    active_seconds=time.monotonic() - self._telemetry_turn_start,
+                    first_response_ms=first_response_ms, **metadata)
+
+    async def _run(self, user_input: str, images: list = None, image_uris: list = None) -> AsyncGenerator[StreamEvent, None]:
         """Run one user turn.
 
         Accepts either raw ``images`` (paths/PIL objects — will be encoded)
@@ -450,7 +479,7 @@ class Agent:
                     model=_mod,
                     profile=self.profile,
                     reasoning_effort=getattr(self, "reasoning_effort", None),
-                    mcp_tools_count=len(self.allowed_tools or []),
+                    mcp_tools_count=self._mcp_tools_count(),
                 )
             except Exception:
                 pass
@@ -950,14 +979,13 @@ class Agent:
         cnt = sum(1 for m in self.session.messages if m.get("role") == "user")
         return max(0, cnt, self._turn_count)
 
+    def _mcp_tools_count(self) -> int:
+        from andromity.core import tools
+        manager = getattr(tools, "_mcp_manager", None)
+        return sum(len(session.tools) for session in manager.sessions.values()) if manager else 0
+
     def _get_session_duration(self) -> float:
-        try:
-            from datetime import datetime, timezone
-            created_dt = datetime.fromisoformat(self.session.created_at)
-            now_dt = datetime.now(timezone.utc)
-            return max(0.0, (now_dt - created_dt).total_seconds())
-        except Exception:
-            return max(0.0, time.time() - self._session_start_time)
+        return max(0.0, time.monotonic() - getattr(self, "_telemetry_turn_start", time.monotonic()))
 
     def _fire_session_end(self, had_error: bool = False) -> None:
         """Send live session update and session outcome telemetry."""
