@@ -8,6 +8,8 @@ from andromity.core.events import Done, TextDelta
 
 @pytest.fixture(autouse=True)
 def setup_session(tmp_path):
+    from andromity.config import config
+    config.set_trusted(str(tmp_path))
     session = Session(name="main-session", project_path=str(tmp_path))
     register_session(session)
     yield session

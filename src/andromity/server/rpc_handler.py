@@ -2479,7 +2479,7 @@ class JsonRpcHandler:
                     "modified_files": [e["path"] for e in entries if e["status"] != "U"]}
         finally:
             if repo:
-                repo.close()
+                await asyncio.to_thread(repo.close)
 
 
     async def rpc_git_diff(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -2489,7 +2489,7 @@ class JsonRpcHandler:
             return {"diff": await asyncio.to_thread(repo.git.diff, "--no-ext-diff", "--no-renames", review_base(repo)) if repo else ""}
         finally:
             if repo:
-                repo.close()
+                await asyncio.to_thread(repo.close)
 
 
     async def rpc_git_show_file(self, params: Dict[str, Any]) -> Dict[str, str]:
@@ -2502,7 +2502,7 @@ class JsonRpcHandler:
             return {"content": await asyncio.to_thread(show_file, repo, params.get("path", ""), params.get("ref", "HEAD"))}
         finally:
             if repo:
-                repo.close()
+                await asyncio.to_thread(repo.close)
 
 
     async def rpc_git_file_diff(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -2514,7 +2514,7 @@ class JsonRpcHandler:
             return await asyncio.to_thread(file_diff, repo, params.get("path", "")) if repo else {"diff": ""}
         finally:
             if repo:
-                repo.close()
+                await asyncio.to_thread(repo.close)
 
 
     async def rpc_git_diff_numstat(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -2527,7 +2527,7 @@ class JsonRpcHandler:
                               if (Path(repo.working_tree_dir) / name).resolve().is_relative_to(project)}}
         finally:
             if repo:
-                repo.close()
+                await asyncio.to_thread(repo.close)
 
 
     async def rpc_git_revert_file(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -2546,7 +2546,7 @@ class JsonRpcHandler:
                 self._git_mutating_roots.discard(root)
         finally:
             if repo:
-                repo.close()
+                await asyncio.to_thread(repo.close)
 
 
     def _review_file_path(self, repo, params: Dict[str, Any]) -> None:

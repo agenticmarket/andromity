@@ -6,10 +6,10 @@ def test_builder_profile():
     assert "Builder" in get_system_prompt("builder")
 
 
-def test_builder_prompt_includes_professional_codex_execution_rules():
+def test_builder_prompt_includes_professional_execution_rules():
     prompt = get_system_prompt("builder")
     for rule in (
-        "professional Codex coding agent",
+        "Behave as a professional",
         "Begin with evidence",
         "smallest coherent change",
         "dummy actions",
