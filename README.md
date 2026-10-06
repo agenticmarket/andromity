@@ -186,28 +186,13 @@ Your code goes to one place: the LLM provider you configure. Not us.
 
 ---
 
-## 🏆 Verified Air-Gapped Benchmarking (SWE-bench Lite)
+## SWE-bench Lite: local evaluation
 
-Andromity is evaluated under **100% strict socket-level airgap isolation** (`ANDROMITY_AIRGAP=1`) with zero internet access, non-loopback TCP connection blocking, and sanitized git history to guarantee completely unimpeachable, contamination-free results.
+Andromity resolved **150 of 300 SWE-bench Lite tasks (50.0%)** in our local evaluation dated October 4, 2026. The evaluation produced 296 task reports; the remaining four tasks count as unresolved in the full-dataset score. This is a self-reported result, not an official leaderboard ranking or a guarantee of contamination-free model training.
 
-Evaluating the full 300 instances on the official SWE-bench Docker testbed places Andromity in the **Top 10 Globally** on the [SWE-bench Lite Leaderboard](https://www.swebench.com/):
+The agent workspace was initialized from each task's base commit. Tool execution used command restrictions, proxy settings, and Python socket guards; these are not an OS-enforced air gap. Model inference used a remote provider.
 
-| Benchmark Suite | Evaluated Tasks | Autonomous Patches | Tests Resolved | Resolve Rate (% of 300) | Airgap Guarantee | Global Standing |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **SWE-bench Lite** | **296** | **295 (98.3%)** | **150** | **50.00% (50.68% eval)** | **100% Offline Socket Blocked** | **Global Rank #8** 🏆 |
-
-### Top Repository Resolve Rates:
-- 📈 **matplotlib/matplotlib:** **72.7%** (16 / 22)
-- 🔭 **astropy/astropy:** **66.7%** (4 / 6)
-- 🔍 **pylint-dev/pylint:** **66.7%** (4 / 6)
-- 🧪 **pytest-dev/pytest:** **64.7%** (11 / 17)
-- 🧠 **scikit-learn/scikit-learn:** **56.5%** (13 / 23)
-- 🌐 **django/django:** **54.1%** (60 / 111)
-- 📚 **sphinx-doc/sphinx:** **50.0%** (8 / 16)
-- 🔢 **sympy/sympy:** **39.0%** (30 / 77)
-
-📖 **Read the Creator & Engineering Case Study:** [Cutting the Internet Cord: How We Air-Gapped SWE-bench Lite](docs/SWE_BENCH_AIRGAP_JOURNEY.md)
-*All Docker logs, patch diffs, and reproduction commands are fully open and auditable in `logs/run_evaluation/` and `benchmark/`.*
+See [benchmark methodology and limitations](BENCHMARK.md) and the [evaluation evidence](evaluation/swe-bench-lite-2026-10-04/) for deduplicated predictions, per-task outcomes, and hashes. The model alias was recorded as Space Bunny Alpha; the archived predictions identify the system as `andromity/auto`, so the underlying model identity is not independently established.
 
 ---
 

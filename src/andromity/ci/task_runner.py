@@ -1,33 +1,16 @@
 """Task Runner Engine for Interactive Issue & PR Tasks.
 
-Executes instructions triggered by maintainers via `@andromity <instruction>`,
-applies file changes, and commits with official co-author attribution.
+Keeps the legacy task entry point explicit about unsupported execution.
 """
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
 from typing import Optional
 
 from andromity.ci.github_client import GitHubClient
 
 CO_AUTHOR_TRAILER = "Co-authored-by: Andromity <333054755+andromity-bot@users.noreply.github.com>"
-
-
-def run_git_command(args: list[str], timeout: int = 30) -> str:
-    """Execute a git command safely and return output."""
-    try:
-        res = subprocess.run(
-            ["git"] + args, capture_output=True, text=True, check=False, timeout=timeout
-        )
-        if res.returncode != 0:
-            print(f"[Andromity CI] git {' '.join(args)} error: {res.stderr}", file=sys.stderr)
-        return res.stdout.strip()
-    except subprocess.TimeoutExpired:
-        print(f"[Andromity CI] git {' '.join(args)} timed out after {timeout}s", file=sys.stderr)
-        return ""
 
 
 def _sanitize_instruction(instruction: str, max_len: int = 200) -> str:
@@ -47,7 +30,7 @@ def execute_agent_task(
     model: str = "openrouter/deepseek/deepseek-v4.1-flash",
     api_key: Optional[str] = None,
 ) -> bool:
-    """Execute a maintainer task safely and push or commit changes."""
+    """Reject unsupported task execution without mutating the workspace."""
     # 1. Security Check: Gated execution
     if not github_client.is_actor_authorized(author_association):
         print(
@@ -68,38 +51,14 @@ def execute_agent_task(
 
     print(f"[Andromity CI] Authorized maintainer triggered task: '{_sanitize_instruction(instruction)}'")
 
-    # 2. Setup git identity (--local to avoid contaminating global config)
-    run_git_command(["config", "--local", "user.name", "Andromity"])
-    run_git_command(["config", "--local", "user.email", "333054755+andromity-bot@users.noreply.github.com"])
-
-    # 3. Post start notification
     github_client.create_or_update_comment(
         issue_number,
         body=(
-            f"⏳ **Andromity** is processing your task: `{instruction}`...\n\n"
-            "--- \n<sub>Powered by [Andromity](https://andromity.agenticmarket.dev)</sub>"
+            "Andromity task mode is unavailable: this Action supports PR reviews, "
+            "but does not execute coding tasks or create pull requests. No files "
+            "were changed and no model tokens were spent. For release README "
+            "updates, use the Andromity Release Notes workflow."
         ),
         marker=f"<!-- andromity-task-status-{issue_number} -->",
     )
-
-    # 4. Format commit message with co-author trailer
-    safe_instruction = _sanitize_instruction(instruction)
-    commit_msg = f"feat: {safe_instruction}\n\n{CO_AUTHOR_TRAILER}"
-
-    # In task mode, if working directory has changes, commit them with the co-author trailer
-    status = run_git_command(["status", "--porcelain"])
-    if status:
-        run_git_command(["add", "-A"])
-        run_git_command(["commit", "-m", commit_msg])
-        print(f"[Andromity CI] Committed changes with co-author trailer: {CO_AUTHOR_TRAILER}")
-
-    github_client.create_or_update_comment(
-        issue_number,
-        body=(
-            f"✅ **Andromity** finished processing task: `{instruction}`.\n\n"
-            f"- Changes committed with `{CO_AUTHOR_TRAILER}`\n\n"
-            "--- \n<sub>Powered by [Andromity](https://andromity.agenticmarket.dev)</sub>"
-        ),
-        marker=f"<!-- andromity-task-status-{issue_number} -->",
-    )
-    return True
+    return False

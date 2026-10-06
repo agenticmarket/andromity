@@ -669,8 +669,8 @@
     "watch:tsc": "tsc -watch -p ./",
     "build": "node esbuild.js",
     "package": "vsce package",
-    "test": "node --test dist-test/**/*.test.js",
-    "test:build": "tsc -p ./tsconfig.test.json && node --test dist-test/**/*.test.js"
+    "test": "node scripts/run-tests.cjs",
+    "test:build": "tsc -p ./tsconfig.test.json && node scripts/run-tests.cjs"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

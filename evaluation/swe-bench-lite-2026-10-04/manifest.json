@@ -1,0 +1,21 @@
+{
+  "evaluation_date": "2026-10-04",
+  "dataset": "SWE-bench/SWE-bench_Lite",
+  "dataset_total": 300,
+  "evaluated": 296,
+  "resolved": 150,
+  "full_dataset_resolve_rate": 0.5,
+  "unique_predictions": 295,
+  "original_prediction_rows": 362,
+  "duplicate_policy": "Identical patches only; retain one row per instance. No conflicting duplicates.",
+  "claimed_model_alias": "openrouter/stealth/space-bunny-alpha",
+  "prediction_model_identifier": "andromity/auto",
+  "verification": "Self-reported; raw local counts and patch correspondence checked. No independent harness rerun.",
+  "agent_commit": null,
+  "dataset_revision": null,
+  "harness_revision": null,
+  "sha256": {
+    "outcomes.json": "ec5af22bc4101edf97be06a33b83186d1b2823e18544d0c68704295fd011c53c",
+    "predictions.jsonl.gz": "17cd7ab0fbb9a576974b27c2e102d13192fec95bae30898849dd9a0dfc869e01"
+  }
+}
