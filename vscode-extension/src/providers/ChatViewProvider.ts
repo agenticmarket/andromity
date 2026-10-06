@@ -3088,7 +3088,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       defaultWallpaperUri: customState?.defaultWallpaperUri ?? webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, "media", "wildcat-panther-dusk.jpg")).toString(),
       workspaceFiles: customState?.workspaceFiles ?? wsPaths.files,
       workspaceFolders: customState?.workspaceFolders ?? wsPaths.dirs,
-      extensionVersion: customState?.extensionVersion ?? (this._context?.extension?.packageJSON?.version || "0.2.12"),
+      extensionVersion: customState?.extensionVersion ?? (this._context?.extension?.packageJSON?.version || "0.2.15"),
     });
   }
 }

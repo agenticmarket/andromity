@@ -5,7 +5,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const vscode = acquireVsCodeApi();
     window.__vscodeApi = vscode;
     const sidebarIconUri = "${sidebarIconUri}";
-    const extensionVersion = "${state.extensionVersion || '0.2.12'}";
+    const extensionVersion = "${state.extensionVersion || '0.2.15'}";
 
     window.onerror = function(msg, url, lineNo, columnNo, error) {
       console.error("[Andromity Webview Error]", msg, lineNo, columnNo, error);

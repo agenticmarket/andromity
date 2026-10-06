@@ -7,6 +7,13 @@ from andromity.server.protocol import (
     METHOD_NOT_FOUND,
 )
 from andromity.server.rpc_handler import JsonRpcHandler
+from andromity import __version__
+
+
+@pytest.mark.asyncio
+async def test_initialize_reports_package_version():
+    result = await JsonRpcHandler(lambda notification: None).rpc_initialize({})
+    assert result["agentInfo"]["version"] == __version__
 
 
 @pytest.mark.asyncio

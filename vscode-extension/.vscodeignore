@@ -15,6 +15,7 @@ bin/**/andromity-serverb*
 bin/**/*b.exe
 bin/**/_internal/litellm/proxy/**
 .vscode-test/**
+.session_cache/**
 src/**
 test/**
 dist-test/**

@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Set
 
+from andromity import __version__
 from andromity.config import config, get_config_dir
 from andromity.core.agent import Agent
 
@@ -662,7 +663,7 @@ class JsonRpcHandler:
             },
             "agentInfo": {
                 "name": "Andromity",
-                "version": "0.2.12",
+                "version": __version__,
                 "description": "Autonomous AI coding agent by AgenticMarket",
             },
         }

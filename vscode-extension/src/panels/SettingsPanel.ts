@@ -998,7 +998,7 @@ export class SettingsPanel {
   private _getHtmlForWebview(): string {
     const iconUri = this._panel.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, "media", "sidebar-icon.svg"));
     const nonce = typeof this._getNonce === "function" ? this._getNonce() : "mock-nonce";
-    let extVersion = "0.2.14";
+    let extVersion = "0.2.15";
     try {
       const ext = vscode.extensions.getExtension("agenticmarket.andromity-agent") ||
                   SettingsPanel.extensionContext?.extension;

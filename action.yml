@@ -35,9 +35,10 @@ runs:
   using: "composite"
   steps:
     - name: Set up uv
-      uses: astral-sh/setup-uv@v5
+      uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
       with:
         enable-cache: true
+        version: "0.12.23"
 
     - name: Run Andromity CI
       shell: bash
@@ -53,4 +54,4 @@ runs:
         GITHUB_SHA: ${{ github.sha }}
         GITHUB_REF: ${{ github.ref }}
       run: |
-        uv run --project "${{ github.action_path }}" andromity-ci
+        uv run --locked --project "${{ github.action_path }}" andromity-ci

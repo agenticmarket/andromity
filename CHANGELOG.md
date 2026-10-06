@@ -2,6 +2,12 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
+## [0.2.15] — 2026-10-06
+
+### Fixed
+- Refresh the VS Code chat, keep BYOK setup visible, clarify cloud trial status, and preserve manual scrolling while reliably jumping to the latest turn.
+- Harden Docker defaults and release workflows with locked dependencies, restricted credentials, pinned Actions, and release validation.
+
 ## [0.2.12] — 2026-09-30
 
 ### 🌿 Git & Multi-Repository Targeting

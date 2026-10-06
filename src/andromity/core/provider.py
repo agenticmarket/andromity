@@ -249,7 +249,7 @@ async def stream_completion(
         try:
             from andromity import __version__ as _pkg_ver
         except Exception:
-            _pkg_ver = "0.2.14"
+            _pkg_ver = "0.2.15"
         andromity_headers = {
             "User-Agent": "Andromity",
             "x-andromity-client-id": config.get("user", "anonymous_id", "local_client"),

@@ -2,9 +2,10 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
-## [Unreleased]
+## [0.2.15] - 2026-10-06
 
 ### Improved
+- Exclude temporary session-cache copies from packaged extensions.
 - Show a three-dot activity wave in the composer and latest-message button while the agent is working.
 - Refresh the chat welcome screen with task cards, clearer conversation spacing, a compact theme-aware composer, and visible keyboard focus.
 - Put API key and Ollama setup first, with one cloud trial action and one sign-in button below as alternatives.
