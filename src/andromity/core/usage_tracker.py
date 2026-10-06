@@ -1,9 +1,10 @@
 from __future__ import annotations
-import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Literal
-from andromity.config import get_config_dir
+from andromity.core.debug_log import get_logger
+
+log = get_logger("usage_tracker")
 
 TimeRange = Literal["today", "week", "month", "all"]
 
@@ -30,15 +31,11 @@ class UsageSummary:
     daily_activity: dict[str, dict] = field(default_factory=dict) # YYYY-MM-DD → {tokens, cost, count}
 
 class UsageTracker:
-    """Aggregates usage data from all persisted session JSON files."""
+    """Aggregates persisted session usage from SQLite."""
 
     def get_summary(self, time_range: TimeRange = "all",
                     project_path: str | None = None) -> UsageSummary:
-        db_sessions = self._load_sessions_from_db(project_path)
-        if db_sessions:
-            sessions = db_sessions
-        else:
-            sessions = self._load_sessions(project_path)
+        sessions = self._load_sessions_from_db(project_path)
 
         cutoff = self._cutoff(time_range)
         summary = UsageSummary()
@@ -97,6 +94,8 @@ class UsageTracker:
         try:
             from andromity.core.db import get_conn, init_schema
             init_schema()
+            from andromity.core.session_migration import migrate_legacy_sessions
+            migrate_legacy_sessions()
             conn = get_conn()
             if project_path:
                 from andromity.core.session import normalize_project_path
@@ -142,57 +141,9 @@ class UsageTracker:
                     ))
                 return stats
         except Exception:
-            pass
+            log.warning("Could not load usage history from SQLite. Please retry.")
         return []
 
-    def _load_sessions(self, project_path: str | None) -> list[SessionStat]:
-        sessions_root = get_config_dir() / "sessions"
-        if not sessions_root.exists():
-            return []
-        stats: list[SessionStat] = []
-        if project_path:
-            from andromity.core.session import normalize_project_path
-            import hashlib
-            from pathlib import Path
-            norm = normalize_project_path(project_path)
-            hashes_to_check = {
-                hashlib.sha256(norm.encode()).hexdigest()[:16],
-                hashlib.sha256(str(project_path).encode()).hexdigest()[:16],
-                hashlib.sha256(str(project_path).lower().encode()).hexdigest()[:16],
-                hashlib.sha256(Path(project_path).resolve().as_posix().encode()).hexdigest()[:16],
-            }
-            dirs = [sessions_root / h for h in hashes_to_check if (sessions_root / h).exists()]
-        else:
-            dirs = [d for d in sessions_root.iterdir() if d.is_dir()]
-        for d in dirs:
-            if not d.is_dir():
-                continue
-            for f in d.glob("*.json"):
-                try:
-                    data = json.loads(f.read_text(encoding="utf-8"))
-                    provider = (data.get("provider") or "").strip() or "unknown"
-                    model = (data.get("model") or "").strip() or "unknown"
-                    tokens = int(data.get("token_total", 0) or 0)
-                    cost_usd = float(data.get("cost_usd", 0.0) or 0.0)
-
-                    # Free models (":free" suffix) and local providers (ollama/local) cost strictly $0.00
-                    if ":free" in model.lower() or provider.lower() in ("ollama", "local"):
-                        cost_usd = 0.0
-
-                    stats.append(SessionStat(
-                        session_id=data.get("id", f.stem),
-                        name=data.get("name", "Unnamed"),
-                        provider=provider,
-                        model=model,
-                        tokens=tokens,
-                        cost_usd=cost_usd,
-                        created_at=data.get("created_at", ""),
-                        updated_at=data.get("updated_at", ""),
-                        project_path=data.get("project_path", ""),
-                    ))
-                except Exception:
-                    continue
-        return stats
     @staticmethod
     def _is_test_or_temp_session(project_path: str | None, name: str | None = None) -> bool:
         if not project_path:

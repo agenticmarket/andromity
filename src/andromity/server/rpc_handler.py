@@ -634,18 +634,11 @@ class JsonRpcHandler:
                     if keep_id is None and not kept_one:
                         kept_one = True
                         continue
-                    conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
-                    try:
-                        conn.execute("DELETE FROM session_messages WHERE session_id = ?", (sid,))
-                    except Exception:
-                        pass
+                    if active_sess:
+                        active_sess.delete()
+                    else:
+                        Session.delete_by_id(sid)
                     self._active_sessions.pop(sid, None)
-                    try:
-                        s_file = (get_config_dir() / "sessions" / phash / f"{sid}.json").resolve()
-                        if s_file.exists():
-                            s_file.unlink()
-                    except Exception:
-                        pass
             try:
                 conn.commit()
             except Exception:
@@ -763,38 +756,15 @@ class JsonRpcHandler:
         except ValueError:
             raise ValueError(f"Invalid session_id: {session_id!r}")
 
-        # 1. Delete from SQLite
-        from andromity.core.db import get_conn, init_schema
-        try:
-            init_schema()
-            conn = get_conn()
-            conn.execute("DELETE FROM sessions WHERE id = ?", (valid_id,))
-        except Exception as e:
-            log.warning("Failed to delete session %s from SQLite: %s", valid_id, e)
-
-        # 2. Delete JSON snapshot from disk
-        if valid_id in self._active_sessions:
-            sess = self._active_sessions.pop(valid_id)
-            try:
-                if hasattr(sess, "file_path") and Path(sess.file_path).exists():
-                    p = Path(sess.file_path).resolve()
-                    sessions_dir = (get_config_dir() / "sessions").resolve()
-                    if p.is_relative_to(sessions_dir):
-                        p.unlink()
-            except Exception:
-                pass
+        task = self._running_tasks.get(valid_id)
+        if task is not None and not task.done():
+            return {"success": False, "error": "This chat is running. Stop it before deleting it."}
+        session = self._active_sessions.get(valid_id)
+        if session is not None:
+            session.delete()
         else:
-            storage_root = get_config_dir()
-            sessions_dir = (storage_root / "sessions").resolve()
-            if sessions_dir.exists():
-                for p_dir in sessions_dir.iterdir():
-                    if p_dir.is_dir():
-                        s_file = (p_dir / f"{valid_id}.json").resolve()
-                        if s_file.is_relative_to(sessions_dir) and s_file.exists():
-                            try:
-                                s_file.unlink()
-                            except Exception:
-                                pass
+            Session.delete_by_id(valid_id)
+        self._active_sessions.pop(valid_id, None)
         return {"success": True, "session_id": valid_id}
 
     async def rpc_session_rename(self, params: Dict[str, Any]) -> Dict[str, Any]:

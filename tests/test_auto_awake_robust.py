@@ -47,7 +47,7 @@ def setup_sessions(temp_workspace):
 
 @pytest.mark.asyncio
 async def test_session_watch_and_persistence(temp_workspace):
-    """Test that session_watch sets status, watching_for, and persists to JSON and DB."""
+    """Test that session_watch sets status, watching_for, and persists to SQLite."""
     s = Session(name="Watcher", project_path=str(temp_workspace), session_id="sess_watch_test")
     s.storage_dir = temp_workspace
     s.file_path = temp_workspace / f"{s.id}.json"
@@ -60,9 +60,9 @@ async def test_session_watch_and_persistence(temp_workspace):
         assert s.status == "watching"
         assert s.watching_for == {"target_session": "Backend", "reason": "Waiting for database migration"}
 
-        # Verify JSON file has watching metadata
+        # Verify SQLite retains watching metadata
         s.save()
-        loaded = Session.load(s.file_path)
+        loaded = Session.load_by_id(s.id)
         assert loaded.status == "watching"
         assert loaded.watching_for == {"target_session": "Backend", "reason": "Waiting for database migration"}
         assert loaded.consecutive_auto_wakes == 0

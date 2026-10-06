@@ -34,7 +34,7 @@ def test_session_persistence():
     with tempfile.TemporaryDirectory() as tmpdir:
         s = Session(name="persist", project_path=tmpdir)
         s.add_message("user", content="hello")
-        loaded = Session.load(s.file_path)
+        loaded = Session.load_by_id(s.id)
         assert loaded.name == "persist" and loaded.messages[0]["content"] == "hello"
 
 
@@ -100,7 +100,7 @@ def test_session_rename():
         s.rename("My New Name")
         assert s.name == "My New Name"
         # Persisted
-        loaded = Session.load(s.file_path)
+        loaded = Session.load_by_id(s.id)
         assert loaded.name == "My New Name"
 
 

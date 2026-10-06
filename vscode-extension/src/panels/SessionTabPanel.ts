@@ -843,10 +843,19 @@ export class SessionTabPanel {
       case "delete_session": {
         if (message.sessionId) {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-          await this._rpcClient.call("session.delete", {
-            session_id: message.sessionId,
-            project_path: workspaceFolder,
-          }).catch(() => null);
+          try {
+            const result = await this._rpcClient.call<{ success: boolean; error?: string }>("session.delete", {
+              session_id: message.sessionId,
+              project_path: workspaceFolder,
+            });
+            if (!result.success) {
+              void vscode.window.showErrorMessage(result.error || "Could not delete this chat. Please retry.");
+              break;
+            }
+          } catch {
+            void vscode.window.showErrorMessage("Could not delete this chat. Check the connection and retry.");
+            break;
+          }
           if (message.sessionId === this._sessionId) {
             this.dispose();
           } else {

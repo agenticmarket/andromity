@@ -16,6 +16,10 @@ from andromity.core.debug_log import get_logger
 log = get_logger("session")
 
 
+class SessionPersistenceError(RuntimeError):
+    """An actionable storage failure without exposing SQLite internals."""
+
+
 def _validate_session_id(session_id: str) -> str:
     """Validate and sanitize session_id to prevent directory traversal."""
     if not session_id or not isinstance(session_id, str):
@@ -81,15 +85,17 @@ class Session:
         self.model = config.get("default", "model", "")
         self.profile = config.get("default", "profile", "builder")
         sessions_root = get_config_dir() / "sessions"
-        sessions_root.mkdir(parents=True, exist_ok=True)
         sessions_root = sessions_root.resolve()
         self.storage_dir = sessions_root / self.project_hash
-        self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.storage_dir = self.storage_dir.resolve()
+        # Retain the legacy path for explicit imports, without writing snapshots.
         self.file_path = self.storage_dir / f"{self.id}.json"
         self._save_timer: Optional[threading.Timer] = None
         self._save_lock = threading.RLock()
         self._dirty = False
+        self._persisted = False
+        self._messages_loaded = True
+        self._message_digests: List[str] = []
 
         # Ensure project folder has clean gitignore rules for .andromity
         try:
@@ -146,15 +152,14 @@ class Session:
             pass
 
     def set_status(self, status: str, watching_for: Optional[Dict[str, Any]] = None):
-        """Update live lifecycle status of this session in DB and JSON."""
-        self.status = status
-        if watching_for is not None:
-            self.watching_for = watching_for
-        elif status != "watching":
-            self.watching_for = None
-        self.updated_at = datetime.now(timezone.utc).isoformat()
-        self._save_to_db()
-        self._mark_dirty(delay=0.05)
+        """Persist live lifecycle status and watch state atomically."""
+        with self._save_lock:
+            self.status = status
+            if watching_for is not None:
+                self.watching_for = watching_for
+            elif status != "watching":
+                self.watching_for = None
+            self.save()
 
     _active_timers: set = set()
 
@@ -198,9 +203,12 @@ class Session:
             if self._save_timer is not None:
                 Session._active_timers.discard(self._save_timer)
             if self._dirty:
-                self._dirty = False
                 self._save_timer = None
-                self._save_snapshot()
+                try:
+                    self._save_snapshot()
+                    self._dirty = False
+                except SessionPersistenceError:
+                    log.warning("Chat history could not be saved; pending changes remain in memory.")
 
     def flush(self):
         """Immediately write any pending debounced save to disk."""
@@ -213,7 +221,6 @@ class Session:
                     pass
                 self._save_timer = None
             if self._dirty:
-                self._dirty = False
                 self.save()
 
 
@@ -250,7 +257,7 @@ class Session:
             msg["steering"] = True
         with self._save_lock:
             self.messages.append(msg)
-            need_save = not self.file_path.exists()
+            need_save = not self._persisted
         if need_save:
             self.save()
         else:
@@ -290,6 +297,7 @@ class Session:
             "usage_breakdown": dict(self.usage_breakdown), "cost_source": self.cost_source,
             "provider": getattr(self, "provider", ""),
             "model": getattr(self, "model", ""),
+            "profile": getattr(self, "profile", "builder"),
             "plan": copy.deepcopy(self.plan) if snapshot and self.plan else self.plan,
             "compacted_history": self.compacted_history if not snapshot else copy.deepcopy(self.compacted_history),
             "allowed_commands": list(getattr(self, "allowed_commands", [])),
@@ -403,13 +411,32 @@ class Session:
         self.plan = None
         self.save()
 
+    def _session_metadata(self) -> Dict[str, Any]:
+        return {
+            "permission_mode": getattr(self, "permission_mode", "safe"),
+            "profile": getattr(self, "profile", "builder"),
+            "consecutive_auto_wakes": getattr(self, "consecutive_auto_wakes", 0),
+            "collaborators": list(getattr(self, "collaborators", [])),
+            "watching_for": getattr(self, "watching_for", None),
+        }
+
     def _save_to_db(self):
         """Persist session and messages into SQLite database."""
         try:
             from andromity.core.db import clean_surrogates, get_conn, init_schema, j, transaction
             init_schema()
             conn = get_conn()
+            if not getattr(self, "_messages_loaded", True):
+                row = conn.execute("SELECT * FROM sessions WHERE id = ?", (self.id,)).fetchone()
+                if row is None:
+                    raise SessionPersistenceError("This chat no longer exists.")
+                self.messages = self._from_db_row(row, conn).messages
+                self._messages_loaded = True
             with transaction(conn):
+                if getattr(self, "_persisted", False) and not conn.execute(
+                    "SELECT 1 FROM sessions WHERE id = ?", (self.id,)
+                ).fetchone():
+                    raise SessionPersistenceError("This chat was deleted. Start a new chat to continue.")
                 # 1. Upsert session row
                 conn.execute("""
                     INSERT INTO sessions (
@@ -418,8 +445,9 @@ class Session:
                         cost_usd, cost_source, usage_breakdown, plan,
                         compacted_history, parent_session, branch_point,
                         allowed_commands, allowed_domains, undo_stack,
+                        session_metadata,
                         sync_dirty, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         project_hash = excluded.project_hash,
                         project_path = excluded.project_path,
@@ -439,6 +467,7 @@ class Session:
                         allowed_commands = excluded.allowed_commands,
                         allowed_domains = excluded.allowed_domains,
                         undo_stack = excluded.undo_stack,
+                        session_metadata = excluded.session_metadata,
                         sync_dirty = 1,
                         updated_at = excluded.updated_at
                 """, (
@@ -449,55 +478,52 @@ class Session:
                     j(self.compacted_history), self.parent_session, self.branch_point,
                     j(getattr(self, "allowed_commands", [])), j(getattr(self, "allowed_domains", [])),
                     j(getattr(self, "undo_stack", [])),
+                    j(self._session_metadata()),
                     self.created_at, self.updated_at
                 ))
 
-                # 2. Sync messages (insert or replace message sequence)
-                count_row = conn.execute(
-                    "SELECT COUNT(*) as c FROM session_messages WHERE session_id = ?", (self.id,)
-                ).fetchone()
-                db_count = count_row["c"] if count_row else 0
-
-                if db_count > len(self.messages):
-                    conn.execute("DELETE FROM session_messages WHERE session_id = ?", (self.id,))
-                    start_idx = 0
-                else:
-                    start_idx = db_count
-
-                if start_idx < len(self.messages):
-                    rows_to_insert = [
-                        (
-                            self.id,
-                            seq,
-                            clean_surrogates(m.get("role", "user")),
-                            clean_surrogates(m.get("content")),
-                            j(m["tool_calls"]) if "tool_calls" in m else None,
-                            clean_surrogates(m.get("thinking")),
-                            clean_surrogates(m.get("name")),
-                            clean_surrogates(m.get("tool_call_id")),
-                            m.get("ts", self.updated_at),
-                            j(m["images"]) if "images" in m else None,
-                            m.get("duration"),
-                            m.get("turn_id"),
-                            int(bool(m.get("steering"))),
-                        )
-                        for seq, m in enumerate(self.messages[start_idx:], start=start_idx)
-                    ]
+                # Persist edits and truncation as well as new messages.
+                conn.execute("DELETE FROM session_messages WHERE session_id = ? AND seq >= ?", (self.id, len(self.messages)))
+                rows = [
+                    (
+                        self.id,
+                        seq,
+                        clean_surrogates(m.get("role", "user")),
+                        clean_surrogates(m.get("content")),
+                        j(m["tool_calls"]) if "tool_calls" in m else None,
+                        clean_surrogates(m.get("thinking")),
+                        clean_surrogates(m.get("name")),
+                        clean_surrogates(m.get("tool_call_id")),
+                        m.get("ts", self.updated_at),
+                        j(m["images"]) if "images" in m else None,
+                        m.get("duration"),
+                        m.get("turn_id"),
+                        int(bool(m.get("steering"))),
+                    )
+                    for seq, m in enumerate(self.messages)
+                ]
+                digests = [hashlib.sha256(j(row).encode("utf-8")).hexdigest() for row in rows]
+                previous = getattr(self, "_message_digests", [])
+                rows_to_insert = [row for i, row in enumerate(rows) if i >= len(previous) or digests[i] != previous[i]]
+                if rows_to_insert:
                     conn.executemany("""
                         INSERT OR REPLACE INTO session_messages (
                             session_id, seq, role, content, tool_calls,
                             thinking, name, tool_call_id, ts, images, duration, turn_id, steering
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, rows_to_insert)
+            self._persisted = True
+            self._message_digests = digests
+        except SessionPersistenceError:
+            raise
         except Exception as e:
             log.exception("Failed to persist session %s to SQLite: %s", getattr(self, "id", "unknown"), e)
+            raise SessionPersistenceError("Could not save chat history. Check disk space and permissions, then retry.") from e
 
     def _save_snapshot(self):
-        """Snapshot state under lock, then persist to DB and JSON."""
+        """Persist the current locked state to SQLite."""
         self.updated_at = datetime.now(timezone.utc).isoformat()
         self._save_to_db()
-        data = self.to_dict(snapshot=True)
-        self._write_json(data)
 
     def save(self):
         """Immediate, synchronous save."""
@@ -505,46 +531,14 @@ class Session:
             if getattr(self, "_save_timer", None) is not None:
                 try:
                     self._save_timer.cancel()
+                    Session._active_timers.discard(self._save_timer)
                 except Exception:
                     pass
                 self._save_timer = None
-            self._dirty = False
+            self._dirty = True
             self.updated_at = datetime.now(timezone.utc).isoformat()
             self._save_to_db()
-            data = self.to_dict(snapshot=True)
-            self._write_json(data)
-
-    def _write_json(self, data: Dict[str, Any]):
-        """Atomic write: serialize to a temp file, then os.replace()."""
-        num_msgs = len(data.get("messages", []))
-        indent = 2 if num_msgs <= 50 else None
-        separators = None if indent else (",", ":")
-        try:
-            self.file_path.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        tmp_path = self.file_path.with_suffix(".tmp")
-        try:
-            with open(tmp_path, "w", encoding="utf-8", errors="replace") as f:
-                json.dump(data, f, indent=indent, separators=separators, ensure_ascii=False)
-                f.flush()
-                try:
-                    os.fsync(f.fileno())
-                except OSError:
-                    pass
-            os.replace(str(tmp_path), str(self.file_path))
-        except OSError:
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-            with open(self.file_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=indent, separators=separators)
-                f.flush()
-                try:
-                    os.fsync(f.fileno())
-                except OSError:
-                    pass
+            self._dirty = False
 
     def rename(self, name: str):
         """Rename this session and persist."""
@@ -589,9 +583,21 @@ class Session:
         session.allowed_commands = uj(row["allowed_commands"], []) if "allowed_commands" in keys and row["allowed_commands"] else []
         session.allowed_domains = uj(row["allowed_domains"], []) if "allowed_domains" in keys and row["allowed_domains"] else []
         session.undo_stack = uj(row["undo_stack"], []) if "undo_stack" in keys and row["undo_stack"] else []
-        session.consecutive_auto_wakes = 0
-        session.collaborators = []
-        session.watching_for = None
+        metadata = uj(row["session_metadata"], {}) if "session_metadata" in keys else {}
+        session.permission_mode = metadata.get("permission_mode", "safe")
+        session.profile = metadata.get("profile", "builder")
+        session.consecutive_auto_wakes = metadata.get("consecutive_auto_wakes", 0)
+        session.collaborators = metadata.get("collaborators", [])
+        session.watching_for = metadata.get("watching_for")
+        session.allowed_external_files = set()
+        session.storage_dir = get_config_dir() / "sessions" / session.project_hash
+        session.file_path = session.storage_dir / f"{session.id}.json"
+        session._save_timer = None
+        session._save_lock = threading.RLock()
+        session._dirty = False
+        session._persisted = True
+        session._messages_loaded = load_messages
+        session._message_digests = []
 
         if not load_messages:
             session.messages = []
@@ -626,31 +632,29 @@ class Session:
             msgs.append(m)
         session.messages = msgs
 
-        # Path setup for JSON compatibility
-        sessions_root = get_config_dir() / "sessions"
-        session.storage_dir = sessions_root / session.project_hash
-        session.file_path = session.storage_dir / f"{session.id}.json"
-        session._save_timer = None
-        session._save_lock = threading.RLock()
-        session._dirty = False
         return session
 
     @classmethod
     def load(cls, file_path: Any) -> "Session":
+        """Read an explicit legacy import; normal session loading uses SQLite."""
         fp = Path(file_path)
         with open(fp, "r", encoding="utf-8") as f:
             data = json.load(f)
+        if not isinstance(data, dict) or not isinstance(data.get("messages", []), list) or any(
+            not isinstance(message, dict) for message in data.get("messages", [])
+        ):
+            raise ValueError("Invalid legacy session snapshot")
         session = cls.__new__(cls)
-        session.id = data["id"]
+        session.id = _validate_session_id(data["id"])
         session.name = data["name"]
         session.status = data.get("status", "idle")
-        session.project_hash = data["project"]
+        session.project_hash = data.get("project") or fp.parent.name
         session.project_path = data.get("project_path", "")
         session.parent_session = data.get("parent_session")
         session.branch_point = data.get("branch_point")
         session.created_at = data["created_at"]
         session.updated_at = data.get("updated_at", session.created_at)
-        session.messages = data["messages"]
+        session.messages = data.get("messages", [])
         session.token_total = data.get("token_total", 0)
         session.context_tokens = data.get("context_tokens", 0)
         if session.context_tokens == 0 and session.messages:
@@ -680,17 +684,24 @@ class Session:
         session.watching_for = data.get("watching_for")
         from andromity.config import config
         session.permission_mode = data.get("permission_mode", config.get("default", "permission_mode", "safe"))
+        session.profile = data.get("profile", "builder")
+        session.allowed_external_files = set()
         session.storage_dir = fp.parent
         session.file_path = fp
         session._save_timer = None
         session._save_lock = threading.RLock()
         session._dirty = False
+        session._persisted = False
+        session._messages_loaded = True
+        session._message_digests = []
         return session
 
     @classmethod
     def list_sessions(cls, project_path: Optional[str] = None, limit: int = 100, include_subagents: bool = False) -> List["Session"]:
         from andromity.core.db import get_conn, init_schema
         init_schema()
+        from andromity.core.session_migration import migrate_legacy_sessions
+        migrate_legacy_sessions()
         conn = get_conn()
 
         norm_path = normalize_project_path(project_path)
@@ -725,33 +736,7 @@ class Session:
                 cnt = counts.get(s.id, 0)
                 s.message_count = cnt
                 s.messages = [{}] * cnt
-        known_ids = {s.id for s in db_sessions}
-
-        # 2. Also check for any unmigrated JSON session files
-        sessions_root = get_config_dir() / "sessions"
-        if sessions_root.exists():
-            unmigrated_files = []
-            for h in hashes_to_check:
-                p_dir = sessions_root / h
-                if p_dir.exists() and p_dir.is_dir():
-                    for f in p_dir.glob("*.json"):
-                        stem = f.stem
-                        if stem not in known_ids:
-                            known_ids.add(stem)
-                            unmigrated_files.append(f)
-
-            for f in unmigrated_files:
-                try:
-                    s = cls.load(f)
-                    s._save_to_db()  # Auto-migrate to SQLite
-                    if not include_subagents and s.parent_session:
-                        continue
-                    db_sessions.append(s)
-                except Exception:
-                    continue
-
-        db_sessions.sort(key=lambda s: getattr(s, "updated_at", s.created_at), reverse=True)
-        return db_sessions[:limit]
+        return db_sessions
 
     @classmethod
     def load_by_id(cls, session_id: str, project_path: Optional[str] = None) -> Optional["Session"]:
@@ -762,6 +747,8 @@ class Session:
 
         from andromity.core.db import get_conn, init_schema
         init_schema()
+        from andromity.core.session_migration import migrate_legacy_sessions
+        migrate_legacy_sessions()
         conn = get_conn()
 
         hashes_to_check = []
@@ -791,34 +778,29 @@ class Session:
         if row:
             return cls._from_db_row(row, conn)
 
-        # 2. Check JSON fallback
-        sessions_dir = (get_config_dir() / "sessions").resolve()
-        if hashes_to_check:
-            for h in hashes_to_check:
-                candidate = (sessions_dir / h / f"{valid_id}.json").resolve()
-                if candidate.is_relative_to(sessions_dir) and candidate.exists():
-                    try:
-                        s = cls.load(candidate)
-                        s._save_to_db()  # Auto-migrate to SQLite
-                        return s
-                    except Exception:
-                        pass
-            # If project_path was explicitly provided, do NOT fall back to other projects (IDOR guard)
-            return None
-
-        # If no project_path provided, scan all project subdirectories under sessions
-        if sessions_dir.exists():
-            for p_dir in sessions_dir.iterdir():
-                if p_dir.is_dir():
-                    candidate = (p_dir / f"{valid_id}.json").resolve()
-                    if candidate.is_relative_to(sessions_dir) and candidate.exists():
-                        try:
-                            s = cls.load(candidate)
-                            s._save_to_db()  # Auto-migrate to SQLite
-                            return s
-                        except Exception:
-                            pass
         return None
+
+    @classmethod
+    def delete_by_id(cls, session_id: str) -> None:
+        from andromity.core.db import get_conn, init_schema, transaction
+        from andromity.core.session_migration import migrate_legacy_sessions
+        valid_id = _validate_session_id(session_id)
+        try:
+            init_schema()
+            migrate_legacy_sessions()
+            with transaction(get_conn()) as conn:
+                conn.execute("DELETE FROM sessions WHERE id = ?", (valid_id,))
+        except Exception as error:
+            raise SessionPersistenceError("Could not delete this chat. Check disk access, then retry.") from error
+
+    def delete(self) -> None:
+        with self._save_lock:
+            if self._save_timer is not None:
+                self._save_timer.cancel()
+                Session._active_timers.discard(self._save_timer)
+                self._save_timer = None
+            self.delete_by_id(self.id)
+            self._dirty = False
 
 
 def get_all_sessions(project_path: Optional[str] = None, include_subagents: bool = False) -> List[Session]:

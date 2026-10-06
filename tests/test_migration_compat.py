@@ -24,7 +24,6 @@ def test_legacy_session_json_auto_migrates(isolated_env, monkeypatch):
     """Verify that old JSON session files created in previous versions are loaded and imported to SQLite transparently."""
     sessions_root = isolated_env / "sessions"
     monkeypatch.setattr("andromity.core.session.get_config_dir", lambda: isolated_env)
-    monkeypatch.setattr("andromity.core.usage_tracker.get_config_dir", lambda: isolated_env)
 
     project_dir = str(isolated_env / "my_project")
     import hashlib

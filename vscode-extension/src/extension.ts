@@ -798,11 +798,15 @@ export async function activate(context: vscode.ExtensionContext) {
       );
       if (confirm !== "Delete") return;
       try {
-        await client.call("session.delete", { session_id: item.session.id });
+        const result = await client.call<{ success: boolean; error?: string }>("session.delete", { session_id: item.session.id });
+        if (!result.success) {
+          void vscode.window.showErrorMessage(result.error || "Could not delete this chat. Please retry.");
+          return;
+        }
         sessionTreeProvider.refresh();
         vscode.window.showInformationMessage("Session deleted.");
-      } catch (e: any) {
-        vscode.window.showErrorMessage(`Failed to delete session: ${e.message}`);
+      } catch {
+        void vscode.window.showErrorMessage("Could not delete this chat. Check the connection and retry.");
       }
     }),
 

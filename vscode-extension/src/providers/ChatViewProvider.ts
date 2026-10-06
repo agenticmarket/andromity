@@ -2744,12 +2744,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "delete_session": {
         if (this._rpcClient && message.sessionId) {
-          this._waterfallAutoOpenedSessions.delete(message.sessionId);
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-          await this._rpcClient.call("session.delete", {
-            session_id: message.sessionId,
-            project_path: workspaceFolder,
-          }).catch(() => {});
+          try {
+            const result = await this._rpcClient.call<{ success: boolean; error?: string }>("session.delete", {
+              session_id: message.sessionId,
+              project_path: workspaceFolder,
+            });
+            if (!result.success) {
+              void vscode.window.showErrorMessage(result.error || "Could not delete this chat. Please retry.");
+              break;
+            }
+          } catch {
+            void vscode.window.showErrorMessage("Could not delete this chat. Check the connection and retry.");
+            break;
+          }
+          this._waterfallAutoOpenedSessions.delete(message.sessionId);
           await this.fetchAndPostSessions();
           vscode.commands.executeCommand("andromity.refreshSessions");
           if (message.sessionId === this._currentSessionId) {

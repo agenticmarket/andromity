@@ -140,7 +140,7 @@ SessionBrowserOverlay {
         for s in self._sessions:
             age = _time_ago(getattr(s, "updated_at", s.created_at))
             tokens = f"{s.token_total:,}" if s.token_total else "—"
-            msg_count = str(len([m for m in s.messages if m.get("role") in ("user", "assistant")]))
+            msg_count = str(getattr(s, "message_count", len(s.messages)))
             table.add_row(_session_label(s), _session_status(s, self._current_id), age, tokens, msg_count)
             
         if self._sessions:
@@ -189,6 +189,15 @@ SessionBrowserOverlay {
         idx = table.cursor_row if table.cursor_row is not None and 0 <= table.cursor_row < len(self._sessions) else self._selected_idx
         idx = max(0, min(idx, len(self._sessions) - 1))
         session = self._sessions[idx]
+        try:
+            session = Session.load_by_id(session.id, session.project_path)
+        except Exception:
+            self.notify("Could not load chat history. Please retry.", severity="error")
+            return
+        if session is None:
+            self.notify("This chat no longer exists.", severity="warning")
+            self._load_sessions(keep_cursor=True)
+            return
         self.dismiss()
         try:
             self.app.run_worker(self.app._load_session(session))
@@ -205,9 +214,10 @@ SessionBrowserOverlay {
         if session.id == self._current_id:
             return  # don't delete active session
         try:
-            session.file_path.unlink(missing_ok=True)
+            session.delete()
         except Exception:
-            pass
+            self.notify("Could not delete this chat. Please retry.", severity="error")
+            return
         self._load_sessions(keep_cursor=True)
 
     def on_key(self, event):

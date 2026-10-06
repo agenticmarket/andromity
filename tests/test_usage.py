@@ -65,7 +65,7 @@ def test_usage_tracker_free_models_and_unmodeled_sessions(tmp_path, monkeypatch)
     sessions_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(config, "config_dir", cfg_dir)
     monkeypatch.setattr(config, "config_path", cfg_dir / "config.toml")
-    monkeypatch.setattr("andromity.core.usage_tracker.get_config_dir", lambda: cfg_dir)
+    monkeypatch.setattr("andromity.core.session.get_config_dir", lambda: cfg_dir)
     monkeypatch.setattr("andromity.config.get_config_dir", lambda: cfg_dir)
 
     from andromity.core.db import set_custom_db_path
@@ -129,7 +129,7 @@ async def test_settings_usage_tab_ui(tmp_path, monkeypatch):
     sessions_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(config, "config_dir", cfg_dir)
     monkeypatch.setattr(config, "config_path", cfg_dir / "config.toml")
-    monkeypatch.setattr("andromity.core.usage_tracker.get_config_dir", lambda: cfg_dir)
+    monkeypatch.setattr("andromity.core.session.get_config_dir", lambda: cfg_dir)
     monkeypatch.setattr("andromity.config.get_config_dir", lambda: cfg_dir)
 
     s1 = {

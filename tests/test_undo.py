@@ -180,8 +180,8 @@ def test_session_undo_stack_persistence(tmp_path):
     ]
     session.save()
     
-    # 1. Test JSON load
-    loaded = Session.load(session.file_path)
+    # 1. Test session load
+    loaded = Session.load_by_id(session.id)
     assert loaded.undo_stack == session.undo_stack
     
     # 2. Test SQLite load
