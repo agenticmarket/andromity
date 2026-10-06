@@ -2461,63 +2461,93 @@ class JsonRpcHandler:
     async def rpc_git_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from andromity.core.git_ops import status_entries
         repo = self._review_repo(params)
-        if not repo:
-            return {"is_git": False, "branch": None, "dirty": False, "files": []}
-        entries = await asyncio.to_thread(status_entries, repo)
-        project = Path(params.get("project_path") or Path.cwd()).resolve()
-        entries = [entry for entry in entries
-                   if (Path(repo.working_tree_dir) / entry["path"]).resolve().is_relative_to(project)]
-        branch = "detached"
         try:
-            branch = repo.active_branch.name
-        except Exception:
-            pass
-        return {"is_git": True, "branch": branch, "dirty": bool(entries), "files": entries,
-                "repository_root": str(Path(repo.working_tree_dir).resolve()),
-                "untracked_files": [e["path"] for e in entries if e["status"] == "U"],
-                "modified_files": [e["path"] for e in entries if e["status"] != "U"]}
+            if not repo:
+                return {"is_git": False, "branch": None, "dirty": False, "files": []}
+            entries = await asyncio.to_thread(status_entries, repo)
+            project = Path(params.get("project_path") or Path.cwd()).resolve()
+            entries = [entry for entry in entries
+                       if (Path(repo.working_tree_dir) / entry["path"]).resolve().is_relative_to(project)]
+            branch = "detached"
+            try:
+                branch = repo.active_branch.name
+            except Exception:
+                pass
+            return {"is_git": True, "branch": branch, "dirty": bool(entries), "files": entries,
+                    "repository_root": str(Path(repo.working_tree_dir).resolve()),
+                    "untracked_files": [e["path"] for e in entries if e["status"] == "U"],
+                    "modified_files": [e["path"] for e in entries if e["status"] != "U"]}
+        finally:
+            if repo:
+                repo.close()
+
 
     async def rpc_git_diff(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from andromity.core.git_review import review_base
         repo = self._review_repo(params)
-        return {"diff": await asyncio.to_thread(repo.git.diff, "--no-ext-diff", "--no-renames", review_base(repo)) if repo else ""}
+        try:
+            return {"diff": await asyncio.to_thread(repo.git.diff, "--no-ext-diff", "--no-renames", review_base(repo)) if repo else ""}
+        finally:
+            if repo:
+                repo.close()
+
 
     async def rpc_git_show_file(self, params: Dict[str, Any]) -> Dict[str, str]:
         from andromity.core.git_review import show_file
         repo = self._review_repo(params)
-        if not repo:
-            raise ValueError("Not a Git repository.")
-        self._review_file_path(repo, params)
-        return {"content": await asyncio.to_thread(show_file, repo, params.get("path", ""), params.get("ref", "HEAD"))}
+        try:
+            if not repo:
+                raise ValueError("Not a Git repository.")
+            self._review_file_path(repo, params)
+            return {"content": await asyncio.to_thread(show_file, repo, params.get("path", ""), params.get("ref", "HEAD"))}
+        finally:
+            if repo:
+                repo.close()
+
 
     async def rpc_git_file_diff(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from andromity.core.git_review import file_diff
         repo = self._review_repo(params)
-        if repo:
-            self._review_file_path(repo, params)
-        return await asyncio.to_thread(file_diff, repo, params.get("path", "")) if repo else {"diff": ""}
+        try:
+            if repo:
+                self._review_file_path(repo, params)
+            return await asyncio.to_thread(file_diff, repo, params.get("path", "")) if repo else {"diff": ""}
+        finally:
+            if repo:
+                repo.close()
+
 
     async def rpc_git_diff_numstat(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from andromity.core.git_review import numstat
         repo = self._review_repo(params)
-        stats = await asyncio.to_thread(numstat, repo) if repo else {}
-        project = Path(params.get("project_path") or Path.cwd()).resolve()
-        return {"files": {name: value for name, value in stats.items()
-                          if (Path(repo.working_tree_dir) / name).resolve().is_relative_to(project)}}
+        try:
+            stats = await asyncio.to_thread(numstat, repo) if repo else {}
+            project = Path(params.get("project_path") or Path.cwd()).resolve()
+            return {"files": {name: value for name, value in stats.items()
+                              if (Path(repo.working_tree_dir) / name).resolve().is_relative_to(project)}}
+        finally:
+            if repo:
+                repo.close()
+
 
     async def rpc_git_revert_file(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from andromity.core.git_review import revert_file
         from andromity.core.git_ops import run_restoration
         repo = self._review_repo(params, mutate=True)
-        if not repo:
-            raise ValueError("Not a Git repository. No files were changed.")
-        self._review_file_path(repo, params)
-        root = str(Path(repo.working_tree_dir).resolve())
-        self._git_mutating_roots.add(root)
         try:
-            return await run_restoration(revert_file, repo, params.get("path", ""))
+            if not repo:
+                raise ValueError("Not a Git repository. No files were changed.")
+            self._review_file_path(repo, params)
+            root = str(Path(repo.working_tree_dir).resolve())
+            self._git_mutating_roots.add(root)
+            try:
+                return await run_restoration(revert_file, repo, params.get("path", ""))
+            finally:
+                self._git_mutating_roots.discard(root)
         finally:
-            self._git_mutating_roots.discard(root)
+            if repo:
+                repo.close()
+
 
     def _review_file_path(self, repo, params: Dict[str, Any]) -> None:
         from andromity.core.git_ops import repository_path

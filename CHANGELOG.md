@@ -5,6 +5,7 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 ## [0.2.15] — 2026-10-06
 
 ### Fixed
+- Close Git review repository handles after RPC requests so Windows can release workspace directories.
 - Refresh the VS Code chat, keep BYOK setup visible, clarify cloud trial status, and preserve manual scrolling while reliably jumping to the latest turn.
 - Harden Docker defaults and release workflows with locked dependencies, restricted credentials, pinned Actions, and release validation.
 - Reduce telemetry dashboard D1 reads with normalized shared snapshots, compact historical activity, grouped feature/session statistics, and session/day error checks. Ordinary ingestion no longer invalidates statistics snapshots.

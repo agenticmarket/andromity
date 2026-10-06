@@ -8,7 +8,12 @@ EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
 def review_base(repo: Any) -> str:
-    return "HEAD" if repo.head.is_valid() else EMPTY_TREE
+    from git.exc import GitCommandError
+    try:
+        repo.git.rev_parse("--verify", "HEAD")
+        return "HEAD"
+    except GitCommandError:
+        return EMPTY_TREE
 
 
 def show_file(repo: Any, path: str, ref: str = "HEAD") -> str:
