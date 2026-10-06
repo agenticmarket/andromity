@@ -353,11 +353,14 @@ class MCPStdioSession:
 
 
 class MCPSseSession:
-    """Connects to a remote MCP server over HTTP SSE using the official python SDK."""
-    def __init__(self, name: str, url: str, headers: Optional[Dict[str, str]] = None):
+    """Remote MCP session using SDK SSE or Streamable HTTP transports."""
+    def __init__(self, name: str, url: str, headers: Optional[Dict[str, str]] = None, transport: str = "sse"):
         self.name = name
         self.url = url
         self.headers = headers or {}
+        self.transport = transport
+        self.needs_auth = False
+        self.legacy_endpoint = False
         self.tools: List[Any] = []
         self.error: Optional[str] = None
         self.stderr_tail: List[str] = []
@@ -372,9 +375,15 @@ class MCPSseSession:
 
     async def start(self) -> bool:
         self.error = None
+        self.needs_auth = False
+        self.legacy_endpoint = False
         self._init_event.clear()
         self._bg_task = asyncio.create_task(self._run())
-        await self._init_event.wait()
+        try:
+            await asyncio.wait_for(self._init_event.wait(), timeout=30)
+        except asyncio.TimeoutError:
+            self.error = "Connection timed out. Check the server URL and try again."
+            await self.stop()
         return self._session is not None
 
     async def _run(self):
@@ -382,7 +391,12 @@ class MCPSseSession:
         from mcp.client.session import ClientSession
         
         try:
-            async with sse_client(self.url, headers=self.headers) as (read_stream, write_stream):
+            if self.transport == "http":
+                from mcp.client.streamable_http import streamablehttp_client
+            connection = (streamablehttp_client(self.url, headers=self.headers)
+                          if self.transport == "http" else sse_client(self.url, headers=self.headers))
+            async with connection as streams:
+                read_stream, write_stream = streams[:2]
                 async with ClientSession(read_stream, write_stream) as session:
                     self._session = session
                     await session.initialize()
@@ -411,8 +425,15 @@ class MCPSseSession:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            self.error = f"Failed to connect to SSE: {e}"
-            log.error(self.error)
+            def has_status(exc: BaseException, statuses: tuple[int, ...]) -> bool:
+                response = getattr(exc, "response", None)
+                return (getattr(response, "status_code", None) in statuses or
+                        any(has_status(child, statuses) for child in getattr(exc, "exceptions", ())))
+            self.needs_auth = has_status(e, (401,))
+            self.legacy_endpoint = has_status(e, (404, 405))
+            self.error = ("Authentication required. Authenticate or update the access token."
+                          if self.needs_auth else "Could not connect. Check the server URL, transport, and credentials, then retry.")
+            log.warning("MCP remote connection failed for '%s' (%s)", self.name, type(e).__name__)
         finally:
             self._session = None
             if not self._init_event.is_set():
@@ -532,6 +553,9 @@ class MCPClientManager:
         """
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         entry = dict(self.server_status.get(name, {}))
+        if status and status != entry.get("status") and status in ("running", "error", "needs_auth", "needs_trust"):
+            from andromity.telemetry import send_feature_used
+            send_feature_used("mcp_" + status)
         if status is not None:
             entry["status"] = status
         if tools is not None:
@@ -579,16 +603,12 @@ class MCPClientManager:
     async def start_all(self):
         """Start all enabled configured MCP servers concurrently.
 
-        For remote HTTP servers (serverUrl only, no command):
-          - If a cached OAuth token exists → convert to mcp-remote with Bearer header
-          - Otherwise → mark as needs_auth so the settings UI shows Connect button
+        Remote sessions use cached OAuth credentials or configured headers.
+        Public servers connect directly; HTTP 401 marks a server as needs_auth.
         """
         if not hasattr(self, "_start_lock") or self._start_lock is None:
             self._start_lock = asyncio.Lock()
         async with self._start_lock:
-            from andromity.core.oauth import load_token, ensure_fresh_token
-            from andromity.config import config as app_config
-
             mcp_config = self.load_config()
             servers    = mcp_config.get("mcpServers", {})
             # Hydrate persisted status first, then clear stale entries for removed servers
@@ -641,6 +661,13 @@ class MCPClientManager:
             )
             return
 
+        from andromity.config import config
+        is_user_home = Path(self.project_path).resolve() == Path.home().resolve()
+        if not is_user_home and not trusted and not config.is_trusted(self.project_path) and not srv_conf.get("trusted"):
+            self._set_status(name, status="needs_trust", tools=0, error="Untrusted folder",
+                             error_detail="Trust this workspace before connecting MCP servers.")
+            return
+
         # Check if this is an explicit remote server OR a legacy mcp-remote proxy command
         is_legacy_sse = "mcp-remote" in args or "mcp-remote" in command
         if is_legacy_sse:
@@ -655,52 +682,35 @@ class MCPClientManager:
         if server_url and not command:
             # Check for cached OAuth token
             token = await ensure_fresh_token(name)
-            if not token:
-                # No token — check PAT headers in existing config
-                headers = srv_conf.get("headers", {})
-                pat = headers.get("Authorization", "").replace("Bearer ", "").strip()
-                if not pat:
-                    # Mark as needs_auth — settings UI will show Connect button
-                    self._set_status(
-                        name, status="needs_auth", tools=0,
-                        error="Authentication required", command="",
-                        error_detail=(
-                            f"Server '{name}' needs an OAuth token or PAT. "
-                            "Open Settings → MCP and authenticate to connect."
-                        ),
-                    )
-                    return
-                token = pat
-
-            # Start native Python SSE session
-            headers = {"Authorization": f"Bearer {token}"}
-            session = MCPSseSession(name=name, url=server_url, headers=headers)
+            headers = dict(srv_conf.get("headers", {}))
+            if token:
+                headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
+                headers["Authorization"] = f"Bearer {token}"
+            from urllib.parse import urlparse
+            transport = srv_conf.get("type") or srv_conf.get("transport")
+            auto_transport = transport not in ("sse", "http", "streamable-http")
+            if transport not in ("sse", "http", "streamable-http"):
+                transport = "sse" if urlparse(server_url).path.rstrip("/").endswith("/sse") else "http"
+            session = MCPSseSession(name=name, url=server_url, headers=headers,
+                                    transport="sse" if transport == "sse" else "http")
             success = await session.start()
-            cmd_str = f"SSE {server_url}"
+            if not success and auto_transport and session.transport == "http" and session.legacy_endpoint:
+                await session.stop()
+                session = MCPSseSession(name=name, url=server_url, headers=headers, transport="sse")
+                success = await session.start()
+            cmd_str = f"{session.transport.upper()} {server_url}"
             if success:
                 self.sessions[name] = session
                 self._set_status(name, status="running", tools=len(session.tools),
                                  error=None, command=cmd_str)
             else:
-                self._set_status(name, status="error", tools=0,
+                self._set_status(name, status="needs_auth" if session.needs_auth else "error", tools=0,
                                  error=session.error or "Failed to connect",
                                  command=cmd_str, error_detail=session.error)
             return
 
         # ── Stdio server ──────────────────────────────────────
         if not command:
-            return
-
-        from andromity.config import config
-        is_user_home = Path(self.project_path).resolve() == Path.home().resolve()
-        if not is_user_home and not trusted and not config.is_trusted(self.project_path) and not srv_conf.get("trusted"):
-            cmd_str = f"{command} {' '.join(str(a) for a in args)}".strip()
-            self._set_status(
-                name, status="needs_trust", tools=0,
-                error="Untrusted folder",
-                command=cmd_str,
-                error_detail=f"MCP stdio server '{name}' was blocked because this project folder is not trusted. Mark as trusted to enable local command execution."
-            )
             return
 
         session = MCPStdioSession(

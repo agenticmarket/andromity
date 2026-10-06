@@ -173,6 +173,8 @@ async def start_stdio_server():
                 log.exception("Error processing RPC request: %s", e)
 
     log.info("Andromity JSON-RPC stdio server ready and listening.")
+    from andromity.telemetry import send_feature_used
+    send_feature_used("app_started")
 
     while True:
         try:

@@ -336,8 +336,125 @@ export function getChatActivityScript(): string {
         return wrap;
       };
 
+      window.renderBackgroundProcessActivityRow = function(toolName, toolArgs, status, toolResult, processId) {
+        var parsedArgs = {};
+        if (typeof toolArgs === 'string') {
+          try { parsedArgs = JSON.parse(toolArgs); } catch(e) { parsedArgs = {}; }
+        } else if (toolArgs && typeof toolArgs === 'object') {
+          parsedArgs = toolArgs;
+        }
+
+        var cmd = parsedArgs.CommandLine || parsedArgs.command || parsedArgs.cmd || '';
+        var procId = processId || parsedArgs.process_id || '';
+        if (!procId && typeof toolResult === 'string') {
+          var m = toolResult.match(/with id '([^']+)'/);
+          if (m) procId = m[1];
+        }
+
+        var isRunning = (status === 'running' || status === 'running_bg');
+        var wrap = document.createElement('div');
+        wrap.className = 'activity-cmd-wrap bg-proc-wrap';
+        if (procId) wrap.setAttribute('data-process-id', procId);
+
+        var row = document.createElement('div');
+        row.className = 'activity-row activity-row-command activity-row-clickable bg-proc-row' + (isRunning ? ' running' : '');
+        row.setAttribute('data-action', 'toggle-cmd-output');
+
+        var safeCmd = escapeHtml(cmd || 'background command');
+        var safeProcId = escapeHtml(procId || 'bg');
+
+        var stopBtnHtml = (isRunning && procId) ?
+          '<button class="bg-proc-stop-btn" data-process-id="' + safeProcId + '" title="Stop background process">' +
+            '<span class="codicon codicon-debug-stop"></span> Stop' +
+          '</button>' : '';
+
+        var tagHtml = isRunning ?
+          '<span class="bg-proc-badge running"><span class="activity-running-dot"></span> RUNNING (BG)</span>' :
+          ('<span class="bg-proc-badge ' + (status === 'error' ? 'stopped' : (status === 'stopped' ? 'stopped' : 'done')) + '">' +
+            (status === 'error' ? 'FAILED' : (status === 'stopped' ? 'STOPPED' : 'DONE')) +
+          '</span>');
+
+        row.innerHTML =
+          '<span class="activity-action" style="color:var(--accent,#58a6ff); font-weight:600;">BG</span>' +
+          '<span class="activity-cmd-text" title="' + safeCmd + ' (' + safeProcId + ')">' + safeCmd + '</span>' +
+          '<div style="display:flex; align-items:center; gap:6px; margin-left:auto;">' +
+            tagHtml +
+            stopBtnHtml +
+            '<span class="activity-chevron">&#x203A;</span>' +
+          '</div>';
+
+        wrap.appendChild(row);
+
+        var outputText = '';
+        if (typeof toolResult === 'string' && toolResult.trim()) {
+          outputText = toolResult.trim();
+        }
+        var outputBox = document.createElement('div');
+        outputBox.className = 'activity-cmd-output';
+        outputBox.style.display = 'none';
+        outputBox.textContent = outputText || '(Background process started)';
+        wrap.appendChild(outputBox);
+
+        return wrap;
+      };
+
+      window.handleProcessExitedUI = function(msg) {
+        var procId = msg.process_id;
+        var wraps = procId ? document.querySelectorAll('[data-process-id="' + procId + '"]') : [];
+        if (!wraps || wraps.length === 0) {
+          wraps = document.querySelectorAll('.bg-proc-wrap:has(.bg-proc-badge.running), .bg-proc-wrap.running');
+        }
+        wraps.forEach(function(wrap) {
+          var badge = wrap.querySelector('.bg-proc-badge');
+          if (badge) {
+            badge.className = 'bg-proc-badge ' + (msg.exit_code === 0 ? 'done' : 'stopped');
+            badge.textContent = msg.exit_code === 0 ? 'DONE (BG)' : ('STOPPED (' + (msg.exit_code !== undefined ? msg.exit_code : '') + ')');
+          }
+          var stopBtn = wrap.querySelector('.bg-proc-stop-btn');
+          if (stopBtn) {
+            stopBtn.remove();
+          }
+          var row = wrap.querySelector('.bg-proc-row') || wrap;
+          row.classList.remove('running');
+          var out = wrap.querySelector('.activity-cmd-output');
+          if (out) {
+            var dur = typeof msg.duration === 'number' ? (' in ' + msg.duration + 's') : '';
+            out.textContent = (out.textContent ? (out.textContent + String.fromCharCode(10)) : '') +
+              '[Process finished with exit code ' + (msg.exit_code !== undefined ? msg.exit_code : 0) + dur + ']';
+          }
+        });
+
+        var toolCards = procId ? document.querySelectorAll('.tool-card[data-process-id="' + procId + '"]') : [];
+        if (!toolCards || toolCards.length === 0) {
+          toolCards = document.querySelectorAll('.tool-card[data-tool-name="shell_bg"]');
+        }
+        toolCards.forEach(function(tc) {
+          var tag = tc.querySelector('.tool-tag');
+          if (tag) {
+            tag.textContent = msg.exit_code === 0 ? 'DONE' : 'STOPPED';
+            tag.style.background = msg.exit_code === 0 ? 'rgba(63, 185, 80, 0.2)' : 'rgba(248, 81, 73, 0.2)';
+            tag.style.color = msg.exit_code === 0 ? 'var(--green)' : 'var(--red)';
+          }
+          var sBtn = tc.querySelector('.bg-proc-stop-btn');
+          if (sBtn) sBtn.remove();
+        });
+      };
+
       // Document click delegation for activity rows
       document.addEventListener('click', function(e) {
+        var stopBtn = e.target.closest('.bg-proc-stop-btn');
+        if (stopBtn) {
+          e.stopPropagation();
+          e.preventDefault();
+          var pId = stopBtn.getAttribute('data-process-id');
+          if (pId) {
+            stopBtn.disabled = true;
+            stopBtn.textContent = 'Stopping...';
+            postToVsCode({ type: 'kill_process', processId: pId });
+          }
+          return;
+        }
+
         var diffBtn = e.target.closest('.activity-diff-btn');
         var statsEl = !diffBtn ? e.target.closest('.activity-stats') : null;
         if (diffBtn || statsEl) {

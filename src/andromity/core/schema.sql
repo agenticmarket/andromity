@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     allowed_commands TEXT NOT NULL DEFAULT '[]',
     allowed_domains  TEXT NOT NULL DEFAULT '[]',
     undo_stack       TEXT NOT NULL DEFAULT '[]',
+    session_metadata TEXT NOT NULL DEFAULT '{}',
     sync_dirty      INTEGER NOT NULL DEFAULT 1,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL

@@ -1,12 +1,12 @@
 [project]
 name = "andromity"
-version = "0.2.12"
-description = "AI coding agent with a beautiful terminal UI. Works with Claude, Gemini, GPT, Ollama and more."
+version = "0.2.15"
+description = "Open-source AI coding agent for terminal and IDE workflows with BYOK, local Ollama, MCP tools and subagents."
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [{ name = "Agentic Market", email = "hello@agenticmarket.dev" }]
-keywords = ["ai", "coding-agent", "tui", "terminal", "llm", "claude", "gemini", "mcp", "cli"]
+keywords = ["ai", "coding-agent", "autonomous-agent", "byok", "ollama", "mcp", "llm", "cli", "tui", "terminal", "code-review", "claude", "openai", "gemini", "openrouter", "subagents"]
 
 classifiers = [
     "Development Status :: 5 - Production/Stable",

@@ -22,7 +22,7 @@ def set_custom_db_path(path: Optional[Path]) -> None:
     close_conn()
 
 
-def close_conn() -> None:
+def close_conn(cancel_timers: bool = True) -> None:
     """Close the current thread's database connection if open."""
     if hasattr(_local, "conn") and _local.conn is not None:
         try:
@@ -32,11 +32,12 @@ def close_conn() -> None:
         _local.conn = None
     if hasattr(_local, "conn_path"):
         _local.conn_path = None
-    try:
-        from andromity.core.session import Session
-        Session.cancel_all_timers()
-    except Exception:
-        pass
+    if cancel_timers:
+        try:
+            from andromity.core.session import Session
+            Session.cancel_all_timers()
+        except Exception:
+            pass
     import gc
     gc.collect()
 
@@ -56,7 +57,7 @@ def get_conn() -> sqlite3.Connection:
     db_path = get_db_path()
     current_path = getattr(_local, "conn_path", None)
     if not hasattr(_local, "conn") or _local.conn is None or current_path != db_path:
-        close_conn()
+        close_conn(cancel_timers=False)
         if str(db_path) != ":memory:":
             db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(
@@ -83,8 +84,12 @@ def get_conn() -> sqlite3.Connection:
 def init_schema() -> None:
     """Execute DDL schema to ensure all tables and indexes exist."""
     global _SCHEMA_INITIALIZED
+    conn = get_conn()
+    # executescript commits an open transaction. Callers initialize the
+    # schema before beginning a transaction, including legacy imports.
+    if conn.in_transaction:
+        return
     with _INIT_LOCK:
-        conn = get_conn()
         schema_path = Path(__file__).parent / "schema.sql"
         if schema_path.exists():
             schema_sql = schema_path.read_text(encoding="utf-8")
@@ -153,6 +158,10 @@ def init_schema() -> None:
             INSERT OR IGNORE INTO schema_version(version) VALUES (1);
             """
         conn.executescript(schema_sql)
+        conn.execute("CREATE TABLE IF NOT EXISTS storage_migrations (name TEXT PRIMARY KEY, completed_at TEXT NOT NULL)")
+        session_columns = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)")}
+        if "session_metadata" not in session_columns:
+            conn.execute("ALTER TABLE sessions ADD COLUMN session_metadata TEXT NOT NULL DEFAULT '{}'")
 
         # Migration helper for older databases: ensure new columns exist
         for col_name in ("allowed_commands", "allowed_domains", "undo_stack"):
@@ -161,7 +170,7 @@ def init_schema() -> None:
             except sqlite3.OperationalError:
                 pass  # column already exists
 
-        for col_name, col_type in (("images", "TEXT"), ("duration", "REAL")):
+        for col_name, col_type in (("images", "TEXT"), ("duration", "REAL"), ("turn_id", "TEXT"), ("steering", "INTEGER NOT NULL DEFAULT 0")):
             try:
                 conn.execute(f"ALTER TABLE session_messages ADD COLUMN {col_name} {col_type};")
             except sqlite3.OperationalError:

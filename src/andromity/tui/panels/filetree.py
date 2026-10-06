@@ -135,11 +135,12 @@ class _DebouncedFSHandler(_FSHandler if _WATCHDOG else object):
     flushes them as a set so the panel can sync ONLY the affected subtrees.
     Uses a single persistent background thread to eliminate timer-thread churn."""
 
-    def __init__(self, callback, debounce_sec: float = 1.2):
+    def __init__(self, callback, debounce_sec: float = 1.2, project_path: Optional[Path] = None):
         if _WATCHDOG:
             super().__init__()
         self._callback = callback  # called with set[str] of changed dir paths
         self._debounce = debounce_sec
+        self._project_path = project_path.resolve() if project_path else None
         self._pending: set[str] = set()
         self._lock = threading.Lock()
         self._cond = threading.Condition(self._lock)
@@ -149,15 +150,27 @@ class _DebouncedFSHandler(_FSHandler if _WATCHDOG else object):
         self._worker_thread.start()
 
     def on_any_event(self, event):
-        src = getattr(event, "src_path", None) or getattr(event, "dest_path", None)
-        if not src or _is_noise(src):
+        event_type = getattr(event, "event_type", "modified")
+        if event_type not in {"created", "deleted", "modified", "moved"}:
             return
-        try:
-            parent = str(Path(src).parent)
-        except Exception:
+        # Directory modified events accompany child events; avoid ancestor cascades.
+        if getattr(event, "is_directory", False) and event_type == "modified":
+            return
+        parents = set()
+        for src in (getattr(event, "src_path", None), getattr(event, "dest_path", None)):
+            if not src:
+                continue
+            try:
+                path = Path(src)
+                relative = path.resolve().relative_to(self._project_path) if self._project_path else path
+                if not _is_noise(str(relative)):
+                    parents.add(str(path.parent))
+            except (ValueError, OSError):
+                continue
+        if not parents:
             return
         with self._cond:
-            self._pending.add(parent)
+            self._pending.update(parents)
             self._last_event_time = time.time()
             self._cond.notify_all()
 
@@ -257,7 +270,8 @@ FileTreePanel { height: 1fr; }
         if _WATCHDOG and not is_root_dir:
             try:
                 self._fs_handler = _DebouncedFSHandler(
-                    callback=lambda dirs: self.app.call_from_thread(self._apply_fs_events, dirs)
+                    callback=lambda dirs: self.app.call_from_thread(self._apply_fs_events, dirs),
+                    project_path=self.project_path,
                 )
                 self._observer = Observer()
                 self._observer.schedule(self._fs_handler, str(self.project_path), recursive=True)
@@ -297,6 +311,8 @@ FileTreePanel { height: 1fr; }
         if dir_path.is_dir() and str(dir_path) not in self._loaded_paths:
             self._populate_node(node, dir_path)
             self._loaded_paths.add(str(dir_path))
+        elif dir_path.is_dir():
+            self._sync_node(node, dir_path, self._git_status_cache, recurse=False)
 
     # ── Shared scanning / labeling helpers ─────────────────────────────────────
 
@@ -378,7 +394,7 @@ FileTreePanel { height: 1fr; }
 
     # ── Incremental Diff Sync (seamless updates — no clear, no flicker) ────────
 
-    def _sync_node(self, parent_node: TreeNode, dir_path: Path, git_status: dict) -> None:
+    def _sync_node(self, parent_node: TreeNode, dir_path: Path, git_status: dict, recurse: bool = True) -> None:
         """Reconcile parent_node's children with dir_path's actual contents.
 
         Applies MINIMAL mutations only:
@@ -438,7 +454,7 @@ FileTreePanel { height: 1fr; }
 
             # Descend ONLY into open, already-loaded directories. Collapsed
             # stubs stay untouched — invisible changes never reach the UI.
-            if is_dir and node.is_expanded and key in self._loaded_paths:
+            if recurse and is_dir and node.is_expanded and key in self._loaded_paths:
                 self._sync_node(node, item, git_status)
 
             prev = node
@@ -470,31 +486,23 @@ FileTreePanel { height: 1fr; }
         if not self.display:
             return
         if self._last_query:
-            # Search view rebuilds itself on the next keystroke — don't fight it.
+            # Watcher events are already debounced; update the active search too.
+            self._do_search()
             return
 
         tree = self.query_one("#file-tree", Tree)
 
         targets: dict[str, TreeNode] = {}
-        need_root = False
         for dir_str in changed_dirs:
             node = self._nearest_syncable_node(tree, Path(dir_str))
             if node is None:
-                need_root = True
-            else:
-                targets[str(node.data)] = node
-
-        # Drop targets nested inside other targets — syncing the ancestor
-        # already recurses into expanded, loaded children.
-        pruned: dict[str, TreeNode] = {}
-        for key, node in targets.items():
-            kpath = Path(key)
-            if any(Path(other) in kpath.parents for other in targets if other != key):
                 continue
-            pruned[key] = node
-        targets = pruned
+            else:
+                targets[str(self.project_path) if node is tree.root else str(node.data)] = node
 
-        if not targets and not need_root:
+        # Each target reconciles only its own children, including nested targets.
+
+        if not targets:
             return
 
         def _scan():
@@ -513,12 +521,9 @@ FileTreePanel { height: 1fr; }
             scroll_y = tree.scroll_y
             cursor_line = tree.cursor_line
 
-            if need_root:
-                self._sync_node(tree.root, self.project_path, git_status)
-            else:
-                for key, node in targets.items():
-                    if self._node_attached(node):
-                        self._sync_node(node, Path(key), git_status)
+            for key, node in targets.items():
+                if self._node_attached(node):
+                    self._sync_node(node, Path(key), git_status, recurse=False)
 
             # Defensive: anchor the viewport if mass deletions shifted layout.
             try:
@@ -536,19 +541,21 @@ FileTreePanel { height: 1fr; }
             except Exception:
                 log.debug("could not schedule fs-event apply (shutting down?)", exc_info=True)
 
-        self.run_worker(_worker, thread=True, exclusive=True, group="tree-fs-events")
+        self.run_worker(_worker, thread=True, exclusive=False, group="tree-fs-events")
 
     def _nearest_syncable_node(self, tree: Tree, dir_path: Path) -> TreeNode | None:
         """Deepest live tree node that is dir_path itself or an ancestor of it
         and already loaded. Returns None when only a root-level sync helps."""
         project = self.project_path
+        if dir_path != project and project not in dir_path.parents:
+            return None
         current = dir_path
         while True:
             if current == project:
                 return tree.root
             node = self._find_child_node(tree.root, current)
             if node is not None and str(current) in self._loaded_paths:
-                return node
+                return node if node.is_expanded else None
             parent = current.parent
             if parent == current:
                 return None
@@ -560,6 +567,10 @@ FileTreePanel { height: 1fr; }
         for child in root.children:
             if str(child.data) == t:
                 return child
+            if child.is_expanded:
+                found = FileTreePanel._find_child_node(child, target)
+                if found is not None:
+                    return found
         return None
 
     @staticmethod

@@ -1,11 +1,13 @@
 import { ChatViewState } from "./chatHtml.js";
+import { getPromptDisplayScript } from "../promptDisplay.js";
 
 export function getChatClientScript(sidebarIconUri: string, state: ChatViewState): string {
   return `
+    ${getPromptDisplayScript()}
     const vscode = acquireVsCodeApi();
     window.__vscodeApi = vscode;
     const sidebarIconUri = "${sidebarIconUri}";
-    const extensionVersion = "${state.extensionVersion || '0.2.12'}";
+    const extensionVersion = "${state.extensionVersion || '0.2.15'}";
 
     window.onerror = function(msg, url, lineNo, columnNo, error) {
       console.error("[Andromity Webview Error]", msg, lineNo, columnNo, error);
@@ -73,6 +75,143 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (planTrackerStrip) planTrackerStrip.style.display = 'none';
       document.querySelector('.composer-container')?.classList.remove('has-plan-tracker');
     }
+
+    const bgProcessStrip = document.getElementById('bg-process-strip');
+    const bgStripInfo = document.getElementById('bg-strip-info');
+    const bgStripTitle = document.getElementById('bg-strip-title');
+    const bgStripCount = document.getElementById('bg-strip-count');
+    const bgStripTimer = document.getElementById('bg-strip-timer');
+    const btnBgStopAll = document.getElementById('btn-bg-stop-all');
+    const bgProcessList = document.getElementById('bg-process-list');
+    let isBgStripCollapsed = false;
+    const activeBgProcesses = new Map(); // procId -> { process_id, pid, command, startTime }
+    let bgTimerInterval = null;
+
+    function formatElapsedSecs(sec) {
+      if (sec < 60) return sec + 's';
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      return m + 'm ' + s + 's';
+    }
+
+    function updateBgProcessStripUI() {
+      if (!bgProcessStrip) return;
+      if (activeBgProcesses.size === 0) {
+        bgProcessStrip.style.display = 'none';
+        document.querySelector('.composer-container')?.classList.remove('has-bg-process');
+        if (bgTimerInterval) {
+          clearInterval(bgTimerInterval);
+          bgTimerInterval = null;
+        }
+        if (btnBgStopAll) {
+          btnBgStopAll.disabled = false;
+          btnBgStopAll.innerHTML = '<span class="codicon codicon-debug-stop"></span> Stop';
+        }
+        return;
+      }
+
+      bgProcessStrip.style.display = 'flex';
+      document.querySelector('.composer-container')?.classList.add('has-bg-process');
+
+      const count = activeBgProcesses.size;
+      if (bgStripCount) bgStripCount.textContent = count === 1 ? '1 running' : (count + ' running');
+
+      if (count === 1) {
+        const first = activeBgProcesses.values().next().value;
+        const shortCmd = (first && first.command ? first.command : 'Background Task').trim().split(String.fromCharCode(10)).join(' ');
+        if (bgStripTitle) bgStripTitle.textContent = shortCmd.length > 28 ? (shortCmd.slice(0, 26) + '...') : shortCmd;
+      } else {
+        if (bgStripTitle) bgStripTitle.textContent = 'Background Tasks';
+      }
+
+      if (bgProcessList) {
+        let itemsHtml = '';
+        let maxElapsed = 0;
+        const now = Date.now();
+        activeBgProcesses.forEach(function(proc, procId) {
+          const el = Math.max(0, Math.floor((now - (proc.startTime || now)) / 1000));
+          if (el > maxElapsed) maxElapsed = el;
+          const elStr = formatElapsedSecs(el);
+          const safeCmd = escapeHtml((proc.command || 'Process ' + procId).split(String.fromCharCode(10)).join(' '));
+          const safeProcId = escapeHtml(procId);
+          itemsHtml += '<div class="bg-process-item" data-process-id="' + safeProcId + '" title="Click to view live logs in new tab">' +
+            '<div class="bg-item-left">' +
+              '<span class="bg-item-id">' + safeProcId + '</span>' +
+              '<span class="bg-item-cmd" title="' + safeCmd + '">' + safeCmd + '</span>' +
+            '</div>' +
+            '<div class="bg-item-right">' +
+              '<span class="bg-item-elapsed" id="bg-elapsed-' + safeProcId + '">' + elStr + '</span>' +
+              '<button class="btn-tracker-close bg-item-stop-btn" data-process-id="' + safeProcId + '" title="Stop process"><svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg></button>' +
+            '</div>' +
+          '</div>';
+        });
+        bgProcessList.innerHTML = itemsHtml;
+        if (bgStripTimer) bgStripTimer.textContent = formatElapsedSecs(maxElapsed);
+      }
+
+      if (!bgTimerInterval) {
+        bgTimerInterval = setInterval(function() {
+          let maxElapsed = 0;
+          const now = Date.now();
+          activeBgProcesses.forEach(function(proc, procId) {
+            const el = Math.max(0, Math.floor((now - (proc.startTime || now)) / 1000));
+            if (el > maxElapsed) maxElapsed = el;
+            const elSpan = document.getElementById('bg-elapsed-' + procId);
+            if (elSpan) elSpan.textContent = formatElapsedSecs(el);
+          });
+          if (bgStripTimer) bgStripTimer.textContent = formatElapsedSecs(maxElapsed);
+        }, 1000);
+      }
+    }
+
+    if (bgStripInfo) {
+      bgStripInfo.addEventListener('click', function() {
+        isBgStripCollapsed = !isBgStripCollapsed;
+        if (bgProcessStrip) bgProcessStrip.classList.toggle('collapsed', isBgStripCollapsed);
+      });
+    }
+
+
+
+    if (btnBgStopAll) {
+      btnBgStopAll.addEventListener('click', function(ev) {
+        ev.stopPropagation();
+        btnBgStopAll.disabled = true;
+        btnBgStopAll.innerHTML = '<span class="codicon codicon-loading codicon-modifier-spin"></span>';
+        activeBgProcesses.forEach(function(proc, procId) {
+          vscode.postMessage({ type: 'kill_process', processId: procId });
+        });
+      });
+    }
+
+    if (bgProcessList) {
+      bgProcessList.addEventListener('click', function(ev) {
+        const stopBtn = ev.target.closest('.bg-item-stop-btn');
+        if (stopBtn) {
+          ev.stopPropagation();
+          const procId = stopBtn.getAttribute('data-process-id');
+          if (procId) {
+            stopBtn.disabled = true;
+            stopBtn.innerHTML = '<span class="codicon codicon-loading codicon-modifier-spin"></span>';
+            vscode.postMessage({ type: 'kill_process', processId: procId });
+          }
+          return;
+        }
+
+        const item = ev.target.closest('.bg-process-item');
+        if (item) {
+          const procId = item.getAttribute('data-process-id');
+          if (procId) {
+            const proc = activeBgProcesses.get(procId);
+            vscode.postMessage({
+              type: 'open_bg_task_tab',
+              processId: procId,
+              command: proc ? proc.command : ''
+            });
+          }
+        }
+      });
+    }
     const zeroWorkspaceLabel = document.getElementById('zero-workspace-label');
     const recentSessionsSection = document.getElementById('recent-sessions-section');
     const recentSessionsList = document.getElementById('recent-sessions-list');
@@ -97,11 +236,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const onboardingProvidersGrid = document.getElementById('onboarding-providers-grid');
     const onboardingKeyForm = document.getElementById('onboarding-key-form');
     const onboardingOllamaForm = document.getElementById('onboarding-ollama-form');
-    const onboardingAndromityForm = document.getElementById('onboarding-andromity-form');
+    const onboardingOwnProvider = document.getElementById('onboarding-own-provider');
+    const onboardingTrialSection = document.getElementById('onboarding-trial-section');
     const btnOnboardingInstantStart = document.getElementById('btn-onboarding-instant-start');
     const btnOnboardingGithubLogin = document.getElementById('btn-onboarding-github-login');
-    const btnOnboardingAndromityActivate = document.getElementById('btn-onboarding-andromity-activate');
-    const btnOnboardingAndromityGithub = document.getElementById('btn-onboarding-andromity-github');
     const onboardingKeyInput = document.getElementById('onboarding-key-input');
     const onboardingKeyLabel = document.getElementById('onboarding-key-label');
     const onboardingPortalLink = document.getElementById('onboarding-portal-link');
@@ -387,18 +525,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     ];
 
     const DEVELOPER_STATEMENTS = [
-      { main: "Make it work.<br>Make it right.", sub: "First functional, then optimal." },
-      { main: "Think twice.<br>Code once.", sub: "Clarity precedes execution." },
-      { main: "First solve the problem.<br>Then write the code.", sub: "Understand deeply before building." },
-      { main: "Ship fast.<br>Break nothing.", sub: "Precision in every iteration." },
-      { main: "Simplicity is prerequisite<br>for reliability.", sub: "Keep architectures clean & focused." },
-      { main: "Leave the code<br>better than you found it.", sub: "Continuous craftsmanship." },
-      { main: "Talk is cheap.<br>Show me the code.", sub: "Let working software speak." },
-      { main: "Stay curious.<br>Build fearlessly.", sub: "What are we engineering today?" },
-      { main: "Less code.<br>Fewer bugs.", sub: "Elegance through minimalism." },
-      { main: "Design is how it works,<br>not just how it looks.", sub: "Form follows function." },
-      { main: "Premature optimization<br>is the root of all evil.", sub: "Measure before you tune." },
-      { main: "Code is read more<br>than it is written.", sub: "Optimize for readability." }
+      { main: "What are we<br>building today?", sub: "Bring an idea, a bug, or a question. Let's work through it." },
+      { main: "A fresh look.<br>A clear next step.", sub: "Explore your code, solve a problem, or start something new." },
+      { main: "Pick up where<br>you left off.", sub: "Continue a conversation or bring your next idea to life." }
     ];
 
     function setRandomStatement() {
@@ -612,6 +741,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let pinnedModels = ${JSON.stringify(state.pinnedModels || [])};
     let isRunning = false;
     const promptQueue = [];
+    const serverQueues = {};
+    const appliedInputIds = new Set();
+    let queueSupported = false;
+    let pendingInputDraft = null;
+
+    function requestQueueSnapshot() {
+      if (currentSessionId) vscode.postMessage({ type: 'queue_snapshot', sessionId: currentSessionId });
+    }
     const sentPromptsHistory = [];
     let promptHistoryIndex = 0;
     let tempPromptDraft = '';
@@ -641,13 +778,23 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let _isUserActivelyScrolling = false;
     let _userScrollDebounceTimer = null;
     let _lastUserScrollTime = 0;
+    let _scrollIntentVersion = 0;
 
     function markUserScrollActive() {
+      _scrollIntentVersion++;
       _lastUserScrollTime = Date.now();
       _isUserActivelyScrolling = true;
+      _ignoreScrollUntil = 0;
+      isProgrammaticScroll = false;
+      if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer);
+      if (_scrollRafId) {
+        cancelAnimationFrame(_scrollRafId);
+        _scrollRafId = null;
+      }
       if (_userScrollDebounceTimer) clearTimeout(_userScrollDebounceTimer);
       _userScrollDebounceTimer = setTimeout(() => {
         _isUserActivelyScrolling = false;
+        if (!userScrolledUp) scrollToBottomIfNeeded();
       }, 500);
     }
 
@@ -672,10 +819,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const doScroll = () => {
         if (!chatContainer) return;
         chatContainer.scrollTop = chatContainer.scrollHeight;
-        const lastEl = chatContainer.lastElementChild;
-        if (lastEl && typeof lastEl.scrollIntoView === 'function') {
-          lastEl.scrollIntoView({ block: 'end', behavior: smooth ? 'smooth' : 'auto' });
-        }
       };
 
       if (smooth) {
@@ -703,10 +846,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (scrollUnreadBadge) scrollUnreadBadge.classList.add('has-unread');
         return;
       }
+      if (_isUserActivelyScrolling) return;
 
       if (_scrollRafId) return; // Coalesce within current frame to eliminate jitter
+      const scrollSessionId = currentSessionId;
       _scrollRafId = requestAnimationFrame(() => {
         _scrollRafId = null;
+        if (currentSessionId !== scrollSessionId) return;
+        if (_isUserActivelyScrolling) return;
         if (!chatContainer || userScrolledUp) {
           if (scrollUnreadBadge) scrollUnreadBadge.classList.add('has-unread');
           return;
@@ -719,6 +866,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         programmaticScrollTimer = setTimeout(() => {
           isProgrammaticScroll = false;
         }, 120);
+      });
+    }
+
+    function settleSessionScroll() {
+      const sessionId = currentSessionId;
+      const intentVersion = _scrollIntentVersion;
+      const followLatest = () => {
+        if (currentSessionId !== sessionId || _scrollIntentVersion !== intentVersion) return;
+        scrollToBottomIfNeeded();
+      };
+      requestAnimationFrame(() => {
+        followLatest();
+        setTimeout(followLatest, 60);
+        setTimeout(followLatest, 180);
       });
     }
 
@@ -738,8 +899,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           if (btnScrollBottom) btnScrollBottom.classList.add('visible');
         } else if (e.deltaY > 0) {
-          // User scrolled DOWN: if user reached near the bottom, resume auto-scroll
-          if (isAtBottom(64)) {
+          markUserScrollActive();
+          // Resume only at the bottom; a threshold would fight native wheel momentum.
+          if (isAtBottom(2)) {
             userScrolledUp = false;
             _isUserActivelyScrolling = false;
             _lastUserScrollTime = 0;
@@ -764,6 +926,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         isProgrammaticScroll = false;
       }, { passive: true });
 
+      chatContainer.addEventListener('keydown', (e) => {
+        if (e.target?.closest('input, textarea, [contenteditable="true"]')) return;
+        if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(e.key)) {
+          markUserScrollActive();
+          _ignoreScrollUntil = 0;
+          isProgrammaticScroll = false;
+        }
+      });
+
       chatContainer.addEventListener('load', (e) => {
         if (e.target && e.target.tagName === 'IMG') {
           scrollToBottomIfNeeded();
@@ -781,15 +952,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const delta = currentScrollTop - _lastScrollTop;
         _lastScrollTop = currentScrollTop;
 
-        const atBottom = isAtBottom(64);
+        const atBottom = isAtBottom(2);
 
-        if (atBottom) {
+        if (atBottom && !(_isUserActivelyScrolling && userScrolledUp && delta <= 0)) {
           // User reached or is at bottom: auto-scroll resumes
           userScrolledUp = false;
           _isUserActivelyScrolling = false;
           _lastUserScrollTime = 0;
-        } else if (delta < -2) {
-          // User scrolled UP away from bottom: halt auto-scroll
+        } else if (!atBottom && delta !== 0 && _isUserActivelyScrolling) {
+          // Layout changes can also reduce scrollTop when a permission card closes.
           userScrolledUp = true;
           markUserScrollActive();
           if (_scrollRafId) {
@@ -808,8 +979,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
       });
 
-      // ResizeObserver: watch only sticky UI elements (planTrackerStrip, interactiveSlot).
-      // If user is scrolled up or actively scrolling, DO NOT auto-scroll!
+      // Follow viewport changes from permission cards, trackers, and composer resizing.
       if (typeof ResizeObserver !== 'undefined') {
         const ro = new ResizeObserver(() => {
           if (!userScrolledUp) {
@@ -822,11 +992,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (interactiveSlot) {
           ro.observe(interactiveSlot);
         }
+        ro.observe(chatContainer);
       }
     }
 
     btnScrollBottom?.addEventListener('click', () => {
-      scrollToBottom(true);
+      scrollToBottom(false);
+      settleSessionScroll();
     });
 
     let toolSeqDoneTools = new Set();
@@ -1139,6 +1311,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
     if (promptInput) {
       promptInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+          e.preventDefault();
+          if (queueSupported) sendCurrentPrompt('steer');
+          else appendSystemNote('Update the Andromity server to use safe steering.');
+          return;
+        }
         // Mentions navigation
         if (mentionPalette && mentionPalette.style.display === 'flex' && currentMentionMatches.length > 0) {
           if (e.key === 'ArrowDown') {
@@ -2656,7 +2834,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const name = chip.dataset.name || 'AI Provider';
         const portal = chip.dataset.portal || '';
 
-        if (onboardingKeyLabel) onboardingKeyLabel.textContent = '2. Paste ' + name + ' API Key';
+        if (onboardingKeyLabel) onboardingKeyLabel.textContent = 'Paste your ' + name + ' API key';
         if (onboardingKeyInput) onboardingKeyInput.placeholder = 'Paste your ' + name + ' API key...';
         if (onboardingPortalLink) {
           onboardingPortalLink.dataset.url = portal;
@@ -2666,17 +2844,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         if (selectedOnboardingProvider === 'ollama') {
           if (onboardingKeyForm) onboardingKeyForm.style.display = 'none';
-          if (onboardingAndromityForm) onboardingAndromityForm.style.display = 'none';
           if (onboardingOllamaForm) onboardingOllamaForm.style.display = 'flex';
           vscode.postMessage({ type: 'check_ollama_status' });
-        } else if (selectedOnboardingProvider === 'andromity') {
-          if (onboardingKeyForm) onboardingKeyForm.style.display = 'none';
-          if (onboardingOllamaForm) onboardingOllamaForm.style.display = 'none';
-          if (onboardingAndromityForm) onboardingAndromityForm.style.display = 'flex';
         } else {
           if (onboardingKeyForm) onboardingKeyForm.style.display = 'flex';
           if (onboardingOllamaForm) onboardingOllamaForm.style.display = 'none';
-          if (onboardingAndromityForm) onboardingAndromityForm.style.display = 'none';
           if (onboardingKeyInput) setTimeout(() => onboardingKeyInput.focus(), 50);
         }
       });
@@ -2694,17 +2866,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       handleActivateAndromityFree(btnOnboardingInstantStart);
     });
 
-    btnOnboardingAndromityActivate?.addEventListener('click', () => {
-      handleActivateAndromityFree(btnOnboardingAndromityActivate);
-    });
 
     btnOnboardingGithubLogin?.addEventListener('click', () => {
       vscode.postMessage({ type: 'open_github_login' });
     });
 
-    btnOnboardingAndromityGithub?.addEventListener('click', () => {
-      vscode.postMessage({ type: 'open_github_login' });
-    });
 
     const btnTopAccount = document.getElementById('btn-top-account');
     const accountPillDot = document.getElementById('account-pill-dot');
@@ -2716,11 +2882,58 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const accountPlanBadge = document.getElementById('account-plan-badge');
     const accountQuotaVal = document.getElementById('account-quota-val');
     const accountQuotaBar = document.getElementById('account-quota-bar');
+    const accountQuotaTrack = document.getElementById('account-quota-track');
     const accountResetTimer = document.getElementById('account-reset-timer');
     const accountLatencyText = document.getElementById('account-latency-text');
     const btnAccountLogin = document.getElementById('btn-account-login');
     const btnAccountLogout = document.getElementById('btn-account-logout');
     const btnAccountRefresh = document.getElementById('btn-account-refresh');
+
+    function renderCloudAccountUsage(msg) {
+      const isAuthed = msg.plan === 'authenticated';
+      const known = msg.status === 'active' || msg.status === 'limit_reached' || msg.status === 'blocked';
+      const hasLimit = known && Number.isFinite(msg.limit_today) && msg.limit_today > 0;
+      const hasRemaining = Number.isFinite(msg.turns_remaining) && msg.turns_remaining >= 0;
+      const remaining = hasLimit && hasRemaining ? Math.min(msg.limit_today, msg.turns_remaining) : null;
+      const reached = msg.status === 'limit_reached' || (hasLimit && remaining === 0);
+      const blocked = msg.status === 'blocked';
+      const username = msg.username && !/^anonymous$/i.test(msg.username) ? msg.username : (isAuthed ? 'Developer' : 'Guest');
+      if (accountUsername) accountUsername.textContent = username;
+      if (accountPlanBadge) accountPlanBadge.textContent = isAuthed ? 'Signed in' : 'Cloud trial';
+      if (accountAvatar) accountAvatar.textContent = username.replace(/[^a-zA-Z0-9]/g, '').slice(0, 2).toUpperCase() || 'AM';
+      if (accountPillDot) {
+        accountPillDot.classList.toggle('authed', isAuthed);
+        accountPillDot.classList.toggle('limit', reached || blocked);
+      }
+      if (accountPillText) accountPillText.textContent = isAuthed ? 'Signed in' : 'Guest';
+      if (btnTopAccount) btnTopAccount.setAttribute('title', 'Cloud account — usage and daily allowance');
+      if (accountQuotaVal) {
+        accountQuotaVal.textContent = blocked ? 'Access blocked' : reached ? 'Daily limit reached' : known ? 'Available' : msg.status === 'checking' ? 'Checking…' : 'Usage unavailable';
+        accountQuotaVal.style.color = blocked || reached ? 'var(--vscode-errorForeground, #f85149)' : known ? 'var(--cloud-success, #3fb950)' : 'var(--muted)';
+      }
+      if (accountQuotaTrack) {
+        accountQuotaTrack.style.display = remaining !== null ? 'block' : 'none';
+        if (remaining !== null) {
+          accountQuotaTrack.setAttribute('aria-valuemax', '100');
+          accountQuotaTrack.setAttribute('aria-valuenow', String(Math.round(remaining / msg.limit_today * 100)));
+        }
+      }
+      if (accountQuotaBar && remaining !== null) {
+        const pct = Math.round(remaining / msg.limit_today * 100);
+        accountQuotaBar.style.width = pct + '%';
+        accountQuotaBar.style.background = pct <= 20 ? 'var(--vscode-errorForeground, #f85149)' : pct <= 50 ? 'var(--vscode-editorWarning-foreground, #d29922)' : 'var(--cloud-success, #3fb950)';
+      }
+      if (accountResetTimer) {
+        accountResetTimer.textContent = '';
+        if (hasLimit) {
+          const now = new Date();
+          const reset = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
+          accountResetTimer.textContent = 'Daily allowance resets at ' + reset.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+        }
+      }
+      if (btnAccountLogin) btnAccountLogin.style.display = isAuthed ? 'none' : 'block';
+      if (btnAccountLogout) btnAccountLogout.style.display = isAuthed ? 'block' : 'none';
+    }
 
     btnTopAccount?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -2941,8 +3154,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       onboardingSelectedLiveModel = defaultModel || (onboardingLiveModelsList[0]?.id) || '';
 
       if (onboardingStep1) onboardingStep1.style.display = 'none';
+      if (onboardingOwnProvider) onboardingOwnProvider.style.display = 'none';
+      if (onboardingTrialSection) onboardingTrialSection.style.display = 'none';
       if (onboardingStep2) onboardingStep2.style.display = 'flex';
-      if (onboardingStepText) onboardingStepText.textContent = 'Step 2 of 2 · Choose Starting Model';
+      if (onboardingStepText) onboardingStepText.textContent = 'Choose a starting model';
 
       if (onboardingStep2Badge) {
         const provName = provider ? (provider.charAt(0).toUpperCase() + provider.slice(1)) : 'AI';
@@ -2957,7 +3172,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function showOnboardingKeyStep() {
       if (onboardingStep2) onboardingStep2.style.display = 'none';
       if (onboardingStep1) onboardingStep1.style.display = 'flex';
-      if (onboardingStepText) onboardingStepText.textContent = 'Step 1 of 2 · Quick Setup';
+      if (onboardingOwnProvider) onboardingOwnProvider.style.display = 'block';
+      if (onboardingTrialSection) onboardingTrialSection.style.display = 'flex';
+      if (onboardingStepText) onboardingStepText.textContent = 'Choose how to connect';
 
       if (btnOnboardingSave) {
         btnOnboardingSave.disabled = false;
@@ -3151,7 +3368,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       recentSessionsSection.style.display = 'flex';
       const recent = pastSessionsWithHistory.slice(0, 3);
       recentSessionsList.innerHTML = recent.map(s => {
-        const name = escapeHtml(s.name || s.id || 'Untitled Session');
+        const name = escapeHtml(cleanPromptForDisplay(s.name) || s.id || 'Untitled Session');
         const dateStr = formatDateBadge(s.updated_at || s.created_at);
         const msgsText = s.message_count + (s.message_count === 1 ? ' msg' : ' msgs');
         const modelTag = s.model ? escapeHtml(s.model.split('/').pop().replace(/-/g, ' ')) : '';
@@ -3231,7 +3448,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const parentName = opts.parentName || '';
 
       const isCur = s.id === currentSessionId;
-      const name = escapeHtml(s.name || s.id || (isSubsession ? 'Subagent Task' : 'Session'));
+      const name = escapeHtml(cleanPromptForDisplay(s.name) || s.id || (isSubsession ? 'Subagent Task' : 'Session'));
       const msgs = s.message_count ? (s.message_count + ' msgs') : 'Empty';
       const cost = (s.cost_usd && Number(s.cost_usd) > 0) ? ('$' + Number(s.cost_usd).toFixed(3)) : '';
       const timeStr = formatDateBadge(s.updated_at || s.created_at);
@@ -3718,6 +3935,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         node.addEventListener('click', () => {
           if (timelineFlyout) timelineFlyout.style.display = 'none';
+          userScrolledUp = true;
+          markUserScrollActive();
+          btnScrollBottom?.classList.add('visible');
           uWrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
           uWrap.style.transition = 'outline 0.15s ease';
           uWrap.style.outline = '1px solid rgba(255, 255, 255, 0.25)';
@@ -3744,6 +3964,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     document.getElementById('btn-timeline-jump-first')?.addEventListener('click', () => {
       const firstWrap = chatContainer.querySelector('.message-wrap.user');
       if (firstWrap) {
+        userScrolledUp = true;
+        markUserScrollActive();
+        btnScrollBottom?.classList.add('visible');
         firstWrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
         if (timelineFlyout) timelineFlyout.style.display = 'none';
       }
@@ -3939,9 +4162,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             if (sId === currentSessionId) {
               userScrolledUp = false;
               scrollToBottom(false);
-              requestAnimationFrame(() => {
-                scrollToBottom(false);
-              });
+              settleSessionScroll();
               break;
             }
             vscode.postMessage({ type: 'switch_session', sessionId: sId });
@@ -4155,31 +4376,33 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
         case 'retry-turn': {
           const errCard = target.closest('.andromity-error-card, .error-card');
+          if (errCard?.dataset.retryPending === 'true') break;
           if (errCard) {
             errCard.style.opacity = '0.5';
-            errCard.style.pointerEvents = 'none';
+            errCard.dataset.retryPending = 'true';
             const btn = errCard.querySelector('.btn-error-retry');
             if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>Retrying...';
           }
           vscode.postMessage({
             type: 'retry_turn',
             sessionId: currentSessionId,
-            stripImages: false,
+            stripImages: false, model: currentModel, provider: currentProvider, reasoningEffort: currentReasoning,
           });
           break;
         }
         case 'retry-without-image': {
           const errCard = target.closest('.andromity-error-card, .error-card');
+          if (errCard?.dataset.retryPending === 'true') break;
           if (errCard) {
             errCard.style.opacity = '0.5';
-            errCard.style.pointerEvents = 'none';
+            errCard.dataset.retryPending = 'true';
             const btn = errCard.querySelector('.btn-error-retry');
             if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>Retrying without image...';
           }
           vscode.postMessage({
             type: 'retry_turn',
             sessionId: currentSessionId,
-            stripImages: true,
+            stripImages: true, model: currentModel, provider: currentProvider, reasoningEffort: currentReasoning,
           });
           break;
         }
@@ -4294,7 +4517,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         }
         case 'remove-queued':
-          removeQueued(parseInt(target.getAttribute('data-idx') || '0', 10));
+          if (queueSupported) vscode.postMessage({ type: 'queue_remove', sessionId: currentSessionId, inputId: target.getAttribute('data-input-id') });
+          else removeQueued(parseInt(target.getAttribute('data-idx') || '0', 10));
+          break;
+        case 'steer-queued':
+          vscode.postMessage({ type: 'queue_promote', sessionId: currentSessionId, inputId: target.getAttribute('data-input-id') });
+          break;
+        case 'resume-queue':
+          vscode.postMessage({ type: 'queue_resume', sessionId: currentSessionId });
           break;
         case 'copy-code':
           copyCode(target);
@@ -4370,12 +4600,33 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (isVisible) {
         modelFlyout.style.display = 'none';
       } else {
+        const promptBoxEl = document.querySelector('.prompt-box');
+        if (promptBoxEl) {
+          const pbRect = promptBoxEl.getBoundingClientRect();
+          if (pbRect.width > 0) {
+            modelFlyout.style.width = Math.round(pbRect.width) + 'px';
+            modelFlyout.style.maxWidth = Math.round(pbRect.width) + 'px';
+          }
+        }
         modelFlyout.style.display = 'flex';
         if (flyoutSearch) flyoutSearch.value = '';
         renderFlyoutList('');
         if (flyoutSearch) setTimeout(() => flyoutSearch.focus(), 50);
       }
     }
+
+    window.addEventListener('resize', () => {
+      if (modelFlyout && modelFlyout.style.display === 'flex') {
+        const promptBoxEl = document.querySelector('.prompt-box');
+        if (promptBoxEl) {
+          const pbRect = promptBoxEl.getBoundingClientRect();
+          if (pbRect.width > 0) {
+            modelFlyout.style.width = Math.round(pbRect.width) + 'px';
+            modelFlyout.style.maxWidth = Math.round(pbRect.width) + 'px';
+          }
+        }
+      }
+    });
 
     function isModelPinned(modelId, provider) {
       if (!pinnedModels || !Array.isArray(pinnedModels)) return false;
@@ -4457,12 +4708,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     window.pickModel = function(modelId, provider) {
       currentModel = modelId;
       if (provider) currentProvider = provider;
+      // Invalidate capability of previous model so UI does not stay locked in stale state
+      currentModelReasoningCapability = null;
+      const newCap = getActiveModelReasoningCapability();
+      if (newCap.mode !== 'none' && (!currentReasoning || currentReasoning === 'off')) {
+        currentReasoning = newCap.default_effort || 'medium';
+      }
       updateModelBadge();
       modelFlyout.style.display = 'none';
-      vscode.postMessage({ type: 'update_config', key: 'model', value: modelId });
-      if (provider) {
-        vscode.postMessage({ type: 'update_config', key: 'provider', value: provider });
-      }
+      vscode.postMessage({ type: 'update_config', key: 'model', value: modelId, provider: provider || currentProvider });
     };
 
     window.openModelHub = function() {
@@ -4487,13 +4741,47 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     let availableProfiles = ['builder', 'coder', 'reviewer', 'planner'];
-    const REASONING_LEVELS = [
-      { id: 'off', label: 'Off', desc: 'Direct responses • zero reasoning overhead', pct: 0 },
-      { id: 'low', label: 'Low', desc: 'Fast & concise thoughts • minimal latency', pct: 33.33 },
-      { id: 'medium', label: 'Medium', desc: 'Balanced reasoning for coding & architecture', pct: 66.66 },
-      { id: 'high', label: 'High', desc: 'Deep step-by-step reflection • complex tasks', pct: 100 }
-    ];
-    let availableReasoningEfforts = REASONING_LEVELS.map(l => l.id);
+    let REASONING_LEVELS = [];
+    let currentModelReasoningCapability = null;
+
+    function getActiveModelReasoningCapability() {
+      if (currentModelReasoningCapability && currentModelReasoningCapability._modelId === currentModel &&
+          currentModelReasoningCapability._providerId === currentProvider) {
+        return currentModelReasoningCapability;
+      }
+      const found = (allModels || []).find(m => m.id === currentModel && m.provider === currentProvider);
+      return found?.reasoning || { mode: 'unknown', supported_efforts: [], default_effort: 'auto' };
+    }
+
+    function getReasoningChoices(cap) {
+      const ids = ['auto'];
+      (cap.supported_efforts || []).forEach(value => {
+        if (typeof value !== 'string') return;
+        const id = value === 'none' ? 'off' : value;
+        if (cap.is_mandatory && id === 'off') return;
+        if (!ids.includes(id)) ids.push(id);
+      });
+      const ascending = ['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'on'];
+      const rank = id => ascending.includes(id) ? ascending.indexOf(id) : ascending.length;
+      ids.sort((a, b) => rank(a) - rank(b));
+      return ids.map((id, idx) => ({
+        id, label: id === 'auto' ? 'Auto' : id.charAt(0).toUpperCase() + id.slice(1),
+        pct: ids.length > 1 ? idx * 100 / (ids.length - 1) : 0,
+      }));
+    }
+
+    function hasReasoningControls(cap) {
+      return (Array.isArray(cap.supported_efforts) && cap.supported_efforts.length > 0) ||
+        (cap.supports_max_tokens === true && Number.isInteger(cap.budget_min) && Number.isInteger(cap.budget_max));
+    }
+
+    function validReasoningBudget(cap, value) {
+      if (!cap.supports_max_tokens || !['google_budget', 'anthropic_budget'].includes(cap.request_format)) return false;
+      if (!/^budget:[0-9]+$/.test(value || '')) return false;
+      const budget = Number(value.slice(7));
+      return Number.isInteger(cap.budget_min) && Number.isInteger(cap.budget_max) &&
+        budget >= cap.budget_min && budget <= cap.budget_max && (budget !== 0 || cap.supported_efforts.includes('off'));
+    }
     let attachedImages = [];
     let attachedFiles = [];
     let currentActiveEditorContext = null;
@@ -4667,7 +4955,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (lbl) {
         lbl.textContent = display.toUpperCase();
         if (typeof lbl.removeAttribute === 'function') {
-          lbl.removeAttribute('aria-busy');
+          if (typeof lbl.removeAttribute === 'function') lbl.removeAttribute('aria-busy');
         }
         if (lbl.classList && typeof lbl.classList.remove === 'function') {
           lbl.classList.remove('skeleton', 'skeleton-text');
@@ -4686,80 +4974,103 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function getReasoningLevelIndex(val) {
-      const v = (val || 'medium').toLowerCase();
-      const idx = REASONING_LEVELS.findIndex(l => l.id === v);
-      return idx >= 0 ? idx : 2;
+      const idx = REASONING_LEVELS.findIndex(l => l.id === val);
+      return idx >= 0 ? idx : 0;
     }
 
     function setReasoningLevel(levelId, notifyExtension) {
-      const idx = getReasoningLevelIndex(levelId);
-      const lvl = REASONING_LEVELS[idx];
-      currentReasoning = lvl.id;
-      updateReasoningUI(lvl);
+      const cap = getActiveModelReasoningCapability();
+      if (!hasReasoningControls(cap)) return;
+      const choices = getReasoningChoices(cap);
+      if (!choices.some(level => level.id === levelId) && !validReasoningBudget(cap, levelId)) return;
+      currentReasoning = levelId;
+      updateReasoningUI();
       if (notifyExtension) {
         vscode.postMessage({ type: 'update_config', key: 'reasoningEffort', value: currentReasoning });
       }
     }
 
-    function updateReasoningUI(lvl) {
-      if (!lvl) {
-        const idx = getReasoningLevelIndex(currentReasoning);
-        lvl = REASONING_LEVELS[idx];
+    function updateReasoningUI() {
+      const cap = getActiveModelReasoningCapability();
+      const controlsAvailable = hasReasoningControls(cap);
+      REASONING_LEVELS = getReasoningChoices(cap);
+      if (!REASONING_LEVELS.some(level => level.id === currentReasoning) && !validReasoningBudget(cap, currentReasoning)) {
+        currentReasoning = cap.default_effort && REASONING_LEVELS.some(level => level.id === cap.default_effort)
+          ? cap.default_effort : 'auto';
       }
-      const idx = REASONING_LEVELS.indexOf(lvl);
-
-      // 1. Update prompt button label & title
+      const idx = getReasoningLevelIndex(currentReasoning);
+      const lvl = REASONING_LEVELS[idx];
+      const isBudget = validReasoningBudget(cap, currentReasoning);
+      const label = controlsAvailable
+        ? (isBudget ? currentReasoning.slice(7) + ' tokens' : lvl.label)
+        : 'N/A';
+      const btn = document.getElementById('btn-prompt-reasoning');
+      if (btn) {
+        btn.classList.toggle('is-unsupported', !controlsAvailable);
+        btn.disabled = !controlsAvailable;
+        btn.setAttribute('aria-disabled', controlsAvailable ? 'false' : 'true');
+        btn.title = controlsAvailable
+          ? (cap.description || 'Thinking effort: ' + label)
+          : 'Thinking controls are unavailable for this model';
+      }
+      const activeReasoningPopover = document.getElementById('reasoning-popover');
+      if (!controlsAvailable && activeReasoningPopover) {
+        activeReasoningPopover.style.display = 'none';
+        if (btn) {
+          btn.classList.remove('active');
+          btn.setAttribute('aria-expanded', 'false');
+        }
+      }
       const lbl = document.getElementById('prompt-reasoning-label');
       if (lbl) {
-        lbl.textContent = lvl.label;
-        if (typeof lbl.removeAttribute === 'function') {
-          lbl.removeAttribute('aria-busy');
-        }
-        if (lbl.classList && typeof lbl.classList.remove === 'function') {
-          lbl.classList.remove('skeleton', 'skeleton-text');
-        }
-        if (lbl.parentElement) {
-          lbl.parentElement.title = 'Reasoning Effort: ' + lvl.label + ' (Click to adjust)';
-        }
+        lbl.textContent = label;
+        if (typeof lbl.removeAttribute === 'function') lbl.removeAttribute('aria-busy');
+        lbl.classList.remove('skeleton', 'skeleton-text');
       }
-
-      // 2. Update popover badge
-      const badge = document.getElementById('reasoning-popover-badge');
-      if (badge) {
-        badge.textContent = lvl.label;
-        badge.className = 'reasoning-popover-badge badge-' + lvl.id;
-      }
-
-      // 3. Update description text
-      const desc = document.getElementById('reasoning-popover-desc');
-      if (desc) {
-        desc.textContent = lvl.desc;
-      }
-
-      // 4. Update slider input value
       const slider = document.getElementById('reasoning-slider-range');
-      if (slider && Number(slider.value) !== idx) {
+      if (slider) {
+        slider.min = '0';
+        slider.max = String(REASONING_LEVELS.length - 1);
         slider.value = String(idx);
+        slider.disabled = REASONING_LEVELS.length < 2;
       }
-
-      // 5. Update slider track fill width & style
       const fill = document.getElementById('reasoning-slider-fill');
       if (fill) {
         fill.style.width = lvl.pct + '%';
-        fill.className = 'reasoning-slider-fill fill-' + lvl.id;
+        fill.className = 'reasoning-slider-fill';
       }
-
-      // 6. Update step button states
-      document.querySelectorAll('.reasoning-step-btn').forEach(btn => {
-        const bLevel = btn.getAttribute('data-level');
-        btn.classList.toggle('active', bLevel === lvl.id);
+      const labels = document.getElementById('reasoning-slider-labels');
+      const ticks = document.getElementById('reasoning-slider-ticks');
+      if (labels) labels.innerHTML = "";
+      if (ticks) ticks.innerHTML = "";
+      REASONING_LEVELS.forEach((level, levelIdx) => {
+        if (labels) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'reasoning-step-btn' + (currentReasoning === level.id ? ' active' : '');
+          button.setAttribute("data-level", level.id);
+          button.textContent = level.label;
+          if (typeof button.addEventListener === 'function') button.addEventListener('click', () => setReasoningLevel(level.id, true));
+          labels.appendChild(button);
+        }
+        if (ticks) {
+          const tick = document.createElement('span');
+          tick.className = 'reasoning-tick-point' + (levelIdx <= idx ? ' active' : '');
+          tick.title = level.label;
+          if (typeof tick.addEventListener === 'function') tick.addEventListener('click', () => setReasoningLevel(level.id, true));
+          ticks.appendChild(tick);
+        }
       });
-
-      // 7. Update tick point indicator states
-      document.querySelectorAll('.reasoning-tick-point').forEach(tp => {
-        const tIdx = parseInt(tp.getAttribute('data-level-idx') || '0', 10);
-        tp.classList.toggle('active', tIdx <= idx);
-      });
+      const budgetInput = document.getElementById('reasoning-budget-input');
+      const budgetRow = document.getElementById('reasoning-budget-row');
+      const hasBudget = cap.supports_max_tokens && Number.isInteger(cap.budget_min) && Number.isInteger(cap.budget_max);
+      if (budgetRow) budgetRow.hidden = !hasBudget;
+      if (budgetInput && hasBudget) {
+        budgetInput.min = String(cap.budget_min);
+        budgetInput.max = String(cap.budget_max);
+        budgetInput.value = isBudget ? currentReasoning.slice(7) : '';
+        budgetInput.placeholder = cap.budget_min + '–' + cap.budget_max;
+      }
     }
 
     function updateReasoningBadge() {
@@ -4900,6 +5211,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function toggleReasoningPopover(forceState) {
       if (!reasoningPopover) return;
+      if (!hasReasoningControls(getActiveModelReasoningCapability())) {
+        reasoningPopover.style.display = 'none';
+        if (btnReasoningEl) {
+          btnReasoningEl.classList.remove('active');
+          btnReasoningEl.setAttribute('aria-expanded', 'false');
+        }
+        return;
+      }
       const isVisible = reasoningPopover.style.display !== 'none';
       const show = typeof forceState === 'boolean' ? forceState : !isVisible;
       reasoningPopover.style.display = show ? 'flex' : 'none';
@@ -4932,30 +5251,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     if (reasoningSlider) {
       reasoningSlider.addEventListener('input', (e) => {
         const valIdx = parseInt(e.target.value, 10);
-        const lvl = REASONING_LEVELS[valIdx] || REASONING_LEVELS[2];
-        setReasoningLevel(lvl.id, true);
+        const lvl = REASONING_LEVELS[valIdx];
+        if (lvl) setReasoningLevel(lvl.id, true);
       });
     }
 
-    document.querySelectorAll('.reasoning-step-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const lvlId = btn.getAttribute('data-level');
-        if (lvlId) {
-          setReasoningLevel(lvlId, true);
-        }
-      });
-    });
-
-    document.querySelectorAll('.reasoning-tick-point').forEach(tp => {
-      tp.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const tIdx = parseInt(tp.getAttribute('data-level-idx') || '0', 10);
-        const lvl = REASONING_LEVELS[tIdx];
-        if (lvl) {
-          setReasoningLevel(lvl.id, true);
-        }
-      });
+    document.getElementById('reasoning-budget-apply')?.addEventListener('click', () => {
+      const input = document.getElementById('reasoning-budget-input');
+      if (input && input.value && input.checkValidity()) setReasoningLevel('budget:' + String(Number(input.value)), true);
     });
 
     function appendHelpCard() {
@@ -5094,7 +5397,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
     updateModelBadge();
 
-    function sendCurrentPrompt() {
+    function sendCurrentPrompt(delivery) {
+      if (pendingInputDraft) return;
       const text = promptInput.value.trim();
       const imagesToSend = [...attachedImages];
       const filesToSend = [...attachedFiles];
@@ -5127,6 +5431,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         tempPromptDraft = '';
       }
 
+      if (!queueSupported) {
       promptInput.value = '';
       promptInput.style.height = 'auto';
       sendBtn.classList.remove('has-text');
@@ -5134,6 +5439,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       renderImageAttachments();
       attachedFiles = [];
       renderAttachedFiles();
+      }
 
       let fullText = text;
       if (filesToSend.length > 0) {
@@ -5145,6 +5451,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       const promptPayload = fullText || (imagesToSend.length > 0 ? 'Please inspect attached image' : 'Please inspect attached files');
 
+      if (queueSupported) {
+        const requestId = 'input-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+        pendingInputDraft = { requestId, text, images: imagesToSend, files: filesToSend, sessionId: currentSessionId };
+        dispatchPrompt(promptPayload, true, imagesToSend, delivery === 'steer' ? 'steer' : 'queue', requestId);
+        return;
+      }
+
       if (isRunning) {
         promptQueue.push({ text: promptPayload, images: imagesToSend, sessionId: currentSessionId });
         renderQueue();
@@ -5153,8 +5466,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       dispatchPrompt(promptPayload, true, imagesToSend);
     }
 
-    function dispatchPrompt(text, attachContext, images) {
+    function dispatchPrompt(text, attachContext, images, delivery, requestId) {
       try {
+        if (queueSupported) {
+          vscode.postMessage({
+            type: 'submit_input', requestId: requestId || ('input-' + Date.now() + '-' + Math.random().toString(36).slice(2)),
+            prompt: text, sessionId: currentSessionId, images: images || [],
+            delivery: delivery || 'queue', attachContext,
+            profile: currentProfile, mode: currentMode, model: currentModel,
+            provider: currentProvider, reasoningEffort: currentReasoning,
+          });
+          return;
+        }
         console.log('[Andromity webview] dispatchPrompt sending:', text.slice(0,120));
         lastTurnPrompt = {
           text: text,
@@ -5197,6 +5520,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function flushQueue() {
+      if (queueSupported) return;
       if (promptQueue.length === 0) return;
       const idx = promptQueue.findIndex(q => !q.sessionId || q.sessionId === currentSessionId);
       if (idx === -1) return;
@@ -5210,6 +5534,29 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function renderQueue() {
+      if (queueSupported) {
+        const state = serverQueues[currentSessionId];
+        const items = state ? state.items : [];
+        queueContainer.style.display = items.length ? 'flex' : 'none';
+        const steerIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20v-7a4 4 0 0 1 4-4h12"/><path d="m15 4 5 5-5 5"/></svg>';
+        const removeIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';
+        const playIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>';
+        queueContainer.innerHTML = '<div class="queue-header"><span>Queued <span class="queue-count">' + items.length + '</span></span>' +
+          (state && state.paused ? '<button class="queue-resume" data-action="resume-queue" title="Resume pending messages">' + playIcon + 'Resume</button>' : '') + '</div><div class="queue-items">' +
+          items.map(function(item, index) {
+            const id = escapeHtml(item.id);
+            const steering = item.delivery === 'steer';
+            const text = escapeHtml(parseUserPromptDisplay(item.prompt).userText || 'Image message');
+            return '<div class="queue-chip' + (steering ? ' is-steering' : '') + '"><span class="queue-index">' + (index + 1) + '</span>' +
+              '<span class="queue-text" title="' + text + '">' + text + '</span>' +
+              (item.image_count ? '<span class="queue-attachment" title="Attached images">' + item.image_count + ' img</span>' : '') +
+              (steering ? '<span class="queue-status" title="Waiting for the current response and tool operations to finish">Next safe point</span>' : '') +
+              '<div class="queue-actions"><button class="queue-action queue-steer" data-action="steer-queued" data-input-id="' + id + '"' + (steering ? ' disabled' : '') +
+              ' title="Steer at the next safe point" aria-label="Steer queued message at the next safe point">' + steerIcon + '</button>' +
+              '<button class="queue-action queue-remove" data-action="remove-queued" data-input-id="' + id + '" title="Remove from queue" aria-label="Remove queued message">' + removeIcon + '</button></div></div>';
+          }).join('') + '</div>';
+        return;
+      }
       const sessionQueue = promptQueue.filter(q => !q.sessionId || q.sessionId === currentSessionId);
       if (sessionQueue.length === 0) {
         queueContainer.style.display = 'none';
@@ -5219,7 +5566,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       queueContainer.style.display = 'flex';
       queueContainer.innerHTML = promptQueue.map((q, i) => {
         if (q.sessionId && q.sessionId !== currentSessionId) return '';
-        const text = typeof q === 'object' ? (q.text || 'Image prompt') : q;
+        const rawText = typeof q === 'object' ? q.text : q;
+        const text = parseUserPromptDisplay(rawText).userText || 'Image prompt';
         return '<div class="queue-chip">' +
           '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
           '<span class="queue-text">' + escapeHtml(text) + '</span>' +
@@ -5879,7 +6227,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       const wrap = document.createElement('div');
       wrap.className = 'message-wrap user';
-      const existingUserCount = chatContainer.querySelectorAll('.message-wrap.user').length;
+      const normalUserCount = chatContainer.querySelectorAll('.message-wrap.user:not([data-steering])').length;
+      const existingUserCount = opts && opts.turnIndex !== undefined ? opts.turnIndex : (opts && opts.steering ? Math.max(0, normalUserCount - 1) : normalUserCount);
+      if (opts && opts.steering) wrap.setAttribute('data-steering', 'true');
       wrap.setAttribute('data-turn-index', String(existingUserCount));
 
       const actionsDiv = document.createElement('div');
@@ -6523,7 +6873,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function startAssistantTurn() {
       isRunning = true;
       // Only stick to bottom if user was already at the bottom; do not steal scroll if user is reading history
-      if (isAtBottom(64)) {
+      if (!userScrolledUp && !_isUserActivelyScrolling && isAtBottom(2)) {
         userScrolledUp = false;
       }
       document.querySelector('.prompt-box')?.classList.add('is-generating');
@@ -6765,8 +7115,21 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       } catch {}
     }
 
-    window.addEventListener('message', event => {
-      const msg = event.data;
+    window.addEventListener('message', event => handleBackendMessage(event.data));
+
+    function rememberInteraction(msg) {
+      const sid = msg.session_id || currentSessionId;
+      const state = sessionsState[sid] = sessionsState[sid] || {};
+      state.interactions = state.interactions || Object.create(null);
+      const id = msg.approval_id || msg.question_id || 'plan';
+      state.interactions[id] = msg;
+      if (sid === currentSessionId) {
+        interactiveSlot.dataset.interactionId = id;
+        delete interactiveSlot.dataset.submitting;
+      }
+    }
+
+    function handleBackendMessage(msg) {
       switch (msg.type) {
         case 'workspace_files_updated': {
           if (Array.isArray(msg.files)) {
@@ -6825,6 +7188,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'init_state':
           clearSkeletonState();
           currentSessionId = msg.sessionId;
+          requestQueueSnapshot();
           allModels = msg.models || [];
           if (msg.pinnedModels) {
             pinnedModels = msg.pinnedModels;
@@ -6841,10 +7205,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             currentProfile = msg.profile;
             updateProfileBadge();
           }
+          if (msg.modelReasoningCapability) {
+            currentModelReasoningCapability = {
+              ...msg.modelReasoningCapability,
+              _modelId: msg.model || currentModel,
+              _providerId: msg.provider || currentProvider,
+            };
+          } else {
+            currentModelReasoningCapability = null;
+          }
           if (msg.reasoningEffort) {
             currentReasoning = msg.reasoningEffort;
-            updateReasoningBadge();
           }
+          updateReasoningBadge();
           if (typeof msg.mascotEnabled === 'boolean') {
             setMascotEnabled(msg.mascotEnabled);
           }
@@ -6856,7 +7229,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           const curSess = (msg.sessions || []).find(s => s.id === msg.sessionId);
           const sessLabel = document.getElementById('active-session-name');
           if (sessLabel) {
-            sessLabel.textContent = curSess ? (curSess.name || curSess.id) : 'Main Session';
+            sessLabel.textContent = curSess ? (cleanPromptForDisplay(curSess.name) || curSess.id) : 'Main Session';
           }
           if (msg.sessions) {
             allSessions = msg.sessions;
@@ -6941,17 +7314,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               ? 'Edge Gateway Active'
               : 'Multi-cloud edge fallback &bull; Instant free trial';
           }
-          if (accountPillDot) accountPillDot.classList.toggle('authed', isAuthed);
-          if (accountPillText) accountPillText.textContent = isAuthed ? 'Pro' : 'Free';
-          if (btnTopAccount) btnTopAccount.setAttribute('title', isAuthed ? 'Account (Pro) — Click for usage & quota' : 'Account — Click for usage & quota');
-          if (accountUsername) accountUsername.textContent = msg.username || (isAuthed ? 'Authenticated Developer' : 'Anonymous Trial');
-          if (accountPlanBadge) accountPlanBadge.textContent = isAuthed ? 'Community Account' : 'Free Tier';
-          if (btnAccountLogin) btnAccountLogin.style.display = isAuthed ? 'none' : 'block';
-          if (btnAccountLogout) btnAccountLogout.style.display = isAuthed ? 'block' : 'none';
-          if (accountAvatar) {
-            const name = (msg.username || (isAuthed ? 'AM' : 'AT')).replace(/[^a-zA-Z0-9]/g, '');
-            accountAvatar.textContent = (name.slice(0, 2) || 'AM').toUpperCase();
-          }
+          renderCloudAccountUsage({ plan: isAuthed ? 'authenticated' : 'anonymous', username: msg.username, status: 'checking' });
           if (isAuthed) {
             appendSystemNote('✅ Signed in with AgenticMarket account. Authenticated access is now active.');
           } else {
@@ -6961,50 +7324,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
 
         case 'usage_updated': {
-          const isAuthed = msg.plan === 'authenticated';
-          const hasDailyLimit = typeof msg.limit_today === 'number' && msg.limit_today > 0;
-          const limit = hasDailyLimit ? msg.limit_today : null;
-          const remaining = (typeof msg.turns_remaining === 'number' && msg.turns_remaining >= 0) ? msg.turns_remaining : null;
-          const used = typeof msg.turns_today === 'number' ? msg.turns_today : 0;
-          const isLimitReached = msg.status === 'limit_reached' || (hasDailyLimit && remaining === 0);
-
-          if (accountPillDot) {
-            accountPillDot.classList.toggle('authed', isAuthed);
-            accountPillDot.classList.toggle('limit', isLimitReached);
-          }
-          if (accountPillText) {
-            accountPillText.textContent = isAuthed ? 'Pro' : 'Free';
-          }
-          if (btnTopAccount) {
-            btnTopAccount.setAttribute('title', isAuthed ? 'Account (Pro) — Click for usage & quota' : 'Account — Click for usage & quota');
-          }
-          if (accountUsername && msg.username) accountUsername.textContent = msg.username;
-          if (accountPlanBadge) {
-            accountPlanBadge.textContent = isAuthed ? 'Community Account' : 'Free Tier';
-          }
-          if (accountQuotaVal) {
-            accountQuotaVal.textContent = isLimitReached ? 'Daily Limit Reached' : 'Active';
-            accountQuotaVal.style.color = isLimitReached ? '#ef4444' : '#10b981';
-          }
-          if (accountQuotaBar) {
-            if (hasDailyLimit && limit) {
-              const pct = Math.min(100, Math.max(0, Math.round(((remaining ?? 0) / limit) * 100)));
-              accountQuotaBar.style.width = pct + '%';
-              accountQuotaBar.style.background = pct <= 20 ? '#ef4444' : pct <= 50 ? '#eab308' : '#10b981';
-            } else {
-              accountQuotaBar.style.width = isLimitReached ? '0%' : '100%';
-              accountQuotaBar.style.background = isLimitReached ? '#ef4444' : '#10b981';
-            }
-          }
-          if (btnAccountLogin) btnAccountLogin.style.display = isAuthed ? 'none' : 'block';
-          if (btnAccountLogout) btnAccountLogout.style.display = isAuthed ? 'block' : 'none';
-          if (accountAvatar) {
-            const name = (msg.username || 'AM').replace(/[^a-zA-Z0-9]/g, '');
-            accountAvatar.textContent = (name.slice(0, 2) || 'AM').toUpperCase();
-          }
-          if (accountLatencyText && typeof msg.last_latency_ms === 'number' && msg.last_latency_ms > 0) {
-            accountLatencyText.textContent = msg.last_latency_ms + 'ms Edge';
-          }
+          renderCloudAccountUsage(msg);
           break;
         }
 
@@ -7029,18 +7349,24 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'config_updated':
           if (msg.key === 'mode') {
             updateModeBadge(msg.value);
-            if (msg.value !== 'safe') {
-              const appCard = interactiveSlot.querySelector('.permission-card, .approval-card');
-              if (appCard) {
-                interactiveSlot.innerHTML = '';
-                appendSystemNote('Mode switched to ' + msg.value.toUpperCase() + ' -- pending tool auto-approved.');
-              }
-            }
           } else if (msg.key === 'model') {
             currentModel = msg.value;
+            if (msg.provider) currentProvider = msg.provider;
+            if (msg.reasoningCapability) {
+              currentModelReasoningCapability = {
+                ...msg.reasoningCapability,
+                _modelId: msg.value,
+                _providerId: msg.provider || currentProvider,
+              };
+            } else {
+              currentModelReasoningCapability = null;
+            }
             updateModelBadge();
+            updateReasoningBadge();
           } else if (msg.key === 'provider') {
             currentProvider = msg.value;
+            currentModelReasoningCapability = null;
+            updateReasoningBadge();
             updateModelBadge();
           } else if (msg.key === 'profile') {
             currentProfile = msg.value;
@@ -7055,7 +7381,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.name) {
             const activeSessName = document.getElementById('active-session-name');
             if (activeSessName) {
-              activeSessName.textContent = msg.name;
+              activeSessName.textContent = cleanPromptForDisplay(msg.name);
             }
           }
           break;
@@ -7083,6 +7409,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           // Clear per-session diff state so it doesn't leak into the target session
           turnEditedFiles.clear();
           globalDiffStats = {};
+          activeBgProcesses.clear();
+          updateBgProcessStripUI();
           if (msg.sessionId) {
             currentSessionId = msg.sessionId;
           }
@@ -7099,15 +7427,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           updateCollabInboxBadge();
           renderCollabInbox();
           interactiveSlot.innerHTML = '';
+          delete interactiveSlot.dataset.interactionId;
+          delete interactiveSlot.dataset.submitting;
+          activePendingApprovalId = null;
+          activePendingToolName = '';
+          activePendingPlan = false;
           hidePlanTracker();
           isPlanTrackerDismissed = false;
           {
             const sessState = sessionsState[currentSessionId];
-            if (sessState && sessState.pendingApproval) {
-              interactiveSlot.innerHTML = renderPermissionCard(sessState.pendingApproval);
-            } else if (sessState && sessState.pendingPlanApproval) {
-              interactiveSlot.innerHTML = renderPlanApprovalCard(sessState.pendingPlanApproval);
-            }
+            const pending = Object.values(sessState?.interactions || {})[0];
+            if (pending) handleBackendMessage(pending);
             if (sessState && sessState.isRunning) {
               isRunning = true;
               cancelBtn.style.display = 'flex';
@@ -7129,6 +7459,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
 
         case 'session_loaded':
+          if (msg.session?.id && currentSessionId && msg.session.id !== currentSessionId) break;
           userScrolledUp = false;
           _isUserActivelyScrolling = false;
           _lastUserScrollTime = 0;
@@ -7141,19 +7472,34 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           finishCurrentThinking();
           chatContainer.innerHTML = '';
           interactiveSlot.innerHTML = '';
+          delete interactiveSlot.dataset.interactionId;
+          activePendingApprovalId = null;
+          activePendingToolName = '';
+          activePendingPlan = false;
+          currentTurnAssistantDiv = null;
+          currentAssistantContent = null;
+          currentThinkingDiv = null;
+          currentThinkingContent = null;
+          currentToolSequence = null;
+          const runtime = msg.session?.runtime;
+          if (runtime) sessionLiveBuffer.delete(currentSessionId);
+          const liveToolIds = new Set((runtime?.tools || []).map(tool => tool.tool_id));
+          activeBgProcesses.clear();
+          updateBgProcessStripUI();
           // Reset diff stats — they belong to the previous session's history and must not
           // accumulate into the newly loaded session's tool call replay.
           globalDiffStats = {};
           turnEditedFiles.clear();
           if (msg.session && msg.session.id) {
             currentSessionId = msg.session.id;
+            requestQueueSnapshot();
           }
           if (msg.session) {
             updateSessionCollabBadge(msg.session);
           }
           updateCollabInboxBadge();
           renderCollabInbox();
-          const sessionIsRunning = Boolean(
+          const sessionIsRunning = runtime ? runtime.is_running === true : Boolean(
             (msg.session && (msg.session.status === 'running' || msg.session.is_running)) ||
             (sessionsState[currentSessionId] && sessionsState[currentSessionId].isRunning)
           );
@@ -7176,7 +7522,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           const activeSessName = document.getElementById('active-session-name');
           if (activeSessName && msg.session) {
-            activeSessName.textContent = msg.session.name || msg.session.id || 'Main Session';
+            activeSessName.textContent = cleanPromptForDisplay(msg.session.name) || msg.session.id || 'Main Session';
           }
           const hasCompactedHistory = msg.session && Array.isArray(msg.session.compacted_history) && msg.session.compacted_history.length > 0;
           let allMessages = [];
@@ -7227,7 +7573,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   appendCompactionSummaryCard(uContent);
                 } else {
                   try {
-                    appendUserMessage(uContent, m.images || [], m.ts, { skipDedupe: true });
+                    appendUserMessage(uContent, m.images || [], m.ts, { skipDedupe: true, steering: Boolean(m.steering) });
                   } catch (userRenderErr) {
                     console.error('[Andromity webview] Failed to render user prompt', userRenderErr);
                   }
@@ -7268,7 +7614,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 }
 
                 // 2. Tool calls (grouped into a single unified sector per turn)
-                if (m.tool_calls && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+                if (m.tool_calls && Array.isArray(m.tool_calls) && m.tool_calls.some(tc => !liveToolIds.has(tc.id))) {
                   if (!currentTurnToolSeq) {
                     currentTurnToolSeq = document.createElement('div');
                     currentTurnToolSeq.className = 'tool-sequence collapsed';
@@ -7312,6 +7658,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   }
 
                   for (const tc of m.tool_calls) {
+                    if (liveToolIds.has(tc.id)) continue;
                     currentTurnToolCount++;
                     const fn = tc.function || {};
                     const toolName = fn.name || 'tool';
@@ -7353,7 +7700,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     if (typeof window.renderAntigravityActivityRow === 'function') {
                       renderedActivity = window.renderAntigravityActivityRow(toolName, toolArgs, 'done');
                     }
-                    if (!renderedActivity && typeof window.renderCommandActivityRow === 'function' && /^(shell_exec|run_command|bash|exec|cmd)$/i.test(toolName)) {
+                    if (!renderedActivity && typeof window.renderBackgroundProcessActivityRow === 'function' && /^shell_bg$/i.test(toolName)) {
+                      renderedActivity = window.renderBackgroundProcessActivityRow(toolName, toolArgs, 'running_bg', (typeof m !== 'undefined' && m ? m.result : ''));
+                    } else if (!renderedActivity && typeof window.renderCommandActivityRow === 'function' && /^(shell_exec|run_command|bash|exec|cmd)$/i.test(toolName)) {
                       renderedActivity = window.renderCommandActivityRow(toolName, toolArgs, 'done');
                     }
 
@@ -7536,18 +7885,65 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             // second wrapper here — that caused the "new turn" visual break after session switch.
             startAssistantTurn();
           }
+          if (runtime) handleBackendMessage({ type: 'session_runtime', session_id: currentSessionId, runtime });
           renderConversationTimeline();
           userScrolledUp = false;
           scrollToBottom(false);
-          requestAnimationFrame(() => {
-            scrollToBottom(false);
-            setTimeout(() => {
-              scrollToBottom(false);
-            }, 60);
-            setTimeout(() => {
-              scrollToBottom(false);
-            }, 180);
-          });
+          settleSessionScroll();
+          break;
+
+        case 'session_runtime': {
+          if (msg.session_id !== currentSessionId) break;
+          const state = sessionsState[currentSessionId] = sessionsState[currentSessionId] || {};
+          state.interactions = Object.create(null);
+          delete state.pendingApproval;
+          delete state.pendingQuestions;
+          delete state.pendingPlanApproval;
+          state.isRunning = msg.runtime.is_running === true;
+          isRunning = state.isRunning;
+          cancelBtn.style.display = isRunning ? 'flex' : 'none';
+          sendBtn.style.display = isRunning ? 'none' : 'flex';
+          document.querySelector('.prompt-box')?.classList.toggle('is-generating', isRunning);
+          if (!isRunning) removeTurnLoader();
+          if (msg.runtime.thinking) handleBackendMessage({ type: 'thinking_delta', text: msg.runtime.thinking });
+          if (msg.runtime.text) handleBackendMessage({ type: 'text_delta', text: msg.runtime.text });
+          for (const tool of msg.runtime.tools || []) {
+            handleBackendMessage({ type: 'tool_start', ...tool });
+            handleBackendMessage({ type: 'tool_delta', tool_id: tool.tool_id, chunk: tool.args_json });
+          }
+          activeBgProcesses.clear();
+          for (const process of msg.runtime.processes || []) handleBackendMessage({ type: 'process_started', ...process });
+          updateBgProcessStripUI();
+          for (const interaction of msg.runtime.interactions || []) handleBackendMessage(interaction);
+          break;
+        }
+        case 'session_load_failed':
+          if (msg.session_id === currentSessionId) appendSystemNote('Could not load this session. Reconnect and try again.');
+          clearSkeletonState();
+          break;
+        case 'action_failed':
+          if (msg.session_id === currentSessionId) appendSystemNote(msg.error);
+          break;
+        case 'interaction_resolved': {
+          const sid = msg.session_id || currentSessionId;
+          const state = sessionsState[sid];
+          if (state?.interactions) delete state.interactions[msg.interaction_id];
+          if (sid !== currentSessionId || interactiveSlot.dataset.interactionId !== msg.interaction_id) break;
+          interactiveSlot.innerHTML = '';
+          delete interactiveSlot.dataset.interactionId;
+          delete interactiveSlot.dataset.submitting;
+          activePendingApprovalId = null;
+          activePendingToolName = '';
+          activePendingPlan = false;
+          const next = Object.values(state?.interactions || {})[0];
+          if (next) handleBackendMessage(next);
+          break;
+        }
+        case 'interaction_failed':
+          if (msg.session_id !== currentSessionId) break;
+          delete interactiveSlot.dataset.submitting;
+          interactiveSlot.querySelectorAll('button, input, textarea').forEach(control => { control.disabled = false; });
+          appendSystemNote(msg.error);
           break;
 
         case 'play_sound':
@@ -7843,7 +8239,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               if (typeof window.renderAntigravityActivityRow === 'function') {
                 activityEl = window.renderAntigravityActivityRow(toolName, rawArgs, msg.success === false ? 'error' : 'done');
               }
-              if (!activityEl && typeof window.renderCommandActivityRow === 'function' && /^(shell_exec|run_command|bash|exec|cmd)$/i.test(toolName)) {
+              if (!activityEl && typeof window.renderBackgroundProcessActivityRow === 'function' && /^shell_bg$/i.test(toolName)) {
+                activityEl = window.renderBackgroundProcessActivityRow(toolName, rawArgs, msg.success === false ? 'error' : 'running_bg', msg.result);
+              } else if (!activityEl && typeof window.renderCommandActivityRow === 'function' && /^(shell_exec|run_command|bash|exec|cmd)$/i.test(toolName)) {
                 activityEl = window.renderCommandActivityRow(toolName, rawArgs, msg.success === false ? 'error' : 'done', msg.result);
               }
 
@@ -7852,11 +8250,73 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 targetTool.removeAttribute('data-start-ts');
                 targetTool.replaceWith(activityEl);
               } else {
+                const isBg = /^shell_bg$/i.test(toolName);
+                let procId = '';
+                if (isBg && msg.result) {
+                  const m = String(msg.result).match(/with id '([^']+)'/);
+                  if (m) procId = m[1];
+                }
                 const tag = targetTool.querySelector('.tool-tag');
                 if (tag) {
-                  tag.textContent = msg.success === false ? 'FAILED' : 'DONE';
-                  tag.style.background = msg.success === false ? 'rgba(248, 81, 73, 0.2)' : 'rgba(63, 185, 80, 0.2)';
-                  tag.style.color = msg.success === false ? 'var(--red)' : 'var(--green)';
+                  if (isBg && msg.success !== false) {
+                    tag.textContent = 'RUNNING (BG)';
+                    tag.style.background = 'rgba(88, 166, 255, 0.2)';
+                    tag.style.color = 'var(--accent, #58a6ff)';
+                    if (procId) {
+                      targetTool.setAttribute('data-process-id', procId);
+                      if (!activeBgProcesses.has(procId)) {
+                        activeBgProcesses.set(procId, {
+                          process_id: procId,
+                          pid: '',
+                          command: targetTool.getAttribute('data-tool-args') || '',
+                          startTime: Date.now()
+                        });
+                        updateBgProcessStripUI();
+                      }
+                      const hdr = targetTool.querySelector('.tool-header');
+                      if (hdr && !hdr.querySelector('.bg-proc-stop-btn')) {
+                        const sBtn = document.createElement('button');
+                        sBtn.className = 'bg-proc-stop-btn';
+                        sBtn.setAttribute('data-process-id', procId);
+                        sBtn.title = 'Stop background process';
+                        sBtn.innerHTML = '<span class="codicon codicon-debug-stop"></span> Stop';
+                        sBtn.onclick = function(ev) {
+                          ev.stopPropagation();
+                          sBtn.disabled = true;
+                          sBtn.textContent = 'Stopping...';
+                          vscode.postMessage({ type: 'kill_process', processId: procId });
+                        };
+                        hdr.appendChild(sBtn);
+                      }
+                    }
+                  } else {
+                    tag.textContent = msg.success === false ? 'FAILED' : 'DONE';
+                    tag.style.background = msg.success === false ? 'rgba(248, 81, 73, 0.2)' : 'rgba(63, 185, 80, 0.2)';
+                    tag.style.color = msg.success === false ? 'var(--red)' : 'var(--green)';
+                  }
+
+                  if ((msg.tool_name === 'shell_kill') && msg.success !== false) {
+                    let kPid = '';
+                    const km = String(msg.result || '').match(/Process '([^']+)'/);
+                    if (km) kPid = km[1];
+                    if (!kPid && targetTool) {
+                      try {
+                        const rawArgs = targetTool.getAttribute('data-tool-args');
+                        const parsed = JSON.parse(rawArgs || '{}');
+                        if (parsed.process_id) kPid = parsed.process_id;
+                      } catch (e) {}
+                    }
+                    if (kPid && activeBgProcesses.has(kPid)) {
+                      activeBgProcesses.delete(kPid);
+                      updateBgProcessStripUI();
+                    } else if (!kPid && activeBgProcesses.size === 1) {
+                      activeBgProcesses.clear();
+                      updateBgProcessStripUI();
+                    }
+                    if (typeof window.handleProcessExitedUI === 'function') {
+                      window.handleProcessExitedUI({ process_id: kPid, exit_code: 0 });
+                    }
+                  }
                 }
                 targetTool.removeAttribute('data-start-ts');
                 targetTool.classList.remove('expanded', 'stuck');
@@ -7901,6 +8361,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break; }
 
         case 'tool_approval_required': {
+          rememberInteraction(msg);
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
             sessionsState[msg.session_id].isRunning = true;
@@ -7912,12 +8373,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break; }
 
         case 'ask_questions': {
+          rememberInteraction(msg);
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
             sessionsState[msg.session_id].isRunning = true;
             sessionsState[msg.session_id].pendingQuestions = msg;
             break;
           }
+          activePendingApprovalId = null;
+          activePendingToolName = '';
+          activePendingPlan = false;
           let questions = msg.questions || [];
           if (typeof questions === 'string') {
             try {
@@ -7996,6 +8461,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
 
         case 'plan_approval':
+          rememberInteraction(msg);
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
             sessionsState[msg.session_id].isRunning = true;
@@ -8110,7 +8576,92 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           break;
 
+        case 'process_started': {
+          if (msg.session_id && msg.session_id !== currentSessionId) break;
+          const procId = msg.process_id;
+          if (procId) {
+            activeBgProcesses.set(procId, {
+              process_id: procId,
+              pid: msg.pid,
+              command: msg.command || '',
+              startTime: (msg.started ? msg.started * 1000 : Date.now())
+            });
+            updateBgProcessStripUI();
+          }
+          break;
+        }
+
+        case 'process_exited': {
+          if (msg.session_id && msg.session_id !== currentSessionId) break;
+          const procId = msg.process_id;
+          if (procId) {
+            activeBgProcesses.delete(procId);
+            updateBgProcessStripUI();
+          } else {
+            activeBgProcesses.clear();
+            updateBgProcessStripUI();
+          }
+          if (typeof window.handleProcessExitedUI === 'function') {
+            window.handleProcessExitedUI(msg);
+          }
+          break;
+        }
+
+        case 'retry_result': {
+          if (msg.session_id && msg.session_id !== currentSessionId) break;
+          document.querySelectorAll('[data-retry-pending="true"]').forEach(card => {
+            delete card.dataset.retryPending;
+            card.style.opacity = '';
+            const button = card.querySelector('.btn-error-retry');
+            if (button) button.textContent = button.dataset.action === 'retry-without-image' ? 'Retry without Image' : 'Retry';
+          });
+          if (!msg.success) appendSystemNote(msg.error || 'Retry could not start. Try again.');
+          break;
+        }
+        case 'input_session':
+          currentSessionId = msg.session_id;
+          break;
+        case 'queue_state': {
+          queueSupported = true;
+          const previous = serverQueues[msg.session_id];
+          if (!previous || msg.epoch !== previous.epoch || msg.revision >= previous.revision) serverQueues[msg.session_id] = msg;
+          renderQueue();
+          break;
+        }
+        case 'queue_unavailable':
+          if (msg.unsupported) queueSupported = false;
+          break;
+        case 'input_accepted':
+          if (pendingInputDraft && msg.request_id === pendingInputDraft.requestId) {
+            if (currentSessionId === pendingInputDraft.sessionId && promptInput.value.trim() === pendingInputDraft.text &&
+                JSON.stringify(attachedImages) === JSON.stringify(pendingInputDraft.images) &&
+                JSON.stringify(attachedFiles) === JSON.stringify(pendingInputDraft.files)) {
+              promptInput.value = '';
+              promptInput.style.height = 'auto';
+              attachedImages = []; attachedFiles = [];
+              renderImageAttachments(); renderAttachedFiles();
+              sendBtn.classList.remove('has-text');
+            }
+            pendingInputDraft = null;
+          }
+          break;
+        case 'input_rejected':
+          if (pendingInputDraft && msg.request_id === pendingInputDraft.requestId) pendingInputDraft = null;
+          appendSystemNote(msg.error || 'Message was not accepted. Your draft is preserved.');
+          break;
+        case 'input_applied':
+          if (msg.session_id !== currentSessionId || appliedInputIds.has(msg.input_id)) break;
+          appliedInputIds.add(msg.input_id);
+          endAssistantTurn();
+          interactiveSlot.innerHTML = '';
+          activePendingApprovalId = null;
+          activePendingToolName = '';
+          activePendingPlan = false;
+          appendUserMessage(msg.prompt, msg.image_uris || [], Date.now(), { skipDedupe: true, steering: true, turnIndex: msg.turn_index });
+          startAssistantTurn();
+          break;
         case 'init_queue':
+          if (queueSupported) { requestQueueSnapshot(); break; }
           if (Array.isArray(msg.queue) && msg.queue.length > 0) {
             promptQueue.push(...msg.queue);
             renderQueue();
@@ -8129,7 +8680,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             msg.seedMessages.forEach(function(m) {
               if (!m) return;
               if (m.role === 'user') {
-                appendUserMessage(extractMessageText(m.content), m.images || [], m.ts, { skipDedupe: true });
+                appendUserMessage(extractMessageText(m.content), m.images || [], m.ts, { skipDedupe: true, steering: Boolean(m.steering) });
               } else if (m.role === 'assistant' && extractMessageText(m.content).trim()) {
                 const wrap = document.createElement('div');
                 wrap.className = 'message-wrap assistant';
@@ -8156,6 +8707,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             updateSessionActivityIndicator();
           }
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
+          if (msg.input_id && !appliedInputIds.has(msg.input_id)) {
+            appliedInputIds.add(msg.input_id);
+            hideZeroState();
+            appendUserMessage(msg.prompt, msg.image_uris || [], Date.now(), { skipDedupe: true });
+            startAssistantTurn();
+            break;
+          }
           if (msg.prompt) {
             const parsed = parseUserPromptDisplay(msg.prompt);
             const cleanText = normalizePromptText(parsed.userText || '');
@@ -8251,6 +8809,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             context_tokens: msg.context_tokens,
             cost_usd: msg.cost_usd,
           });
+          const pendingPlan = sessionsState[currentSessionId]?.interactions?.plan;
+          if (pendingPlan) handleBackendMessage(pendingPlan);
           flushQueue();
           break; }
 
@@ -8277,7 +8837,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               cost_usd: msg.cost_usd,
             });
           }
-          flushQueue();
           break;
         }
 
@@ -8300,7 +8859,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           endAssistantTurn();
           interactiveSlot.innerHTML = '';
           appendErrorCard(msg.error || 'Unknown agent error.');
-          flushQueue();
           break;
         }
 
@@ -8326,6 +8884,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
 
         case 'plan_updated':
+          if (msg.plan?.status !== 'pending') handleBackendMessage({ type: 'interaction_resolved', session_id: msg.session_id, interaction_id: 'plan' });
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
             break;
           }
@@ -8408,7 +8967,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.name) {
             const activeSessName = document.getElementById('active-session-name');
             if (activeSessName && (!msg.session_id || msg.session_id === currentSessionId)) {
-              activeSessName.textContent = msg.name;
+              activeSessName.textContent = cleanPromptForDisplay(msg.name);
             }
             const sObj = allSessions.find(s => s.id === (msg.session_id || currentSessionId));
             if (sObj) {
@@ -8493,7 +9052,45 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         }
       }
-    });
+    }
+
+    function extractCleanErrorMessage(raw) {
+      if (!raw) return '';
+      let str = String(raw).trim();
+      const firstBrace = str.indexOf('{');
+      const lastBrace = str.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        try {
+          const parsed = JSON.parse(str.slice(firstBrace, lastBrace + 1));
+          if (parsed) {
+            if (parsed.error && typeof parsed.error === 'object' && parsed.error.message) {
+              return String(parsed.error.message).trim();
+            }
+            if (parsed.error && typeof parsed.error === 'string') {
+              return String(parsed.error).trim();
+            }
+            if (parsed.message && typeof parsed.message === 'string') {
+              return String(parsed.message).trim();
+            }
+            if (parsed.detail && typeof parsed.detail === 'string') {
+              return String(parsed.detail).trim();
+            }
+          }
+        } catch (e) {}
+      }
+      str = str.replace(/^(?:litellm\.)?[a-zA-Z]*(?:Error|Exception):\s*/gi, '')
+               .replace(/^[a-zA-Z]*(?:Error|Exception):\s*/gi, '')
+               .replace(/^[a-zA-Z]+Exception\s*[-:]\s*/gi, '')
+               .trim();
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        str = (str.slice(0, firstBrace) + str.slice(lastBrace + 1)).trim();
+      }
+      const uIdIdx = str.toLowerCase().indexOf('"user_id"');
+      if (uIdIdx !== -1) str = str.slice(0, uIdIdx).trim();
+      str = str.replace(/^[- :]+/, '').trim();
+      const firstLine = str.split(String.fromCharCode(10))[0].replace(String.fromCharCode(13), '');
+      return (firstLine && firstLine.trim()) || str;
+    }
 
     function appendErrorCard(text, rawError, errorType) {
       if (!text) text = 'An unexpected agent error occurred.';
@@ -8507,21 +9104,58 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         return;
       }
 
+      const cleanMsg = extractCleanErrorMessage(trimmed);
       const low = trimmed.toLowerCase();
       let badge = 'ERROR';
       let title = 'Turn Interrupted';
-      let desc = trimmed;
+      let desc = cleanMsg || trimmed;
+      let timerHtml = '';
       let eType = errorType || 'generic';
 
       const iconRetry = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>';
       const iconModel = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>';
       const iconCompact = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>';
       const iconPlus = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>';
-      const iconSettings = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>';
+      const iconSettings = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83-2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>';
+      const iconAccount = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>';
 
       let actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">' + iconRetry + 'Retry Turn</button>';
 
-      if (low.includes('image') || low.includes('vision') || low.includes('multimodal') || low.includes('does not support')) {
+      if (low.includes('daily limit') || low.includes('daily_limit') || low.includes('free trial limit') || low.includes('quota limit') || low.includes('quota resets in')) {
+        badge = 'QUOTA LIMIT';
+        title = 'Daily Limit Reached';
+        const isUserAuthed = isAndromityActive ||
+          (typeof localStorage !== 'undefined' && localStorage.getItem('andromity_active_status') === 'true') ||
+          low.includes('daily gateway limit');
+
+        desc = isUserAuthed
+          ? 'You have reached your daily gateway limit. Add your BYOK key in Settings for unlimited requests, or adjust your quota in the panel.'
+          : 'You have reached your daily free trial limit. Sign in with your AgenticMarket account to activate your account, or add a BYOK key in Settings.';
+
+        const timerMatch = text.match(/Quota resets in [^\\r\\n\\)]+\\)/i);
+        if (timerMatch) {
+          timerHtml = '<br><div style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-family:var(--font-mono,monospace);color:#10b981;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.22);padding:3px 9px;border-radius:4px;margin-top:8px;">' +
+            '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
+            escapeHtml(timerMatch[0]) +
+            '</div>';
+        }
+        eType = 'quota_exceeded';
+        if (isUserAuthed) {
+          actionsHtml = '<button class="btn-error-retry" data-action="open-settings" title="Configure BYOK">' + iconSettings + 'Open Settings</button>' +
+            '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">' + iconModel + 'Switch Model</button>';
+        } else {
+          actionsHtml = '<button class="btn-error-retry" data-action="open-account-login" title="Sign in with AgenticMarket">' + iconAccount + 'Sign In</button>' +
+            '<button class="btn-error-secondary" data-action="open-settings" title="Configure BYOK">' + iconSettings + 'Open Settings</button>' +
+            '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">' + iconModel + 'Switch Model</button>';
+        }
+      } else if (low.includes('notfound') || low.includes('not found') || low.includes('no endpoints found') || low.includes('model_not_found') || (low.includes('404') && (low.includes('model') || low.includes('endpoint')))) {
+        badge = 'NOT FOUND';
+        title = 'Model Not Available';
+        desc = (cleanMsg || 'The requested model was not found or has no active endpoints.') + ' Please switch to another model.';
+        eType = 'model_not_found';
+        actionsHtml = '<button class="btn-error-retry" data-action="switch-model-flyout" title="Switch to another model">' + iconModel + 'Switch Model</button>' +
+          '<button class="btn-error-secondary" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>';
+      } else if (low.includes('image') || low.includes('vision') || low.includes('multimodal') || low.includes('does not support')) {
         badge = 'IMAGE NOT SUPPORTED';
         title = 'Model Does Not Support Images';
         desc = 'The active model does not accept image attachments. Switch to a vision model (e.g. Claude 3.7 Sonnet, GPT-4o, Gemini 2.0 Flash) or retry with text only.';
@@ -8531,14 +9165,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       } else if (low.includes('429') || low.includes('rate limit') || low.includes('quota')) {
         badge = 'RATE LIMIT';
         title = 'Rate Limit Reached';
-        desc = 'Rate limit or quota threshold reached for the model provider. Please wait a moment and click Retry.';
+        desc = (cleanMsg || 'Rate limit or quota threshold reached for the model provider.') + ' Please wait a moment and click Retry.';
         eType = 'rate_limit';
         actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>' +
           '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch model">' + iconModel + 'Switch Model</button>';
       } else if (low.includes('midstream') || low.includes('503') || low.includes('502') || low.includes('500') || low.includes('serviceunavailable') || low.includes('service unavailable') || low.includes('bad gateway') || low.includes('upstream error')) {
         badge = 'SERVICE DISRUPTED';
         title = 'Upstream Service Interruption';
-        desc = 'The upstream provider experienced a temporary service disruption or disconnect. This is usually transient—click Retry to continue.';
+        desc = (cleanMsg || 'The upstream provider experienced a temporary service disruption or disconnect.') + ' This is usually transient—click Retry to continue.';
         eType = 'provider_unavailable';
         actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>' +
           '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch model">' + iconModel + 'Switch Model</button>';
@@ -8549,12 +9183,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         eType = 'context_exceeded';
         actionsHtml = '<button class="btn-error-retry" data-action="trigger-compact" title="Compact context">' + iconCompact + 'Compact Context</button>' +
           '<button class="btn-error-secondary" data-action="new-session" title="New session">' + iconPlus + 'New Session</button>';
-      } else if (low.includes('401') || low.includes('403') || low.includes('unauthorized') || low.includes('api key')) {
+      } else if (low.includes('401') || low.includes('403') || low.includes('unauthorized') || low.includes('api key') || low.includes('missing credentials') || low.includes('pass an api_key') || low.includes('no api key')) {
         badge = 'AUTHENTICATION';
         title = 'Authentication Error';
-        desc = 'Invalid or missing API key. Please check your provider settings.';
+        desc = (cleanMsg || 'Invalid or missing API key.') + ' Please check your provider settings.';
         eType = 'auth_error';
         actionsHtml = '<button class="btn-error-retry" data-action="open-settings" title="Open settings">' + iconSettings + 'Open Settings</button>';
+      } else {
+        desc = cleanMsg || trimmed;
+        actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">' + iconRetry + 'Retry Turn</button>' +
+          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">' + iconModel + 'Switch Model</button>';
       }
 
       const iconAlert = '<span class="error-header-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span>';
@@ -8568,10 +9206,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               '<span class="error-title">' + escapeHtml(title) + '</span>' +
             '</div>' +
           '</div>' +
-          '<div class="error-card-body">' + escapeHtml(desc) + '</div>' +
+          '<div class="error-card-body">' + escapeHtml(desc) + timerHtml + '</div>' +
           '<details class="error-details">' +
             '<summary>Technical Details</summary>' +
-            '<pre class="error-code"><code>' + escapeHtml(rawError || text) + '</code></pre>' +
+            '<pre class="error-code"><code>' + escapeHtml(String(rawError || text || '').replace(/"user_id"\s*:\s*"[^"]+"/gi, '"user_id":"[redacted]"')) + '</code></pre>' +
           '</details>' +
           '<div class="error-card-actions">' +
             actionsHtml +
@@ -8759,7 +9397,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       let subPath = '';
 
       const lowerTool = toolName.toLowerCase();
-      if (lowerTool === 'shell_exec' || lowerTool === 'run_command' || lowerTool === 'bash' || lowerTool === 'exec' || lowerTool === 'cmd') {
+      const canRemember = /^(shell_exec|shell_bg|fetch_url)$/.test(lowerTool);
+      if (lowerTool === 'shell_exec' || lowerTool === 'shell_bg' || lowerTool === 'run_command' || lowerTool === 'bash' || lowerTool === 'exec' || lowerTool === 'cmd') {
         actionTitle = 'Running command';
         iconClass = 'command';
         iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>';
@@ -8767,7 +9406,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const isWin = typeof navigator !== 'undefined' && ((navigator.platform && navigator.platform.indexOf('Win') > -1) || (navigator.userAgent && /win/i.test(navigator.userAgent)));
         const shellName = isWin ? 'powershell' : 'bash';
         codeDisplay = (shellName + ': ' + cmd).trim();
-        subPath = toolArgs.cwd || toolArgs.Cwd || (zeroWorkspaceLabel ? zeroWorkspaceLabel.textContent : '') || '';
+        subPath = cmd;
       } else if (lowerTool === 'edit_file' || lowerTool === 'write_to_file' || lowerTool === 'replace_file_content' || lowerTool === 'multi_replace_file_content' || lowerTool === 'create_file') {
         actionTitle = 'Edit file';
         iconClass = 'file';
@@ -8796,7 +9435,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         iconClass = 'web';
         iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>';
         codeDisplay = 'url: ' + (toolArgs.url || toolArgs.Url || '');
-        subPath = toolArgs.url || '';
+        try { subPath = new URL(toolArgs.url || '').hostname; } catch { subPath = toolArgs.url || ''; }
       } else {
         actionTitle = 'Execute ' + toolName;
         iconClass = 'command';
@@ -8855,20 +9494,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             '</div>' +
           '</div>' +
 
-          '<div class="permission-option-row" data-action="approve-tool-session" data-approval-id="' + escapeHtml(approvalId) + '" data-tool="' + escapeHtml(toolName) + '" tabindex="0" role="button">' +
+          '<div class="permission-option-row" data-action="approve-tool-session" data-approval-id="' + escapeHtml(approvalId) + '" data-tool="' + escapeHtml(toolName) + '" tabindex="0" role="button"' + (canRemember ? '' : ' style="display:none;"') + '>' +
             '<div class="option-row-main">' +
               '<div class="option-row-title">Allow for remainder of this session</div>' +
-              '<div class="option-row-sub">path: ' + escapeHtml(subPath) + '</div>' +
+              '<div class="option-row-sub">' + (lowerTool === 'fetch_url' ? 'domain: ' : 'command: ') + escapeHtml(subPath) + '</div>' +
             '</div>' +
             '<div class="option-row-badge">' +
               '<kbd class="perm-kbd">Ctrl</kbd> <kbd class="perm-kbd">Alt</kbd> <kbd class="perm-kbd">Y</kbd>' +
             '</div>' +
           '</div>' +
 
-          '<div class="permission-option-row" data-action="approve-tool-always" data-approval-id="' + escapeHtml(approvalId) + '" data-tool="' + escapeHtml(toolName) + '" tabindex="0" role="button">' +
+          '<div class="permission-option-row" data-action="approve-tool-always" data-approval-id="' + escapeHtml(approvalId) + '" data-tool="' + escapeHtml(toolName) + '" tabindex="0" role="button"' + (canRemember ? '' : ' style="display:none;"') + '>' +
             '<div class="option-row-main">' +
               '<div class="option-row-title">Always allow</div>' +
-              '<div class="option-row-sub">path: ' + escapeHtml(subPath) + '</div>' +
+              '<div class="option-row-sub">' + (lowerTool === 'fetch_url' ? 'domain: ' : 'command: ') + escapeHtml(subPath) + '</div>' +
             '</div>' +
             '<div class="option-row-badge">' +
               '<kbd class="perm-kbd">Ctrl</kbd> <kbd class="perm-kbd">Shift</kbd> <kbd class="perm-kbd">Y</kbd>' +
@@ -9098,16 +9737,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     });
 
     window.approveTool = function(approvalId, scope, toolName) {
-      interactiveSlot.innerHTML = '';
-      activePendingApprovalId = null;
-      activePendingToolName = '';
+      if (scope && scope !== 'once' && !/^(shell_exec|shell_bg|fetch_url)$/.test(toolName || activePendingToolName)) return;
+      if (interactiveSlot.dataset.submitting) return;
+      interactiveSlot.dataset.submitting = 'true';
+      interactiveSlot.querySelectorAll('button').forEach(button => { button.disabled = true; });
       vscode.postMessage({ type: 'approve_tool', approvalId, scope: scope || 'once', toolName });
     };
 
     window.rejectTool = function(approvalId) {
-      interactiveSlot.innerHTML = '';
-      activePendingApprovalId = null;
-      activePendingToolName = '';
+      if (interactiveSlot.dataset.submitting) return;
+      interactiveSlot.dataset.submitting = 'true';
+      interactiveSlot.querySelectorAll('button').forEach(button => { button.disabled = true; });
       vscode.postMessage({ type: 'reject_tool', approvalId });
     };
 
@@ -9170,6 +9810,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     };
 
     window.submitQuestions = function(questionId, totalQ) {
+      if (interactiveSlot.dataset.submitting) return;
+      interactiveSlot.dataset.submitting = 'true';
       const answers = [];
       for (let i = 0; i < totalQ; i++) {
         const checked = document.querySelectorAll('input[name="q_' + i + '"]:checked');
@@ -9181,7 +9823,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           answers.push(textIn ? textIn.value.trim() : '');
         }
       }
-      interactiveSlot.innerHTML = '';
+      interactiveSlot.querySelectorAll('button, input, textarea').forEach(control => { control.disabled = true; });
       vscode.postMessage({ type: 'answer_question', questionId, answers: answers.join(', ') });
     };
 

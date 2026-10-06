@@ -1,0 +1,28 @@
+services:
+  andromity:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/agenticmarket/andromity:0.2.15
+    container_name: andromity
+    stdin_open: true
+    tty: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - .:/workspace
+      - andromity_data:/home/andromity/.andromity
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+    extra_hosts:
+      # Allows connecting to local Ollama running on host at http://host.docker.internal:11434
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  andromity_data:

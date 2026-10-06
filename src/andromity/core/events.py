@@ -37,6 +37,16 @@ class ToolCallEnd(StreamEvent):
 @dataclass
 class Done(StreamEvent):
     usage: Optional[Dict[str, int]] = None
+    outcome: str = "success"
+    error_type: Optional[str] = None
+
+
+@dataclass
+class InputApplied(StreamEvent):
+    input_id: str
+    prompt: str
+    image_uris: Optional[list] = None
+    turn_index: int = 0
 
 
 @dataclass

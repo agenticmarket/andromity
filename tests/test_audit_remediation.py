@@ -1,4 +1,4 @@
-"""Comprehensive tests for dual-write consistency, security hardening, and audit remediation."""
+"""Comprehensive tests for SQLite persistence, security hardening, and audit remediation."""
 import json
 import os
 import tempfile
@@ -71,8 +71,8 @@ def test_j_and_uj_type_safety():
     assert uj('{"a":1}', default={}) == {"a": 1}
 
 
-def test_session_set_status_dual_write(isolated_env, monkeypatch):
-    """Verify set_status updates both SQLite and the JSON file snapshot."""
+def test_session_set_status_sqlite(isolated_env, monkeypatch):
+    """Verify set_status persists without creating a JSON snapshot."""
     monkeypatch.setattr("andromity.core.session.get_config_dir", lambda: isolated_env)
     project_dir = str(isolated_env / "status_proj")
     s = Session(name="Status Test", project_path=project_dir)
@@ -87,10 +87,7 @@ def test_session_set_status_dual_write(isolated_env, monkeypatch):
     assert row is not None
     assert row["status"] == "running"
 
-    # 2. Verify on disk JSON
-    assert s.file_path.exists()
-    disk_data = json.loads(s.file_path.read_text(encoding="utf-8"))
-    assert disk_data["status"] == "running"
+    assert not s.file_path.exists()
 
 
 def test_session_list_merges_unmigrated_json(isolated_env, monkeypatch):
@@ -205,8 +202,8 @@ def test_cron_sanitize_scoped_to_project(isolated_env):
 
 
 @pytest.mark.asyncio
-async def test_rpc_session_delete_cleans_db_and_json(isolated_env, monkeypatch):
-    """Verify rpc_session_delete purges SQLite records and removes JSON files without traversal risk."""
+async def test_rpc_session_delete_cleans_db(isolated_env, monkeypatch):
+    """Verify rpc_session_delete purges SQLite records without traversal risk."""
     monkeypatch.setattr("andromity.core.session.get_config_dir", lambda: isolated_env)
     monkeypatch.setattr("andromity.server.rpc_handler.get_config_dir", lambda: isolated_env)
     project_dir = str(isolated_env / "rpc_proj")
@@ -216,13 +213,13 @@ async def test_rpc_session_delete_cleans_db_and_json(isolated_env, monkeypatch):
 
     conn = get_conn()
     assert conn.execute("SELECT * FROM sessions WHERE id = ?", (s.id,)).fetchone() is not None
-    assert s.file_path.exists()
+    assert not s.file_path.exists()
 
     handler = JsonRpcHandler()
     res = await handler.rpc_session_delete({"session_id": s.id})
     assert res["success"] is True
 
-    # Check both DB and disk
+    # Check SQLite and absence of JSON snapshots
     assert conn.execute("SELECT * FROM sessions WHERE id = ?", (s.id,)).fetchone() is None
     assert not s.file_path.exists()
 

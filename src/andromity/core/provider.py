@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import AsyncGenerator, List, Dict, Any, Optional
 
@@ -223,77 +224,36 @@ async def stream_completion(
         provider_name = config.get("default", "provider", "anthropic")
     if model is None:
         model = config.get("default", "model", "claude-sonnet-4-6")
-    provider_cfg = config.get_provider_config(provider_name)
-
-    if provider_name == "google":
-        # LiteLLM routes Google AI Studio Gemini API via the 'gemini/' prefix
-        litellm_model = f"gemini/{model}" if not model.startswith("gemini/") else model
-        base_url = provider_cfg.get("base_url") if provider_cfg else None
-    elif provider_name == "ollama":
-        # LiteLLM routes Ollama chat endpoint via 'ollama_chat/' or 'ollama/'
-        litellm_model = f"ollama_chat/{model}" if not (model.startswith("ollama/") or model.startswith("ollama_chat/")) else model
-        base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "http://localhost:11434"
+    from andromity.core.connections import provider_request
+    resolved = provider_request(provider_name, model)
+    litellm_model = resolved["model"]
+    base_url = resolved.get("api_base")
+    _num_ctx = 0
+    if litellm_model.startswith(("ollama/", "ollama_chat/")):
         from andromity.core.models import get_ollama_num_ctx
-        _num_ctx = get_ollama_num_ctx(model, base_url)
-        log.info("Ollama num_ctx=%d for model=%s", _num_ctx, model)
-    elif provider_name == "nvidia":
-        # Route natively via litellm's nvidia_nim provider (handles auth and endpoints automatically)
-        litellm_model = f"nvidia_nim/{model}" if not model.startswith("nvidia_nim/") else model
-        base_url = (provider_cfg.get("base_url") if provider_cfg else None)
-    elif provider_cfg and provider_cfg.get("type") and provider_cfg.get("type") != provider_name:
-        litellm_model = f"{provider_cfg.get('type')}/{model}"
-        base_url = provider_cfg.get("base_url")
-    elif provider_name == "openrouter":
-        clean_model = model.lstrip("~") if model else model
-        litellm_model = f"openrouter/{clean_model}" if not clean_model.startswith("openrouter/") else clean_model
-        base_url = provider_cfg.get("base_url") if provider_cfg else None
-    elif provider_name == "opencode":
-        # OpenCode Zen inference gateway — OpenAI-compatible, requires User-Agent header
-        litellm_model = f"openai/{model}" if not model.startswith("openai/") else model
-        base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "https://opencode.ai/inference/openai/v1"
-    elif provider_name == "andromity":
-        clean_model = model or "auto"
-        litellm_model = f"openai/{clean_model}"
-        base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "https://gateway.agenticmarket.dev/v1"
-    else:
-        litellm_model = f"{provider_name}/{model}" if not model.startswith(f"{provider_name}/") else model
-        base_url = provider_cfg.get("base_url") if provider_cfg else None
-
-    api_key = config.get_api_key(provider_name)
-    if provider_name == "andromity" and not api_key:
-        api_key = "anonymous_trial"
-    if provider_name == "opencode" and not api_key:
-        # Auto-read token from OpenCode's local auth store (set by `opencode auth login`)
-        try:
-            import json as _json
-            _auth_path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
-            _auth = _json.loads(_auth_path.read_text(encoding="utf-8"))
-            api_key = _auth.get("opencode", {}).get("key") or _auth.get("openrouter", {}).get("key")
-        except Exception:
-            pass
-
+        _num_ctx = get_ollama_num_ctx(model, base_url or "http://localhost:11434")
     kwargs = {
-        "model": litellm_model,
+        **resolved,
         "messages": sanitized_messages,
         "stream": True,
         "stream_options": {"include_usage": True},
     }
-    if api_key:
-        kwargs["api_key"] = api_key
-    if base_url:
-        kwargs["api_base"] = base_url
     if tools:
         kwargs["tools"] = tools
 
     # Custom kwargs per provider
-    if provider_name == "ollama" and _num_ctx:
+    if _num_ctx:
         kwargs.setdefault("options", {})["num_ctx"] = _num_ctx
 
     if provider_name == "andromity":
+        try:
+            from andromity import __version__ as _pkg_ver
+        except Exception:
+            _pkg_ver = "0.2.15"
         andromity_headers = {
             "User-Agent": "Andromity",
             "x-andromity-client-id": config.get("user", "anonymous_id", "local_client"),
-            "x-andromity-version": "0.2.12",
+            "x-andromity-version": _pkg_ver,
         }
         if turn_id:
             andromity_headers["x-andromity-turn-id"] = turn_id
@@ -302,12 +262,16 @@ async def stream_completion(
     # OpenRouter: send app identity headers so the dashboard shows "Andromity"
     # instead of "litellm". See https://openrouter.ai/docs#provider-routing
     if provider_name == "openrouter":
+        client_env = (os.environ.get("ANDROMITY_CLIENT") or "").lower()
+        is_vscode = client_env in ("server", "vscode") or bool(os.environ.get("VSCODE_PID"))
+        categories = "ide-extension,cli-agent" if is_vscode else "cli-agent,ide-extension"
+
         kwargs["extra_headers"] = {
             "User-Agent": "Andromity",
             "HTTP-Referer": "https://andromity.agenticmarket.dev",
             "X-Title": "Andromity",
             "X-OpenRouter-Title": "Andromity",
-            "X-OpenRouter-Categories": "cli-agent",
+            "X-OpenRouter-Categories": categories,
         }
         # Enable provider fallbacks so overloaded endpoints do not stall in queue
         kwargs.setdefault("extra_body", {})
@@ -321,21 +285,11 @@ async def stream_completion(
     log.info("stream_completion start: provider=%s model=%s litellm_model=%s",
              provider_name, model, litellm_model)
 
-    if "z-ai/" in model or "glm-" in model:
-        kwargs.setdefault("extra_body", {})
-        kwargs["extra_body"]["chat_template_kwargs"] = {
-            "enable_thinking": True,
-            "clear_thinking": False
-        }
-
-    # Inject reasoning effort when set
-    if reasoning_effort and reasoning_effort != "off":
-        if provider_name == "openrouter":
-            kwargs.setdefault("extra_body", {})
-            kwargs["extra_body"]["reasoning"] = {"effort": reasoning_effort, "exclude": False}
-        else:
-            # OpenAI o-series and compatible providers
-            kwargs["reasoning_effort"] = reasoning_effort
+    from andromity.core.reasoning import (
+        apply_reasoning_to_request, discover_model_reasoning_capability,
+    )
+    capability = await asyncio.to_thread(discover_model_reasoning_capability, provider_name, model)
+    apply_reasoning_to_request(provider_name, model, reasoning_effort, kwargs, capability)
 
     # Upstream retry with backoff for stalls, rate limits, and transient drops
     STREAM_BACKOFF_DELAYS = [5.0, 10.0, 20.0]
@@ -367,10 +321,25 @@ async def stream_completion(
                     or "upgrade_url" in msg
                     or "sign in with github" in msg
                 )
-                if is_daily_quota:
-                    log.info("Daily quota reached upstream. Failing fast without retries.")
+                is_auth_error = (
+                    isinstance(e, (litellm.AuthenticationError, litellm.PermissionDeniedError))
+                    or any(k in msg for k in (
+                        "missing credentials", "please pass an `api_key`", "please pass an api_key",
+                        "invalid api key", "invalid_api_key", "unauthorized", "401", "forbidden", "403",
+                        "no api key", "missing api key"
+                    ))
+                )
+                is_bad_request = (
+                    isinstance(e, (litellm.BadRequestError, litellm.NotFoundError, litellm.ContextWindowExceededError, litellm.UnsupportedParamsError))
+                    or any(k in msg for k in (
+                        "context_length_exceeded", "maximum context length", "model not found", "does not exist"
+                    ))
+                )
+
+                if is_daily_quota or is_auth_error or is_bad_request:
+                    log.info("Non-retryable provider error: %s (HTTP %s).", type(e).__name__, getattr(e, "status_code", "unknown"))
                     yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-                    yield Done()
+                    yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"])
                     return
 
                 is_429 = "429" in msg or "rate limit" in msg or "ratelimit" in msg or "quota" in msg
@@ -391,9 +360,9 @@ async def stream_completion(
                     await asyncio.sleep(wait_s)
                     continue
                 else:
-                    log.error("acompletion initial error after %d attempts: %s", total_attempts, e, exc_info=True)
+                    log.error("Provider call failed after %d attempts: %s (HTTP %s).", total_attempts, type(e).__name__, getattr(e, "status_code", "unknown"))
                     yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-                    yield Done()
+                    yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"])
                     return
 
             # 2. Watchdog: guard against upstream queue stall
@@ -491,23 +460,91 @@ async def stream_completion(
                 except Exception:
                     pass
 
-            # If stalled or failed BEFORE emitting any tokens, retry with backoff!
-            if not has_emitted_content and attempt < len(STREAM_BACKOFF_DELAYS):
+            msg = str(e).lower()
+            is_non_retryable = (
+                isinstance(e, (
+                    litellm.AuthenticationError,
+                    litellm.PermissionDeniedError,
+                    litellm.BadRequestError,
+                    litellm.NotFoundError,
+                    litellm.ContextWindowExceededError,
+                    litellm.UnsupportedParamsError,
+                ))
+                or any(k in msg for k in (
+                    "missing credentials", "please pass an `api_key`", "please pass an api_key",
+                    "invalid api key", "invalid_api_key", "unauthorized", "401", "forbidden", "403",
+                    "no api key", "missing api key",
+                    "daily_limit_reached", "quota_exceeded", "free trial requests", "daily limit",
+                    "context_length_exceeded", "maximum context length", "model not found"
+                ))
+            )
+
+            # If stalled or failed BEFORE emitting any tokens, retry with backoff ONLY for transient errors
+            if not has_emitted_content and not is_non_retryable and attempt < len(STREAM_BACKOFF_DELAYS):
                 wait_s = STREAM_BACKOFF_DELAYS[attempt]
                 log.warning(
-                    "Upstream stalled or failed before emitting tokens (%s: %s). Retrying in %.0fs (attempt %d/%d)...",
-                    type(e).__name__, e, wait_s, attempt + 1, total_attempts
+                    "Upstream stalled or failed before emitting tokens (%s). Retrying in %.0fs (attempt %d/%d)...",
+                    type(e).__name__, wait_s, attempt + 1, total_attempts
                 )
                 await asyncio.sleep(wait_s)
                 continue
 
-            log.error("Provider stream error (%s): %s", type(e).__name__, e, exc_info=True)
+            log.error("Provider stream error: %s (HTTP %s).", type(e).__name__, getattr(e, "status_code", "unknown"))
             if isinstance(e, ProviderStalledError):
                 yield TextDelta(text=_format_stall_text(provider_name, model, e.timeout))
             else:
                 yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-            yield Done(usage=usage)
+            yield Done(usage=usage, outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"])
             return
+
+
+def extract_clean_error_message(err_or_text: Any) -> str:
+    """Extract a user-friendly error message from raw LiteLLM/provider exception strings.
+    Strips raw python exception prefixes, extracts JSON error messages, and removes internal IDs."""
+    import json
+    import re
+
+    raw = str(err_or_text) if err_or_text is not None else ""
+    if not raw:
+        return ""
+    if re.search(r"<(?:!doctype\s+html|html\b|head\b|body\b)", raw, re.IGNORECASE):
+        return "The endpoint returned a web page instead of an API response. Check the provider base URL."
+
+    # 1. Look for embedded JSON error payload (e.g. {"error": {"message": "..."}})
+    json_match = re.search(r'(\{[\s\S]*\})', raw)
+    if json_match:
+        try:
+            data = json.loads(json_match.group(1))
+            if isinstance(data, dict):
+                err_val = data.get("error")
+                if isinstance(err_val, dict) and err_val.get("message"):
+                    return str(err_val["message"]).strip()
+                elif isinstance(err_val, str) and err_val.strip():
+                    return err_val.strip()
+                elif data.get("message") and isinstance(data["message"], str):
+                    return data["message"].strip()
+                elif data.get("detail") and isinstance(data["detail"], str):
+                    return data["detail"].strip()
+        except Exception:
+            pass
+
+    # 2. Strip leading LiteLLM / Provider exception boilerplate
+    cleaned = raw.strip()
+    cleaned = re.sub(r'^(?:litellm\.)?\w*(?:Error|Exception):\s*', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'^(?:litellm\.)?\w*(?:Error|Exception):\s*', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'^\w+Exception\s*[-:]\s*', '', cleaned, flags=re.IGNORECASE)
+
+    # 3. Strip trailing raw JSON or user_id dumps
+    cleaned = re.sub(r'\{[\s\S]*\}', '', cleaned).strip()
+    cleaned = re.sub(r'["\']user_id["\']\s*:\s*["\'][^"\']+["\']', '', cleaned, flags=re.IGNORECASE).strip()
+
+    # 4. Strip leftover punctuation
+    cleaned = cleaned.lstrip('- :').strip()
+
+    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+    if lines:
+        return lines[0]
+    return raw.strip()
 
 
 def classify_error_info(
@@ -523,6 +560,8 @@ def classify_error_info(
     msg = str(e) or type(e).__name__
     low = msg.lower()
     err_cls = type(e).__name__
+    clean_msg = extract_clean_error_message(e)
+    is_html = bool(re.search(r"<(?:!doctype\s+html|html\b|head\b|body\b)", msg, re.IGNORECASE))
 
     disp_model = model or "the selected model"
     disp_prov = (provider or "AI provider").capitalize()
@@ -532,8 +571,20 @@ def classify_error_info(
         or any(k in low for k in ("image", "vision", "multimodal", "modality", "does not support image"))
     ) and any(k in low for k in ("image", "vision", "multimodal", "modality", "support", "400", "payload"))
 
+    is_not_found = (
+        getattr(e, "status_code", None) == 404
+        or err_cls == "NotFoundError"
+        or "notfound" in low
+        or "not found" in low
+        or "no endpoints found" in low
+        or "model_not_found" in low
+        or "does not exist" in low
+        or ("404" in msg and ("model" in low or "endpoint" in low or "not found" in low))
+    )
+
     is_rate = (
-        "429" in msg
+        getattr(e, "status_code", None) == 429
+        or "429" in msg
         or "rate limit" in low
         or "ratelimit" in low
         or "quota" in low
@@ -541,15 +592,19 @@ def classify_error_info(
         or "daily limit" in low
         or "free trial" in low
     )
-    is_upstream = any(k in low for k in (
+    is_upstream = getattr(e, "status_code", None) in (500, 502, 503, 504) or any(k in low for k in (
         "midstreamfallbackerror", "serviceunavailable", "service_unavailable", "service unavailable",
         "503", "502", "500", "504", "bad gateway", "gateway timeout",
         "upstream error", "apiconnectionerror", "connection reset", "broken pipe"
     ))
-    is_context = any(k in low for k in ("context length", "maximum context", "token limit", "context_length_exceeded", "prompt is too long"))
-    is_auth = any(k in low for k in ("401", "403", "unauthorized", "invalid api key", "authentication error", "invalid_api_key", "forbidden"))
+    is_context = any(k in low for k in ("context length", "maximum context", "token limit", "context_length_exceeded", "prompt is too long", "context window"))
+    is_auth = getattr(e, "status_code", None) in (401, 403) or err_cls in ("AuthenticationError", "PermissionDeniedError") or any(k in low for k in (
+        "401", "403", "unauthorized", "invalid api key", "authentication error",
+        "invalid_api_key", "forbidden", "missing credentials", "please pass an `api_key`",
+        "please pass an api_key", "no api key", "missing api key"
+    ))
     is_ollama_off = ("connection refused" in low or "failed to connect" in low) and ("11434" in low or provider == "ollama")
-    is_stall = "stalled" in low or "watchdog" in low or "first token" in low
+    is_stall = err_cls in ("TimeoutError", "Timeout", "ProviderStalledError") or any(k in low for k in ("stalled", "watchdog", "first token", "timed out"))
 
     icon_retry = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>'
     icon_model = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>'
@@ -561,7 +616,18 @@ def classify_error_info(
     timer_text = ""
     timer_html = ""
 
-    if is_vision:
+    if is_html and is_not_found:
+        err_type = "endpoint_not_found"
+        badge = "INVALID ENDPOINT"
+        title = "API Endpoint Not Found"
+        desc_text = "The provider returned an HTML 404 page. Check the base URL in Settings; OpenAI-compatible connections use the API root (for example, https://your-provider/v1), without /chat/completions."
+        desc_html = html.escape(desc_text)
+        actions_html = (
+            f'<button class="btn-error-retry" data-action="open-settings" title="Correct the provider base URL">'
+            f'{icon_settings}Open Settings</button>'
+        )
+        actions_tui = ["Open Settings and correct the provider base URL"]
+    elif is_vision:
         err_type = "vision_unsupported"
         badge = "IMAGE NOT SUPPORTED"
         title = "Model Does Not Support Images"
@@ -664,6 +730,8 @@ def classify_error_info(
                     f'{icon_account}Sign In</button>'
                     f'<button class="btn-error-secondary" data-action="open-settings" title="Configure BYOK">'
                     f'{icon_settings}Open Settings</button>'
+                    f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to an alternate model">'
+                    f'{icon_model}Switch Model</button>'
                 )
                 actions_tui = [
                     "Run 'andromity auth login' or sign in via Hub",
@@ -777,31 +845,55 @@ def classify_error_info(
             "Type /retry to re-send this turn",
             "Press Ctrl+M to switch to another model",
         ]
+    elif is_not_found:
+        err_type = "model_not_found"
+        badge = "NOT FOUND"
+        title = "Model Not Available"
+        clean_detail = clean_msg or f"No endpoints found for {disp_model}."
+        desc_text = (
+            f"{disp_prov}: {clean_detail} Please switch to another model."
+        )
+        desc_html = (
+            f"<strong>{html.escape(disp_prov)}</strong>: {html.escape(clean_detail)} Please switch to another model."
+        )
+        actions_html = (
+            f'<button class="btn-error-retry" data-action="switch-model-flyout" title="Switch to another model">'
+            f'{icon_model}Switch Model</button>'
+            f'<button class="btn-error-secondary" data-action="retry-turn" title="Retry this turn">'
+            f'{icon_retry}Retry Turn</button>'
+        )
+        actions_tui = [
+            "Press Ctrl+M to switch to another model",
+            "Type /retry to re-send this turn",
+        ]
     else:
         err_type = "generic"
         badge = "ERROR"
-        title = f"Turn Interrupted ({err_cls})"
-        first_line = msg.splitlines()[0] if msg else err_cls
-        if len(first_line) > 140:
-            first_line = first_line[:137] + "..."
+        title = "Turn Interrupted"
+        user_err_msg = clean_msg or (msg.splitlines()[0] if msg else err_cls)
+        if len(user_err_msg) > 180:
+            user_err_msg = user_err_msg[:177] + "..."
         desc_text = (
-            f"An error interrupted communication with {disp_prov}: {first_line}. "
-            "Retry to re-send this turn."
+            f"{disp_prov}: {user_err_msg}. Retry to re-send this turn."
         )
         desc_html = (
-            f"An error interrupted communication with <strong>{html.escape(disp_prov)}</strong>: {html.escape(first_line)}. "
+            f"<strong>{html.escape(disp_prov)}</strong>: {html.escape(user_err_msg)}. "
             "Click Retry to re-send this turn."
         )
         actions_html = (
             f'<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">'
             f'{icon_retry}Retry Turn</button>'
+            f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">'
+            f'{icon_model}Switch Model</button>'
         )
         actions_tui = [
-            "Type /retry to re-send this turn",
+            "Press Ctrl+M to switch to another model",
         ]
 
-    clean_msg = re.sub(r'\bof \d+ (?:requests|turns)\b', '', msg)
-    raw_preview = clean_msg[:500] + ("..." if len(clean_msg) > 500 else "")
+    clean_msg_raw = re.sub(r'\bof \d+ (?:requests|turns)\b', '', msg)
+    raw_preview = clean_msg_raw[:500] + ("..." if len(clean_msg_raw) > 500 else "")
+    if is_html:
+        raw_preview = "HTML response received instead of an API response."
 
     return {
         "type": err_type,
@@ -905,8 +997,6 @@ def classify_and_format_error(
     - Under VS Code server (ANDROMITY_CLIENT="server") or pytest: outputs HTML card.
     - Under TUI or CLI: outputs clean, tag-free terminal Markdown.
     """
-    import os
-
     info = classify_error_info(e, provider=provider, model=model, has_images=has_images)
 
     if output_format == "html":
@@ -915,8 +1005,9 @@ def classify_and_format_error(
         return format_error_terminal(info)
 
     # Auto-detection:
-    # VS Code daemon or pytest expects HTML cards
-    if os.environ.get("ANDROMITY_CLIENT") == "server" or os.environ.get("PYTEST_CURRENT_TEST"):
+    # VS Code daemon (ANDROMITY_CLIENT in "server", "vscode") or pytest expects HTML cards
+    client_env = (os.environ.get("ANDROMITY_CLIENT") or "").lower()
+    if client_env in ("server", "vscode") or os.environ.get("PYTEST_CURRENT_TEST"):
         return format_error_html(info)
 
     # TUI, CLI, and standalone callers receive terminal markdown

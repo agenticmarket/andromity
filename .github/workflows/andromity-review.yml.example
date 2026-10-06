@@ -19,15 +19,20 @@ jobs:
   review:
     name: "Andromity Code Review"
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@andromity'))
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
+       contains(github.event.comment.body, '@andromity'))
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Run Andromity Action
-        uses: agenticmarket/andromity@main
+        uses: agenticmarket/andromity@a7ca6ff7ccd33631e52859a12abaf2eb273f5b48 # main
         with:
           api-key: ${{ secrets.OPENROUTER_API_KEY }}
           model: "openrouter/deepseek/deepseek-v4.1-flash"

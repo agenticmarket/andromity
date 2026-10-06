@@ -1,12 +1,16 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { RpcClient } from "../server/RpcClient.js";
+import { handleInputMessage } from "../server/inputBridge.js";
+import { handleInteractionMessage, reportDisconnectedAction } from "../server/interactionBridge.js";
+import { SessionHydration } from "../server/sessionHydration.js";
 import { ChatViewProvider } from "../providers/ChatViewProvider.js";
 import { ModelInfo, ProviderInfo, SessionInfo } from "../server/types.js";
 import { EditorBridge } from "../integrations/EditorBridge.js";
 import { SettingsPanel } from "./SettingsPanel.js";
 import { PlanEditorPanel } from "./PlanEditorPanel.js";
 import { WaterfallPanel } from "./WaterfallPanel.js";
+import { BackgroundTaskPanel } from "./BackgroundTaskPanel.js";
 
 /**
  * SessionTabPanel allows opening any Andromity session in a dedicated editor tab
@@ -30,6 +34,8 @@ export class SessionTabPanel {
   private _currentReasoning: string = "medium";
   private _disposables: vscode.Disposable[] = [];
   private _rpcDisposables: Array<() => void> = [];
+  private _hydration = new SessionHydration();
+  private _creatingSession: Promise<void> | null = null;
 
   public static getAllPanels(): SessionTabPanel[] {
     return Array.from(SessionTabPanel._panels.values());
@@ -143,7 +149,12 @@ export class SessionTabPanel {
 
     this._panel.webview.onDidReceiveMessage(
       async (message) => {
-        await this._handleMessage(message);
+        try { await this._handleMessage(message); }
+        catch (error) {
+          console.error("[Andromity SessionTab] Action failed:", error);
+          this._postMessage({ type: "action_failed", session_id: this._sessionId,
+            error: "This action could not be completed. Reconnect and try again." });
+        }
       },
       null,
       this._disposables
@@ -174,6 +185,7 @@ export class SessionTabPanel {
     this._rpcClient = client;
     this._bindRpcEvents();
     this._postMessage({ type: "backend_ready" });
+    void this._loadSession();
   }
 
   private _disposeRpcEvents() {
@@ -192,6 +204,7 @@ export class SessionTabPanel {
   }
 
   private _postMessage(msg: any) {
+    if (this._hydration.capture(msg)) return;
     try {
       this._panel.webview.postMessage(msg);
     } catch {}
@@ -212,6 +225,12 @@ export class SessionTabPanel {
       return true;
     };
 
+    bind("agent/queueChanged", (params: any) => {
+      if (isMatch(params)) this._postMessage({ type: "queue_state", ...params, supported: true });
+    });
+    bind("agent/inputApplied", (params: any) => {
+      if (isMatch(params)) this._postMessage({ type: "input_applied", ...params });
+    });
     bind("agent/started", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "agent_started", ...params });
     });
@@ -249,16 +268,25 @@ export class SessionTabPanel {
         }
       }
     });
+    bind("agent/interactionResolved", (params: any) => {
+      if (isMatch(params)) this._postMessage({ type: "interaction_resolved", ...params });
+    });
+    bind("process/started", (params: any) => {
+      if (isMatch(params)) this._postMessage({ type: "process_started", ...params });
+    });
+    bind("process/exited", (params: any) => {
+      if (isMatch(params)) this._postMessage({ type: "process_exited", ...params });
+    });
     bind("agent/planApproval", (params: any) => {
       if (isMatch(params)) {
-        this._postMessage({ type: "plan_approval", plan: params.plan });
+        this._postMessage({ type: "plan_approval", ...params });
         if (this._viewProvider.isSoundEnabled("attention") && !this._viewProvider.isViewVisible()) {
           this._postMessage({ type: "play_sound", kind: "attention" });
         }
       }
     });
     bind("agent/planUpdated", (params: any) => {
-      if (isMatch(params)) this._postMessage({ type: "plan_updated", plan: params.plan, session_id: params.session_id });
+      if (isMatch(params)) this._postMessage({ type: "plan_updated", ...params });
     });
     bind("subagent/spawned", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "subagent_spawned", ...params });
@@ -381,10 +409,10 @@ export class SessionTabPanel {
     }
 
     if (message.type === "open_plan_tab") {
-      const plan = this._viewProvider.getCurrentPlan?.();
+      const plan = await this._rpcClient?.call<{ plan: unknown }>("plan.get", { session_id: this._sessionId });
       PlanEditorPanel.createOrShow(
         this._extensionUri,
-        plan || null,
+        plan?.plan || null,
         this._rpcClient,
         async (approved, feedback, sid) => {
           await this._viewProvider.handlePlanApproval(approved, feedback, sid || this._sessionId);
@@ -397,6 +425,16 @@ export class SessionTabPanel {
     if (message.type === "open_file") {
       if (message.filePath) {
         await this._viewProvider.openFile(message.filePath, message.line);
+      }
+      return;
+    }
+    if (message.type === "pick_file_attachment") {
+      const uris = await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: false,
+        canSelectMany: true, openLabel: "Attach File", title: "Attach File to Andromity Context" });
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      for (const uri of uris || []) {
+        this._postMessage({ type: "file_attached", file: { name: path.basename(uri.fsPath), fsPath: uri.fsPath,
+          path: workspaceFolder ? path.relative(workspaceFolder, uri.fsPath).replace(/\\/g, "/") : uri.fsPath } });
       }
       return;
     }
@@ -466,11 +504,88 @@ export class SessionTabPanel {
     }
 
     if (!this._rpcClient) {
+      reportDisconnectedAction(message, this._sessionId, event => this._postMessage(event));
       vscode.window.showErrorMessage("Andromity daemon is not connected.");
       return;
     }
 
+    if (await handleInputMessage(this._rpcClient, message, this._sessionId, (event) => this._postMessage(event))) return;
+    if (await handleInteractionMessage(this._rpcClient, message, this._sessionId, (event) => this._postMessage(event))) return;
+
     switch (message.type) {
+      case "set_api_key": {
+        try {
+          if (!message.provider) throw new Error("Missing provider");
+          if (message.apiKey) await this._rpcClient.call("config.set_api_key", { provider: message.provider, api_key: message.apiKey });
+          const models = await this._rpcClient.call<ModelInfo[]>("config.refresh_models", { provider: message.provider }, 6000)
+            .catch(() => this._rpcClient!.call<ModelInfo[]>("config.list_models", { provider: message.provider }));
+          if (!models.length) {
+            this._postMessage({ type: "key_configure_failed", error: "No models returned. Check the provider endpoint and model ID in Settings." });
+            break;
+          }
+          this._postMessage({ type: "key_configured_select_model", provider: message.provider, models,
+            defaultModel: message.modelId || models[0].id });
+        } catch {
+          this._postMessage({ type: "key_configure_failed", error: "Could not configure this provider. Check the connection in Settings." });
+        }
+        break;
+      }
+      case "activate_andromity_free": {
+        await this._handleMessage({ type: "update_config", key: "model", value: "auto", provider: "andromity" });
+        this._postMessage({ type: "key_configured_success", provider: "andromity", model: "auto" });
+        break;
+      }
+      case "start_ollama_server": {
+        await this._viewProvider.startOllamaServer();
+        this._postMessage({ type: "ollama_status_updated", status: await this._viewProvider.probeOllama() });
+        break;
+      }
+      case "open_external": {
+        try {
+          const uri = vscode.Uri.parse(message.url);
+          if (uri.scheme === "http" || uri.scheme === "https") await vscode.env.openExternal(uri);
+        } catch { /* Ignore invalid links. */ }
+        break;
+      }
+      case "trust_workspace": {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const trust = await this._rpcClient.call<{ is_trusted: boolean }>("trust.set", { project_path: workspaceFolder });
+        this._postMessage({ type: "trust_updated", isTrusted: trust.is_trusted });
+        break;
+      }
+      case "toggle_pin": {
+        const result = await this._rpcClient.call<{ pinned: unknown[] }>("config.toggle_pin", {
+          modelId: message.modelId, provider: message.provider, name: message.name,
+        });
+        this._postMessage({ type: "update_pinned_models", pinnedModels: result.pinned });
+        break;
+      }
+      case "kill_process": {
+        await this._rpcClient.call("process.kill", { process_id: message.processId || message.process_id, session_id: this._sessionId });
+        break;
+      }
+      case "open_bg_task_tab": {
+        const id = message.processId || message.process_id;
+        if (id) BackgroundTaskPanel.createOrShow(this._extensionUri, id, this._rpcClient, message.command, this._sessionId);
+        break;
+      }
+      case "new_session": {
+        if (this._creatingSession) { await this._creatingSession; break; }
+        this._creatingSession = (async () => {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          const current = await this._rpcClient!.call<any>("session.get", { session_id: this._sessionId, project_path: workspaceFolder });
+          if (!current.is_running && !current.messages?.length) { await this._loadSession(); return; }
+          const created = await this._rpcClient!.call<SessionInfo>("session.create", {
+            project_path: workspaceFolder, keep_id: this._sessionId,
+            name: `Session ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+          });
+          await this._switchSession(created.id);
+          void vscode.commands.executeCommand("andromity.refreshSessions");
+        })();
+        try { await this._creatingSession; }
+        finally { this._creatingSession = null; }
+        break;
+      }
       case "send_prompt":
       case "prompt": {
         try {
@@ -559,7 +674,13 @@ export class SessionTabPanel {
 
       case "cycle_reasoning":
       case "update_reasoning": {
-        const efforts = ["high", "medium", "low", "off"];
+        const cap = await this._rpcClient?.call<any>("model.reasoning_capability", {
+          provider: this._currentProvider, model: this._currentModel,
+        }).catch(() => null);
+        const efforts: string[] = ["auto", ...(cap?.supported_efforts || []).filter((effort: string) => effort !== "auto")];
+        if (efforts.length === 1 && !cap?.supports_max_tokens) {
+          break;
+        }
         if (message.value && efforts.includes(message.value.toLowerCase())) {
           this._currentReasoning = message.value.toLowerCase();
         } else {
@@ -578,11 +699,14 @@ export class SessionTabPanel {
 
       case "select_model":
       case "update_config": {
-        const key = message.key || (message.modelId ? "model" : undefined);
-        const value = message.value || message.modelId;
+        const key = message.key || (message.modelId || message.model ? "model" : undefined);
+        const value = message.value ?? message.modelId ?? message.model;
         if (key) {
           switch (key) {
-            case "model": this._currentModel = value; break;
+            case "model":
+              this._currentModel = value;
+              if (message.provider) this._currentProvider = message.provider;
+              break;
             case "provider": this._currentProvider = value; break;
             case "profile": this._currentProfile = value; break;
             case "mode": this._currentMode = value; break;
@@ -592,41 +716,15 @@ export class SessionTabPanel {
             section: "default",
             key: key === "reasoningEffort" ? "reasoning_effort" : key === "mode" ? "permission_mode" : key,
             value: value,
-          }).catch(() => {});
-          this._postMessage({ type: "config_updated", key: key, value: value, provider: message.provider || this._currentProvider });
+          });
+          if (key === "model" && message.provider) {
+            await this._rpcClient.call("config.set", { section: "default", key: "provider", value: message.provider });
+          }
+          const reasoningCapability = key === "model" ? await this._rpcClient?.call<any>("model.reasoning_capability", {
+            provider: this._currentProvider, model: this._currentModel,
+          }).catch(() => null) : undefined;
+          this._postMessage({ type: "config_updated", key, value, provider: this._currentProvider, reasoningCapability });
         }
-        break;
-      }
-
-      case "approve_tool": {
-        await this._rpcClient.call("agent.approve_tool", {
-          approval_id: message.approvalId,
-          session_id: this._sessionId,
-          approved: true,
-          scope: message.scope || "once",
-          tool_name: message.toolName,
-        }).catch((err) => console.error("[SessionTab] Tool approval error:", err));
-        if (message.scope === "session") {
-          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-          await this._rpcClient.call("config.set", { section: "default", key: "permission_mode", value: "trust" }).catch(() => {});
-          this._currentMode = "trust";
-          this._postMessage({ type: "config_updated", key: "mode", value: "trust" });
-        } else if (message.scope === "always") {
-          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-          await this._rpcClient.call("trust.set", { project_path: workspaceFolder }).catch(() => {});
-          await this._rpcClient.call("config.set", { section: "default", key: "permission_mode", value: "trust" }).catch(() => {});
-          this._currentMode = "trust";
-          this._postMessage({ type: "trust_updated", isTrusted: true });
-          this._postMessage({ type: "config_updated", key: "mode", value: "trust" });
-        }
-        break;
-      }
-
-      case "reject_tool": {
-        await this._rpcClient.call("agent.reject_tool", {
-          approval_id: message.approvalId,
-          session_id: this._sessionId,
-        }).catch((err) => console.error("[SessionTab] Tool reject error:", err));
         break;
       }
 
@@ -686,68 +784,9 @@ export class SessionTabPanel {
         break;
       }
 
-      case "answer_question": {
-        await this._rpcClient.call("agent.answer_question", {
-          question_id: message.questionId,
-          session_id: this._sessionId,
-          answers: message.answers,
-        }).catch((err) => console.error("[SessionTab] Answer question error:", err));
-        break;
-      }
-
-      case "trust_workspace": {
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        await this._rpcClient?.call("trust.set", { project_path: workspaceFolder });
-        vscode.window.showInformationMessage("Workspace trusted. File editing and shell commands enabled.");
-        this._postMessage({ type: "trust_updated", isTrusted: true });
-        SettingsPanel.currentPanel?.loadData();
-        break;
-      }
-
-      case "tool_approval_response": {
-        await this._rpcClient.call("agent.approve_tool", {
-          approval_id: message.approvalId || message.callId,
-          session_id: this._sessionId,
-          approved: message.approved,
-          reason: message.reason,
-          answer: message.answer,
-        }).catch((err) => console.error("[SessionTab] Tool approval error:", err));
-        break;
-      }
-
-      case "plan_approval_response": {
-        if (message.approved) {
-          await this._rpcClient.call("plan.approve", {
-            session_id: this._sessionId,
-            comment: message.feedback || "",
-            feedback: message.feedback || "",
-          }).catch(() => {});
-        } else {
-          await this._rpcClient.call("plan.reject", {
-            session_id: this._sessionId,
-            comment: message.feedback || "",
-            feedback: message.feedback || "",
-          }).catch(() => {});
-        }
-        break;
-      }
-
-      case "ask_question_response": {
-        await this._rpcClient.call("agent.answer_question", {
-          session_id: this._sessionId,
-          question_id: message.questionId,
-          answers: message.answers,
-        }).catch((err) => console.error("[SessionTab] Answer question error:", err));
-        break;
-      }
-
       case "switch_session": {
         if (message.sessionId && message.sessionId !== this._sessionId) {
-          const oldId = this._sessionId;
-          this._sessionId = message.sessionId;
-          SessionTabPanel._panels.delete(oldId);
-          SessionTabPanel._panels.set(this._sessionId, this);
-          await this._loadSession();
+          await this._switchSession(message.sessionId);
         }
         break;
       }
@@ -760,14 +799,8 @@ export class SessionTabPanel {
       }
 
       case "undo_turn": {
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        const res = await this._rpcClient.call<any>("session.undo", {
-          session_id: this._sessionId,
-          project_path: workspaceFolder,
-          turn_index: (message as any).turnIndex,
-          turns_to_undo: (message as any).turnsToUndo,
-        }).catch(() => null);
-        if (res?.success) {
+        const undone = await this._viewProvider.undoSession(this._sessionId, message.turnIndex, message.turnsToUndo);
+        if (undone) {
           try {
             vscode.commands.executeCommand("git.refresh");
             vscode.commands.executeCommand("andromity.refreshChanges");
@@ -775,11 +808,9 @@ export class SessionTabPanel {
           await this._loadSession();
           this._postMessage({
             type: "turn_undone",
-            turnsUndone: res.turns_undone,
-            targetTurnIndex: res.target_turn_index,
+            turnsUndone: message.turnsToUndo || 1,
+            targetTurnIndex: message.turnIndex,
           });
-        } else if (res?.error) {
-          vscode.window.showWarningMessage(res.error);
         }
         break;
       }
@@ -812,10 +843,19 @@ export class SessionTabPanel {
       case "delete_session": {
         if (message.sessionId) {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-          await this._rpcClient.call("session.delete", {
-            session_id: message.sessionId,
-            project_path: workspaceFolder,
-          }).catch(() => null);
+          try {
+            const result = await this._rpcClient.call<{ success: boolean; error?: string }>("session.delete", {
+              session_id: message.sessionId,
+              project_path: workspaceFolder,
+            });
+            if (!result.success) {
+              void vscode.window.showErrorMessage(result.error || "Could not delete this chat. Please retry.");
+              break;
+            }
+          } catch {
+            void vscode.window.showErrorMessage("Could not delete this chat. Check the connection and retry.");
+            break;
+          }
           if (message.sessionId === this._sessionId) {
             this.dispose();
           } else {
@@ -860,34 +900,53 @@ export class SessionTabPanel {
       }
 
       case "request_rename_session": {
-        if (message.sessionId && message.name) {
+        const name = message.name || await vscode.window.showInputBox({ prompt: "Enter new session name", value: message.currentName || "" });
+        if (message.sessionId && name?.trim()) {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           await this._rpcClient.call("session.rename", {
             session_id: message.sessionId,
-            name: message.name,
+            name: name.trim(),
             project_path: workspaceFolder,
           }).catch(() => null);
           if (message.sessionId === this._sessionId) {
-            this._sessionName = message.name;
-            this._panel.title = message.name;
+            this._sessionName = name.trim();
+            this._panel.title = name.trim();
           }
+          await this._handleMessage({ type: "fetch_sessions" });
         }
         break;
       }
     }
   }
 
+  private async _switchSession(sessionId: string) {
+    const existing = SessionTabPanel._panels.get(sessionId);
+    if (existing && existing !== this) {
+      existing._panel.reveal();
+      return;
+    }
+    SessionTabPanel._panels.delete(this._sessionId);
+    this._sessionId = sessionId;
+    SessionTabPanel._panels.set(sessionId, this);
+    this._postMessage({ type: "session_switched", sessionId });
+    await this._loadSession();
+  }
+
   private async _loadSession() {
     if (!this._rpcClient || !this._sessionId) return;
+    const sessionId = this._sessionId;
+    const version = this._hydration.begin(sessionId);
     try {
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      const [sessionData, configData, models, providers, sessions] = await Promise.all([
-        this._rpcClient.call<any>("session.get", { session_id: this._sessionId, project_path: workspaceFolder }),
+      const [configData, models, providers, sessions] = await Promise.all([
         this._rpcClient.call<any>("config.get", { project_path: workspaceFolder }).catch(() => ({})),
         this._rpcClient.call<ModelInfo[]>("config.list_models", {}).catch(() => []),
         this._rpcClient.call<ProviderInfo[]>("config.list_providers", {}).catch(() => []),
         this._rpcClient.call<SessionInfo[]>("session.list", { project_path: workspaceFolder, include_subagents: true }).catch(() => []),
       ]);
+      if (!this._hydration.isCurrent(version)) return;
+      const sessionData = await this._rpcClient.call<any>("session.get", { session_id: sessionId, project_path: workspaceFolder });
+      if (!this._hydration.isCurrent(version)) return;
 
       if (sessionData && sessionData.name) {
         this._sessionName = sessionData.name;
@@ -896,16 +955,22 @@ export class SessionTabPanel {
 
       this._currentModel = sessionData?.model || configData?.default_model || "anthropic/claude-3.7-sonnet";
       this._currentProvider = sessionData?.provider || configData?.default_provider || "openrouter";
-      this._currentMode = sessionData?.mode || configData?.permission_mode || "safe";
-      this._currentProfile = configData?.default_profile || "builder";
-      this._currentReasoning = configData?.reasoning_effort || "medium";
+      this._currentMode = sessionData?.permission_mode || sessionData?.mode || configData?.permission_mode || "safe";
+      this._currentProfile = sessionData?.profile || configData?.default_profile || "builder";
+      this._currentReasoning = configData?.reasoning_effort || "auto";
+
+      const capability = await this._rpcClient.call<any>("model.reasoning_capability", {
+        provider: this._currentProvider, model: this._currentModel,
+      }).catch(() => null);
+      if (!this._hydration.isCurrent(version)) return;
 
       this._postMessage({
         type: "init_state",
         sessionId: this._sessionId,
         profile: this._currentProfile,
         availableProfiles: configData?.available_profiles || ["builder", "coder", "reviewer", "planner"],
-        availableReasoningEfforts: configData?.available_reasoning_efforts || ["low", "medium", "high", "off"],
+        availableReasoningEfforts: configData?.available_reasoning_efforts || [],
+        modelReasoningCapability: capability,
         model: this._currentModel,
         provider: this._currentProvider,
         mode: this._currentMode,
@@ -914,7 +979,7 @@ export class SessionTabPanel {
         providers: providers || [],
         skills: [],
         sessions: sessions || [],
-        isTrusted: true,
+        isTrusted: configData?.is_trusted === true,
         workspaceName: workspaceFolder ? path.basename(workspaceFolder) : "Workspace Ready",
         currentPlan: sessionData?.plan || null,
       });
@@ -926,6 +991,7 @@ export class SessionTabPanel {
         images: this._initialImages,
         seedMessages: this._initialSeedMessages,
       });
+      this._hydration.finish(version, sessionData?.runtime?.event_seq || 0, (event) => this._postMessage(event));
 
       if (this._initialQueue && this._initialQueue.length > 0) {
         this._postMessage({
@@ -953,7 +1019,10 @@ export class SessionTabPanel {
         void this._viewProvider.fetchUsage();
       }
     } catch (err) {
+      if (!this._hydration.isCurrent(version)) return;
+      this._hydration.finish(version, -1, (event) => this._postMessage(event));
       console.error("[Andromity SessionTab] Failed to load session:", err);
+      this._postMessage({ type: "session_load_failed", session_id: sessionId });
     }
   }
 

@@ -6,10 +6,10 @@ from typing import AsyncGenerator, Dict, Any, Optional, Callable
 from andromity.core.provider import stream_completion, sanitize_messages_for_api
 from andromity.core.session import Session
 from andromity.core.profiles import get_system_prompt, filter_tools_for_profile
-from andromity.core.tools import CORE_TOOLS, ToolRegistry, execute_tool, register_session
+from andromity.core.tools import CORE_TOOLS, ToolRegistry, execute_tool, register_session, requires_workspace_trust
 from andromity.core.events import (
     StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired, PlanUpdated,
-    LLMCallStart, LLMCallEnd
+    LLMCallStart, LLMCallEnd, InputApplied
 )
 from andromity.core.debug_log import get_logger
 from andromity.config import config
@@ -70,6 +70,8 @@ class Agent:
                  provider: Optional[str] = None, model: Optional[str] = None):
         self.session = session
         self.profile = profile or config.get("default", "profile", "builder")
+        if self.session:
+            self.session.profile = self.profile
         self.dry_run = dry_run
         self.auto_approve = auto_approve
         self.on_tool_approval = on_tool_approval
@@ -83,13 +85,16 @@ class Agent:
             except Exception:
                 ctx_limit = 0
         self.ctx_limit = ctx_limit
-        self.reasoning_effort = reasoning_effort if reasoning_effort is not None else config.get("default", "reasoning_effort", "medium")
+        self.reasoning_effort = reasoning_effort if reasoning_effort is not None else config.get("default", "reasoning_effort", "auto")
         self.provider = provider
         self.model = model
         self.allowed_tools = filter_tools_for_profile(CORE_TOOLS, self.profile)
         self._empty_retried = False
         # Set when the current turn carries pasted images (see run()).
         self._turn_image_parts = None
+        from andromity.core.inputs import InputQueue
+        self.input_queue = InputQueue(session.id)
+        self._message_images: dict[int, tuple[dict, list]] = {}
         # Coarse tool-usage counters for session_end telemetry (no args stored)
         # Bind to session so multi-turn interactions retain cumulative tool activity
         if session is not None and not hasattr(session, "_tool_usage_counts"):
@@ -157,14 +162,38 @@ class Agent:
             {k: v for k, v in m.items() if k in ("role", "content", "tool_calls", "name", "tool_call_id")}
             for m in self.session.messages
         ]
-        if not self._turn_image_parts:
-            return sanitize_messages_for_api(msgs)
-        # The most recent user message is the one just added for this turn.
-        for i in range(len(msgs) - 1, -1, -1):
-            if msgs[i].get("role") == "user" and isinstance(msgs[i].get("content"), str):
-                msgs[i]["content"] = self._turn_image_parts
-                break
+        for original, msg in zip(self.session.messages, msgs):
+            entry = self._message_images.get(id(original))
+            if entry and entry[0] is original:
+                msg["content"] = entry[1]
+        live_ids = {id(message) for message in self.session.messages}
+        self._message_images = {key: value for key, value in self._message_images.items() if key in live_ids}
         return sanitize_messages_for_api(msgs)
+
+    def _apply_steering(self) -> list[InputApplied]:
+        events = []
+        while (item := self.input_queue.peek(steering_only=True)) is not None:
+            payload = item.payload
+            prompt = payload.get("prompt", "")
+            uris = payload.get("image_uris") or []
+            if not uris and payload.get("images"):
+                from andromity.core.images import image_to_data_uri
+                uris = [image_to_data_uri(image) for image in payload["images"]]
+            if uris and not self._model_supports_vision():
+                self.input_queue.pause()
+                raise ValueError("The active model does not support images. Your steering message is still queued; choose a vision model and resume.")
+            self.session.add_message("user", content=prompt, images=uris or None,
+                                     turn_id=getattr(self, "current_user_turn_id", None), steering=True)
+            if uris:
+                parts = [
+                    {"type": "text", "text": prompt},
+                    *({"type": "image_url", "image_url": {"url": uri}} for uri in uris),
+                ]
+                message = self.session.messages[-1]
+                self._message_images[id(message)] = (message, parts)
+            events.append(InputApplied(item.id, prompt, uris, max(0, len(self.session.get_user_turn_indices()) - 1)))
+            self.input_queue.applied(item)
+        return events
 
     def _model_supports_vision(self) -> bool:
         """Best-effort check that the active model accepts images.
@@ -350,6 +379,35 @@ class Agent:
         yield TextDelta(text=f"*Context compacted successfully ({old_count} → {len(new_messages)} messages).*\n\n")
 
     async def run(self, user_input: str, images: list = None, image_uris: list = None) -> AsyncGenerator[StreamEvent, None]:
+        import asyncio
+        import uuid
+        from andromity.telemetry import send_task_event
+        run_id = uuid.uuid4().hex
+        self._telemetry_turn_start = time.monotonic()
+        first_response_ms = None
+        outcome = None
+        metadata = {"provider": self.provider, "model": self.model}
+        send_task_event("task_started", self.session.id, run_id, **metadata)
+        try:
+            async for event in self._run(user_input, images, image_uris):
+                if first_response_ms is None and isinstance(event, TextDelta):
+                    first_response_ms = int((time.monotonic() - self._telemetry_turn_start) * 1000)
+                if isinstance(event, Done):
+                    outcome = "completed" if event.outcome == "success" else "failed"
+                yield event
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        except Exception:
+            outcome = "failed"
+            raise
+        finally:
+            if outcome is not None:
+                send_task_event("task_finished", self.session.id, run_id, outcome=outcome,
+                    active_seconds=time.monotonic() - self._telemetry_turn_start,
+                    first_response_ms=first_response_ms, **metadata)
+
+    async def _run(self, user_input: str, images: list = None, image_uris: list = None) -> AsyncGenerator[StreamEvent, None]:
         """Run one user turn.
 
         Accepts either raw ``images`` (paths/PIL objects — will be encoded)
@@ -372,7 +430,7 @@ class Agent:
                 fake_err = Exception(f"Model '{model_name}' does not support image input.")
                 card = classify_and_format_error(fake_err, provider=prov_name, model=model_name, has_images=True)
                 yield TextDelta(text=f"\n[Image not sent] {model_name} does not support images. Switch to a vision model (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-flash) with /model.\n" + card)
-                yield Done()
+                yield Done(outcome="error")
                 self._fire_session_end(had_error=True)
                 return
             self._turn_image_parts = [
@@ -404,6 +462,9 @@ class Agent:
                     notices.append(f"{unread_cnt} unread message(s) in mailbox. (Use session_read_messages to read)")
                 effective_input += f"\n\n[Co-Agent Mailbox: {'; '.join(notices)}]"
         self.session.add_message("user", content=effective_input, images=thumb_uris)
+        if self._turn_image_parts:
+            message = self.session.messages[-1]
+            self._message_images[id(message)] = (message, self._turn_image_parts)
         self._turn_count += 1
 
         if not getattr(self.session, "_telemetry_sent", False):
@@ -418,7 +479,7 @@ class Agent:
                     model=_mod,
                     profile=self.profile,
                     reasoning_effort=getattr(self, "reasoning_effort", None),
-                    mcp_tools_count=len(self.allowed_tools or []),
+                    mcp_tools_count=self._mcp_tools_count(),
                 )
             except Exception:
                 pass
@@ -434,6 +495,8 @@ class Agent:
             setattr(self.orchestrator, "current_turn_id", user_turn_id)
         iteration_idx = 0
         while True:
+            for applied in self._apply_steering():
+                yield applied
             iteration_idx += 1
             turn_id = f"{self._turn_count}_{iteration_idx}_{int(time.time()*1000)}"
             pending_tool_calls: Dict[str, Dict[str, str]] = {}
@@ -441,13 +504,14 @@ class Agent:
             assistant_content = ""
             assistant_thinking = ""
             last_usage = None
+            provider_outcome = "success"
 
             stream_kwargs: Dict[str, Any] = {"tools": self.allowed_tools, "turn_id": user_turn_id}
             if self.provider:
                 stream_kwargs["provider_name"] = self.provider
             if self.model:
                 stream_kwargs["model"] = self.model
-            if self.reasoning_effort and self.reasoning_effort != "off":
+            if self.reasoning_effort:
                 stream_kwargs["reasoning_effort"] = self.reasoning_effort
 
             llm_start_time = time.time()
@@ -469,6 +533,7 @@ class Agent:
 
                 if isinstance(event, Done):
                     last_usage = event.usage
+                    provider_outcome = event.outcome
                 else:
                     yield event
                 if isinstance(event, TextDelta):
@@ -568,6 +633,14 @@ class Agent:
                 turn_id=turn_id,
             )
 
+            if provider_outcome != "success":
+                for call in tool_calls_to_execute:
+                    self.session.add_message("tool", content="Not executed: provider response failed.",
+                                             tool_call_id=call["id"], name=call["function"]["name"])
+                yield Done(usage=last_usage, outcome="error")
+                self._fire_session_end(had_error=True)
+                break
+
             if not assistant_content and not tool_calls_to_execute:
                 # Model returned nothing — retry once before giving up
                 if not getattr(self, '_empty_retried', False):
@@ -591,7 +664,7 @@ class Agent:
                         "Try rephrasing your message or switch model with **Ctrl+L**.\n"
                     )
                 yield TextDelta(text=warning)
-                yield Done(usage=last_usage)
+                yield Done(usage=last_usage, outcome="error")
                 self._fire_session_end(had_error=True)
                 break
 
@@ -607,7 +680,9 @@ class Agent:
                         "[OFFLINE]", "[TIMED OUT]", "[ERROR]"
                     ))
                 )
-                yield Done(usage=last_usage)
+                if not has_error and self.input_queue.peek(steering_only=True):
+                    continue
+                yield Done(usage=last_usage, outcome="error" if has_error else "success")
                 self._fire_session_end(had_error=has_error)
                 break
 
@@ -617,6 +692,7 @@ class Agent:
             ask_calls = [tc for tc in tool_calls_to_execute
                          if isinstance(tc, dict) and ((tc.get("function") or {}).get("name") in ("ask_questions", "ask_question"))]
             other_calls = [tc for tc in tool_calls_to_execute if tc not in ask_calls]
+            interaction_superseded = False
 
             for tc in ask_calls:
                 fn_dict = tc.get("function") or {} if isinstance(tc, dict) else {}
@@ -662,7 +738,9 @@ class Agent:
                     )
                 elif self.on_questions:
                     try:
-                        result = await self.on_questions(questions)
+                        result = await self.input_queue.interaction(
+                            self.on_questions(questions), "Questions superseded by a new user instruction.")
+                        interaction_superseded = result == "Questions superseded by a new user instruction."
                     except Exception as e:
                         _log.warning("on_questions callback error: %s", e, exc_info=True)
                         result = "The user did not answer the questions. Proceed with reasonable assumptions."
@@ -679,16 +757,56 @@ class Agent:
             # shared across concurrent prompts).
             prepared: list[tuple[dict, str, dict]] = []  # (tool_call, name, args)
             final_results: dict[str, str] = {}  # call_id → result/rejection for ALL calls
+            _MUTATING_TOOLS = {"write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill"}
             for tool_call in other_calls:
-                tool_name = tool_call["function"]["name"]
+                tool_name = (tool_call["function"]["name"] or "").strip()
+                t_lower = tool_name.lower()
+                if interaction_superseded:
+                    # A pending interaction may have been dismissed by steering.
+                    final_results[tool_call["id"]] = "Not executed: superseded by a new user instruction."
+                    yield ToolResult(tool_id=tool_call["id"], result=final_results[tool_call["id"]], success=False)
+                    continue
                 try:
                     args = json.loads(tool_call["function"]["arguments"])
                 except json.JSONDecodeError:
                     args = {}
 
+                # Dry-run mode: purely simulated preview, does not execute tools or mutate disk
+                if self.dry_run:
+                    dry_msg = f"[DRY RUN] Would execute {tool_name}({json.dumps(args, indent=2)})"
+                    final_results[tool_call["id"]] = dry_msg
+                    yield ToolResult(tool_id=tool_call["id"], result=dry_msg, duration_ms=0.0, success=True, ts=time.time())
+                    continue
+
+                # Hard Gate: Profile confinement (planner and reviewer cannot execute mutating tools)
+                prof = (self.profile or "").strip().lower()
+                if prof in ("planner", "reviewer") and t_lower in _MUTATING_TOOLS:
+                    rejection = (
+                        f"TOOL BLOCKED: Profile '{self.profile}' is strictly restricted from executing mutating tool '{tool_name}'.\n"
+                        f"Do NOT retry this tool call.\n"
+                        f"Provide planning, analysis, or audit findings instead."
+                    )
+                    final_results[tool_call["id"]] = rejection
+                    yield ToolResult(tool_id=tool_call["id"], result=f"[Blocked: {self.profile} profile]", duration_ms=0.0, success=False, ts=time.time())
+                    continue
+
+                # Hard Gate: Folder trust boundary (untrusted folder unconditionally blocks mutations)
+                project_dir = getattr(self.session, "project_path", "") if self.session else ""
+                if project_dir and not config.is_trusted(project_dir) and requires_workspace_trust(t_lower):
+                    rejection = (
+                        f"TOOL BLOCKED: Workspace folder ({project_dir}) is untrusted.\n"
+                        f"Workspace reads, writes, and commands are blocked across all permission modes until trust is granted via /trust."
+                    )
+                    final_results[tool_call["id"]] = rejection
+                    yield ToolResult(tool_id=tool_call["id"], result="[Untrusted Workspace]", duration_ms=0.0, success=False, ts=time.time())
+                    continue
+
                 if not self.auto_approve and self.on_tool_approval:
                     import inspect
-                    approval_res = await self.on_tool_approval(tool_name, args) if inspect.iscoroutinefunction(self.on_tool_approval) else self.on_tool_approval(tool_name, args)
+                    approval_res = await self.input_queue.interaction(
+                        self.on_tool_approval(tool_name, args), (False, "Superseded by a new user instruction")
+                    ) if inspect.iscoroutinefunction(self.on_tool_approval) else self.on_tool_approval(tool_name, args)
+                    interaction_superseded = approval_res == (False, "Superseded by a new user instruction")
                     is_approved = True
                     rejection_reason: str | None = None
                     if isinstance(approval_res, tuple):
@@ -721,6 +839,12 @@ class Agent:
                         continue
                 prepared.append((tool_call, tool_name, args))
 
+            if interaction_superseded:
+                for call, name, args in prepared:
+                    final_results[call["id"]] = "Not executed: superseded by a new user instruction."
+                    yield ToolResult(tool_id=call["id"], result=final_results[call["id"]], success=False)
+                prepared.clear()
+
             # ── Phase 2: run all accepted calls CONCURRENTLY. Results are
             # yielded as each call finishes so the UI can mark that tool's
             # indicator done immediately; subagent progress events are also
@@ -749,6 +873,18 @@ class Agent:
                     if self.dry_run:
                         dur = round((time.time() - t0) * 1000, 2)
                         return tool_call["id"], f"[DRY RUN] Would execute {tool_name}({json.dumps(args, indent=2)})", dur, True
+
+                    # Defense in depth: runtime check in _execute
+                    prof_run = (self.profile or "").strip().lower()
+                    t_run = (tool_name or "").strip().lower()
+                    if prof_run in ("planner", "reviewer") and t_run in _MUTATING_TOOLS:
+                        dur = round((time.time() - t0) * 1000, 2)
+                        return tool_call["id"], f"Error: Tool '{tool_name}' is forbidden for profile '{self.profile}'.", dur, False
+                    p_dir = getattr(self.session, "project_path", "") if self.session else ""
+                    if p_dir and not config.is_trusted(p_dir) and requires_workspace_trust(t_run):
+                        dur = round((time.time() - t0) * 1000, 2)
+                        return tool_call["id"], f"Error: Workspace is untrusted. Tool '{tool_name}' is blocked.", dur, False
+
                     try:
                         from andromity.core.tools import execute_tool_async
                         result = await execute_tool_async(tool_name, args, tool_id=tool_call.get("id"))
@@ -797,6 +933,7 @@ class Agent:
                     for t in pending_tasks:
                         if not t.done():
                             t.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
                     raise
                 finally:
                     unregister_subagent_progress_callback(_on_subagent_prog)
@@ -842,14 +979,13 @@ class Agent:
         cnt = sum(1 for m in self.session.messages if m.get("role") == "user")
         return max(0, cnt, self._turn_count)
 
+    def _mcp_tools_count(self) -> int:
+        from andromity.core import tools
+        manager = getattr(tools, "_mcp_manager", None)
+        return sum(len(session.tools) for session in manager.sessions.values()) if manager else 0
+
     def _get_session_duration(self) -> float:
-        try:
-            from datetime import datetime, timezone
-            created_dt = datetime.fromisoformat(self.session.created_at)
-            now_dt = datetime.now(timezone.utc)
-            return max(0.0, (now_dt - created_dt).total_seconds())
-        except Exception:
-            return max(0.0, time.time() - self._session_start_time)
+        return max(0.0, time.monotonic() - getattr(self, "_telemetry_turn_start", time.monotonic()))
 
     def _fire_session_end(self, had_error: bool = False) -> None:
         """Send live session update and session outcome telemetry."""

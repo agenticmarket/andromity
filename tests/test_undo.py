@@ -180,8 +180,8 @@ def test_session_undo_stack_persistence(tmp_path):
     ]
     session.save()
     
-    # 1. Test JSON load
-    loaded = Session.load(session.file_path)
+    # 1. Test session load
+    loaded = Session.load_by_id(session.id)
     assert loaded.undo_stack == session.undo_stack
     
     # 2. Test SQLite load
@@ -206,6 +206,8 @@ async def test_rpc_session_undo_multi_turn_git_rollback(tmp_path):
     repo.git.add("-A")
     repo.index.commit("baseline commit")
     
+    from andromity.config import config
+    config.set_trusted(str(tmp_path))
     handler = JsonRpcHandler()
     session = Session(project_path=str(tmp_path))
     session.undo_stack = []
@@ -218,6 +220,7 @@ async def test_rpc_session_undo_multi_turn_git_rollback(tmp_path):
     session.add_message("user", "Turn 0: create file1")
     (tmp_path / "file1.txt").write_text("file1 v0\n", encoding="utf-8")
     session.add_message("assistant", "Created file1")
+    session.undo_stack[-1]["after_hash"] = create_pre_edit_snapshot(repo)
     
     # Simulate Turn 1: pre-turn snapshot, modifies file1, creates file2.txt
     s1 = create_pre_edit_snapshot(repo)
@@ -226,6 +229,7 @@ async def test_rpc_session_undo_multi_turn_git_rollback(tmp_path):
     (tmp_path / "file1.txt").write_text("file1 v1\n", encoding="utf-8")
     (tmp_path / "file2.txt").write_text("file2 v1\n", encoding="utf-8")
     session.add_message("assistant", "Updated file1, created file2")
+    session.undo_stack[-1]["after_hash"] = create_pre_edit_snapshot(repo)
     
     # Simulate Turn 2 (3rd turn): pre-turn snapshot, modifies file1, creates file3.txt
     s2 = create_pre_edit_snapshot(repo)
@@ -234,6 +238,7 @@ async def test_rpc_session_undo_multi_turn_git_rollback(tmp_path):
     (tmp_path / "file1.txt").write_text("file1 v2\n", encoding="utf-8")
     (tmp_path / "file3.txt").write_text("file3 v2\n", encoding="utf-8")
     session.add_message("assistant", "Updated file1, created file3")
+    session.undo_stack[-1]["after_hash"] = create_pre_edit_snapshot(repo)
     
     # Simulate Turn 3 (4th turn): pre-turn snapshot, creates file4.txt
     s3 = create_pre_edit_snapshot(repo)
@@ -241,6 +246,7 @@ async def test_rpc_session_undo_multi_turn_git_rollback(tmp_path):
     session.add_message("user", "Turn 3: create file4")
     (tmp_path / "file4.txt").write_text("file4 v3\n", encoding="utf-8")
     session.add_message("assistant", "Created file4")
+    session.undo_stack[-1]["after_hash"] = create_pre_edit_snapshot(repo)
     session.save()
     
     # Verify disk state before undo: all 4 files exist
@@ -303,6 +309,8 @@ async def test_rpc_session_undo_multi_turn_git_rollback(tmp_path):
 async def test_rpc_session_undo_turns_to_undo_param(tmp_path):
     """Verify turns_to_undo parameter can be passed directly."""
     from andromity.server.rpc_handler import JsonRpcHandler
+    from andromity.config import config
+    config.set_trusted(str(tmp_path))
     handler = JsonRpcHandler()
     session = Session(project_path=str(tmp_path))
     session.add_message("user", "Turn 1")

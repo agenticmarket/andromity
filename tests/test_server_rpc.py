@@ -7,6 +7,13 @@ from andromity.server.protocol import (
     METHOD_NOT_FOUND,
 )
 from andromity.server.rpc_handler import JsonRpcHandler
+from andromity import __version__
+
+
+@pytest.mark.asyncio
+async def test_initialize_reports_package_version():
+    result = await JsonRpcHandler(lambda notification: None).rpc_initialize({})
+    assert result["agentInfo"]["version"] == __version__
 
 
 @pytest.mark.asyncio
@@ -243,6 +250,8 @@ async def test_rpc_cron_lifecycle(tmp_path):
 @pytest.mark.asyncio
 async def test_rpc_git_revert_file_via_request(tmp_path):
     import git
+    from andromity.config import config
+    config.set_trusted(str(tmp_path))
     repo = git.Repo.init(tmp_path)
     handler = JsonRpcHandler()
 

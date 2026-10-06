@@ -1,3 +1,8 @@
+import { ingestTelemetry } from './ingest.js';
+import { buildStatsScope, measurementQueries } from './statsScope.js';
+import { cachedStats } from './statsCache.js';
+import { sessionSummaries, featureSummaries } from './metricSummaries.js';
+
 export default {
   async fetch(request, env, ctx) {
     const requestHeaders = request.headers.get('Access-Control-Request-Headers') || '*';
@@ -52,33 +57,20 @@ export default {
           request.headers.get('Accept')?.includes('text/html')
         );
 
-        // Edge Cache Optimization: Serve cached JSON response if fresh (< 60s)
-        const cache = caches.default;
-        const cacheKeyUrl = new URL(request.url);
-        cacheKeyUrl.searchParams.delete('format');
-        const cacheKey = new Request(cacheKeyUrl.toString(), { method: 'GET' });
-
-        if (!wantsHtml) {
-          try {
-            const cachedRes = await cache.match(cacheKey);
-            if (cachedRes) {
-              return cachedRes;
-            }
-          } catch {}
-        }
-
         try {
-          const stats = await getD1Stats(env);
+          const stats = await getD1Stats(env, url.searchParams);
 
           if (wantsHtml) {
-            return new Response(renderStatsHtml(stats), {
+            const htmlRes = new Response(renderStatsHtml(stats), {
               status: 200,
               headers: {
                 ...securityHeaders,
                 'Content-Type': 'text/html; charset=utf-8',
-                'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+                'Cache-Control': 'private, no-store',
               },
             });
+
+            return htmlRes;
           }
 
           const response = new Response(JSON.stringify(stats, null, 2), {
@@ -86,12 +78,9 @@ export default {
             headers: {
               ...securityHeaders,
               'Content-Type': 'application/json',
-              'Cache-Control': 'public, max-age=60, s-maxage=60',
+              'Cache-Control': 'private, no-store',
             },
           });
-
-          // Cache on Cloudflare Edge for 60 seconds (prevents D1 read quota exhaustion)
-          ctx.waitUntil(cache.put(cacheKey, response.clone()));
 
           return response;
         } catch (err) {
@@ -145,6 +134,17 @@ export default {
           headers: { ...securityHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
         });
       }
+
+      if (url.pathname === '/health' || url.pathname === '/') {
+        return new Response(JSON.stringify({
+          status: 'ok',
+          service: 'andromity-telemetry',
+          timestamp: new Date().toISOString()
+        }), {
+          status: 200,
+          headers: { ...securityHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+        });
+      }
     }
 
     if (request.method !== 'POST') {
@@ -152,7 +152,7 @@ export default {
     }
 
     if (url.pathname === '/api/admin/purge-user' || url.pathname === '/purge-user') {
-      const expectedSecret = env.STATS_SECRET;
+      const expectedSecret = env.ADMIN_SECRET;
       const providedKey = request.headers.get('x-stats-key') ||
                           request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
 
@@ -165,9 +165,10 @@ export default {
 
       try {
         const body = await request.json().catch(() => ({}));
-        const targetUserId = typeof body.user_id === 'string' ? body.user_id.trim() : '';
-        if (!targetUserId || !/^[a-zA-Z0-9_-]{8,64}$/.test(targetUserId)) {
-          return new Response(JSON.stringify({ error: 'Valid user_id parameter is required' }), {
+        const rawTargetId = typeof body.user_id === 'string' ? body.user_id.trim() : '';
+        const targetUserId = rawTargetId.replace(/^usr_/, '');
+        if (!targetUserId || !/^[a-zA-Z0-9_-]{4,64}$/.test(targetUserId)) {
+          return new Response(JSON.stringify({ error: 'Valid user_id or prefix parameter is required' }), {
             status: 400,
             headers: { ...securityHeaders, 'Content-Type': 'application/json' },
           });
@@ -181,29 +182,112 @@ export default {
         }
 
         const purgeBatch = await env.DB.batch([
-          env.DB.prepare(`DELETE FROM feature_events WHERE user_id = ? OR user_id LIKE (? || '%')`).bind(targetUserId, targetUserId),
-          env.DB.prepare(`DELETE FROM events WHERE user_id = ? OR user_id LIKE (? || '%')`).bind(targetUserId, targetUserId),
-          env.DB.prepare(`DELETE FROM sessions WHERE user_id = ? OR user_id LIKE (? || '%')`).bind(targetUserId, targetUserId),
-          env.DB.prepare(`DELETE FROM users WHERE user_id = ? OR user_id LIKE (? || '%')`).bind(targetUserId, targetUserId),
+          env.DB.prepare(`DELETE FROM feature_events WHERE user_id = ? OR user_id = ? OR user_id LIKE (? || '%')`).bind(rawTargetId, targetUserId, targetUserId),
+          env.DB.prepare(`DELETE FROM events WHERE user_id = ? OR user_id = ? OR user_id LIKE (? || '%')`).bind(rawTargetId, targetUserId, targetUserId),
+          env.DB.prepare(`DELETE FROM sessions WHERE user_id = ? OR user_id = ? OR user_id LIKE (? || '%')`).bind(rawTargetId, targetUserId, targetUserId),
+          env.DB.prepare(`DELETE FROM users WHERE user_id = ? OR user_id = ? OR user_id LIKE (? || '%')`).bind(rawTargetId, targetUserId, targetUserId),
+          env.DB.prepare(`DELETE FROM activity_days WHERE user_id = ? OR user_id = ? OR user_id LIKE (? || '%')`).bind(rawTargetId, targetUserId, targetUserId),
+          env.DB.prepare(`DELETE FROM activity_facts WHERE user_id = ? OR user_id = ? OR user_id LIKE (? || '%')`).bind(rawTargetId, targetUserId, targetUserId),
+          env.DB.prepare(`DELETE FROM task_runs WHERE user_id = ? OR user_id = ? OR user_id LIKE (? || '%')`).bind(rawTargetId, targetUserId, targetUserId),
+          env.DB.prepare('DELETE FROM telemetry_stats_cache').bind(),
+          env.DB.prepare(`DELETE FROM telemetry_receipts WHERE user_id = ? OR user_id = ? OR user_id LIKE (? || '%')`).bind(rawTargetId, targetUserId, targetUserId),
         ]);
 
-        // Evict Edge caches so next stats query is fresh immediately
+        // Evict Edge caches and in-memory L1 cache so next stats query is fresh immediately
+
         try {
           const cache = caches.default;
           await cache.delete(new Request(new URL('/api/stats', request.url).toString()));
           await cache.delete(new Request(new URL('/stats', request.url).toString()));
+          await cache.delete(new Request(new URL('/stats?format=html', request.url).toString()));
         } catch {}
+
+        const changes = purgeBatch.map((r) => r.meta?.changes ?? 0);
+        const totalDeleted = changes.reduce((a, b) => a + b, 0);
 
         return new Response(JSON.stringify({
           success: true,
           purged_user_id: targetUserId,
-          changes: purgeBatch.map((r) => r.meta?.changes ?? 0),
+          total_deleted: totalDeleted,
+          changes: {
+            feature_events: changes[0] ?? 0,
+            events: changes[1] ?? 0,
+            sessions: changes[2] ?? 0,
+            users: changes[3] ?? 0,
+          },
         }), {
           status: 200,
           headers: { ...securityHeaders, 'Content-Type': 'application/json' },
         });
       } catch (err) {
         return new Response(JSON.stringify({ error: 'Purge failed', details: String(err) }), {
+          status: 500,
+          headers: { ...securityHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
+    if (url.pathname === '/api/admin/purge-retention' || url.pathname === '/purge-retention') {
+      const expectedSecret = env.ADMIN_SECRET;
+      const providedKey = request.headers.get('x-stats-key') ||
+                          request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
+
+      if (!expectedSecret || !timingSafeMatch(providedKey, expectedSecret)) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401,
+          headers: { ...securityHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      try {
+        const body = await request.json().catch(() => ({}));
+        const days = Math.min(365, Math.max(1, parseInt(body.days, 10) || 30));
+
+        if (!env.DB) {
+          return new Response(JSON.stringify({ error: 'Database not bound' }), {
+            status: 500,
+            headers: { ...securityHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        const purgeBatch = await env.DB.batch([
+          env.DB.prepare(`DELETE FROM feature_events WHERE date < date('now', '-' || ? || ' days')`).bind(days),
+          env.DB.prepare(`DELETE FROM events WHERE created_at < datetime('now', '-' || ? || ' days')`).bind(days),
+          env.DB.prepare(`DELETE FROM sessions WHERE created_at < datetime('now', '-' || ? || ' days')`).bind(days),
+          env.DB.prepare(`DELETE FROM activity_days WHERE date < date('now', '-' || ? || ' days')`).bind(days),
+          env.DB.prepare(`DELETE FROM activity_facts WHERE date < date('now', '-' || ? || ' days')`).bind(days),
+          env.DB.prepare(`DELETE FROM task_runs WHERE date < date('now', '-' || ? || ' days')`).bind(days),
+          env.DB.prepare('DELETE FROM telemetry_stats_cache').bind(),
+          env.DB.prepare(`DELETE FROM telemetry_receipts WHERE received_at < datetime('now', '-' || ? || ' days')`).bind(days),
+        ]);
+
+        // Evict Edge caches and in-memory L1 cache
+
+        try {
+          const cache = caches.default;
+          await cache.delete(new Request(new URL('/api/stats', request.url).toString()));
+          await cache.delete(new Request(new URL('/stats', request.url).toString()));
+          await cache.delete(new Request(new URL('/stats?format=html', request.url).toString()));
+        } catch {}
+
+        const changes = purgeBatch.map((r) => r.meta?.changes ?? 0);
+        const totalPurged = changes.reduce((a, b) => a + b, 0);
+
+        return new Response(JSON.stringify({
+          success: true,
+          retention_days: days,
+          total_purged: totalPurged,
+          changes: {
+            feature_events: changes[0] ?? 0,
+            events: changes[1] ?? 0,
+            sessions: changes[2] ?? 0,
+          },
+        }), {
+          status: 200,
+          headers: { ...securityHeaders, 'Content-Type': 'application/json' },
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: 'Retention purge failed', details: String(err) }), {
           status: 500,
           headers: { ...securityHeaders, 'Content-Type': 'application/json' },
         });
@@ -278,154 +362,28 @@ export default {
       const durationSeconds = Math.max(0, parseInt(data.duration_seconds || data.duration_sec || 0, 10));
       const turnCountInput  = Math.min(Math.max(0, parseInt(data.turn_count || 0, 10)), 9999);
 
-      const now     = new Date().toISOString();
+      const received = Date.now();
+      const occurred = Number(data.occurred_at) * 1000;
+      const now = new Date(Number.isFinite(occurred) && occurred >= received - 7 * 86400000
+        && occurred <= received + 300000 ? occurred : received).toISOString();
       const date    = now.split('T')[0];
       const sessionId = rawSessionId || `sess-${date}-${rawUserId.slice(0, 8)}`;
 
-      // ── /ping  →  session_start ────────────────────────────────────────────
-      if (url.pathname === '/ping') {
-        if (env.DB) {
-          ctx.waitUntil(
-            env.DB.batch([
-              env.DB.prepare(`
-                INSERT INTO users (user_id, first_seen, last_seen, country, session_count)
-                VALUES (?, ?, ?, ?, 1)
-                ON CONFLICT(user_id) DO UPDATE SET
-                  last_seen     = excluded.last_seen,
-                  country       = COALESCE(users.country, excluded.country),
-                  session_count = users.session_count + 1
-              `).bind(rawUserId, now, now, country),
-              env.DB.prepare(`
-                INSERT INTO sessions
-                  (session_id, user_id, client, country, os, version,
-                   provider, model, provider_type, reasoning_effort, mcp_tools_count,
-                   profile, duration_seconds, turn_count,
-                   created_at, date)
-                VALUES (?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?,
-                        ?, ?, ?,
-                        ?, ?)
-                ON CONFLICT(session_id) DO UPDATE SET
-                  duration_seconds = MAX(sessions.duration_seconds, excluded.duration_seconds),
-                  turn_count       = MAX(sessions.turn_count, excluded.turn_count),
-                  profile          = COALESCE(excluded.profile, sessions.profile)
-              `).bind(
-                sessionId, rawUserId, client, country, os, version,
-                provider, model, providerType, reasoningEffort, mcpToolsCount,
-                profile, durationSeconds, turnCountInput,
-                now, date
-              ),
-            ]).catch((err) => console.error('D1 /ping Write Failed:', err))
-          );
-        }
-        return new Response('OK', { status: 202, headers: securityHeaders });
-      }
-
-      // ── /event  →  session_end | weekly_summary | feature_use | session_update ──
-      if (url.pathname === '/event') {
-        const ALLOWED_EVENTS = ['session_end', 'weekly_summary', 'compact_triggered', 'feature_use', 'session_update'];
-        const eventType = ALLOWED_EVENTS.includes(data.event) ? data.event : null;
-        if (!eventType) {
-          return new Response(JSON.stringify({ error: 'Unknown event type' }), {
-            status: 400,
-            headers: { ...securityHeaders, 'Content-Type': 'application/json' },
-          });
-        }
-
-        if (env.DB) {
-          // feature_use
-          if (eventType === 'feature_use') {
-            const featureRaw = typeof data.feature === 'string' ? data.feature.toLowerCase().trim() : (typeof data.feature_name === 'string' ? data.feature_name.toLowerCase().trim() : 'unknown');
-            const featureName = featureRaw.slice(0, 64).replace(/[^a-z0-9_-]/g, '') || 'unknown';
-
-            ctx.waitUntil(
-              env.DB.prepare(`
-                INSERT INTO feature_events
-                  (feature_name, user_id, session_id, client, os, version, created_at, date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-              `).bind(
-                featureName, rawUserId, sessionId, client, os, version, now, date
-              ).run().catch((err) => console.error('D1 feature_use Write Failed:', err))
-            );
-          }
-
-          // session_update (in-progress turn update)
-          if (eventType === 'session_update') {
-            ctx.waitUntil(
-              env.DB.prepare(`
-                UPDATE sessions SET
-                  turn_count       = MAX(turn_count, ?),
-                  duration_seconds = MAX(duration_seconds, ?)
-                WHERE session_id = ?
-              `).bind(turnCountInput, durationSeconds, sessionId).run().catch((err) => console.error('D1 session_update Write Failed:', err))
-            );
-          }
-
-          // session_end / compact_triggered
-          if (eventType === 'session_end' || eventType === 'compact_triggered') {
-            const turnCount      = Math.min(Math.max(0, parseInt(data.turn_count       || 0, 10)), 9999);
-            const hadError       = data.had_error === 1 || data.had_error === true ? 1 : 0;
-            const VALID_BUCKETS  = ['0-5min', '5-15min', '15-30min', '30min+'];
-            const durationBucket = VALID_BUCKETS.includes(data.duration_bucket) ? data.duration_bucket : '0-5min';
-            const toolBash  = Math.min(Math.max(0, parseInt(data.tool_bash_count || 0, 10)), 9999);
-            const toolFile  = Math.min(Math.max(0, parseInt(data.tool_file_count || 0, 10)), 9999);
-            const toolWeb   = Math.min(Math.max(0, parseInt(data.tool_web_count  || 0, 10)), 9999);
-
-            ctx.waitUntil(
-              env.DB.batch([
-                env.DB.prepare(`
-                  INSERT INTO events
-                    (event, user_id, session_id, client, os, version,
-                     provider, model, provider_type,
-                     turn_count, had_error, duration_bucket,
-                     tool_bash_count, tool_file_count, tool_web_count,
-                     created_at, date)
-                  VALUES (?, ?, ?, ?, ?, ?,
-                          ?, ?, ?,
-                          ?, ?, ?,
-                          ?, ?, ?,
-                          ?, ?)
-                `).bind(
-                  eventType, rawUserId, sessionId, client, os, version,
-                  provider, model, providerType,
-                  turnCount, hadError, durationBucket,
-                  toolBash, toolFile, toolWeb,
-                  now, date
-                ),
-                env.DB.prepare(`
-                  UPDATE sessions SET
-                    turn_count       = MAX(turn_count, ?),
-                    duration_seconds = MAX(duration_seconds, ?)
-                  WHERE session_id = ?
-                `).bind(turnCount, durationSeconds, sessionId),
-              ]).catch((err) => console.error('D1 /event Write Failed:', err))
-            );
-          }
-
-          // weekly_summary — store minimal record (no session linkage)
-          if (eventType === 'weekly_summary') {
-            const featuresRaw = Array.isArray(data.features_used) ? data.features_used : [];
-            const features = featuresRaw
-              .filter((f) => typeof f === 'string' && /^[a-zA-Z0-9_]{1,32}$/.test(f))
-              .slice(0, 20)
-              .join(',');
-
-            ctx.waitUntil(
-              env.DB.prepare(`
-                INSERT INTO events
-                  (event, user_id, session_id, client, os, version, created_at, date)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-              `).bind(
-                'weekly_summary', rawUserId, features, client, os, version, now, date
-              ).run().catch((err) => console.error('D1 weekly_summary Write Failed:', err))
-            );
-          }
-        }
+      try {
+        if (!env.DB) throw new Error('Database unavailable');
+        await ingestTelemetry(env.DB, { ...data, event: url.pathname === '/ping' ? 'session_start' : data.event }, {
+          userId: rawUserId, sessionId, client, os, version, country, provider, model,
+          providerType, profile, reasoningEffort, mcpToolsCount, now, date,
+        });
 
         return new Response('OK', { status: 202, headers: securityHeaders });
+      } catch (error) {
+        const invalid = error instanceof TypeError;
+        return new Response(JSON.stringify({ error: invalid ? error.message : 'Telemetry temporarily unavailable' }), {
+          status: invalid ? 400 : 503, headers: { ...securityHeaders, 'Content-Type': 'application/json' },
+        });
       }
 
-      return new Response('Not Found', { status: 404, headers: securityHeaders });
     } catch {
       return new Response(JSON.stringify({ error: 'Bad Request' }), {
         status: 400,
@@ -448,11 +406,44 @@ function timingSafeMatch(a, b) {
   return diff === 0;
 }
 
-async function getD1Stats(env) {
+export async function getD1Stats(env, params = new URLSearchParams()) {
+  if (!env.DB) return { error: 'Database not bound' };
+  buildStatsScope(params);
+  return cachedStats(env, params, computeD1Stats);
+}
+
+export async function computeD1Stats(env, params = new URLSearchParams()) {
   if (!env.DB) {
     return { error: 'Database not bound' };
   }
 
+  const readCost = { rows_read: 0, statements: 0, statement_reads: [] };
+  const batch = async statements => {
+    const results = await env.DB.batch(statements);
+    for (const result of results) {
+      readCost.rows_read += result.meta?.rows_read || 0;
+      readCost.statement_reads.push(result.meta?.rows_read || 0);
+    }
+    readCost.statements += statements.length;
+    return results;
+  };
+  const scope = buildStatsScope(params);
+  const prepare = sql => scope.prepare(env.DB, sql);
+  const measurement = await batch(measurementQueries(scope, env.DB));
+  const [sessionRows, featureRows] = await batch([
+    prepare(`SELECT user_id,client,country,os,version,provider,model,provider_type,reasoning_effort,
+      profile,turn_count,created_at FROM sessions`),
+    prepare(`SELECT feature_name,user_id,COUNT(*) AS use_count FROM feature_events GROUP BY feature_name,user_id`),
+  ]);
+  const { clientsRes, countriesRes, osRes, versionsRes, hourlyRes, providersRes, providerTypesRes, reasoningRes, profilesRes, turnDistRes } = sessionSummaries(sessionRows.results || []);
+  const { featuresRes, onboardingRes, errorCategoriesRes, cronStatsRes, mascotStatsRes, wallpaperStatsRes, settingsTabsRes, waterfallFrequencyRes } = featureSummaries(featureRows.results || []);
+  const [modelsRes] = await batch([prepare(`
+    SELECT COALESCE(model,'unknown') AS model,COALESCE(provider,'unknown') AS provider,
+      COUNT(DISTINCT user_id) AS users,COUNT(*) AS sessions
+    FROM sessions WHERE model IS NOT NULL AND model!='unknown'
+      AND session_id IN (SELECT session_id FROM scoped_activity)
+    GROUP BY model ORDER BY sessions DESC LIMIT 30
+  `)]);
   const [
     totalUsersRes,
     totalSessionsRes,
@@ -460,93 +451,39 @@ async function getD1Stats(env) {
     todayStatsRes,
     todayReturningRes,
     dailyRes,
-    clientsRes,
-    countriesRes,
-    osRes,
-    versionsRes,
-    hourlyRes,
     recentSessionsRes,
     userBucketsRes,
-    // v2 — new queries
-    providersRes,
-    modelsRes,
-    providerTypesRes,
-    reasoningRes,
     durationRes,
-    // v3
-    profilesRes,
-    featuresRes,
-    // v4
-    turnDistRes,
-    onboardingRes,
-    // v5 — error health & product adoption
     errorStatsRes,
-    errorCategoriesRes,
-    cronStatsRes,
-    mascotStatsRes,
-    wallpaperStatsRes,
-    settingsTabsRes,
-    // v6 — waterfall loyalty & work intent
-    waterfallFrequencyRes,
-    workQualityRes,
-  ] = await env.DB.batch([
-    env.DB.prepare(`SELECT COUNT(*) AS count FROM users`),
-    env.DB.prepare(`SELECT COUNT(*) AS count FROM sessions`),
-    env.DB.prepare(`SELECT COUNT(*) AS count FROM (SELECT user_id FROM sessions GROUP BY user_id HAVING COUNT(DISTINCT date) > 1)`),
-    env.DB.prepare(`SELECT COUNT(DISTINCT user_id) AS dau, COUNT(*) AS sessions FROM sessions WHERE date = date('now')`),
-    env.DB.prepare(`
+    workQualityRes
+  ] = await batch([
+    prepare(`SELECT COUNT(*) AS count FROM users`),
+    prepare(`SELECT COUNT(*) AS count FROM sessions`),
+    prepare(`SELECT COUNT(*) AS count FROM (SELECT user_id FROM scoped_activity GROUP BY user_id HAVING COUNT(DISTINCT date)>1)`),
+    prepare(`SELECT COUNT(DISTINCT user_id) AS dau, COUNT(DISTINCT CASE WHEN session_id IN (SELECT session_id FROM sessions) THEN session_id END) AS sessions FROM scoped_activity WHERE date = date('now')`),
+    prepare(`
       SELECT COUNT(DISTINCT s.user_id) AS count
-      FROM sessions s
+      FROM scoped_activity s
       JOIN users u ON s.user_id = u.user_id
       WHERE s.date = date('now') AND date(u.first_seen) < date('now')
     `),
-    env.DB.prepare(`
+    prepare(`
       SELECT
         s.date,
         COUNT(DISTINCT s.user_id) AS dau,
-        COUNT(*) AS sessions,
+        COUNT(DISTINCT CASE WHEN s.session_id IN (SELECT session_id FROM sessions) THEN s.session_id END) AS sessions,
         COUNT(DISTINCT CASE WHEN date(u.first_seen) < s.date THEN s.user_id END) AS returning_users,
         COUNT(DISTINCT CASE WHEN date(u.first_seen) = s.date THEN s.user_id END) AS new_users
-      FROM sessions s
+      FROM scoped_activity s
       JOIN users u ON s.user_id = u.user_id
       WHERE s.date >= date('now', '-30 days')
       GROUP BY s.date
       ORDER BY s.date DESC
     `),
-    env.DB.prepare(`
-      SELECT client, COUNT(DISTINCT user_id) AS users, COUNT(*) AS sessions
-      FROM sessions
-      GROUP BY client
-      ORDER BY sessions DESC
-    `),
-    env.DB.prepare(`
-      SELECT COALESCE(country, 'UNKNOWN') AS country, COUNT(DISTINCT user_id) AS users, COUNT(*) AS sessions
-      FROM sessions
-      GROUP BY country
-      ORDER BY users DESC
-      LIMIT 30
-    `),
-    env.DB.prepare(`
-      SELECT COALESCE(os, 'unknown') AS os, COUNT(DISTINCT user_id) AS users, COUNT(*) AS sessions
-      FROM sessions
-      GROUP BY os
-      ORDER BY sessions DESC
-    `),
-    env.DB.prepare(`
-      SELECT COALESCE(version, '0.0.0') AS version, COUNT(DISTINCT user_id) AS users, COUNT(*) AS sessions
-      FROM sessions
-      GROUP BY version
-      ORDER BY sessions DESC
-      LIMIT 20
-    `),
-    env.DB.prepare(`
-      SELECT strftime('%H', created_at) AS hour, COUNT(*) AS sessions
-      FROM sessions
-      WHERE created_at >= datetime('now', '-7 days')
-      GROUP BY hour
-      ORDER BY hour ASC
-    `),
-    env.DB.prepare(`
+    prepare(`
+      WITH recent AS (
+        SELECT * FROM sessions ORDER BY created_at DESC LIMIT 100
+      )
       SELECT
         s.session_id,
         substr(s.user_id, 1, 8) AS user_prefix,
@@ -578,44 +515,14 @@ async function getD1Stats(env) {
         COALESCE(e.tool_file_count, 0) AS tool_file_count,
         COALESCE(e.tool_web_count, 0) AS tool_web_count,
         (COALESCE(e.tool_bash_count, 0) + COALESCE(e.tool_file_count, 0) + COALESCE(e.tool_web_count, 0)) AS total_tools_count,
-        COALESCE(fe_s.cnt, 0) AS session_waterfall_count,
-        COALESCE(fe_u.cnt, 0) AS user_waterfall_total,
+        (SELECT COUNT(*) FROM feature_events fe WHERE fe.session_id = s.session_id AND fe.feature_name = 'waterfall_manual') AS session_waterfall_count,
+        (SELECT COUNT(*) FROM feature_events fe WHERE fe.user_id = s.user_id AND fe.feature_name = 'waterfall_manual') AS user_waterfall_total,
         s.created_at
-      FROM sessions s
-      LEFT JOIN (
-        SELECT
-          CASE WHEN session_id = 'scrubbed_api_key' THEN user_id || '_' || substr(created_at, 1, 13) ELSE session_id END AS match_key,
-          session_id, user_id,
-          MAX(turn_count) AS turn_count,
-          MAX(had_error) AS had_error,
-          MAX(duration_bucket) AS duration_bucket,
-          SUM(tool_bash_count) AS tool_bash_count,
-          SUM(tool_file_count) AS tool_file_count,
-          SUM(tool_web_count) AS tool_web_count,
-          MAX(created_at) AS created_at
-        FROM events
-        WHERE event = 'session_end'
-        GROUP BY match_key
-      ) e ON (
-        s.session_id = e.session_id OR
-        (e.session_id = 'scrubbed_api_key' AND s.user_id = e.user_id AND substr(s.created_at, 1, 13) = substr(e.created_at, 1, 13))
-      )
-      LEFT JOIN (
-        SELECT session_id, COUNT(*) AS cnt
-        FROM feature_events
-        WHERE feature_name = 'waterfall'
-        GROUP BY session_id
-      ) fe_s ON s.session_id = fe_s.session_id
-      LEFT JOIN (
-        SELECT user_id, COUNT(*) AS cnt
-        FROM feature_events
-        WHERE feature_name = 'waterfall'
-        GROUP BY user_id
-      ) fe_u ON s.user_id = fe_u.user_id
+      FROM recent s
+      LEFT JOIN events e ON e.id = (SELECT MAX(latest.id) FROM events latest WHERE latest.session_id=s.session_id AND latest.event='session_end')
       ORDER BY s.created_at DESC
-      LIMIT 100
     `),
-    env.DB.prepare(`
+    prepare(`
       SELECT
         CASE
           WHEN session_count = 1 THEN '1 session'
@@ -627,48 +534,7 @@ async function getD1Stats(env) {
       FROM users
       GROUP BY bucket
     `),
-    // v2 — providers
-    env.DB.prepare(`
-      SELECT COALESCE(provider, 'unknown') AS provider,
-             COUNT(DISTINCT user_id) AS users,
-             COUNT(*) AS sessions
-      FROM sessions
-      WHERE provider IS NOT NULL AND provider != 'unknown'
-      GROUP BY provider
-      ORDER BY sessions DESC
-      LIMIT 20
-    `),
-    // v2 — models
-    env.DB.prepare(`
-      SELECT COALESCE(model, 'unknown') AS model,
-             COALESCE(provider, 'unknown') AS provider,
-             COUNT(DISTINCT user_id) AS users,
-             COUNT(*) AS sessions
-      FROM sessions
-      WHERE model IS NOT NULL AND model != 'unknown'
-      GROUP BY model
-      ORDER BY sessions DESC
-      LIMIT 30
-    `),
-    // v2 — cloud vs local split
-    env.DB.prepare(`
-      SELECT COALESCE(provider_type, 'cloud') AS provider_type,
-             COUNT(DISTINCT user_id) AS users,
-             COUNT(*) AS sessions
-      FROM sessions
-      GROUP BY provider_type
-    `),
-    // v2 — reasoning effort adoption
-    env.DB.prepare(`
-      SELECT COALESCE(reasoning_effort, 'off') AS reasoning_effort,
-             COUNT(DISTINCT user_id) AS users,
-             COUNT(*) AS sessions
-      FROM sessions
-      GROUP BY reasoning_effort
-      ORDER BY sessions DESC
-    `),
-    // v2 — session duration distribution (from events table)
-    env.DB.prepare(`
+    prepare(`
       SELECT COALESCE(duration_bucket, '0-5min') AS duration_bucket,
              COUNT(*) AS sessions
       FROM events
@@ -682,139 +548,23 @@ async function getD1Stats(env) {
         ELSE 5
       END
     `),
-    // v3 — profiles distribution
-    env.DB.prepare(`
-      SELECT COALESCE(profile, 'builder') AS profile,
-             COUNT(DISTINCT user_id) AS users,
-             COUNT(*) AS sessions
-      FROM sessions
-      GROUP BY profile
-      ORDER BY sessions DESC
-    `),
-    // v3 — feature adoption
-    env.DB.prepare(`
-      SELECT feature_name AS feature,
-             COUNT(DISTINCT user_id) AS users,
-             COUNT(*) AS count
-      FROM feature_events
-      GROUP BY feature_name
-      ORDER BY count DESC
-      LIMIT 25
-    `),
-    // v4 — turn distribution (real turns vs bounces)
-    env.DB.prepare(`
-      SELECT
-        CASE
-          WHEN turn_count = 0 THEN '0 turns (bounce)'
-          WHEN turn_count = 1 THEN '1 turn'
-          WHEN turn_count BETWEEN 2 AND 4 THEN '2-4 turns'
-          ELSE '5+ turns'
-        END AS bucket,
-        COUNT(*) AS sessions,
-        COUNT(DISTINCT user_id) AS users
-      FROM sessions
-      GROUP BY bucket
-      ORDER BY CASE bucket
-        WHEN '0 turns (bounce)' THEN 1
-        WHEN '1 turn' THEN 2
-        WHEN '2-4 turns' THEN 3
-        ELSE 4
-      END
-    `),
-    // v4 — onboarding funnel
-    env.DB.prepare(`
-      SELECT
-        COUNT(DISTINCT CASE WHEN feature_name = 'onboarding_viewed' THEN user_id END) AS viewed_users,
-        COUNT(DISTINCT CASE WHEN feature_name LIKE 'onboard_prov_%' THEN user_id END) AS provider_selected_users,
-        COUNT(DISTINCT CASE WHEN feature_name = 'onboarding_key_saved' THEN user_id END) AS key_saved_users,
-        COUNT(DISTINCT CASE WHEN feature_name = 'onboarding_completed' THEN user_id END) AS completed_users
-      FROM feature_events
-    `),
-    // v5 — error health
-    env.DB.prepare(`
-      SELECT
-        COUNT(DISTINCT user_id) AS affected_users,
-        COUNT(DISTINCT session_id) AS error_sessions,
-        COUNT(*) AS total_errors
-      FROM feature_events
-      WHERE feature_name LIKE 'error_%'
-    `),
-    // v5 — error categories
-    env.DB.prepare(`
-      SELECT feature_name AS category,
-             COUNT(DISTINCT user_id) AS users,
-             COUNT(*) AS count
-      FROM feature_events
-      WHERE feature_name LIKE 'error_%'
-      GROUP BY feature_name
-      ORDER BY count DESC
-    `),
-    // v5 — real crons vs seed presets
-    env.DB.prepare(`
-      SELECT
-        COUNT(CASE WHEN feature_name = 'cron_created' THEN 1 END) AS user_crons_created,
-        COUNT(CASE WHEN feature_name = 'cron_user_run_manual' THEN 1 END) AS user_manual_runs,
-        COUNT(CASE WHEN feature_name = 'cron_user_run_auto' THEN 1 END) AS user_auto_runs,
-        COUNT(CASE WHEN feature_name = 'cron_user_toggled' THEN 1 END) AS user_toggled,
-        COUNT(CASE WHEN feature_name = 'cron_seed_run_manual' THEN 1 END) AS seed_manual_runs,
-        COUNT(CASE WHEN feature_name = 'cron_seed_run_auto' THEN 1 END) AS seed_auto_runs,
-        COUNT(DISTINCT CASE WHEN feature_name LIKE 'cron_user_%' OR feature_name = 'cron_created' THEN user_id END) AS active_cron_users
-      FROM feature_events
-    `),
-    // v5 — mascot interactions
-    env.DB.prepare(`
-      SELECT
-        COUNT(CASE WHEN feature_name = 'mascot_petted' THEN 1 END) AS petted_count,
-        COUNT(CASE WHEN feature_name = 'mascot_tossed' THEN 1 END) AS tossed_count,
-        COUNT(DISTINCT CASE WHEN feature_name IN ('mascot_petted', 'mascot_tossed') THEN user_id END) AS engaged_users,
-        COUNT(CASE WHEN feature_name = 'mascot_enabled' THEN 1 END) AS enabled_count,
-        COUNT(CASE WHEN feature_name = 'mascot_disabled' THEN 1 END) AS disabled_count
-      FROM feature_events
-    `),
-    // v5 — atmospheric wallpaper
-    env.DB.prepare(`
-      SELECT
-        COUNT(CASE WHEN feature_name = 'wallpaper_enabled' THEN 1 END) AS enabled_count,
-        COUNT(CASE WHEN feature_name = 'wallpaper_disabled' THEN 1 END) AS disabled_count,
-        COUNT(DISTINCT CASE WHEN feature_name = 'wallpaper_enabled' THEN user_id END) AS unique_users_enabled
-      FROM feature_events
-    `),
-    // v5 — settings tabs visited
-    env.DB.prepare(`
-      SELECT
-        REPLACE(feature_name, 'settings_tab_', '') AS tab,
-        COUNT(DISTINCT user_id) AS users,
-        COUNT(*) AS visits
-      FROM feature_events
-      WHERE feature_name LIKE 'settings_tab_%'
-      GROUP BY feature_name
-      ORDER BY visits DESC
-    `),
-    // v6 — waterfall loyalty & habit distribution
-    env.DB.prepare(`
-      SELECT
-        CASE
-          WHEN wf_count = 1 THEN '1 trace (Explorer)'
-          WHEN wf_count BETWEEN 2 AND 4 THEN '2-4 traces (Engaged)'
-          ELSE '5+ traces (Habitual Power User)'
-        END AS bucket,
-        COUNT(*) AS users,
-        SUM(wf_count) AS invocations
-      FROM (
-        SELECT user_id, COUNT(*) as wf_count
-        FROM feature_events
-        WHERE feature_name = 'waterfall'
-        GROUP BY user_id
-      )
-      GROUP BY bucket
-      ORDER BY CASE bucket
-        WHEN '1 trace (Explorer)' THEN 1
-        WHEN '2-4 traces (Engaged)' THEN 2
-        ELSE 3
-      END
-    `),
-    // v6 — developer work intent & execution quality
-    env.DB.prepare(`
+    prepare(`SELECT COUNT(DISTINCT user_id) AS affected_users,
+      COUNT(DISTINCT session_id) AS error_sessions, COALESCE(SUM(error_count),0) AS total_errors FROM (
+        SELECT t.user_id,t.session_id,1 AS error_count FROM scoped_tasks t
+          WHERE t.outcome='failed'
+        UNION ALL
+        SELECT user_id,session_id,COUNT(*) AS error_count FROM feature_events f WHERE feature_name LIKE 'error_%'
+          AND NOT EXISTS(SELECT 1 FROM task_runs t WHERE t.session_id=f.session_id AND t.date=f.date)
+          GROUP BY user_id,session_id,date
+        UNION ALL
+        SELECT e.user_id,e.session_id,e.error_count FROM (
+          SELECT user_id,session_id,date,COUNT(*) AS error_count FROM events
+          WHERE event='session_end' AND had_error=1 GROUP BY user_id,session_id,date
+        ) e WHERE 1=1
+          AND NOT EXISTS(SELECT 1 FROM task_runs t WHERE t.session_id=e.session_id AND t.date=e.date)
+          AND NOT EXISTS(SELECT 1 FROM feature_events f WHERE f.session_id=e.session_id AND f.date=e.date AND f.feature_name LIKE 'error_%')
+      )`),
+    prepare(`
       SELECT
         CASE
           WHEN (COALESCE(e.tool_bash_count,0) + COALESCE(e.tool_file_count,0) + COALESCE(e.tool_web_count,0)) > 0 THEN 'Real Work (Tool Calling)'
@@ -825,26 +575,11 @@ async function getD1Stats(env) {
         COUNT(*) AS sessions,
         COUNT(DISTINCT s.user_id) AS users
       FROM sessions s
-      LEFT JOIN (
-        SELECT
-          CASE WHEN session_id = 'scrubbed_api_key' THEN user_id || '_' || substr(created_at, 1, 13) ELSE session_id END AS match_key,
-          session_id, user_id,
-          SUM(tool_bash_count) AS tool_bash_count,
-          SUM(tool_file_count) AS tool_file_count,
-          SUM(tool_web_count) AS tool_web_count,
-          MAX(created_at) AS created_at
-        FROM events
-        WHERE event = 'session_end'
-        GROUP BY match_key
-      ) e ON (
-        s.session_id = e.session_id OR
-        (e.session_id = 'scrubbed_api_key' AND s.user_id = e.user_id AND substr(s.created_at, 1, 13) = substr(e.created_at, 1, 13))
-      )
+      LEFT JOIN events e ON e.id = (SELECT MAX(latest.id) FROM events latest WHERE latest.session_id=s.session_id AND latest.event='session_end')
       GROUP BY category
       ORDER BY sessions DESC
-    `),
+    `)
   ]);
-
   const totalUsers      = totalUsersRes.results?.[0]?.count ?? 0;
   const totalSessions   = totalSessionsRes.results?.[0]?.count ?? 0;
   const totalReturning  = returningUsersRes.results?.[0]?.count ?? 0;
@@ -858,7 +593,18 @@ async function getD1Stats(env) {
   const affectedUsers    = errorStatsRes?.results?.[0]?.affected_users ?? 0;
   const sessionErrorRate = totalSessions > 0 ? Number(((errorSessions / totalSessions) * 100).toFixed(1)) : 0;
 
-  return {
+  const result = {
+    window_activity: { ...measurement[0].results[0], sampled: false,
+      segments: { new_users: measurement[5].results[0].new_users || 0,
+        old_users: (measurement[0].results[0].mau || 0) - (measurement[5].results[0].new_users || 0),
+        regular_users: measurement[5].results[0].regular_users || 0 } },
+    adoption: measurement[4].results[0],
+    cohort_health: measurement[1].results[0],
+    retention: measurement[2].results[0],
+    task_outcomes: measurement[3].results[0],
+    measurement_version: 2,
+    coverage: { legacy_activity: true, task_outcomes_require_version: "0.2.14", watermark: "Observed activity; opt-outs and historical gaps are excluded." },
+    filters: Object.fromEntries(params),
     summary: {
       total_users:           totalUsers,
       total_sessions:        totalSessions,
@@ -935,6 +681,8 @@ async function getD1Stats(env) {
     work_intent: workQualityRes?.results ?? [],
     updated_at: new Date().toISOString(),
   };
+
+  return { ...result, query_cost: readCost };
 }
 
 

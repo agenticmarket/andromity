@@ -3,13 +3,32 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Optional, List, Union, TYPE_CHECKING
+from typing import Any, Callable, Optional, List, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from git import Repo
 
 log = logging.getLogger("andromity.git_ops")
 SNAPSHOT_BRANCH = "andromity-snapshots"
+
+
+async def run_restoration(function: Callable[..., Any], *args: Any) -> Any:
+    """Keep restoration ownership until the underlying filesystem worker finishes."""
+    import asyncio
+    worker = asyncio.create_task(asyncio.to_thread(function, *args))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if worker.done() and not worker.cancelled():
+            worker.exception()
+        raise
 
 
 def get_repo(path: Optional[Path] = None) -> Optional["Repo"]:
@@ -98,6 +117,7 @@ def create_pre_edit_snapshot(
             return None  # brand new empty repo with no commits yet
 
         work_dir = Path(repo.working_tree_dir)
+        scope = Path(repo_or_path).resolve() if isinstance(repo_or_path, (str, Path)) else work_dir.resolve()
 
         # Base commit: use latest snapshot on shadow branch if present, else HEAD
         try:
@@ -117,7 +137,7 @@ def create_pre_edit_snapshot(
                 pass
             env = {**os.environ, "GIT_INDEX_FILE": tmp_index}
             if target_files:
-                repo.git.execute(["git", "read-tree", snap_base], env=env)
+                repo.git.execute(["git", "read-tree", head_commit], env=env)
                 rel_targets = []
                 resolved_work = work_dir.resolve()
                 for tf in target_files:
@@ -130,12 +150,15 @@ def create_pre_edit_snapshot(
                         rel_targets.append(p.relative_to(resolved_work).as_posix())
                     except (ValueError, Exception):
                         continue
-                existing_targets = [f for f in rel_targets if (work_dir / f).exists()]
-                if existing_targets:
-                    repo.git.execute(["git", "add", "--"] + existing_targets, env=env)
+                if rel_targets:
+                    repo.git.execute(["git", "add", "-A", "--"] + [":(literal)" + name for name in rel_targets], env=env)
             else:
-                # Stage everything (tracked + untracked) into the temp index.
-                repo.git.execute(["git", "add", "-A"], env=env)
+                # A workspace can be a subfolder of a larger repository.
+                if scope != work_dir.resolve():
+                    repo.git.execute(["git", "read-tree", head_commit], env=env)
+                    repo.git.execute(["git", "add", "-A", "--", ":(literal)" + scope.relative_to(work_dir.resolve()).as_posix()], env=env)
+                else:
+                    repo.git.execute(["git", "add", "-A"], env=env)
             # Write the tree from the temp index.
             tree_hash = repo.git.execute(["git", "write-tree"], env=env).strip()
         finally:
@@ -165,108 +188,126 @@ def create_pre_edit_snapshot(
         return None
 
 
+def repository_path(repo: "Repo", file_path: str) -> tuple[Path, str]:
+    """Resolve one repository file, rejecting traversal, metadata and symlink escapes."""
+    root = Path(repo.working_tree_dir).resolve()
+    candidate = Path(file_path)
+    if not file_path or candidate == Path("."):
+        raise ValueError("Choose a repository file.")
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    lexical = Path(os.path.abspath(candidate))
+    try:
+        rel = lexical.relative_to(root)
+        lexical.parent.resolve().relative_to(root)
+    except ValueError as exc:
+        raise ValueError("File must be inside the repository.") from exc
+    if not rel.parts or any(part.lower() == ".git" for part in rel.parts):
+        raise ValueError("Git metadata cannot be reviewed or reverted.")
+    if lexical.is_symlink():
+        raise ValueError("Symbolic links cannot be reverted through Changes Review.")
+    return lexical, rel.as_posix()
+
+
+def status_entries(repo: "Repo") -> list[dict]:
+    raw = repo.git.execute(["git", "status", "--porcelain=v1", "-z", "-uall"], stdout_as_string=False)
+    parts = raw.decode("utf-8", errors="surrogateescape").split("\0")
+    entries = []
+    i = 0
+    while i < len(parts):
+        item = parts[i]
+        i += 1
+        if len(item) < 4:
+            continue
+        code, name = item[:2], item[3:]
+        entry = {"path": name, "status": "!" if code in ("UU", "AA", "DD", "AU", "UA", "DU", "UD") else "U" if code == "??" else
+                 "D" if "D" in code else "R" if "R" in code else
+                 "A" if "A" in code else "C" if "C" in code else
+                 "M",
+                 "index_status": code[0], "worktree_status": code[1]}
+        if "R" in code or "C" in code:
+            entry["original_path"] = parts[i]
+            i += 1
+        entries.append(entry)
+    return entries
+
+
 def restore_snapshot(repo: "Repo", commit_hash: str, files: Optional[List[str]] = None) -> bool:
-    """
-    Restore working tree to snapshot state.
-
-    If `files` is provided, only those relative paths are restored (surgical).
-    Otherwise ALL files tracked in the snapshot are restored.
-
-    Uses restore_file_snapshot per-file so newly-created files (which
-    git checkout cannot restore) are deleted rather than left on disk.
-    NEVER runs git-clean, which would nuke unrelated files.
-    """
-    from git.exc import GitCommandError
+    """Restore worktree files only; preserve HEAD and the user's staging area."""
     try:
-        work_dir = Path(repo.working_tree_dir)
-        if files:
-            for rel in files:
-                restore_file_snapshot(repo, commit_hash, rel)
-            return True
-
-        # 1. Query all files present in the snapshot commit tree
-        try:
-            snapshot_files = set(repo.git.ls_tree("-r", "--name-only", commit_hash).splitlines())
-        except (GitCommandError, Exception):
-            snapshot_files = set()
-
-        # 2. Inspect untracked and modified working directory files via git status
-        # Any file currently present on disk that did not exist in the snapshot was created during the turn
-        try:
-            status_lines = repo.git.status("--porcelain=v1", "-uall").splitlines()
-            for line in status_lines:
-                if not line.strip():
-                    continue
-                path_part = line[3:].strip()
-                if " -> " in path_part:
-                    path_part = path_part.split(" -> ")[-1]
-                path_part = path_part.strip('"').replace("\\", "/")
-                if path_part and path_part not in snapshot_files:
-                    target_path = work_dir / path_part
-                    if target_path.is_file() or target_path.is_symlink():
-                        try:
-                            target_path.unlink(missing_ok=True)
-                            # Remove empty parent directories up to work_dir
-                            parent = target_path.parent
-                            while parent != work_dir and parent.is_dir() and not any(parent.iterdir()):
-                                parent.rmdir()
-                                parent = parent.parent
-                        except Exception as del_err:
-                            log.warning("Failed to remove newly created file %s during rollback: %s", target_path, del_err)
-        except Exception as st_err:
-            log.warning("Failed to inspect status during restore: %s", st_err)
-
-        # 3. Checkout all files from the snapshot commit to restore modified/deleted files
-        try:
-            repo.git.checkout("--force", commit_hash, "--", ".")
-        except GitCommandError as chk_err:
-            log.warning("Git checkout failed during snapshot restore: %s", chk_err)
-
-        # 4. Reset index so staging area is clean
-        try:
-            repo.git.reset()
-        except Exception:
-            pass
-
+        commit = repo.commit(commit_hash)
+        if files is None:
+            # Compatibility for explicit full restores. Session undo passes recorded paths.
+            current = [entry["path"] for entry in status_entries(repo)]
+            snapshot = repo.git.ls_tree("-rz", "--name-only", commit.hexsha).split("\0")
+            files = list(dict.fromkeys([*current, *(name for name in snapshot if name)]))
+        paths = [repository_path(repo, name)[1] for name in files]
+        # Validate every path before modifying any file.
+        for rel in paths:
+            if not restore_file_snapshot(repo, commit.hexsha, rel):
+                return False
         return True
-    except Exception as e:
-        log.warning("Failed to restore snapshot: %s", e)
+    except Exception as exc:
+        log.warning("Failed to restore snapshot: %s", exc)
         return False
 
 
-def restore_file_snapshot(repo: Repo, commit_hash: str, rel_path: str) -> bool:
-    """Restores a single file from a snapshot. If it didn't exist then, deletes it."""
+def restore_file_snapshot(repo: "Repo", commit_hash: str, rel_path: str) -> bool:
     from git.exc import GitCommandError
     try:
-        norm_path = rel_path.replace("\\", "/")
-        work_dir = Path(repo.working_tree_dir)
-        full_path = work_dir / norm_path
-
-        # Check if file existed in snapshot tree
-        in_snapshot = False
+        full_path, rel = repository_path(repo, rel_path)
+        commit = repo.commit(commit_hash)
         try:
-            repo.git.cat_file("-e", f"{commit_hash}:{norm_path}")
-            in_snapshot = True
-        except (GitCommandError, Exception):
-            in_snapshot = False
-
-        if in_snapshot:
-            repo.git.checkout("--force", commit_hash, "--", norm_path)
-            return True
+            commit.tree / rel
+        except KeyError:
+            if full_path.is_dir():
+                return False
+            full_path.unlink(missing_ok=True)
+            parent = full_path.parent
+            root = Path(repo.working_tree_dir).resolve()
+            while parent != root and parent.is_dir() and not any(parent.iterdir()):
+                parent.rmdir()
+                parent = parent.parent
         else:
-            # File did not exist in the snapshot (it was newly created during the turn).
-            # Delete it from disk and clean empty parent directories.
-            if full_path.is_file() or full_path.is_symlink():
-                full_path.unlink(missing_ok=True)
-                parent = full_path.parent
-                while parent != work_dir and parent.is_dir() and not any(parent.iterdir()):
-                    parent.rmdir()
-                    parent = parent.parent
-            return True
-    except Exception as e:
-        log.warning("Failed to restore file %s from snapshot: %s", rel_path, e)
+            repo.git.restore("--source=" + commit.hexsha, "--worktree", "--", ":(literal)" + rel)
+        return True
+    except (GitCommandError, OSError, ValueError) as exc:
+        log.warning("Failed to restore file %s: %s", rel_path, exc)
         return False
 
+
+def rollback_recorded_turns(repo: "Repo", records: list[dict], project_path: Optional[str] = None) -> bool:
+    """Restore only recorded turn changes, refusing to overwrite subsequent user edits."""
+    if not records or any(not record.get("after_hash") for record in records):
+        return False
+    expected: dict[str, str] = {}
+    for record in records:
+        names = repo.git.diff("--name-only", "--no-renames", "-z", record["snapshot_hash"], record["after_hash"]).split("\0")
+        for name in filter(None, names):
+            if project_path and not (Path(repo.working_tree_dir) / name).resolve().is_relative_to(Path(project_path).resolve()):
+                continue
+            expected[name] = record["after_hash"]
+    for name, after_hash in expected.items():
+        full, rel = repository_path(repo, name)
+        tree = repo.commit(after_hash).tree
+        try:
+            blob = tree / rel
+        except KeyError:
+            if full.exists():
+                return False
+        else:
+            if not full.is_file():
+                return False
+            if full.read_bytes() != blob.data_stream.read() and repo.git.hash_object("--path=" + rel, "--", str(full)).strip() != blob.hexsha:
+                return False
+    return restore_snapshot(repo, records[0]["snapshot_hash"], list(expected))
+
+
+def checkpoint_changed_files(repo: "Repo", record: dict, project_path: str) -> list[str]:
+    project = Path(project_path).resolve()
+    names = repo.git.diff("--name-only", "--no-renames", "-z", record["snapshot_hash"], record["after_hash"]).split("\0")
+    return [(Path(repo.working_tree_dir) / name).resolve().relative_to(project).as_posix()
+            for name in names if name and (Path(repo.working_tree_dir) / name).resolve().is_relative_to(project)]
 
 
 def list_snapshots(repo: Repo, limit: int = 20) -> List[dict]:

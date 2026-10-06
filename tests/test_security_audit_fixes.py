@@ -126,6 +126,8 @@ async def test_sensitive_path_approval_not_bypassed(tmp_path, monkeypatch):
     handler = JsonRpcHandler()
     session = Session(name="Security Test", project_path=str(tmp_path))
     session.permission_mode = "trust"
+    from andromity.config import config
+    config.set_trusted(str(tmp_path))
 
     captured = {}
 

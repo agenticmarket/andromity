@@ -135,6 +135,8 @@ def test_messages_for_api_swaps_last_user_content(session):
         {"type": "text", "text": "hi"},
         {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,BBBB"}},
     ]
+    message = session.messages[-1]
+    agent._message_images[id(message)] = (message, agent._turn_image_parts)
     msgs = agent._messages_for_api()
     assert msgs[-1]["content"] == agent._turn_image_parts
     # Original session is untouched.

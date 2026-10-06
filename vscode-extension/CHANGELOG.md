@@ -2,6 +2,30 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [0.2.15] - 2026-10-06
+
+### Added
+- Show a three-dot activity wave in the composer and latest-message button while the agent is working.
+- Refresh the chat welcome screen with task cards, clearer conversation spacing, a compact theme-aware composer, and visible keyboard focus.
+- Put API key and Ollama setup first, with one cloud trial action and one sign-in button below as alternatives.
+- Clarify the cloud account panel with an allowance bar, local reset times, blocked and unavailable states, and a clear separation from BYOK usage.
+- Add, remove, enable, disable, restart, and authenticate MCP servers from the Hub.
+- Remove installed skills from the Hub, targeting the selected installation.
+- Inspect connected MCP tools in a collapsible list of names and descriptions.
+
+### Fixed
+- Exclude temporary session-cache copies from packaged extensions.
+- Preserve small manual scrolls and timeline navigation in idle sessions, and use full turn heights so opening sessions and jumping to latest reach the entire conversation.
+- Keep chat pinned to the latest message through permission-card layout changes, and stop delayed session scrolling from overriding manual scrolling or a newer session.
+- Pause auto-follow during manual scroll gestures and resume at the actual bottom, avoiding jumps when browsing between turns near the latest message.
+- Distinguish manual and automatic Waterfall usage, record cancellation requests separately from completion, and avoid duplicate error telemetry.
+- Hide automatically attached IDE context from queue previews, session titles, and live/restored Waterfall labels and tooltips while retaining it for the agent.
+- Automatically start enabled MCP servers on daemon connection and reconnection, refresh their live status, and notify users when authentication, trust, or retry is needed.
+- Show Re-authenticate after connecting and wrap long MCP URLs within responsive cards.
+- Allow enough time for remote MCP startup rather than caching an empty list after a short timeout.
+
+Versions 0.2.13 and 0.2.14 were urgent releases and do not have separate changelog entries.
+
 ## [0.2.12] - 2026-09-30
 
 ### Added & Improved

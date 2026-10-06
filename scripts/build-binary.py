@@ -144,6 +144,15 @@ if os.path.isfile(_LITELLM_CALLBACK_MGR):
     except Exception as _e:
         print(f"[Cleanup] WARNING: Could not patch logging_callback_manager.py: {_e}")
 
+# Remove litellm proxy artifacts (contains 390+ Next.js JS chunks and public_key.pem)
+_LITELLM_PROXY = os.path.join(out_dir, "_internal", "litellm", "proxy")
+if os.path.isdir(_LITELLM_PROXY):
+    try:
+        shutil.rmtree(_LITELLM_PROXY, ignore_errors=True)
+        print("[Cleanup] Removed litellm proxy web UI and certificate artifacts - runtime unaffected.")
+    except Exception as _e:
+        print(f"[Cleanup] WARNING: Could not remove litellm/proxy: {_e}")
+
 print(f"\n[OK] Onedir binary bundle built and deployed at: {out_dir}")
 for f in os.listdir(out_dir):
     fp = os.path.join(out_dir, f)

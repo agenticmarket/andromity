@@ -8,9 +8,12 @@ import sys
 import time
 import traceback
 import uuid
+from copy import deepcopy
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set
 
+from andromity import __version__
 from andromity.config import config, get_config_dir
 from andromity.core.agent import Agent
 
@@ -29,6 +32,7 @@ READ_ONLY_TOOLS = {
 CRON_SEED_PRESET_NAMES = {"Run Tests & Verify Build", "Daily Code Health & TODO Scanner"}
 from andromity.core.events import (
     Done,
+    InputApplied,
     HandoffWritten,
     LLMCallEnd,
     LLMCallStart,
@@ -65,6 +69,7 @@ from andromity.core.models import (
     get_cached_live_models,
 )
 from andromity.core.session import Session
+from andromity.server.runtime import SessionRuntime
 from andromity.server.protocol import (
     AGENT_BUSY,
     INTERNAL_ERROR,
@@ -86,15 +91,28 @@ class JsonRpcHandler:
         self.send_notification = send_notification
         self._active_sessions: Dict[str, Session] = {}
         self._running_tasks: Dict[str, asyncio.Task] = {}
-        self._pending_approvals: Dict[str, asyncio.Future] = {}
-        self._pending_questions: Dict[str, asyncio.Future] = {}
+        self._runtime = SessionRuntime()
+        self._pending_approvals: Dict[str, Any] = {}
+        self._pending_questions: Dict[str, Any] = {}
         self._pending_plan_approvals: Dict[str, asyncio.Future] = {}
         self._cron_schedulers: Dict[str, Any] = {}
         self._active_agents: Dict[str, Any] = {}
+        self._input_queues: Dict[str, Any] = {}
+        self._input_locks: Dict[str, asyncio.Lock] = {}
+        self._last_prompt_requests: Dict[str, Dict[str, Any]] = {}
+        self._git_mutating_roots: Set[str] = set()
         self._mcp_manager: Optional[Any] = None
         self._mcp_started: bool = False
+        self._user_killed_processes: Set[str | tuple[str, str]] = set()
+        try:
+            self._loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
         from andromity.core.session_bus import SessionBus
         SessionBus.get_instance().subscribe(self._on_session_bus_event)
+        from andromity.core import tools as _tools_mod
+        _tools_mod.register_process_started_callback(self._on_process_started)
+        _tools_mod.register_process_exited_callback(self._on_process_exited)
 
     def _on_session_bus_event(self, event: StreamEvent):
         if isinstance(event, SessionMessageReceived):
@@ -178,6 +196,60 @@ class JsonRpcHandler:
                         trigger_type="handoff",
                     ))
 
+    def _on_process_started(self, info: dict):
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self.notify, "process/started", info)
+        else:
+            self.notify("process/started", info)
+
+    def _on_process_exited(self, info: dict):
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._handle_process_exit_threadsafe, info)
+        else:
+            self._handle_process_exit_threadsafe(info)
+
+    def _handle_process_exit_threadsafe(self, info: dict):
+        self.notify("process/exited", info)
+        session_id = info.get("session_id")
+        pid_str = info.get("process_id", "")
+        scoped_pid = (session_id, pid_str)
+        was_user_killed = scoped_pid in self._user_killed_processes or pid_str in self._user_killed_processes
+        if was_user_killed:
+            self._user_killed_processes.discard(pid_str)
+            self._user_killed_processes.discard(scoped_pid)
+        if session_id:
+            exit_code = info.get("exit_code", 0)
+            cmd_str = info.get("command", "")
+            if was_user_killed:
+                prompt_content = (
+                    f"[User Action]: Background process '{pid_str}' (Command: `{cmd_str}`) "
+                    f"was manually stopped by the user."
+                )
+            else:
+                prompt_content = (
+                    f"[Background Process Notification]:\n"
+                    f"Process '{pid_str}' (Command: `{cmd_str}`) has finished with exit code {exit_code}.\n"
+                    f"Use shell_read('{pid_str}') to review its final output if needed."
+                )
+            coro = self._handle_auto_awake(
+                target_session_id=session_id,
+                from_session=f"bg_proc_{pid_str}",
+                from_session_id="",
+                prompt_content=prompt_content,
+                trigger_type="process_exit",
+            )
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(coro)
+            except RuntimeError:
+                if self._loop and self._loop.is_running():
+                    asyncio.run_coroutine_threadsafe(coro, self._loop)
+                else:
+                    try:
+                        coro.close()
+                    except Exception:
+                        pass
+
     async def _handle_auto_awake(
         self,
         target_session_id: str,
@@ -236,10 +308,11 @@ class JsonRpcHandler:
 
         # 4. Increment circuit breaker counter and record collaborator link
         session.consecutive_auto_wakes = current_wakes + 1
-        if not hasattr(session, "collaborators") or session.collaborators is None:
-            session.collaborators = []
-        if from_session and from_session not in session.collaborators:
-            session.collaborators.append(from_session)
+        if trigger_type != "process_exit":
+            if not hasattr(session, "collaborators") or session.collaborators is None:
+                session.collaborators = []
+            if from_session and from_session not in session.collaborators:
+                session.collaborators.append(from_session)
         session.save()
 
         # Update sender's collaborators as well for bidirectional UI link
@@ -278,12 +351,24 @@ class JsonRpcHandler:
             log.exception("Auto-wake execution failed for session %s: %s", session.id, e)
 
     def notify(self, method: str, params: Dict[str, Any]):
-        """Send a JSON-RPC notification to the client."""
-        if self.send_notification:
-            notif = JsonRpcNotification(method=method, params=params)
-            res = self.send_notification(notif)
-            if inspect.isawaitable(res):
-                asyncio.create_task(res)
+        """Send a JSON-RPC notification to the client in a thread-safe manner."""
+        params = self._runtime.observe(method, params)
+        if not self.send_notification:
+            return
+        notif = JsonRpcNotification(method=method, params=params)
+        res = self.send_notification(notif)
+        if inspect.isawaitable(res):
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(res)
+            except RuntimeError:
+                if self._loop and self._loop.is_running():
+                    asyncio.run_coroutine_threadsafe(res, self._loop)
+                else:
+                    try:
+                        res.close()
+                    except Exception:
+                        pass
 
     async def handle_request(self, request: JsonRpcRequest) -> Optional[JsonRpcResponse]:
         """Dispatch a single JSON-RPC request to its corresponding handler."""
@@ -328,6 +413,76 @@ class JsonRpcHandler:
                 err_msg,
             )
 
+    async def rpc_process_kill(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Kill a background process started with shell_bg."""
+        process_id = params.get("process_id", "")
+        if not process_id:
+            raise ValueError("process_id is required")
+        from andromity.core.tools import shell_kill
+        with self._process_session(params):
+            self._user_killed_processes.add((params["session_id"], process_id) if params.get("session_id") else process_id)
+            result = shell_kill(process_id)
+        return {"status": "ok", "message": result, "process_id": process_id}
+
+    async def rpc_process_read(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Read output from a running or exited background process."""
+        process_id = params.get("process_id", "")
+        lines = int(params.get("lines", 200))
+        if not process_id:
+            raise ValueError("process_id is required")
+        from andromity.core.tools import shell_read
+        with self._process_session(params):
+            output = shell_read(process_id, lines=lines)
+        return {"process_id": process_id, "output": output}
+
+    @contextmanager
+    def _process_session(self, params: Dict[str, Any]) -> Iterator[None]:
+        """New clients address processes by their owning session; legacy calls remain supported."""
+        sid = params.get("session_id")
+        if not sid:
+            yield
+            return
+        from andromity.core import tools
+        session = self._get_or_load_session(sid, params.get("project_path"))
+        if not config.is_trusted(session.project_path):
+            raise PermissionError("Workspace is untrusted. Enable trust before managing background commands.")
+        key = (str(Path(session.project_path).resolve()), params.get("process_id"))
+        with tools._bg_lock:
+            entry = tools._bg_processes.get(key)
+            if entry is None or entry.get("session_id") != sid:
+                raise ValueError("Background command is no longer available in this session.")
+        token = tools._current_session_var.set(session)
+        try:
+            yield
+        finally:
+            tools._current_session_var.reset(token)
+
+    async def rpc_process_list(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """List active background processes."""
+        from andromity.core.tools import _bg_processes, _bg_lock, _bg_project_key
+        proj_key = params.get("project_path") or _bg_project_key()
+        with _bg_lock:
+            entries = []
+            for key, entry in _bg_processes.items():
+                if isinstance(key, tuple):
+                    pk, pid = key
+                    if pk != proj_key and proj_key != "__global__":
+                        continue
+                else:
+                    pid = key
+                proc = entry["proc"]
+                alive = proc.poll() is None
+                entries.append({
+                    "process_id": pid,
+                    "pid": proc.pid,
+                    "command": entry.get("cmd", ""),
+                    "status": "running" if alive else f"exited ({proc.returncode})",
+                    "started": entry.get("started", 0),
+                    "elapsed": int(time.time() - entry.get("started", time.time())),
+                    "session_id": entry.get("session_id", ""),
+                })
+        return {"processes": entries}
+
     # ── MCP Manager helpers ─────────────────────────────────────────────────
     def _get_mcp_manager(self, project_path: Optional[str] = None):
         """Return (and lazily create) the daemon's MCPClientManager."""
@@ -337,6 +492,7 @@ class JsonRpcHandler:
                     resolved = str(Path(project_path).resolve())
                     if resolved != str(Path(self._mcp_manager.project_path).resolve()):
                         self._mcp_manager.project_path = resolved
+                        self._mcp_started = False
                 except Exception:
                     pass
             return self._mcp_manager
@@ -369,14 +525,20 @@ class JsonRpcHandler:
         if not hasattr(self, "_mcp_start_lock") or self._mcp_start_lock is None:
             self._mcp_start_lock = asyncio.Lock()
         async with self._mcp_start_lock:
+            if (self._mcp_manager is not None and project_path
+                    and Path(project_path).resolve() != Path(self._mcp_manager.project_path).resolve()):
+                await self._mcp_manager.stop_all()
             mgr = self._get_mcp_manager(project_path)
             if not self._mcp_started:
                 try:
+                    # A project switch invalidates live sessions, not just cached status.
+                    if mgr.sessions:
+                        await mgr.stop_all()
                     await mgr.start_all()
+                    self._mcp_started = True
                 except Exception as e:
                     log.warning("MCP start_all failed: %s", e)
-                finally:
-                    self._mcp_started = True
+                    raise
             return mgr
 
     # ── Session Methods ─────────────────────────────────────────────────────────
@@ -480,18 +642,11 @@ class JsonRpcHandler:
                     if keep_id is None and not kept_one:
                         kept_one = True
                         continue
-                    conn.execute("DELETE FROM sessions WHERE id = ?", (sid,))
-                    try:
-                        conn.execute("DELETE FROM session_messages WHERE session_id = ?", (sid,))
-                    except Exception:
-                        pass
+                    if active_sess:
+                        active_sess.delete()
+                    else:
+                        Session.delete_by_id(sid)
                     self._active_sessions.pop(sid, None)
-                    try:
-                        s_file = (get_config_dir() / "sessions" / phash / f"{sid}.json").resolve()
-                        if s_file.exists():
-                            s_file.unlink()
-                    except Exception:
-                        pass
             try:
                 conn.commit()
             except Exception:
@@ -515,7 +670,7 @@ class JsonRpcHandler:
             },
             "agentInfo": {
                 "name": "Andromity",
-                "version": "0.2.12",
+                "version": __version__,
                 "description": "Autonomous AI coding agent by AgenticMarket",
             },
         }
@@ -569,17 +724,29 @@ class JsonRpcHandler:
         session_id = params.get("session_id")
         project_path = params.get("project_path")
         session = self._get_or_load_session(session_id, project_path)
+        runtime = self._runtime.snapshot(session.id)
+        processes = await self.rpc_process_list({"project_path": session.project_path})
+        runtime["processes"] = [p for p in processes["processes"] if p["session_id"] == session.id and p["status"] == "running"]
+        task = self._running_tasks.get(session.id)
+        runtime["is_running"] = task is not None and not task.done()
+        plan = getattr(session, "plan", None)
+        if isinstance(plan, dict) and plan.get("status") == "pending" and not any(i["type"] == "plan_approval" for i in runtime["interactions"]):
+            runtime["interactions"].append({"type": "plan_approval", "session_id": session.id, "plan": plan})
         return {
             "id": session.id,
             "name": session.name,
             "status": getattr(session, "status", "idle"),
+            "is_running": runtime["is_running"],
+            "runtime": runtime,
+            "permission_mode": session.permission_mode,
+            "profile": session.profile,
             "project_path": session.project_path,
-            "messages": session.messages,
+            "messages": deepcopy(session.messages),
             "token_total": getattr(session, "token_total", 0),
             "context_tokens": getattr(session, "context_tokens", 0),
             "cost_usd": getattr(session, "cost_usd", 0.0),
             "usage_breakdown": getattr(session, "usage_breakdown", {}),
-            "plan": getattr(session, "plan", None),
+            "plan": deepcopy(plan),
             "compacted_history": getattr(session, "compacted_history", []),
             "model": getattr(session, "model", None) or getattr(getattr(self, "agent", None), "model_name", None) or getattr(getattr(self, "config", None), "model", None),
             "provider": getattr(session, "provider", None) or getattr(getattr(self, "agent", None), "provider_name", None) or getattr(getattr(self, "config", None), "provider", None),
@@ -597,38 +764,15 @@ class JsonRpcHandler:
         except ValueError:
             raise ValueError(f"Invalid session_id: {session_id!r}")
 
-        # 1. Delete from SQLite
-        from andromity.core.db import get_conn, init_schema
-        try:
-            init_schema()
-            conn = get_conn()
-            conn.execute("DELETE FROM sessions WHERE id = ?", (valid_id,))
-        except Exception as e:
-            log.warning("Failed to delete session %s from SQLite: %s", valid_id, e)
-
-        # 2. Delete JSON snapshot from disk
-        if valid_id in self._active_sessions:
-            sess = self._active_sessions.pop(valid_id)
-            try:
-                if hasattr(sess, "file_path") and Path(sess.file_path).exists():
-                    p = Path(sess.file_path).resolve()
-                    sessions_dir = (get_config_dir() / "sessions").resolve()
-                    if p.is_relative_to(sessions_dir):
-                        p.unlink()
-            except Exception:
-                pass
+        task = self._running_tasks.get(valid_id)
+        if task is not None and not task.done():
+            return {"success": False, "error": "This chat is running. Stop it before deleting it."}
+        session = self._active_sessions.get(valid_id)
+        if session is not None:
+            session.delete()
         else:
-            storage_root = get_config_dir()
-            sessions_dir = (storage_root / "sessions").resolve()
-            if sessions_dir.exists():
-                for p_dir in sessions_dir.iterdir():
-                    if p_dir.is_dir():
-                        s_file = (p_dir / f"{valid_id}.json").resolve()
-                        if s_file.is_relative_to(sessions_dir) and s_file.exists():
-                            try:
-                                s_file.unlink()
-                            except Exception:
-                                pass
+            Session.delete_by_id(valid_id)
+        self._active_sessions.pop(valid_id, None)
         return {"success": True, "session_id": valid_id}
 
     async def rpc_session_rename(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -764,28 +908,31 @@ class JsonRpcHandler:
             turns_to_undo = 1
             target_turn_idx = total_turns - 1
 
-        turns_undone, popped, snap_item = session.rollback_to_turn(target_turn_idx)
-
-        # Rollback git snapshot if available
+        if not config.is_trusted(session.project_path):
+            return {"success": False, "error": "Trust this workspace before undoing file changes."}
+        self._review_repo({"project_path": session.project_path}, mutate=True)
+        records = [record for record in getattr(session, "undo_stack", [])
+                   if record.get("turn_index", -1) >= target_turn_idx]
         repo = get_repo(Path(session.project_path))
-        rollback_msg = "No git snapshot available"
-        if repo:
+        rollback_msg = "Conversation restored; no file checkpoint available."
+        if records:
+            if not repo:
+                return {"success": False, "error": "The repository is unavailable. No conversation messages were removed."}
             try:
-                snap_hash = snap_item.get("snapshot_hash") if snap_item else None
-                if not snap_hash:
-                    # Fallback to list_snapshots from andromity-snapshots branch
-                    snaps = list_snapshots(repo, limit=max(20, turns_undone + 2))
-                    snap_idx = min(turns_undone - 1, len(snaps) - 1)
-                    if snaps and snap_idx >= 0:
-                        snap_hash = snaps[snap_idx]["hash"]
-
-                if snap_hash:
-                    ok = await asyncio.to_thread(restore_snapshot, repo, snap_hash)
-                    rollback_msg = f"Restored snapshot {snap_hash[:7]}" if ok else "Failed to restore snapshot"
-                else:
-                    rollback_msg = "No snapshots recorded"
-            except Exception as e:
-                rollback_msg = f"Git rollback error: {e}"
+                from andromity.core.git_ops import rollback_recorded_turns, run_restoration
+                root = str(Path(repo.working_tree_dir).resolve())
+                self._git_mutating_roots.add(root)
+                try:
+                    ok = await run_restoration(rollback_recorded_turns, repo, records, session.project_path)
+                finally:
+                    self._git_mutating_roots.discard(root)
+            except Exception:
+                log.exception("Turn rollback failed")
+                ok = False
+            if not ok:
+                return {"success": False, "error": "Files changed after this turn or its checkpoint is incomplete. Review the changes before undoing; your conversation is preserved."}
+            rollback_msg = "Restored snapshot " + records[0]["snapshot_hash"][:7]
+        turns_undone, popped, _ = session.rollback_to_turn(target_turn_idx)
 
         return {
             "success": True,
@@ -912,9 +1059,102 @@ class JsonRpcHandler:
 
     # ── Agent Execution & Streaming Methods ─────────────────────────────────────
 
+    def _inputs(self, session_id: str):
+        from andromity.core.inputs import InputQueue
+        if session_id not in self._input_queues:
+            self._input_queues[session_id] = InputQueue(
+                session_id, lambda state: self.notify("agent/queueChanged", state))
+        return self._input_queues[session_id]
+
+    async def rpc_agent_queue(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        session = self._get_or_load_session(params.get("session_id"), params.get("project_path"))
+        return {**self._inputs(session.id).snapshot(), "supported": True}
+
+    async def rpc_agent_submit(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        session = self._get_or_load_session(params.get("session_id"), params.get("project_path"))
+        sid = session.id
+        async with self._input_locks.setdefault(sid, asyncio.Lock()):
+            queue = self._inputs(sid)
+            payload = {**params, "session_id": sid}
+            item = queue.submit(payload, params.get("delivery", "queue"), params.get("request_id"))
+            await self._start_pending(sid)
+            return {"session_id": sid, "input_id": item.id, "status": item.status,
+                    "queue": queue.snapshot()}
+
+    async def rpc_agent_promote(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        sid = params["session_id"]
+        async with self._input_locks.setdefault(sid, asyncio.Lock()):
+            self._inputs(sid).promote(params["input_id"])
+            await self._start_pending(sid)
+            return self._inputs(sid).snapshot()
+
+    async def rpc_agent_remove(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        queue = self._inputs(params["session_id"])
+        queue.remove(params["input_id"])
+        return queue.snapshot()
+
+    async def rpc_agent_resume(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        sid = params["session_id"]
+        async with self._input_locks.setdefault(sid, asyncio.Lock()):
+            self._inputs(sid).resume()
+            await self._start_pending(sid)
+            return self._inputs(sid).snapshot()
+
+    async def _start_pending(self, sid: str) -> None:
+        task = self._running_tasks.get(sid)
+        if task and not task.done():
+            return
+        queue = self._inputs(sid)
+        item = queue.peek()
+        if item is None:
+            return
+        payload = {**item.payload, "input_id": item.id}
+        try:
+            await self.rpc_agent_prompt(payload)
+            queue.applied(item)
+            from andromity.telemetry import send_feature_used
+            send_feature_used("queue_dispatched", session_id=sid)
+        except Exception:
+            queue.pause()
+            raise
+
+    async def _finish_pending(self, sid: str, task: asyncio.Task) -> None:
+        async with self._input_locks.setdefault(sid, asyncio.Lock()):
+            if self._running_tasks.get(sid) is task:
+                self._running_tasks.pop(sid, None)
+            try:
+                await self._start_pending(sid)
+            except Exception:
+                log.exception("Unable to start queued input for %s", sid)
+
+    async def rpc_agent_retry(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        sid = params.get("session_id")
+        session = self._get_or_load_session(sid, params.get("project_path"))
+        sid = session.id
+        async with self._input_locks.setdefault(sid, asyncio.Lock()):
+            task = self._running_tasks.get(sid)
+            if task and not task.done():
+                raise ValueError("Wait for the current turn to finish before retrying.")
+            previous = self._last_prompt_requests.get(sid)
+            if previous is None:
+                raise ValueError("This request is no longer available. Send the prompt again.")
+            payload = {**previous, "session_id": sid}
+            payload.pop("input_id", None)
+            payload.pop("request_id", None)
+            if params.get("strip_images"):
+                payload.pop("images", None)
+                payload["image_uris"] = []
+                if not str(payload.get("prompt", "")).strip():
+                    raise ValueError("This message only contains an image. Add a text prompt before retrying.")
+            for key in ("model", "provider", "reasoning_effort"):
+                if params.get(key):
+                    payload[key] = params[key]
+            # Retry never restores files or resumes messages paused after an error.
+            return await self.rpc_agent_prompt(payload)
+
     async def rpc_agent_prompt(self, params: Dict[str, Any]) -> Dict[str, Any]:
         prompt = params.get("prompt", "")
-        if not prompt:
+        if not prompt and not (params.get("images") or params.get("image_uris")):
             raise ValueError("prompt is required")
 
         project_path = params.get("project_path")
@@ -924,6 +1164,13 @@ class JsonRpcHandler:
 
         if session_id in self._running_tasks and not self._running_tasks[session_id].done():
             raise RuntimeError(f"Session {session_id} is already running a turn.")
+        prompt_repo = get_repo(Path(session.project_path))
+        if prompt_repo and str(Path(prompt_repo.working_tree_dir).resolve()) in self._git_mutating_roots:
+            raise ValueError("Wait for file restoration to finish before starting another turn.")
+
+        if not params.get("is_auto_wake"):
+            from copy import deepcopy
+            self._last_prompt_requests[session_id] = deepcopy(params)
 
         is_auto_wake = bool(params.get("is_auto_wake", False))
         if not is_auto_wake:
@@ -931,9 +1178,10 @@ class JsonRpcHandler:
             session.save()
 
         profile = params.get("profile") or config.get("default", "profile", "builder")
+        session.profile = profile
         model = params.get("model") or config.get("default", "model", "claude-sonnet-4-6")
         provider = params.get("provider") or config.get("default", "provider", "anthropic")
-        reasoning_effort = params.get("reasoning_effort") or config.get("default", "reasoning_effort", "medium")
+        reasoning_effort = params.get("reasoning_effort") or config.get("default", "reasoning_effort", "auto")
         # Respect per-session mode passed from client, falling back to server default
         mode = (params.get("mode") or config.get("default", "permission_mode", "safe")).lower()
         session.permission_mode = mode
@@ -942,14 +1190,23 @@ class JsonRpcHandler:
 
         # Create callbacks for interactive approval and clarifying questions
         async def _on_tool_approval(tool_name: str, args: Dict[str, Any]) -> bool:
-            # 1. Untrusted workspace security check (matching TUI app.py:534)
-            if not is_trusted_workspace and mode not in ("full", "yolo"):
-                if tool_name in ("write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill", "spawn_subagent"):
-                    log.warning("Tool '%s' blocked — workspace %s is untrusted", tool_name, session.project_path)
-                    return (False, "TOOL BLOCKED: Workspace is untrusted. Grant trust in Andromity Hub (Trust & Security) to permit file edits or terminal commands.")
+            t_lower = (tool_name or "").strip().lower()
+            prof_lower = (profile or "").strip().lower()
 
-            # 2. YOLO / FULL mode auto-approves all actions
-            if auto_approve or mode in ("full", "yolo"):
+            # 1. Profile confinement check (hard gate: planner/reviewer cannot mutate files or execute shell)
+            if prof_lower in ("planner", "reviewer") and t_lower in ("write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill"):
+                log.warning("Tool '%s' blocked — profile %s is read-only", tool_name, profile)
+                return (False, f"TOOL BLOCKED: Profile '{profile}' is restricted from executing mutating tool '{tool_name}'.")
+
+            # 2. Untrusted workspace security check (hard fence: blocks writes across all modes)
+            if not is_trusted_workspace:
+                from andromity.core.tools import requires_workspace_trust
+                if requires_workspace_trust(t_lower):
+                    log.warning("Tool '%s' blocked — workspace %s is untrusted", tool_name, session.project_path)
+                    return (False, "TOOL BLOCKED: Workspace is untrusted. Grant trust in Settings to permit workspace reads, writes, and commands.")
+
+            # 3. YOLO / FULL mode auto-approves all actions once security gates pass
+            if mode in ("full", "yolo"):
                 return True
 
             from andromity.core.security import is_sensitive_path
@@ -1038,6 +1295,7 @@ class JsonRpcHandler:
                 return bool(approved)
             finally:
                 self._pending_approvals.pop(approval_id, None)
+                self.notify("agent/interactionResolved", {"session_id": session_id, "interaction_id": approval_id})
 
         async def _on_questions(questions: List[Dict[str, Any]]) -> str:
             question_id = str(uuid.uuid4())
@@ -1057,6 +1315,7 @@ class JsonRpcHandler:
                 return "The user did not answer the questions within 15 minutes. Proceed with reasonable assumptions.If serious question wait to user send next message."
             finally:
                 self._pending_questions.pop(question_id, None)
+                self.notify("agent/interactionResolved", {"session_id": session_id, "interaction_id": question_id})
 
         # Auto-title session from first user prompt if still default
         if not is_auto_wake and (session.name in ("new-session", "Main Session") or session.name.startswith("Session ") or session.name.startswith("session-")):
@@ -1084,7 +1343,7 @@ class JsonRpcHandler:
         agent = Agent(
             session=session,
             profile=profile,
-            auto_approve=auto_approve,
+            auto_approve=False,
             on_tool_approval=_on_tool_approval,
             on_questions=_on_questions,
             reasoning_effort=reasoning_effort,
@@ -1092,13 +1351,17 @@ class JsonRpcHandler:
             model=model,
         )
         self._active_agents[session_id] = agent
+        agent.input_queue = self._inputs(session_id)
 
         async def _run_stream():
+            turn_checkpoint = None
             try:
                 # Reset turn snapshot flag and take pre-turn snapshot
                 session._turn_snapshotted = False
                 try:
                     p_path = Path(session.project_path)
+                    if not config.is_trusted(str(p_path)):
+                        raise ValueError("Workspace is not trusted")
                     await asyncio.to_thread(ensure_git_tracking, p_path)
                     snap_hash = await asyncio.to_thread(create_pre_edit_snapshot, p_path)
                     if snap_hash:
@@ -1106,11 +1369,9 @@ class JsonRpcHandler:
                         if not hasattr(session, "undo_stack") or session.undo_stack is None:
                             session.undo_stack = []
                         user_turn_idx = len(session.get_user_turn_indices())
-                        session.undo_stack.append({
-                            "snapshot_hash": snap_hash,
-                            "msg_count": len(session.messages),
-                            "turn_index": user_turn_idx,
-                        })
+                        turn_checkpoint = {"snapshot_hash": snap_hash, "msg_count": len(session.messages),
+                                           "turn_index": user_turn_idx}
+                        session.undo_stack.append(turn_checkpoint)
                         session.save()
                 except Exception as snap_err:
                     log.debug("Pre-edit snapshot skipped: %s", snap_err)
@@ -1122,10 +1383,18 @@ class JsonRpcHandler:
                     "session_id": session_id,
                     "prompt": prompt,
                     "turn_index": user_turn_idx,
+                    "input_id": params.get("input_id"),
+                    "image_uris": image_uris or [],
                 })
                 session.set_status("running")
                 async for event in agent.run(prompt, images=images, image_uris=image_uris):
-                    if isinstance(event, TextDelta):
+                    if isinstance(event, InputApplied):
+                        self.notify("agent/inputApplied", {
+                            "session_id": session_id, "input_id": event.input_id,
+                            "prompt": event.prompt, "image_uris": event.image_uris or [],
+                            "turn_index": event.turn_index,
+                        })
+                    elif isinstance(event, TextDelta):
                         if "[Context compacting" in event.text:
                             self.notify("session/compacting", {
                                 "session_id": session_id,
@@ -1309,10 +1578,19 @@ class JsonRpcHandler:
                             "error": event.error,
                         })
                     elif isinstance(event, Done):
+                        if event.outcome != "success":
+                            agent.input_queue.pause()
                         turn_files = self._extract_turn_files(session)
+                        if turn_checkpoint:
+                            turn_checkpoint["after_hash"] = await asyncio.to_thread(create_pre_edit_snapshot, Path(session.project_path))
+                            if turn_checkpoint["after_hash"]:
+                                from andromity.core.git_ops import checkpoint_changed_files
+                                turn_files = await asyncio.to_thread(checkpoint_changed_files,
+                                    get_repo(Path(session.project_path)), turn_checkpoint, session.project_path)
                         self.notify("agent/done", {
                             "session_id": session_id,
                             "usage": event.usage,
+                            "outcome": event.outcome,
                             "token_total": getattr(session, "token_total", 0),
                             "context_tokens": getattr(session, "context_tokens", 0),
                             "cost_usd": getattr(session, "cost_usd", 0.0),
@@ -1353,11 +1631,14 @@ class JsonRpcHandler:
                     "collaborators": getattr(session, "collaborators", []),
                 })
             except asyncio.CancelledError:
+                agent.input_queue.pause()
                 try:
                     agent.kill_subagents("cancelled")
                 except Exception:
                     pass
                 session.set_status("cancelled")
+                from andromity.telemetry import send_feature_used
+                send_feature_used("cancel_completed", session_id=session_id)
                 self.notify("agent/cancelled", {
                     "session_id": session_id,
                     "token_total": getattr(session, "token_total", 0),
@@ -1366,11 +1647,12 @@ class JsonRpcHandler:
                 })
                 log.info("Agent execution cancelled for session %s", session_id)
             except Exception as e:
+                agent.input_queue.pause()
                 session.set_status("error")
                 log.exception("Agent execution failed for session %s: %s", session_id, e)
                 self.notify("agent/error", {
                     "session_id": session_id,
-                    "error": str(e),
+                    "error": "The run could not finish. Pending messages are paused. Check your connection and provider settings, then retry.",
                 })
                 # Zero-PII error classification telemetry
                 try:
@@ -1392,11 +1674,17 @@ class JsonRpcHandler:
                 except Exception:
                     pass
             finally:
+                if turn_checkpoint:
+                    if len(session.get_user_turn_indices()) <= turn_checkpoint["turn_index"]:
+                        session.undo_stack.remove(turn_checkpoint)
+                    elif not turn_checkpoint.get("after_hash"):
+                        turn_checkpoint["after_hash"] = await asyncio.to_thread(create_pre_edit_snapshot, Path(session.project_path))
+                    session.save()
                 self._active_agents.pop(session_id, None)
 
         task = asyncio.create_task(_run_stream())
         self._running_tasks[session_id] = task
-        task.add_done_callback(lambda _: self._running_tasks.pop(session_id, None))
+        task.add_done_callback(lambda finished: asyncio.create_task(self._finish_pending(session_id, finished)))
 
         return {"status": "started", "session_id": session_id}
 
@@ -1424,6 +1712,8 @@ class JsonRpcHandler:
                 if p not in candidates:
                     candidates.append(p)
             for p in candidates:
+                if config.get_provider_config(p) and p in (preferred_prov, default_prov):
+                    return p, config.get_api_key(p)
                 if p == "ollama":
                     return p, config.get_api_key(p)
                 k = config.get_api_key(p)
@@ -1439,28 +1729,8 @@ class JsonRpcHandler:
         else:
             model_name = str(model)
 
-        p_conf = config.get_provider_config(provider_name)
-        base_url = p_conf.get("base_url") if p_conf and isinstance(p_conf, dict) else None
-
-        # Resolve LiteLLM provider prefixes so models route properly
-        if provider_name == "google":
-            litellm_model = f"gemini/{model_name}" if not model_name.startswith("gemini/") else model_name
-        elif provider_name == "ollama":
-            litellm_model = f"ollama_chat/{model_name}" if not (model_name.startswith("ollama/") or model_name.startswith("ollama_chat/")) else model_name
-            base_url = base_url or "http://localhost:11434"
-        elif provider_name == "openrouter":
-            clean = model_name.lstrip("~")
-            litellm_model = f"openrouter/{clean}" if not clean.startswith("openrouter/") else clean
-        elif provider_name == "nvidia":
-            litellm_model = f"nvidia_nim/{model_name}" if not model_name.startswith("nvidia_nim/") else model_name
-        elif p_conf and p_conf.get("type") and p_conf.get("type") != provider_name:
-            litellm_model = f"{p_conf.get('type')}/{model_name}"
-        else:
-            litellm_model = f"{provider_name}/{model_name}" if not model_name.startswith(f"{provider_name}/") else model_name
-
-        # Fast fail if provider requires key but none configured
-        if provider_name != "ollama" and not api_key:
-            raise RuntimeError(f"No API key configured for provider '{provider_name}'. Please configure it in Settings.")
+        from andromity.core.connections import provider_request
+        resolved = provider_request(provider_name, model_name)
 
         try:
             import sys, os, re
@@ -1479,15 +1749,8 @@ class JsonRpcHandler:
 
             messages = [{"role": "user", "content": prompt}]
             kwargs: Dict[str, Any] = {
-                "model": litellm_model,
-                "messages": messages,
-                "temperature": 0.2,
-                "max_tokens": 800,
+                **resolved, "messages": messages, "temperature": 0.2, "max_tokens": 800,
             }
-            if api_key:
-                kwargs["api_key"] = api_key
-            if base_url:
-                kwargs["api_base"] = base_url
 
             resp = await asyncio.wait_for(asyncio.to_thread(lambda: litellm.completion(**kwargs)), timeout=25)
             text = ""
@@ -1544,10 +1807,13 @@ class JsonRpcHandler:
                 if not args and len(item) > 3:
                     args = item[3]
                 if session_id and stored_sid and session_id != stored_sid:
-                    log.warning("Tool approval session mismatch: %s != %s", session_id, stored_sid)
+                    return {"success": False, "error": "Approval belongs to another session"}
                 session_id = session_id or stored_sid
             else:
                 fut = item
+
+            if fut.done():
+                return {"success": False, "error": "Approval already resolved"}
 
             # If user approved with session or permanent scope, update session and config allowlists
             if approved and session_id:
@@ -1557,24 +1823,19 @@ class JsonRpcHandler:
                         session = Session.load_by_id(session_id)
                     except Exception:
                         pass
+                if session is None or not config.is_trusted(session.project_path):
+                    return {"success": False, "error": "Workspace is untrusted"}
 
                 if tool_name in ("shell_exec", "shell_bg"):
                     cmd = str(args.get("command", "")).strip()
                     if cmd:
-                        try:
-                            import shlex
-                            prefix = shlex.split(cmd)[0]
-                        except Exception:
-                            prefix = cmd
                         if scope == "session" and session:
-                            session.allow_command(prefix)
                             session.allow_command(cmd)
                         elif scope in ("always", "project"):
                             existing = config.get("default", "allowed_commands", []) or []
-                            if prefix not in existing:
-                                config.set("default", "allowed_commands", list(existing) + [prefix])
+                            if cmd not in existing:
+                                config.set("default", "allowed_commands", list(existing) + [cmd])
                             if session:
-                                session.allow_command(prefix)
                                 session.allow_command(cmd)
 
                 elif tool_name == "fetch_url":
@@ -1594,6 +1855,7 @@ class JsonRpcHandler:
 
             if not fut.done():
                 fut.set_result(approved)
+                self.notify("agent/interactionResolved", {"session_id": session_id, "interaction_id": approval_id})
             return {"success": True, "approval_id": approval_id, "approved": approved, "scope": scope}
         return {"success": False, "error": "Approval ID not found or already resolved"}
 
@@ -1614,11 +1876,13 @@ class JsonRpcHandler:
             if isinstance(item, tuple):
                 stored_sid, fut = item
                 if session_id and stored_sid and session_id != stored_sid:
-                    log.warning("Question answer session mismatch: %s != %s", session_id, stored_sid)
+                    return {"success": False, "error": "Question belongs to another session"}
+                session_id = session_id or stored_sid
             else:
                 fut = item
             if not fut.done():
                 fut.set_result(answer_str)
+                self.notify("agent/interactionResolved", {"session_id": session_id, "interaction_id": question_id})
             return {"success": True, "question_id": question_id}
         return {"success": False, "error": "Question ID not found or already resolved"}
 
@@ -1626,6 +1890,7 @@ class JsonRpcHandler:
         session_id = params.get("session_id")
         if not session_id:
             raise ValueError("session_id is required")
+        self._inputs(session_id).pause()
 
         cancelled = False
         if session_id in self._active_agents:
@@ -1637,7 +1902,8 @@ class JsonRpcHandler:
         if session_id in self._running_tasks:
             task = self._running_tasks[session_id]
             if not task.done():
-                task.cancel()
+                if not task.cancelling():
+                    task.cancel()
                 cancelled = True
 
         # Resolve any pending futures specifically for this session
@@ -1662,15 +1928,21 @@ class JsonRpcHandler:
         all_cfg = config.to_dict() if hasattr(config, "to_dict") else {}
         user = config.get_user() if hasattr(config, "get_user") else {}
         from andromity.core.profiles import PROFILES
+        def_provider = config.get("default", "provider", "openrouter")
+        def_model = config.get("default", "model", "anthropic/claude-3.7-sonnet")
+        from andromity.core.reasoning import discover_model_reasoning_capability
+        model_cap = await asyncio.to_thread(discover_model_reasoning_capability, def_provider, def_model)
         return {
             "config": all_cfg,
-            "default_provider": config.get("default", "provider", "openrouter"),
-            "default_model": config.get("default", "model", "anthropic/claude-3.7-sonnet"),
+            "capabilities": {"input_queue": True, "steering": True, "custom_providers": True},
+            "default_provider": def_provider,
+            "default_model": def_model,
             "default_profile": config.get("default", "profile", "builder"),
             "available_profiles": list(PROFILES.keys()),
-            "available_reasoning_efforts": ["low", "medium", "high", "off"],
+            "available_reasoning_efforts": model_cap.supported_efforts,
+            "model_reasoning_capability": model_cap.to_dict(),
             "permission_mode": config.get("default", "permission_mode", "safe"),
-            "reasoning_effort": config.get("default", "reasoning_effort", "medium"),
+            "reasoning_effort": config.get("default", "reasoning_effort", "auto"),
             "user_name": user.get("name", ""),
             "user_email": user.get("email", ""),
             "max_subagents": config.get("subagents", "max_parallel", 3),
@@ -1717,10 +1989,14 @@ class JsonRpcHandler:
 
         # If permission_mode is switched to trust/full/yolo, auto-approve any pending approvals!
         if key in ("permission_mode", "mode") and str(value).lower() in ("trust", "full", "yolo"):
-            for app_id, fut in list(self._pending_approvals.items()):
+            for app_id, item in list(self._pending_approvals.items()):
+                sid, fut = (item[0], item[1]) if isinstance(item, tuple) else (None, item)
+                session = self._active_sessions.get(sid)
+                if session is None or not config.is_trusted(session.project_path):
+                    continue
                 if not fut.done():
                     fut.set_result(True)
-            self._pending_approvals.clear()
+                    self.notify("agent/interactionResolved", {"session_id": sid, "interaction_id": app_id})
 
         return {"success": True, "section": section, "key": key, "value": value}
 
@@ -1742,8 +2018,23 @@ class JsonRpcHandler:
         force_refresh = params.get("refresh", False) if params else False
         models = []
         try:
-            providers_to_check = [target_provider] if target_provider else list(MODEL_CATALOG.keys())
+            from andromity.core.connections import provider_info
+            providers_to_check = [target_provider] if target_provider else [p["id"] for p in provider_info()]
             pinned_list = config.get_pinned_models()
+
+            async def _discover_connection(p: str) -> None:
+                saved = config.get_provider_config(p) or {}
+                if not force_refresh and get_cached_live_models(p):
+                    return
+                if force_refresh or (saved.get("type") in ("openai", "anthropic") and saved.get("base_url")):
+                    try:
+                        await asyncio.wait_for(asyncio.to_thread(
+                            fetch_live_models_sync, p, api_key=config.get_api_key(p), base_url=saved.get("base_url"),
+                        ), timeout=6.0)
+                    except Exception:
+                        pass
+
+            await asyncio.gather(*[_discover_connection(p) for p in providers_to_check])
 
             def _is_pinned(m_id: str, p_key: str) -> bool:
                 return any(p.get("id") == m_id and (not p.get("provider") or p.get("provider") == p_key) for p in pinned_list)
@@ -1759,10 +2050,11 @@ class JsonRpcHandler:
                     pass
 
             for p in providers_to_check:
-                cached = get_cached_live_models(p) if not force_refresh else []
+                cached = get_cached_live_models(p)
                 if p == "openrouter" and openrouter_cached and not cached:
                     cached = openrouter_cached
 
+                from andromity.core.reasoning import get_model_reasoning_capability
                 if cached:
                     for m in cached:
                         m_id = m.get("id")
@@ -1774,13 +2066,15 @@ class JsonRpcHandler:
                             "context": m.get("context", ""),
                             "context_limit": m.get("context_limit") or get_context_limit_for_model(p, m_id),
                             "pricing": m.get("pricing", ""),
-                            "is_free": m.get("is_free", False),
+                            "is_free": m.get("is_free", False) or m_id.lower().endswith(":free"),
                             "tags": m.get("tags", []),
                             "is_pinned": _is_pinned(m_id, p),
+                            "reasoning": get_model_reasoning_capability(p, m_id, m).to_dict(),
                         })
                 else:
                     # Fallback to catalog instantly
-                    for m in MODEL_CATALOG.get(p, {}).get("models", []):
+                    from andromity.core.models import get_models_for_provider
+                    for m in get_models_for_provider(p):
                         m_id = m.get("id")
                         ctx = get_context_limit_for_model(p, m_id)
                         models.append({
@@ -1791,18 +2085,28 @@ class JsonRpcHandler:
                             "context": m.get("context", ""),
                             "context_limit": ctx,
                             "pricing": m.get("pricing", ""),
-                            "is_free": False,
-                            "tags": [],
+                            "is_free": m.get("is_free", False) or m_id.lower().endswith(":free"),
+                            "tags": m.get("tags", []),
                             "is_pinned": _is_pinned(m_id, p),
+                            "reasoning": get_model_reasoning_capability(p, m_id, m).to_dict(),
                         })
         except Exception as e:
             log.warning("Error listing models: %s", e)
         return models
 
+    async def rpc_model_reasoning_capability(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Return the genuine reasoning capability for a given provider and model."""
+        provider = params.get("provider", "openrouter") if params else "openrouter"
+        model_id = params.get("model", "") if params else ""
+        from andromity.core.reasoning import discover_model_reasoning_capability
+        cap = await asyncio.to_thread(discover_model_reasoning_capability, provider, model_id)
+        return cap.to_dict()
+
     async def rpc_config_refresh_models(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """Force refresh live models in parallel with strict timeout and resilient fallback."""
         target_provider = params.get("provider") if params else None
-        providers = [target_provider] if target_provider else ["andromity", "openrouter", "ollama", "anthropic", "openai", "google", "groq", "nvidia", "deepseek"]
+        from andromity.core.connections import provider_info
+        providers = [target_provider] if target_provider else [p["id"] for p in provider_info()]
 
         async def _fetch_one(p: str):
             api_key = config.get_api_key(p)
@@ -1811,7 +2115,7 @@ class JsonRpcHandler:
             if p_conf and isinstance(p_conf, dict):
                 base_url = p_conf.get("base_url")
             try:
-                timeout_val = 1.5 if p == "ollama" else 3.0
+                timeout_val = 2.0 if p == "ollama" else 6.0
                 return await asyncio.wait_for(
                     asyncio.to_thread(fetch_live_models_sync, p, api_key=api_key, base_url=base_url),
                     timeout=timeout_val
@@ -1820,10 +2124,10 @@ class JsonRpcHandler:
                 return []
 
         try:
-            # Run all provider fetches in parallel with an overall timeout of 5 seconds max
+            # Fetch providers in parallel while keeping the model hub responsive.
             await asyncio.wait_for(
                 asyncio.gather(*[_fetch_one(p) for p in providers], return_exceptions=True),
-                timeout=5.0
+                timeout=7.0
             )
         except Exception as e:
             log.warning("Parallel model refresh encountered timeout or error: %s", e)
@@ -1895,6 +2199,21 @@ class JsonRpcHandler:
             log.error("Failed to install skill %s: %s", name, e)
             return {"success": False, "error": str(e)}
 
+    async def rpc_skills_remove(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        project_path = params.get("project_path") or str(Path.cwd().resolve())
+        if not config.is_trusted(project_path):
+            return {"success": False, "error": "Trust this workspace before removing skills."}
+        try:
+            from andromity.core.skills import SkillsManager
+            name = params.get("name", "")
+            path = params.get("path")
+            if not path:
+                return {"success": False, "error": "Select an installed skill to remove."}
+            removed = await asyncio.to_thread(SkillsManager(project_path).uninstall, name, path)
+            return {"success": removed, "name": name}
+        except (ValueError, OSError):
+            return {"success": False, "error": "Could not remove this skill. Refresh the list and check folder permissions."}
+
 
     async def rpc_usage_get(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Get aggregate usage statistics and cost analytics (UsageTracker-backed)."""
@@ -1908,11 +2227,37 @@ class JsonRpcHandler:
                 time_range = "all"
             tracker = UsageTracker()
             summary = tracker.get_summary(time_range=time_range, project_path=project_path)
+            # Defaults preserve the existing latest-100 response for older clients.
+            try:
+                limit = max(1, min(100, int(params.get("limit", 100))))
+                offset = max(0, int(params.get("offset", 0)))
+            except (TypeError, ValueError, OverflowError):
+                limit, offset = 100, 0
+            if offset >= len(summary.sessions):
+                offset = max(0, (len(summary.sessions) - 1) // limit * limit)
+            from datetime import datetime, timezone
+            hourly_activity: Dict[str, Dict[str, Any]] = {}
+            for session in summary.sessions:
+                try:
+                    stamp = datetime.fromisoformat(session.updated_at or session.created_at)
+                    if stamp.tzinfo is None:
+                        stamp = stamp.replace(tzinfo=timezone.utc)
+                    hour = stamp.astimezone(timezone.utc).strftime("%Y-%m-%dT%H")
+                except (ValueError, TypeError):
+                    continue
+                bucket = hourly_activity.setdefault(hour, {"tokens": 0, "cost": 0.0, "count": 0})
+                bucket["tokens"] += session.tokens
+                bucket["cost"] += session.cost_usd
+                bucket["count"] += 1
             result: Dict[str, Any] = {
                 "total_tokens": summary.total_tokens,
                 "total_cost_usd": summary.total_cost_usd,
                 "total_sessions": summary.total_sessions,
                 "daily_activity": summary.daily_activity,
+                "hourly_activity": hourly_activity,
+                "sessions_total": len(summary.sessions),
+                "sessions_offset": offset,
+                "sessions_limit": limit,
                 "sessions": [
                     {
                         "id": s.session_id,
@@ -1925,7 +2270,7 @@ class JsonRpcHandler:
                         "updated_at": s.updated_at,
                         "project_path": s.project_path,
                     }
-                    for s in summary.sessions[:100]
+                    for s in summary.sessions[offset:offset + limit]
                 ],
                 "by_model": summary.by_model,
                 "by_provider": summary.by_provider,
@@ -1941,6 +2286,7 @@ class JsonRpcHandler:
         except Exception as exc:
             log.warning("usage.get error: %s", exc)
             return {
+                "error": "Could not load usage. Please retry.",
                 "total_tokens": 0,
                 "total_cost_usd": 0.0,
                 "total_sessions": 0,
@@ -1966,18 +2312,25 @@ class JsonRpcHandler:
         return {"success": True, "authenticated": False}
 
     async def rpc_config_list_providers(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
-        providers = [
-            {"id": "andromity", "name": "Andromity Auto (Free Trial)", "has_key": True, "portal": "https://agenticmarket.dev"},
-            {"id": "openrouter", "name": "OpenRouter", "has_key": bool(config.get_api_key("openrouter")), "portal": "https://openrouter.ai/keys"},
-            {"id": "anthropic", "name": "Anthropic (Claude)", "has_key": bool(config.get_api_key("anthropic")), "portal": "https://console.anthropic.com/settings/keys"},
-            {"id": "openai", "name": "OpenAI (GPT / o-series)", "has_key": bool(config.get_api_key("openai")), "portal": "https://platform.openai.com/api-keys"},
-            {"id": "google", "name": "Google Gemini", "has_key": bool(config.get_api_key("google")), "portal": "https://aistudio.google.com/app/apikey"},
-            {"id": "deepseek", "name": "DeepSeek", "has_key": bool(config.get_api_key("deepseek")), "portal": "https://platform.deepseek.com/api_keys"},
-            {"id": "groq", "name": "Groq Cloud", "has_key": bool(config.get_api_key("groq")), "portal": "https://console.groq.com/keys"},
-            {"id": "nvidia", "name": "NVIDIA NIM", "has_key": bool(config.get_api_key("nvidia")), "portal": "https://build.nvidia.com/"},
-            {"id": "ollama", "name": "Ollama (Local)", "has_key": True, "portal": "https://ollama.com"},
-        ]
-        return providers
+        from andromity.core.connections import provider_info
+        return provider_info()
+
+    async def rpc_config_save_provider(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        name = config.save_provider(params)
+        return {"success": True, "provider": name, "providers": await self.rpc_config_list_providers()}
+
+    async def rpc_config_delete_provider(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        config.delete_provider(params["provider"])
+        return {"success": True, "providers": await self.rpc_config_list_providers()}
+
+    async def rpc_config_test_provider(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from andromity.core.connections import connection_failure, test_connection
+        try:
+            return await asyncio.wait_for(test_connection(params["provider"], params.get("model", "")), 30)
+        except asyncio.TimeoutError:
+            return connection_failure("timeout")
+        except Exception:
+            return connection_failure("generic")
 
     async def rpc_system_info(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Return system runtime details, version, python executable, tools count, etc."""
@@ -2088,273 +2441,120 @@ class JsonRpcHandler:
 
     # ── Git & Snapshots ─────────────────────────────────────────────────────────
 
-    async def rpc_git_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _review_repo(self, params: Dict[str, Any], mutate: bool = False):
         project_path = Path(params.get("project_path") or Path.cwd()).resolve()
+        if not config.is_trusted(str(project_path)):
+            raise ValueError("Trust this workspace before reviewing or reverting files.")
         repo = get_repo(project_path)
-        if not repo:
-            return {"is_git": False, "branch": None, "dirty": False}
+        if mutate and repo:
+            root = Path(repo.working_tree_dir).resolve()
+            if str(root) in self._git_mutating_roots:
+                raise ValueError("Another file restoration is in progress. Wait for it to finish.")
+            for sid, task in self._running_tasks.items():
+                session = self._active_sessions.get(sid)
+                if not task.done() and session:
+                    active_repo = get_repo(Path(session.project_path))
+                    if active_repo and Path(active_repo.working_tree_dir).resolve() == root:
+                        raise ValueError("Wait for all agent turns in this repository to finish before reverting.")
+        return repo
 
-        untracked: List[str] = []
-        modified: List[str] = []
+    async def rpc_git_status(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from andromity.core.git_ops import status_entries
+        repo = self._review_repo(params)
         try:
-            raw = repo.git.status("--porcelain", "-uall")
-            for line in raw.splitlines():
-                if len(line) >= 4:
-                    code = line[:2]
-                    p = line[3:].strip().replace("\\", "/")
-                    if " -> " in p:
-                        p = p.split(" -> ")[-1]
-                    if code.startswith("??"):
-                        untracked.append(p)
-                    else:
-                        modified.append(p)
-        except Exception:
-            pass
+            if not repo:
+                return {"is_git": False, "branch": None, "dirty": False, "files": []}
+            entries = await asyncio.to_thread(status_entries, repo)
+            project = Path(params.get("project_path") or Path.cwd()).resolve()
+            entries = [entry for entry in entries
+                       if (Path(repo.working_tree_dir) / entry["path"]).resolve().is_relative_to(project)]
+            branch = "detached"
+            try:
+                branch = repo.active_branch.name
+            except Exception:
+                pass
+            return {"is_git": True, "branch": branch, "dirty": bool(entries), "files": entries,
+                    "repository_root": str(Path(repo.working_tree_dir).resolve()),
+                    "untracked_files": [e["path"] for e in entries if e["status"] == "U"],
+                    "modified_files": [e["path"] for e in entries if e["status"] != "U"]}
+        finally:
+            if repo:
+                await asyncio.to_thread(repo.close)
 
-        branch_name = "detached"
-        try:
-            if not repo.head.is_detached:
-                branch_name = str(repo.active_branch)
-        except Exception:
-            pass
-
-        return {
-            "is_git": True,
-            "branch": branch_name,
-            "dirty": bool(untracked or modified),
-            "untracked_files": untracked,
-            "modified_files": modified,
-        }
 
     async def rpc_git_diff(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        project_path = Path(params.get("project_path") or Path.cwd()).resolve()
-        repo = get_repo(project_path)
-        if not repo:
-            return {"diff": ""}
-
+        from andromity.core.git_review import review_base
+        repo = self._review_repo(params)
         try:
-            diff_text = repo.git.diff("HEAD")
-        except Exception:
-            diff_text = repo.git.diff()
-        return {"diff": diff_text}
+            return {"diff": await asyncio.to_thread(repo.git.diff, "--no-ext-diff", "--no-renames", review_base(repo)) if repo else ""}
+        finally:
+            if repo:
+                await asyncio.to_thread(repo.close)
+
 
     async def rpc_git_show_file(self, params: Dict[str, Any]) -> Dict[str, str]:
-        """Return the content of a file at a given git ref (default HEAD or index)."""
-        project_path = Path(params.get("project_path") or Path.cwd()).resolve()
-        file_path = params.get("path", "")
-        ref = params.get("ref", "HEAD")
-        if not file_path:
-            raise ValueError("path is required")
-
-        repo = get_repo(project_path)
-        if not repo:
-            raise ValueError("Not a git repository")
-
-        p = Path(file_path)
-        if p.is_absolute():
-            try:
-                rel = p.resolve().relative_to(project_path.resolve()).as_posix()
-            except ValueError:
-                rel = p.as_posix()
-        else:
-            rel = p.as_posix()
-        content = ""
-
-        if ref == "EMPTY":
-            return {"content": ""}
-
-        # 1. Try reading from the Git Index first (handles staged files that aren't in HEAD yet)
+        from andromity.core.git_review import show_file
+        repo = self._review_repo(params)
         try:
-            content = repo.git.show(f":{rel}")
-        except Exception:
-            pass
+            if not repo:
+                raise ValueError("Not a Git repository.")
+            self._review_file_path(repo, params)
+            return {"content": await asyncio.to_thread(show_file, repo, params.get("path", ""), params.get("ref", "HEAD"))}
+        finally:
+            if repo:
+                await asyncio.to_thread(repo.close)
 
-        # 2. If not in index, try reading from the requested ref (e.g. HEAD)
-        if not content and ref and ref != "SNAPSHOT":
-            try:
-                content = repo.git.show(f"{ref}:{rel}")
-            except Exception:
-                pass
 
-        # 3. If still empty, try reading from the latest pre-turn snapshot
-        if not content:
-            try:
-                snaps = list_snapshots(repo, limit=1)
-                if snaps:
-                    content = repo.git.show(f"{snaps[0]['hash']}:{rel}")
-            except Exception:
-                pass
-
-        return {"content": content}
-
-    async def rpc_git_file_diff(self, params: Dict[str, Any]) -> Dict[str, str]:
-        """Return the unified diff of a single file against index or HEAD."""
-        project_path = Path(params.get("project_path") or Path.cwd()).resolve()
-        file_path = params.get("path", "")
-        if not file_path:
-            raise ValueError("path is required")
-
-        repo = get_repo(project_path)
-        if not repo:
-            return {"diff": ""}
-
-        p = Path(file_path)
-        if p.is_absolute():
-            try:
-                rel = p.resolve().relative_to(project_path.resolve()).as_posix()
-            except ValueError:
-                rel = p.as_posix()
-        else:
-            rel = p.as_posix()
-        diff_text = ""
-        # 1. Unstaged changes in working tree vs index
+    async def rpc_git_file_diff(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from andromity.core.git_review import file_diff
+        repo = self._review_repo(params)
         try:
-            diff_text = repo.git.diff("--", rel)
-        except Exception:
-            pass
-        # 2. If empty, staged changes vs HEAD
-        if not diff_text:
-            try:
-                diff_text = repo.git.diff("--cached", "--", rel)
-            except Exception:
-                pass
-        # 3. If still empty, working tree vs HEAD
-        if not diff_text:
-            try:
-                diff_text = repo.git.diff("HEAD", "--", rel)
-            except Exception:
-                pass
-        return {"diff": diff_text}
+            if repo:
+                self._review_file_path(repo, params)
+            return await asyncio.to_thread(file_diff, repo, params.get("path", "")) if repo else {"diff": ""}
+        finally:
+            if repo:
+                await asyncio.to_thread(repo.close)
+
 
     async def rpc_git_diff_numstat(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Return numstat diff (+additions, -deletions) for files against index or HEAD."""
-        project_path = Path(params.get("project_path") or Path.cwd()).resolve()
-        repo = get_repo(project_path)
-        if not repo:
-            return {"files": {}}
-
-        files_stats: Dict[str, Dict[str, int]] = {}
-
-        # 1. Unstaged changes in working tree (Working tree vs Index)
+        from andromity.core.git_review import numstat
+        repo = self._review_repo(params)
         try:
-            unstaged = repo.git.diff("--numstat")
-            for line in unstaged.splitlines():
-                parts = line.strip().split("\t")
-                if len(parts) >= 3:
-                    add = int(parts[0]) if parts[0].isdigit() else 0
-                    dele = int(parts[1]) if parts[1].isdigit() else 0
-                    rel_p = parts[2].replace("\\", "/")
-                    files_stats[rel_p] = {"additions": add, "deletions": dele}
-        except Exception:
-            pass
+            stats = await asyncio.to_thread(numstat, repo) if repo else {}
+            project = Path(params.get("project_path") or Path.cwd()).resolve()
+            return {"files": {name: value for name, value in stats.items()
+                              if (Path(repo.working_tree_dir) / name).resolve().is_relative_to(project)}}
+        finally:
+            if repo:
+                await asyncio.to_thread(repo.close)
 
-        # 2. Staged changes in index (Index vs HEAD) for files not already in unstaged changes
-        try:
-            staged = repo.git.diff("--cached", "--numstat")
-            for line in staged.splitlines():
-                parts = line.strip().split("\t")
-                if len(parts) >= 3:
-                    add = int(parts[0]) if parts[0].isdigit() else 0
-                    dele = int(parts[1]) if parts[1].isdigit() else 0
-                    rel_p = parts[2].replace("\\", "/")
-                    if rel_p not in files_stats:
-                        files_stats[rel_p] = {"additions": add, "deletions": dele}
-        except Exception:
-            pass
-
-        # 3. Untracked files (using -uall to discover files in subdirectories)
-        try:
-            raw_untracked = repo.git.status("--porcelain", "-uall")
-            BINARY_EXTENSIONS = {
-                ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".svgz",
-                ".pdf", ".zip", ".tar", ".gz", ".7z", ".rar",
-                ".exe", ".dll", ".so", ".dylib", ".bin", ".dat",
-                ".safetensors", ".gguf", ".onnx", ".pt", ".pth", ".pkl",
-                ".mp3", ".mp4", ".wav", ".avi", ".mov", ".webm",
-                ".woff", ".woff2", ".ttf", ".eot", ".otf"
-            }
-            for line in raw_untracked.splitlines():
-                if line.startswith("?? "):
-                    untracked_rel = line[3:].strip().replace("\\", "/")
-                    if untracked_rel in files_stats:
-                        continue
-                    p = project_path / untracked_rel
-                    if p.is_file():
-                        try:
-                            # Skip known binary extensions immediately
-                            if p.suffix.lower() in BINARY_EXTENSIONS:
-                                files_stats[untracked_rel] = {"additions": 0, "deletions": 0}
-                                continue
-
-                            st = p.stat()
-                            # For files > 500KB, avoid line-by-line reading to prevent freezing
-                            if st.st_size > 500_000:
-                                files_stats[untracked_rel] = {"additions": 1, "deletions": 0}
-                                continue
-
-                            # Quick binary check & fast byte count for text
-                            with p.open("rb") as fb:
-                                chunk = fb.read(4096)
-                                if b"\0" in chunk:
-                                    files_stats[untracked_rel] = {"additions": 0, "deletions": 0}
-                                    continue
-                                rest = fb.read()
-                                line_count = chunk.count(b"\n") + rest.count(b"\n")
-                                files_stats[untracked_rel] = {"additions": max(1, line_count), "deletions": 0}
-                        except Exception:
-                            files_stats[untracked_rel] = {"additions": 0, "deletions": 0}
-        except Exception:
-            pass
-        return {"files": files_stats}
 
     async def rpc_git_revert_file(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Safely revert local changes to a file (untracked or tracked)."""
-        project_path = Path(params.get("project_path") or Path.cwd()).resolve()
-        file_path = params.get("path", "")
-        if not file_path:
-            raise ValueError("path is required")
-
-        repo = get_repo(project_path)
-        p = Path(file_path)
-        if p.is_absolute():
-            abs_path = p.resolve()
+        from andromity.core.git_review import revert_file
+        from andromity.core.git_ops import run_restoration
+        repo = self._review_repo(params, mutate=True)
+        try:
+            if not repo:
+                raise ValueError("Not a Git repository. No files were changed.")
+            self._review_file_path(repo, params)
+            root = str(Path(repo.working_tree_dir).resolve())
+            self._git_mutating_roots.add(root)
             try:
-                rel = abs_path.relative_to(project_path.resolve()).as_posix()
-            except ValueError:
-                rel = p.as_posix()
-        else:
-            abs_path = (project_path / file_path).resolve()
-            rel = p.as_posix()
+                return await run_restoration(revert_file, repo, params.get("path", ""))
+            finally:
+                self._git_mutating_roots.discard(root)
+        finally:
+            if repo:
+                await asyncio.to_thread(repo.close)
 
-        is_tracked = False
-        if repo:
-            try:
-                tracked_out = repo.git.ls_files(rel)
-                is_tracked = bool(tracked_out.strip())
-            except Exception:
-                is_tracked = False
 
-        if is_tracked and repo:
-            try:
-                repo.git.reset("HEAD", "--", rel)
-            except Exception:
-                pass
-            try:
-                repo.git.checkout("HEAD", "--", rel)
-            except Exception:
-                pass
-            return {"success": True, "action": "checkout", "path": rel}
-        else:
-            if abs_path.exists():
-                if abs_path.is_file() or abs_path.is_symlink():
-                    abs_path.unlink()
-                elif abs_path.is_dir():
-                    import shutil
-                    shutil.rmtree(abs_path)
-                return {"success": True, "action": "deleted", "path": rel}
-            return {"success": True, "action": "none", "path": rel}
-
-    # ── Cron & Scheduled Jobs ───────────────────────────────────────────────────
+    def _review_file_path(self, repo, params: Dict[str, Any]) -> None:
+        from andromity.core.git_ops import repository_path
+        full, _ = repository_path(repo, params.get("path", ""))
+        project = Path(params.get("project_path") or Path.cwd()).resolve()
+        if not full.resolve().is_relative_to(project):
+            raise ValueError("Choose a file inside the trusted workspace.")
 
     def _get_or_create_cron_scheduler(self, project_path: str):
         if project_path not in self._cron_schedulers:
@@ -2369,6 +2569,10 @@ class JsonRpcHandler:
 
     def _make_cron_approval(self, cron_job):
         async def _approval(tool_name: str, args: dict) -> bool:
+            cron_proj = getattr(cron_job, "project_path", None)
+            if cron_proj and not config.is_trusted(cron_proj):
+                if tool_name in ("write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill", "spawn_subagent"):
+                    return False
             if cron_job.mode == "yolo":
                 return True
             from andromity.core.security import is_sensitive_path
@@ -2426,23 +2630,19 @@ class JsonRpcHandler:
             pass
 
         # ── Trust Governance Gate ──────────────────────────────────────────────
-        from andromity.core.session import normalize_project_path
-        trusted_projects = config.get("trust", "trusted_projects", [])
-        if project_path and trusted_projects:
-            norm_path = normalize_project_path(project_path)
-            if norm_path not in [normalize_project_path(p) for p in trusted_projects]:
-                error_msg = f"Workspace folder is untrusted. Trust this workspace in Andromity to allow autonomous cron runs."
-                run.status = "failed"
-                run.error = error_msg
-                run.finished_at = datetime.now(timezone.utc).isoformat()
-                run_store.save_run(run)
-                self.notify("cron/run_completed", {"job_id": job.id, "run": run.to_dict(), "job": job.to_dict()})
-                return run.to_dict()
+        if project_path and not config.is_trusted(project_path):
+            error_msg = f"Workspace folder is untrusted. Trust this workspace in Andromity to allow autonomous cron runs."
+            run.status = "failed"
+            run.error = error_msg
+            run.finished_at = datetime.now(timezone.utc).isoformat()
+            run_store.save_run(run)
+            self.notify("cron/run_completed", {"job_id": job.id, "run": run.to_dict(), "job": job.to_dict()})
+            return run.to_dict()
 
         agent = Agent(
             session=cron_session,
             profile="builder",
-            auto_approve=(job.mode in ("trust", "yolo", "full")),
+            auto_approve=False,
             on_tool_approval=self._make_cron_approval(job),
             reasoning_effort="medium",
             provider=job.provider,
@@ -2679,7 +2879,7 @@ class JsonRpcHandler:
 
         last_user_idx = -1
         for i in range(len(session.messages) - 1, -1, -1):
-            if session.messages[i].get("role") == "user":
+            if session.messages[i].get("role") == "user" and not session.messages[i].get("steering"):
                 last_user_idx = i
                 break
 
@@ -2767,34 +2967,8 @@ class JsonRpcHandler:
             if not provider or not model:
                 return
 
-            provider_cfg = config.get_provider_config(provider)
-            base_url = None
-            api_key = config.get_api_key(provider)
-
-            if provider == "ollama":
-                litellm_model = f"ollama_chat/{model}" if not (model.startswith("ollama/") or model.startswith("ollama_chat/")) else model
-                base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "http://localhost:11434"
-            elif provider == "google":
-                litellm_model = f"gemini/{model}" if not model.startswith("gemini/") else model
-            elif provider == "openrouter":
-                litellm_model = f"openrouter/{model}" if not model.startswith("openrouter/") else model
-            elif provider == "nvidia":
-                litellm_model = f"nvidia_nim/{model}" if not model.startswith("nvidia_nim/") else model
-            elif provider == "andromity":
-                clean_model = model or "auto"
-                litellm_model = f"openai/{clean_model}"
-                base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "https://gateway.agenticmarket.dev/v1"
-                if not api_key:
-                    api_key = "anonymous_trial"
-            else:
-                litellm_model = f"{provider}/{model}" if not model.startswith(f"{provider}/") else model
-                base_url = provider_cfg.get("base_url") if provider_cfg else None
-
-            kwargs = {"model": litellm_model, "stream": False}
-            if api_key:
-                kwargs["api_key"] = api_key
-            if base_url:
-                kwargs["api_base"] = base_url
+            from andromity.core.connections import provider_request
+            kwargs = {**provider_request(provider, model), "stream": False}
 
             messages = [
                 {"role": "system", "content": """You are a title generator. You output ONLY a thread title. Nothing else.
@@ -2849,9 +3023,66 @@ Your output must be:
                         "context_tokens": session.context_tokens,
                     })
         except Exception as e:
-            log.debug("Failed to generate AI session name: %s", e)
+            log.debug("Failed to generate AI session name: %s (HTTP %s)", type(e).__name__, getattr(e, "status_code", "unknown"))
 
     # ── MCP & Skills ────────────────────────────────────────────────────────────
+
+    async def rpc_mcp_add(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        project_path = params.get("project_path") or str(Path.cwd().resolve())
+        if not config.is_trusted(project_path):
+            return {"success": False, "error": "Trust this workspace before adding MCP servers."}
+        name = params.get("name")
+        conf = params.get("config")
+        if not isinstance(name, str) or not name.strip() or not isinstance(conf, dict):
+            return {"success": False, "error": "A server name and configuration are required."}
+        from andromity.core.mcp import MCPClientManager
+        if name in MCPClientManager(project_path).load_config().get("mcpServers", {}):
+            return {"success": False, "error": "That server name already exists. Choose another name."}
+        command = conf.get("command")
+        url = conf.get("url") or conf.get("serverUrl")
+        from urllib.parse import urlparse
+        if bool(command) == bool(url) or (command and not isinstance(command, str)):
+            return {"success": False, "error": "Specify either a command or a remote HTTP URL."}
+        if url and (not isinstance(url, str) or urlparse(url).scheme not in ("http", "https") or not urlparse(url).netloc):
+            return {"success": False, "error": "Enter a valid HTTP or HTTPS server URL."}
+        if not isinstance(conf.get("disabled", False), bool):
+            return {"success": False, "error": "disabled must be true or false."}
+        if not isinstance(conf.get("args", []), list) or any(not isinstance(a, str) for a in conf.get("args", [])):
+            return {"success": False, "error": "Command arguments must be a JSON array of strings."}
+        for key in ("headers", "env"):
+            values = conf.get(key, {})
+            if not isinstance(values, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in values.items()):
+                return {"success": False, "error": "Headers and environment values must be strings."}
+        oauth_config = conf.get("oauth", {})
+        if not isinstance(oauth_config, dict) or any(not isinstance(oauth_config.get(key, ""), str) for key in ("client_id", "client_secret")):
+            return {"success": False, "error": "OAuth client credentials must be strings."}
+        if not config.add_mcp_server(project_path, name, conf):
+            return {"success": False, "error": "Could not save MCP configuration. Check the file and folder permissions."}
+        mgr = await self._ensure_mcp_started(project_path)
+        if name not in mgr.server_status:
+            await mgr.start_server(name)
+        status = dict(mgr.server_status.get(name, {}))
+        self.notify("mcp/statusChanged", {"name": name, "status": status})
+        return {"success": True, "name": name, "status": status.get("status", "unknown")}
+
+    async def rpc_mcp_remove(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        project_path = params.get("project_path") or str(Path.cwd().resolve())
+        if not config.is_trusted(project_path):
+            return {"success": False, "error": "Trust this workspace before removing MCP servers."}
+        name = params.get("name")
+        if not isinstance(name, str) or not name:
+            return {"success": False, "error": "Select an MCP server to remove."}
+        if not config.remove_mcp_server(project_path, name):
+            return {"success": False, "error": "Could not remove this server. Refresh the list and check folder permissions."}
+        mgr = self._get_mcp_manager(project_path)
+        await mgr.stop_server(name)
+        from andromity.core.oauth import clear_token
+        clear_token(name)
+        # A lower-priority config may contain another entry with the same name.
+        if name in mgr.load_config().get("mcpServers", {}):
+            await mgr.start_server(name)
+        self.notify("mcp/statusChanged", {"name": name, "status": dict(mgr.server_status.get(name, {}))})
+        return {"success": True, "name": name}
 
     async def rpc_mcp_list_servers(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """Return a list of MCP server objects with live status, tool counts, and error details."""
@@ -2862,7 +3093,7 @@ Your output must be:
             # Prefer daemon's own manager, fallback to global tools manager
             live_manager = self._mcp_manager or getattr(_tools_mod, "_mcp_manager", None)
             # Ensure manager is started at least once so status is live, but don't block on error
-            if live_manager is None:
+            if not self._mcp_started or params.get("project_path"):
                 try:
                     # lazy start for first list call
                     live_manager = await self._ensure_mcp_started(params.get("project_path"))
@@ -2893,7 +3124,7 @@ Your output must be:
                 session = live_sessions.get(name)
                 tools_count = len(session.tools) if session and hasattr(session, "tools") else status_entry.get("tools", 0)
                 status = status_entry.get("status", "unknown")
-                command = srv_conf.get("command") or srv_conf.get("serverUrl") or ""
+                command = srv_conf.get("command") or srv_conf.get("serverUrl") or srv_conf.get("url") or ""
                 args = srv_conf.get("args", [])
                 result.append({
                     "name": name,
@@ -2901,9 +3132,12 @@ Your output must be:
                     "args": args,
                     "status": status,
                     "tools_count": tools_count,
+                    "tools": [{"name": tool.name, "description": tool.description}
+                              for tool in session.tools] if session and hasattr(session, "tools") else [],
                     "error": status_entry.get("error") or srv_conf.get("error") or None,
                     "error_detail": status_entry.get("error_detail") or None,
                     "disabled": srv_conf.get("disabled", False),
+                    "remote": bool(srv_conf.get("serverUrl") or srv_conf.get("url") or "mcp-remote" in args or "mcp-remote" in str(srv_conf.get("command", ""))),
                     "updated_at": status_entry.get("updated_at") or None,
                 })
             return result
@@ -3032,6 +3266,8 @@ Your output must be:
                 raise ValueError("name is required")
 
             from andromity.core.mcp import MCPClientManager
+            if not config.is_trusted(project_path):
+                return {"success": False, "error": "Trust this workspace before authenticating MCP servers."}
             tmp_mgr = MCPClientManager(project_path)
             cfg = tmp_mgr.load_config().get("mcpServers", {}).get(name, {})
             server_url = cfg.get("serverUrl") or cfg.get("url") or ""
@@ -3049,12 +3285,23 @@ Your output must be:
 
             from andromity.core.oauth import full_oauth_flow
 
+            progress = []
             def _status_cb(msg: str):
+                progress.append(msg)
                 self.notify("mcp/authProgress", {"name": name, "status": msg})
 
-            token = await full_oauth_flow(name, server_url, _status_cb)
+            if params.get("access_token"):
+                from andromity.core.oauth import store_token
+                token = params["access_token"]
+                if not isinstance(token, str) or not token.strip():
+                    return {"success": False, "error": "Enter a valid access token."}
+                store_token(name, {"access_token": token.strip()}, "", "")
+            else:
+                token = await full_oauth_flow(name, server_url, _status_cb,
+                                              client_id=cfg.get("oauth", {}).get("client_id"),
+                                              client_secret=cfg.get("oauth", {}).get("client_secret"))
             if not token:
-                return {"success": False, "error": "OAuth authorization flow was cancelled or failed"}
+                return {"success": False, "error": progress[-1] if progress else "Authentication failed. Please retry."}
 
             # Restart the server now that token is saved in tokens.json
             mgr = await self._ensure_mcp_started(project_path)
@@ -3064,7 +3311,7 @@ Your output must be:
             return {"success": True, "name": name, "authenticated": True, "status": status.get("status", "running")}
         except Exception as e:
             log.warning("mcp.authenticate error: %s", e)
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": "Could not authenticate. Check the server configuration and retry."}
 
     async def rpc_mcp_auth(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Alias for mcp.authenticate."""

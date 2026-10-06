@@ -1,8 +1,11 @@
 import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
-import { ModelInfo, ProviderInfo } from "../server/types.js";
+import { ModelInfo, ProviderInfo, IntegrationResult, McpServerConfig } from "../server/types.js";
 import { join } from "path";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
+import { homedir } from "os";
+import { getUsageScript } from "./usage/usageScript.js";
+import { decodeUsagePng } from "./usage/usageImage.js";
 
 export class SettingsPanel {
   public static currentPanel: SettingsPanel | undefined;
@@ -47,7 +50,7 @@ export class SettingsPanel {
           rpcClient.call<ModelInfo[]>("config.list_models", {}, 8000).catch(() => []),
           rpcClient.call<ProviderInfo[]>("config.list_providers", {}, 8000).catch(() => []),
           rpcClient.call<any[]>("skills.list", { project_path: workspaceFolder }, 8000).catch(() => []),
-          rpcClient.call<any[]>("mcp.list", { project_path: workspaceFolder }, 8000).catch(() => []),
+          rpcClient.call<any[]>("mcp.list", { project_path: workspaceFolder }, 120000).catch(() => []),
           rpcClient.call<any>("usage.get", { project_path: null, time_range: "all" }, 8000).catch(() => ({})),
           rpcClient.call<any>("system.info", {}, 8000).catch(() => ({})),
           rpcClient.call<any>("trust.status", { project_path: workspaceFolder }, 8000).catch(() => ({ is_trusted: true, trusted_projects: [] })),
@@ -180,6 +183,11 @@ export class SettingsPanel {
     this._rpcClient = client;
     void this._rpcClient.call("telemetry.recordFeature", { feature: "settings_opened" }).catch(() => {});
     this.loadData();
+  }
+
+  public static updateMcpServers(mcpServers: unknown[]): void {
+    if (SettingsPanel._cachedState) SettingsPanel._cachedState.mcpServers = mcpServers;
+    SettingsPanel.currentPanel?._panel.webview.postMessage({ type: "mcp_refreshed", mcpServers });
   }
 
   public setInitialTab(tab: string) {
@@ -320,6 +328,37 @@ export class SettingsPanel {
   }
 
   private async _handleMessage(message: any) {
+    if (message.type === "export_usage_image") {
+      try {
+        const bytes = decodeUsagePng(message.image);
+        const format = ["square", "landscape", "story"].includes(message.format) ? message.format : "square";
+        const kind = ["activity", "daily"].includes(message.kind) ? message.kind : "recap";
+        const target = await vscode.window.showSaveDialog({
+          defaultUri: vscode.Uri.file(join(homedir(), `andromity-${kind}-${format}-${new Date().toISOString().slice(0, 10)}.png`)),
+          filters: { "PNG image": ["png"] },
+          saveLabel: "Save usage image",
+        });
+        if (target) {
+          await vscode.workspace.fs.writeFile(target, bytes);
+          vscode.window.showInformationMessage("Exported usage image.");
+        }
+        this._panel.webview.postMessage({ type: "usage_export_result", success: !!target, cancelled: !target });
+      } catch {
+        this._panel.webview.postMessage({ type: "usage_export_result", success: false });
+        vscode.window.showErrorMessage("Could not save the usage image. Try again and choose a writable folder.");
+      }
+      return;
+    }
+    if (message.type === "copy_usage_caption") {
+      try {
+        if (typeof message.caption !== "string" || message.caption.length > 2000) return;
+        await vscode.env.clipboard.writeText(message.caption);
+        this._panel.webview.postMessage({ type: "usage_caption_copied", success: true });
+      } catch {
+        this._panel.webview.postMessage({ type: "usage_caption_copied", success: false });
+      }
+      return;
+    }
     if (message.type === "login_account") {
       try {
         if (SettingsPanel.chatProvider) {
@@ -370,6 +409,9 @@ export class SettingsPanel {
           this._panel.webview.postMessage({ type: "daemon_status", connected: false });
         }
         return;
+      }
+      if (message.type === "fetch_usage") {
+        this._panel.webview.postMessage({ type: "usage_load_failed", requestId: message.requestId });
       }
       if (message.type === "webview_error") {
         console.error("[SettingsPanel Webview Error]", message);
@@ -473,6 +515,38 @@ export class SettingsPanel {
         break;
       }
 
+      case "save_provider":
+      case "delete_provider":
+      case "test_provider": {
+        try {
+          if (message.type === "test_provider") {
+            const result = await this._rpcClient.call<{ success: boolean; message: string }>("config.test_provider", {
+              provider: message.provider,
+            }, 35000);
+            this._panel.webview.postMessage({ type: "provider_result", ...result });
+          } else {
+            const result = await this._rpcClient.call<{ provider: string; providers: ProviderInfo[] }>(
+              message.type === "save_provider" ? "config.save_provider" : "config.delete_provider",
+              message.type === "save_provider" ? message.connection : { provider: message.provider });
+            this._panel.webview.postMessage({ type: "providers_updated", providers: result.providers });
+            this._panel.webview.postMessage({ type: "provider_result", success: true, saved: message.type === "save_provider", message: "Connection updated." });
+            this._onConfigChangeCallback?.();
+            const provider = result.provider || message.provider;
+            if (message.type === "save_provider") {
+              const models = await this._rpcClient.call<ModelInfo[]>("config.refresh_models", { provider }, 10000).catch(() => []);
+              this._panel.webview.postMessage({ type: "models_refreshed", provider, models });
+            } else {
+              this._panel.webview.postMessage({ type: "models_refreshed", provider, models: [] });
+            }
+          }
+        } catch (error: unknown) {
+          const text = error instanceof Error ? error.message : String(error);
+          this._panel.webview.postMessage({ type: "provider_result", success: false,
+            message: text.includes("-32601") ? "Update the Andromity server to configure custom providers." : text });
+        }
+        break;
+      }
+
       case "set_api_key": {
         try {
           await this._rpcClient.call("config.set_api_key", {
@@ -498,15 +572,40 @@ export class SettingsPanel {
           const res = await this._rpcClient.call<any>("skills.install", {
             name: message.name,
             source_id: message.sourceId || "anthropic",
+            project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
           }, 60000);
           if (res.success) {
             vscode.window.showInformationMessage(`Installed skill '${message.name}' successfully.`);
             await this.loadData();
+            this._onConfigChangeCallback?.();
           } else {
             vscode.window.showErrorMessage(`Failed to install skill: ${res.error || "Unknown error"}`);
           }
         } catch (err: any) {
           vscode.window.showErrorMessage(`Failed to install skill: ${err.message}`);
+        }
+        break;
+      }
+
+      case "remove_skill": {
+        try {
+          if (!vscode.workspace.isTrusted) {
+            vscode.window.showWarningMessage("Trust this workspace before removing skills.");
+            break;
+          }
+          const choice = await vscode.window.showWarningMessage(
+            `Remove skill '${message.name}' from ${message.path}?`, { modal: true }, "Remove");
+          if (choice !== "Remove") break;
+          const res = await this._rpcClient.call<IntegrationResult>("skills.remove", {
+            name: message.name, path: message.path,
+            project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+          });
+          if (!res.success) vscode.window.showWarningMessage(res.error || "Could not remove the skill.");
+          else this._onConfigChangeCallback?.();
+        } catch {
+          vscode.window.showErrorMessage("Could not remove the skill. Reconnect to an updated Andromity server and retry.");
+        } finally {
+          await this.loadData(true);
         }
         break;
       }
@@ -718,15 +817,19 @@ export class SettingsPanel {
           const usage = await this._rpcClient.call<any>("usage.get", {
             time_range: message.timeRange || "all",
             project_path: projectPath,
-          }, 15000).catch(() => ({}));
+            offset: Math.max(0, Math.floor(Number(message.offset) || 0)),
+            limit: 10,
+          }, 15000);
           this._panel.webview.postMessage({
             type: "usage_loaded",
             usage: usage || {},
             timeRange: message.timeRange || "all",
             scope: message.scope || "global",
+            requestId: message.requestId,
           });
         } catch (err: any) {
           console.error("[SettingsPanel] Failed to fetch usage:", err);
+          this._panel.webview.postMessage({ type: "usage_load_failed", requestId: message.requestId });
         }
         break;
       }
@@ -854,6 +957,61 @@ export class SettingsPanel {
         break;
       }
 
+      case "mcp_add":
+      case "mcp_remove": {
+        try {
+          const project_path = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          if (!vscode.workspace.isTrusted || !project_path) {
+            vscode.window.showWarningMessage("Open a trusted workspace before managing MCP servers.");
+            break;
+          }
+          let res: IntegrationResult;
+          if (message.type === "mcp_add") {
+            const name = await vscode.window.showInputBox({ title: "Add MCP server", prompt: "Server name", ignoreFocusOut: true,
+              validateInput: value => value.trim() ? undefined : "Enter a server name." });
+            if (!name) break;
+            const kind = await vscode.window.showQuickPick(["Remote HTTP (OAuth or access token)", "Remote SSE (legacy)", "Local command (stdio)", "Advanced JSON configuration"],
+              { title: "MCP connection type", ignoreFocusOut: true });
+            if (!kind) break;
+            let serverConfig: McpServerConfig;
+            if (kind === "Advanced JSON configuration") {
+              const raw = await vscode.window.showInputBox({ title: "MCP server configuration", password: true, ignoreFocusOut: true,
+                prompt: "Paste one server object. Supports headers, env, and oauth.client_id.",
+                validateInput: value => { try { const parsed: unknown = JSON.parse(value); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? undefined : "Enter a JSON object."; } catch { return "Enter valid JSON."; } } });
+              if (raw === undefined) break;
+              serverConfig = JSON.parse(raw) as McpServerConfig;
+            } else if (kind === "Local command (stdio)") {
+              const command = await vscode.window.showInputBox({ title: "MCP command", prompt: "Executable, such as npx, uvx, or python", ignoreFocusOut: true });
+              if (!command?.trim()) break;
+              const raw = await vscode.window.showInputBox({ title: "Command arguments", value: "[]", prompt: 'JSON array of arguments, such as ["-y", "@modelcontextprotocol/server-filesystem", "."]', ignoreFocusOut: true,
+                validateInput: value => { try { const args: unknown = JSON.parse(value); return Array.isArray(args) && args.every(arg => typeof arg === "string") ? undefined : "Enter an array of strings."; } catch { return "Enter valid JSON."; } } });
+              if (raw === undefined) break;
+              serverConfig = { command: command.trim(), args: JSON.parse(raw) as string[] };
+            } else {
+              const url = await vscode.window.showInputBox({ title: "Remote MCP URL", prompt: "For Supabase: https://mcp.supabase.com/mcp?project_ref=YOUR_PROJECT_REF", ignoreFocusOut: true,
+                validateInput: value => { try { const parsed = new URL(value); return ["https:", "http:"].includes(parsed.protocol) ? undefined : "Use HTTP or HTTPS."; } catch { return "Enter a valid URL."; } } });
+              if (!url) break;
+              const token = await vscode.window.showInputBox({ title: "Access token (optional)", prompt: "Leave empty to authenticate in your browser after adding the server.", password: true, ignoreFocusOut: true });
+              if (token === undefined) break;
+              serverConfig = { url, type: kind === "Remote SSE (legacy)" ? "sse" : "http" };
+              if (token.trim()) serverConfig.headers = { Authorization: `Bearer ${token.trim()}` };
+            }
+            res = await this._rpcClient.call<IntegrationResult>("mcp.add", { name: name.trim(), config: serverConfig, project_path }, 60000);
+          } else {
+            const choice = await vscode.window.showWarningMessage(`Remove MCP server '${message.name}' and its saved authentication?`, { modal: true }, "Remove");
+            if (choice !== "Remove") break;
+            res = await this._rpcClient.call<IntegrationResult>("mcp.remove", { name: message.name, project_path }, 60000);
+          }
+          if (!res.success) vscode.window.showWarningMessage(res.error || "Could not update MCP servers.");
+          else this._onConfigChangeCallback?.();
+        } catch {
+          vscode.window.showErrorMessage("Could not update MCP servers. Reconnect to an updated Andromity server and retry.");
+        } finally {
+          await this.loadData(true);
+        }
+        break;
+      }
+
       case "mcp_restart": {
         try {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -910,17 +1068,37 @@ export class SettingsPanel {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           const name = message.name || message.server_name;
           if (!name) throw new Error("Server name missing");
-          vscode.window.showInformationMessage(`Starting OAuth authentication for '${name}' in browser...`);
-          const res = await this._rpcClient.call<any>("mcp.authenticate", { name, project_path: workspaceFolder }, 130000);
+          if (!vscode.workspace.isTrusted) {
+            vscode.window.showWarningMessage("Trust this workspace before authenticating MCP servers.");
+            break;
+          }
+          const method = await vscode.window.showQuickPick(["Sign in with browser (OAuth)", "Use access token / PAT"],
+            { title: `Authenticate ${name}`, ignoreFocusOut: true });
+          if (!method) {
+            this._panel.webview.postMessage({ type: "mcp_refresh_failed" });
+            break;
+          }
+          let access_token: string | undefined;
+          if (method === "Use access token / PAT") {
+            access_token = await vscode.window.showInputBox({ title: `Access token for ${name}`, password: true, ignoreFocusOut: true,
+              validateInput: value => value.trim() ? undefined : "Enter an access token." });
+            if (!access_token) {
+              this._panel.webview.postMessage({ type: "mcp_refresh_failed" });
+              break;
+            }
+          }
+          vscode.window.showInformationMessage(access_token ? `Saving access token for '${name}'...` : `Starting authentication for '${name}' in browser...`);
+          const res = await this._rpcClient.call<IntegrationResult>("mcp.authenticate", { name, project_path: workspaceFolder, access_token }, 240000);
           if (res && res.success !== false) {
-            vscode.window.showInformationMessage(`MCP '${name}' authenticated successfully!`);
+            if (res.status === "running") vscode.window.showInformationMessage(`MCP '${name}' authenticated and connected.`);
+            else vscode.window.showWarningMessage(`Authentication saved for '${name}'. Connection status: ${res.status || "unknown"}. Check the server card and retry.`);
           } else {
             vscode.window.showWarningMessage(`MCP auth failed: ${res?.error || 'Unknown error'}`);
           }
           const mcpServers = await this._rpcClient.call<any[]>("mcp.list", { project_path: workspaceFolder }, 10000).catch(() => []);
           this._panel.webview.postMessage({ type: "mcp_refreshed", mcpServers: mcpServers || [] });
         } catch (e: any) {
-          vscode.window.showErrorMessage(`OAuth auth error: ${e.message}`);
+          vscode.window.showErrorMessage("Authentication could not finish. Reconnect and try Authenticate again.");
           this._panel.webview.postMessage({ type: "mcp_refresh_failed" });
         }
         break;
@@ -964,9 +1142,11 @@ export class SettingsPanel {
   }
 
   private _getHtmlForWebview(): string {
+    const logoPath = join(this._extensionUri.fsPath, "media", "icon.png");
+    const usageLogoData = existsSync(logoPath) ? "data:image/png;base64," + readFileSync(logoPath).toString("base64") : "";
     const iconUri = this._panel.webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, "media", "sidebar-icon.svg"));
-    const nonce = this._getNonce();
-    let extVersion = "0.2.12";
+    const nonce = typeof this._getNonce === "function" ? this._getNonce() : "mock-nonce";
+    let extVersion = "0.2.15";
     try {
       const ext = vscode.extensions.getExtension("agenticmarket.andromity-agent") ||
                   SettingsPanel.extensionContext?.extension;
@@ -1074,6 +1254,21 @@ export class SettingsPanel {
       font-size: 12.5px;
       font-family: inherit;
     }
+
+    #connection-editor .cron-form-col { min-width: min(220px, 100%); }
+    #connection-editor input {
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 34px;
+      border-radius: 4px;
+      outline: none;
+    }
+    #connection-editor input:focus {
+      border-color: var(--vscode-focusBorder);
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: -1px;
+    }
+    #connection-editor .setting-desc { margin: 0; }
 
     .cron-list {
       display: flex;
@@ -1237,34 +1432,50 @@ export class SettingsPanel {
       font-size: 13px;
       line-height: 1.5;
       display: flex;
-      flex-direction: column;
+      flex-direction: row;
       height: 100vh;
       overflow: hidden;
     }
 
-    /* Top Navigation Bar */
-    .top-nav {
+    /* Vertical Navigation Sidebar */
+    .side-nav {
+      display: flex;
+      flex-direction: column;
+      width: 228px;
+      height: 100vh;
+      background: var(--card-bg);
+      border-right: 1px solid var(--card-border);
+      flex-shrink: 0;
+      transition: width 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+      user-select: none;
+      z-index: 50;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .sidebar-header {
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      gap: 10px;
+      padding: 14px 16px;
       border-bottom: 1px solid var(--card-border);
-      padding: 8px 20px;
-      background: var(--card-bg);
       flex-shrink: 0;
-      gap: 12px;
-      overflow-x: auto;
+      min-height: 52px;
+      overflow: hidden;
     }
 
     .brand-group {
       display: flex;
       align-items: center;
-      gap: 9px;
+      gap: 10px;
       flex-shrink: 0;
+      min-width: 0;
+      cursor: default;
     }
 
     .brand-avatar {
-      width: 22px;
-      height: 22px;
+      width: 24px;
+      height: 24px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -1272,29 +1483,61 @@ export class SettingsPanel {
     }
 
     .brand-icon {
-      width: 30px;
-      height: 30px;
+      width: 24px;
+      height: 24px;
       object-fit: contain;
       display: block;
     }
 
+    .brand-info {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      overflow: hidden;
+    }
+
     .brand-title {
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 600;
-      letter-spacing: 0.3px;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--text);
+      line-height: 1.2;
+    }
+
+    .brand-subtitle {
+      font-size: 10px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      white-space: nowrap;
+      line-height: 1.2;
     }
 
     .nav-tabs {
       display: flex;
-      gap: 4px;
-      flex-wrap: nowrap;
+      flex-direction: column;
+      gap: 3px;
+      padding: 10px 8px;
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    .nav-tabs::-webkit-scrollbar {
+      width: 4px;
+    }
+    .nav-tabs::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 4px;
     }
 
     .nav-tab {
       display: flex;
       align-items: center;
-      gap: 6px;
-      padding: 6px 12px;
+      gap: 10px;
+      padding: 8px 10px;
       border-radius: 4px;
       cursor: pointer;
       font-size: 12px;
@@ -1304,30 +1547,217 @@ export class SettingsPanel {
       background: transparent;
       white-space: nowrap;
       transition: all 0.15s ease;
+      text-align: left;
+      width: 100%;
+      box-sizing: border-box;
+      position: relative;
     }
 
     .nav-tab:hover {
       color: var(--text);
-      background: rgba(255, 255, 255, 0.04);
+      background: rgba(255, 255, 255, 0.05);
     }
 
     .nav-tab.active {
       color: var(--text);
       background: var(--bg);
       border-color: var(--card-border);
-      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+      box-shadow: inset 2px 0 0 var(--card-hover-border), 0 1px 3px rgba(0,0,0,0.15);
+      font-weight: 600;
     }
 
     .nav-tab svg {
+      width: 15px;
+      height: 15px;
+      flex-shrink: 0;
+      transition: transform 0.15s ease;
+    }
+
+    .nav-tab:hover svg {
+      transform: scale(1.05);
+    }
+
+    .nav-tab-label {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .nav-tab-badge {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      font-weight: 600;
+      margin-left: auto;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+
+    .nav-tab.active .nav-tab-badge {
+      background: rgba(255, 255, 255, 0.15);
+      color: var(--text);
+    }
+
+    /* Sidebar Footer with collapse toggle */
+    .sidebar-footer {
+      padding: 8px;
+      border-top: 1px solid var(--card-border);
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .sidebar-toggle-btn {
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    .sidebar-toggle-btn:hover {
+      color: var(--text);
+    }
+
+    .sidebar-toggle-icon {
       width: 14px;
       height: 14px;
+      transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    /* Collapsed / Low Space Styles */
+    .side-nav.collapsed,
+    .side-nav.auto-compact {
+      width: 52px;
+    }
+
+    .side-nav.collapsed .sidebar-header,
+    .side-nav.auto-compact .sidebar-header {
+      padding: 14px 0;
+      justify-content: center;
+    }
+
+    .side-nav.collapsed .brand-info,
+    .side-nav.auto-compact .brand-info,
+    .side-nav.collapsed .nav-tab-label,
+    .side-nav.auto-compact .nav-tab-label,
+    .side-nav.collapsed .nav-tab-badge,
+    .side-nav.auto-compact .nav-tab-badge {
+      display: none !important;
+    }
+
+    .side-nav.collapsed .nav-tabs,
+    .side-nav.auto-compact .nav-tabs {
+      padding: 10px 6px;
+    }
+
+    .side-nav.collapsed .nav-tab,
+    .side-nav.auto-compact .nav-tab {
+      justify-content: center;
+      padding: 9px 0;
+      gap: 0;
+    }
+
+    .side-nav.collapsed .nav-tab svg,
+    .side-nav.auto-compact .nav-tab svg {
+      margin: 0;
+    }
+
+    .side-nav.collapsed .sidebar-toggle-icon,
+    .side-nav.auto-compact .sidebar-toggle-icon {
+      transform: rotate(180deg);
+    }
+
+    /* Pure CSS Media Query for narrow viewports */
+    @media (max-width: 820px) {
+      .side-nav {
+        width: 52px !important;
+      }
+      .side-nav .sidebar-header {
+        padding: 14px 0 !important;
+        justify-content: center !important;
+      }
+      .side-nav .brand-info,
+      .side-nav .nav-tab-label,
+      .side-nav .nav-tab-badge {
+        display: none !important;
+      }
+      .side-nav .nav-tabs {
+        padding: 10px 6px !important;
+      }
+      .side-nav .nav-tab {
+        justify-content: center !important;
+        padding: 9px 0 !important;
+        gap: 0 !important;
+      }
+      .side-nav .nav-tab svg {
+        margin: 0 !important;
+      }
+      .side-nav .sidebar-toggle-icon {
+        transform: rotate(180deg);
+      }
+    }
+
+    /* Floating Tooltip */
+    .nav-floating-tooltip {
+      position: fixed;
+      z-index: 99999;
+      pointer-events: none;
+      background: var(--card-bg, #252526);
+      color: var(--text, #cccccc);
+      border: 1px solid var(--card-hover-border, #007fd4);
+      padding: 6px 11px;
+      font-size: 11.5px;
+      font-weight: 500;
+      white-space: nowrap;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+      border-radius: 4px !important;
+      opacity: 0;
+      visibility: hidden;
+      transform: translateX(-6px);
+      transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s ease;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .nav-floating-tooltip.visible {
+      opacity: 1;
+      visibility: visible;
+      transform: translateX(0);
+    }
+
+    .nav-floating-tooltip::before {
+      content: '';
+      position: absolute;
+      left: -5px;
+      top: 50%;
+      transform: translateY(-50%) rotate(45deg);
+      width: 8px;
+      height: 8px;
+      background: var(--card-bg, #252526);
+      border-left: 1px solid var(--card-hover-border, #007fd4);
+      border-bottom: 1px solid var(--card-hover-border, #007fd4);
+    }
+
+    .nav-floating-tooltip .tooltip-badge {
+      font-size: 10px;
+      background: rgba(255, 255, 255, 0.12);
+      padding: 1px 5px;
+      border-radius: 3px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
     }
 
     /* Main Container */
     .main-content {
       flex: 1;
+      min-width: 0;
+      height: 100vh;
       overflow-y: auto;
-      padding: 20px 28px 48px;
+      padding: 24px 32px 56px;
     }
 
     .tab-pane {
@@ -1732,6 +2162,38 @@ export class SettingsPanel {
       line-height: 1.4;
     }
 
+    #mcp-grid {
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+    }
+    .mcp-card { min-width: 0; }
+    .mcp-card .item-card-top { gap: 8px; flex-wrap: wrap; }
+    .mcp-card .item-card-title { min-width: 0; overflow-wrap: anywhere; }
+    .mcp-card .status-dot { flex-shrink: 0; }
+    .mcp-endpoint, .mcp-endpoint code {
+      min-width: 0;
+      max-width: 100%;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .mcp-tools { min-width: 0; border: 1px solid var(--card-border); border-radius: 4px; }
+    .mcp-tools summary {
+      cursor: pointer;
+      padding: 8px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--primary-fg);
+      background: var(--primary);
+      border-radius: 4px;
+    }
+    .mcp-tools summary:hover { background: var(--primary-hover); }
+    .mcp-tools summary:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+    .mcp-tools-list { max-height: 280px; overflow: auto; padding: 0 10px; }
+    .mcp-tool { padding: 10px 0; border-bottom: 1px solid var(--card-border); }
+    .mcp-tool:last-child { border-bottom: 0; }
+    .mcp-tool-name { font-family: var(--font-mono); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+    .mcp-tool-description { font-size: 12px; line-height: 1.5; color: var(--text-muted); overflow-wrap: anywhere; margin: 4px 0; }
+
     .key-input-row {
       display: flex;
       gap: 8px;
@@ -2083,62 +2545,93 @@ export class SettingsPanel {
 
     @keyframes spin { 100% { transform: rotate(360deg); } }
     .spinning { animation: spin 1s linear infinite; }
+
+    .usage-share-bar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-top:16px; }
+    .usage-share-bar h2 { margin:0; }
+    .usage-pagination { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-top:14px; color:var(--text-muted); font-size:11px; }
+    .usage-pagination button:disabled { opacity:.4; cursor:default; }
+    .usage-day:hover, .usage-day:focus { stroke:var(--text, #fff); stroke-width:1.5; outline:none; }
+    .usage-share-dialog { background:var(--card-bg, #161b22); color:var(--text, #eee); border:1px solid var(--card-border); border-radius:12px; padding:20px; width:min(720px, calc(100vw - 48px)); max-height:90vh; overflow-y:auto; }
+    .usage-share-dialog::backdrop { background:rgba(0,0,0,.7); }
+    .usage-share-controls { display:flex; flex-wrap:wrap; gap:14px; margin:16px 0; align-items:center; }
+    .usage-share-controls label { font-size:12px; display:flex; gap:8px; align-items:center; }
+    .usage-share-controls select { background:var(--input-bg, #111); color:inherit; border:1px solid var(--card-border); border-radius:5px; padding:7px; max-width:100%; }
+    .usage-share-preview-wrap { padding:16px; background:rgba(0,0,0,.15); border-radius:8px; text-align:center; }
+    #usage-share-preview { max-width:100%; max-height:420px; object-fit:contain; border-radius:8px; }
   </style>
 </head>
 <body>
 
-  <!-- Top Navigation -->
-  <div class="top-nav">
-    <div class="brand-group">
-      <div class="brand-avatar">
-        <img class="brand-icon" src="${iconUri}" alt="Andromity" />
+  <!-- Vertical Navigation Sidebar -->
+  <aside class="side-nav" id="side-nav">
+    <div class="sidebar-header">
+      <div class="brand-group" id="brand-group" data-tooltip="Andromity Hub v${extVersion}">
+        <div class="brand-avatar">
+          <img class="brand-icon" src="${iconUri}" alt="Andromity" />
+        </div>
+        <div class="brand-info">
+          <span class="brand-title">Andromity Hub</span>
+          <span class="brand-subtitle">v${extVersion}</span>
+        </div>
       </div>
-      <span class="brand-title">Andromity Hub</span>
     </div>
 
-    <div class="nav-tabs">
-      <button class="nav-tab active" data-tab="models" id="tab-btn-models">
+    <div class="nav-tabs" id="nav-tabs-container">
+      <button class="nav-tab active" data-tab="models" id="tab-btn-models" data-tooltip="Model Hub" aria-label="Model Hub">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
-        Model Hub (<span id="model-count-badge">0</span>)
+        <span class="nav-tab-label">Model Hub</span>
+        <span class="nav-tab-badge" id="model-count-badge">0</span>
       </button>
-      <button class="nav-tab" data-tab="crons" id="tab-btn-crons">
+      <button class="nav-tab" data-tab="crons" id="tab-btn-crons" data-tooltip="Cron Jobs" aria-label="Cron Jobs">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-        Cron Jobs (<span id="crons-count-badge">0</span>)
+        <span class="nav-tab-label">Cron Jobs</span>
+        <span class="nav-tab-badge" id="crons-count-badge">0</span>
       </button>
-      <button class="nav-tab" data-tab="keys" id="tab-btn-keys">
+      <button class="nav-tab" data-tab="keys" id="tab-btn-keys" data-tooltip="API Keys & Connectors" aria-label="API Keys & Connectors">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path></svg>
-        API Keys & Connectors
+        <span class="nav-tab-label">API Keys & Connectors</span>
       </button>
-      <button class="nav-tab" data-tab="skills" id="tab-btn-skills">
+      <button class="nav-tab" data-tab="skills" id="tab-btn-skills" data-tooltip="Skills & Packs" aria-label="Skills & Packs">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-        Skills & Packs (<span id="skills-count-badge">0</span>)
+        <span class="nav-tab-label">Skills & Packs</span>
+        <span class="nav-tab-badge" id="skills-count-badge">0</span>
       </button>
-      <button class="nav-tab" data-tab="mcp" id="tab-btn-mcp">
+      <button class="nav-tab" data-tab="mcp" id="tab-btn-mcp" data-tooltip="MCP Servers" aria-label="MCP Servers">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M9 9h6v6H9z"></path></svg>
-        MCP Servers
+        <span class="nav-tab-label">MCP Servers</span>
       </button>
-      <button class="nav-tab" data-tab="usage" id="tab-btn-usage">
+      <button class="nav-tab" data-tab="usage" id="tab-btn-usage" data-tooltip="Usage & Costs" aria-label="Usage & Costs">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
-        Usage & Costs
+        <span class="nav-tab-label">Usage & Costs</span>
       </button>
-      <button class="nav-tab" data-tab="trust" id="tab-btn-trust">
+      <button class="nav-tab" data-tab="trust" id="tab-btn-trust" data-tooltip="Trust & Security" aria-label="Trust & Security">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-        Trust & Security
+        <span class="nav-tab-label">Trust & Security</span>
       </button>
-      <button class="nav-tab" data-tab="general" id="tab-btn-general">
+      <button class="nav-tab" data-tab="general" id="tab-btn-general" data-tooltip="Preferences" aria-label="Preferences">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-        Preferences
+        <span class="nav-tab-label">Preferences</span>
       </button>
-      <button class="nav-tab" data-tab="personalisation" id="tab-btn-personalisation">
+      <button class="nav-tab" data-tab="personalisation" id="tab-btn-personalisation" data-tooltip="Personalisation" aria-label="Personalisation">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"></circle><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"></circle><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"></circle><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"></circle><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.563-2.512 5.563-5.563C22 6.5 17.5 2 12 2z"></path></svg>
-        Personalisation
+        <span class="nav-tab-label">Personalisation</span>
       </button>
-      <button class="nav-tab" data-tab="about" id="tab-btn-about">
+      <button class="nav-tab" data-tab="about" id="tab-btn-about" data-tooltip="About & Diagnostics" aria-label="About & Diagnostics">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
-        About & Diagnostics
+        <span class="nav-tab-label">About & Diagnostics</span>
       </button>
     </div>
-  </div>
+
+    <div class="sidebar-footer">
+      <button class="nav-tab sidebar-toggle-btn" id="sidebar-toggle-btn" data-tooltip="Toggle Navigation" aria-label="Toggle Navigation">
+        <svg class="sidebar-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="11 17 6 12 11 7"></polyline><polyline points="18 17 13 12 18 7"></polyline></svg>
+        <span class="nav-tab-label">Collapse Sidebar</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Floating Tooltip Container -->
+  <div class="nav-floating-tooltip" id="nav-floating-tooltip"></div>
 
   <!-- Main Body Content -->
   <div class="main-content">
@@ -2148,7 +2641,7 @@ export class SettingsPanel {
       <div class="section-header">
         <div>
           <h2 class="section-title">Live Model Hub</h2>
-          <p class="section-desc">Search, filter, and switch between 396+ OpenRouter and provider models in real-time.</p>
+          <p class="section-desc">Discover models from your connected providers. Filter free routes or choose an exact model ID.</p>
         </div>
         <button class="btn btn-secondary" id="btn-refresh-models">
           <svg id="icon-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -2194,6 +2687,7 @@ export class SettingsPanel {
           <div class="chip" data-provider="deepseek">DeepSeek</div>
           <div class="chip" data-provider="groq">Groq</div>
           <div class="chip" data-provider="ollama">Ollama (Local)</div>
+          <span id="custom-provider-chips" style="display:contents;"></span>
           <div class="chip" data-provider="nvidia">NVIDIA NIM</div>
         </div>
 
@@ -2298,9 +2792,40 @@ export class SettingsPanel {
       <div class="section-header">
         <div>
           <h2 class="section-title">API Keys & Provider Connectors</h2>
-          <p class="section-desc">Manage API credentials securely on your machine. Keys are encrypted and stored in local config.</p>
+          <p class="section-desc">Manage provider connections and credentials in your local configuration.</p>
+        </div>
+        <button class="btn btn-secondary" data-action="add-provider">Add custom provider</button>
+      </div>
+      <div class="cron-form" id="connection-editor" style="display:none; margin-bottom:16px;">
+        <div class="cron-form-row">
+          <div class="cron-form-col"><label for="connection-id">Connection ID</label><input id="connection-id" placeholder="local-models"></div>
+          <div class="cron-form-col"><label for="connection-name">Display name</label><input id="connection-name" placeholder="Local models"></div>
+        </div>
+        <div class="cron-form-row">
+          <div class="cron-form-col"><label for="connection-url">Base URL</label><input id="connection-url" placeholder="http://localhost:1234/v1"></div>
+          <div class="cron-form-col"><label for="connection-model">Model ID</label><input id="connection-model" placeholder="provider/model-name"></div>
+        </div>
+        <p class="setting-desc">Use the API root, for example https://your-provider/v1. Pasted /chat/completions endpoints are converted automatically.</p>
+        <div class="cron-form-row">
+          <div class="cron-form-col">
+            <label for="connection-key">API key</label>
+            <input type="password" id="connection-key" autocomplete="off" spellcheck="false" placeholder="Enter API key" aria-describedby="connection-key-hint">
+            <p class="setting-desc" id="connection-key-hint">Optional. Leave blank to keep the saved key.</p>
+          </div>
+        </div>
+        <details style="margin:12px 0;"><summary>Advanced</summary>
+          <div class="cron-form-row" style="margin-top:10px;">
+            <div class="cron-form-col"><label for="connection-type">LiteLLM provider type</label><input id="connection-type" value="openai" placeholder="openai"></div>
+            <div class="cron-form-col"><label for="connection-version">API version · optional</label><input id="connection-version"></div>
+          </div>
+          <p class="setting-desc">OpenAI-compatible is the default. Other adapters can use the runtime's standard environment credentials.</p>
+        </details>
+        <div style="display:flex; justify-content:flex-end; gap:8px;">
+          <button class="btn btn-secondary" data-action="cancel-provider">Cancel</button>
+          <button class="btn" data-action="save-provider">Save connection</button>
         </div>
       </div>
+      <div id="provider-status" role="status" aria-live="polite" class="setting-desc" style="margin-bottom:10px;"></div>
       <div class="cards-grid" id="keys-grid"></div>
     </div>
 
@@ -2332,6 +2857,7 @@ export class SettingsPanel {
           <p class="section-desc">External database connectors, tool servers, and enterprise context integrations.</p>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
+          <button class="btn" data-action="mcp_add">Add MCP Server</button>
           <button class="btn btn-secondary" id="btn-refresh-mcp">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
             <span>Refresh</span>
@@ -2381,21 +2907,38 @@ export class SettingsPanel {
         </div>
       </div>
 
-      <!-- GitHub-Style Daily Activity Chart -->
-      <div class="settings-card" style="margin-top: 14px; position: relative; z-index: 30; overflow: visible;">
-        <div class="setting-label" style="display:flex; justify-content:space-between; align-items:center;">
-          <span>Daily Token Activity (GitHub Style)</span>
-          <span style="font-size:11px; font-weight:normal; color:var(--text-muted);">Last 14 Days</span>
+      <div class="usage-share-bar">
+        <p class="setting-desc">Your progress, ready to share. Create a branded image for X or Instagram.</p>
+        <button class="btn" id="usage-share-open">Share usage ↗</button>
+      </div>
+      <p id="usage-status" class="setting-desc" role="status" aria-live="polite"></p>
+
+      <div class="settings-card" style="margin-top:14px; position:relative; overflow:visible;">
+        <div class="setting-label" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+          <span>Daily Token Activity</span>
+          <div style="display:flex;gap:12px;align-items:center;"><span id="usage-bar-period" class="setting-desc">Last 14 Days</span><button class="btn btn-secondary" data-usage-share-kind="daily">Export chart</button></div>
         </div>
-        <div id="usage-chart-container" style="margin-top: 12px; overflow: visible;"></div>
+        <div id="usage-bar-chart-container" style="margin-top:12px;overflow:visible;"></div>
       </div>
 
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-top: 14px;">
+      <!-- GitHub-Style Daily Activity Chart -->
+      <div class="settings-card" style="margin-top: 14px; position: relative; z-index: 30; overflow: visible;">
+        <div class="setting-label" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+          <span>Daily Session Activity</span><button class="btn btn-secondary" data-usage-share-kind="activity">Export graph</button>
+          <span id="usage-activity-period" style="font-size:11px; font-weight:normal; color:var(--text-muted);"></span>
+        </div>
+        <p id="usage-activity-summary" class="setting-desc"></p>
+        <div id="usage-chart-container" style="margin-top: 12px; overflow-x: auto;"></div>
+        <p class="setting-desc">Color shows token volume. Session totals are grouped by their last activity date (UTC); this is not a per-day token ledger. Streaks use days with recorded tokens.</p>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 14px; margin-top: 14px;">
         <!-- Model Distribution Breakdown -->
         <div class="settings-card">
           <div class="setting-label">Model Distribution</div>
           <div class="setting-desc">Token consumption breakdown across AI models</div>
           <div id="usage-models-breakdown" style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px;"></div>
+          <div id="usage-models-pagination" class="usage-pagination"></div>
         </div>
 
         <!-- Provider Distribution Breakdown -->
@@ -2403,6 +2946,7 @@ export class SettingsPanel {
           <div class="setting-label">Provider Distribution</div>
           <div class="setting-desc">Token share across configured API providers</div>
           <div id="usage-providers-breakdown" style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px;"></div>
+          <div id="usage-providers-pagination" class="usage-pagination"></div>
         </div>
       </div>
 
@@ -2424,7 +2968,21 @@ export class SettingsPanel {
             <tbody id="usage-sessions-body"></tbody>
           </table>
         </div>
+        <div id="usage-sessions-pagination" class="usage-pagination"></div>
       </div>
+      <dialog id="usage-share-dialog" class="usage-share-dialog" aria-labelledby="usage-share-title">
+        <img id="usage-brand-logo" src="${usageLogoData}" alt="" hidden>
+        <div class="usage-share-bar"><h2 id="usage-share-title">Share your progress</h2><button class="btn btn-secondary" id="usage-share-close" aria-label="Close share preview">Close</button></div>
+        <p class="setting-desc">Only aggregate stats appear. Session names, project paths, prompts, and account details stay private.</p>
+        <div class="usage-share-controls">
+          <label>Card <select id="usage-share-kind"><option value="recap">Usage recap</option><option value="activity">Activity & streaks</option><option value="daily">Daily token chart</option></select></label>
+          <label>Format <select id="usage-share-format"><option value="square">Square · 1080 × 1080</option><option value="landscape">X · 1200 × 675</option><option value="story">Story · 1080 × 1920</option></select></label>
+          <label><input type="checkbox" id="usage-share-cost"> Include estimated cost</label>
+        </div>
+        <div class="usage-share-preview-wrap"><img id="usage-share-preview" alt="Preview of your Andromity usage image"></div>
+        <div class="usage-share-bar"><span class="setting-desc">Save the PNG, then attach it to your post.</span><div><button class="btn btn-secondary" id="usage-share-caption">Copy caption</button> <button class="btn" id="usage-share-save">Save PNG</button></div></div>
+        <p id="usage-share-status" class="setting-desc" role="status" aria-live="polite"></p>
+      </dialog>
     </div>
 
     <!-- ── TAB 6: TRUST & SECURITY ─────────────────────────────────── -->
@@ -2528,12 +3086,9 @@ export class SettingsPanel {
 
         <div class="settings-card">
           <div class="setting-label">Reasoning Effort</div>
-          <div class="setting-desc">Effort level for models supporting extended thinking (o1, o3, Claude 3.7).</div>
+          <div class="setting-desc">Controls supported by the selected model. Auto uses the provider default.</div>
           <select class="setting-select" id="setting-reasoning">
-            <option value="off">Off — Zero reasoning overhead</option>
-            <option value="low">Low — Fast concise reasoning</option>
-            <option value="medium">Medium — Balanced depth</option>
-            <option value="high">High — In-depth architectural reasoning</option>
+            <option value="auto">Auto — Provider default</option>
           </select>
         </div>
 
@@ -2981,22 +3536,122 @@ SOFTWARE.</pre>
     let currentAccount = { isAuthenticated: false, username: "", email: "", plan: "free" };
 
     // Tabs Navigation
+    const sideNav = document.getElementById("side-nav");
     const tabButtons = document.querySelectorAll(".nav-tab");
     const panes = document.querySelectorAll(".tab-pane");
+    const sidebarToggleBtn = document.getElementById("sidebar-toggle-btn");
+    const toggleLabel = sidebarToggleBtn ? sidebarToggleBtn.querySelector(".nav-tab-label") : null;
+    const navTooltip = document.getElementById("nav-floating-tooltip");
 
     tabButtons.forEach(btn => {
       btn.addEventListener("click", () => {
         const tab = btn.dataset.tab;
-        switchTab(tab);
+        if (tab) {
+          switchTab(tab);
+        }
       });
     });
 
     function switchTab(tab) {
-      tabButtons.forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+      tabButtons.forEach(b => {
+        if (b.dataset.tab) {
+          b.classList.toggle("active", b.dataset.tab === tab);
+        }
+      });
       panes.forEach(p => p.classList.toggle("active", p.id === "pane-" + tab));
       try {
         vscode.postMessage({ type: "tab_switched", tab: tab });
       } catch (e) {}
+    }
+
+    // Sidebar Manual Collapse & Auto Low-Space Detection
+    function setSidebarCollapsed(collapsed) {
+      if (!sideNav) return;
+      if (collapsed) {
+        sideNav.classList.add("collapsed");
+        if (toggleLabel) toggleLabel.textContent = "Expand Sidebar";
+        if (sidebarToggleBtn) sidebarToggleBtn.setAttribute("data-tooltip", "Expand Sidebar");
+      } else {
+        sideNav.classList.remove("collapsed");
+        if (toggleLabel) toggleLabel.textContent = "Collapse Sidebar";
+        if (sidebarToggleBtn) sidebarToggleBtn.setAttribute("data-tooltip", "Collapse Sidebar");
+      }
+    }
+
+    if (sidebarToggleBtn) {
+      sidebarToggleBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const nextState = !sideNav.classList.contains("collapsed");
+        setSidebarCollapsed(nextState);
+        try {
+          const state = (typeof vscode !== "undefined" && vscode.getState) ? (vscode.getState() || {}) : {};
+          state.settingsNavCollapsed = nextState;
+          if (typeof vscode !== "undefined" && vscode.setState) vscode.setState(state);
+        } catch (e) {}
+      });
+    }
+
+    // Restore saved collapse state
+    try {
+      const savedState = (typeof vscode !== "undefined" && vscode.getState) ? vscode.getState() : null;
+      if (savedState && savedState.settingsNavCollapsed) {
+        setSidebarCollapsed(true);
+      }
+    } catch (e) {}
+
+    // Auto-detect low space on resize
+    function handleNavResize() {
+      if (!sideNav) return;
+      if (window.innerWidth < 820) {
+        sideNav.classList.add("auto-compact");
+      } else {
+        sideNav.classList.remove("auto-compact");
+      }
+    }
+    window.addEventListener("resize", handleNavResize);
+    handleNavResize();
+
+    // Floating Tooltip on hover (especially when low space / collapsed)
+    if (navTooltip) {
+      const tooltipTargets = document.querySelectorAll("[data-tooltip]");
+      tooltipTargets.forEach(el => {
+        el.addEventListener("mouseenter", () => {
+          const isCompact = sideNav && (
+            sideNav.classList.contains("collapsed") ||
+            sideNav.classList.contains("auto-compact") ||
+            window.innerWidth < 820
+          );
+          if (!isCompact && !el.classList.contains("sidebar-toggle-btn")) {
+            return;
+          }
+          const text = el.getAttribute("data-tooltip");
+          if (!text) return;
+          const badgeEl = el.querySelector(".nav-tab-badge");
+          const count = badgeEl && badgeEl.textContent && badgeEl.textContent !== "0"
+            ? ' <span class="tooltip-badge">' + badgeEl.textContent + '</span>'
+            : "";
+          navTooltip.innerHTML = text + count;
+          const rect = el.getBoundingClientRect();
+          navTooltip.style.left = (rect.right + 10) + "px";
+          navTooltip.style.top = Math.round(rect.top + (rect.height / 2) - 13) + "px";
+          navTooltip.classList.add("visible");
+        });
+
+        el.addEventListener("mouseleave", () => {
+          navTooltip.classList.remove("visible");
+        });
+
+        el.addEventListener("click", () => {
+          navTooltip.classList.remove("visible");
+        });
+      });
+
+      const navContainer = document.getElementById("nav-tabs-container");
+      if (navContainer) {
+        navContainer.addEventListener("scroll", () => {
+          navTooltip.classList.remove("visible");
+        });
+      }
     }
 
     // Refresh button
@@ -3205,6 +3860,26 @@ SOFTWARE.</pre>
         togglePin(btn.dataset.id, btn.dataset.provider, btn.dataset.name);
       } else if (action === "save-key") {
         saveKey(btn.dataset.id);
+      } else if (action === "add-provider" || action === "edit-provider") {
+        editProvider(action === "edit-provider" ? btn.dataset.id : "");
+      } else if (action === "cancel-provider") {
+        document.getElementById("connection-editor").style.display = "none";
+        document.getElementById("connection-key").value = "";
+      } else if (action === "save-provider") {
+        const value = (id) => document.getElementById(id).value.trim();
+        const connection = { id: value("connection-id"), display_name: value("connection-name"),
+          base_url: value("connection-url"), model: value("connection-model"),
+          type: value("connection-type") || "openai", api_version: value("connection-version") };
+        if (value("connection-key")) connection.api_key = value("connection-key");
+        vscode.postMessage({ type: "save_provider", connection });
+      } else if (action === "test-provider") {
+        document.getElementById("provider-status").textContent = "Testing connection…";
+        vscode.postMessage({ type: "test_provider", provider: btn.dataset.id });
+      } else if (action === "delete-provider") {
+        vscode.postMessage({ type: "delete_provider", provider: btn.dataset.id });
+      } else if (action === "use-provider") {
+        const provider = allProviders.find(p => p.id === btn.dataset.id);
+        if (provider && provider.model) selectModel(provider.model, provider.id);
       } else if (action === "open-portal" || action === "open-url") {
         openExternalUrl(btn.dataset.url);
       } else if (action === "open-license-file") {
@@ -3265,6 +3940,10 @@ SOFTWARE.</pre>
         btn.disabled = true;
         btn.innerHTML = '<span class="spinning-loader"></span> Authenticating in browser...';
         vscode.postMessage({ type: "mcp_auth", name: btn.dataset.name });
+      } else if (action === "mcp_add" || action === "mcp_remove") {
+        vscode.postMessage({ type: action, name: btn.dataset.name });
+      } else if (action === "remove-skill") {
+        vscode.postMessage({ type: "remove_skill", name: btn.dataset.skillName, path: btn.dataset.skillPath });
       } else if (action === "login-account") {
         btn.disabled = true;
         btn.innerHTML = '<span class="spinning-loader"></span> Connecting...';
@@ -3294,7 +3973,7 @@ SOFTWARE.</pre>
         usageScopeChips.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
         chip.classList.add("active");
         currentUsageScope = chip.dataset.usageScope || "global";
-        vscode.postMessage({ type: "fetch_usage", timeRange: currentUsageRange, scope: currentUsageScope });
+        requestUsage();
       });
     }
 
@@ -3306,8 +3985,7 @@ SOFTWARE.</pre>
         usageRangeChips.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
         chip.classList.add("active");
         currentUsageRange = chip.dataset.usageRange || "all";
-        renderUsage();
-        vscode.postMessage({ type: "fetch_usage", timeRange: currentUsageRange, scope: currentUsageScope });
+        requestUsage();
       });
     }
 
@@ -3331,7 +4009,27 @@ SOFTWARE.</pre>
       if (typeof msg.waterfallAutoOpen !== "undefined" && selectWaterfallAutoOpen) {
         selectWaterfallAutoOpen.value = msg.waterfallAutoOpen !== false ? "enabled" : "disabled";
       }
-      if (currentConfig.reasoning_effort && selectReasoning) selectReasoning.value = currentConfig.reasoning_effort;
+      if (selectReasoning) {
+        selectReasoning.innerHTML = '';
+        const efforts = ['auto', ...(currentConfig.available_reasoning_efforts || []).filter(value => value !== 'auto')];
+        const ascending = ['auto', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'on'];
+        const rank = value => ascending.includes(value) ? ascending.indexOf(value) : ascending.length;
+        efforts.sort((a, b) => rank(a) - rank(b));
+        efforts.forEach(value => {
+          const option = document.createElement('option');
+          option.value = value;
+          option.textContent = value === 'auto' ? 'Auto — Provider default' : value.charAt(0).toUpperCase() + value.slice(1);
+          selectReasoning.appendChild(option);
+        });
+        const selected = currentConfig.reasoning_effort;
+        if (selected && selected.startsWith('budget:')) {
+          const option = document.createElement('option');
+          option.value = selected;
+          option.textContent = selected.slice(7) + ' thinking tokens';
+          selectReasoning.appendChild(option);
+        }
+        selectReasoning.value = efforts.includes(selected) || (selected && selected.startsWith('budget:')) ? selected : 'auto';
+      }
       if (currentConfig.user_name && inputUserName) inputUserName.value = currentConfig.user_name;
       if (currentConfig.user_email && inputUserEmail) inputUserEmail.value = currentConfig.user_email;
       if (currentConfig.max_subagents && selectMaxSubagents) selectMaxSubagents.value = String(currentConfig.max_subagents);
@@ -3408,7 +4106,7 @@ SOFTWARE.</pre>
           allSkills = msg.skills || [];
           allRemoteSkills = msg.remoteSkills || [];
           allMcpServers = msg.mcpServers || [];
-          usageData = msg.usage || {};
+          if (usageRequestId === 0 && !usagePending && currentUsageRange === "all" && currentUsageScope === "global") usageData = msg.usage || {};
           allCrons = msg.crons || [];
 
           applySystemAndConfig(msg);
@@ -3444,14 +4142,38 @@ SOFTWARE.</pre>
           break;
         }
         case "usage_loaded": {
+          if (msg.requestId !== usageRequestId || msg.timeRange !== currentUsageRange || msg.scope !== currentUsageScope) break;
+          usagePending = false;
+          if (msg.usage && msg.usage.error) {
+            document.getElementById('usage-status').textContent = 'Could not load usage. Select a range to retry.';
+            break;
+          }
           usageData = msg.usage || {};
+          usageSessionPage = Math.floor((usageData.sessions_offset || 0) / usagePageSize);
           renderUsage();
+          break;
+        }
+        case "usage_load_failed": {
+          if (msg.requestId !== usageRequestId) break;
+          usagePending = false;
+          document.getElementById('usage-status').textContent = 'Could not load usage. Select a range to retry.';
+          break;
+        }
+        case "usage_export_result": {
+          document.getElementById('usage-share-save').disabled = false;
+          if (msg.success) document.getElementById('usage-share-dialog').close();
+          document.getElementById('usage-share-status').textContent = msg.success ? 'PNG saved. Ready to post!' : msg.cancelled ? 'Save cancelled.' : 'Could not save the PNG. Try another folder.';
+          break;
+        }
+        case "usage_caption_copied": {
+          document.getElementById('usage-share-status').textContent = msg.success ? 'Caption copied. Paste it into your post.' : 'Could not copy the caption. Try again.';
           break;
         }
         case "models_refreshed": {
           iconRefresh.classList.remove("spinning");
           refreshLabel.textContent = "Refresh Catalog";
-          allModels = (msg.models || []).filter(m => m.provider !== "andromity" || m.id === "auto");
+          const incoming = (msg.models || []).filter(m => m.provider !== "andromity" || m.id === "auto");
+          allModels = msg.provider ? allModels.filter(m => m.provider !== msg.provider).concat(incoming) : incoming;
           document.getElementById("model-count-badge").textContent = allModels.length;
           renderModels();
           break;
@@ -3473,6 +4195,14 @@ SOFTWARE.</pre>
             selectMode.value = msg.value.toLowerCase();
           } else if (msg.key === "startupSession" && selectStartupSession) {
             selectStartupSession.value = msg.value;
+          }
+          break;
+        }
+        case "provider_result": {
+          document.getElementById("provider-status").textContent = msg.message || "";
+          if (msg.success && msg.saved) {
+            document.getElementById("connection-editor").style.display = "none";
+            document.getElementById("connection-key").value = "";
           }
           break;
         }
@@ -3806,6 +4536,18 @@ SOFTWARE.</pre>
       }).join("");
     }
 
+    function editProvider(id) {
+      const provider = allProviders.find(p => p.id === id) || {};
+      const fields = { "connection-id": provider.id || "", "connection-name": provider.name || "",
+        "connection-url": provider.base_url || "", "connection-model": provider.model || "",
+        "connection-type": provider.type || "openai", "connection-version": provider.api_version || "", "connection-key": "" };
+      Object.keys(fields).forEach(key => document.getElementById(key).value = fields[key]);
+      document.getElementById("connection-id").disabled = Boolean(id);
+      document.getElementById("connection-editor").style.display = "block";
+      document.getElementById(id ? "connection-url" : "connection-id").focus();
+      document.getElementById("provider-status").textContent = "";
+    }
+
     function renderProviders() {
       const grid = document.getElementById("keys-grid");
       if (!grid) return;
@@ -3834,6 +4576,14 @@ SOFTWARE.</pre>
       ];
 
       const displayList = (allProviders && allProviders.length > 0) ? [...allProviders] : defaultProviders;
+      const customChips = document.getElementById("custom-provider-chips");
+      if (customChips) {
+        customChips.innerHTML = displayList.filter(p => p.custom).map(p => '<button class="chip" data-provider="' + escapeHtml(p.id) + '">' + escapeHtml(p.name) + '</button>').join('');
+        customChips.querySelectorAll('[data-provider]').forEach(chip => chip.addEventListener('click', () => {
+          document.querySelectorAll('.chip[data-provider]').forEach(c => c.classList.remove('active'));
+          chip.classList.add('active'); activeProvider = chip.dataset.provider; renderModels();
+        }));
+      }
       if (!displayList.some(p => p.id === 'andromity')) {
         displayList.unshift({ id: 'andromity', name: 'Andromity Cloud Gateway', has_key: true });
       }
@@ -3841,6 +4591,16 @@ SOFTWARE.</pre>
       grid.innerHTML = displayList.map(p => {
         const meta = providerMeta[p.id] || { name: p.name || p.id, desc: "AI Provider API", portal: p.portal || "" };
         const hasKey = p.has_key || p.id === "ollama" || p.id === "andromity";
+        if (p.custom) {
+          const id = escapeHtml(p.id);
+          return '<div class="item-card"><div class="item-card-top"><div class="item-card-title">' + escapeHtml(p.name) + '</div><span class="badge">Custom</span></div>' +
+            '<div class="item-card-desc">' + escapeHtml(p.base_url || p.type) + '<br>' + escapeHtml(p.model || '') + '</div>' +
+            '<div style="display:flex; gap:6px; flex-wrap:wrap;">' +
+            '<button class="btn" data-action="use-provider" data-id="' + id + '">Use model</button>' +
+            '<button class="btn btn-secondary" data-action="edit-provider" data-id="' + id + '">Edit</button>' +
+            '<button class="btn btn-secondary" data-action="test-provider" data-id="' + id + '">Test</button>' +
+            '<button class="btn btn-secondary" data-action="delete-provider" data-id="' + id + '">Remove</button></div></div>';
+        }
 
         if (p.id === 'andromity') {
           const isAuthed = currentAccount && currentAccount.isAuthenticated;
@@ -3890,132 +4650,16 @@ SOFTWARE.</pre>
       }).join("");
     }
 
-    function getFilteredSessions(sessions, range) {
-      if (!Array.isArray(sessions)) return [];
-      if (range === "all") return sessions;
-      const now = Date.now();
-      const dayMs = 24 * 60 * 60 * 1000;
-      let limitMs = 30 * dayMs;
-      if (range === "month") limitMs = 30 * dayMs;
-      else if (range === "week") limitMs = 7 * dayMs;
-      else if (range === "today") limitMs = 1 * dayMs;
-
-      return sessions.filter(s => {
-        const d = new Date(s.updated_at || s.created_at || 0).getTime();
-        return (now - d) <= limitMs;
-      });
-    }
-
-    function renderUsage() {
-      const allSessionsList = usageData.sessions || [];
-      const isAllRange = currentUsageRange === "all";
-      const filteredSessions = isAllRange ? allSessionsList : getFilteredSessions(allSessionsList, currentUsageRange);
-
-      const totalTokens = (isAllRange && typeof usageData.total_tokens === "number" && usageData.total_tokens > 0)
-        ? usageData.total_tokens
-        : filteredSessions.reduce((acc, s) => acc + (s.token_total || s.tokens || 0), 0);
-
-      const totalCost = (isAllRange && typeof usageData.total_cost_usd === "number")
-        ? usageData.total_cost_usd
-        : filteredSessions.reduce((acc, s) => acc + (s.cost_usd || 0), 0.0);
-
-      const totalSessions = (isAllRange && typeof usageData.total_sessions === "number" && usageData.total_sessions > 0)
-        ? usageData.total_sessions
-        : filteredSessions.length;
-
-      const avgTokens = totalSessions > 0 ? Math.round(totalTokens / totalSessions) : 0;
-
-      const tokensEl = document.getElementById("stat-usage-tokens");
-      const costEl = document.getElementById("stat-usage-cost");
-      const sessionsEl = document.getElementById("stat-usage-sessions");
-      const avgEl = document.getElementById("stat-usage-avg");
-
-      if (tokensEl) tokensEl.textContent = formatTokens(totalTokens);
-      if (costEl) costEl.textContent = '$' + Number(totalCost).toFixed(4);
-      if (sessionsEl) sessionsEl.textContent = totalSessions;
-      if (avgEl) avgEl.textContent = formatTokens(avgTokens);
-
-      renderUsageChart(filteredSessions, currentUsageRange);
-      renderModelBreakdown(filteredSessions);
-      renderProviderBreakdown(filteredSessions);
-      renderSessionsTable(filteredSessions);
-    }
+    ${getUsageScript()}
 
     function renderUsageChart(sessions, range) {
-      const container = document.getElementById("usage-chart-container");
+      const container = document.getElementById("usage-bar-chart-container");
       if (!container) return;
 
-      const slots = [];
-      const now = new Date();
-      const numSlots = range === "today" ? 12 : (range === "week" ? 7 : (range === "month" ? 14 : 14));
-
-      if (range === "today") {
-        for (let i = 0; i < 12; i++) {
-          const slotHour = i * 2;
-          const label = String(slotHour).padStart(2, '0') + ':00';
-          slots.push({
-            idx: i,
-            label: label,
-            fullDate: 'Today, ' + label,
-            tokens: 0,
-            cost: 0,
-            count: 0
-          });
-        }
-        if (Array.isArray(sessions)) {
-          sessions.forEach(s => {
-            const d = new Date(s.updated_at || s.created_at || 0);
-            if (d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()) {
-              const hour = d.getHours();
-              const slotIdx = Math.min(11, Math.floor(hour / 2));
-              slots[slotIdx].tokens += (s.token_total || s.tokens || 0);
-              slots[slotIdx].cost += (s.cost_usd || 0);
-              slots[slotIdx].count += 1;
-            }
-          });
-        }
-      } else {
-        const dailyMap = {};
-        for (let i = numSlots - 1; i >= 0; i--) {
-          const d = new Date(now);
-          d.setDate(d.getDate() - i);
-          const iso = d.toISOString().slice(0, 10);
-          const fullDate = d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-          const label = (d.getMonth() + 1) + '/' + d.getDate();
-          const slot = {
-            idx: numSlots - 1 - i,
-            dateIso: iso,
-            label: label,
-            fullDate: fullDate,
-            dayName: d.toLocaleDateString([], { weekday: 'short' }),
-            tokens: 0,
-            cost: 0,
-            count: 0
-          };
-          slots.push(slot);
-          dailyMap[iso] = slot;
-        }
-
-        // If backend provided complete daily_activity aggregated across ALL sessions, populate chart from it
-        if (usageData.daily_activity && Object.keys(usageData.daily_activity).length > 0) {
-          for (const [dayIso, dayData] of Object.entries(usageData.daily_activity)) {
-            if (dailyMap[dayIso]) {
-              dailyMap[dayIso].tokens += (dayData.tokens || 0);
-              dailyMap[dayIso].cost += (dayData.cost || 0);
-              dailyMap[dayIso].count += (dayData.count || 0);
-            }
-          }
-        } else if (Array.isArray(sessions)) {
-          sessions.forEach(s => {
-            const sDate = (s.updated_at || s.created_at || "").slice(0, 10);
-            if (dailyMap[sDate]) {
-              dailyMap[sDate].tokens += (s.token_total || s.tokens || 0);
-              dailyMap[sDate].cost += (s.cost_usd || 0);
-              dailyMap[sDate].count += 1;
-            }
-          });
-        }
-      }
+      const period = document.getElementById('usage-bar-period');
+      if (period) period.textContent = range === 'today' ? 'Today · 2-hour intervals' : range === 'week' ? 'Last 7 Days' : 'Last 14 Days';
+      const slots = usageBarSlots(sessions, range);
+      const numSlots = slots.length;
 
       const totalTokensInChart = slots.reduce((acc, s) => acc + s.tokens, 0);
       slots.forEach(s => {
@@ -4126,12 +4770,13 @@ SOFTWARE.</pre>
       }
     }
 
+
     function renderModelBreakdown(filteredSessions) {
       const container = document.getElementById("usage-models-breakdown");
       if (!container) return;
 
       const modelMap = {};
-      if (currentUsageRange === "all" && usageData.by_model && Object.keys(usageData.by_model).length > 0) {
+      if (usageData.by_model) {
         Object.assign(modelMap, usageData.by_model);
       } else if (Array.isArray(filteredSessions) && filteredSessions.length > 0) {
         filteredSessions.forEach(s => {
@@ -4144,6 +4789,7 @@ SOFTWARE.</pre>
 
       const entries = Object.entries(modelMap);
       if (entries.length === 0) {
+        usagePagination('usage-models-pagination', 0, 0, usagePageSize);
         container.innerHTML = '<div style="color:var(--text-muted); font-size:12px; padding:6px 0;">No model usage recorded in this timeframe.</div>';
         return;
       }
@@ -4151,7 +4797,9 @@ SOFTWARE.</pre>
       entries.sort((a, b) => (b[1].tokens || 0) - (a[1].tokens || 0));
       const totalTokens = entries.reduce((acc, [, data]) => acc + (data.tokens || 0), 0) || 1;
 
-      container.innerHTML = entries.map(([modelId, data]) => {
+      usageModelPage = Math.min(usageModelPage, Math.max(0, Math.ceil(entries.length / usagePageSize) - 1));
+      usagePagination('usage-models-pagination', usageModelPage, entries.length, usagePageSize);
+      container.innerHTML = entries.slice(usageModelPage * usagePageSize, (usageModelPage + 1) * usagePageSize).map(([modelId, data]) => {
         const tokens = data.tokens || 0;
         const cost = data.cost || 0;
         const pct = Math.min(100, Math.round((tokens / totalTokens) * 100));
@@ -4181,7 +4829,7 @@ SOFTWARE.</pre>
       if (!container) return;
 
       const provMap = {};
-      if (currentUsageRange === "all" && usageData.by_provider && Object.keys(usageData.by_provider).length > 0) {
+      if (usageData.by_provider) {
         Object.assign(provMap, usageData.by_provider);
       } else if (Array.isArray(filteredSessions) && filteredSessions.length > 0) {
         filteredSessions.forEach(s => {
@@ -4195,6 +4843,7 @@ SOFTWARE.</pre>
 
       const entries = Object.entries(provMap);
       if (entries.length === 0) {
+        usagePagination('usage-providers-pagination', 0, 0, usagePageSize);
         container.innerHTML = '<div style="color:var(--text-muted); font-size:12px; padding:6px 0;">No provider activity recorded in this timeframe.</div>';
         return;
       }
@@ -4202,7 +4851,9 @@ SOFTWARE.</pre>
       entries.sort((a, b) => (b[1].tokens || 0) - (a[1].tokens || 0));
       const totalTokens = entries.reduce((acc, [, data]) => acc + (data.tokens || 0), 0) || 1;
 
-      container.innerHTML = entries.map(([provId, data]) => {
+      usageProviderPage = Math.min(usageProviderPage, Math.max(0, Math.ceil(entries.length / usagePageSize) - 1));
+      usagePagination('usage-providers-pagination', usageProviderPage, entries.length, usagePageSize);
+      container.innerHTML = entries.slice(usageProviderPage * usagePageSize, (usageProviderPage + 1) * usagePageSize).map(([provId, data]) => {
         const tokens = data.tokens || 0;
         const cost = data.cost || 0;
         const pct = Math.min(100, Math.round((tokens / totalTokens) * 100));
@@ -4236,7 +4887,8 @@ SOFTWARE.</pre>
         return;
       }
 
-      tbody.innerHTML = list.slice(0, 25).map(s => {
+      const start = typeof usageData.sessions_offset === 'number' ? 0 : usageSessionPage * usagePageSize;
+      tbody.innerHTML = list.slice(start, start + usagePageSize).map(s => {
         const sName = s.name || s.id || "Untitled Session";
         const modelStr = (s.model || "default") + (s.provider ? ' (' + s.provider + ')' : "");
         const tokens = s.token_total || s.tokens || 0;
@@ -4276,6 +4928,7 @@ SOFTWARE.</pre>
             '</div>' +
             '<div class="item-card-desc">' + escapeHtml(s.description || 'Custom agent workflow skill.') + '</div>' +
             '<div style="font-size: 11px; font-family: var(--font-mono); color: var(--text-muted); word-break: break-all;">' + escapeHtml(s.path || '') + '</div>' +
+            (s.scope === 'builtin' ? '' : '<button class="btn btn-secondary" data-action="remove-skill" data-skill-name="' + escapeHtml(s.name) + '" data-skill-path="' + escapeHtml(s.path || '') + '">Remove Skill</button>') +
           '</div>'
         ).join("");
       } else {
@@ -4314,7 +4967,7 @@ SOFTWARE.</pre>
       if (allMcpServers.length === 0) {
         grid.innerHTML = '<div class="empty-state" style="grid-column: 1 / -1;">' +
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M9 9h6v6H9z"></path></svg>' +
-          '<div>No MCP servers configured. Add servers to <code>.andromity/mcp.json</code> or <code>.vscode/mcp.json</code>.</div>' +
+          '<div>No MCP servers configured. Use Add MCP Server to connect a remote service or local tool server.</div>' +
         '</div>';
         return;
       }
@@ -4344,15 +4997,20 @@ SOFTWARE.</pre>
         const badgeStyle = isError   ? 'background:rgba(248,81,73,0.15); color:#f85149; border:1px solid rgba(248,81,73,0.3);'
                          : isDisabled ? 'background:rgba(255,255,255,0.06); color:var(--text-muted);'
                          : '';
-        const badgeLabel = isRunning  ? (s.tools_count > 0 ? s.tools_count + ' tools' : 'running')
+        const badgeLabel = isRunning  ? 'Connected'
                          : isError    ? 'error'
                          : isAuth     ? 'needs auth'
                          : isDisabled ? 'disabled'
                          : 'not started';
 
         const cmdStr = s.command ? escapeHtml(s.command) + (s.args && s.args.length ? ' ' + s.args.map(escapeHtml).join(' ') : '') : '<span style="color:var(--text-muted)">no command</span>';
+        const tools = Array.isArray(s.tools) ? s.tools : [];
+        const toolsHtml = tools.map(tool => '<div class="mcp-tool">' +
+          '<div class="mcp-tool-name">' + escapeHtml(tool.name) + '</div>' +
+          '<div class="mcp-tool-description">' + escapeHtml(tool.description || 'No description provided by this server.') + '</div>' +
+        '</div>').join('');
 
-        return '<div class="item-card">' +
+        return '<div class="item-card mcp-card">' +
           '<div class="item-card-top">' +
             '<div class="item-card-title">' +
               '<span class="status-dot ' + dotClass + '" style="' + dotStyle + '"></span>' +
@@ -4360,16 +5018,21 @@ SOFTWARE.</pre>
             '</div>' +
             '<span class="badge ' + badgeColor + '" style="' + badgeStyle + '">' + escapeHtml(badgeLabel) + '</span>' +
           '</div>' +
-          '<div class="item-card-desc"><code>' + cmdStr + '</code></div>' +
+          '<div class="item-card-desc mcp-endpoint"><code>' + cmdStr + '</code></div>' +
           (isError && s.error ? '<div style="font-size:11px; color:#f85149; margin-top:6px; padding:5px 8px; background:rgba(248,81,73,0.08); border:1px solid rgba(248,81,73,0.2);">' + escapeHtml(s.error) + '</div>' : '') +
           (isError && s.error_detail ? '<div style="font-size:10.5px; color:var(--text-muted); margin-top:4px; padding:5px 8px; background:rgba(255,255,255,0.03); border:1px solid var(--card-border); max-height:80px; overflow:auto; white-space:pre-wrap; word-break:break-word;">' + escapeHtml(s.error_detail) + '</div>' : '') +
-          (isAuth ? '<div style="margin-top:8px;"><button class="btn" style="font-size:11px; padding:4px 10px;" data-action="mcp_auth" data-name="' + escapeHtml(s.name) + '">Connect / Authenticate</button></div>' : '') +
+          (isRunning ? '<details class="mcp-tools"><summary>View tools (' + escapeHtml(String(s.tools_count || 0)) + ')</summary>' +
+            '<div class="mcp-tools-list">' + (toolsHtml || '<div class="mcp-tool-description">' +
+              (s.tools_count > 0 ? 'Tool details unavailable. Update the daemon and refresh.' : 'This server currently exposes no tools.') + '</div>') + '</div></details>' : '') +
+          (!isRunning && !isDisabled && (s.remote || isAuth) ? '<div style="margin-top:8px;"><button class="btn" style="font-size:11px; padding:4px 10px;" data-action="mcp_auth" data-name="' + escapeHtml(s.name) + '">Connect / Authenticate</button></div>' : '') +
           '<div style="display:flex; gap:6px; margin-top:10px; flex-wrap:wrap;">' +
             '<button class="btn btn-secondary" style="padding:4px 8px; font-size:11px;" data-action="mcp_restart" data-name="' + escapeHtml(s.name) + '"' + (isDisabled ? ' disabled title="Enable first to restart"' : '') + '>↺ Restart</button>' +
             (isDisabled
               ? '<button class="btn" style="padding:4px 8px; font-size:11px;" data-action="mcp_toggle" data-name="' + escapeHtml(s.name) + '" data-disabled="false">Enable</button>'
               : '<button class="btn btn-secondary" style="padding:4px 8px; font-size:11px;" data-action="mcp_toggle" data-name="' + escapeHtml(s.name) + '" data-disabled="true">Disable</button>'
             ) +
+            (isRunning && s.remote ? '<button class="btn btn-secondary" data-action="mcp_auth" data-name="' + escapeHtml(s.name) + '">Re-authenticate</button>' : '') +
+            '<button class="btn btn-secondary" data-action="mcp_remove" data-name="' + escapeHtml(s.name) + '">Remove</button>' +
           '</div>' +
         '</div>';
       }).join("");
@@ -4469,18 +5132,6 @@ SOFTWARE.</pre>
       });
     }
 
-    const skillsGrid = document.getElementById("skills-grid");
-    if (skillsGrid) {
-      skillsGrid.addEventListener("click", (e) => {
-        const btn = e.target.closest("button[data-action='install-skill']");
-        if (!btn) return;
-        const name = btn.dataset.skillName;
-        const sourceId = btn.dataset.sourceId || "anthropic";
-        btn.disabled = true;
-        btn.innerHTML = '<span style="display:inline-block; width:9px; height:9px; border:1.5px solid currentColor; border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite; margin-right:4px;"></span> Installing...';
-        vscode.postMessage({ type: "install_skill", name, sourceId });
-      });
-    }
 
     const cronContainer = document.getElementById("cron-list-container");
     if (cronContainer) {
@@ -4528,30 +5179,6 @@ SOFTWARE.</pre>
       });
     }
 
-    // ── MCP Server Controls (Restart / Enable-Disable / Refresh) ──
-    const mcpGrid = document.getElementById("mcp-grid");
-    if (mcpGrid) {
-      mcpGrid.addEventListener("click", (e) => {
-        const btn = e.target.closest("button[data-action]");
-        if (!btn) return;
-        const action = btn.dataset.action;
-        const name = btn.dataset.name;
-        if (action === "mcp_restart") {
-          btn.disabled = true;
-          const orig = btn.textContent;
-          btn.textContent = "↺ Restarting...";
-          vscode.postMessage({ type: "mcp_restart", name });
-          setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 4000);
-        } else if (action === "mcp_toggle") {
-          const disabled = btn.dataset.disabled === "true";
-          btn.disabled = true;
-          const orig = btn.textContent;
-          btn.textContent = disabled ? "Disabling..." : "Enabling...";
-          vscode.postMessage({ type: "mcp_toggle", name, disabled });
-          setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 4000);
-        }
-      });
-    }
     const btnRefreshMcp = document.getElementById("btn-refresh-mcp");
     if (btnRefreshMcp) {
       btnRefreshMcp.addEventListener("click", () => {

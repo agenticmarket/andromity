@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
 import { getWaterfallHtml } from "../providers/waterfall/waterfallHtml.js";
 import { SettingsPanel } from "./SettingsPanel.js";
+import { FingerprintPanel } from "./FingerprintPanel.js";
 
 export class WaterfallTraceStore {
   private static _buffers = new Map<string, any[]>();
@@ -77,6 +78,8 @@ export class WaterfallTraceStore {
     bind("session/answerReceived", "session_answer_received", (p) => p?.to_session_id || p?.from_session_id);
     bind("session/sharedStateChanged", "session_shared_state_changed");
     bind("session/handoffWritten", "session_handoff_written", (p) => p?.to_session_id || p?.from_session_id);
+    bind("process/started", "process_started", (p) => p?.session_id);
+    bind("process/exited", "process_exited", (p) => p?.session_id);
   }
 
   public static getEvents(sessionId: string): any[] {
@@ -124,11 +127,12 @@ export class WaterfallPanel {
     sessionName: string,
     rpcClient: RpcClient | null,
     context: vscode.ExtensionContext,
-    viewColumn: vscode.ViewColumn = vscode.ViewColumn.Active
+    viewColumn: vscode.ViewColumn = vscode.ViewColumn.Active,
+    source: "manual" | "auto" = "manual"
   ): WaterfallPanel {
     if (rpcClient) {
       WaterfallTraceStore.init(rpcClient);
-      void rpcClient.call("telemetry.recordFeature", { feature: "waterfall", session_id: sessionId }).catch(() => {});
+      void rpcClient.call("telemetry.recordFeature", { feature: source === "manual" ? "waterfall_manual" : "waterfall_auto", session_id: sessionId }).catch(() => {});
     }
     if (WaterfallPanel._panels.has(sessionId)) {
       const existing = WaterfallPanel._panels.get(sessionId)!;
@@ -335,6 +339,16 @@ export class WaterfallPanel {
     bind("session/handoffWritten", (params: any) => {
       if (isSessionTarget(params)) this._postMessage({ type: "session_handoff_written", ...params });
     });
+    bind("process/started", (params: any) => {
+      if (!params?.session_id || params.session_id === this._sessionId) {
+        this._postMessage({ type: "process_started", ...params });
+      }
+    });
+    bind("process/exited", (params: any) => {
+      if (!params?.session_id || params.session_id === this._sessionId) {
+        this._postMessage({ type: "process_exited", ...params });
+      }
+    });
   }
 
   private _postReplayComplete() {
@@ -389,6 +403,16 @@ export class WaterfallPanel {
       }
       case "open_settings": {
         SettingsPanel.createOrShow(this._extensionUri, this._rpcClient, "general");
+        break;
+      }
+      case "open_fingerprint": {
+        FingerprintPanel.createOrShow(
+          this._extensionUri,
+          this._sessionId,
+          this._sessionName,
+          this._rpcClient,
+          this._context
+        );
         break;
       }
       case "waterfall_ready": {

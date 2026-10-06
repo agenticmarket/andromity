@@ -504,7 +504,7 @@ def _python_grep(
     timed_out = False
 
     for dirpath, dirnames, filenames in os.walk(root):
-        if _time.monotonic() > deadline:
+        if _time.monotonic() >= deadline:
             timed_out = True
             break
 
@@ -516,7 +516,7 @@ def _python_grep(
         ]
 
         for fname in filenames:
-            if _time.monotonic() > deadline:
+            if _time.monotonic() >= deadline:
                 timed_out = True
                 break
 
@@ -537,7 +537,7 @@ def _python_grep(
             try:
                 with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                     for line_num, line in enumerate(f, 1):
-                        if line_num % 500 == 0 and _time.monotonic() > deadline:
+                        if line_num % 500 == 0 and _time.monotonic() >= deadline:
                             timed_out = True
                             break
                         if regex.search(line):

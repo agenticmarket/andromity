@@ -42,6 +42,7 @@ _EVENT_ENDPOINT = "https://telemetry.agenticmarket.dev/event"
 
 _tracked_sessions: set[str] = set()
 _lock = threading.Lock()
+_delivery_lock = threading.Lock()
 
 # ─────────────────────────────────────────────────────────────────────
 # Guard
@@ -53,6 +54,8 @@ def _should_send_telemetry() -> bool:
     if os.environ.get("ANDROMITY_NO_TELEMETRY") in ("1", "true", "True", "TRUE"):
         return False
     if os.environ.get("CI") in ("1", "true", "True", "TRUE"):
+        return False
+    if os.environ.get("ANDROMITY_INTERNAL") in ("1", "true", "True", "TRUE"):
         return False
     if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST"):
         return False
@@ -145,28 +148,83 @@ def _duration_bucket(duration_sec: float) -> str:
 # ─────────────────────────────────────────────────────────────────────
 
 def _post(endpoint: str, payload: dict) -> None:
-    """Send JSON payload to endpoint; silently swallow all errors."""
-    try:
-        import urllib.request
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            endpoint,
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent": f"andromity/{__version__} ({payload.get('client', 'cli')})",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=3.0):
+    """Retry bounded delivery, retaining failed anonymous events for the next send."""
+    import urllib.request
+    from pathlib import Path
+    payload = {**payload, "event_id": payload.get("event_id") or uuid.uuid4().hex,
+               "occurred_at": payload.get("occurred_at") or time.time()}
+    spool: Path = get_config_dir() / ".telemetry_outbox.json"
+    with _delivery_lock:
+        if not _should_send_telemetry():
+            spool.unlink(missing_ok=True)
+            return
+        try:
+            pending = json.loads(spool.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pending = []
+        if not isinstance(pending, list):
+            pending = []
+        pending = [item for item in pending if isinstance(item, dict)
+                   and isinstance(item.get("payload"), dict)
+                   and isinstance(item.get("queued"), (int, float))
+                   and item.get("endpoint") in (_PING_ENDPOINT, _EVENT_ENDPOINT)
+                   and time.time() - item["queued"] < 7 * 86400][-99:]
+        pending.append({"endpoint": endpoint, "payload": payload, "queued": time.time()})
+        try:
+            spool.parent.mkdir(parents=True, exist_ok=True)
+            temp = spool.with_suffix(".tmp")
+            temp.write_text(json.dumps(pending), encoding="utf-8")
+            temp.replace(spool)
+        except OSError:
             pass
-    except Exception:
-        pass
-
-
+        remaining = []
+        for item in pending:
+            delivered = False
+            for attempt in range(3):
+                if not _should_send_telemetry():
+                    spool.unlink(missing_ok=True)
+                    return
+                try:
+                    req = urllib.request.Request(item["endpoint"], data=json.dumps(item["payload"]).encode("utf-8"),
+                        headers={"Content-Type": "application/json", "User-Agent": f"andromity/{__version__}"}, method="POST")
+                    with urllib.request.urlopen(req, timeout=3.0):
+                        delivered = True
+                    break
+                except Exception:
+                    if attempt < 2:
+                        time.sleep(0.1 * (2 ** attempt))
+            if not delivered:
+                remaining.append(item)
+        try:
+            spool.parent.mkdir(parents=True, exist_ok=True)
+            temp = spool.with_suffix(".tmp")
+            temp.write_text(json.dumps(remaining), encoding="utf-8")
+            temp.replace(spool)
+        except OSError:
+            pass
+    return
 # ─────────────────────────────────────────────────────────────────────
 # Public API
 # ─────────────────────────────────────────────────────────────────────
+
+def send_task_event(event: str, session_id: str, run_id: str, *, outcome: Optional[str] = None,
+                    active_seconds: float = 0, first_response_ms: Optional[int] = None,
+                    provider: Optional[str] = None, model: Optional[str] = None) -> None:
+    if not _should_send_telemetry():
+        return
+    if event not in ("task_started", "task_finished"):
+        raise ValueError("Invalid task event")
+    if event == "task_finished" and outcome not in ("completed", "failed", "cancelled"):
+        raise ValueError("Invalid task outcome")
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{16,64}", run_id):
+        raise ValueError("Invalid run ID")
+    payload = {"event": event, "user_id": _get_or_create_user_id(),
+        "session_id": _safe_str(session_id, 64), "run_id": run_id,
+        "client": _detect_client(), "os": platform.system().lower(), "version": __version__,
+        "provider": _safe_str(provider or "unknown", 32), "model": _safe_str(model or "unknown", 64),
+        "outcome": outcome, "active_seconds": max(0, active_seconds), "first_response_ms": first_response_ms}
+    threading.Thread(target=_post, args=(_EVENT_ENDPOINT, payload), daemon=True).start()
+
 
 def send_session_start(
     session_id: Optional[str] = None,

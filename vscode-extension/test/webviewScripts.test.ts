@@ -35,12 +35,317 @@ Module.prototype.require = function (reqPath: string) {
 
 import { ChatViewState, getChatViewHtml } from "../src/providers/chatview/chatHtml.js";
 import { getChatClientScript } from "../src/providers/chatview/chatClientScript.js";
+
+describe("Queued prompt display", () => {
+  it("hides ambient IDE context in server and fallback queues without changing payloads", () => {
+    const script = getChatClientScript("icon.svg", {
+      currentSessionId: "session", currentModel: "model", currentProvider: "provider",
+      currentMode: "safe", currentProfile: "builder", currentReasoning: "medium",
+    });
+    const parser = script.slice(script.indexOf("    function parseUserPromptDisplay("), script.indexOf("    function appendUserMessage("));
+    const renderer = script.slice(script.indexOf("    function renderQueue("), script.indexOf("    window.removeQueued ="));
+    const prompt = "leave it\n\n---\n[Active Document: internal-log (Language: Log)]\nprivate editor content";
+    for (const queueSupported of [true, false]) {
+      const item = { id: "input", prompt, text: prompt, sessionId: "session", image_count: 0 };
+      const container = { style: { display: "" }, innerHTML: "" };
+      const context = vm.createContext({
+        queueSupported, currentSessionId: "session", queueContainer: container,
+        serverQueues: { session: { items: [item] } }, promptQueue: [item],
+        escapeHtml: (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;"),
+        getPathBasename: (value: string) => value.split(/[\\/]/).pop(),
+      });
+      vm.runInContext(parser + renderer + "\nrenderQueue();", context);
+      assert.ok(container.innerHTML.includes("leave it"));
+      assert.ok(!container.innerHTML.includes("Active Document"));
+      assert.ok(!container.innerHTML.includes("private editor content"));
+      assert.equal(item.prompt, prompt);
+      assert.equal(item.text, prompt);
+    }
+  });
+});
 import { getChatStyles } from "../src/providers/chatview/chatStyles.js";
 import { getWaterfallHtml } from "../src/providers/waterfall/waterfallHtml.js";
 import { getWaterfallScript } from "../src/providers/waterfall/waterfallScript.js";
+import { getFingerprintHtml } from "../src/providers/fingerprint/fingerprintHtml.js";
+import { getFingerprintScript } from "../src/providers/fingerprint/fingerprintScript.js";
 import { getChatAmbientScript } from "../src/providers/chatview/chatAmbientScript.js";
+import { getChatActivityScript } from "../src/providers/chatview/chatActivityRow.js";
+import { getChatActivityStyles } from "../src/providers/chatview/chatActivityStyles.js";
+import { BackgroundTaskPanel } from "../src/panels/BackgroundTaskPanel.js";
+import { handleInputMessage } from "../src/server/inputBridge.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
+
+describe("Shared sidebar and session-tab retry transport", () => {
+  it("uses the selected session and server retry without undoing files", async () => {
+    const calls: any[] = [];
+    const posts: any[] = [];
+    const rpc: any = { call: async (method: string, params: any) => { calls.push({ method, params }); return {}; } };
+    assert.equal(await handleInputMessage(rpc, { type: "retry_turn", sessionId: "tab", stripImages: true },
+      "sidebar", message => posts.push(message)), true);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].method, "agent.retry");
+    assert.equal(calls[0].params.session_id, "tab");
+    assert.equal(calls[0].params.strip_images, true);
+    assert.equal(posts[0].type, "retry_result");
+    assert.equal(posts[0].success, true);
+  });
+
+  it("returns a retry failure acknowledgement without leaking provider details", async () => {
+    const posts: any[] = [];
+    const rpc: any = { call: async () => { throw new Error("internal secret provider error"); } };
+    await handleInputMessage(rpc, { type: "retry_turn", stripImages: true }, "tab", message => posts.push(message));
+    assert.equal(posts[0].type, "retry_result");
+    assert.equal(posts[0].success, false);
+    assert.equal(posts[0].error, "Retry could not start. Reconnect and try again.");
+  });
+});
+
+describe("Chat scroll layout and session settling", () => {
+  function harness() {
+    const script = getChatClientScript('icon.svg', {
+      currentSessionId: 'first', currentModel: 'auto', currentProvider: 'andromity',
+      currentMode: 'safe', currentProfile: 'builder', currentReasoning: 'auto',
+    });
+    const listeners: Record<string, (event: any) => void> = {};
+    const frames = new Map<number, () => void>();
+    const timers = new Map<number, () => void>();
+    let nextId = 1;
+    let now = 1000;
+    let top = 600;
+    const chat = {
+      scrollHeight: 1000, clientHeight: 400, lastElementChild: null,
+      get scrollTop() { return top; },
+      set scrollTop(value: number) { top = Math.max(0, Math.min(value, this.scrollHeight - this.clientHeight)); },
+      addEventListener: (event: string, callback: (event: any) => void) => { listeners[event] = callback; },
+      scrollTo: ({ top: value }: { top: number }) => { chat.scrollTop = value; },
+    };
+    let resize = () => {};
+    const observed: unknown[] = [];
+    const context = vm.createContext({
+      currentSessionId: 'first', chatContainer: chat, btnScrollBottom: null,
+      scrollUnreadBadge: null, planTrackerStrip: {}, interactiveSlot: {},
+      Date: { now: () => now },
+      requestAnimationFrame: (callback: () => void) => { const id = nextId++; frames.set(id, callback); return id; },
+      cancelAnimationFrame: (id: number) => frames.delete(id),
+      setTimeout: (callback: () => void) => { const id = nextId++; timers.set(id, callback); return id; },
+      clearTimeout: (id: number) => timers.delete(id),
+      ResizeObserver: class {
+        constructor(callback: () => void) { resize = callback; }
+        observe(element: unknown) { observed.push(element); }
+      },
+    });
+    vm.runInContext(script.slice(script.indexOf('    let userScrolledUp ='), script.indexOf('    let toolSeqDoneTools =')), context);
+    const flush = (queue: Map<number, () => void>) => {
+      const callbacks = [...queue.values()]; queue.clear(); callbacks.forEach(callback => callback());
+    };
+    return { chat, context, listeners, observed, resize: () => resize(),
+      frames: () => flush(frames), timers: () => { now += 600; flush(timers); },
+      sessionTimers: () => {
+        const gestureTimer = vm.runInContext('_userScrollDebounceTimer', context);
+        for (const [id, callback] of [...timers]) {
+          if (id === gestureTimer) continue;
+          timers.delete(id); callback();
+        }
+      },
+      eval: (code: string) => vm.runInContext(code, context) };
+  }
+  it('keeps following when approval removal shifts the viewport during new output', () => {
+    const h = harness();
+    assert.ok(h.observed.includes(h.chat));
+    h.chat.clientHeight = 200;
+    h.resize(); h.frames(); h.timers();
+    assert.equal(h.chat.scrollTop, 800);
+    h.chat.clientHeight = 400;
+    h.chat.scrollTop = 550;
+    h.chat.scrollHeight = 1200;
+    h.listeners.scroll({});
+    h.resize(); h.frames();
+    assert.equal(h.eval('userScrolledUp'), false);
+    assert.equal(h.chat.scrollTop, 800);
+  });
+  it('preserves manual reading when permission layout changes', () => {
+    const h = harness();
+    h.listeners.wheel({ deltaY: -1 });
+    h.chat.scrollTop = 200;
+    h.listeners.scroll({});
+    h.chat.clientHeight = 200;
+    h.resize(); h.frames();
+    assert.equal(h.chat.scrollTop, 200);
+    assert.equal(h.eval('userScrolledUp'), true);
+  });
+  it('does not force delayed session settling after the user scrolls up', () => {
+    const h = harness();
+    h.eval('settleSessionScroll();'); h.frames();
+    h.listeners.wheel({ deltaY: -1 });
+    h.chat.scrollTop = 200;
+    h.timers(); h.frames();
+    assert.equal(h.chat.scrollTop, 200);
+  });
+  it('ignores pending scroll callbacks from a previous session', () => {
+    const h = harness();
+    h.eval('settleSessionScroll();'); h.frames(); h.frames();
+    h.eval("currentSessionId = 'second';");
+    h.chat.scrollTop = 200;
+    h.timers(); h.frames();
+    assert.equal(h.chat.scrollTop, 200);
+  });
+  it('recognizes keyboard scrolling as user intent', () => {
+    const h = harness();
+    h.listeners.keydown({ key: 'PageUp', target: { closest: () => null } });
+    h.chat.scrollTop = 200;
+    h.listeners.scroll({});
+    assert.equal(h.eval('userScrolledUp'), true);
+  });
+  it('ignores a queued animation frame after switching sessions', () => {
+    const h = harness();
+    h.eval('scrollToBottomIfNeeded();');
+    h.eval("currentSessionId = 'second';");
+    h.chat.scrollTop = 200;
+    h.frames();
+    assert.equal(h.chat.scrollTop, 200);
+  });
+  it('does not resume following when reading within 64px of the latest message', () => {
+    const h = harness();
+    h.listeners.wheel({ deltaY: -12 });
+    h.chat.scrollTop = 588;
+    h.listeners.scroll({});
+    h.resize(); h.frames();
+    assert.equal(h.eval('userScrolledUp'), true);
+    assert.equal(h.chat.scrollTop, 588);
+  });
+  it('does not pull a touch or scrollbar gesture to the bottom before its scroll event', () => {
+    for (const gesture of ['touchmove', 'pointerdown']) {
+      const h = harness();
+      h.listeners[gesture]({});
+      h.chat.scrollTop = 200;
+      h.eval('scrollToBottomIfNeeded();'); h.frames();
+      assert.equal(h.chat.scrollTop, 200);
+    }
+  });
+  it('keeps native downward scrolling free until it actually reaches the bottom', () => {
+    const h = harness();
+    h.listeners.wheel({ deltaY: -1 });
+    h.chat.scrollTop = 200; h.listeners.scroll({}); h.timers();
+    h.listeners.wheel({ deltaY: 1 });
+    h.chat.scrollTop = 550; h.listeners.scroll({});
+    h.eval('scrollToBottomIfNeeded();'); h.frames();
+    assert.equal(h.chat.scrollTop, 550);
+    h.chat.scrollTop = 600; h.listeners.scroll({});
+    assert.equal(h.eval('userScrolledUp'), false);
+  });
+  it('preserves a tiny scrollbar scroll in an idle session after gesture settling', () => {
+    const h = harness();
+    h.listeners.pointerdown({});
+    h.chat.scrollTop = 597;
+    h.listeners.scroll({});
+    h.chat.scrollTop = 596;
+    h.listeners.scroll({});
+    h.timers(); h.resize(); h.frames();
+    assert.equal(h.eval('userScrolledUp'), true);
+    assert.equal(h.chat.scrollTop, 596);
+  });
+  it('does not mistake a stale bottom scroll event for resuming after a wheel-up', () => {
+    const h = harness();
+    h.listeners.wheel({ deltaY: -1 });
+    h.listeners.scroll({});
+    h.chat.scrollTop = 599;
+    h.listeners.scroll({});
+    h.timers(); h.resize(); h.frames();
+    assert.equal(h.chat.scrollTop, 599);
+    assert.equal(h.eval('userScrolledUp'), true);
+  });
+  it('abandons session settling after any manual gesture, even without a scroll event', () => {
+    const h = harness();
+    h.eval('settleSessionScroll();'); h.frames(); h.frames();
+    h.listeners.pointerdown({});
+    h.chat.scrollTop = 300;
+    h.sessionTimers(); h.frames();
+    assert.equal(h.chat.scrollTop, 300);
+  });
+  it('uses real turn heights and jumps the latest button to the complete feed', () => {
+    assert.ok(!getChatStyles().includes('content-visibility: auto'));
+    const h = harness();
+    h.chat.scrollHeight = 5000;
+    h.chat.scrollTop = 300;
+    h.eval('scrollToBottom(false); settleSessionScroll();'); h.frames(); h.frames(); h.timers(); h.frames();
+    assert.equal(h.chat.scrollTop, 4600);
+    h.eval("currentSessionId = 'second';");
+    h.chat.scrollHeight = 8000;
+    h.eval('scrollToBottom(false); settleSessionScroll();'); h.frames(); h.frames(); h.timers(); h.frames();
+    assert.equal(h.chat.scrollTop, 7600);
+  });
+});
+
+describe("Cloud account allowance", () => {
+  const script = getChatClientScript('icon.svg', {
+    currentSessionId: 'account', currentModel: 'auto', currentProvider: 'andromity',
+    currentMode: 'safe', currentProfile: 'builder', currentReasoning: 'auto',
+  });
+  const renderer = script.slice(script.indexOf('    function renderCloudAccountUsage('),
+    script.indexOf("    btnTopAccount?.addEventListener('click'"));
+  function render(msg: Record<string, unknown>) {
+    const element = () => ({ textContent: '', style: { display: '', width: '', color: '', background: '' },
+      attributes: {} as Record<string, string>, setAttribute(name: string, value: string) { this.attributes[name] = value; },
+      classList: { toggle: () => {} } });
+    const elements = Object.fromEntries(['accountUsername', 'accountPlanBadge', 'accountAvatar', 'accountPillDot',
+      'accountPillText', 'btnTopAccount', 'accountQuotaVal',
+      'accountQuotaTrack', 'accountQuotaBar', 'accountResetTimer', 'btnAccountLogin', 'btnAccountLogout'].map(key => [key, element()]));
+    const context = vm.createContext({ ...elements, msg });
+    vm.runInContext(renderer + '\nrenderCloudAccountUsage(msg);', context);
+    return elements;
+  }
+  it('shows an accessible allowance bar without visible turn counts', () => {
+    const ui = render({ plan: 'anonymous', username: 'Anonymous', status: 'active', limit_today: 30, turns_remaining: 12 });
+    assert.equal(ui.accountUsername.textContent, 'Guest');
+    assert.equal(ui.accountQuotaBar.style.width, '40%');
+    assert.equal(ui.accountQuotaTrack.attributes['aria-valuenow'], '40');
+    assert.ok(![ui.accountUsername, ui.accountPlanBadge, ui.accountQuotaVal].some(element => /12|30/.test(element.textContent)));
+    assert.ok(!renderer.includes('accountAllowanceValue'));
+    assert.match(ui.accountResetTimer.textContent, /^Daily allowance resets at /);
+  });
+  it('does not invent a full allowance when usage cannot be fetched', () => {
+    const ui = render({ plan: 'anonymous', status: 'unavailable', limit_today: null, turns_remaining: null });
+    assert.equal(ui.accountQuotaVal.textContent, 'Usage unavailable');
+    assert.equal(ui.accountQuotaTrack.style.display, 'none');
+    assert.equal(ui.accountResetTimer.textContent, '');
+  });
+  it('does not equate a signed-in account or an uncapped allowance with Pro', () => {
+    const ui = render({ plan: 'authenticated', username: 'Developer', status: 'active', limit_today: null, turns_remaining: -1 });
+    assert.equal(ui.accountPlanBadge.textContent, 'Signed in');
+    assert.equal(ui.accountQuotaTrack.style.display, 'none');
+    assert.equal(ui.accountResetTimer.textContent, '');
+    assert.equal(ui.btnAccountLogin.style.display, 'none');
+  });
+  it('distinguishes blocked access from an exhausted allowance', () => {
+    assert.equal(render({ status: 'blocked', limit_today: 30, turns_remaining: 25 }).accountQuotaVal.textContent, 'Access blocked');
+    const ui = render({ status: 'limit_reached', limit_today: 30, turns_remaining: 0 });
+    assert.equal(ui.accountQuotaVal.textContent, 'Daily limit reached');
+    assert.equal(ui.accountQuotaBar.style.width, '0%');
+  });
+  it('broadcasts unavailable usage when the gateway request fails', async () => {
+    const { ChatViewProvider } = await import('../src/providers/ChatViewProvider.js');
+    const provider: any = Object.create(ChatViewProvider.prototype);
+    const posts: any[] = [];
+    Object.assign(provider, {
+      _context: { secrets: { get: async () => undefined } },
+      _getGatewayBaseUrl: () => 'https://gateway.invalid',
+      broadcastToWebviews: (msg: any) => posts.push(msg),
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => { throw new Error('network unavailable'); };
+    try {
+      const usage = await provider.fetchUsage(true);
+      assert.equal(usage.status, 'unavailable');
+      assert.equal(usage.limit_today, null);
+      assert.equal(usage.turns_remaining, null);
+      assert.equal(posts[0].type, 'usage_updated');
+      assert.equal(posts[0].status, 'unavailable');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
 
 describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
   it("ChatViewProvider client script should compile with 0 syntax errors", () => {
@@ -123,6 +428,8 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     const postedMessages: any[] = [];
     const mockDoc: any = {
       getElementById: () => ({
+        setAttribute: () => {},
+        removeAttribute: () => {},
         addEventListener: () => {},
         classList: { add: () => {}, remove: () => {}, contains: () => false, toggle: () => {} },
         style: {},
@@ -222,6 +529,76 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.doesNotThrow(() => {
       new vm.Script(scriptMatch[1], { filename: "extractedWaterfallScript.js" });
     }, "Extracted waterfall script must parse with 0 syntax errors");
+  });
+
+  it("Fingerprint client script should compile with 0 syntax errors", () => {
+    const scriptCode = getFingerprintScript("test-session-123");
+    assert.ok(scriptCode.length > 500, "Fingerprint script should be non-empty");
+    assert.ok(scriptCode.includes("setupInteractions"), "Must contain canvas and node interaction setup");
+    assert.ok(scriptCode.includes("isCanvasPanning"), "Must handle canvas panning state");
+    assert.ok(scriptCode.includes("draggingNodeId"), "Must handle node dragging state");
+    assert.ok(scriptCode.includes("renderConnections"), "Must redraw bezier curves dynamically on drag");
+    assert.ok(scriptCode.includes("bindControls"), "Must bind UI controls using DOM listeners");
+    assert.ok(scriptCode.includes("toggleLeftSidebar"), "Must provide toggle function for left turns sidebar");
+    assert.ok(scriptCode.includes("toggleInspector"), "Must provide toggle function for right inspector drawer");
+
+    assert.doesNotThrow(() => {
+      new vm.Script(scriptCode, { filename: "fingerprintScript.js" });
+    }, "fingerprintScript.js must parse with 0 syntax errors");
+  });
+
+  it("Fingerprint HTML should contain valid CSP, nonce, zero emojis, and script structure", () => {
+    const mockWebview: any = {
+      cspSource: "vscode-webview:",
+      asWebviewUri: (u: any) => "vscode-resource://" + (u.fsPath || u.path || String(u)),
+    };
+
+    const html = getFingerprintHtml(mockWebview, "test-sess", "Test Session");
+    assert.ok(html.includes("<!DOCTYPE html>"), "Must be a full HTML document");
+    assert.ok(html.includes("Content-Security-Policy"), "Must declare strict CSP");
+    assert.ok(html.includes("nonce-"), "Must have script nonce in CSP");
+    assert.ok(html.includes('<script nonce="'), "Script tags must be nonce-protected");
+    assert.ok(!html.includes("onclick="), "Must NOT contain inline onclick handlers that violate CSP");
+    assert.ok(html.includes('id="btn-safety-guard"'), "Must contain safety guard button");
+    assert.ok(html.includes('id="btn-fit-canvas"'), "Must contain fit canvas button");
+    assert.ok(html.includes('id="tab-dag"'), "Must contain Causal DAG tab button");
+    assert.ok(html.includes('id="tab-blast"'), "Must contain Blast Radius tab button");
+    assert.ok(html.includes('id="btn-zoom-fit"'), "Must contain Fit zoom button in toolbar");
+    assert.ok(html.includes('id="btn-toggle-left-sidebar"'), "Must contain toggle button for left turns sidebar");
+    assert.ok(html.includes('id="btn-toggle-right-sidebar"'), "Must contain toggle button for right inspector drawer");
+    assert.ok(html.includes('id="btn-collapse-left"'), "Must contain collapse button inside left sidebar header");
+    assert.ok(html.includes('id="btn-collapse-right"'), "Must contain collapse button inside inspector header");
+    assert.ok(html.includes('id="btn-pin-inspector"'), "Must contain pin/unpin inspector button");
+    assert.ok(html.includes('class="fp-inspector collapsed"'), "Inspector drawer must start default collapsed");
+
+    // Zero fake data verification
+    const panelPath = fs.existsSync(path.join(__dirname, "../src/panels/FingerprintPanel.ts"))
+      ? path.join(__dirname, "../src/panels/FingerprintPanel.ts")
+      : path.join(__dirname, "../../src/panels/FingerprintPanel.ts");
+    const panelSource = fs.readFileSync(panelPath, "utf8");
+    assert.ok(!panelSource.includes("_getSampleTraceData"), "FingerprintPanel must NOT contain any fake sample data stubs");
+    assert.ok(panelSource.includes("tools_called"), "FingerprintPanel must extract child tools called by subagents");
+
+    // Zero emojis check
+    const emojiRegex = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u;
+    assert.ok(!emojiRegex.test(html), "Fingerprint HTML must have 0 emojis and use SVG vector icons");
+
+    const scriptMatch = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/);
+    assert.ok(scriptMatch && scriptMatch[1], "Should extract script body");
+    assert.ok(scriptMatch[1].includes("togglePinInspector"), "Script must contain togglePinInspector function");
+    assert.ok(scriptMatch[1].includes("isInspectorPinned"), "Script must track isInspectorPinned state");
+    assert.ok(scriptMatch[1].includes("clusterCx"), "Script must compute multi-turn orbital cluster centers for blast radius view");
+    assert.ok(scriptMatch[1].includes("drilldownSubagent"), "Script must contain drilldownSubagent function");
+    assert.ok(scriptMatch[1].includes("exitSubagentDrilldown"), "Script must contain exitSubagentDrilldown function");
+    assert.ok(scriptMatch[1].includes("getCurrentDataset"), "Script must contain getCurrentDataset function for subagent isolation");
+    assert.ok(html.includes('id="subagent-breadcrumb"'), "HTML must contain subagent drilldown breadcrumb bar");
+    assert.ok(html.includes('id="btn-back-to-session"'), "HTML must contain back to main session button");
+    assert.ok(html.includes('id="crumb-subagent-role"'), "HTML must display subagent role crumb");
+    assert.ok(html.includes('id="sidebar-subagents-section"'), "HTML must include subagents section in sidebar");
+
+    assert.doesNotThrow(() => {
+      new vm.Script(scriptMatch[1], { filename: "extractedFingerprintScript.js" });
+    }, "Extracted Fingerprint script must parse with 0 syntax errors");
   });
 
   it("Ambient wallpaper script should compile with 0 syntax errors for both enabled and disabled states", () => {
@@ -956,7 +1333,7 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(scriptCode.includes("function isAtBottom(threshold = 64)"), "isAtBottom should have a generous threshold of 64px");
     assert.ok(scriptCode.includes("if (userScrolledUp)"), "scrollToBottomIfNeeded should respect userScrolledUp");
     assert.ok(
-      scriptCode.includes("if (isAtBottom(64))") && scriptCode.includes("userScrolledUp = false;"),
+      scriptCode.includes("if (!userScrolledUp && !_isUserActivelyScrolling && isAtBottom(2))"),
       "startAssistantTurn must not unconditionally overwrite userScrolledUp when user is reading history"
     );
     assert.ok(
@@ -1029,10 +1406,9 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(html.includes('id="reasoning-slider-fill"'), "Chat HTML must contain reasoning-slider-fill");
     assert.ok(!html.includes('id="reasoning-popover-desc"'), "Minimal popover must omit description text box");
     assert.ok(!html.includes('id="reasoning-popover-badge"'), "Minimal popover must omit title/badge header");
-    assert.ok(html.includes('data-level="off"'), "Popover must contain Off step");
-    assert.ok(html.includes('data-level="low"'), "Popover must contain Low step");
-    assert.ok(html.includes('data-level="medium"'), "Popover must contain Medium step");
-    assert.ok(html.includes('data-level="high"'), "Popover must contain High step");
+    assert.ok(html.includes('id="reasoning-slider-labels"'), "Steps must be populated from capabilities");
+    assert.ok(!html.includes('data-level="off"'), "Off must not be offered before capability discovery");
+    assert.ok(html.includes('id="reasoning-budget-input"'), "Budget models need a token input");
 
     // 2. CSS styles validation
     assert.ok(styles.includes('.reasoning-popover'), "Styles must define .reasoning-popover");
@@ -1072,7 +1448,7 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(scriptCode.includes("<span>Watching</span>"), "Script must render Watching label in title case");
   });
 
-  it("should render 1-click seamless onboarding hero, instant free trial button, and GitHub OAuth login button", () => {
+  it("puts visible BYOK providers before the single trial and sign-in actions", () => {
     const mockWebview: any = {
       asWebviewUri: (uri: any) => ({ toString: () => uri.fsPath || "uri" }),
       cspSource: "vscode-webview-resource:",
@@ -1093,9 +1469,18 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(html.includes("onboarding-instant-hero"), "HTML must include .onboarding-instant-hero");
     assert.ok(html.includes("btn-onboarding-instant-start"), "HTML must include #btn-onboarding-instant-start");
     assert.ok(html.includes("btn-onboarding-github-login"), "HTML must include #btn-onboarding-github-login");
-    assert.ok(html.includes("btn-onboarding-andromity-activate"), "HTML must include #btn-onboarding-andromity-activate");
-    assert.ok(html.includes('data-provider="andromity"'), "HTML must include data-provider='andromity' chip");
-    assert.ok(html.includes("onboarding-andromity-form"), "HTML must include #onboarding-andromity-form");
+    assert.equal((html.match(/id="btn-onboarding-instant-start"/g) || []).length, 1);
+    assert.equal((html.match(/id="btn-onboarding-github-login"/g) || []).length, 1);
+    assert.ok(!html.includes('id="btn-onboarding-andromity-activate"'));
+    assert.ok(!html.includes('id="btn-onboarding-andromity-github"'));
+    assert.ok(!html.includes('data-provider="andromity"'));
+    assert.ok(html.includes('<section class="onboarding-own-provider" id="onboarding-own-provider"'));
+    assert.ok(!html.includes('<details class="onboarding-own-provider"'));
+    assert.ok(html.indexOf('id="onboarding-own-provider"') < html.indexOf('id="onboarding-trial-section"'));
+    for (const provider of ['anthropic', 'openai', 'google', 'openrouter', 'ollama', 'deepseek']) {
+      assert.ok(html.includes('data-provider="' + provider + '"'));
+    }
+    assert.ok(!html.includes('Step 1 of 2'));
 
     // CSS asserts
     assert.ok(styles.includes(".onboarding-instant-hero"), "Styles must define .onboarding-instant-hero");
@@ -1108,6 +1493,40 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(scriptCode.includes("activate_andromity_free"), "Script must dispatch activate_andromity_free message");
     assert.ok(scriptCode.includes("open_github_login"), "Script must dispatch open_github_login message");
     assert.ok(scriptCode.includes("isAndromityActive"), "Script must check isAndromityActive to auto-dismiss onboarding");
+  });
+
+  it("keeps connection choices out of model selection and restores them when going back", () => {
+    const script = getChatClientScript('icon.svg', {
+      currentSessionId: 'setup', currentModel: 'auto', currentProvider: 'andromity',
+      currentMode: 'safe', currentProfile: 'builder', currentReasoning: 'auto',
+    });
+    const element = () => ({ style: { display: '' }, textContent: '', value: '', focus: () => {} });
+    const ownProvider = element();
+    const trial = element();
+    const step1 = element();
+    const step2 = element();
+    const label = element();
+    const context = vm.createContext({
+      onboardingPendingProvider: '', selectedOnboardingProvider: 'anthropic',
+      onboardingLiveModelsList: [], onboardingSelectedLiveModel: '',
+      onboardingStep1: step1, onboardingStep2: step2, onboardingOwnProvider: ownProvider,
+      onboardingTrialSection: trial, onboardingStepText: label,
+      onboardingStep2Badge: element(), onboardingStep2Search: element(),
+      btnOnboardingSave: null, btnOnboardingOllamaSave: null, btnStep2Confirm: null,
+      renderOnboardingStep2Models: () => {}, setTimeout: (fn: () => void) => fn(),
+    });
+    const functions = script.slice(script.indexOf('    function showOnboardingModelStep('),
+      script.indexOf('    function renderOnboardingStep2Models('));
+    vm.runInContext(functions + "\nshowOnboardingModelStep('anthropic', [], 'claude');", context);
+    assert.equal(trial.style.display, 'none');
+    assert.equal(ownProvider.style.display, 'none');
+    assert.equal(step2.style.display, 'flex');
+    assert.equal(label.textContent, 'Choose a starting model');
+    vm.runInContext('showOnboardingKeyStep();', context);
+    assert.equal(trial.style.display, 'flex');
+    assert.equal(ownProvider.style.display, 'block');
+    assert.equal(step1.style.display, 'flex');
+    assert.equal(step2.style.display, 'none');
   });
 
   it("should render clean popover dropdown menus for permission modes and agent profiles with zero emojis", () => {
@@ -1165,4 +1584,337 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(scriptCode.includes("updateModeBadge"), "Script must define updateModeBadge");
     assert.ok(scriptCode.includes("updateProfileBadge"), "Script must define updateProfileBadge");
   });
+
+  it("should render error cards strictly from agent_error events with native action buttons and not from AI text tokens", () => {
+    const state: ChatViewState = {
+      currentSessionId: "sess-error-card",
+      currentModel: "andromity/auto",
+      currentProvider: "andromity",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "medium",
+    };
+    const scriptCode = getChatClientScript("icon.svg", state);
+
+    // 1. Verify appendErrorCard defines the quota limit actions and UI elements
+    assert.ok(scriptCode.includes("function appendErrorCard("), "Script must define appendErrorCard");
+    assert.ok(scriptCode.includes('data-action="open-account-login"'), "Quota error card must render Sign In button");
+    assert.ok(scriptCode.includes('data-action="open-settings"'), "Quota error card must render Open Settings button");
+    assert.ok(scriptCode.includes('data-action="switch-model-flyout"'), "Quota error card must render Switch Model button");
+    assert.ok(scriptCode.includes("badge = 'QUOTA LIMIT'"), "Quota error card must badge as QUOTA LIMIT");
+    assert.ok(scriptCode.includes("title = 'Daily Limit Reached'"), "Quota error card must title as Daily Limit Reached");
+    assert.ok(scriptCode.includes("Quota resets in"), "Quota error card must detect countdown timer");
+
+    // 2. Safeguard check: endAssistantTurn must NEVER regex-scan assistant response text for QUOTA LIMIT or RATE LIMIT
+    const endTurnIdx = scriptCode.indexOf("function endAssistantTurn(");
+    assert.ok(endTurnIdx > 0, "Script must define endAssistantTurn");
+    const endTurnBody = scriptCode.slice(endTurnIdx, endTurnIdx + 1200);
+    assert.ok(!endTurnBody.includes("includes('[QUOTA LIMIT]')"), "endAssistantTurn must not convert [QUOTA LIMIT] text into error card");
+    assert.ok(!endTurnBody.includes("includes('[RATE LIMIT]')"), "endAssistantTurn must not convert [RATE LIMIT] text into error card");
+    assert.ok(!endTurnBody.includes("appendErrorCard"), "endAssistantTurn must never call appendErrorCard from normal text stream");
+
+    // 3. Verify agent_error handler strictly routes to appendErrorCard
+    const agentErrorIdx = scriptCode.indexOf("case 'agent_error':");
+    assert.ok(agentErrorIdx > 0, "Script must handle agent_error message");
+    const agentErrorBlock = scriptCode.slice(agentErrorIdx, agentErrorIdx + 1200);
+    assert.ok(agentErrorBlock.includes("appendErrorCard(msg.error"), "agent_error case must invoke appendErrorCard");
+  });
+
+  it("executes appendErrorCard in VM mock DOM on agent_error and renders action buttons without triggering on normal text", () => {
+    const state: ChatViewState = {
+      currentSessionId: "sess-error-vm",
+      currentModel: "andromity/auto",
+      currentProvider: "andromity",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "medium",
+    };
+    const scriptCode = getChatClientScript("icon.svg", state);
+
+    let messageListener: any = null;
+    const appendedElements: any[] = [];
+    const mockChatContainer: any = {
+      appendChild: (el: any) => appendedElements.push(el),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      scrollHeight: 1000,
+      scrollTop: 0,
+      clientHeight: 500,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+    };
+
+    const mockDoc: any = {
+      getElementById: (id: string) => {
+        if (id === 'chat-messages' || id === 'chat-container') return mockChatContainer;
+        return {
+          addEventListener: () => {},
+          classList: { add: () => {}, remove: () => {}, contains: () => false, toggle: () => {} },
+          style: {},
+          setAttribute: () => {},
+          removeAttribute: () => {},
+          remove: () => {},
+          getBoundingClientRect: () => ({ top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0 }),
+          querySelector: () => null,
+          querySelectorAll: () => [],
+          appendChild: () => {},
+        };
+      },
+      createElement: (tag: string) => {
+        const el: any = {
+          tagName: tag.toUpperCase(),
+          children: [],
+          classList: { add: () => {}, remove: () => {}, contains: () => false, toggle: () => {} },
+          style: {},
+          setAttribute: () => {},
+          removeAttribute: () => {},
+          remove: () => {},
+          getBoundingClientRect: () => ({ top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0 }),
+          querySelector: () => null,
+          querySelectorAll: () => [],
+          appendChild: (c: any) => el.children.push(c),
+        };
+        Object.defineProperty(el, 'innerHTML', {
+          set(val: string) {
+            el._innerHTML = val;
+            el.firstElementChild = {
+              className: 'andromity-error-card',
+              innerHTML: val,
+              getAttribute: () => null,
+            };
+          },
+          get() {
+            return el._innerHTML || '';
+          }
+        });
+        return el;
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      querySelectorAll: () => [],
+      querySelector: () => null,
+      body: { classList: { add: () => {}, remove: () => {} } },
+    };
+
+    const mockWindow: any = {
+      addEventListener: (evt: string, fn: any) => {
+        if (evt === 'message') messageListener = fn;
+      },
+      removeEventListener: () => {},
+      dispatchEvent: () => {},
+    };
+
+    const sandbox: any = {
+      acquireVsCodeApi: () => ({ postMessage: () => {}, getState: () => ({}), setState: () => {} }),
+      document: mockDoc,
+      window: mockWindow,
+      console: { log: () => {}, warn: () => {}, error: () => {}, info: () => {} },
+      setTimeout: (fn: Function) => { fn(); },
+      setInterval: () => 1,
+      clearInterval: () => {},
+      clearTimeout: () => {},
+      requestAnimationFrame: (fn: Function) => { fn(); },
+      cancelAnimationFrame: () => {},
+      marked: { parse: (s: string) => s, use: () => {} },
+      navigator: { clipboard: { writeText: () => Promise.resolve() } },
+      encodeURIComponent,
+      decodeURIComponent,
+      Math,
+      Date,
+      JSON,
+      String,
+      Number,
+      Array,
+      Object,
+      RegExp,
+      Set,
+      Map,
+    };
+
+    vm.createContext(sandbox);
+    vm.runInContext(scriptCode, sandbox);
+
+    assert.ok(typeof messageListener === 'function', "Script must register window message listener");
+
+    // 1. Simulate an agent_error with quota limit
+    messageListener({
+      data: {
+        type: 'agent_error',
+        error: 'daily_limit_reached (Quota resets in 14h 10m)'
+      }
+    });
+
+    assert.ok(appendedElements.length > 0, "Error card element must be appended to chatContainer");
+    const lastAppended = appendedElements[appendedElements.length - 1];
+    const cardHtml = lastAppended.innerHTML || (lastAppended.firstElementChild && lastAppended.firstElementChild.innerHTML) || '';
+
+    // Verify error card contents
+    assert.ok(cardHtml.includes('QUOTA LIMIT'), "Card must include QUOTA LIMIT badge");
+    assert.ok(cardHtml.includes('Daily Limit Reached'), "Card must include Daily Limit Reached title");
+    assert.ok(cardHtml.includes('data-action="open-account-login"'), "Unauthed quota error card must include Sign In button");
+    assert.ok(cardHtml.includes('data-action="open-settings"'), "Card must include Open Settings button");
+    assert.ok(cardHtml.includes('data-action="switch-model-flyout"'), "Card must include Switch Model button");
+    assert.ok(cardHtml.includes('Quota resets in 14h 10m'), "Card must render quota reset timer");
+
+    // 2. Simulate daily gateway limit when user IS authed / signed in
+    messageListener({
+      data: {
+        type: 'agent_error',
+        error: 'You have reached your daily gateway limit. (Quota resets in 12h 00m)'
+      }
+    });
+    const authedAppended = appendedElements[appendedElements.length - 1];
+    const authedHtml = authedAppended.innerHTML || (authedAppended.firstElementChild && authedAppended.firstElementChild.innerHTML) || '';
+    assert.ok(!authedHtml.includes('data-action="open-account-login"'), "Authed gateway error card must NOT include Sign In or Account button");
+    assert.ok(authedHtml.includes('data-action="open-settings"'), "Authed gateway card must include Open Settings button");
+    assert.ok(authedHtml.includes('data-action="switch-model-flyout"'), "Authed gateway card must include Switch Model button");
+
+    // 3. Simulate LiteLLM NotFoundError with OpenRouter JSON payload
+    messageListener({
+      data: {
+        type: 'agent_error',
+        error: 'litellm.NotFoundError: NotFoundError: OpenrouterException - {"error":{"message":"No endpoints found for anthropic/claude-3.7-sonnet.","code":404},"user_id":"user_3EiZCW01tlR9E6IjromZ0smUe31"}'
+      }
+    });
+    const nfAppended = appendedElements[appendedElements.length - 1];
+    const nfHtml = nfAppended.innerHTML || (nfAppended.firstElementChild && nfAppended.firstElementChild.innerHTML) || '';
+    assert.ok(nfHtml.includes('Model Not Available'), "404 must badge/title as Model Not Available");
+    assert.ok(nfHtml.includes('No endpoints found for anthropic/claude-3.7-sonnet.'), "Must extract clean JSON message");
+    assert.ok(!nfHtml.includes('user_3EiZCW01tlR9E6IjromZ0smUe31'), "Must strip internal user_id from visible error card");
+    assert.ok(nfHtml.includes('data-action="switch-model-flyout"'), "404 error must provide Switch Model button");
+
+    // 4. Verify model flyout width styles and prompt box matching
+    const styles = getChatStyles();
+    assert.ok(styles.includes('max-width: var(--chat-max-width, 860px)'), "Model flyout must expand up to chat-max-width");
+    assert.ok(scriptCode.includes('modelFlyout.style.width = Math.round(pbRect.width) + \'px\''), "Script must sync flyout width to prompt box");
+  });
+
+  it("should render real-time background process row with 1-click stop button and update on process exit", () => {
+    const activityScript = getChatActivityScript();
+    const activityStyles = getChatActivityStyles();
+    const waterfallScript = getWaterfallScript("test-session");
+
+    // 1. Verify CSS styles for background process controls
+    assert.ok(activityStyles.includes('.bg-proc-badge'), "Activity styles must define .bg-proc-badge");
+    assert.ok(activityStyles.includes('.bg-proc-stop-btn'), "Activity styles must define .bg-proc-stop-btn");
+
+    // 2. Execute activityScript in a mock VM sandbox
+    const sandbox: any = {
+      window: {},
+      document: {
+        addEventListener: () => {},
+        querySelectorAll: () => [],
+        createElement: (tag: string) => {
+          const el: any = {
+            tagName: tag,
+            className: '',
+            _innerHTML: '',
+            get innerHTML() {
+              if (this._innerHTML) return this._innerHTML;
+              return this.children.map((c: any) => c.innerHTML || '').join('');
+            },
+            set innerHTML(v: string) { this._innerHTML = v; },
+            style: {},
+            children: [] as any[],
+            appendChild: (c: any) => el.children.push(c),
+            setAttribute: (k: string, v: string) => { el._attrs = el._attrs || {}; el._attrs[k] = v; },
+            getAttribute: (k: string) => el._attrs ? el._attrs[k] : null,
+            querySelector: () => null,
+            querySelectorAll: () => [],
+          };
+          return el;
+        },
+      },
+      escapeHtml: (s: string) => s,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(activityScript, sandbox);
+
+    assert.equal(typeof sandbox.window.renderBackgroundProcessActivityRow, 'function', "Must expose renderBackgroundProcessActivityRow");
+    assert.equal(typeof sandbox.window.handleProcessExitedUI, 'function', "Must expose handleProcessExitedUI");
+
+    // 3. Render a running background process row
+    const rowEl = sandbox.window.renderBackgroundProcessActivityRow(
+      "shell_bg",
+      JSON.stringify({ command: "npm run dev", process_id: "dev-server" }),
+      "running_bg",
+      "Background process started with id 'dev-server' (PID 4321)."
+    );
+    assert.ok(rowEl, "renderBackgroundProcessActivityRow should return an element");
+    assert.ok(rowEl.className.includes("bg-proc-wrap"), "Row wrap must have bg-proc-wrap class");
+    assert.equal(rowEl.getAttribute("data-process-id"), "dev-server", "Row must store data-process-id");
+
+    const innerHtml = rowEl.innerHTML;
+    assert.ok(innerHtml.includes("RUNNING (BG)"), "Must display RUNNING (BG) status badge");
+    assert.ok(innerHtml.includes("bg-proc-stop-btn"), "Must render 1-click Stop button");
+    assert.ok(!innerHtml.includes("View Logs"), "Must STRICTLY NOT contain any View Logs button (per user constraint)");
+
+    // 4. Verify Waterfall script handles process_started and process_exited
+    assert.ok(waterfallScript.includes("case 'process_started':"), "Waterfall must handle process_started event");
+    assert.ok(waterfallScript.includes("case 'process_exited':"), "Waterfall must handle process_exited event");
+    assert.ok(waterfallScript.includes("isBgProc"), "Waterfall must track isBgProc for shell_bg");
+
+    // 5. Verify Background Process Strip upside Prompt Box
+    const mockWebview: any = {
+      cspSource: "vscode-webview:",
+      asWebviewUri: (uri: any) => uri,
+    };
+    const chatHtml = getChatViewHtml(mockWebview, mockVscode.Uri.file("/ext"), {
+      currentSessionId: "sess-test",
+      currentModel: "claude-sonnet",
+      currentProvider: "anthropic",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "medium",
+    });
+    assert.ok(chatHtml.includes('id="bg-process-strip"'), "Chat HTML must include bg-process-strip upside prompt box");
+    assert.ok(chatHtml.includes('id="btn-bg-stop-all"'), "Chat HTML must include btn-bg-stop-all 1-click stop button");
+
+    assert.ok(chatHtml.includes('id="bg-process-list"'), "Chat HTML must include bg-process-list");
+
+    const chatStyles = getChatStyles();
+    assert.ok(chatStyles.includes('.bg-process-strip'), "Chat styles must include .bg-process-strip");
+    assert.ok(chatStyles.includes('.bg-process-item'), "Chat styles must include minimal .bg-process-item");
+    assert.ok(chatStyles.includes('.btn-bg-stop-all'), "Chat styles must include .btn-bg-stop-all");
+    assert.ok(!chatStyles.includes('.bg-strip-dot'), "Must NOT contain pulsing dot indicators");
+    assert.ok(!chatHtml.includes('bg-strip-dot'), "Chat HTML must NOT contain dot indicator");
+
+    const clientScript = getChatClientScript("icon.svg", {
+      currentSessionId: "sess-test",
+      currentModel: "claude-sonnet",
+      currentProvider: "anthropic",
+      currentMode: "safe",
+      currentProfile: "builder",
+      currentReasoning: "medium",
+    });
+    assert.ok(clientScript.includes('updateBgProcessStripUI'), "Client script must include updateBgProcessStripUI");
+    assert.ok(clientScript.includes('activeBgProcesses'), "Client script must manage activeBgProcesses");
+    assert.ok(clientScript.includes('open_bg_task_tab'), "Client script must dispatch open_bg_task_tab to view logs in editor tab");
+    assert.ok(!clientScript.includes('bg-item-logs-btn'), "Must NOT render individual log buttons in the list");
+
+    assert.equal(BackgroundTaskPanel.viewType, "andromity.backgroundTaskTab", "BackgroundTaskPanel must have viewType andromity.backgroundTaskTab");
+  });
+
+  it("FingerprintPanel subagent trace extraction, drilldown dataset, and telemetry verification", () => {
+    const scriptCode = getFingerprintScript("test-session-subagents");
+    assert.ok(scriptCode.includes("drilldownSubagent"), "Must include drilldownSubagent function");
+    assert.ok(scriptCode.includes("exitSubagentDrilldown"), "Must include exitSubagentDrilldown function");
+    assert.ok(scriptCode.includes("getCurrentDataset"), "Must include getCurrentDataset function");
+    assert.ok(scriptCode.includes("telemetry_feature"), "Must post telemetry_feature messages");
+    assert.ok(scriptCode.includes("fingerprint_drilldown"), "Must track fingerprint_drilldown");
+    assert.ok(scriptCode.includes("fingerprint_blast_view"), "Must track fingerprint_blast_view");
+
+    const panelPath = fs.existsSync(path.join(__dirname, "../src/panels/FingerprintPanel.ts"))
+      ? path.join(__dirname, "../src/panels/FingerprintPanel.ts")
+      : path.join(__dirname, "../../src/panels/FingerprintPanel.ts");
+    const panelSource = fs.readFileSync(panelPath, "utf8");
+    assert.ok(panelSource.includes("subagents"), "FingerprintPanel must extract subagents trace map");
+    assert.ok(panelSource.includes("subagentsMap"), "FingerprintPanel must maintain subagentsMap");
+    assert.ok(panelSource.includes("hasSubagentDrilldown"), "Subagent nodes must have hasSubagentDrilldown flag");
+    assert.ok(panelSource.includes("tools_called"), "Subagents must extract tools_called from SubAgentResult");
+    assert.ok(panelSource.includes("recordFeature"), "FingerprintPanel must provide recordFeature");
+    assert.ok(panelSource.includes("_sessionRecordedFeatures"), "FingerprintPanel must deduplicate telemetry per session");
+  });
 });
+
+

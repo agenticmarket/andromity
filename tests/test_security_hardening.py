@@ -67,6 +67,8 @@ def test_sensitive_path_precision():
 
 @pytest.mark.asyncio
 async def test_subagent_safe_mode_blocks_shell_bg_and_kill(tmp_path):
+    from andromity.config import config
+    config.set_trusted(str(tmp_path))
     subagent = SubAgent(
         parent_session_id="parent-test",
         role="coder",
@@ -91,6 +93,8 @@ async def test_subagent_safe_mode_blocks_shell_bg_and_kill(tmp_path):
 
 @pytest.mark.asyncio
 async def test_subagent_trust_mode_validates_shell_allowlist(tmp_path):
+    from andromity.config import config
+    config.set_trusted(str(tmp_path))
     subagent = SubAgent(
         parent_session_id="parent-trust",
         role="coder",

@@ -1,6 +1,9 @@
+import { getPromptDisplayScript } from "../promptDisplay.js";
+
 export function getWaterfallScript(sessionId: string): string {
   return `
     (function() {
+      ${getPromptDisplayScript()}
       const vscode = acquireVsCodeApi();
 
       // State
@@ -48,6 +51,7 @@ export function getWaterfallScript(sessionId: string): string {
         btnAutoScroll: document.getElementById('btn-autoscroll'),
         btnClear: document.getElementById('btn-clear'),
         btnExport: document.getElementById('btn-export'),
+        btnFingerprint: document.getElementById('btn-fingerprint'),
         btnGuide: document.getElementById('btn-guide'),
         guideModal: document.getElementById('wf-guide-modal'),
         guideClose: document.getElementById('wf-guide-close')
@@ -95,6 +99,7 @@ export function getWaterfallScript(sessionId: string): string {
       }
 
       function ensureTurn(turnId, userQuery, startTimeMs) {
+        userQuery = cleanPromptForDisplay(userQuery);
         if (!turnId) {
           turnId = state.currentTurnId || (state.turns.size > 0 ? ('turn_' + state.turns.size) : 'turn_1');
         }
@@ -803,7 +808,7 @@ export function getWaterfallScript(sessionId: string): string {
         switch (msg.type) {
           case 'agent_started': {
             state.isRunning = true;
-            const query = msg.prompt || msg.user_input || '';
+            const query = cleanPromptForDisplay(msg.prompt || msg.user_input || '');
             const activeTurn = state.currentTurnId ? state.turns.get(state.currentTurnId) : null;
             if (!activeTurn || activeTurn.endTime) {
               const turnId = 'turn_' + (state.turns.size + 1);
@@ -1072,10 +1077,59 @@ export function getWaterfallScript(sessionId: string): string {
               if (!span.result && msg.result) span.result = msg.result;
               break;
             } else {
-              span.endTime = msg.ts ? msg.ts * 1000 : Date.now();
-              span.durationMs = msg.duration_ms || (span.endTime - span.startTime);
-              span.status = msg.success === false ? 'error' : 'done';
-              span.result = msg.result || '';
+              const isBgProc = (span.name === 'shell_bg' || msg.tool_name === 'shell_bg');
+              if (isBgProc && msg.success !== false) {
+                const procMatch = String(msg.result || '').match(/with id '([^']+)'/);
+                const procId = procMatch ? procMatch[1] : (span.processId || '');
+                if (procId) {
+                  span.processId = procId;
+                  state.bgProcessMap = state.bgProcessMap || new Map();
+                  state.bgProcessMap.set(procId, span.id);
+                }
+                span.isBackground = true;
+                span.status = 'running';
+                span.result = msg.result || '';
+                span.endTime = null;
+                addLog('BG-START', 'Background process started with id ' + (procId || 'bg'));
+              } else {
+                span.endTime = msg.ts ? msg.ts * 1000 : Date.now();
+                span.durationMs = msg.duration_ms || (span.endTime - span.startTime);
+                span.status = msg.success === false ? 'error' : 'done';
+                span.result = msg.result || '';
+                addLog('TOOL-END', span.name + ' finished in ' + formatMs(span.durationMs) + ' (' + span.status + ')');
+
+                if ((span.name === 'shell_kill' || msg.tool_name === 'shell_kill') && msg.success !== false) {
+                  let kPid = '';
+                  try {
+                    const kArgs = typeof span.args === 'string' ? JSON.parse(span.args) : (span.args || {});
+                    kPid = kArgs.process_id || '';
+                  } catch (e) {}
+                  if (!kPid && typeof msg.result === 'string') {
+                    const km = msg.result.match(/Process '([^']+)'/);
+                    if (km) kPid = km[1];
+                  }
+                  state.bgProcessMap = state.bgProcessMap || new Map();
+                  let bgSpanId = kPid ? state.bgProcessMap.get(kPid) : null;
+                  let bgSpan = bgSpanId ? state.spans.get(bgSpanId) : null;
+                  if (!bgSpan) {
+                    for (const s of state.spans.values()) {
+                      if (s.name === 'shell_bg' && (s.processId === kPid || s.status === 'running')) {
+                        bgSpan = s;
+                        break;
+                      }
+                    }
+                  }
+                  if (bgSpan && bgSpan.status === 'running') {
+                    bgSpan.endTime = Date.now();
+                    bgSpan.durationMs = Math.max(50, bgSpan.endTime - bgSpan.startTime);
+                    bgSpan.status = 'done';
+                    bgSpan.isBackground = false;
+                    updateTimingBars(bgSpan.turnId);
+                    recalcTotals();
+                    updateSummaryStats();
+                  }
+                }
+              }
             }
 
             if (span.name === 'spawn_subagent' && msg.result) {
@@ -1276,6 +1330,56 @@ export function getWaterfallScript(sessionId: string): string {
                 updateSpanDetailsContent(span);
               }
               addLog('SUBAGENT-FAILED', \`Subagent \${span.name} failed: \${span.result}\`);
+              updateSummaryStats();
+            }
+            break;
+          }
+
+          case 'process_started': {
+            const procId = msg.process_id;
+            state.bgProcessMap = state.bgProcessMap || new Map();
+            if (procId && !state.bgProcessMap.has(procId)) {
+              for (const s of state.spans.values()) {
+                if (s.name === 'shell_bg' && s.status === 'running' && !s.processId) {
+                  s.processId = procId;
+                  s.isBackground = true;
+                  state.bgProcessMap.set(procId, s.id);
+                  break;
+                }
+              }
+            }
+            addLog('BG-PROC', 'Process ' + procId + ' started (PID ' + (msg.pid || '') + ')');
+            break;
+          }
+
+          case 'process_exited': {
+            const procId = msg.process_id;
+            state.bgProcessMap = state.bgProcessMap || new Map();
+            let spanId = state.bgProcessMap.get(procId);
+            let span = spanId ? state.spans.get(spanId) : null;
+            if (!span) {
+              for (const s of state.spans.values()) {
+                if (s.name === 'shell_bg' && (s.processId === procId || s.status === 'running')) {
+                  span = s;
+                  break;
+                }
+              }
+            }
+            if (span) {
+              const now = Date.now();
+              span.endTime = now;
+              span.durationMs = typeof msg.duration === 'number' ? (msg.duration * 1000) : Math.max(50, span.endTime - span.startTime);
+              span.status = (msg.exit_code === 0) ? 'done' : 'error';
+              span.isBackground = false;
+              if (msg.exit_code !== undefined) {
+                span.result = (span.result ? (span.result + String.fromCharCode(10, 10)) : "") + "[Process (" + procId + ") exited with code " + msg.exit_code + "]";
+              }
+              updateTimingBars(span.turnId);
+              recalcTotals();
+              if (span.element && span.element.classList.contains('expanded')) {
+                updateSpanDetailsContent(span);
+              }
+              addLog('BG-EXIT', 'Process ' + procId + ' exited with code ' + msg.exit_code + ' (' + formatMs(span.durationMs) + ')');
               updateSummaryStats();
             }
             break;
@@ -1507,7 +1611,7 @@ export function getWaterfallScript(sessionId: string): string {
                   const turnNum = userTurnIndex;
                   const tId = 'turn_' + turnNum;
                   const tStart = m.ts ? new Date(m.ts).getTime() : Date.now();
-                  const turnQuery = m.content || ('Turn #' + turnNum);
+                  const turnQuery = cleanPromptForDisplay(m.content) || ('Turn #' + turnNum);
 
                   if (state.turns.has(tId)) {
                     currentTurn = state.turns.get(tId);
@@ -1892,6 +1996,14 @@ export function getWaterfallScript(sessionId: string): string {
           vscode.postMessage({
             type: 'export_waterfall',
             data: exportData
+          });
+        });
+      }
+
+      if (els.btnFingerprint) {
+        els.btnFingerprint.addEventListener('click', () => {
+          vscode.postMessage({
+            type: 'open_fingerprint'
           });
         });
       }

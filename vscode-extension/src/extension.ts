@@ -10,6 +10,7 @@ import { SessionTreeProvider } from "./providers/SessionTreeProvider.js";
 import { SettingsPanel } from "./panels/SettingsPanel.js";
 import { PlanEditorPanel } from "./panels/PlanEditorPanel.js";
 import { WaterfallPanel, WaterfallTraceStore } from "./panels/WaterfallPanel.js";
+import { FingerprintPanel } from "./panels/FingerprintPanel.js";
 import { ChangesReviewPanel } from "./panels/ChangesReviewPanel.js";
 import { PythonBridge, formatTimestamp } from "./server/PythonBridge.js";
 import { RpcClient } from "./server/RpcClient.js";
@@ -252,7 +253,12 @@ export async function activate(context: vscode.ExtensionContext) {
   );
 
   // 5. Connect Python Daemon and wire to providers on every (re)connection
+  let connectedPreviously = false;
   pythonBridge.onClientReady((rpcClient) => {
+    if (connectedPreviously) {
+      void rpcClient.call("telemetry.recordFeature", { feature: "reconnect_completed" }).catch(() => {});
+    }
+    connectedPreviously = true;
     chatProvider.setRpcClient(rpcClient);
     planProvider.setRpcClient(rpcClient);
     sessionTreeProvider.setRpcClient(rpcClient);
@@ -260,6 +266,24 @@ export async function activate(context: vscode.ExtensionContext) {
     changesTreeProvider.setRpcClient(rpcClient);
     SettingsPanel.prewarm(rpcClient);
     SettingsPanel.currentPanel?.setRpcClient(rpcClient);
+    // Reconnect live MCP sessions on every daemon launch, independently of the Hub.
+    void rpcClient.call<Array<{ name: string; status: string; disabled: boolean }>>(
+      "mcp.list", { project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath }, 120000
+    ).then(async (servers) => {
+      SettingsPanel.updateMcpServers(servers);
+      const failed = servers.filter(server => !server.disabled &&
+        ["error", "needs_auth", "needs_trust", "legacy_endpoint"].includes(server.status));
+      if (!failed.length) return;
+      const choice = await vscode.window.showWarningMessage(
+        `Andromity: MCP servers need attention: ${failed.map(server => server.name).join(", ")}. Open MCP settings to authenticate, trust the workspace, or retry.`,
+        "Open MCP Settings"
+      );
+      if (choice === "Open MCP Settings") {
+        SettingsPanel.createOrShow(context.extensionUri, rpcClient, "mcp");
+      }
+    }).catch(() => {
+      void vscode.window.showWarningMessage("Andromity: MCP startup could not finish. Open MCP settings and retry.");
+    });
     PlanEditorPanel.currentPanel?.setRpcClient(rpcClient);
     ChangesReviewPanel.currentPanel?.setRpcClient(rpcClient);
     WaterfallTraceStore.init(rpcClient);
@@ -685,6 +709,23 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
+    vscode.commands.registerCommand("andromity.openFingerprint", (item?: any) => {
+      const sessionId = item?.session?.id || item?.id || chatProvider.getCurrentSessionId();
+      const sessionName = item?.session?.name || item?.name || "Chat Session";
+      if (sessionId) {
+        FingerprintPanel.createOrShow(
+          context.extensionUri,
+          sessionId,
+          sessionName,
+          pythonBridge?.getClient() || null,
+          context,
+          vscode.ViewColumn.Active
+        );
+      } else {
+        vscode.window.showInformationMessage("No active session to open Fingerprint trace for.");
+      }
+    }),
+
     vscode.commands.registerCommand("andromity.fixNotebookCell", async (cell?: vscode.NotebookCell) => {
       let code = "";
       let outputText = "";
@@ -797,11 +838,15 @@ export async function activate(context: vscode.ExtensionContext) {
       );
       if (confirm !== "Delete") return;
       try {
-        await client.call("session.delete", { session_id: item.session.id });
+        const result = await client.call<{ success: boolean; error?: string }>("session.delete", { session_id: item.session.id });
+        if (!result.success) {
+          void vscode.window.showErrorMessage(result.error || "Could not delete this chat. Please retry.");
+          return;
+        }
         sessionTreeProvider.refresh();
         vscode.window.showInformationMessage("Session deleted.");
-      } catch (e: any) {
-        vscode.window.showErrorMessage(`Failed to delete session: ${e.message}`);
+      } catch {
+        void vscode.window.showErrorMessage("Could not delete this chat. Check the connection and retry.");
       }
     }),
 

@@ -23,6 +23,8 @@ TOOL_CALLS = [
 
 @pytest.fixture
 def session(tmp_path):
+    from andromity.config import config
+    config.set_trusted(str(tmp_path))
     return Session(name="test", project_path=str(tmp_path))
 
 

@@ -6,6 +6,7 @@ import pytest
 
 from andromity.core.provider import (
     classify_and_format_error,
+    extract_clean_error_message,
     stream_completion,
     _format_error_text,
 )
@@ -177,4 +178,135 @@ def test_quota_exceeded_omits_raw_litellm_error():
     assert "Quota resets in" in html_out
     assert "<details" not in html_out
     assert "litellm.RateLimitError" not in html_out
+
+
+@pytest.mark.asyncio
+async def test_missing_credentials_fails_fast_without_retries(monkeypatch):
+    """Verify that missing credentials (even wrapped in InternalServerError) fails immediately with auth_error card."""
+    call_count = 0
+
+    async def missing_cred_acompletion(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise Exception("InternalServerError: OpenAIException - Missing credentials. Please pass an `api_key` or set OPENAI_API_KEY")
+
+    import litellm
+    monkeypatch.setattr(litellm, "acompletion", missing_cred_acompletion)
+
+    events = []
+    async for ev in stream_completion([{"role": "user", "content": "hi"}], provider_name="openai", model="o4-mini"):
+        events.append(ev)
+
+    assert call_count == 1, "Missing credentials must not trigger retries"
+    texts = "".join(getattr(e, "text", "") for e in events if isinstance(e, TextDelta))
+    assert 'data-error-type="auth_error"' in texts
+    assert 'data-action="open-settings"' in texts
+    assert any(isinstance(e, Done) for e in events)
+
+
+@pytest.mark.asyncio
+async def test_daily_quota_fails_fast_without_retries(monkeypatch):
+    """Verify that daily quota limit fails immediately on attempt 1 without backoff delays."""
+    call_count = 0
+
+    async def quota_acompletion(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise Exception("daily_limit_reached - free trial requests exceeded")
+
+    import litellm
+    monkeypatch.setattr(litellm, "acompletion", quota_acompletion)
+
+    events = []
+    async for ev in stream_completion([{"role": "user", "content": "hi"}], provider_name="andromity", model="o4-mini"):
+        events.append(ev)
+
+    assert call_count == 1, "Daily quota must fail fast on attempt 1"
+    texts = "".join(getattr(e, "text", "") for e in events if isinstance(e, TextDelta))
+    assert 'data-error-type="quota_exceeded"' in texts
+    assert 'data-action="open-account-login"' in texts or 'data-action="open-settings"' in texts
+    assert any(isinstance(e, Done) for e in events)
+
+
+def test_extract_clean_error_message():
+    """Verify that LiteLLM boilerplate, nested JSON payloads, and user IDs are cleanly stripped."""
+    # 1. OpenRouter 404 with JSON and user_id (exact screenshot error)
+    err1 = (
+        'litellm.NotFoundError: NotFoundError: OpenrouterException - '
+        '{"error":{"message":"No endpoints found for anthropic/claude-3.7-sonnet.","code":404},"user_id":"user_3EiZCW01tlR9E6IjromZ0smUe31"}'
+    )
+    clean1 = extract_clean_error_message(err1)
+    assert clean1 == "No endpoints found for anthropic/claude-3.7-sonnet."
+    assert "user_3EiZCW" not in clean1
+    assert "OpenrouterException" not in clean1
+
+    # 2. OpenAI Authentication error with JSON
+    err2 = (
+        'litellm.AuthenticationError: AuthenticationError: OpenAIException - '
+        '{"error":{"message":"Incorrect API key provided: None. You can find your API key at https://platform.openai.com/account/api-keys.","type":"invalid_request_error","param":null,"code":"invalid_api_key"}}'
+    )
+    clean2 = extract_clean_error_message(err2)
+    assert clean2 == "Incorrect API key provided: None. You can find your API key at https://platform.openai.com/account/api-keys."
+
+    # 3. Plain exception prefix without JSON
+    err3 = "litellm.InternalServerError: InternalServerError: OpenAIException - Missing credentials. Please pass an api_key."
+    clean3 = extract_clean_error_message(err3)
+    assert clean3 == "Missing credentials. Please pass an api_key."
+
+
+def test_classify_not_found_error():
+    """Verify that 404 / NotFoundError provides Model Not Available with Switch Model button."""
+    fake_err = Exception(
+        'litellm.NotFoundError: NotFoundError: OpenrouterException - '
+        '{"error":{"message":"No endpoints found for anthropic/claude-3.7-sonnet.","code":404},"user_id":"user_3EiZCW01tlR9E6IjromZ0smUe31"}'
+    )
+    html_out = classify_and_format_error(fake_err, provider="openrouter", model="anthropic/claude-3.7-sonnet")
+    assert 'data-error-type="model_not_found"' in html_out
+    assert "Model Not Available" in html_out
+    assert "No endpoints found for anthropic/claude-3.7-sonnet." in html_out
+    assert 'data-action="switch-model-flyout"' in html_out
+    # Visible card body must not leak user_id
+    body_part = html_out.split('<details')[0]
+    assert "user_3EiZCW" not in body_part
+
+
+def test_html_404_is_an_endpoint_error_in_both_interfaces():
+    from andromity.core.provider import classify_error_info, format_error_html, format_error_terminal
+
+    error = Exception("NotFoundError: <!DOCTYPE html><html><head>private-page-marker</head><body>404 image quota 500</body></html>")
+    info = classify_error_info(error, provider="custom", model="custom-model", has_images=True)
+    assert info["type"] == "endpoint_not_found"
+    for rendered in (format_error_html(info), format_error_terminal(info)):
+        assert "API Endpoint Not Found" in rendered
+        assert "/chat/completions" in rendered
+        assert "private-page-marker" not in rendered
+    assert 'data-action="open-settings"' in format_error_html(info)
+
+
+@pytest.mark.parametrize("status,expected", [(401, "auth_error"), (403, "auth_error"), (429, "rate_limit"), (503, "provider_unavailable")])
+def test_provider_status_code_does_not_require_error_message_keywords(status, expected):
+    from andromity.core.provider import classify_error_info
+
+    error = Exception("Request rejected")
+    error.status_code = status
+    assert classify_error_info(error)["type"] == expected
+
+
+def test_authed_quota_omits_account_button(monkeypatch):
+    """When the user is authenticated, quota limit card must NOT show Account or Sign In button."""
+    from andromity.config import config
+    monkeypatch.setattr(config, "get_api_key", lambda p: "fake-key" if p == "andromity" else None)
+
+    fake_err = Exception("daily_limit_reached - gateway limit exceeded")
+    html_out = classify_and_format_error(fake_err, provider="andromity", model="auto")
+
+    assert "Daily Limit Reached" in html_out
+    assert 'data-action="open-settings"' in html_out
+    assert 'data-action="switch-model-flyout"' in html_out
+    # Must NOT have Account button or Sign In button when already authed
+    assert 'data-action="open-account-login"' not in html_out
+    assert ">Account<" not in html_out
+    assert ">Sign In<" not in html_out
+
+
 

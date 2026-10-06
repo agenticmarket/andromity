@@ -2,6 +2,25 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
+## [0.2.15] — 2026-10-06
+
+### Fixed
+- Close Git review repository handles after RPC requests so Windows can release workspace directories.
+- Refresh the VS Code chat, keep BYOK setup visible, clarify cloud trial status, and preserve manual scrolling while reliably jumping to the latest turn.
+- Harden Docker defaults and release workflows with locked dependencies, restricted credentials, pinned Actions, and release validation.
+- Reduce telemetry dashboard D1 reads with normalized shared snapshots, compact historical activity, grouped feature/session statistics, and session/day error checks. Ordinary ingestion no longer invalidates statistics snapshots.
+- Count telemetry activity across complete windows, apply database cohort filters, and avoid multiplying session totals when multiple turn endings exist.
+- Separate gateway first-token timing from full response duration and record failures within streams.
+- Generate initial session titles from the user message before appending IDE context, preventing active-document metadata from appearing in titles.
+- Reconnect enabled MCP servers when the IDE daemon starts, even when a manager already exists. Failed startup can retry, and changing projects closes previous sessions.
+- Support remote MCP HTTP transport, protected resource discovery, and OAuth token endpoint client authentication required by providers such as Supabase.
+- Refresh the TUI file sidebar after file creation, deletion, and moves. Reconcile affected visible directories without cascading into unrelated expanded folders; refresh collapsed folders when reopened.
+
+### Added
+- Anonymous task outcomes and active turn timing, durable telemetry retries with idempotent ingestion, and MCP startup/cancellation signals. Dashboard statistics and administrative actions require separate server-side credentials and authenticated access.
+- IDE RPC support for MCP configuration management and removal of selected installed skills, with workspace trust checks.
+- MCP tool names and descriptions for collapsible IDE inspection while keeping schemas lazy.
+
 ## [0.2.12] — 2026-09-30
 
 ### 🌿 Git & Multi-Repository Targeting

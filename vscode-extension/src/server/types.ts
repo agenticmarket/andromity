@@ -62,6 +62,46 @@ export interface ProviderInfo {
   name: string;
   has_key: boolean;
   portal?: string;
+  type?: string;
+  base_url?: string;
+  model?: string;
+  api_version?: string;
+  custom?: boolean;
+}
+
+export interface PendingInputInfo {
+  id: string;
+  prompt: string;
+  delivery: "queue" | "steer";
+  status: string;
+  image_uris: string[];
+  image_count: number;
+}
+
+export interface InputQueueState {
+  session_id: string;
+  epoch: string;
+  revision: number;
+  paused: boolean;
+  items: PendingInputInfo[];
+  supported?: boolean;
+}
+
+export interface InputBridgeMessage {
+  stripImages?: boolean;
+  type: string;
+  sessionId?: string;
+  requestId?: string;
+  inputId?: string;
+  prompt?: string;
+  images?: string[];
+  delivery?: "queue" | "steer";
+  attachContext?: boolean;
+  profile?: string;
+  model?: string;
+  provider?: string;
+  mode?: string;
+  reasoningEffort?: string;
 }
 
 export interface ToolApprovalEvent {
@@ -69,6 +109,21 @@ export interface ToolApprovalEvent {
   approval_id: string;
   tool_name: string;
   args: Record<string, any>;
+}
+
+export interface SessionWebviewEvent {
+  type: string;
+  session_id?: string;
+  event_seq?: number;
+  [key: string]: unknown;
+}
+
+export interface InteractionMessage {
+  type: string;
+  approvalId?: string;
+  questionId?: string;
+  scope?: string;
+  answers?: string;
 }
 
 export interface ClarifyingQuestionsEvent {
@@ -102,3 +157,21 @@ export interface SubAgentEvent {
   error?: string;
 }
 
+export interface IntegrationResult {
+  success: boolean;
+  error?: string;
+  name?: string;
+  status?: string;
+}
+
+export interface McpServerConfig {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  serverUrl?: string;
+  type?: string;
+  headers?: Record<string, string>;
+  oauth?: { client_id?: string; client_secret?: string };
+  disabled?: boolean;
+}

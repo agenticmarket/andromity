@@ -187,6 +187,42 @@ function createMockDOM() {
 }
 
 describe("Changes Review Webview Unit Tests", () => {
+  it("renders folders named like JavaScript object properties", () => {
+    const dom = createMockDOM();
+    vm.runInNewContext(getReviewClientScript(), { document: dom.document, window: dom.window,
+      acquireVsCodeApi: dom.acquireVsCodeApi, console });
+    assert.doesNotThrow(() => dom.dispatchMessage({ type: "set_changes", branch: "main", turnFiles: null,
+      files: [{ path: "__proto__/constructor/file.txt", name: "file.txt", status: "M", additions: 1, deletions: 0 }] }));
+    assert.ok(dom.postedMessages.some(message => message.filePath === "__proto__/constructor/file.txt"));
+  });
+  it("refreshes cached diffs and does not invent a trailing context line", () => {
+    const dom = createMockDOM();
+    vm.runInNewContext(getReviewClientScript(), { document: dom.document, window: dom.window,
+      acquireVsCodeApi: dom.acquireVsCodeApi, console });
+    const changes = { type: "set_changes", branch: "main", turnFiles: null,
+      files: [{ path: "a.txt", name: "a.txt", status: "M", additions: 1, deletions: 1 }] };
+    dom.dispatchMessage(changes);
+    dom.dispatchMessage({ type: "set_file_diff", filePath: "a.txt", diff: "@@ -1 +1 @@\n-old\n+new\n" });
+    const html = dom.elementsById.get("diff-container").innerHTML;
+    assert.equal((html.match(/class="diff-line /g) || []).length, 2);
+    const before = dom.postedMessages.filter(m => m.type === "get_file_diff").length;
+    dom.dispatchMessage(changes);
+    assert.equal(dom.postedMessages.filter(m => m.type === "get_file_diff").length, before + 1);
+  });
+
+  it("shows omitted binary files as notices rather than fabricated additions", () => {
+    const dom = createMockDOM();
+    vm.runInNewContext(getReviewClientScript(), { document: dom.document, window: dom.window,
+      acquireVsCodeApi: dom.acquireVsCodeApi, console });
+    dom.dispatchMessage({ type: "set_changes", branch: "main", turnFiles: null,
+      files: [{ path: "a.bin", name: "a.bin", status: "U", additions: 0, deletions: 0 }] });
+    dom.dispatchMessage({ type: "set_file_diff", filePath: "a.bin", diff: "", notice: "Binary file. Text preview is unavailable." });
+    const html = dom.elementsById.get("diff-container").innerHTML;
+    assert.ok(html.includes("Binary file."));
+    assert.ok(!html.includes("No differences found"));
+    assert.ok(!html.includes('class="diff-line add"'));
+  });
+
   it("reviewClientScript should parse with 0 syntax errors in VM", () => {
     const scriptCode = getReviewClientScript();
     assert.ok(scriptCode.length > 500, "Review client script must be non-empty");
@@ -532,8 +568,8 @@ describe("Changes Review Webview Unit Tests", () => {
       turnFiles: [],
     });
 
-    assert.equal(scopeToggles.style.display, "none", "Scope toggle should hide when turn has no edited files");
-    assert.equal(totalFiles.textContent, "3 Files Changed", "Scope should fall back to all files");
+    assert.equal(scopeToggles.style.display, "inline-flex", "A known empty turn must remain distinct from all workspace changes");
+    assert.equal(totalFiles.textContent, "0 Files Changed");
   });
 });
 

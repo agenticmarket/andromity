@@ -172,7 +172,7 @@ class AndromityApp(App):
         self._project_path = str(Path.cwd())
         self.session = Session(name="new-session", project_path=self._project_path)
         self._ollama_num_ctx = 0
-        init_effort = config.get("default", "reasoning_effort", "medium")
+        init_effort = config.get("default", "reasoning_effort", "auto")
         self.agent = Agent(self.session, on_tool_approval=self._on_tool_approval,
                            on_questions=self._on_ask_questions, ctx_limit=self._get_ctx_limit(),
                            reasoning_effort=init_effort)
@@ -183,7 +183,7 @@ class AndromityApp(App):
         self._session_named = False
         self._debug_mode = False
         self._is_streaming = False
-        self._prompt_queue = []
+        self._input_queues = {}
         self._pending_model_change = False
         self._pending_mode_change = False
         self._yolo_session = False
@@ -261,6 +261,8 @@ class AndromityApp(App):
             self.remove_class("hide-files")
 
     def on_mount(self):
+        from andromity.telemetry import send_feature_used
+        send_feature_used("app_started")
         try:
             from andromity.core.db import init_schema
             init_schema()
@@ -568,7 +570,7 @@ class AndromityApp(App):
             pass
 
         active_mode = "yolo" if self._yolo_session else config.get("default", "permission_mode", "safe")
-        effort = getattr(self.agent, "reasoning_effort", None) or config.get("default", "reasoning_effort", "medium")
+        effort = getattr(self.agent, "reasoning_effort", None) or config.get("default", "reasoning_effort", "auto")
         try:
             self.query_one(StatusBar).update_status(
                 tokens=display_tokens,
@@ -595,7 +597,8 @@ class AndromityApp(App):
 
     async def _on_tool_approval(self, tool_name: str, args: dict) -> bool:
         if not config.is_trusted(self._project_path):
-            if tool_name in ("write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill", "spawn_subagent"):
+            from andromity.core.tools import requires_workspace_trust
+            if requires_workspace_trust(tool_name):
                 chat = self.query_one(ChatPanel)
                 chat.add_system_message(f"[red]✗ Blocked '{tool_name}'[/] — Folder is untrusted. Use [bold cyan]/trust[/] to enable.")
                 return False
@@ -603,7 +606,7 @@ class AndromityApp(App):
         if self._yolo_session:
             return True
 
-        mode = config.get("default", "permission_mode", "safe")
+        mode = getattr(self.session, "permission_mode", None) or config.get("default", "permission_mode", "safe")
         
         from andromity.core.security import is_sensitive_path
         target_path = str(args.get("path", "") or args.get("target_path", "") or args.get("target_file", ""))
@@ -1022,7 +1025,7 @@ class AndromityApp(App):
             self._ollama_num_ctx = get_ollama_num_ctx(model)
         else:
             self._ollama_num_ctx = 0
-        current_effort = getattr(self.agent, "reasoning_effort", None) or config.get("default", "reasoning_effort", "medium")
+        current_effort = getattr(self.agent, "reasoning_effort", None) or config.get("default", "reasoning_effort", "auto")
         self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval,
                            on_questions=self._on_ask_questions, ctx_limit=self._get_ctx_limit(),
                            reasoning_effort=current_effort)
@@ -1034,7 +1037,7 @@ class AndromityApp(App):
         """Apply a new profile from the profile picker and persist it."""
         from andromity.config import config
         config.set("default", "profile", profile)
-        current_effort = getattr(self.agent, "reasoning_effort", None) or config.get("default", "reasoning_effort", "medium")
+        current_effort = getattr(self.agent, "reasoning_effort", None) or config.get("default", "reasoning_effort", "auto")
         self.agent = Agent(self.session, profile=profile, on_tool_approval=self._on_tool_approval,
                            on_questions=self._on_ask_questions, ctx_limit=self._get_ctx_limit(),
                            reasoning_effort=current_effort)
@@ -1053,7 +1056,7 @@ class AndromityApp(App):
         try:
             self.query_one(ChatPanel).add_system_message(
                 f"[cyan]Reasoning effort:[/] [bold]{label}[/]"
-                + (" — sent as reasoning.effort in every request." if effort != "off" else " — no reasoning param sent.")
+                + " — applied using the selected model’s supported controls."
             )
         except Exception:
             pass
@@ -1114,7 +1117,7 @@ class AndromityApp(App):
             pass
 
         active_mode = "yolo" if self._yolo_session else config.get("default", "permission_mode", "safe")
-        effort = getattr(self.agent, "reasoning_effort", None) or config.get("default", "reasoning_effort", "medium")
+        effort = getattr(self.agent, "reasoning_effort", None) or config.get("default", "reasoning_effort", "auto")
         try:
             self.query_one(StatusBar).update_status(
                 tokens=display_tokens,
@@ -1321,18 +1324,44 @@ class AndromityApp(App):
     def _update_queue_display(self):
         """Update the static queue panel above input bar."""
         panel = self.query_one("#queue-panel", QueuePanel)
-        # Queue entries are (prompt, images) tuples — show just the prompt text.
-        panel.update_queue([p for p, _ in self._prompt_queue])
+        panel.update_queue(self._inputs().snapshot())
 
-    def _remove_from_queue(self, index: int):
-        """Remove a message from the queue by index."""
-        if 0 <= index < len(self._prompt_queue):
-            self._prompt_queue.pop(index)
-            self._update_queue_display()
-            chat = self.query_one(ChatPanel)
-            chat.add_system_message(f"[dim]Removed message #{index+1} from queue.[/]")
+    def _inputs(self):
+        from andromity.core.inputs import InputQueue
+        if self.session.id not in self._input_queues:
+            self._input_queues[self.session.id] = InputQueue(
+                self.session.id, lambda state: self._update_queue_display())
+        return self._input_queues[self.session.id]
+
+    def _remove_from_queue(self, input_id: str):
+        self._inputs().remove(input_id)
+
+    def _steer_from_queue(self, input_id: str):
+        self._inputs().promote(input_id)
+        self._drain_inputs()
+
+    def _resume_inputs(self):
+        self._inputs().resume()
+        self._drain_inputs()
+
+    def _drain_inputs(self):
+        if self._is_streaming:
+            return
+        item = self._inputs().peek()
+        if item is None:
+            return
+        prompt, images = item.payload["prompt"], item.payload.get("images")
+        self.agent.provider = item.payload.get("provider")
+        self.agent.model = item.payload.get("model")
+        self.agent.reasoning_effort = item.payload.get("reasoning_effort")
+        self.agent.input_queue = self._inputs()
+        self._is_streaming = True
+        self._inputs().applied(item)
+        self._process_message(prompt, images)
 
     async def _stream_agent(self, prompt: str, images: list | None = None):
+        from andromity.core.events import InputApplied
+        self.agent.input_queue = self._inputs()
         chat = self.query_one(ChatPanel)
         status_bar = self.query_one(StatusBar)
         status_bar.set_streaming(True)
@@ -1364,24 +1393,32 @@ class AndromityApp(App):
         try:
             def _take_snapshot() -> str | None:
                 from andromity.core.git_ops import ensure_git_tracking, create_pre_edit_snapshot
+                if not config.is_trusted(str(self._project_path)):
+                    return None
                 repo, _ = ensure_git_tracking(Path(self._project_path))
-                return create_pre_edit_snapshot(repo)
+                return create_pre_edit_snapshot(Path(self._project_path))
             snapshot_hash = await asyncio.to_thread(_take_snapshot)
         except Exception as snap_err:
             log.warning("Pre-turn snapshot failed: %s", snap_err)
 
-        self._undo_stack.append({
+        turn_checkpoint = {
             "snapshot_hash": snapshot_hash,
             "msg_count": msg_count_before,
             "prompt": prompt[:20000] if len(prompt) > 20000 else prompt,
-        })
+        }
+        self._undo_stack.append(turn_checkpoint)
         self._pre_turn_snapshot = snapshot_hash
         if len(self._undo_stack) > 20:
             self._undo_stack.pop(0)
 
         try:
             async for event in self.agent.run(prompt, images=images or None):
-                if isinstance(event, ThinkingDelta):
+                if isinstance(event, InputApplied):
+                    chat.end_assistant_message()
+                    chat.add_user_message(event.prompt, image_count=len(event.image_uris or []))
+                    chat.start_assistant_message()
+                    first_text_seen = False
+                elif isinstance(event, ThinkingDelta):
                     if not hasattr(chat, "_thinking") or not getattr(chat, "_thinking", None):
                         chat.start_thinking_message()
                     chat.append_thinking(event.text)
@@ -1439,9 +1476,11 @@ class AndromityApp(App):
                 elif isinstance(event, PlanApprovalRequired):
                     log.info("Plan approval required. Pausing agent loop.")
                     self._plan_approval_future = asyncio.Future()
-                    await self._plan_approval_future
+                    await self._inputs().interaction(self._plan_approval_future, False)
                     self._plan_approval_future = None
                 elif isinstance(event, Done):
+                    if event.outcome != "success":
+                        self._inputs().pause()
                     log.info("DONE usage=%s", event.usage)
                     self._update_status()
                     estimated_tokens = 0
@@ -1450,6 +1489,7 @@ class AndromityApp(App):
                 # No mid-stream status rebuilds needed.
 
         except asyncio.CancelledError:
+            self._inputs().pause()
             log.info("Stream cancelled by user")
             try:
                 self.agent.kill_subagents("user_cancelled")
@@ -1464,12 +1504,16 @@ class AndromityApp(App):
                 pass
 
         except Exception as e:
+            self._inputs().pause()
             log.error("Unhandled exception in _stream_agent: %s", e, exc_info=True)
             _err_msg = str(e)
             if len(_err_msg) > 160:
                 _err_msg = _err_msg[:157] + "..."
-            chat.append_text(f"\n[Unexpected error: {type(e).__name__}] {_err_msg}\n")
+            chat.append_text("\nThe run could not finish. Pending messages are paused. Check your provider settings and retry.\n")
         finally:
+            if snapshot_hash:
+                from andromity.core.git_ops import create_pre_edit_snapshot
+                turn_checkpoint["after_hash"] = await asyncio.to_thread(create_pre_edit_snapshot, Path(self._project_path))
             self._current_task = None
             self._is_streaming = False
             status_bar.set_streaming(False)
@@ -1556,13 +1600,8 @@ class AndromityApp(App):
                         _on_batch_review,
                     )
                 
-            if self._prompt_queue:
-                next_prompt, next_images = self._prompt_queue.pop(0)
-                self._update_queue_display()
-                # Process next queued message after a short delay (survives cancel better)
-                self.set_timer(0.3, lambda p=next_prompt, imgs=next_images: self._process_message(p, imgs))
-            else:
-                self.focus_input()
+            self.call_after_refresh(self._drain_inputs)
+            self.focus_input()
 
     @on(InputBar.Submitted)
     def on_input_submitted(self, event: InputBar.Submitted):
@@ -1592,26 +1631,22 @@ class AndromityApp(App):
             )
             return
 
-        if self._is_streaming:
-            if getattr(event, "steer", False):
-                # STEER: Immediately cancel active response and inject new instruction
-                if self._current_task and not self._current_task.done():
-                    self._current_task.cancel()
-                chat = self.query_one(ChatPanel)
-                chat.add_system_message("[bold $primary]Steered agent with new instruction[/]")
-                self._process_message(prompt, images)
-                return
-
-            if len(self._prompt_queue) >= 10:
-                self.query_one(ChatPanel).add_system_message("Queue is full (max 10). Please wait for the agent to finish.")
-                return
-
-            self._prompt_queue.append((prompt, images))
-            log.info("Queued: %s (queue size: %d)", prompt[:50], len(self._prompt_queue))
-            self._update_queue_display()
+        try:
+            self._inputs().submit({
+                "prompt": prompt, "images": images,
+                "provider": self.agent.provider or config.get("default", "provider", ""),
+                "model": self.agent.model or model,
+                "reasoning_effort": self.agent.reasoning_effort,
+            }, "steer" if event.steer else "queue")
+        except ValueError as exc:
+            self.notify(str(exc), severity="warning")
             return
-            
-        self._process_message(prompt, images)
+        self.query_one("#input-field").text = ""
+        bar = self.query_one(InputBar)
+        bar._attachments.clear()
+        bar._update_attachment_bar()
+        self.agent.input_queue = self._inputs()
+        self._drain_inputs()
 
     def _process_message(self, prompt: str, images: list | None = None):
         chat = self.query_one(ChatPanel)
@@ -1674,35 +1709,9 @@ class AndromityApp(App):
             if not provider or not model:
                 return
                 
-            provider_cfg = config.get_provider_config(provider)
-            base_url = None
-            api_key = config.get_api_key(provider)
-            
-            if provider == "ollama":
-                litellm_model = f"ollama_chat/{model}" if not (model.startswith("ollama/") or model.startswith("ollama_chat/")) else model
-                base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "http://localhost:11434"
-            elif provider == "google":
-                litellm_model = f"gemini/{model}" if not model.startswith("gemini/") else model
-            elif provider == "openrouter":
-                litellm_model = f"openrouter/{model}" if not model.startswith("openrouter/") else model
-            elif provider == "nvidia":
-                litellm_model = f"nvidia_nim/{model}" if not model.startswith("nvidia_nim/") else model
-            elif provider == "andromity":
-                clean_model = model or "auto"
-                litellm_model = f"openai/{clean_model}"
-                base_url = (provider_cfg.get("base_url") if provider_cfg else None) or "https://gateway.agenticmarket.dev/v1"
-                if not api_key:
-                    api_key = "anonymous_trial"
-            else:
-                litellm_model = f"{provider}/{model}" if not model.startswith(f"{provider}/") else model
-                base_url = provider_cfg.get("base_url") if provider_cfg else None
+            from andromity.core.connections import provider_request
+            kwargs = {**provider_request(provider, model), "stream": False}
 
-            kwargs = {"model": litellm_model, "stream": False}
-            if api_key:
-                kwargs["api_key"] = api_key
-            if base_url:
-                kwargs["api_base"] = base_url
-                
             messages = [
                 {"role": "system", "content": """You are a title generator. You output ONLY a thread title. Nothing else.
 
@@ -1776,11 +1785,15 @@ Your output must be:
         elif command in ("/reason", "/effort"):
             if len(parts) > 1 and parts[1].strip():
                 effort_arg = parts[1].strip().lower()
-                if effort_arg in ("off", "low", "medium", "high", "xhigh", "max"):
+                from andromity.core.reasoning import get_model_reasoning_capability, ordered_reasoning_efforts
+                cap = get_model_reasoning_capability(self.agent.provider, self.agent.model)
+                efforts = ordered_reasoning_efforts(cap.supported_efforts)
+                from andromity.core.effort import is_valid_effort
+                if is_valid_effort(cap, effort_arg):
                     self.on_reasoning_effort_changed(effort_arg)
                     self._update_status()
                 else:
-                    chat.add_system_message(f"Unknown effort level: {effort_arg}. Choose: off, low, medium, high, xhigh, max")
+                    chat.add_system_message(f"Unsupported effort: {effort_arg}. Choose: {', '.join(efforts)}")
             else:
                 try:
                     self.query_one(StatusBar)._cycle_effort()
@@ -2353,17 +2366,22 @@ Your output must be:
             files_reverted = False
             if snapshot_hash:
                 try:
-                    from andromity.core.git_ops import get_repo, restore_snapshot
+                    from andromity.core.git_ops import get_repo, rollback_recorded_turns, run_restoration
                     def _restore():
                         repo = get_repo(Path(self._project_path))
                         if repo:
-                            return restore_snapshot(repo, snapshot_hash)
+                            return rollback_recorded_turns(repo, [checkpoint], str(self._project_path))
                         return False
-                    files_reverted = await asyncio.to_thread(_restore)
+                    files_reverted = await run_restoration(_restore)
                 except Exception as e:
                     log.warning("Undo file revert failed: %s", e)
 
             # ── 2. Trim session messages & recalculate context tokens ─────────
+            if snapshot_hash and not files_reverted:
+                self._undo_stack.append(checkpoint)
+                self.query_one(ChatPanel).add_system_message("[yellow]Undo stopped: files changed after the turn or the checkpoint is incomplete. Review changes first.[/]")
+                return
+
             if msg_count <= len(self.session.messages):
                 self.session.messages = self.session.messages[:msg_count]
                 try:

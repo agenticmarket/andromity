@@ -360,13 +360,26 @@ class SkillsManager:
         info = parse_frontmatter((target / "SKILL.md").read_text(encoding="utf-8", errors="replace"))
         return SkillInfo(name=name, description=info.get("description", ""), source=source_id, scope=scope, path=str(target))
 
-    def uninstall(self, name: str) -> bool:
+    def uninstall(self, name: str, path: Optional[str] = None) -> bool:
         """Remove a skill from every scope it is installed in."""
+        if not name or name in (".", "..") or "/" in name or "\\" in name:
+            raise ValueError("Invalid skill name")
+        if path is not None:
+            skill = next((s for s in self.installed() if s.name == name and s.path == path), None)
+            if skill is None or skill.scope == "builtin":
+                raise ValueError("Skill is not removable")
+            target = Path(skill.path)
+            if target.is_symlink() or target.resolve().parent != target.parent.resolve():
+                raise ValueError("Linked skills cannot be removed")
+            shutil.rmtree(target)
+            return True
         removed = False
         for base in (self._user_dir, self._project_dir):
             d = base / name
+            if d.is_symlink() or d.resolve().parent != base.resolve():
+                raise ValueError("Linked skills cannot be removed")
             if d.is_dir():
-                shutil.rmtree(d, ignore_errors=True)
+                shutil.rmtree(d)
                 removed = True
         return removed
 

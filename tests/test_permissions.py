@@ -16,6 +16,7 @@ def _mock_trusted(monkeypatch):
 @pytest.mark.asyncio
 async def test_permission_mode_yolo():
     app = AndromityApp()
+    app.session.permission_mode = "yolo"
     with patch("andromity.tui.app.config.get", return_value="yolo"):
         assert await app._on_tool_approval("shell_exec", {"command": "rm -rf /"}) is True
         assert await app._on_tool_approval("edit_file", {"path": ".env"}) is True
@@ -23,6 +24,7 @@ async def test_permission_mode_yolo():
 @pytest.mark.asyncio
 async def test_permission_mode_safe():
     app = AndromityApp()
+    app.session.permission_mode = "safe"
     with patch("andromity.tui.app.config.get", return_value="safe"):
         with patch.object(app, "query_one", return_value=MagicMock()):
             with patch("asyncio.Future", return_value=get_resolved_future()) as mock_future:
@@ -37,6 +39,7 @@ async def test_permission_mode_safe():
 @pytest.mark.asyncio
 async def test_permission_mode_trust():
     app = AndromityApp()
+    app.session.permission_mode = "trust"
     def mock_config_get(section, key, default=None):
         if key == "permission_mode": return "trust"
         if key == "allowed_commands": return ["npm test", "git status"]
@@ -62,6 +65,7 @@ async def test_permission_mode_trust():
 @pytest.mark.asyncio
 async def test_permission_mode_safe_web_and_mcp():
     app = AndromityApp()
+    app.session.permission_mode = "safe"
     with patch("andromity.tui.app.config.get", return_value="safe"):
         with patch.object(app, "query_one", return_value=MagicMock()):
             with patch("asyncio.Future", return_value=get_resolved_future()) as mock_future:
@@ -83,6 +87,7 @@ async def test_permission_mode_safe_web_and_mcp():
 @pytest.mark.asyncio
 async def test_permission_mode_trust_web_allowlist():
     app = AndromityApp()
+    app.session.permission_mode = "trust"
     def mock_config_get(section, key, default=None):
         if key == "permission_mode": return "trust"
         if key == "allowed_domains": return ["docs.python.org", "github.com"]

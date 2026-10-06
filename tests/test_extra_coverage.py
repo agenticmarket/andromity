@@ -86,6 +86,7 @@ def test_read_file_size_cap(isolate_db, monkeypatch):
     # Ensure config limit is default
     from andromity.config import config
     # force check: temporarily patch config.get to return 500 for limit
+    config.set_trusted(proj)
     orig_get = config.get
     def fake_get(section, key, default=None):
         if section == "advanced" and key == "max_file_size_kb":
