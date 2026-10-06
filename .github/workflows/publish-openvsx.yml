@@ -1,0 +1,113 @@
+name: Publish Existing VSIX to Open VSX
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Build Platform Binaries run ID
+        required: true
+        default: '37542533127'
+        type: string
+      version:
+        description: Expected extension version
+        required: true
+        default: '0.2.15'
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: openvsx-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      artifact_ids: ${{ steps.source.outputs.artifact_ids }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Verify successful source build
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.run_id }}
+          EXPECTED_VERSION: ${{ inputs.version }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from urllib.request import Request, urlopen
+          run_id = os.environ['SOURCE_RUN']
+          if not run_id.isdecimal() or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', os.environ['EXPECTED_VERSION']):
+              raise SystemExit('Invalid run ID or stable extension version.')
+          def get(path):
+              request = Request(f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/{path}",
+                  headers={'Authorization': f"Bearer {os.environ['GH_TOKEN']}",
+                           'Accept': 'application/vnd.github+json', 'User-Agent': 'Andromity-release'})
+              with urlopen(request, timeout=30) as response:
+                  return json.load(response)
+          run = get(f'actions/runs/{run_id}')
+          workflow = get('actions/workflows/build-binaries.yml')
+          if run['workflow_id'] != workflow['id'] or run['status'] != 'completed' or run['conclusion'] != 'success':
+              raise SystemExit('Source must be a successful Build Platform Binaries run in this repository.')
+          if run['head_branch'] not in ('main', 'dev') and not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', run['head_branch'] or ''):
+              raise SystemExit('Source must use main, dev, or a stable release tag.')
+          expected = {f'andromity-{platform}.vsix' for platform in ('win32-x64', 'linux-x64', 'darwin-arm64')}
+          artifacts = [a for a in get(f'actions/runs/{run_id}/artifacts?per_page=100')['artifacts'] if a['name'] in expected]
+          if len(artifacts) != 3 or {a['name'] for a in artifacts} != expected or any(a['expired'] for a in artifacts):
+              raise SystemExit('The three platform artifacts must exist and be unexpired.')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('artifact_ids=' + ','.join(str(a['id']) for a in artifacts) + '\n')
+          print(f"Verified run {run_id}, source commit {run['head_sha']}, three artifacts.")
+          PY
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ steps.source.outputs.artifact_ids }}
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: vsix-artifacts
+      - name: Validate extension identity, version, platforms and binaries
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
+        run: python3 scripts/validate-vsix-release.py vsix-artifacts "$EXPECTED_VERSION"
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.validate.outputs.artifact_ids }}
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: vsix-artifacts
+      - name: Publish validated platform packages
+        working-directory: vsix-artifacts
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          OPEN_VSX_TOKEN: ${{ secrets.OPEN_VSX_TOKEN }}
+          OPENVSX_TOKEN: ${{ secrets.OPENVSX_TOKEN }}
+        run: |
+          TOKEN="${OVSX_PAT:-${OPEN_VSX_TOKEN:-$OPENVSX_TOKEN}}"
+          if [ -z "$TOKEN" ]; then
+            echo '::error::An Open VSX publishing token is required.'
+            exit 1
+          fi
+          for f in *.vsix; do
+            echo "Publishing $f"
+            OVSX_PAT="$TOKEN" npx --yes ovsx@1.2.0 publish "$f"
+          done
