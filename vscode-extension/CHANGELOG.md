@@ -2,6 +2,15 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [0.2.16] — 2026-10-07
+
+### Fixed
+- Include LiteLLM proxy dependencies in bundled daemon binaries, fixing the Linux missing-module error.
+- Verify AgenticMarket account sessions before reporting successful sign-in and clear rejected credentials.
+
+### Added
+- Provider runtime checks for bundled binaries during release builds.
+
 ## [0.2.15] - 2026-10-06
 
 ### Added

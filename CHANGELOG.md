@@ -2,6 +2,15 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
+## [0.2.16] — 2026-10-07
+
+### Fixed
+- Preserve LiteLLM proxy dependencies in bundled daemon binaries to fix missing-module failures on Linux.
+- Validate AgenticMarket account sessions before saving sign-in credentials and clear rejected sessions from the extension and daemon.
+
+### Added
+- Check provider dependency imports in the final binary bundle before completing a release build.
+
 ## [0.2.15] — 2026-10-06
 
 ### Fixed

@@ -1,6 +1,6 @@
 [project]
 name = "andromity"
-version = "0.2.15"
+version = "0.2.16"
 description = "Open-source AI coding agent for terminal and IDE workflows with BYOK, local Ollama, MCP tools and subagents."
 readme = "README.md"
 requires-python = ">=3.11"
