@@ -1,0 +1,2370 @@
+[
+  {
+    "instance_id": "astropy__astropy-12907",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "069a09dcf324a08b8292ea911d7350764c4fbba4c0a50d3cd4d62a7734099fbb",
+    "patch_sha256": "02f38562e4a3885ea4138d9e0e69e26705f0efdd19c5f2562bc93da638f6e69b"
+  },
+  {
+    "instance_id": "astropy__astropy-14182",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "74c9082329f3422b840950d407a586d080fb37edf5c1a3e21c03efa96e9068e1",
+    "patch_sha256": "f62dec39c0d0969de5bb11420c82592875e82b92b73a1e9aeb4d3f53493e45ef"
+  },
+  {
+    "instance_id": "astropy__astropy-14365",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "68bfd09eb333f65386aaeafc405c11193764e5d9f235d315d9ac6c9a34af0e87",
+    "patch_sha256": "98ab7aa102ddf70a3b0d38308b767aa89cf7ae2fe57cb608f275e28d83630e55"
+  },
+  {
+    "instance_id": "astropy__astropy-14995",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "95632b42ede5622abd4601abde6265bf368dae6f60a8caa3accd75bfe1604768",
+    "patch_sha256": "4da939ec6c76a60a89c44e3659da7aec69dbcbad308b3921f9cf12f88439c8d1"
+  },
+  {
+    "instance_id": "astropy__astropy-6938",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "434c0fde326385d09f5558ede94d8114ce7d81e04b75b16ce44c4079da067bb3",
+    "patch_sha256": "fa13af8017451dd3ae932e269eaf95fde115e4f28c708f48c2837ac3ff3fb2c1"
+  },
+  {
+    "instance_id": "astropy__astropy-7746",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "1e31cdeffd859718eceae04e8b95bbf50bce27e35c24e55a480c0c3076f72316",
+    "patch_sha256": "bc14ad2317e1599dfc9dfc7d13dd9d1d3d956c9585e6723a3365d8d37c1d72ae"
+  },
+  {
+    "instance_id": "django__django-10914",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "bfef822d5e1ce93f8ac5542bf710dadbbc7a64e4a9c09c9453197a9c60edc01b",
+    "patch_sha256": "4e214ac7c05872d3eef73810dc23d6426fbc9b568ecca20f66c397520d8cea44"
+  },
+  {
+    "instance_id": "django__django-10924",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "7a377ad07712faca30f01d17e37a5cfda9320dc5015f3f93a5f38ccce41f45b4",
+    "patch_sha256": "1217b361796de826522d7079cbd9030ae340db8499e33669d53768128508baa0"
+  },
+  {
+    "instance_id": "django__django-11001",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "c5fb1315a0530f78648484e5f7554e63509a9a1f38500c14a02193d120bc5ddc",
+    "patch_sha256": "9dabd0e3b86f96a1ed714f7e63642a5d78bf7d9fdca5babec30ba79877b8253f"
+  },
+  {
+    "instance_id": "django__django-11019",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "11b863c3a6f71ac1c5f21bf61612a0f8e1b1e64a7f22cea13bf893016c7cb807",
+    "patch_sha256": "302fa596e84b1222684f3864e5591556050abc501d9cb95747b36ceb2fbb8e1d"
+  },
+  {
+    "instance_id": "django__django-11039",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "61810ff28ea4c860ff131ac1377830ca92a4c90aa30b7f67aaf2eb7048a8b833",
+    "patch_sha256": "2de25d1708a6d186373338725af8d43e7825ad1783bafe809547b8d8949863a4"
+  },
+  {
+    "instance_id": "django__django-11049",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "b934dde87098ade17fa6e0b267b30ebb16c804234b4bbdf5172ad9c6b50740fb",
+    "patch_sha256": "9953c3f66475ae7e6a58bdd90e8515cee0c932104c99b671b6529205f450895f"
+  },
+  {
+    "instance_id": "django__django-11099",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "5444419e61b0a0a257cd453bbbf9d3c947b141df7379c2154844268104d97843",
+    "patch_sha256": "dcd7202d62b786de764d90d5793d4d1d2f531486e1bd4f2c0b7bf5507a82163d"
+  },
+  {
+    "instance_id": "django__django-11133",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "629fc65ba64b24062f0c8d0563ba288c011ec25c6c95d2abf040d4b143481072",
+    "patch_sha256": "9a14cc6e0a3a48c32700850d09faae25415752bde505d7ce69f246a0bf5760ea"
+  },
+  {
+    "instance_id": "django__django-11179",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "751024f45097ac0a7caed20c41abe22e67a8faa04fa00f5a83f78fcd594079b3",
+    "patch_sha256": "52a936062d4e0490c8e66edf4bf0ec09a350d7d34447d36ce2949b5bb0afb301"
+  },
+  {
+    "instance_id": "django__django-11283",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "b8fbbf3c6c06d3eb6802c9a003bbb8b6fffb2e4a81bf2f7df6ebc32ec76b06ee",
+    "patch_sha256": "7fcfe0a1a309b663ac57a1dabceae0208d1eeb56a85064e7ac2a1fea5529e9b2"
+  },
+  {
+    "instance_id": "django__django-11422",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "603b5778afd3d2b0c1b2b0486211c4d2579c79d281595ec2cbf03ffac762aa6f",
+    "patch_sha256": "707867ad1e964ab701c054f737bb02da8103c392bce9cd7cab594669e7363f9b"
+  },
+  {
+    "instance_id": "django__django-11564",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "5bdbf878ec0c44c72c46babb56d3913c8915fddfd8a04c4d049d47eb9212aa1e",
+    "patch_sha256": "cc783057576b53286804aea6ba356219c2642ea87c4662829da5668500c27479"
+  },
+  {
+    "instance_id": "django__django-11583",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "e2cffe7204587f90126625d154d9cf32f1802ad861a97f06f9b3d92d4ec2f393",
+    "patch_sha256": "41593dc77f24b72020657145562fa2f39f2d4c8ee4a031a30b2653f11e51c830"
+  },
+  {
+    "instance_id": "django__django-11620",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "0a6a7b6321e34c8c6556b3a05ba692fa44fd1ff9bc227504a5118a622551ddb2",
+    "patch_sha256": "48421da9ab5969741546826a9d9ee1c25ab37d63bb0527cdd2180a186d4af3c9"
+  },
+  {
+    "instance_id": "django__django-11630",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "dbb7ca9f97b22e73697c08d9b0e072c2fa222b2abc79e0f8d2890bc0d353a58b",
+    "patch_sha256": "2ad35aa1c78d05127cc95d96c16eba3b657adf696a27cfeac56d60acd2362065"
+  },
+  {
+    "instance_id": "django__django-11742",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "d3c5da2b6974379b1b5009dfffba0aad44ea847fcb85e1aa2cf7f5f9ccaaed06",
+    "patch_sha256": "dcea0d9abbec7dc1d187dd1d0680e8c04e4210f58f0e02e517db4829b62170d1"
+  },
+  {
+    "instance_id": "django__django-11797",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "0b344eedeb799d86e3b40b39c6c4f0fe9e36310cff567bf4956f213199e99d6c",
+    "patch_sha256": "134d7c31198390985b0365102643174e34e9a0c6e438c094827f41c3c98527f3"
+  },
+  {
+    "instance_id": "django__django-11815",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "4e640e37dd83707c12efdadcf0d85d36aa0352b3b5719077ae460734bcc20c07",
+    "patch_sha256": "56219959cc83b433af226086bb81fb1f73f5f6121f9560a9a74122c8a6b0599f"
+  },
+  {
+    "instance_id": "django__django-11848",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "01a30b46582ad8ba6ced073240531058e8841b185b1a057d6539e150faaf3959",
+    "patch_sha256": "9790102e66809e5a1285b8fe7d4be0592f0ff81646c305fa501626e164b77c28"
+  },
+  {
+    "instance_id": "django__django-11905",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "bcf5be2aa2497b391203bc4291bcdbdb06c03c1a29c0e04cfb0ac6ad90053cc6",
+    "patch_sha256": "bce23491cb493d36edcdd959fd39732769c373cd608c9904137adbbce004d078"
+  },
+  {
+    "instance_id": "django__django-11910",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "4c671874ea0574402aa72efbaf6d75719ff9f57f7200c75771c8be647a2f8b04",
+    "patch_sha256": "19abfe1ab696761d73474c971dd7aefe0212f08a4c20921c4012c71fe818c5a0"
+  },
+  {
+    "instance_id": "django__django-11964",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "732038131f40ae20306064ed07c6f6e72aac921c935aa35d1e3bf6d93a79f91a",
+    "patch_sha256": "2a8ecc4cf2e6814d106eb8ac883505b6671ef3c1dc39d8c2c7107205e99fdd5d"
+  },
+  {
+    "instance_id": "django__django-11999",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "f13b0a2878d9a77a6ddec8cae63c5ba98fb04b648577a3acb34842b8a9a664be",
+    "patch_sha256": "f26684b71f3a5d2d5a9d11a55107743eb53b6019d06c8cfaec5af59a3b9ef9f7"
+  },
+  {
+    "instance_id": "django__django-12113",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "bdc2b9fa97e247fb87004a93e7943b4d71dae7184b76812708dacc9d20c82720",
+    "patch_sha256": "deb1c8d1c4d42db69881462af2851267f54324992138265e6edcf91e1c360b8a"
+  },
+  {
+    "instance_id": "django__django-12125",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "df30df83d758719c9b28eb2a7421299a2dcbbe789af5a8b54fef2bf685788c0a",
+    "patch_sha256": "c1c631e2bccb4a2725b9e1a18c8defc06d1d843779a3c9aeb5782a6371829804"
+  },
+  {
+    "instance_id": "django__django-12184",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "5e0a42cb53d12409cb8f4b29831dc41de655a0eba8e2e1dfd04ab1014fddbe35",
+    "patch_sha256": "eb6a2a56af04fbc811e58f751ad0e67fb1d7347102d5302e9ce0e742c71447fb"
+  },
+  {
+    "instance_id": "django__django-12284",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "e3d7f0e3a6f5998bd299a8e9118fff013f9078c94121337fd73f91e6a929af90",
+    "patch_sha256": "1c6e4d0ecdc66bf121b95a7b64bb621a119077df52635221036f11fab39ce735"
+  },
+  {
+    "instance_id": "django__django-12286",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "8e34118920a96a86ab73716f6339f519a994b65fa066ad071135e8e0a79e3ef7",
+    "patch_sha256": "81de6c9820b2710e3b351c77704c17ff8e45e2eade6b9766a95aaaacc36dba13"
+  },
+  {
+    "instance_id": "django__django-12308",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "7affb81908bb58db9f2044fe601d1b8f9d7bfb36c1aad4fb82edb54483dd7aec",
+    "patch_sha256": "27f0be3e4906b7a26831429652f1e577f080a382299bc93052b16a6c0164349c"
+  },
+  {
+    "instance_id": "django__django-12453",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "1941d0b129f2c14c9d7129f852bfb8783300e239c81a1cb507a7b5efa4a83b4d",
+    "patch_sha256": "c0f1c58051a4773f374e11f31ec338685effa484e3c8dee8e5cda0e9632aaf55"
+  },
+  {
+    "instance_id": "django__django-12470",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "bee720d8ddffcf764cab27f0dcc7764cd6b5ec667f7cc70ebf05d06fb21e881b",
+    "patch_sha256": "a218381c6a5e0f63d58a2bb12c43b239b87fb7dfdd1243d2fe018ff76966b3e9"
+  },
+  {
+    "instance_id": "django__django-12497",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "d5bd66fd166c7051515f827566c66c99a18aef9c832c78999b1a220a97887806",
+    "patch_sha256": "3f00fe2e1890eceee4ea4ad8b24997f64e9d2e1d42bb511b3b8837de722226ab"
+  },
+  {
+    "instance_id": "django__django-12589",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "cf3e8251e23262b0d1705237d0556333a8286ce04885ced33ce9fe33763a0a62",
+    "patch_sha256": "bcccf5a2d73b75933c5c4fec810f40984e146dc2c59d42c8e65f4b338575a172"
+  },
+  {
+    "instance_id": "django__django-12700",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "c506134ea87e9e26eb49599bd640a8ad404275e56d6fb7911d6334c380be88f7",
+    "patch_sha256": "b92c80574c5544aa3298e193cce6fc1a85a521875f363d6ee1e27dd39ea338ec"
+  },
+  {
+    "instance_id": "django__django-12708",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "d2d9b994f3f737f3b2803cb71e0c93f3e69b04f9ff90e07e2b9343731ea18afb",
+    "patch_sha256": "58f77b4d61cfd3e8f465bdadf06da05a62370c39e1a498c011be6ae0aaa1c921"
+  },
+  {
+    "instance_id": "django__django-12747",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "20b35125a01b076d2b91144ec22fe6c3f5e927100815065b89c6fc303ca4ad1c",
+    "patch_sha256": "d080fe4913ef2746a82af14d80bc660d64d6efd060ac704bc2163f516af49554"
+  },
+  {
+    "instance_id": "django__django-12856",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "dc90a1b2a0c99506c028e85a03280cfc692096bb2fb2ca75e07d70d2cb63d63d",
+    "patch_sha256": "0251d80d2c055c84f7644ef605a36bfd4edf04ad3e84609e56577e6573fd5065"
+  },
+  {
+    "instance_id": "django__django-12908",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "5df5713463c5e77e3dc10e586d55cfb5c6e92a41695f22a4a774cfca6d928203",
+    "patch_sha256": "fea85f5395cb300b3678569bb043f26a7e10dd40acfccb0413ea6461062d56b3"
+  },
+  {
+    "instance_id": "django__django-12915",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "6cde96117fff770935e7ef5abf7f446ee0ebf2f1ed1d41e73aa7c87de86f927f",
+    "patch_sha256": "da26a184ac56d74e791da71915628fc94f1795db2488c17608c7d1bf27915469"
+  },
+  {
+    "instance_id": "django__django-12983",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "6f000031cefc66df85112c1a1e14fc23c3aea67811eb5f29d9a3056c6c99ed16",
+    "patch_sha256": "8e834d255240dea27c2ced375cb0a16b78cee168e42b51274d4505bfc68c5b8f"
+  },
+  {
+    "instance_id": "django__django-13028",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "5a7e434d39c8487cfbe1ee899d78c3482d00cb00c1a62d48a6476833b7f615e3",
+    "patch_sha256": "6359eb287fc08d2e3bd75562f783bf14cf154bdcb6195f7cea2c6e84eb893ad6"
+  },
+  {
+    "instance_id": "django__django-13033",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "cf97d40e33650aa04fccfe89eae53aa157d4eab6c773aafa6e43895ad49378ec",
+    "patch_sha256": "c61fc61abeaf42422a98404c403079fec2ba6b5a4fd1a37b325a2f40f7bdcc82"
+  },
+  {
+    "instance_id": "django__django-13158",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "e0564ad40063b9e390e0910652799b1df2ede788cc3aeab012655a8ee6de7361",
+    "patch_sha256": "d1db14c26996dbf2cdaed9c48f1089943e997d8f8698511ed657727baccf504e"
+  },
+  {
+    "instance_id": "django__django-13220",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "1154462ac6ea82c83ab27add4cf358cedd5bc8487cfefc8279548377928ce5fc",
+    "patch_sha256": "3e87520d3aa96646fb36ce1a486468adc0285c5b0c0df1731b754b622ed2bb1f"
+  },
+  {
+    "instance_id": "django__django-13230",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "12f651e447d3f6dbf6db1ab8bd1c917f0c5cc1f4fdb3b0c76368c606fcdc488e",
+    "patch_sha256": "9c94e4458a34a2dcd0a2e671b8d200a9a06fc8ef4767461da49e7e8b9804c6b7"
+  },
+  {
+    "instance_id": "django__django-13265",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "c8e759c17b9f0ebd016567f7a4d2002b521df628976499c3b3c06ecda383ebb0",
+    "patch_sha256": "f17b7a654e6a6232108b79375d26de63bca596144ec16a48a235b3d9bd08dc1d"
+  },
+  {
+    "instance_id": "django__django-13315",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "063ce69deb48c319a0f9fe61e89777de7a0e84d10a9fbacd1b4189d2120171da",
+    "patch_sha256": "834186b036c86ca5d3adea3c91cbd4d198bde54f8d202447a119e255bb2e7104"
+  },
+  {
+    "instance_id": "django__django-13321",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "299730298f42edcfe9640510d2a6a476ceae69af80fa95d8475a569bc361d542",
+    "patch_sha256": "61cda354b8342319d28f70171782d95117061685dd0f1a8f5c85d9db38417193"
+  },
+  {
+    "instance_id": "django__django-13401",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "6773a723c290588961e0ffc270df676d4d6a09859a9dd04853c2bde9f2c50631",
+    "patch_sha256": "e3a2ef8480b3b412e62df64b82947370ec8332333638127a6450121e338b954f"
+  },
+  {
+    "instance_id": "django__django-13447",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "da14614347f9d181621abb5e7365b86aa7ba7cc906c75db82751899f4d304199",
+    "patch_sha256": "9de486b73600fbce428689d4426c45df0d392ef678bb5053dac56cfe2abcf046"
+  },
+  {
+    "instance_id": "django__django-13448",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "3d3cddff2aec382f9054595000281dc80c58b4420b785a1d7346703e4b70baff",
+    "patch_sha256": "d498034ebbbe1a2f829172ab03100f3eb109ad97d5b4e6d7f19090b920d3d556"
+  },
+  {
+    "instance_id": "django__django-13551",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "c67987dce3b33100e670cebd8436b2f04ae2d99a6c5d527a9f00600b285dd1bc",
+    "patch_sha256": "0b084f4fa0447626a6c8ce583fc5864831ed38ebee9d004847fcbdaa61464865"
+  },
+  {
+    "instance_id": "django__django-13590",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "f55de962ca4a89ff0854a08873f5d833c9e2e01cf6ce7108dc1cf1b32b18e26d",
+    "patch_sha256": "82d67f766cf459d3e163e11da51ba43e545ae5bef365c5e136aee6d9a4f1d7d7"
+  },
+  {
+    "instance_id": "django__django-13658",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "ca693ea78e27a1ee4881c38699f661c3cf6b782c7427fb5f093a9366cd9e7045",
+    "patch_sha256": "cef615bcfaa29896765deaced9d2704751d3d2d2737bf514216bc228db4db1dd"
+  },
+  {
+    "instance_id": "django__django-13660",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "0db2ce4058a9541cff5a47c1ba0f366eb768c3f67b0b1c2fd33e34e8c8cc337c",
+    "patch_sha256": "b0ca224864219bc2094ab1e2d82a0346219f893153e43195d61963e3b326ceec"
+  },
+  {
+    "instance_id": "django__django-13710",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "5f572ede41b0440a5efbf8d48413ee40aa2576edf1d76d8d17aea791d9bb9ad9",
+    "patch_sha256": "468e9a284c607dafb4b4bf9fc7410544869541383f044add4d8a613483c6d8ed"
+  },
+  {
+    "instance_id": "django__django-13757",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": false,
+    "report_sha256": "08c5138404ae33ad83d73adf1efdad469a9aced09218feadc3508920d8076753",
+    "patch_sha256": "a7040be12f525e8e5374a214a34ff07ae32952efa57d7bc0eff1c76bd15f400d"
+  },
+  {
+    "instance_id": "django__django-13768",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "96dadfa6b26b2462c282baa5a0f1cbad763f64b568259b4fa573a95f6d5d4f28",
+    "patch_sha256": "cca3d89a3f3dd3b60d07bfd49b4b840fff1b71a4d12709bbc078671c6c5ebf18"
+  },
+  {
+    "instance_id": "django__django-13925",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "cab5058168adafc785c7ddb101b0e031035a9630522dd9ad3078012e1f1a91a8",
+    "patch_sha256": "e111f1f480fb9596627c8db9c2b7e76d4ed17a429c206eda800c503753aa0671"
+  },
+  {
+    "instance_id": "django__django-13933",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "a26fbe463cf671b837f32692a98e9d32aa811de65f73dd338528e6cde9607d3e",
+    "patch_sha256": "f0e92e506cc78f5f905d7b60a6b3a15efdce0cb9db004df5c4245efe6e67c1a2"
+  },
+  {
+    "instance_id": "django__django-13964",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "0cc2cebda1e860ceb172521598327da70746bf93fc608f1f8b168c389cf24e4a",
+    "patch_sha256": "592fad342a2a8bc3dc3d0014b7caaed674747c73abf50e146acc50bd34b121be"
+  },
+  {
+    "instance_id": "django__django-14016",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "618e2453e348ec44ccb343c2d22f449adfa564e86cfbbf541090276454826985",
+    "patch_sha256": "2abd81c14dca776dcae6476b5e1676f9c3bd819ca507200aa532ef2453df2bd2"
+  },
+  {
+    "instance_id": "django__django-14017",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "3f10561754f14459c9bd54c547b9b626292b8d13da3bcb0bbbf3130593f7488d",
+    "patch_sha256": "e9c5c5794deb6bbe0128c6755c4982b718f18a78da88a76f7aca2af72816d7fe"
+  },
+  {
+    "instance_id": "django__django-14155",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "a6d941b6b5c28a8d31323262fa59de055df3bde37b2fc736bab449e04a0d91a7",
+    "patch_sha256": "da0c8ff3ff1980fcf5d35d3ab4e48d528c0338603ba786a949fdd9b77cb2db34"
+  },
+  {
+    "instance_id": "django__django-14238",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "703b5f06e5ed54b9ef5acebf3fb236a649da4534dd2a878f1579acd79ed675c5",
+    "patch_sha256": "741d96aa99e1d6f74f01790dfc0f3089c4472aac35bffdbdd60d8c14f864b2cb"
+  },
+  {
+    "instance_id": "django__django-14382",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "c7ea891246e5e37d37ccbd8f697606634b1cf2697cd61f5401673c9df3eb08ee",
+    "patch_sha256": "4661a49421041a5f3cbfdbf5cd010cd36501f17bad2bbf5342117ec990537dbf"
+  },
+  {
+    "instance_id": "django__django-14411",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "94b63e9ba61747c96b88302f82ab778c61d6d0ac459a290ce9e1f965729c693e",
+    "patch_sha256": "658f7fc57f1ba94e8cd509d71a86fe31963c912c65fdb1a46b26ce37f81e6f8d"
+  },
+  {
+    "instance_id": "django__django-14608",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "96a71723ab574dec2a9e49d7ac750a553040facde7b22d3e759697aa74e925ae",
+    "patch_sha256": "2a227a5954ca4a0b8afd6c4cca3f40cc6ea1d3739d5aa8fd8b0af1211c762435"
+  },
+  {
+    "instance_id": "django__django-14667",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "988dcaf9a3a0126a1a0cb6e4d06fca837730b2959fba9918a2ab935641b5a76a",
+    "patch_sha256": "169f6a3f739e070ecec48bdbc820fab83a8016ee386e7cb5ebcde117f91a2b74"
+  },
+  {
+    "instance_id": "django__django-14672",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "7966e8e34e2e7cf232a09dae59b645297fce800dd78f170be2ecc64d0c9045ed",
+    "patch_sha256": "ab6e718f3fa511d2248b7d773f6c6b8446c1e2914efd7d35d9c8cf489df3aeb6"
+  },
+  {
+    "instance_id": "django__django-14730",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "052f9339ad1f4a9aca95c223cb06f0bd1c0356945d278ba495b2cc64b8d31f07",
+    "patch_sha256": "09e0d0e34fa3320f2dc88135cdf74418d24246e0fc6f432836b4646ad3645ca0"
+  },
+  {
+    "instance_id": "django__django-14752",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "b77adae7421496b3fab25311354f53d11a590a61492bd2cd36b2802fc14be183",
+    "patch_sha256": "67cdacd229c1ed218e65776cf60dbbf97e269754efa3fdb0135d986115fd502a"
+  },
+  {
+    "instance_id": "django__django-14787",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "39d2f1d30e289a1fda9dbc6627478d55742f8b07ba369ab4bb4e14f1593755a0",
+    "patch_sha256": "141b1036f481e668497928dca34e6f1571c4fe9baf33a7efef5d3661ea34234f"
+  },
+  {
+    "instance_id": "django__django-14855",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "bab13fe7e0a1a6bf616e5d41b55d4f990ecd4d5e1eae40263681a1b8740f83c6",
+    "patch_sha256": "89c612608f3357c20e86efa224e4b8e1e41a7eac194157c9a473c9bf054fe79b"
+  },
+  {
+    "instance_id": "django__django-14915",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "85c985c52a5cdf072eda053a5bf1cc834919fc53fe2677beef0236cde1be496f",
+    "patch_sha256": "5cfb95ae948adbc9d2b5bd99a355567693b31742cc39e312c6887caf55c09767"
+  },
+  {
+    "instance_id": "django__django-14997",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "47a3d1061e34dad3659b683579c8fc09dac6248e7b7da7923674b40b002497d3",
+    "patch_sha256": "ad9b59a0e6aed2275a42ba9fc638d77adf1fd49469f66b0ef00b125a2a3c5d25"
+  },
+  {
+    "instance_id": "django__django-14999",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "c359ed06ec708c74da1831fb6b634ef2643af76f14a6101503785d9b163946b9",
+    "patch_sha256": "aa91ac35f42111fc419b102a7b2d17f72e436120a287b9801868cc451d1495fe"
+  },
+  {
+    "instance_id": "django__django-15061",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "05ac75e465297c16dd93db20575e5b81ff59779e0a7342b5a3c85f8791acd5bf",
+    "patch_sha256": "aeaf1db60db2ab52e7810546d5824ac7976051593701e995524eefae7461caee"
+  },
+  {
+    "instance_id": "django__django-15202",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "be7771f62b10e5e4f754bbb8284b781aec5c696de520b740669cfea43dbf7532",
+    "patch_sha256": "b525160ceabb498b0b791114f834db6b2cb475d8d17ff20cd9306a2834b0e9f0"
+  },
+  {
+    "instance_id": "django__django-15213",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "ba290737c9931c4cea489d53233aaa61afefbfd0d3bd63908ff3b3e9acecad3e",
+    "patch_sha256": "8755750255a9f17bc52ce58d301befc3c92d9c7bbf68618dd32e26b94c91ffba"
+  },
+  {
+    "instance_id": "django__django-15252",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "f9f2d0b273f9656dd9d89473b19f0c3c816f70f7957b3bd5960cc57a6d4c7761",
+    "patch_sha256": "7136253ae47b89a9c1f20f5fbf29c02bae76e13235a36c85ccb140353ac501e7"
+  },
+  {
+    "instance_id": "django__django-15320",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "82f6a96803ff583c1d7f7ab53e76f339a4d5699339dd3e9405a8222610395820",
+    "patch_sha256": "fe6c0bdac760395665c8f3edc4f3139b74943f414985cb3b2e64c36ca69d6afd"
+  },
+  {
+    "instance_id": "django__django-15347",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "049a8065bbbf616691d18ec868db7815895c4de902bcf9c9cb8795017b0e3832",
+    "patch_sha256": "ea9d796ecf7a4d5a2d9d699d46b10aebc8dedcc0521c0a22e7f9c32a77031080"
+  },
+  {
+    "instance_id": "django__django-15388",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "bb4e14d567d1f7dce64d77fd3e09209630522e91e80b25381f85d5208940c073",
+    "patch_sha256": "d2507368328d6a695a1d4baef8de8a4c8f44476fdb981645679a934a4d762bae"
+  },
+  {
+    "instance_id": "django__django-15400",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "b5ccbbb4ecc8f1f294461b36a08a00fcd5faf376a9c9673f96855976b6b772a0",
+    "patch_sha256": "7d1a1e87e81d07ed2527a11df31575b07098aa1bad4c87ba8c2abf19d753b862"
+  },
+  {
+    "instance_id": "django__django-15498",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "9503e92b39d3c0e56245d44f958acb30773589656e2e0876ff2949d0fffbfbcf",
+    "patch_sha256": "b5d8cc5154af2c5036c175a3bc73091fabb156440d1d584c6beea71a3eae48b8"
+  },
+  {
+    "instance_id": "django__django-15695",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "f24e4edc6bfa853e1d68e6d1c5c030ae70fcf7d8c28b8a1642ac692a772b7daa",
+    "patch_sha256": "a042a59b7c2df78a902ceff35cf36540887d13e3d389472cbe4b829297f1f17e"
+  },
+  {
+    "instance_id": "django__django-15781",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "5315bd9531007c1083dba9ec3848aca397f8adadcdf9751aa0d6392b4fe820e0",
+    "patch_sha256": "e1df99f980c2149f679bead5790607d8969fa0c705251df3c74b44d90a56cf21"
+  },
+  {
+    "instance_id": "django__django-15789",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "cdd0d0c65d362706e97f9173f5d3a8ce88b5711f347da8fa445a0a53d78a90b7",
+    "patch_sha256": "c2dfecbd79b2a3b1070b617acd661961e312b8dde5e3be2155652f44d5f5176d"
+  },
+  {
+    "instance_id": "django__django-15790",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "5a7a7926cfafa71863e1617cb4f060355a08be84ccf7de2d294be0c78ef8e8d9",
+    "patch_sha256": "31ab25fcdd57e818bb8e6d773ec406340ff829e64dc1e1d3af155447b5d407b6"
+  },
+  {
+    "instance_id": "django__django-15814",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "bc1272de7efece77eb66edc44b65945e5b2b884f143942703a731d59516b1be0",
+    "patch_sha256": "435f9c56cd9f8ac7bdf66e3449d7efe76cf6306ce9dd629a1fc3b8258e005ecb"
+  },
+  {
+    "instance_id": "django__django-15819",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "dc381705da7b573afe1ec5f91d78dedb7f8e3b3ef832f81922f4b51ea508afb8",
+    "patch_sha256": "36a2fd9104149b5086fe8816b3e3b9258fdc5057d772423911f57a97ef968e5c"
+  },
+  {
+    "instance_id": "django__django-15851",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "eee1c10e660b0edac13f757cd22576e65b568f924170fb3befc5ff0673b1275d",
+    "patch_sha256": "9a738826033c86de1854f09813e62412aca32dd9386ef59ef129f7d0c4579a19"
+  },
+  {
+    "instance_id": "django__django-15902",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "4d85926757e3ffdb0be25e2df675fec4ab100d3aa7c59ecd2bca6f0f49a4cea9",
+    "patch_sha256": "a8097bb401fb7a70dd57f38e58d5a9712fb3433bbcb2c77294a4df11bd5d9ced"
+  },
+  {
+    "instance_id": "django__django-15996",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "8814be7285feed729e19084f2055a7f60a97170ea18616f1b5a6fb819e2d0ebf",
+    "patch_sha256": "4da92386ddc8db88808d2741ed60f4e481367cb6312082a2b05dc71f1084c791"
+  },
+  {
+    "instance_id": "django__django-16041",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "138987e8be9a676bfcf81dc35328b75cc3f2ed842ad39423a18c68ad27db2814",
+    "patch_sha256": "e74da95075ddbd781d49f25d04200d099b0dd7223b3dc93814066f4cca208d1c"
+  },
+  {
+    "instance_id": "django__django-16046",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "e3a24f129c085b73740d315aee65ca672f9fab0b786e40526c4c82c7c4c5677e",
+    "patch_sha256": "764b03069ea0beac217419c67dcb45664c6a0fbce3050c8fa4c5d8c2443ed301"
+  },
+  {
+    "instance_id": "django__django-16139",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "b27f65dba2c226422d448aa16047ffc8c5a5555c2a0486817a98552536c12ad7",
+    "patch_sha256": "11e075bfad3d52043ec6f789a4ebdd7a406752d478c9b965340f1a85b4267ad6"
+  },
+  {
+    "instance_id": "django__django-16229",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "44a37646c1672f0bca43da4e72eb5d217a748e4ba011be637bb4ea530c296962",
+    "patch_sha256": "eed177c6d623f982622ca25e426bfa265697dc437c7e2be77600746ac794d467"
+  },
+  {
+    "instance_id": "django__django-16255",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "f920ab47c513a9d1c52ea75f11eb6278ab5ecb35c5ad684e7d1eb15f40bd0545",
+    "patch_sha256": "23cadef55f87c9c85a81937c0178adba658e2e2552bb770833b893bc6931c0d3"
+  },
+  {
+    "instance_id": "django__django-16379",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "bb1dd07907adad77fe285d670b181bed1912123523100e5a61e02556c4b76644",
+    "patch_sha256": "547956380f51245059162967ec4311db971bf227c323a686f6b7259ae22ad67c"
+  },
+  {
+    "instance_id": "django__django-16400",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "ec46949670936cec5a29f1d0edd79752821103358b2cf2d66d7d651b840da7bb",
+    "patch_sha256": "0adb879d7c9b06c5e77b4fd3659dad5ff7bcfe38db035fe8f394ff6c2bac13d7"
+  },
+  {
+    "instance_id": "django__django-16408",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "91c1cf67c58e12d162e5f226ed3f5060451936e07a1a040315ff950d682c35d8",
+    "patch_sha256": "1679943e80780426a0802bf838afb99a06c4f8c36bf64015a5019262f006a9da"
+  },
+  {
+    "instance_id": "django__django-16527",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "3d3edf4fd0a6361461e341d0b15abd9048527f3af6060e5ad61d4a13f76a0eb9",
+    "patch_sha256": "a292aaefd34f474d2ce42e73a6c526984d230d8bf2a06ac85578b153f6c3833d"
+  },
+  {
+    "instance_id": "django__django-16595",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "c7943fc5971b0f161a54fe28f40a27d0254226ffdb9e16331349eef13c197e46",
+    "patch_sha256": "c550e618f08c58d035d906ef2664674332ac539edef4dbf702a2d8f9fb2f758e"
+  },
+  {
+    "instance_id": "django__django-16816",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "20bca56d1a4399327118c43debd4c460faf502950ecc10309235f12780efb3fe",
+    "patch_sha256": "b5737d6cb0f4539a692bbe67abcfd09814a5f1733914234ea2c2e784531170be"
+  },
+  {
+    "instance_id": "django__django-16820",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "5f5632a7ec37c51d890a926a6c802231dc84922bac555e6d113d35da33655290",
+    "patch_sha256": "20351deeb74050305be6eb8d5e19bf1a8fa31aa4e6878f1681caaf2337a497b2"
+  },
+  {
+    "instance_id": "django__django-16873",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "3b4124fd9b95bb434767d289bae0a1a89032964c96b204379732f3dc981b93b8",
+    "patch_sha256": "d00979bac396552a774c68ef9f7eb969524abbe350a4b863b6a2b13bd6116d5f"
+  },
+  {
+    "instance_id": "django__django-16910",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "270c78260e196135df717e7e9ac7552c15f47652e59bcf205fc5f93d877141d7",
+    "patch_sha256": "9628580c7d90aea42dfe2d613def080c37a03b0ad5bcec83ac215cd63c796989"
+  },
+  {
+    "instance_id": "django__django-17051",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "78c9244905e2fbc3f462859d6bd078b28f89b3c3c21b4039d6f582904c5be046",
+    "patch_sha256": "b16d793278c7c50b8f62af1858f9aa0809713d3d353510fa905e13d1f268d62e"
+  },
+  {
+    "instance_id": "django__django-17087",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "2c7d580f2d2ecf2f2ccd0c6e95753929a2ab4213375a06dc59409f7d03e4503b",
+    "patch_sha256": "9b9efda2e5d9ddb5752abf8b2b02538f68d78539d8c892157c9d5b0b9dbd212d"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-18869",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "b315bbd606c586ec2620253cd39cb94a90d231fb0032fdf0f082e04bc34572d9",
+    "patch_sha256": "c6f09416d41b08bb4a97116e6746e84e519352a6f1ec68c011d21b2cde30967b"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-22711",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "cbf6a667a75683c51331bbb31272c2694935d9ed7bbf70497a89f9dea387cadc",
+    "patch_sha256": "71d62688da1528357bb2c04d3c98e15c4dfe74bbd66c3151177db3b08e9b3793"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-22835",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "20c27c83d59f3318491bd095d16e357169b5104e4e18b373df818154fe72d965",
+    "patch_sha256": "d1ce62bfe2eddcef252048309293984c591c472c7c2546a7753144c3a6f58849"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-23299",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "fadd0bdebe17be2e95aec51a151ee5016f33db10a149f003b21c265cbcc59623",
+    "patch_sha256": "fed7a09cb823970b165c054d2a5152b9d3440ee7973b72e706ed888e9bc8004c"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-23314",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "0b24fa202f0c09e4aef63e68d95c4185e0dcdf25ff230725393d3371fccf7b9d",
+    "patch_sha256": "db859daec2368328ceead4582c9d319658c00e4628c5e15b1b9f0acb377f694a"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-23476",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "c04e071a5f73715b1c5693a76c6d9f128fbc15fa4704cdd058d0a7365574d1d8",
+    "patch_sha256": "7a9cdf8944916226f52ee5f94124c5060f446c8a90b423c23dbb93fd3862b07c"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-23562",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "46c56c212e200a35dd0ebe0073622d482f217803861078482f005032d2eca75a",
+    "patch_sha256": "1b1d06a6e02e552dac74de2e749278c5dd79c111d006371e131dc2a37a8e0fd5"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-23563",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "b1c86ef73d63aec8e4bdf77206605d2d3f7f35561a97cbcf461e3ac469688df7",
+    "patch_sha256": "e5f4fcf5d780b3877b19af0d2b7b05950b6e487eee1cd1414497a046ba9fb1c4"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-23913",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "fd6b06e176f3d0b19c781f20c80a1bf5be10a52fa0ec1e879488775dda13210d",
+    "patch_sha256": "fd1d5e74b23bd496ada12041a894243e85bc437cae337686f414ac8446aec703"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-23964",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "4a22528b8934fe3b71d7958f0667830002f08dc4906d9c7e98066d5e7ab8ca5f",
+    "patch_sha256": "5e214c85ed8c23a536e45605225b14a37117d4fb0cfaf425f715e353e0b2b495"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-23987",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "cb88d562ef1d428bc53312df522b9d51c45133a63d97f56a393e461ba37b16d1",
+    "patch_sha256": "3211582eb65605c5c577ada5d9211411e4b7be2bfd8b649165e5c9abde482387"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-24149",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "78ea414345c98363d6476aade856732e05c33104481fdc30104b3a18da2aa7b7",
+    "patch_sha256": "dc15f6cf37ceb835950d513ec69e210080a40bf876a9126078cc598041270401"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-24265",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "f2cf647053054da6ce094f04cb7deaef63158f99c242174d275bb882b0f7b53c",
+    "patch_sha256": "af56135d11bde23af3ce298e214d30fa599615c658c7566dd1b082f28666059b"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-24334",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "03a3c4f2298f6d4a5b98f1dc8d6eea16c4ea4d01a77bc976b7cc04abf6668b1a",
+    "patch_sha256": "1678ba92695f9bdb42b564a5bc6024ede5203ebc57936369748c7c7daa375110"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-24970",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "ec336e9fb1f06d4854ea39241e0479fb969c6283369d830802018464beed837c",
+    "patch_sha256": "5415f8c7de3aad2af7e82dcc098c488902ee4db28d2f3d68e91da83a4e9eb496"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-25079",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "f3e9ca7bdfc8e2b11aab84581cd314bfa76d2f262d0c0bdb22301e1b8454c4ce",
+    "patch_sha256": "c06b131e71f46948d6bd0317043b8decd559b28c76dda081b03419ab571724c0"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-25311",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "f670eb6f7c3a13bbc77bc46bc03aeaed85c12f31e30d589d6980061f5079f085",
+    "patch_sha256": "163e5246610e3c2b0114b9cdb51e28154b6cfa9ce302298a02af1aac1f6eb66d"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-25332",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "b11b5ed9032bf0b1a59da1346e59a7c05e131b6b435ca12e728c5ba4efab4720",
+    "patch_sha256": "c88a6f99df2cc976a81115965c76401d013355de607e6da1e3fd7b67a26682e3"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-25442",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "e09b793c35d5a9f49969dd12a808e41eaf04f274a23d3d2f5eab55345c2fb8e4",
+    "patch_sha256": "63b0f9a2c2d5c2276f6734159b96904cac65717368e272559c19a6f84174f2cd"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-25498",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "ce0c2c8cb546f0d3f5d8e1dc212eef22c725a274b24e65ca354824501fcfe9b9",
+    "patch_sha256": "441281e1152a36efc4d3831595d0c8aa448c17b96fb5d5b095e8fbf890e1829f"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-26011",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "124c1bc86a25d06217e36fe9bd7b5604b982edcd4e4cbb9996adbcb44de9d4ae",
+    "patch_sha256": "3e0f9bd19446a3893e2aae82920bb87b4999f83fe09afbb2efd223f540da9302"
+  },
+  {
+    "instance_id": "matplotlib__matplotlib-26020",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "334546d4c1c33681e6c76f0800a3f0102e18b1e9ead42b1199c8321f4ddeaaf6",
+    "patch_sha256": "2ed85470fa6ef04c3c64438c85a247770ce662ac2c6a827ce020ce0ea26bb115"
+  },
+  {
+    "instance_id": "mwaskom__seaborn-2848",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "163cef9f22cebe74782e0621fb145754ce13d805eef93da96d9139d1a44cb36d",
+    "patch_sha256": "185a74f2e6cc3928607e859b49ea689aa08e20fbc72e07ec8c877ee89e6a0c9a"
+  },
+  {
+    "instance_id": "mwaskom__seaborn-3010",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "3d4ba151a57d824ccab70a92e84b62b55fbe1b6e85447c37fa2d4c5da86de313",
+    "patch_sha256": "08e96bd2eafd45403249cd1400ab549c9173f9ac406db5d321fd5c9d71c6d7c5"
+  },
+  {
+    "instance_id": "mwaskom__seaborn-3190",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "3a2a32c9d1305685662d92df8e36ba9aaea9034e6bcf5aef85a923b6a57d0383",
+    "patch_sha256": "5898cc8124ca82210e7a42ec1e6fc62df1c20d0ff20bfd04a614588d19bd43c8"
+  },
+  {
+    "instance_id": "mwaskom__seaborn-3407",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "4ffc2b8a996005198c997322ad1da2499b18d5c243bbfe4840224fcc0cfaa2a4",
+    "patch_sha256": "bc455d564100cece2fa14068d5c286d2e0e5ba13345143dd0a69a5c33f8405d7"
+  },
+  {
+    "instance_id": "pallets__flask-4045",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "2d4b6ca067929c597e05e6ef1efbeb923046f866a8fd1287ce6935e02f99e1d0",
+    "patch_sha256": "bf4c2cbf56270e8da482b58b254c900ca710735dc0be77e0941d2022ec6e145f"
+  },
+  {
+    "instance_id": "pallets__flask-4992",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "a4c844d748b04c2a1ccae60e4803c7f8689c38fb29b619d7de10f73ec921a853",
+    "patch_sha256": "4d7de6427a67b7fb33f9965508d4c229030b1d55d9cc2bbb420869a38caed3f9"
+  },
+  {
+    "instance_id": "pallets__flask-5063",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "6f5969227a0bc106e57292d3de560ad9085fc677b1aa1d091b3e2c5bf71f9952",
+    "patch_sha256": "3a346d1314c80b7e9926d04ac6be2c78d14abb14445aadabfb38e48c34713ad2"
+  },
+  {
+    "instance_id": "psf__requests-1963",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "27384d12fb15286aa0f31d0741760cb98d16a7dc73924c6ae1c6ff66911c5668",
+    "patch_sha256": "002e7f9a173c7ece627a608d976ba4bbe5e262bd80983f94e3db1d4cd8ebef0e"
+  },
+  {
+    "instance_id": "psf__requests-2148",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "3daa6830a4471469a3b2410e9687216cda263e3268d3c02c11bd0c04dc3806c0",
+    "patch_sha256": "35c1c6379722d510872557055e221239ab83ab8e2b9af105797b433bf7aff207"
+  },
+  {
+    "instance_id": "psf__requests-2317",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "0a88146f1328e84c04b253a122314389001f4dd56911a6082cbd25cd94c861f0",
+    "patch_sha256": "dd6c87953e3d40c045cd67a3ce028660c614994f00a8a55fadf1d22179324a85"
+  },
+  {
+    "instance_id": "psf__requests-2674",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "831d9803e69dfcc2bd018a9787206a6ec0e1606d48891ebb3145f62cba51e04d",
+    "patch_sha256": "79f6c3c1adc58a94bc734a53e2bb76113400d916cab6e463c9466981268b4fd6"
+  },
+  {
+    "instance_id": "psf__requests-3362",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "b7bd16753a3a5df2a83f68ffba9ca1f21be4cd32124e4688551ca4f2d957ffb1",
+    "patch_sha256": "fdcd571fd6b5b730fcad5e673d71e4e6e40118313faebd8d576c2134b937a022"
+  },
+  {
+    "instance_id": "psf__requests-863",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "ab54fb6e49525a79fe6e00123d3171d52d5cc567543ce51637c2609f7aa243d3",
+    "patch_sha256": "2caf01cb69b7eba0d17e1d7c90c068c6642919acd0c144cd0067f962a530fd47"
+  },
+  {
+    "instance_id": "pydata__xarray-3364",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "952d67b996c67ac2c931460e8945522d1d0608315df7a67bec03e8cde38fce43",
+    "patch_sha256": "3168ee5ce9161b506516703a764338bf4a0761c6cdb7532fbbbb1a813d76e492"
+  },
+  {
+    "instance_id": "pydata__xarray-4094",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "399079a7996664ddc19a20295e9c6f3bb605952ae1da926a496095e7cf835d8b",
+    "patch_sha256": "9197f65708d53a4f7177f2578dc5f820144e9823811dfcbbe2f60d538c1ce65e"
+  },
+  {
+    "instance_id": "pydata__xarray-4248",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "5fd2c316102ac7a958cb9caca48be61dcf9e8964cc7ac58c958a7a05019508a9",
+    "patch_sha256": "4aba26340b19700e70502192e2feec9b8460661663222ee9a82433c800a2c0b6"
+  },
+  {
+    "instance_id": "pydata__xarray-4493",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "b901bc0bc76ca356fd2f221b63ab7c821356c5af021936fe4f3e4553758335b8",
+    "patch_sha256": "33f485ffc1d97b64c53dccd4ceb3835920f53b725e5ef1aa641a1b34c8fce2b2"
+  },
+  {
+    "instance_id": "pydata__xarray-5131",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "5fa5d3332bdd4e6394084eb6c0d66907f2c4e06d663ebada9348158082399fa5",
+    "patch_sha256": "8cef07df9c9ab9fab8fc86910070a017159dc94e5cd3ba1fd97b25e561dfdf98"
+  },
+  {
+    "instance_id": "pylint-dev__pylint-5859",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "af7624498a39987f5dba97981de87cac63ab6a704bfbeeb8c55bf954a4d4737c",
+    "patch_sha256": "61a1e2a3453e45d7d8de5a5838cd4dda3b6750c2a76aa7a94c1940da9f507c4e"
+  },
+  {
+    "instance_id": "pylint-dev__pylint-6506",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "fb06f6e16f828aea08d2e5ca4fca34eada09524df553f6ddc5a5d1caa771b071",
+    "patch_sha256": "6e8cb5b25d9a973e5d2543daaeb9c9d4be56119127fb277f43f0ef1917d5b76a"
+  },
+  {
+    "instance_id": "pylint-dev__pylint-7080",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "4d2d8b0d2f0c7c7369ea367d9d624b88230b59538df9d294f8aba3bcb48bd4fe",
+    "patch_sha256": "324be9e9e69aa4d3acfe1dad776ee057f2d4f4bd1d740d5f74c21b6f24b173e1"
+  },
+  {
+    "instance_id": "pylint-dev__pylint-7114",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "9e4f16961ff64e262d6b0956e05d22170f062f8b40cc71c658cad908c09ac7bc",
+    "patch_sha256": "e99d0c3bb9a9a59f3ca36cb075b9836dcada975606bf909a5bac5b18ea3143f1"
+  },
+  {
+    "instance_id": "pylint-dev__pylint-7228",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "e911c3c2ea6935e95695603b3f1749167d802d9cf0bb566d0572325725fd6584",
+    "patch_sha256": "d74a516598f7c953a850019121fe8bccdc97973a0c050093ab797a934977635c"
+  },
+  {
+    "instance_id": "pylint-dev__pylint-7993",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "611935f5443472d8b183fe1ccf268db677b697a54d7aeb134fa347e5ed4fdb86",
+    "patch_sha256": "f2255f9208d47041f5cc9e1f2fbcc535c51b76835494e3e2ab850ec48c826cc9"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-11143",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "b0a1a7fb7813dfefa9129e13273d6589c2596fe808ae69b2efc987772bdf5369",
+    "patch_sha256": "f633b1f1cb2d092b6708a51cdb171ef555dce07cbd0adf234d17143a62e6808c"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-11148",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "8169376ff577ebc8ff62b6f45c866e0fe10867364bbb3c688a05d2b76d525916",
+    "patch_sha256": "f90b4ad1e5aa22a4767c87833f32de32da6d49b5273f83c5a59a9fc796e82e39"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-5103",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "25f8d0473a199b39ff542b9a84db915507a67084ac852d66f5c42cb497790d28",
+    "patch_sha256": "170aad6a5d1437d6903688eebd3cc9cb5845b5356c08dc88ea68d9be8813d68d"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-5221",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "a8734ee999d8141dfd64b2f3c4617b72141c8d289735a0fa74a2e3fb09191ed1",
+    "patch_sha256": "5d42028ce8071408516e76d2662d73470659783752ba53b519297091d8cd7904"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-5227",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "a89682957003c04c342f2c00205dd0e43af7be37c42e4023e04601083f60e0fa",
+    "patch_sha256": "2879c94764ad6291d9c714406aedd02a477bf9a7638ad2ce806dc88abcdd89cf"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-5413",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "0dd774ee90c20a63ecdc65c8dcf852cdc99a2c5b936bf56744b21ac828644138",
+    "patch_sha256": "becd22ad52895684f654645b3120531107c2d0c9feeaede86e73a3814f66bf05"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-5495",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "886453cfa8ac972634aa001582b7f6cfce42250bbb28f3b1568c9b37605d491b",
+    "patch_sha256": "40d8178c95a0662378934cd33e7d519e323da7a7412925991aa7e9bc9fb3370c"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-5692",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "aa418c02ced1fa81ebda6855f0cc71e648b95d8e67ab777b6fe4e3bb26b9996e",
+    "patch_sha256": "df01fc5bc12484629a196153f6f737462e8cb0ea9b6bbc9ee30e3fe0124c85b5"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-6116",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "ae05c6960ceac02126bb9d7dcc0af236d7b483b340f929e397e7913e8f3a3296",
+    "patch_sha256": "0dcfcd696e54a01fd83b49b0bf5a986134233c3e68151f2619cf56c7b09444e4"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-7168",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "9cd57a4af740e69fe06cefc62c9b4fa445b967117b84bb64ad53ffdf6eb4ad7b",
+    "patch_sha256": "718cbb8ea9683b545e1e50497ba3fe96a9a637b2abc7d9f6d8a1375b347d13bb"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-7220",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "66f36db8468903172cdc04170e1fcdd6fc0d219daa8b595e4fc73a462ab0f42d",
+    "patch_sha256": "cce0ce040885fb29b80983b2579a696b9f21c87a30088d225c66ce46e63aeffd"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-7373",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "7e538d13e8db84d09eafb9a9483fa40d36e105d705633f100b64b02ca021db06",
+    "patch_sha256": "7a28fec31fc56261dfe7a67f1ab20ea0bea7a3ec06315d5419ab685b1b74ae26"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-7432",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "eeda7ff96e66e120ec0cdd66b41e15579111d782b5177ad54121b57af5aa3469",
+    "patch_sha256": "5b1a90b7b0e4bf70162a84f536d4765bcd81e3d6647ddb5f6bf2861cff0fbf2f"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-7490",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "d84e6a16fce3890b9c8875e69bd0ac530e52dbfee3c26bb6a73cc6218388fc9a",
+    "patch_sha256": "79a6fda768450e2bf2a73946a51f4d51e77ff56b6ba4b6547019f02bd1cd9874"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-8365",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "d29ef84c4cac302245954626d9f367f5fd5ee36ebf199cc30a365ccd4779ec94",
+    "patch_sha256": "5ccea5545805e7b2507ad34253c8455435fc6f9d5f4f9d5388ad30ff22e53bfa"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-8906",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "61d39129fe5a42f890ddf0f941f4c388f8ec100deb3ad26e7ed0b9c8659a5538",
+    "patch_sha256": "0c6a7435e3564200ff28b91dd42841fbd05b6a7998fb8a199db840c53b70af13"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-9359",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "243f96ff789b12a9f549d8b5414219d68112da23fb6197a5d88366bba3cae974",
+    "patch_sha256": "1d3cec64611f3cb2818a93db9ffe0e682c76d853ca3082b4c51e7c040283c252"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-10297",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "7c6a9ffd0ce6daa7d0bafc57713e6aac421663563d0db0a8d6a0110fd7ce4f5d",
+    "patch_sha256": "7dc52e5a5885652a82bfec333f304b2dc7958deb5b1186cbc5c299759722279d"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-10508",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "b4cbb74e0319553203b686187b4bb53067a6735a8ac91233e14a00c1ef868f99",
+    "patch_sha256": "df8837b77678e83e944ddaed1acf5543bacdb203b5890cae598b30f4ad971cd8"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-10949",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "5ada6386c6963409dcfc598f9e051a8d229f604a66a2a270e85f9946450772a8",
+    "patch_sha256": "9f5fbeb88531358987ebdb4aa783176f220f25f0f9e742f4068b029db4a2de1d"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-11040",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "bd77504b33df8961c9ad2d313e11349d7e26da4326da1aee3bdb5c0c7fcff433",
+    "patch_sha256": "cffa4d95628da5fd0cbc0a71f1680b5def7bd3aa1fa18a5d4fba0c269e1f1bc4"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-11281",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "43d7d0fb0365023d263cd9dc7eae881b150988a3f9651babd4bbb6b0b3986c3a",
+    "patch_sha256": "222e1be692b5a98bdd477fda8f32eee21589023373d4d3dfc353a34278382817"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-12471",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "809a59d2e1bb6cb7f0cd9ce64df3c7d714e218c0888fbba3c49847901191253a",
+    "patch_sha256": "20e8d48376f510f17591647da34957905fe9990de639542c6d51fc36eb8431f0"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-13142",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "d5eaa15d4f8646aac9afb60481e6f66097c2eda7ce8ccef69e467d34a755e00c",
+    "patch_sha256": "5d1a4ee09c24e28bdaf278f42b0c771cd4fe598dcac17a745932eddf07fdb0a4"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-13241",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "5793dec2a900f57c232f668c5bf1a9967d86d114d1db29c9e0fceabdddb11852",
+    "patch_sha256": "47220760f8943021e1b795423519e473cdfc510ffb973f2a24984c72168c7b7b"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-13439",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "bcb5af57f34465996a116ee09c9818b0ff1fdfc4ff4f5e5c4d237cf5e20db46c",
+    "patch_sha256": "2ef275294818c6d79239b1a58650066028e2b4eb3820991d7e35d390140662be"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-13496",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "ba7667bed529e89ba66211bd262776c35ec5ceb8d3a0ab84e792adb6c0d771e5",
+    "patch_sha256": "9f72adc138469e23691e398531fd4e3986487c5379cc39afab87926175070f46"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-13497",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "890301b13c6b502bda136027685ef3a7239979636d639a479dd73bdb3091746d",
+    "patch_sha256": "1e9400631983ddb490018a683bb7a325b720f2fdf2295bbf46a072254c0ee592"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-13584",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "099010d50c3d564f1d853193f96fe32add19709a917e0e706e908b463381ab30",
+    "patch_sha256": "759e16290b09ae4338a4d87bbea37c0f4e900b92926410af7506a57f1a0af8af"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-13779",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "f3d52073d58e84bbd84aa5cf21fa6abc2f06bf32a94d70a848393be950eb4445",
+    "patch_sha256": "655c1649a8baba9e84d44552028b103beca9039cfa75a128d6d52676c3020269"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-14087",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "0c1c15cc7783890ab954b29cc88d1bbca9664b088e115d146e1a26782435faea",
+    "patch_sha256": "357c8ee9df513ce26e6d2a37f84c53e57263efba311a0cb7617fb8eb9f5e600b"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-14092",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "c91978c7763f6e4d035333f3ec9c01f2cc8747a6d7e4778a317f560df9d3c586",
+    "patch_sha256": "326fe9ee95c28265db41f6add63b4846a6c4d188763321a5bd781c61cbfef253"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-14894",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "4a1ab367178da68ad9fa951ae4a33aaaabe3065153f82163d853afbeb8fb61a9",
+    "patch_sha256": "76e44541147b18451a683989dceacae332fbd696f3ff4a3bf203d2093aff616f"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-14983",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "8542dcfb6837b52997474c0ab1d84da049f1493b59a2b7c3da9d4cfc0bec3a2c",
+    "patch_sha256": "406d28021d0a2965bfd7fe047dc9c1a831f8028e188a28cad51eacf079af0282"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-15512",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "535dee69fb247ba0a274743a235d7e21f276f5403d072ad9b57ef74e743d528c",
+    "patch_sha256": "b90c5f353643049276f602981e3f43014e1819912a6191501d6543e2b954dbdd"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-15535",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "ad373a0163f15a15cc50a33d591501e07ed15c4eb5dd86b9ddf6b5575ce61139",
+    "patch_sha256": "8156a2cd313a2cfab01ea4889f11aae8bad1afce7cfc2e2bfc8d9a2c2dab4ec7"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-25500",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "48c4b8432ef77a018b45fe8de313db5d1cf0528f7dc25364ce28f34d51ff08c3",
+    "patch_sha256": "a2b1d05624c95d9f3da7838327638724a6297ee7b6504e8451eac48d3ca3721f"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-25570",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "76459958aafb8052f1384d3a80a7679da775cc6404ecb8cfeddd7ef6f16eecd7",
+    "patch_sha256": "4ab79e3b11cc6ab2bc13d82c617b428b07917bc0880c7294fe420b145341a7ff"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-25638",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "584cbf128e81dac376ac334b7cb3cea0b094c9ee3b4e74ad50681e94c6628e6d",
+    "patch_sha256": "00c667c2aa26b6efdeb9c1b37258bec6c536d7023f5dbdb644a77de24f5160d4"
+  },
+  {
+    "instance_id": "scikit-learn__scikit-learn-25747",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "c3d8c4d478801e16d21ddf705837d4b634c0cace80df30900971ae43c76769bd",
+    "patch_sha256": "86b16c8fea1c3e09b483b5c2ecb25a3013db72c190fc956fdf2950273b04febc"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-10325",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "fa1652cb26c918ebccbea8c008dfaf7b2d5da62b127420ebb25ed59d7b275046",
+    "patch_sha256": "98865f0c4cf02597be55031709675f736276648f1e9e33f05173574b96355a41"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-10451",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "b17d8f40718f6bf5177be48beba08353391c361dfd7f96e59b0eaf6b8346b910",
+    "patch_sha256": "44c052cdba1ed88ed12e5de1eaa8c8d298ed535739745161634a27d740240a82"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-11445",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "3a130c892d99a1e2b8befceac3477e8db9a74a25646f165cdd314e3f16245d53",
+    "patch_sha256": "62d5bb26ec1796f59c21f455307c6bf59980477f2aa622e83fd4d20a6f7dc9c1"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-7686",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "5a8efd6058aba6e57463a1ecc9a36dbc120cd1ba06479aff9d68e58510a78292",
+    "patch_sha256": "58d041d34a1583fe329d8a9f0b383789e813358f13fb5324ec82dc720efe2ee2"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-7738",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "833cb1bef47cffe2195c9b41741a20ff252130a0d4f470f2061cf4bd8346746c",
+    "patch_sha256": "290eacc2f3577a825d21dd6a5d7b8297ac57d1c92fab6a5f76d915d50151c98d"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-7975",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "5bc079f35e2bdeba8f4656d97edde12bbedd5c7e86a7ca26e769c6163a8a456c",
+    "patch_sha256": "03da48d2d4622a7dffd51a00bf683f253fb7213a2931fc964018f461abee2936"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8273",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "fcd261ba73c087c0cc50b795d502d06b8c05741cb41f50fd07dfd6a10a8b2987",
+    "patch_sha256": "46361e4bb3e0f90a563770cb775ae98bddfb849b69779942397e199b0690bacb"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8282",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "1848e96146f5503f46560ece3690e98c8b59ccd8c8dc4f542eadadea23a393ce",
+    "patch_sha256": "32bd08ce7c931cec44305ce964f5228f147bbabbb69f487c153ce528b0057ee8"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8435",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "65966b54adbf81889f8a498b8b59fd106fb6c3c2cfd189b18684124045cfa509",
+    "patch_sha256": "a11e7ed6b7a55133dccec88d6eab4fd645056c9dc460e3b45d95080395ebfdb4"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8474",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "44b2d304c470103bd461b0f9d143d1e79c227c33c022d7344bcaf3817bd279d3",
+    "patch_sha256": "4db787a7fcf924773ac216e770b41211811b00b1c15d1d82fd48eb5f7cc06459"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8506",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "528b5bca554063e7a6d7b7e8b67ac3f3d459a7aa7e7c8e461ed7461cee7c2641",
+    "patch_sha256": "62494ab1e8c4f156bda83695d2eaf48b795b55fc1381e8e644bf18b753b9bec6"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8595",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "b9a75436ee3ed1e75c60a2bb44d9b828ae6989e777b97cf3feda0e799296d80d",
+    "patch_sha256": "84231cd312075410f717ddfdac7515b424ad4211c4c86adaa979b7915ceac5c8"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8627",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "353c9e8f7735a2d9f597057a4b1ce8b45cd742701a386f9d941626dc960a59e1",
+    "patch_sha256": "ce247793ae5cf020b60c47737673d74249a620982d927c39091b043b1e96cdc9"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8713",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "a5d0c23e6e0e606c41222319f8e67808778d2f2aec9e92a64e6eb227ea91fa1b",
+    "patch_sha256": "d63879878a0b2debffbf6ad26f8df9f1c00bd87f535ad5852617770deb57ca03"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8721",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "bd64cec906c762c035fd09d640d6c244d732c45feafdb3b4b4c2e49beff270d9",
+    "patch_sha256": "b6ea3e13ec66a1a32a7cbe9cd1f419dae12bc194109df0a54033cef3d20cffc2"
+  },
+  {
+    "instance_id": "sphinx-doc__sphinx-8801",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "4fc9824713b2ffc55eb5ce6b70ab2030a56477f2dc62ab3a6e0abf1c247bc996",
+    "patch_sha256": "5753c9536b10e8bc4c62215a057ffb50938c198db7c150bb57d0258e7e752405"
+  },
+  {
+    "instance_id": "sympy__sympy-11400",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "058044b194d77274b1b5033d65a63bc51f85b1ecc352c9b7ebb58f992c3397d9",
+    "patch_sha256": "55be61583d6c40be1db2ce8c1ee1efcedc30cff60b7dde4a8ff818d76e234584"
+  },
+  {
+    "instance_id": "sympy__sympy-11870",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "72e84e13f83df3fac0d1c0b335b641b0e87b2a65afcc6f69cbf02b726d9bd890",
+    "patch_sha256": "99ab5d57c549fc0fa2ffa4e2344c6b07223cb5c404040dd85a7ea4ae5b28ac14"
+  },
+  {
+    "instance_id": "sympy__sympy-11897",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "0da6ecbf392041450b5028772dffa645ef0095d8c234c3c6cc5e159b054531c4",
+    "patch_sha256": "823364edb094d3d2767aa1efc3f72f134319198f492637809d857924e9509feb"
+  },
+  {
+    "instance_id": "sympy__sympy-12171",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "19da423bfbf3307cc0540ad14cda28d4dbea8cd0ac3d0c2bf21ba4a90f84175c",
+    "patch_sha256": "025ea21528f5b7707ed9a6472c695adecacdbfa1d3a21c6d29fe433411b19a9c"
+  },
+  {
+    "instance_id": "sympy__sympy-12236",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "9d9d8ec1b6cdc0a21fc8690794e99986891f21bd96282b913fd45bc21715a819",
+    "patch_sha256": "060c953e59b589bc994dbe69763a47e65e3952c2d9ed856fe4170b6978f3fcc3"
+  },
+  {
+    "instance_id": "sympy__sympy-12419",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "6b4444975d0c994e4b10d99aeefe7351db5042a5c95e85d1620ad5821a3cc2be",
+    "patch_sha256": "e4384b6609d4de52ad33847ac00a7bbda774e9d98922b0972cfaf0305a4dc642"
+  },
+  {
+    "instance_id": "sympy__sympy-12454",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "d099b1cfd708897857ea44622abfc812220136b572a872524a9d0b8a5bead8b9",
+    "patch_sha256": "892a5cf76bec2901caacef35920b66b837a290d21294a007c14b889615c079b9"
+  },
+  {
+    "instance_id": "sympy__sympy-12481",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "42a63c250c2690f30a77922023c160f2879c6d3410346c3cbabd513a7bb5cf42",
+    "patch_sha256": "e66f737cab503aff9e40e086defc3f4392863bb61e0e016b4510c4792180d2d8"
+  },
+  {
+    "instance_id": "sympy__sympy-13031",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "7c140be1f41c83021095713e4ed122198a3a85eae52359048bb3271a26fd010a",
+    "patch_sha256": "2f309d86155f50b33a05aa5f614bac204d31cd91ea2bd8b39b69efc0dbf47de0"
+  },
+  {
+    "instance_id": "sympy__sympy-13043",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "8d44161eda4904d5200c453859d0cbe9c185a63afeb5d697ddb938709cc04232",
+    "patch_sha256": "603cd17ba92885ba8608c4a925d93364253aaf67cfcc5bbb103707b64a9fe224"
+  },
+  {
+    "instance_id": "sympy__sympy-13146",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "4dc28decb3e77ae77acd2ee37092d12218d0fa3a312b25babed43e54a3568338",
+    "patch_sha256": "b8e026d7869a3d2b517bac5579fd579993eea05ddb51fc24d6eff02b7ad40c3a"
+  },
+  {
+    "instance_id": "sympy__sympy-13177",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "64ee83e6244a682198fbb5a37c8163add89f7929b8cb1859e1ffc69f2f87757a",
+    "patch_sha256": "cbd5dd2c4ab5d10540ed8f162146f365d7c238e648bfbf3b89f522b424e211b5"
+  },
+  {
+    "instance_id": "sympy__sympy-13437",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "6048ccdfeb678918a216c9a664805e74c6894f52ce32c88b0da8bbafeeab7a43",
+    "patch_sha256": "ffbb60670ce24c190823335c5f641dca844a6350be260ff32984a848dc994dba"
+  },
+  {
+    "instance_id": "sympy__sympy-13471",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "ba264f87303b8e6bfadc95dc5dfe9973275081e413eb13987e7570f1010017a9",
+    "patch_sha256": "712206a3c07a32cf16e37ae7f3c6fbf758a0675a7c10218d554e4a452aee6eb3"
+  },
+  {
+    "instance_id": "sympy__sympy-13480",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "3624330528b4816dc5c4253b7c38f74f9470688151bd6f1ba362f88d5051ad12",
+    "patch_sha256": "c8eacc74dcf2a4c39db4f941cf9cb9990b3265a46ed24e9288f7d9c784836929"
+  },
+  {
+    "instance_id": "sympy__sympy-13647",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "34611b348550a3fb46d18ab59a25071756908f05895d22d6ca4f535afd3cf2f0",
+    "patch_sha256": "e4934bd24ff0379b99aa9fdf3a370ae54a9c59a27a261dcf6ce5844cd33021d7"
+  },
+  {
+    "instance_id": "sympy__sympy-13773",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "978f916b48123cf7994ff220da2ec678c8e3f56ccb65dd30a8af149e35445788",
+    "patch_sha256": "7439117d6a83875e7e07fdf56b07e5a9e5077a7beae6199f9638da365ac0088c"
+  },
+  {
+    "instance_id": "sympy__sympy-13895",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "e9194c4a80b2dddcb5bc15869696cc43ab58650aabe1b884be191459da0f712b",
+    "patch_sha256": "cc2b051a48a57c66d15ea0b7885d9c6bb086b8c2c16a069aab9d8f43c0f5c2be"
+  },
+  {
+    "instance_id": "sympy__sympy-13915",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "050fd6e6c032c16f937dcf007156074fc933e0870bda8d35c44e9873f247e46b",
+    "patch_sha256": "f003dc155bea34a87fecbe60813974dce4a1fda9561a6cb9af2064b1d9e77545"
+  },
+  {
+    "instance_id": "sympy__sympy-13971",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "aa1d3df158e69a058a1d6fd4cb122d2e1ba166785db01884059ea1a12a7fea21",
+    "patch_sha256": "2bb30fb79750aec62163e6ebf4b6cf296d9096207fa2395bcd68df79d6304d50"
+  },
+  {
+    "instance_id": "sympy__sympy-14024",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "85879ab079a66b6428c9891fe2d4338b4a508215cd097c669a116c472090f0a8",
+    "patch_sha256": "16f406a74ab0a4bd94f70f1b040dd0168c9a49f5cfb5665119b4c9915d47df6a"
+  },
+  {
+    "instance_id": "sympy__sympy-14308",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "749da7a3b0969c4548a529b03b743ec154a24f87e32dcf51f88584550aa6d6c6",
+    "patch_sha256": "0244a95f8db2e1761eada5920a2726cb95130c875ea9dede8bf7e95ecae640b2"
+  },
+  {
+    "instance_id": "sympy__sympy-14317",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "eb830bbdfd621dbed4924f8b30298c344391006d6c07a3a0fd478677641bbe6c",
+    "patch_sha256": "0694099a6aead77d4523919e958cbe5df0643fef26af4020c42841e568fbd18f"
+  },
+  {
+    "instance_id": "sympy__sympy-14396",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "3fe4636b4eee5c862ef0d6c9ea924172b00dc184d5dd21f56c18e4285ac2ec2e",
+    "patch_sha256": "f624d0a1708ee7545567eb391bfabee25b55e329ae30c159a90234d2fa341ee4"
+  },
+  {
+    "instance_id": "sympy__sympy-14774",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "b5c26387dbf8c1b354f4637bcb0e4497b6a562f2375780dff218571328ea7645",
+    "patch_sha256": "42e2e46bbf42e703f9a95355151a4a723ed14eb55c67ba3f90539d1d74f33aeb"
+  },
+  {
+    "instance_id": "sympy__sympy-14817",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "ac86f86f44cf0f9e6dbf1a64ce28b64a2f3d2a8da4403d445ed95b0ec25d9e7e",
+    "patch_sha256": "3b2a6ff89d1ee2239b3e55c90f0a262582aa4471f2e055c1f34d741ef92272be"
+  },
+  {
+    "instance_id": "sympy__sympy-15011",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "ef6b28ab7c2ffea210e12acfaf32bb4c88fe882d1f31263d7e945b562078655f",
+    "patch_sha256": "c8076f574e46ffe78c91ab098b8f62a5397e116ca028b8e4d3bb332178ae26ad"
+  },
+  {
+    "instance_id": "sympy__sympy-15308",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "3a2bd6455395e9eb8e2b169f2bf9a96ab31a4f92cb30d03733f3f49f54622211",
+    "patch_sha256": "3699f73bbb577bba7b4d0fe42255dffe162bd8ef3501b92dc9b8f560c839b6fb"
+  },
+  {
+    "instance_id": "sympy__sympy-15345",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "cc9d9b95f21659166177f8b7a51040babb5b510ae4f603a70bca73d178fda938",
+    "patch_sha256": "83e27a01623fb6fa6d75d3fcb7bddcbdd593a3c4669bd5e56d7cffc08c79e4a2"
+  },
+  {
+    "instance_id": "sympy__sympy-15346",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "587a02d434eead95e62afa5fd09dbe355d486abfe15752e65ced40e172e8df7a",
+    "patch_sha256": "4fa6daee3ddf1cf92ddf6b50c0189578306732c79ca7632f33bdd657f7f04421"
+  },
+  {
+    "instance_id": "sympy__sympy-15609",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "3e695e4f42831157566d6d70cbf37806995a9eb3ce8f0813ce6b22a327782c14",
+    "patch_sha256": "191ff2b317699290e20a7b43cfbc85cb8cb996e63d8c01db4040b64c30b7e091"
+  },
+  {
+    "instance_id": "sympy__sympy-15678",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "7da0548c81832d1ac275e1098211ca5fc1603db0cbfae2173e05a88e17a4fc9b",
+    "patch_sha256": "5b196105c785136119b6bb0883af06d98d994cf7e8582bd33f28705fc6e44248"
+  },
+  {
+    "instance_id": "sympy__sympy-16106",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "8cc2b66a72a979ebbef1e47faf004271306d8ae75318d4e1694b2fc23c95647d",
+    "patch_sha256": "39fe7440283b66a88f9ece6316b9db1eda113f91b58e8828a0e5f2d16dbec603"
+  },
+  {
+    "instance_id": "sympy__sympy-16281",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "8c0f06451f9fd874057dce580c965f2600244c70ed86eede206e441a85217e79",
+    "patch_sha256": "7198dded0fa15faa6779a09aa555ac8dc5f6bdf09df7a0240ff85bc558c5e9da"
+  },
+  {
+    "instance_id": "sympy__sympy-16503",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "a3cfca13be40e58ca1e709186ac6997006269646849834519e53c87d87e515d2",
+    "patch_sha256": "9a2448e5637e916c4a9522730b4a9241aa252e40d04aad762ca7ede206541a39"
+  },
+  {
+    "instance_id": "sympy__sympy-16792",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "215005e9991283b174809d51613598c78a87cb27770d2f85e25d523013a79c3d",
+    "patch_sha256": "edb29454feb240954947d4e1a949b8a9621a4e4186bb3aa744e46a434a520bc1"
+  },
+  {
+    "instance_id": "sympy__sympy-16988",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "b1600ecaf875d0500f4cacd0744afce90da7ef538fa4f316cf37f39b2ed0bdfb",
+    "patch_sha256": "edc28b91c29802d955fd233f0180aa8a1d35c67e05111c57e65932a22ed5d87a"
+  },
+  {
+    "instance_id": "sympy__sympy-17022",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "0f7583da0d841437f65918a1d8036b2a432301a0fbd07e1bb072d35cd571cbd5",
+    "patch_sha256": "e341792e9876b028eaa6dcb5c7f125e8fcd1d093ec5dc13aafa91751c05aefbb"
+  },
+  {
+    "instance_id": "sympy__sympy-17139",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "d8ee8408a78eab78fb0d63a8781df9e165af5bd9d0dd176101e18a7e24f3cdfc",
+    "patch_sha256": "8601bcb93dae368936be1d7050eaedc09bedb061cc5fcde42cc60399bbaa3d29"
+  },
+  {
+    "instance_id": "sympy__sympy-17630",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "c8a99d35be12c5547316426a5215f32cd4fa224234376e8d98fc7d8ac8fcc4f9",
+    "patch_sha256": "8380d6a9cb0fb849de74f6c0ae990cd916b078747adf71490b5dc900df40c4e2"
+  },
+  {
+    "instance_id": "sympy__sympy-17655",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "99779b4be269c58f67d92a2ab30d3423b8b77674185f2369523833721b58d2bf",
+    "patch_sha256": "a2bfe5064bac44ffc236e9e3f2bb5a2ef6dff14ba37978b4e003746609fe44a6"
+  },
+  {
+    "instance_id": "sympy__sympy-18057",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "c43bac58067ac0401223622341515cb7ae4133bae070a6ef509d390da0953244",
+    "patch_sha256": "c249f1d767995c639e628d2d1d25095181fb6d6b8ccd3bf92bd9049a17c553b4"
+  },
+  {
+    "instance_id": "sympy__sympy-18087",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "89077dbfb511ef622a4e700fd4bb467f40dfe60adfddf306c3b6e7efefa5842d",
+    "patch_sha256": "cdeca109ae1da8c4aff1299e64af785b09d2888d42951f945682127d6977b2b2"
+  },
+  {
+    "instance_id": "sympy__sympy-18189",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "1335aa7ab227dad6851648607b91a30b81a72c7702405df6dc830d1cd97077b9",
+    "patch_sha256": "0e547cc51a72deb045c05937253d1824cdfebf3247aba3c80c3cbd5c1917dbd5"
+  },
+  {
+    "instance_id": "sympy__sympy-18199",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "eb9e82eb993ef6976fbfb855d8ea7022f7412939532eba4396f6f2b4701dc271",
+    "patch_sha256": "5d7731b4b1828886df3b6819b491247af35d86ca518545be340f18e2f2a08a00"
+  },
+  {
+    "instance_id": "sympy__sympy-18532",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "c5e4ad98a22ffd88f52230fdeb4f53db55581e0c428bc11fb527b891d72bc52a",
+    "patch_sha256": "b35e7ddf6625ff3b4972972cea4e16f9e6f56dc8b50f3c554cef4395769afac6"
+  },
+  {
+    "instance_id": "sympy__sympy-18621",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "ed29888984845a7cf6eb247c4759153a1bad44b89b4eaf3839e56e5f84c1845b",
+    "patch_sha256": "a575478fda6567e83a090d549b5aea1a5745db6493a66ce9e7d973821f98738e"
+  },
+  {
+    "instance_id": "sympy__sympy-18698",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "e66356e6df175f8b4cb84263b5cd542c7f9d07719633134389c7600b0816d874",
+    "patch_sha256": "efcb23bc36ef200bacffddddbd81edcdeade3620b4766cde81845a3cf64e6627"
+  },
+  {
+    "instance_id": "sympy__sympy-18835",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "319f9aad2f59e0b5c0ade9ecc2411bdc1ae7bb8514958e519ba584d416950635",
+    "patch_sha256": "8007c19e0ecaa581866f623d5bd12164f983fbf98ae3b52748266849dc5006d4"
+  },
+  {
+    "instance_id": "sympy__sympy-19007",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "69f07833d1ebaea52c3a58d880262deb9db851f1ccb3471ee1c2694e900e9f58",
+    "patch_sha256": "b2bae6c046071547c495ab554a6eaa6bf2425aff4d266d8b68651f51652c0fa7"
+  },
+  {
+    "instance_id": "sympy__sympy-19254",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "0111cb178189bedce071b25a3ee967b94b05a520bdcb6524b2d5d7b0e5b689f8",
+    "patch_sha256": "f54d1e1a94aa6c8dd28b0618fbba4750d66ba3eb4b39cc3d108f43d67f204e9a"
+  },
+  {
+    "instance_id": "sympy__sympy-19487",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "4078831c9f397f47f82fbff907b34820fd41b900ebd7a0d34bf1d5256d1c6732",
+    "patch_sha256": "66d3368c5cb7a18446c897b768c97c05bfa7d0f6d91101f1d5bcb9b88a158e7c"
+  },
+  {
+    "instance_id": "sympy__sympy-20049",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "8f4c5b94bfa7ba1b974947869f867db0d524c2200bf445992003443d752edaab",
+    "patch_sha256": "eda15abc0235af323fb78d8b825f3d2ebe2692b75adb891facfae17fe5b3afbe"
+  },
+  {
+    "instance_id": "sympy__sympy-20154",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "108bcb0273b306657867dfe9c9e57817435ebb0b66609e319cf4bed050f1189e",
+    "patch_sha256": "4243cc7ff1ba19f964fd6f5fb88123fe26eb7d426dc9a2e3fb6f96f07678dbf4"
+  },
+  {
+    "instance_id": "sympy__sympy-20212",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "6475a047ef4fdc355b81f988a9269c2f0422451bd7b3e0e71cbc3695d603c4a2",
+    "patch_sha256": "719430c46002cc4f05d57b44dce4b68e3322caef4bab07564736fea1f4f42046"
+  },
+  {
+    "instance_id": "sympy__sympy-20322",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "70e11aab7f0fd886eda8c5920db0d6c4169e85fa16c1b0fa2130fe5d19957c69",
+    "patch_sha256": "d9b0d0e3b13d6fc25a58edd2cc149390f03cb3ac599728b36661911798694314"
+  },
+  {
+    "instance_id": "sympy__sympy-20442",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "6009380d19c7e3238a7deeb52de4b2d199892b046048efcf774a1114d8ad1fb6",
+    "patch_sha256": "6944783309e7f84cf7983c1a693eef604a149ce2ca7e0f59e1e772a7ca54c5cf"
+  },
+  {
+    "instance_id": "sympy__sympy-20590",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "6604bdb498cc2b47ff5457ecfd843be564a4ceaab9e4de6b012fd7812be0af4e",
+    "patch_sha256": "57b3c8f6075e43685c6dcccb8a11a42285c08aaa2f91e68f3ad8b00ad3342936"
+  },
+  {
+    "instance_id": "sympy__sympy-20639",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "248997c83b39cd68f457278fafdb232ab14723ebba1b399eecc8debcc54f0869",
+    "patch_sha256": "85a5adb4f5acee116561d70944247f1d8e9c34e5425057e8a79e9c30f5a645a4"
+  },
+  {
+    "instance_id": "sympy__sympy-21055",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "b11e08c20f11554c9ab709593409cbf730f3f12b5bd63a809652e9b95ae60452",
+    "patch_sha256": "d6bfcf044b93eec375d4dac9c0ede69984991f89f85d5a5d9a8ec9994655fd2d"
+  },
+  {
+    "instance_id": "sympy__sympy-21171",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "29588859e5ce380b4a2a78ffc9b291038400e9356a107f09413e1fb8bc9aec74",
+    "patch_sha256": "b755a70006bc77e93018d9926c743bbea5772ea7d07a301c9b62f3eedb7fec92"
+  },
+  {
+    "instance_id": "sympy__sympy-21379",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "9f92bb1ae2da8c604435b06f7da09f1b588f98ed75ac0d442f2ee1f31c6a18e2",
+    "patch_sha256": "7cdda56b7358eade37601437e5520894bad2d10cffe126ec4efadb384b9f93b5"
+  },
+  {
+    "instance_id": "sympy__sympy-21612",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "939b330bf07c1dfbec653b41b8f7bc49cc2caaf2240b77e86452a65871f62747",
+    "patch_sha256": "6641cf5d9816f2f0b7680b64fc7752c2982083e65b8535d2d5612d30f5081d5c"
+  },
+  {
+    "instance_id": "sympy__sympy-21614",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "ff67c11402e287d93cbc0d0fe87a4a702b7300e451bc219a5d25eeaaa3405a81",
+    "patch_sha256": "ea90df2f3a42493dd6f637980c93a02c735c2014789c4c746c6ef1b399e6fcef"
+  },
+  {
+    "instance_id": "sympy__sympy-21627",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "5e76d4ab788a3a145bb218da2fcdbf0be5d64c46997bb34fb25cd3ce6930a45a",
+    "patch_sha256": "5a6b6ce83588301883195d8f922c3ed52f32b630e27746c6e27c147068300c1b"
+  },
+  {
+    "instance_id": "sympy__sympy-21847",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "4770f667ee0ade68f58948857ce6d3dc420d9c8e78e91e313ddd2267e90e7405",
+    "patch_sha256": "11f181d76739653031f1126cbba54b73af62e9091ca9723901222a6ea3457f3e"
+  },
+  {
+    "instance_id": "sympy__sympy-22005",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "3a8721f8367f419ebc850f68a9a4bc938eb9f14a02bf11a01798547e8dc563db",
+    "patch_sha256": "2eec1507f8b5a9c62b2cb534c3b90ac4eec9f9ad797e5125a661c18fba568513"
+  },
+  {
+    "instance_id": "sympy__sympy-22714",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "8e6be490f78f1e451e0464702bc788d9a1669fe9ba7efd173c54fc8080547aca",
+    "patch_sha256": "e8b47b687fbe1c43e7fb4ac143afd187467c4fe9f1b18bef73c0179ff797ec5b"
+  },
+  {
+    "instance_id": "sympy__sympy-22840",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "8675a282fef44f2f27da43849b8800907265a1a6498b767ce21db1bf67f43c2f",
+    "patch_sha256": "8df32f7a1a86725e39fd4c8bc3ccb27cb5281e0accbb22e44d46032e8da4ddc9"
+  },
+  {
+    "instance_id": "sympy__sympy-23117",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "5e82e8391b2ffc67dba1c1892de3c9b4b003bfa6d00aa885910073f31ab5ea51",
+    "patch_sha256": "ae5d4ed8adbec8fd73668458afe5de19335c2696a2cb5529c82e3496a2453823"
+  },
+  {
+    "instance_id": "sympy__sympy-23191",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "633c5c9de25e96aee3857405caf8c9f313c8d4e3eea36e2026e847f08a9cde71",
+    "patch_sha256": "335aeff53db26b24435ade4fbaeab7a12f0c97f59cd3948f974c6a87bb68ab61"
+  },
+  {
+    "instance_id": "sympy__sympy-23262",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "3c990b89088adbe37afc315f060de67eb272302d1cfb49de36ee08b95643cdf0",
+    "patch_sha256": "711abea93e7a137e884eda9f4cd4b48d076470d1634efb98e1e5e3dbb973b116"
+  },
+  {
+    "instance_id": "sympy__sympy-24066",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "da822cb006888b260397f01c5bd2f8f4e20ca2f78ee7196da558be0bf2eb1828",
+    "patch_sha256": "c07c7447f359c7227d98c1783beaf1894808acf325edcf15e711634ec56d6ae0"
+  },
+  {
+    "instance_id": "sympy__sympy-24102",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "890393b4473ac82343ddb366a4652af58f007794a14b2ce61e561e80eb7114e1",
+    "patch_sha256": "8358b1a0a0cb3dd86055ac034371cd3cd21e6533873c49f83f98decceb9ea425"
+  },
+  {
+    "instance_id": "sympy__sympy-24152",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "e6fccc67f540f1a10fbcf668528f293b859d2dab74e77157091dacbab61b25da",
+    "patch_sha256": "86900e0a9078c4b8c848b1d4e3445cbc5f56f67ab028ea58bfbafcafa0a78c30"
+  },
+  {
+    "instance_id": "sympy__sympy-24213",
+    "resolved": true,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "ce9a5995f298d71e37c969019cff441bc864d131d9203152c11c13ec3d8cc0ce",
+    "patch_sha256": "3ea62ac468ebc3fbe778430fe42aab9b7e45ddc4999b04d4986610c6bf93fc9c"
+  },
+  {
+    "instance_id": "sympy__sympy-24909",
+    "resolved": false,
+    "patch_exists": true,
+    "patch_successfully_applied": true,
+    "report_sha256": "3308067022980e97f460a19370b7863c68c9e8cef11be4fa494434f36940c31a",
+    "patch_sha256": "af68272b185180dbd8c7782dd2dc194f891bc278086d75af6af46ee72ec7dcec"
+  }
+]

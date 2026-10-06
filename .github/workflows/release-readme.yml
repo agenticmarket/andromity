@@ -1,0 +1,31 @@
+name: Andromity Release Notes
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: andromity-release-readme
+  cancel-in-progress: false
+
+jobs:
+  release-readme:
+    if: github.event_name == 'workflow_dispatch' || (!github.event.release.draft && !github.event.release.prerelease)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Open latest release README pull request (zero LLM tokens)
+        env:
+          GH_TOKEN: ${{ secrets.ANDROMITY_BOT_TOKEN || github.token }}
+        run: python3 scripts/release-readme.py

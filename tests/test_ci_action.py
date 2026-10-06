@@ -105,6 +105,17 @@ class TestCIAction(unittest.TestCase):
         args, kwargs = mock_client.create_or_update_comment.call_args
         self.assertIn("Permission Denied", kwargs["body"])
 
+    def test_task_runner_does_not_claim_or_commit_unsupported_work(self):
+        client = MagicMock()
+        client.is_actor_authorized.return_value = True
+        with patch("subprocess.run") as git_run, patch("litellm.completion") as completion:
+            self.assertFalse(execute_agent_task("Update README", 10, "OWNER", client))
+        git_run.assert_not_called()
+        completion.assert_not_called()
+        body = client.create_or_update_comment.call_args.kwargs["body"]
+        self.assertIn("task mode is unavailable", body)
+        self.assertNotIn("finished processing", body)
+
     def test_list_comments_uses_per_page_100(self):
         """Verify comment listing requests 100 items per page to prevent missing previous comments."""
         client = GitHubClient(token="fake-token", repository="agenticmarket/andromity")

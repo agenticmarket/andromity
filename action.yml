@@ -19,7 +19,7 @@ inputs:
     required: false
     default: ${{ github.token }}
   mode:
-    description: "Operation mode: 'review' for automated PR code reviews, 'task' for interactive issue solving."
+    description: "Operation mode: 'review' for automated PR code reviews, 'task' currently returns an explicit unsupported error."
     required: false
     default: "review"
   model:

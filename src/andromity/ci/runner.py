@@ -50,7 +50,7 @@ def main() -> int:
     event_name = os.environ.get("GITHUB_EVENT_NAME", "").strip()
 
     # Never log sensitive tokens
-    api_key_display = f"{api_key[:4]}...{api_key[-4:]}" if api_key and len(api_key) > 8 else "(not set)"
+    api_key_display = "configured" if api_key else "not configured"
     print(f"📦 Repository: {repository or 'Local/Unknown'}")
     print(f"⚡ Mode: {mode}")
     print(f"🧠 Model: {model}")
