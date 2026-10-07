@@ -649,10 +649,9 @@ def get_clean_subprocess_env(extra_env: Optional[Dict[str, str]] = None) -> Dict
         guard_path = str(Path(__file__).parent.resolve() / "airgap_guard.py")
         site_dir = str(Path(__file__).parent.resolve() / "airgap_sitecustomize")
         env["PYTHONSTARTUP"] = guard_path
-        # Prepend sitecustomize directory and core_dir to PYTHONPATH
+        # Prepend sitecustomize directory to PYTHONPATH
         orig_pp = env.get("PYTHONPATH", "")
-        core_dir = str(Path(__file__).parent.parent.resolve())
-        env["PYTHONPATH"] = f"{site_dir}{os.pathsep}{core_dir}{os.pathsep}{orig_pp}" if orig_pp else f"{site_dir}{os.pathsep}{core_dir}"
+        env["PYTHONPATH"] = f"{site_dir}{os.pathsep}{orig_pp}" if orig_pp else site_dir
 
     if extra_env:
         env.update(extra_env)

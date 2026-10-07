@@ -302,6 +302,8 @@ class ConfigManager:
             "deepseek": "DEEPSEEK_API_KEY",
             "groq": "GROQ_API_KEY",
             "openrouter": "OPENROUTER_API_KEY",
+            "nvidia": "NVIDIA_API_KEY",
+            "andromity": "ANDROMITY_API_KEY",
         }
         env_var = env_map.get(provider_name)
         if env_var:
