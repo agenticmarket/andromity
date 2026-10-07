@@ -62,18 +62,24 @@ def test_clean_subprocess_env_scrubs_sensitive_provider_keys(monkeypatch):
     assert explicit.get("OPENAI_API_KEY") == "custom-override"
 
 
-def test_requires_workspace_trust_gates_cross_session_and_state_mutations():
-    """Cross-session messaging and state mutations must require workspace trust."""
-    assert requires_workspace_trust("session_send_message") is True
-    assert requires_workspace_trust("session_ask_question") is True
-    assert requires_workspace_trust("session_watch") is True
-    assert requires_workspace_trust("shared_state_set") is True
+def test_requires_workspace_trust_gates_fs_and_command_tools():
+    """Execution and filesystem manipulation tools must strictly require workspace trust."""
+    assert requires_workspace_trust("shell_exec") is True
+    assert requires_workspace_trust("run_background_process") is True
+    assert requires_workspace_trust("write_file") is True
+    assert requires_workspace_trust("edit_file") is True
+    assert requires_workspace_trust("read_file") is True
+    assert requires_workspace_trust("list_dir") is True
+    assert requires_workspace_trust("grep_search") is True
 
-    # Read-only or safe interaction tools remain untrusted-accessible
+    # Inter-agent coordination and inquiry tools remain accessible across sessions
     assert requires_workspace_trust("list_tools") is False
     assert requires_workspace_trust("ask_questions") is False
     assert requires_workspace_trust("session_list") is False
     assert requires_workspace_trust("session_read_messages") is False
+    assert requires_workspace_trust("session_send_message") is False
+    assert requires_workspace_trust("session_ask_question") is False
+    assert requires_workspace_trust("session_answer_question") is False
 
 
 def test_execute_tool_has_valid_docstring():

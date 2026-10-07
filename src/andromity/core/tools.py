@@ -205,13 +205,12 @@ def _assert_safe_read_path(p: Path) -> Path:
     root = _get_project_root()
     resolved = p.resolve() if p.is_absolute() else (root / p).resolve()
 
-    if _is_sensitive_path(resolved):
-        raise PermissionError(
-            f"Access denied: Path '{p}' matches sensitive system/credential targets and cannot be read."
-        )
-
     try:
         resolved.relative_to(root)
+        if _is_sensitive_path(resolved):
+            raise PermissionError(
+                f"Access denied: Path '{p}' matches sensitive system/credential targets and cannot be read."
+            )
         return resolved
     except ValueError:
         pass
@@ -221,6 +220,10 @@ def _assert_safe_read_path(p: Path) -> Path:
         for skill_root in get_approved_skill_roots(root):
             try:
                 resolved.relative_to(skill_root)
+                if _is_sensitive_path(resolved):
+                    raise PermissionError(
+                        f"Access denied: Path '{p}' matches sensitive system/credential targets and cannot be read."
+                    )
                 return resolved
             except ValueError:
                 continue
@@ -230,6 +233,10 @@ def _assert_safe_read_path(p: Path) -> Path:
     session = _current_session_var.get()
     if session and hasattr(session, "allowed_external_files"):
         if resolved in session.allowed_external_files:
+            if _is_sensitive_path(resolved):
+                raise PermissionError(
+                    f"Access denied: Path '{p}' matches sensitive system/credential targets and cannot be read."
+                )
             return resolved
 
     raise PermissionError(
@@ -244,7 +251,8 @@ _assert_safe_path = _assert_safe_write_path
 def requires_workspace_trust(name: str) -> bool:
     return name not in {
         "ask_questions", "ask_question", "list_tools", "web_search", "fetch_url",
-        "session_list", "session_read_messages", "session_answer_question", "shared_state_get",
+        "session_list", "session_read_messages", "session_send_message", "session_ask_question",
+        "session_answer_question", "session_watch", "shared_state_get", "shared_state_set",
     }
 
 
