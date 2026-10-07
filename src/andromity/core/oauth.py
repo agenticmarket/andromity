@@ -513,15 +513,29 @@ def _load_store() -> dict:
         return {}
 
 
+def _normalize_origin(url: Optional[str]) -> str:
+    if not url:
+        return ""
+    try:
+        p = urllib.parse.urlparse(url)
+        if p.scheme and p.netloc:
+            return f"{p.scheme}://{p.netloc}".lower()
+    except Exception:
+        pass
+    return url.strip().lower()
+
+
 def _save_store(store: dict) -> None:
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(store, indent=2).encode("utf-8")
     encrypted = _encrypt_bytes(serialized)
-    TOKEN_FILE.write_bytes(encrypted)
-    try:                               # chmod 600 — owner r/w only
-        TOKEN_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    except Exception:
-        pass
+    if os.name == "nt":
+        TOKEN_FILE.write_bytes(encrypted)
+    else:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        fd = os.open(TOKEN_FILE, flags, stat.S_IRUSR | stat.S_IWUSR)
+        with open(fd, "wb") as f:
+            f.write(encrypted)
 
 
 def store_token(server_name: str, token_resp: dict, client_id: str, token_endpoint: str, resource: Optional[str] = None,
@@ -542,10 +556,19 @@ def store_token(server_name: str, token_resp: dict, client_id: str, token_endpoi
     log.info("Token stored for '%s'", server_name)
 
 
-def load_token(server_name: str) -> Optional[dict]:
+def load_token(server_name: str, server_url: Optional[str] = None) -> Optional[dict]:
     entry = _load_store().get(server_name)
     if not entry or not entry.get("access_token"):
         return None
+    if server_url and entry.get("resource"):
+        stored_origin = _normalize_origin(entry["resource"])
+        requested_origin = _normalize_origin(server_url)
+        if stored_origin and requested_origin and stored_origin != requested_origin:
+            log.warning(
+                "Blocked token replay for server '%s': requested origin '%s' does not match stored origin '%s'",
+                server_name, requested_origin, stored_origin
+            )
+            return None
     exp = entry.get("expires_at", 0)
     if exp and time.time() > exp - 60 and not entry.get("refresh_token"):
         return None          # expired, no refresh possible
@@ -558,9 +581,12 @@ def clear_token(server_name: str) -> None:
     _save_store(store)
 
 
-async def ensure_fresh_token(server_name: str) -> Optional[str]:
+async def ensure_fresh_token(server_name: str, server_url: Optional[str] = None) -> Optional[str]:
     """Return valid access_token, auto-refreshing if expired. None = re-auth needed."""
-    entry = load_token(server_name)
+    try:
+        entry = load_token(server_name, server_url=server_url)
+    except TypeError:
+        entry = load_token(server_name)
     if not entry:
         return None
     exp = entry.get("expires_at", 0)
