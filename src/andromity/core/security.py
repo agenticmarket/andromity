@@ -93,21 +93,6 @@ def is_domain_allowed(url: str, allowed_domains: Optional[List[str]] = None) -> 
     return False
 
 
-SENSITIVE_PATTERNS = [
-    ".env",
-    ".ssh",
-    ".git",
-    "config.toml",
-    "id_rsa",
-    "id_ed25519",
-    "secret",
-    "password",
-    "credentials",
-    "token",
-    "/etc/shadow",
-    "/etc/passwd",
-    "/proc/self/environ",
-]
 
 SENSITIVE_NAMES = {
     ".env",

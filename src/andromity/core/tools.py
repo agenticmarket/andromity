@@ -174,20 +174,12 @@ def _resolve_project_path(path: Union[str, Path]) -> Path:
     return p.resolve()
 
 
-BLOCKED_SENSITIVE_PATTERNS = {
-    ".ssh", "id_rsa", "id_ed25519", "known_hosts", "authorized_keys",
-    ".aws", "credentials", ".gnupg", ".bash_history", ".zsh_history",
-    "/etc/shadow", "/etc/passwd", "system32", "sam", "ntuser.dat",
-}
-
-
 def _is_sensitive_path(resolved: Path) -> bool:
-    parts = {part.lower() for part in resolved.parts}
     name = resolved.name.lower()
-    for pattern in BLOCKED_SENSITIVE_PATTERNS:
-        if pattern in parts or pattern in name:
-            return True
-    return False
+    if name in {"sam", "ntuser.dat", "system"}:
+        return True
+    from andromity.core.security import is_sensitive_path
+    return is_sensitive_path(str(resolved))
 
 
 def _assert_safe_write_path(p: Path) -> Path:
@@ -213,16 +205,16 @@ def _assert_safe_read_path(p: Path) -> Path:
     root = _get_project_root()
     resolved = p.resolve() if p.is_absolute() else (root / p).resolve()
 
+    if _is_sensitive_path(resolved):
+        raise PermissionError(
+            f"Access denied: Path '{p}' matches sensitive system/credential targets and cannot be read."
+        )
+
     try:
         resolved.relative_to(root)
         return resolved
     except ValueError:
         pass
-
-    if _is_sensitive_path(resolved):
-        raise PermissionError(
-            f"Access denied: Path '{p}' matches sensitive system/credential targets and cannot be read."
-        )
 
     try:
         from andromity.core.skills import get_approved_skill_roots
@@ -252,8 +244,7 @@ _assert_safe_path = _assert_safe_write_path
 def requires_workspace_trust(name: str) -> bool:
     return name not in {
         "ask_questions", "ask_question", "list_tools", "web_search", "fetch_url",
-        "session_list", "session_read_messages", "session_send_message", "session_ask_question",
-        "session_answer_question", "session_watch", "shared_state_get", "shared_state_set",
+        "session_list", "session_read_messages", "session_answer_question", "shared_state_get",
     }
 
 
@@ -641,6 +632,14 @@ def get_clean_subprocess_env(extra_env: Optional[Dict[str, str]] = None) -> Dict
             paths = env["PATH"].split(os.pathsep)
             cleaned_paths = [p for p in paths if p and os.path.abspath(p) != os.path.abspath(mei)]
             env["PATH"] = os.pathsep.join(cleaned_paths)
+
+    # 4. Strip sensitive provider keys to prevent exfiltration by child processes
+    for key in (
+        "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+        "DEEPSEEK_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "NVIDIA_API_KEY",
+        "NVIDIA_NIM_API_KEY", "ANDROMITY_API_KEY",
+    ):
+        env.pop(key, None)
 
     if os.environ.get("ANDROMITY_AIRGAP") == "1":
         env["HTTP_PROXY"] = "http://127.0.0.1:9"
@@ -2147,9 +2146,9 @@ def _run_coro_sync(coro):
 
 
 def execute_tool(name: str, args: Dict[str, Any]) -> str:
+    """Execute any tool (Core, Web, Coordination, or MCP) with logging and error handling."""
     if requires_workspace_trust(name) and not _is_trusted():
         return "Error: Workspace is untrusted. Use /trust to allow workspace tools."
-    """Execute any tool (Core, Web, Coordination, or MCP) with logging and error handling."""
     log.debug("TOOL CALL: %s(%s)", name, {k: (str(v)[:80] + '...' if isinstance(v, str) and len(v) > 80 else v) for k, v in args.items()})
 
     try:
