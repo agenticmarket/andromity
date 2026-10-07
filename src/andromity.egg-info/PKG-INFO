@@ -1,13 +1,13 @@
 Metadata-Version: 2.4
 Name: andromity
-Version: 0.2.14
-Summary: AI coding agent with a beautiful terminal UI. Works with Claude, Gemini, GPT, Ollama and more.
+Version: 0.2.16
+Summary: Open-source AI coding agent for terminal and IDE workflows with BYOK, local Ollama, MCP tools and subagents.
 Author-email: Agentic Market <hello@agenticmarket.dev>
 License: MIT
 Project-URL: Homepage, https://agenticmarket.dev
 Project-URL: Repository, https://github.com/agenticmarket/andromity
 Project-URL: Bug Tracker, https://github.com/agenticmarket/andromity/issues
-Keywords: ai,coding-agent,tui,terminal,llm,claude,gemini,mcp,cli
+Keywords: ai,coding-agent,autonomous-agent,byok,ollama,mcp,llm,cli,tui,terminal,code-review,claude,openai,gemini,openrouter,subagents
 Classifier: Development Status :: 5 - Production/Stable
 Classifier: Environment :: Console
 Classifier: Intended Audience :: Developers
@@ -48,8 +48,10 @@ Dynamic: license-file
 
   **Trust-governed, BYOK, autonomous coding agent with subagents, live plans, native diffs & one-click rollback.**
 
-  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.10-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.15-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white)](https://discord.gg/taPJSNy4)
   [![PyPI](https://img.shields.io/pypi/v/andromity)](https://pypi.org/project/andromity/)
+  [![GitHub Stars](https://img.shields.io/github/stars/agenticmarket/andromity?style=social)](https://github.com/agenticmarket/andromity)
   ![Python](https://img.shields.io/badge/python-3.11+-blue)
   [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -226,6 +228,38 @@ Your code goes to one place: the LLM provider you configure. Not us.
 - Opt out of telemetry: `export DO_NOT_TRACK=1`
 
 ---
+
+## SWE-bench Lite: local evaluation
+
+Andromity resolved **150 of 300 SWE-bench Lite tasks (50.0%)** in our local evaluation dated October 4, 2026. The evaluation produced 296 task reports; the remaining four tasks count as unresolved in the full-dataset score. This is a self-reported result, not an official leaderboard ranking or a guarantee of contamination-free model training.
+
+The agent workspace was initialized from each task's base commit. Tool execution used command restrictions, proxy settings, and Python socket guards; these are not an OS-enforced air gap. Model inference used a remote provider.
+
+See [benchmark methodology and limitations](BENCHMARK.md) and the [evaluation evidence](evaluation/swe-bench-lite-2026-10-04/) for deduplicated predictions, per-task outcomes, and hashes. The model alias was recorded as Space Bunny Alpha; the archived predictions identify the system as `andromity/auto`, so the underlying model identity is not independently established.
+
+---
+
+## 🚀 #BuiltWithAndromity Showcase & Hackathons
+
+Are you building an open-source project, university coursework, or commercial application using Andromity?
+
+- **Showcase Your Work:** Tag your project or PR with **`#BuiltWithAndromity`** on X (Twitter) or drop it in the `#showcase` channel on [Discord](https://discord.gg/taPJSNy4).
+- **Get Featured:** Top community projects and contributions are spotlighted on [agenticmarket.dev](https://agenticmarket.dev) and receive official ecosystem contributor recognition and goodies.
+- **Community Hackathons:** Stay tuned in Discord for global community hackathons benefiting open-source developers worldwide.
+
+---
+
+## 💬 Community & Discord
+
+Join our growing community of autonomous AI developers, students, and engineers:
+
+- **Discord:** [Join the Andromity Community Discord](https://discord.gg/taPJSNy4) for live discussions, local Ollama setups, prompt engineering, and MCP skill sharing.
+- **Skills & MCP Hub:** Discover and publish community agent skills, custom prompts, and MCP tool servers on [AgenticMarket](https://agenticmarket.dev).
+
+⭐ **Loved the Live Waterfall profiler or saved hours debugging?** Consider giving Andromity a star on GitHub — it helps more developers discover 100% free, private, open-source AI tooling!
+
+---
+
 ## Star History
 
 <a href="https://www.star-history.com/?repos=agenticmarket%2Fandromity&type=date&legend=top-left">

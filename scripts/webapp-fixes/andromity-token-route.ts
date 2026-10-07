@@ -36,7 +36,17 @@ export async function GET(req: NextRequest) {
     try {
       const registered = await register(token);
       if (!registered.ok) {
-        return NextResponse.json({ error: "Account session could not be activated. Please retry sign-in shortly." }, { status: 503 });
+        console.error("Andromity session registration failed", {
+          gateway: new URL(gatewayUrl).origin,
+          status: registered.status,
+          requestId: registered.headers.get("cf-ray"),
+        });
+        return NextResponse.json({
+          error: registered.status === 429
+            ? "Sign-in is temporarily rate limited. Please wait a moment and retry."
+            : "Account session could not be activated. Please retry sign-in shortly.",
+          gateway_status: registered.status,
+        }, { status: 503 });
       }
       // Preserve the dashboard's existing usage token; its failure must not
       // discard a successfully registered IDE session.
