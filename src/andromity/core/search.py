@@ -114,31 +114,16 @@ def _expand_brace_pattern(pattern: Optional[str]) -> List[Optional[str]]:
     return [f"{prefix}{alt}{suffix}" for alt in alts.split(',')]
 
 
-def grep_search(
-    query: str,
-    path: str = ".",
-    case_sensitive: bool = False,
-    file_pattern: Optional[str] = None,
-    max_results: int = 50,
-    multiline: bool = False,
-) -> str:
-    """
-    Search for a text pattern across the codebase.
-    Uses ripgrep (`rg`) -> `git grep` -> Python fallback.
-    Automatically respects .gitignore and ignores heavy/cache folders.
-    """
-    if not query.strip():
-        return "Error: query cannot be empty."
-
-    search_path = Path(path).resolve()
-    if not search_path.exists():
-        return f"Error: Path '{path}' does not exist."
-
-    # Expand brace patterns like *.{ts,tsx,js,jsx} → [*.ts, *.tsx, *.js, *.jsx]
-    expanded_patterns = _expand_brace_pattern(file_pattern)
-
 _RESOLVED_RG_PATH: Optional[str] = None
 _RG_SEARCH_ATTEMPTED: bool = False
+
+RIPGREP_SHA256 = {
+    "ripgrep-14.1.1-x86_64-pc-windows-msvc.zip": "d0f534024c42afd6cb4d38907c25cd2b249b79bbe6cc1dbee8e3e37c2b6e25a1",
+    "ripgrep-14.1.1-aarch64-apple-darwin.tar.gz": "24ad76777745fbff131c8fbc466742b011f925bfa4fffa2ded6def23b5b937be",
+    "ripgrep-14.1.1-x86_64-apple-darwin.tar.gz": "fc87e78f7cb3fea12d69072e7ef3b21509754717b746368fd40d88963630e2b3",
+    "ripgrep-14.1.1-x86_64-unknown-linux-musl.tar.gz": "4cf9f2741e6c465ffdb7c26f38056a59e2a2544b51f7cc128ef28337eeae4d8e",
+    "ripgrep-14.1.1-aarch64-unknown-linux-musl.tar.gz": "c827481c4ff4ea10c9dc7a4022c8de5db34a5737cb74484d62eb94a95841ab2f",
+}
 
 
 def ensure_ripgrep() -> Optional[str]:
@@ -146,6 +131,10 @@ def ensure_ripgrep() -> Optional[str]:
     Automatically download and install the official standalone ripgrep binary
     into ~/.andromity/bin/ so fast grep search is always available.
     """
+    if os.environ.get("ANDROMITY_AIRGAP") == "1":
+        return None
+
+    import hashlib
     import platform
     import urllib.request
     import zipfile
@@ -180,6 +169,18 @@ def ensure_ripgrep() -> Optional[str]:
         req = urllib.request.Request(url, headers={"User-Agent": "Andromity-Agent"})
         with urllib.request.urlopen(req, timeout=15) as resp, open(archive_path, "wb") as out_f:
             shutil.copyfileobj(resp, out_f)
+
+        expected_hash = RIPGREP_SHA256.get(asset)
+        if expected_hash:
+            hasher = hashlib.sha256()
+            with open(archive_path, "rb") as af:
+                while chunk := af.read(65536):
+                    hasher.update(chunk)
+            if hasher.hexdigest().lower() != expected_hash.lower():
+                log.error("Ripgrep download integrity check failed for %s", asset)
+                if archive_path.exists():
+                    archive_path.unlink()
+                return None
 
         if asset.endswith(".zip"):
             with zipfile.ZipFile(archive_path, "r") as zf:
