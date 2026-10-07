@@ -17,7 +17,8 @@ function harness(fetch, authenticated = true) {
     '../../../../../db/schema': { user: {} }, 'drizzle-orm': { eq: () => undefined },
     'node:crypto': require('node:crypto'),
   };
-  new Script(source).runInNewContext({ exports, require: name => deps[name], process: { env: {} }, fetch, AbortSignal });
+  new Script(source).runInNewContext({ exports, require: name => deps[name], process: { env: {} }, fetch, AbortSignal,
+    URL, console: { error: () => {} } });
   return exports.GET({ headers: new Headers() });
 }
 
@@ -25,7 +26,9 @@ test('registration failures never return an IDE token', async () => {
   for (const fetch of [async () => new Response('{}', { status: 500 }), async () => { throw new Error('timeout'); }]) {
     const response = await harness(fetch);
     assert.equal(response.status, 503);
-    assert.equal((await response.json()).token, undefined);
+    const body = await response.json();
+    assert.equal(body.token, undefined);
+    if (body.gateway_status) assert.equal(body.gateway_status, 500);
   }
 });
 test('successful registration returns the exact random token registered with gateway', async () => {

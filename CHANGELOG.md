@@ -5,11 +5,14 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 ## [0.2.16] — 2026-10-07
 
 ### Fixed
-- Preserve LiteLLM proxy dependencies in bundled daemon binaries to fix missing-module failures on Linux.
+- Preserve LiteLLM proxy runtime modules (`spend_tracking`) in bundled daemon binaries to resolve Linux runtime crashes (`ModuleNotFoundError: No module named 'litellm.proxy'`).
+- Prune Next.js frontend chunks and stray test certificates from `litellm/proxy` to resolve VS Code Marketplace automated validation and security scanner rejections.
+- Eliminate duplicate binary outputs (`serverb`) and enforce strict packaging exclusions for certificates and keys.
 - Validate AgenticMarket account sessions before saving sign-in credentials and clear rejected sessions from the extension and daemon.
 
 ### Added
-- Check provider dependency imports in the final binary bundle before completing a release build.
+- Automated provider runtime checks (`--check-runtime`) integrated into both the build script and GitHub Actions CI matrix across Windows, Linux, and macOS runners.
+- Dedicated regression test suites in Python and TypeScript (`packagingGuards.test.ts`) guarding `.vscodeignore` rules and bundled binary integrity.
 
 ## [0.2.15] — 2026-10-06
 

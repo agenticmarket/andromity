@@ -39,10 +39,9 @@ print(f"Building andromity-server for {platform_key} -> {temp_dist}")
 # Fall back to pip with --break-system-packages if uv is not available.
 uv_path = shutil.which("uv")
 if uv_path:
-    # --system targets the current interpreter (sys.executable), matching
-    # whatever Python the caller is running (e.g. actions/setup-python's Python).
-    subprocess.check_call([uv_path, "pip", "install", "-e", ".", "--quiet", "--system"], cwd=ROOT)
-    subprocess.check_call([uv_path, "pip", "install", "pyinstaller", "--quiet", "--system"], cwd=ROOT)
+    target_flag = ["--python", sys.executable]
+    subprocess.check_call([uv_path, "pip", "install", "-e", ".", "--quiet"] + target_flag, cwd=ROOT)
+    subprocess.check_call([uv_path, "pip", "install", "pyinstaller", "--quiet"] + target_flag, cwd=ROOT)
 else:
     # Plain pip — works on Windows and in venvs where pip isn't restricted.
     # On externally-managed systems (Linux/macOS), add --break-system-packages
@@ -109,6 +108,19 @@ if not os.path.exists(src_root):
 
 robust_copy(src_root, out_dir)
 
+# Remove any duplicate or stale executables (e.g. andromity-serverb.exe)
+for fname in os.listdir(out_dir):
+    if "serverb" in fname.lower():
+        p = os.path.join(out_dir, fname)
+        try:
+            if os.path.isfile(p):
+                os.remove(p)
+            elif os.path.isdir(p):
+                shutil.rmtree(p)
+            print(f"[Cleanup] Removed stale/duplicate artifact: {fname}")
+        except Exception as e:
+            print(f"[Cleanup] WARNING: Could not remove {fname}: {e}")
+
 # Remove botocore documentation-only data files that are never loaded at runtime
 # but trigger false-positive secret scanner alerts on Open VSX (rule: square-access-token etc.)
 _BOTOCORE_DATA = os.path.join(out_dir, "_internal", "botocore", "data")
@@ -140,9 +152,49 @@ if os.path.isfile(_LITELLM_CALLBACK_MGR):
             _patched = _content.replace("webhook-test.com", "example.com")
             with open(_LITELLM_CALLBACK_MGR, "w", encoding="utf-8") as _f:
                 _f.write(_patched)
-            print("[Cleanup] Patched webhook-test.com → example.com in litellm/logging_callback_manager.py (doc-only string, runtime unaffected).")
+            print("[Cleanup] Patched webhook-test.com -> example.com in litellm/logging_callback_manager.py (doc-only string, runtime unaffected).")
     except Exception as _e:
         print(f"[Cleanup] WARNING: Could not patch logging_callback_manager.py: {_e}")
+
+# Prune litellm proxy web UI and certificate artifacts (Next.js JS chunks and public_key.pem)
+# that trigger false-positive scanner blocks on VS Code Marketplace, while PRESERVING all Python
+# modules (e.g. proxy.spend_tracking, proxy._types) required at runtime.
+_LITELLM_PROXY = os.path.join(out_dir, "_internal", "litellm", "proxy")
+if os.path.isdir(_LITELLM_PROXY):
+    _pruned_count = 0
+    # Remove web UI frontends and Swagger artifacts (contains hundreds of obfuscated JS chunks)
+    for _sub in ("client", "_experimental", "swagger"):
+        _p = os.path.join(_LITELLM_PROXY, _sub)
+        if os.path.exists(_p):
+            try:
+                shutil.rmtree(_p, ignore_errors=True)
+                _pruned_count += 1
+            except Exception:
+                pass
+    # Remove any stray certificate/key or JS files inside proxy
+    for _root, _dirs, _files in os.walk(_LITELLM_PROXY):
+        for _fname in _files:
+            if _fname.endswith((".pem", ".key", ".crt", ".js")):
+                try:
+                    os.remove(os.path.join(_root, _fname))
+                    _pruned_count += 1
+                except Exception:
+                    pass
+    if _pruned_count:
+        print(f"[Cleanup] Pruned {_pruned_count} litellm proxy web UI/certificate artifacts (Python modules preserved).")
+
+# Strip any stray certificate/key secrets from anywhere in the bundle (except standard root CA cacert.pem)
+_cert_count = 0
+for _root, _dirs, _files in os.walk(out_dir):
+    for _fname in _files:
+        if _fname.lower().endswith((".pem", ".key", ".crt")) and _fname.lower() != "cacert.pem":
+            try:
+                os.remove(os.path.join(_root, _fname))
+                _cert_count += 1
+            except Exception:
+                pass
+if _cert_count:
+    print(f"[Cleanup] Removed {_cert_count} non-cacert certificate/key files from bundle.")
 
 # LiteLLM imports proxy.spend_tracking during normal completions. Preserve
 # its Python modules and verify imports in the final, cleaned bundle.

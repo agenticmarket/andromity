@@ -5,11 +5,14 @@ All notable changes to the "andromity" extension will be documented in this file
 ## [0.2.16] — 2026-10-07
 
 ### Fixed
-- Include LiteLLM proxy dependencies in bundled daemon binaries, fixing the Linux missing-module error.
+- Preserve LiteLLM proxy runtime dependencies in bundled daemon binaries to fix missing-module errors on Linux.
+- Prune bundled proxy web chunks and test certificates to resolve VS Code Marketplace validation errors.
+- Exclude duplicate binary variants and stray certificate keys from the extension package.
 - Verify AgenticMarket account sessions before reporting successful sign-in and clear rejected credentials.
 
 ### Added
-- Provider runtime checks for bundled binaries during release builds.
+- Automated provider runtime verification (`--check-runtime`) during binary builds and CI release workflows.
+- Permanent packaging and binary bundle cleanliness test suites.
 
 ## [0.2.15] - 2026-10-06
 
