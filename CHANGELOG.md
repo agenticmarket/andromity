@@ -2,6 +2,23 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
+## [0.2.17] — 2026-10-08
+
+### Security
+- Auto-woken sessions now run with their own permission mode and profile, capped at TRUST, and never in an untrusted folder.
+- Session tools that can wake or steer another session (send, ask, broadcast, watch, shared state writes, handoffs) require workspace trust again and need approval in SAFE mode. Sessions only reach peers in the same project, and only the addressed session (or the user) can answer a question.
+- Writes to `.git/`, `.andromity/`, `.vscode/`, `.husky/`, `package.json`, `.envrc` and `.mcp.json` need approval in SAFE and TRUST, since they can trigger later command execution.
+- Cron jobs that arrive in a repository's `.andromity/crons.json` are imported disabled, and FULL/YOLO jobs are lowered to SAFE.
+- VS Code: the sign-in token only goes to AgenticMarket hosts set in user settings, sign-in links must come from this editor, and model output can no longer render raw HTML or load remote images in chat.
+
+### Fixed
+- Inter-session messages, questions and answers now appear in the TUI, and VS Code keeps them for sessions that are not on screen.
+- Collaborator badges and per-session renames in VS Code, plus shared-state and handoff notifications.
+- Sessions whose last turn was cancelled or failed can be woken again.
+
+### Changed
+- Error telemetry records the error category (for example `error_auth`, `error_rate_limit`, `error_ollama_offline`), never the message text.
+
 ## [0.2.16] — 2026-10-07
 
 ### Fixed

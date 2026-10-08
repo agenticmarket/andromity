@@ -2,6 +2,17 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [0.2.17] — 2026-10-08
+
+### Security
+- The sign-in token is only sent to AgenticMarket hosts configured in user settings; workspace settings can no longer redirect it.
+- Sign-in links must be started from this editor, and callback tokens are no longer written to the output log.
+- Chat renders model-supplied HTML as text and shows remote images as links.
+- Session collaboration and edits to execution-control files (`.git/`, `.vscode/`, `package.json`, …) follow stricter trust and approval rules.
+
+### Fixed
+- Collaborator badges, per-session renames, and inbox items for sessions that are not on screen.
+
 ## [0.2.16] — 2026-10-07
 
 ### Fixed
