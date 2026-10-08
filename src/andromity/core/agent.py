@@ -62,6 +62,21 @@ def _estimate_tokens(messages: list) -> int:
     return total
 
 
+_ERROR_FEATURE_NAMES = {
+    "auth_error": "error_auth",
+    "rate_limit": "error_rate_limit",
+    "context_exceeded": "error_context_length",
+    "timeout": "error_timeout",
+}
+
+
+def error_feature_name(error_type: Optional[str]) -> str:
+    kind = (error_type or "generic").strip().lower()
+    if kind.startswith("error_"):
+        return kind
+    return _ERROR_FEATURE_NAMES.get(kind, f"error_{kind}")
+
+
 class Agent:
     def __init__(self, session: Session, profile: str = None, dry_run: bool = False,
                  auto_approve: bool = False, on_tool_approval: Optional[Callable] = None,
@@ -431,7 +446,7 @@ class Agent:
                 card = classify_and_format_error(fake_err, provider=prov_name, model=model_name, has_images=True)
                 yield TextDelta(text=f"\n[Image not sent] {model_name} does not support images. Switch to a vision model (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-flash) with /model.\n" + card)
                 yield Done(outcome="error")
-                self._fire_session_end(had_error=True)
+                self._fire_session_end(had_error=True, error_type="vision_unsupported")
                 return
             self._turn_image_parts = [
                 {"type": "text", "text": user_input},
@@ -505,6 +520,7 @@ class Agent:
             assistant_thinking = ""
             last_usage = None
             provider_outcome = "success"
+            provider_error_type = None
 
             stream_kwargs: Dict[str, Any] = {"tools": self.allowed_tools, "turn_id": user_turn_id}
             if self.provider:
@@ -534,6 +550,7 @@ class Agent:
                 if isinstance(event, Done):
                     last_usage = event.usage
                     provider_outcome = event.outcome
+                    provider_error_type = event.error_type
                 else:
                     yield event
                 if isinstance(event, TextDelta):
@@ -637,8 +654,8 @@ class Agent:
                 for call in tool_calls_to_execute:
                     self.session.add_message("tool", content="Not executed: provider response failed.",
                                              tool_call_id=call["id"], name=call["function"]["name"])
-                yield Done(usage=last_usage, outcome="error")
-                self._fire_session_end(had_error=True)
+                yield Done(usage=last_usage, outcome="error", error_type=provider_error_type)
+                self._fire_session_end(had_error=True, error_type=provider_error_type or "provider_failed")
                 break
 
             if not assistant_content and not tool_calls_to_execute:
@@ -653,6 +670,7 @@ class Agent:
                 model = config.get("default", "model", "")
                 limit = self.ctx_limit or get_context_limit_for_model(provider, model)
                 current_tokens = _estimate_tokens(self.session.messages)
+                empty_reason = "context_exceeded" if limit > 0 and current_tokens > limit * 0.9 else "empty_response"
                 if limit > 0 and current_tokens > limit * 0.9:
                     warning = (
                         f"\n**[No response from model]** Context full ({current_tokens:,}/{limit:,} tokens). "
@@ -665,7 +683,7 @@ class Agent:
                     )
                 yield TextDelta(text=warning)
                 yield Done(usage=last_usage, outcome="error")
-                self._fire_session_end(had_error=True)
+                self._fire_session_end(had_error=True, error_type=empty_reason)
                 break
 
             self._empty_retried = False
@@ -683,7 +701,8 @@ class Agent:
                 if not has_error and self.input_queue.peek(steering_only=True):
                     continue
                 yield Done(usage=last_usage, outcome="error" if has_error else "success")
-                self._fire_session_end(had_error=has_error)
+                # Marker text in a successful reply: tracked separately so false positives stay visible.
+                self._fire_session_end(had_error=has_error, error_type="error_marker_in_reply" if has_error else None)
                 break
 
             # ── ask_questions: user answers in an inline panel; the answers become the
@@ -987,10 +1006,13 @@ class Agent:
     def _get_session_duration(self) -> float:
         return max(0.0, time.monotonic() - getattr(self, "_telemetry_turn_start", time.monotonic()))
 
-    def _fire_session_end(self, had_error: bool = False) -> None:
+    def _fire_session_end(self, had_error: bool = False, error_type: Optional[str] = None) -> None:
         """Send live session update and session outcome telemetry."""
         try:
-            from andromity.telemetry import send_session_update, send_session_end
+            from andromity.telemetry import send_session_update, send_session_end, send_feature_used
+            if had_error:
+                # Category only (e.g. error_auth, error_ollama_offline); never the message text.
+                send_feature_used(error_feature_name(error_type), session_id=self.session.id)
             _prov = self.provider or config.get("default", "provider", "")
             _mod  = self.model  or config.get("default", "model", "")
             turns = self._get_turn_count()
