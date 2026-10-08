@@ -72,14 +72,20 @@ def test_requires_workspace_trust_gates_fs_and_command_tools():
     assert requires_workspace_trust("list_dir") is True
     assert requires_workspace_trust("grep_search") is True
 
-    # Inter-agent coordination and inquiry tools remain accessible across sessions
+    # Read-only coordination and answering stay available in untrusted folders
     assert requires_workspace_trust("list_tools") is False
     assert requires_workspace_trust("ask_questions") is False
     assert requires_workspace_trust("session_list") is False
     assert requires_workspace_trust("session_read_messages") is False
-    assert requires_workspace_trust("session_send_message") is False
-    assert requires_workspace_trust("session_ask_question") is False
     assert requires_workspace_trust("session_answer_question") is False
+    assert requires_workspace_trust("shared_state_get") is False
+
+
+def test_requires_workspace_trust_gates_tools_that_can_wake_or_steer_sessions():
+    """An untrusted session must not be able to drive a trusted one through the bus."""
+    for name in ("session_send_message", "session_ask_question", "session_broadcast",
+                 "session_watch", "shared_state_set", "write_handoff"):
+        assert requires_workspace_trust(name) is True, name
 
 
 def test_execute_tool_has_valid_docstring():

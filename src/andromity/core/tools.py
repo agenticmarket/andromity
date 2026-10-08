@@ -251,8 +251,9 @@ _assert_safe_path = _assert_safe_write_path
 def requires_workspace_trust(name: str) -> bool:
     return name not in {
         "ask_questions", "ask_question", "list_tools", "web_search", "fetch_url",
-        "session_list", "session_read_messages", "session_send_message", "session_ask_question",
-        "session_answer_question", "session_watch", "shared_state_get", "shared_state_set",
+        # Reading and answering stay open; sending, asking, watching and shared-state writes can
+        # wake or steer a trusted session, so they need trust like any other workspace action.
+        "session_list", "session_read_messages", "session_answer_question", "shared_state_get",
     }
 
 

@@ -7392,15 +7392,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           break;
 
-        case 'session_updated':
-          if (msg.name) {
-            const activeSessName = document.getElementById('active-session-name');
-            if (activeSessName) {
-              activeSessName.textContent = cleanPromptForDisplay(msg.name);
-            }
-          }
-          break;
-
         case 'session_switched':
           userScrolledUp = false;
           _isUserActivelyScrolling = false;
@@ -8516,51 +8507,48 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break; }
 
         case 'session_message_received':
-          if (!currentSessionId || msg.to_session_id === currentSessionId || msg.to_session === currentSessionId || msg.to_session === 'all' || msg.to_session === '*') {
-            addCollabInboxItem({
-              id: 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-              type: 'message',
-              fromSession: msg.from_session,
-              fromSessionId: msg.from_session_id,
-              toSession: msg.to_session,
-              content: msg.content,
-              messageType: msg.message_type,
-              timestamp: msg.timestamp || new Date().toISOString(),
-              unread: true
-            });
-          }
+          addCollabInboxItem({
+            sessionId: msg.to_session_id || undefined,
+            id: 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+            type: 'message',
+            fromSession: msg.from_session,
+            fromSessionId: msg.from_session_id,
+            toSession: msg.to_session,
+            content: msg.content,
+            messageType: msg.message_type,
+            timestamp: msg.timestamp || new Date().toISOString(),
+            unread: true
+          });
           break;
 
         case 'session_question_received':
-          if (!currentSessionId || msg.to_session_id === currentSessionId || msg.to_session === currentSessionId || msg.to_session === 'all' || msg.to_session === '*') {
-            addCollabInboxItem({
-              id: 'q_' + (msg.question_id || Date.now()),
-              type: 'question',
-              fromSession: msg.from_session,
-              fromSessionId: msg.from_session_id,
-              toSession: msg.to_session,
-              content: msg.question,
-              questionId: msg.question_id,
-              timestamp: msg.timestamp || new Date().toISOString(),
-              unread: true
-            });
-          }
+          addCollabInboxItem({
+            sessionId: msg.to_session_id || undefined,
+            id: 'q_' + (msg.question_id || Date.now()),
+            type: 'question',
+            fromSession: msg.from_session,
+            fromSessionId: msg.from_session_id,
+            toSession: msg.to_session,
+            content: msg.question,
+            questionId: msg.question_id,
+            timestamp: msg.timestamp || new Date().toISOString(),
+            unread: true
+          });
           break;
 
         case 'session_answer_received':
-          if (!currentSessionId || msg.to_session_id === currentSessionId || msg.to_session === currentSessionId || msg.to_session === 'all' || msg.to_session === '*') {
-            addCollabInboxItem({
-              id: 'ans_' + (msg.question_id || Date.now()),
-              type: 'answer',
-              fromSession: msg.from_session,
-              fromSessionId: msg.from_session_id,
-              toSession: msg.to_session,
-              content: msg.answer,
-              questionId: msg.question_id,
-              timestamp: msg.timestamp || new Date().toISOString(),
-              unread: true
-            });
-          }
+          addCollabInboxItem({
+            sessionId: msg.to_session_id || undefined,
+            id: 'ans_' + (msg.question_id || Date.now()),
+            type: 'answer',
+            fromSession: msg.from_session,
+            fromSessionId: msg.from_session_id,
+            toSession: msg.to_session,
+            content: msg.answer,
+            questionId: msg.question_id,
+            timestamp: msg.timestamp || new Date().toISOString(),
+            unread: true
+          });
           break;
 
         case 'session_shared_state_changed':

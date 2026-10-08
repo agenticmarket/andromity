@@ -17,6 +17,16 @@ from andromity.core.events import (
 log = get_logger("session_bus")
 
 
+def _norm_project(path: Optional[str]) -> Optional[str]:
+    if not path:
+        return None
+    import os
+    try:
+        return os.path.normcase(str(Path(path).resolve()))
+    except OSError:
+        return os.path.normcase(str(path))
+
+
 @dataclass
 class BusMessage:
     id: str
@@ -183,19 +193,31 @@ class SessionBus:
     def resolve_session_id(self, target: str, from_session_id: Optional[str] = None) -> Optional[str]:
         """Resolve a session name or ID to an active session ID."""
         with self._lock:
-            target_clean = target.strip()
+            target_clean = (target or "").strip()
+            if not target_clean:
+                return None
+            # Sessions only reach peers in their own project, and never themselves.
+            from_reg = self._registrations.get(from_session_id) if from_session_id else None
+            from_project = _norm_project(from_reg.project_path) if from_reg else None
+            candidates = {
+                sid: reg for sid, reg in self._registrations.items()
+                if sid != from_session_id
+                and (from_project is None or _norm_project(reg.project_path) == from_project)
+            }
             # 1. Exact ID match
-            if target_clean in self._registrations:
+            if target_clean in candidates:
                 return target_clean
-            # 2. Exact Name match
-            for sid, reg in self._registrations.items():
-                if reg.name.lower() == target_clean.lower():
-                    return sid
-            # 3. Partial ID match
-            for sid in self._registrations.keys():
-                if sid.startswith(target_clean):
-                    return sid
-            return None
+            # 2. Exact Name match (must be unambiguous)
+            named = [sid for sid, reg in candidates.items() if reg.name.lower() == target_clean.lower()]
+            if len(named) == 1:
+                return named[0]
+            if named:
+                return None
+            # 3. Unambiguous ID prefix of at least 6 characters
+            if len(target_clean) < 6:
+                return None
+            prefixed = [sid for sid in candidates if sid.startswith(target_clean)]
+            return prefixed[0] if len(prefixed) == 1 else None
 
     # ── Messaging ────────────────────────────────────────────────────────────
 
@@ -327,11 +349,17 @@ class SessionBus:
         from_session_id: str,
         question_id: str,
         answer: str,
+        answered_by_user: bool = False,
     ) -> bool:
-        """Provide an answer to a pending question."""
+        """Provide an answer to a pending question. Only the addressed session, or the user from the UI, may answer."""
         with self._lock:
+            record = self._question_records.get(question_id)
+            if record and not answered_by_user and record.to_session_id != from_session_id:
+                log.warning("SessionBus: session %s tried to answer question %s addressed to %s",
+                            from_session_id, question_id, record.to_session_id)
+                return False
             future = self._pending_questions.pop(question_id, None)
-            record = self._question_records.pop(question_id, None)
+            self._question_records.pop(question_id, None)
 
             if not future or future.done() or not record:
                 log.warning("SessionBus: No active question future found for id %s", question_id)
@@ -380,7 +408,7 @@ class SessionBus:
             for sid, reg in self._registrations.items():
                 if sid == from_session_id:
                     continue
-                if project_path_only and from_project and reg.project_path and reg.project_path != from_project:
+                if project_path_only and _norm_project(reg.project_path) != _norm_project(from_project):
                     continue
                 targets.append((sid, reg.name))
 

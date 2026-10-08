@@ -351,6 +351,11 @@ class CronStore:
                 for c_dict in data.get("crons", []):
                     c_obj = CronJob.from_dict(c_dict)
                     if c_obj.id not in known_ids:
+                        # The file can arrive with a cloned repository. Jobs never created on this
+                        # machine stay off until the user enables them, and never start auto-approving.
+                        c_obj.enabled = False
+                        if (c_obj.mode or "").lower() in ("full", "yolo"):
+                            c_obj.mode = "safe"
                         unmigrated.append(c_obj)
                         jobs.append(c_obj)
                         known_ids.add(c_obj.id)

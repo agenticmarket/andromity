@@ -52,18 +52,17 @@ PROFILES = {
     "reviewer": {
         "tools": [
             "read_file", "grep_search", "find_files", "list_dir", "list_tools",
-            "web_search", "fetch_url", "session_send_message", "session_list",
-            "session_read_messages", "session_answer_question", "session_watch",
+            "web_search", "fetch_url", "session_list",
+            "session_read_messages", "session_answer_question",
             "shared_state_get", "read_handoff"
         ]
     },
     "planner": {
         "tools": [
             "read_file", "grep_search", "find_files", "list_dir", "write_plan",
-            "update_plan_step", "ask_questions", "list_tools", "spawn_subagent", "session_send_message",
-            "session_ask_question", "session_broadcast", "session_list",
-            "session_read_messages", "session_answer_question", "session_watch",
-            "shared_state_set", "shared_state_get", "write_handoff", "read_handoff"
+            "update_plan_step", "ask_questions", "list_tools", "spawn_subagent", "session_list",
+            "session_ask_question", "session_read_messages", "session_answer_question",
+            "shared_state_get", "write_handoff", "read_handoff"
         ]
     },
     "benchmark": {
