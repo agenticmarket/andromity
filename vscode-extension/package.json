@@ -570,6 +570,18 @@
           "default": true,
           "description": "Send anonymous launch and performance telemetry to edge worker."
         },
+        "andromity.gatewayUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "description": "Override the AgenticMarket gateway URL (https on agenticmarket.dev, or loopback for local development). Empty uses the default."
+        },
+        "andromity.webAppUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "description": "Override the AgenticMarket sign-in site URL (https on agenticmarket.dev, or loopback for local development). Empty uses the default."
+        },
         "andromity.serverPort": {
           "type": "number",
           "default": 0,

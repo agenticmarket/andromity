@@ -366,13 +366,7 @@ export class SettingsPanel {
         if (SettingsPanel.chatProvider) {
           await SettingsPanel.chatProvider.openLogin();
         } else {
-          const scheme = vscode.env.uriScheme || "vscode";
-          const callbackUrl = `${scheme}://agenticmarket.andromity-agent/auth`;
-          const configured = vscode.workspace.getConfiguration("andromity").get<string>("webAppUrl");
-          const base = (configured && configured.trim().length > 0)
-            ? configured.trim().replace(/\/+$/, "")
-            : "https://agenticmarket.dev";
-          await vscode.env.openExternal(vscode.Uri.parse(`${base}/auth/connect?callback=${encodeURIComponent(callbackUrl)}`));
+          await vscode.commands.executeCommand("andromity.login");
         }
       } catch (err: any) {
         vscode.window.showErrorMessage(`Failed to open login: ${err.message}`);

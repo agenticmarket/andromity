@@ -5753,10 +5753,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             }
             return '<div class="table-scroll-wrapper"><table class="md-table">' + headerHtml + bodyHtml + '</table></div>';
           },
+          // Model output can carry prompt-injected markup (fake action buttons, overlays), so raw HTML renders as text.
+          html(token) {
+            const raw = token && typeof token === 'object' ? (token.text || token.raw || '') : String(token || '');
+            return escapeHtml(raw);
+          },
           link(token) {
             const href = token && typeof token === 'object' ? (token.href || '#') : String(token || '#');
             const title = token && typeof token === 'object' ? token.title : '';
-            const text = token && typeof token === 'object' ? (token.text || href) : href;
+            const text = token && typeof token === 'object' && token.tokens && this.parser
+              ? this.parser.parseInline(token.tokens)
+              : escapeHtml(token && typeof token === 'object' ? (token.text || href) : href);
             if (href.startsWith('file://')) {
               var fpath = href.startsWith('file:///') ? href.slice(8) : href.slice(7);
               var line = 0;
@@ -5773,6 +5780,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             const href = token && typeof token === 'object' ? (token.href || '') : String(token || '');
             const title = token && typeof token === 'object' ? token.title : '';
             const text = token && typeof token === 'object' ? token.text : '';
+            // Remote images would load without a click and can carry data out in the URL; show them as links instead.
+            if (!href.startsWith('data:image/')) {
+              const label = escapeHtml(text || href);
+              if (href.startsWith('http://') || href.startsWith('https://')) {
+                return '<a href="' + escapeHtml(href) + '" target="_blank" style="color:var(--accent); text-decoration:underline;">' + label + '</a>';
+              }
+              return label;
+            }
             return '<img class="md-image" src="' + escapeHtml(href) + '" alt="' + escapeHtml(text || '') + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + ' loading="lazy" />';
           },
           checkbox(token) {

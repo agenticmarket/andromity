@@ -132,7 +132,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.window.registerUriHandler({
       async handleUri(uri: vscode.Uri) {
-        log(`[Andromity] Received protocol URI: ${uri.toString()}`);
+        log(`[Andromity] Received protocol URI: ${uri.with({ query: "", fragment: "" }).toString()}`);
         const fullUriStr = uri.toString(true);
         let decodedStr = fullUriStr;
         try {
@@ -169,15 +169,14 @@ export async function activate(context: vscode.ExtensionContext) {
           const state = queryParams.get("state");
           const expectedState = context.secrets ? await context.secrets.get("andromity.oauth_state") : null;
 
-          // Verify state nonce if an expected state was registered to prevent CSRF / session fixation
-          if (expectedState) {
-            if (!state || state !== expectedState) {
-              log("[Andromity] OAuth CSRF state verification failed");
-              vscode.window.showErrorMessage("Andromity authentication rejected: OAuth state mismatch or expired (potential CSRF).");
-              return;
-            }
-            await context.secrets.delete("andromity.oauth_state");
+          // Every sign-in starts from openLogin(), which stores a nonce. A callback without a
+          // pending nonce is an unsolicited link and could sign the user into someone else's account.
+          if (!expectedState || !state || state !== expectedState) {
+            log("[Andromity] OAuth CSRF state verification failed");
+            vscode.window.showErrorMessage("Andromity sign-in link expired or was not started from this editor. Use Sign in again.");
+            return;
           }
+          await context.secrets.delete("andromity.oauth_state");
 
           const rawToken = queryParams.get("token") || queryParams.get("key") || queryParams.get("session") || queryParams.get("api_key") || queryParams.get("code");
           const token = rawToken ? rawToken.trim() : null;

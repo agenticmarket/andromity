@@ -25,6 +25,7 @@ import {
 } from "../server/types.js";
 import { getChatViewHtml, ChatViewState } from "./chatview/chatHtml.js";
 import { PlanViewProvider } from "./PlanViewProvider.js";
+import { accountUrl } from "./accountEndpoints.js";
 
 export interface OllamaStatus {
   running: boolean;
@@ -767,19 +768,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   public async _getWebAppBaseUrl(): Promise<string> {
-    const configured = vscode.workspace.getConfiguration("andromity").get<string>("webAppUrl");
-    if (configured && configured.trim().length > 0) {
-      return configured.trim().replace(/\/+$/, "");
-    }
-    return "https://agenticmarket.dev";
+    return accountUrl("webAppUrl");
   }
 
   public _getGatewayBaseUrl(): string {
-    const configured = vscode.workspace.getConfiguration("andromity").get<string>("gatewayUrl");
-    if (configured && configured.trim().length > 0) {
-      return configured.trim().replace(/\/+$/, "");
-    }
-    return "https://gateway.agenticmarket.dev";
+    return accountUrl("gatewayUrl");
   }
 
   private _usageInFlight: Promise<any> | null = null;
