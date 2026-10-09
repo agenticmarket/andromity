@@ -208,3 +208,35 @@ test('delayed retries retain their occurrence date and receipt owner',async()=>{
   assert.equal(db.sqlite.prepare('SELECT user_id FROM telemetry_receipts').get().user_id,'user-12345678');
   db.sqlite.close();
 });
+
+test('active users include feature-only users but session_users counts only users with a recorded session',async()=>{
+  const db=database();
+  await ingestTelemetry(db,{event:'session_start'},fields({userId:'user-session-1',sessionId:'session-real-1'}));
+  await ingestTelemetry(db,{event:'feature_use',feature_name:'app_started'},fields({userId:'user-feature-1',sessionId:'orphan-session-1'}));
+  await ingestTelemetry(db,{event:'feature_use',feature_name:'app_started'},fields({userId:'user-feature-2',sessionId:'orphan-session-2'}));
+  const result=await stats(db);
+  assert.equal(result.summary.today.dau,3);
+  assert.equal(result.summary.today.sessions,1);
+  assert.equal(result.summary.today.session_users,1);
+  assert.equal(result.daily[0].dau,3);
+  assert.equal(result.daily[0].session_users,1);
+  assert.equal(result.window_activity.wau,3);
+  assert.equal(result.window_activity.session_users_7d,1);
+  assert.equal(result.window_activity.session_users_30d,1);
+  db.sqlite.close();
+});
+
+test('events reporting the literal unknown session id are not pooled into one shared session',async()=>{
+  const db=database();
+  for(const user_id of ['aaaa1111-user','bbbb2222-user']) {
+    const response=await worker.fetch(new Request('https://telemetry.test/event',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({event:'feature_use',feature_name:'app_started',user_id,client:'vscode',session_id:'unknown'})
+    }),{DB:db},{waitUntil(){}});
+    assert.equal(response.status,202);
+  }
+  const ids=db.sqlite.prepare('SELECT DISTINCT session_id FROM activity_facts').all().map(r=>r.session_id);
+  assert.equal(ids.length,2);
+  assert.ok(ids.every(id=>id!=='unknown'));
+  db.sqlite.close();
+});

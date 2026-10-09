@@ -319,6 +319,7 @@ export default {
       }
 
       let rawSessionId = typeof data.session_id === 'string' ? data.session_id.trim() : '';
+      if (rawSessionId === 'unknown') rawSessionId = '';
       if (rawSessionId && !/^[a-zA-Z0-9_-]{4,64}$/.test(rawSessionId)) {
         return new Response(JSON.stringify({ error: 'Invalid session_id format' }), {
           status: 400,
@@ -460,7 +461,7 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
     prepare(`SELECT COUNT(*) AS count FROM users`),
     prepare(`SELECT COUNT(*) AS count FROM sessions`),
     prepare(`SELECT COUNT(*) AS count FROM (SELECT user_id FROM scoped_activity GROUP BY user_id HAVING COUNT(DISTINCT date)>1)`),
-    prepare(`SELECT COUNT(DISTINCT user_id) AS dau, COUNT(DISTINCT CASE WHEN session_id IN (SELECT session_id FROM sessions) THEN session_id END) AS sessions FROM scoped_activity WHERE date = date('now')`),
+    prepare(`SELECT COUNT(DISTINCT user_id) AS dau, COUNT(DISTINCT CASE WHEN session_id IN (SELECT session_id FROM sessions) THEN session_id END) AS sessions, COUNT(DISTINCT CASE WHEN session_id IN (SELECT session_id FROM sessions) THEN user_id END) AS session_users FROM scoped_activity WHERE date = date('now')`),
     prepare(`
       SELECT COUNT(DISTINCT s.user_id) AS count
       FROM scoped_activity s
@@ -472,6 +473,7 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
         s.date,
         COUNT(DISTINCT s.user_id) AS dau,
         COUNT(DISTINCT CASE WHEN s.session_id IN (SELECT session_id FROM sessions) THEN s.session_id END) AS sessions,
+        COUNT(DISTINCT CASE WHEN s.session_id IN (SELECT session_id FROM sessions) THEN s.user_id END) AS session_users,
         COUNT(DISTINCT CASE WHEN date(u.first_seen) < s.date THEN s.user_id END) AS returning_users,
         COUNT(DISTINCT CASE WHEN date(u.first_seen) = s.date THEN s.user_id END) AS new_users
       FROM scoped_activity s
@@ -585,6 +587,7 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
   const totalReturning  = returningUsersRes.results?.[0]?.count ?? 0;
   const dauToday        = todayStatsRes.results?.[0]?.dau ?? 0;
   const sessionsToday   = todayStatsRes.results?.[0]?.sessions ?? 0;
+  const sessionUsersToday = todayStatsRes.results?.[0]?.session_users ?? 0;
   const returningToday  = todayReturningRes.results?.[0]?.count ?? 0;
   const newUsersToday   = Math.max(0, dauToday - returningToday);
 
@@ -613,6 +616,7 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
       today: {
         dau:             dauToday,
         sessions:        sessionsToday,
+        session_users:   sessionUsersToday,
         returning_users: returningToday,
         new_users:       newUsersToday,
       },
