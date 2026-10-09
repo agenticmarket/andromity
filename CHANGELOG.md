@@ -2,6 +2,20 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
+## [0.2.18] — 2026-10-09
+
+### Fixed
+- Ollama model discovery now returns only models installed on the running server. Offline servers and empty installations no longer fall back to catalog entries or stale cached models.
+- Plan approval uses the active session's permission mode instead of the global default. Builder instructions now match automatic plan approval in Full and YOLO.
+- Switching permission modes rechecks pending approvals against workspace trust and profile restrictions. Switching to Trust preserves checks for sensitive paths, execution-control files, commands, and external actions.
+
+### Changed
+- VS Code chat has clearer permission and working-style menus, model activity indicators, tool targets, and Markdown formatting. See the extension changelog for details.
+
+### Telemetry Dashboard
+- Session timelines show recorded error categories, such as “Model not found” and “Provider unavailable”, instead of a generic error badge. Older records without a category show “Error type not recorded”.
+- A later successful turn no longer hides an earlier recorded session error. These dashboard changes are deployed independently of the core release and use existing anonymous telemetry without collecting error message text.
+
 ## [0.2.17] — 2026-10-09
 
 ### Added

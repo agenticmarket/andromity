@@ -2,6 +2,23 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [0.2.18] — 2026-10-09
+
+### Added
+- Ollama setup states in the Hub: show when the server is unavailable, offer Start Ollama for an installed but stopped server, and provide installation and official setup documentation links.
+- Running Ollama servers with no installed models show a download action and a Check again button.
+- Connecting and reasoning activity animations, with a steady assistant header while response text streams.
+- File and folder targets beside existing tool names in live activity, restored sessions, and history. Technical tool identifiers remain unchanged.
+
+### Changed
+- Improve Markdown readability with clearer heading and paragraph spacing, quieter inline code and file links, and better table padding and alignment. Wide tables remain horizontally scrollable.
+- Simplify permission and working-style menus, improve keyboard navigation, and keep the permissions popup above chat content with a more compact layout.
+- Explain when permission changes apply from the next turn, including when eligible pending approvals may proceed immediately. Menu descriptions reflect workspace trust, profile restrictions, and the shared Full/YOLO approval rules.
+
+### Fixed
+- Ollama model selection shows only installed models verified against the running server, blocks stale catalog selections, and no longer marks an offline provider as active.
+- Ollama onboarding cannot activate a model before one is installed. Installation and documentation links remain available when the agent service is disconnected.
+
 ## [0.2.17] — 2026-10-09
 
 ### Security
