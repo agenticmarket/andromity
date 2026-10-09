@@ -214,8 +214,11 @@ async def test_paste_chip_removal():
 
         bar = host.query_one("#attachment-bar", AttachmentBar)
         button = bar.query_one("Button")
-        button.press()
-        await pilot.pause()
+        await pilot.click(button)
+        for _ in range(20):
+            await pilot.pause(0.05)
+            if not _chips(host):
+                break
         assert len(_chips(host)) == 0
         assert not bar.has_class("has-items")
 
