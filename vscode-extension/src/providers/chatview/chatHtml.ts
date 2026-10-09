@@ -923,17 +923,16 @@ ${styles}
         </div>
 
         <!-- Permission Mode Popover Menu -->
-        <div class="menu-popover mode-popover" id="mode-popover" style="display:none;" role="menu" aria-label="Permission Governance Mode">
-          <div class="menu-popover-header">Permission Governance</div>
+        <div class="menu-popover mode-popover" id="mode-popover" style="display:none;" role="menu" aria-label="Permissions">
+          <div class="menu-popover-header">Permissions</div>
           <div class="menu-popover-list">
             <button type="button" class="menu-popover-item ${(!state.currentMode || state.currentMode.toLowerCase() === 'safe') ? 'active' : ''}" data-mode="safe" role="menuitem">
               <span class="menu-popover-icon mode-safe">${getModeSvg('safe')}</span>
               <div class="menu-popover-content">
                 <div class="menu-popover-title-row">
                   <span class="menu-popover-title">Safe</span>
-                  <span class="menu-popover-tag">Default</span>
                 </div>
-                <span class="menu-popover-desc">Prompt before running commands or modifying files</span>
+                <span class="menu-popover-desc">Ask before edits, commands, and external actions.</span>
               </div>
               <svg class="menu-popover-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="20 6 9 17 4 12"></polyline>
@@ -944,9 +943,8 @@ ${styles}
               <div class="menu-popover-content">
                 <div class="menu-popover-title-row">
                   <span class="menu-popover-title">Trust</span>
-                  <span class="menu-popover-tag">Workspace</span>
                 </div>
-                <span class="menu-popover-desc">Auto-run workspace tools; prompt on external tools</span>
+                <span class="menu-popover-desc">Allow ordinary edits and approved commands; ask for other actions.</span>
               </div>
               <svg class="menu-popover-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="20 6 9 17 4 12"></polyline>
@@ -957,9 +955,8 @@ ${styles}
               <div class="menu-popover-content">
                 <div class="menu-popover-title-row">
                   <span class="menu-popover-title">Full</span>
-                  <span class="menu-popover-tag">Autonomous</span>
                 </div>
-                <span class="menu-popover-desc">Execute standard tools with safety boundaries</span>
+                <span class="menu-popover-desc">Automatically approve tools within existing restrictions.</span>
               </div>
               <svg class="menu-popover-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="20 6 9 17 4 12"></polyline>
@@ -970,9 +967,8 @@ ${styles}
               <div class="menu-popover-content">
                 <div class="menu-popover-title-row">
                   <span class="menu-popover-title">YOLO</span>
-                  <span class="menu-popover-tag warn">Unrestricted</span>
                 </div>
-                <span class="menu-popover-desc">Full autonomous execution without confirmations</span>
+                <span class="menu-popover-desc">Automatically approve tools within existing restrictions.</span>
               </div>
               <svg class="menu-popover-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="20 6 9 17 4 12"></polyline>
@@ -1037,7 +1033,7 @@ ${styles}
   <!-- Status Bar Footer -->
   <div class="status-bar" id="status-bar-footer">
     <div class="status-bar-left">
-      <button class="prompt-pill-btn" id="btn-prompt-profile" title="Agent Profile" aria-label="Agent profile" aria-haspopup="menu" aria-expanded="false">
+      <button class="prompt-pill-btn" id="btn-prompt-profile" title="Working style" aria-label="Working style" aria-haspopup="menu" aria-expanded="false">
         <span id="prompt-profile-icon" class="prompt-profile-icon">
           ${getProfileSvg(state.currentProfile)}
         </span>
@@ -1049,17 +1045,16 @@ ${styles}
       </button>
 
       <!-- Agent Profile Popover Menu -->
-      <div class="menu-popover profile-popover" id="profile-popover" style="display:none;" role="menu" aria-label="Agent Profile">
-        <div class="menu-popover-header">Agent Profile</div>
+      <div class="menu-popover profile-popover" id="profile-popover" style="display:none;" role="menu" aria-label="Working style">
+        <div class="menu-popover-header">Working style</div>
         <div class="menu-popover-list">
           <button type="button" class="menu-popover-item ${(!state.currentProfile || state.currentProfile.toLowerCase() === 'builder') ? 'active' : ''}" data-profile="builder" role="menuitem">
             <span class="menu-popover-icon">${getProfileSvg('builder')}</span>
             <div class="menu-popover-content">
               <div class="menu-popover-title-row">
                 <span class="menu-popover-title">Builder</span>
-                <span class="menu-popover-tag">Default</span>
               </div>
-              <span class="menu-popover-desc">Plans first, then implements step by step</span>
+              <span class="menu-popover-desc">Implement tasks; plan complex changes first.</span>
             </div>
             <svg class="menu-popover-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="20 6 9 17 4 12"></polyline>
@@ -1070,9 +1065,8 @@ ${styles}
             <div class="menu-popover-content">
               <div class="menu-popover-title-row">
                 <span class="menu-popover-title">Coder</span>
-                <span class="menu-popover-tag">Direct</span>
               </div>
-              <span class="menu-popover-desc">Direct implementation, skips planning</span>
+              <span class="menu-popover-desc">Implement directly, without a structured planning workflow.</span>
             </div>
             <svg class="menu-popover-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="20 6 9 17 4 12"></polyline>
@@ -1083,9 +1077,8 @@ ${styles}
             <div class="menu-popover-content">
               <div class="menu-popover-title-row">
                 <span class="menu-popover-title">Planner</span>
-                <span class="menu-popover-tag">Architect</span>
               </div>
-              <span class="menu-popover-desc">Produces plans only, touches no code</span>
+              <span class="menu-popover-desc">Create plans without editing project code or running commands.</span>
             </div>
             <svg class="menu-popover-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="20 6 9 17 4 12"></polyline>
@@ -1096,9 +1089,8 @@ ${styles}
             <div class="menu-popover-content">
               <div class="menu-popover-title-row">
                 <span class="menu-popover-title">Reviewer</span>
-                <span class="menu-popover-tag">Audit</span>
               </div>
-              <span class="menu-popover-desc">Read-only audit, produces security & code findings</span>
+              <span class="menu-popover-desc">Inspect code and report findings without edits or commands.</span>
             </div>
             <svg class="menu-popover-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="20 6 9 17 4 12"></polyline>

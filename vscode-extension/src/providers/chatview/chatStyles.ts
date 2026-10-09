@@ -6295,6 +6295,9 @@ export function getChatStyles(): string {
       animation: menuPopoverSlideUp 0.14s cubic-bezier(0.16, 1, 0.3, 1);
       user-select: none;
       box-sizing: border-box;
+      max-height: calc(100vh - 32px);
+      overflow-y: auto;
+      overscroll-behavior: contain;
     }
 
     @keyframes menuPopoverSlideUp {
@@ -6343,7 +6346,7 @@ export function getChatStyles(): string {
       display: flex;
       align-items: flex-start;
       gap: 9px;
-      padding: 7px 8px;
+      padding: 10px 9px;
       border-radius: 5px;
       background: transparent;
       border: none;
@@ -6358,6 +6361,18 @@ export function getChatStyles(): string {
 
     .menu-popover-item:hover {
       background: var(--surface-hover);
+    }
+    .menu-popover-item:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder, #007fd4);
+      outline-offset: -2px;
+    }
+    .menu-popover-note {
+      padding: 9px;
+      margin-top: 5px;
+      border-top: 1px solid var(--popover-border);
+      color: var(--vscode-descriptionForeground, #999);
+      font-size: 11px;
+      line-height: 1.5;
     }
 
     .menu-popover-item.active {
@@ -6428,10 +6443,10 @@ export function getChatStyles(): string {
     }
 
     .menu-popover-desc {
-      font-size: 10.5px;
+      font-size: 11.5px;
       color: var(--fg);
-      opacity: 0.68;
-      line-height: 1.3;
+      opacity: 0.8;
+      line-height: 1.45;
       white-space: normal;
     }
 

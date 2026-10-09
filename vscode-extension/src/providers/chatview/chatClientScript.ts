@@ -3981,6 +3981,36 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const modePopover = document.getElementById('mode-popover');
     const btnPromptMode = document.getElementById('btn-prompt-mode');
 
+    function positionChoiceMenu(menu) {
+      menu.style.transform = '';
+      const rect = menu.getBoundingClientRect();
+      const shift = rect.right > innerWidth - 12 ? innerWidth - 12 - rect.right : rect.left < 12 ? 12 - rect.left : 0;
+      menu.style.transform = 'translateX(' + shift + 'px)';
+      menu.style.maxHeight = Math.max(80, Math.min(innerHeight - 24, rect.bottom - 12)) + 'px';
+    }
+    function prepareChoiceMenu(menu, trigger, note) {
+      if (!menu) return;
+      menu.insertAdjacentHTML?.('beforeend', '<div class="menu-popover-note">' + note + '</div>');
+      menu.addEventListener('keydown', (event) => {
+        const items = [...menu.querySelectorAll('.menu-popover-item')];
+        const index = items.indexOf(document.activeElement);
+        if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+          event.preventDefault();
+          const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+          items[next]?.focus();
+        } else if (event.key === 'Escape') {
+          event.preventDefault(); menu.style.display = 'none';
+          trigger?.setAttribute('aria-expanded', 'false'); trigger?.classList.remove('active'); trigger?.focus();
+        }
+      });
+    }
+    prepareChoiceMenu(modePopover, btnPromptMode, 'Workspace trust and profile restrictions still apply. Full and YOLO share tool approval rules. Changes apply to subsequent turns.');
+    window.addEventListener('resize', () => {
+      document.querySelectorAll('.mode-popover, .profile-popover').forEach(menu => {
+        if (menu.style.display !== 'none') positionChoiceMenu(menu);
+      });
+    });
+
     function toggleModePopover(forceState) {
       if (!modePopover) return;
       const isVisible = modePopover.style.display !== 'none';
@@ -4000,6 +4030,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (modelFlyout) modelFlyout.style.display = 'none';
       }
       modePopover.style.display = show ? 'flex' : 'none';
+      if (show) { positionChoiceMenu(modePopover); modePopover.querySelector('.menu-popover-item.active')?.focus(); }
       if (btnPromptMode) {
         btnPromptMode.setAttribute('aria-expanded', show ? 'true' : 'false');
         btnPromptMode.classList.toggle('active', show);
@@ -4016,7 +4047,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         e.stopPropagation();
         const selectedMode = item.getAttribute('data-mode');
         if (selectedMode) {
-          updateModeBadge(selectedMode);
           vscode.postMessage({ type: 'cycle_mode', nextMode: selectedMode });
         }
         toggleModePopover(false);
@@ -4970,7 +5000,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           lbl.classList.remove('skeleton', 'skeleton-text');
         }
         if (lbl.parentElement) {
-          lbl.parentElement.title = 'Agent Profile: ' + display + ' (Click to choose)';
+          lbl.parentElement.title = 'Working style: ' + display + ' (Click to choose)';
         }
       }
       if (iconEl && PROFILE_ICONS[p]) {
@@ -5168,6 +5198,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     const btnProfileEl = document.getElementById('btn-prompt-profile');
     const profilePopover = document.getElementById('profile-popover');
+    prepareChoiceMenu(profilePopover, document.getElementById('btn-prompt-profile'), 'Choose how the agent approaches the task. Changes apply to subsequent turns.');
 
     function toggleProfilePopover(forceState) {
       if (!profilePopover) return;
@@ -5187,6 +5218,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (modelFlyout) modelFlyout.style.display = 'none';
       }
       profilePopover.style.display = show ? 'flex' : 'none';
+      if (show) { positionChoiceMenu(profilePopover); profilePopover.querySelector('.menu-popover-item.active')?.focus(); }
       if (btnProfileEl) {
         btnProfileEl.setAttribute('aria-expanded', show ? 'true' : 'false');
         btnProfileEl.classList.toggle('active', show);
@@ -6851,12 +6883,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
 
       const titles = {
-        safe: 'SAFE Mode: Confirms before every file edit and shell command (Click to choose)',
-        trust: 'TRUST Mode: Auto-approves file writes in workspace; prompts for commands (Click to choose)',
-        full: 'FULL Mode: Auto-approves all tool actions and logs to stream (Click to choose)',
-        yolo: 'YOLO Mode: Autonomous silent execution (Click to choose)'
+        safe: 'Safe: Ask before edits, commands, and external actions',
+        trust: 'Trust: Allow ordinary edits and approved commands; ask for other actions',
+        full: 'Full: Automatically approve tools within existing restrictions',
+        yolo: 'YOLO: Automatically approve tools within existing restrictions'
       };
-      const title = titles[currentMode] || 'Permission Governance Mode (Click to choose)';
+      const title = titles[currentMode] || 'Choose permissions';
       if (promptModeBtn) promptModeBtn.title = title;
 
       document.querySelectorAll('.mode-popover .menu-popover-item').forEach(item => {
@@ -7369,6 +7401,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'config_updated':
           if (msg.key === 'mode') {
             updateModeBadge(msg.value);
+            if (msg.appliesNextTurn && msg.notice) {
+              appendSystemNote(msg.notice);
+              const modeButton = document.getElementById('btn-prompt-mode');
+              if (modeButton) modeButton.title += ' — Applies from the next turn';
+            }
           } else if (msg.key === 'model') {
             currentModel = msg.value;
             if (msg.provider) currentProvider = msg.provider;

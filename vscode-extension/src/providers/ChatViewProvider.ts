@@ -2451,10 +2451,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           key: "permission_mode",
           value: this._currentMode,
         });
-        this._postToWebview({ type: "config_updated", key: "mode", value: this._currentMode });
+        const modeChangeNotice = this._isExecuting
+          ? `Permissions set to ${this._currentMode.toUpperCase()} for the next turn. Eligible pending approvals may proceed now.`
+          : `Permissions: ${this._currentMode.toUpperCase()}`;
+        this._postToWebview({ type: "config_updated", key: "mode", value: this._currentMode, notice: modeChangeNotice, appliesNextTurn: this._isExecuting });
         void this._rpcClient?.call("telemetry.recordFeature", { feature: "mode_" + this._currentMode }).catch(() => {});
         SettingsPanel.currentPanel?.loadData();
-        vscode.window.showInformationMessage(`Permission Mode: ${this._currentMode.toUpperCase()}`);
+        vscode.window.showInformationMessage(modeChangeNotice);
         break;
       }
 

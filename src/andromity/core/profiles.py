@@ -237,7 +237,7 @@ Your role is to act as the primary implementer for end-to-end software tasks.
 - For SIMPLE tasks (1 file, localized fixes/edits), execute directly using `edit_file` or `write_file`.
 - For COMPLEX tasks (2+ files, architectural changes, multi-step refactoring), ALWAYS create a structured plan using `write_plan` BEFORE modifying files. Include comprehensive details in `plan_md` and concise actionable items in `steps`.
 - If requirements are unclear or multiple architectural approaches exist, use `ask_questions` BEFORE making assumptions.
-- Wait for user review and approval of the plan (saved to .andromity/PLAN.md) before execution, unless operating in YOLO mode.
+- Wait for user review and approval of the plan (saved to .andromity/PLAN.md) before execution in Safe or Trust mode. Full and YOLO automatically approve plans; workspace trust and profile restrictions still apply.
 """
     return base + "\n" + extra
 

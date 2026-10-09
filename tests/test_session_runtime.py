@@ -114,6 +114,43 @@ def test_config_mode_change_handles_approval_tuples_without_bypassing_trust(monk
     assert not untrusted.done()
 
 
+@pytest.mark.parametrize("tool,args,approved", [
+    ("edit_file", {"path": "src/app.py"}, True),
+    ("edit_file", {"path": "package.json"}, False),
+    ("read_file", {"path": ".env"}, False),
+    ("shell_exec", {"command": "python --version"}, True),
+    ("shell_exec", {"command": "curl example.com"}, False),
+    ("fetch_url", {"url": "https://example.com"}, False),
+    ("mcp__db__delete", {}, False),
+])
+def test_switch_to_trust_rechecks_pending_action(monkeypatch, tool, args, approved):
+    from andromity.server.rpc_handler import JsonRpcHandler, config
+    handler = JsonRpcHandler()
+    monkeypatch.setattr(config, "set", lambda *args: None)
+    monkeypatch.setattr(config, "save", lambda: None)
+    monkeypatch.setattr(config, "is_trusted", lambda path: True)
+    monkeypatch.setattr(config, "get", lambda section, key, default=None: ["python --version"] if key == "allowed_commands" else [])
+    future = PendingFuture()
+    handler._active_sessions = {"a": SimpleNamespace(project_path="trusted", profile="builder")}
+    handler._pending_approvals = {"p": ("a", future, tool, args)}
+    immediate(handler.rpc_config_set({"key": "permission_mode", "value": "trust"}))
+    assert future.done() is approved
+
+
+@pytest.mark.parametrize("mode", ["trust", "full", "yolo"])
+def test_mode_switch_preserves_read_only_profile_gate(monkeypatch, mode):
+    from andromity.server.rpc_handler import JsonRpcHandler, config
+    handler = JsonRpcHandler()
+    monkeypatch.setattr(config, "set", lambda *args: None)
+    monkeypatch.setattr(config, "save", lambda: None)
+    monkeypatch.setattr(config, "is_trusted", lambda path: True)
+    future = PendingFuture()
+    handler._active_sessions = {"a": SimpleNamespace(project_path="trusted", profile="planner")}
+    handler._pending_approvals = {"p": ("a", future, "shell_exec", {"command": "python --version"})}
+    immediate(handler.rpc_config_set({"key": "permission_mode", "value": mode}))
+    assert not future.done()
+
+
 def test_process_actions_require_the_owning_session_and_restore_context(tmp_path, monkeypatch):
     from andromity.server.rpc_handler import JsonRpcHandler, config
     from andromity.core import tools

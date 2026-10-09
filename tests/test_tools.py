@@ -343,6 +343,29 @@ def test_write_plan_syncs_todo(tmp_path):
         assert not (tmp_path / "PLAN.md").exists()
 
 
+@pytest.mark.parametrize("session_mode,global_mode,approved", [
+    ("safe", "full", False), ("trust", "yolo", False),
+    ("full", "safe", True), ("yolo", "trust", True),
+])
+def test_plan_approval_uses_session_mode(tmp_path, monkeypatch, session_mode, global_mode, approved):
+    from types import SimpleNamespace
+    from andromity.core import tools
+    from andromity.config import config
+    captured = []
+    session = SimpleNamespace(id="plan-mode", permission_mode=session_mode, save_plan=captured.append)
+    token = tools._current_session_var.set(session)
+    monkeypatch.setattr(tools, "_get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(tools, "_notify_plan", lambda *args: None)
+    monkeypatch.setattr(tools, "_notify_todo", lambda: None)
+    monkeypatch.setattr(config, "get", lambda *args: global_mode)
+    try:
+        result = tools.write_plan(title="Mode test", steps=["Inspect"])
+        assert ("auto-approved" in result) is approved
+        assert captured[0]["status"] == ("approved" if approved else "pending")
+    finally:
+        tools._current_session_var.reset(token)
+
+
 def test_write_plan_rich_md_body(tmp_path):
     """plan_md produces a full PLAN.md: AI-written body + auto-appended live checklist."""
     plan_md = (

@@ -1157,7 +1157,7 @@ def write_plan(title: str, description: str = "", plan_md: str = "", steps: list
     todo_list.save()
 
     from andromity.config import config
-    mode = config.get("default", "permission_mode", "safe")
+    mode = (getattr(cur_session, "permission_mode", "") or config.get("default", "permission_mode", "safe")).lower()
     auto_approve = mode in ("yolo", "full")
 
     plan = Plan(

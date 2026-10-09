@@ -2024,13 +2024,38 @@ class JsonRpcHandler:
         config.set(section, key, value)
         config.save()
 
-        # If permission_mode is switched to trust/full/yolo, auto-approve any pending approvals!
+        # Re-evaluate pending actions; Trust retains its command and path exceptions.
         if key in ("permission_mode", "mode") and str(value).lower() in ("trust", "full", "yolo"):
             for app_id, item in list(self._pending_approvals.items()):
                 sid, fut = (item[0], item[1]) if isinstance(item, tuple) else (None, item)
                 session = self._active_sessions.get(sid)
                 if session is None or not config.is_trusted(session.project_path):
                     continue
+                tool_name = item[2] if isinstance(item, tuple) and len(item) > 2 else ""
+                args = item[3] if isinstance(item, tuple) and len(item) > 3 else {}
+                if getattr(session, "profile", "builder") in ("planner", "reviewer") and tool_name in ("write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill"):
+                    continue
+                if str(value).lower() == "trust":
+                    from andromity.core.security import is_sensitive_path, is_execution_control_path, is_command_allowlisted, is_domain_allowed
+                    target = str(args.get("path") or args.get("target_path") or args.get("target_file") or args.get("file_path") or "")
+                    if is_sensitive_path(target):
+                        continue
+                    if tool_name in ("write_file", "edit_file", "edit_file_multi"):
+                        if is_execution_control_path(target):
+                            continue
+                    elif tool_name in ("shell_exec", "shell_bg"):
+                        allowed = (config.get("default", "allowed_commands", []) or []) + (getattr(session, "allowed_commands", []) or [])
+                        if not is_command_allowlisted(str(args.get("command", "")), allowed):
+                            continue
+                    elif tool_name == "fetch_url":
+                        domains = (config.get("default", "allowed_domains", []) or []) + (getattr(session, "allowed_domains", []) or [])
+                        if not is_domain_allowed(str(args.get("url", "")), domains):
+                            continue
+                    elif tool_name.startswith("mcp__"):
+                        if any(m in tool_name.lower() for m in ("write", "insert", "update", "delete", "create", "drop", "push", "exec", "post")):
+                            continue
+                    elif tool_name not in READ_ONLY_TOOLS | SESSION_DRIVING_TOOLS | {"shell_kill", "spawn_subagent", "web_search"}:
+                        continue
                 if not fut.done():
                     fut.set_result(True)
                     self.notify("agent/interactionResolved", {"session_id": sid, "interaction_id": app_id})
