@@ -502,7 +502,12 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
         COALESCE(s.profile, 'builder') AS profile,
         COALESCE(s.duration_seconds, 0) AS duration_seconds,
         COALESCE(e.turn_count, s.turn_count, 1) AS turn_count,
-        COALESCE(e.had_error, 0) AS had_error,
+        CASE WHEN EXISTS(SELECT 1 FROM events er WHERE er.session_id=s.session_id AND er.user_id=s.user_id AND er.event='session_end' AND er.had_error=1)
+          OR EXISTS(SELECT 1 FROM feature_events ef WHERE ef.session_id=s.session_id AND ef.user_id=s.user_id AND ef.feature_name LIKE 'error_%')
+          OR EXISTS(SELECT 1 FROM task_runs et WHERE et.session_id=s.session_id AND et.user_id=s.user_id AND et.outcome='failed')
+          THEN 1 ELSE 0 END AS had_error,
+        (SELECT group_concat(DISTINCT ef.feature_name) FROM feature_events ef
+          WHERE ef.session_id=s.session_id AND ef.user_id=s.user_id AND ef.feature_name LIKE 'error_%') AS error_categories,
         COALESCE(
           e.duration_bucket,
           CASE
@@ -627,7 +632,10 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
     os:               osRes.results ?? [],
     versions:         versionsRes.results ?? [],
     hourly:           hourlyRes.results ?? [],
-    recent_sessions:  recentSessionsRes.results ?? [],
+    recent_sessions: (recentSessionsRes.results ?? []).map(session => ({...session,
+      error_categories: [...new Set(String(session.error_categories || '').split(',')
+        .filter(category => /^error_[a-z0-9_]{1,58}$/.test(category)))],
+    })),
     user_distribution: userBucketsRes.results ?? [],
     // v2
     providers:         providersRes.results ?? [],

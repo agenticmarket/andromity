@@ -26,6 +26,28 @@ const fields = (overrides={}) => ({ userId:'user-12345678',sessionId:'session-te
   now:new Date().toISOString(),date:new Date().toISOString().slice(0,10),...overrides });
 const stats = db => getD1Stats({DB:db},new URLSearchParams('timeRange=all'));
 
+test('session timeline exposes existing error categories and retains errors after recovery',async()=>{
+  const db=database();
+  await ingestTelemetry(db,{event:'session_start'},fields());
+  await ingestTelemetry(db,{event:'feature_use',feature_name:'error_model_not_found'},fields());
+  await ingestTelemetry(db,{event:'session_end',had_error:true},fields());
+  await ingestTelemetry(db,{event:'session_end',had_error:false},fields());
+  const result=await stats(db);
+  assert.equal(result.recent_sessions[0].had_error,1);
+  assert.deepEqual(result.recent_sessions[0].error_categories,['error_model_not_found']);
+  db.sqlite.close();
+});
+
+test('legacy session errors have an empty category list rather than an invented cause',async()=>{
+  const db=database();
+  await ingestTelemetry(db,{event:'session_start'},fields());
+  await ingestTelemetry(db,{event:'session_end',had_error:true},fields());
+  const result=await stats(db);
+  assert.equal(result.recent_sessions[0].had_error,1);
+  assert.deepEqual(result.recent_sessions[0].error_categories,[]);
+  db.sqlite.close();
+});
+
 test('repeated delivery is atomic and creates one feature event',async()=>{
   const db=database(); const data={event:'feature_use',feature_name:'waterfall_manual',event_id:'event-123456789012345'};
   await ingestTelemetry(db,data,fields()); await ingestTelemetry(db,data,fields());
