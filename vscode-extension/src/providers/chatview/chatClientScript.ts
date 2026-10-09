@@ -1,11 +1,23 @@
 import { ChatViewState } from "./chatHtml.js";
 import { getPromptDisplayScript } from "../promptDisplay.js";
 import { getThinkingOrbsScript } from "./thinkingOrbs.js";
+import { getToolTargetsScript } from "./toolTargets.js";
 
 export function getChatClientScript(sidebarIconUri: string, state: ChatViewState): string {
   return `
     ${getPromptDisplayScript()}
     ${getThinkingOrbsScript()}
+    ${getToolTargetsScript()}
+    function updateToolTarget(card, name, args) {
+      const group = card?.querySelector('.tool-title-group');
+      if (!group) return;
+      const target = getToolTargetSummary(name, args);
+      if (!target) return;
+      let label = group.querySelector('.tool-target');
+      if (!label) { label = document.createElement('span'); label.className = 'tool-target'; group.appendChild(label); }
+      label.textContent = target;
+      label.title = target;
+    }
     const vscode = acquireVsCodeApi();
     window.__vscodeApi = vscode;
     const sidebarIconUri = "${sidebarIconUri}";
@@ -7779,6 +7791,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                       '<div class="tool-body">' + escapeHtml(toolArgs) + '</div>';
                       // Delegated listener handles tool-header click without double toggle
                       currentTurnToolBody.appendChild(tDiv);
+                      updateToolTarget(tDiv, toolName, toolArgs);
                     }
                   }
 
@@ -7926,7 +7939,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   td.innerHTML = '<div class="tool-header"><div class="tool-title-group"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg><span>'+escapeHtml(ev.tool_name)+'</span></div><div style="display:flex; align-items:center;"><span class="tool-tag">RUNNING</span><svg class="tool-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg></div></div><div class="tool-body" id="args-'+ev.tool_id+'"></div>';
                   seq.querySelector('.tool-seq-body').appendChild(td);
                 } else if (ev.t === 'tool_delta') {
-                  const ae = document.getElementById('args-'+ev.tool_id); if (ae) ae.textContent += ev.chunk;
+                  const ae = document.getElementById('args-'+ev.tool_id); if (ae) { ae.textContent += ev.chunk; const card = document.getElementById('tool-'+ev.tool_id); updateToolTarget(card, card?.querySelector('.tool-title-group span')?.textContent || '', ae.textContent); }
                 } else if (ev.t === 'tool_result') {
                   const tt = document.getElementById('tool-'+ev.tool_id);
                   if (tt) { const tag=tt.querySelector('.tool-tag'); if(tag){tag.textContent='DONE'; tag.style.background='rgba(63,185,80,0.2)'; tag.style.color='var(--green)';} tt.classList.remove('expanded'); }
@@ -8168,6 +8181,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (argsEl) {
             argsEl.textContent += msg.chunk;
             const toolRow = document.getElementById('tool-' + msg.tool_id);
+            updateToolTarget(toolRow, toolRow?.getAttribute('data-tool-name') || '', argsEl.textContent);
             if (toolRow && toolRow.getAttribute('data-label-resolved') === '0') {
               const partial = argsEl.textContent;
               const fileMatch = partial.match(/"(?:TargetFile|file_path|target_file|path)"\\s*:\\s*"([^"]+)"/);

@@ -4214,10 +4214,21 @@ export function getChatStyles(): string {
       color: var(--fg);
     }
     .tool-title-group {
+      min-width: 0;
+      flex: 1;
       display: flex;
       align-items: center;
       gap: 6px;
       font-family: var(--vscode-editor-font-family, monospace);
+    }
+    .tool-title-group > span:first-of-type { flex-shrink: 0; }
+    .tool-target {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground, #999);
     }
     .tool-tag {
       font-size: 9px;
