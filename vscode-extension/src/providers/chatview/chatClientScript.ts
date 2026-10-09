@@ -4265,8 +4265,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
         case 'open-review-tab':
         case 'open-changes-review': {
-          const card = target.closest('.files-changed-card');
+          let card = target.closest('.files-changed-card');
           let turnFiles = undefined;
+          if (!card && target.closest('.activity-row-file')) {
+            // Scope an edit row to its own turn. While the turn is still running it
+            // has no card yet; null stops the host substituting the previous turn.
+            const turnWrap = target.closest('.message-wrap');
+            card = turnWrap ? turnWrap.querySelector('.files-changed-card[data-turn-files]') : null;
+            turnFiles = null;
+          }
           if (card && card.getAttribute('data-turn-files')) {
             try {
               turnFiles = JSON.parse(card.getAttribute('data-turn-files'));
@@ -7562,6 +7569,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             let currentTurnToolBody = null;
             let currentTurnToolCount = 0;
             let turnEditedFilesForLoad = new Set();
+            const toolResultsForLoad = new Map();
+            for (const hm of allMessages) {
+              if (hm && hm.role === 'tool' && hm.tool_call_id) toolResultsForLoad.set(hm.tool_call_id, extractMessageText(hm.content));
+            }
 
             for (let i = 0; i < allMessages.length; i++) {
               try {
@@ -7671,7 +7682,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     const toolArgs = fn.arguments || '';
 
                     const isWriteTool = /^(write_file|write_to_file|edit_file|edit_file_multi|multi_replace_file_content|replace_file_content|patch_file|create_file|delete_file|move_file|rename_file|save_file)$/.test(toolName);
-                    if (isWriteTool) {
+                    const loadedEditStatus = typeof window.classifyFileEditResult === 'function'
+                      ? window.classifyFileEditResult(toolResultsForLoad.get(tc.id), undefined)
+                      : 'done';
+                    if (isWriteTool && loadedEditStatus !== 'error') {
                       try {
                         const parsedArgs = typeof toolArgs === 'object' && toolArgs !== null ? toolArgs : JSON.parse(toolArgs);
                         const p = parsedArgs.path || parsedArgs.target_path || parsedArgs.target_file || parsedArgs.file_path || parsedArgs.TargetFile;
@@ -7704,7 +7718,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
                     var renderedActivity = null;
                     if (typeof window.renderAntigravityActivityRow === 'function') {
-                      renderedActivity = window.renderAntigravityActivityRow(toolName, toolArgs, 'done');
+                      renderedActivity = window.renderAntigravityActivityRow(toolName, toolArgs, loadedEditStatus);
                     }
                     if (!renderedActivity && typeof window.renderBackgroundProcessActivityRow === 'function' && /^shell_bg$/i.test(toolName)) {
                       renderedActivity = window.renderBackgroundProcessActivityRow(toolName, toolArgs, 'running_bg', (typeof m !== 'undefined' && m ? m.result : ''));
@@ -8210,7 +8224,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
             if (rawArgs) {
               const isWriteTool = /^(write_file|write_to_file|edit_file|edit_file_multi|multi_replace_file_content|replace_file_content|patch_file|create_file|delete_file|move_file|rename_file|save_file)$/.test(toolName);
-              if (isWriteTool) {
+              const editStatus = typeof window.classifyFileEditResult === 'function'
+                ? window.classifyFileEditResult(msg.result, msg.success)
+                : (msg.success === false ? 'error' : 'done');
+              if (isWriteTool && editStatus !== 'error') {
                 try {
                   const parsed = typeof rawArgs === 'object' && rawArgs !== null ? rawArgs : JSON.parse(rawArgs);
                   const p = parsed.path || parsed.target_path || parsed.target_file || parsed.file_path || parsed.TargetFile;
@@ -8243,7 +8260,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
               let activityEl = null;
               if (typeof window.renderAntigravityActivityRow === 'function') {
-                activityEl = window.renderAntigravityActivityRow(toolName, rawArgs, msg.success === false ? 'error' : 'done');
+                activityEl = window.renderAntigravityActivityRow(toolName, rawArgs, editStatus);
               }
               if (!activityEl && typeof window.renderBackgroundProcessActivityRow === 'function' && /^shell_bg$/i.test(toolName)) {
                 activityEl = window.renderBackgroundProcessActivityRow(toolName, rawArgs, msg.success === false ? 'error' : 'running_bg', msg.result);
@@ -9397,6 +9414,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       let iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
       let iconClass = 'command';
       let codeDisplay = '';
+      let editPreviewHtml = '';
       let subPath = '';
 
       const lowerTool = toolName.toLowerCase();
@@ -9410,12 +9428,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const shellName = isWin ? 'powershell' : 'bash';
         codeDisplay = (shellName + ': ' + cmd).trim();
         subPath = cmd;
-      } else if (lowerTool === 'edit_file' || lowerTool === 'write_to_file' || lowerTool === 'replace_file_content' || lowerTool === 'multi_replace_file_content' || lowerTool === 'create_file') {
-        actionTitle = 'Edit file';
+      } else if (/^(edit_file|edit_file_multi|write_file|write_to_file|replace_file_content|multi_replace_file_content|create_file)$/.test(lowerTool)) {
+        const isWholeFileWrite = lowerTool === 'write_file' || lowerTool === 'write_to_file' || lowerTool === 'create_file';
+        actionTitle = isWholeFileWrite ? 'Write file' : 'Edit file';
         iconClass = 'file';
         iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>';
         const filePath = toolArgs.path || toolArgs.file || toolArgs.TargetFile || '';
+        const preview = typeof window.renderEditApprovalPreview === 'function' ? window.renderEditApprovalPreview(toolName, toolArgs) : null;
         codeDisplay = 'file: ' + filePath;
+        if (preview) {
+          codeDisplay += '  (+' + preview.additions + ' -' + preview.deletions +
+            (preview.editCount > 1 ? ', ' + preview.editCount + ' edits' : '') + ')';
+          if (isWholeFileWrite) codeDisplay += '\\nCreates the file or replaces its entire content.';
+          editPreviewHtml = preview.html;
+        }
         if (toolArgs.Instruction || toolArgs.Description) {
           codeDisplay += '\\n' + (toolArgs.Instruction || toolArgs.Description);
         }
@@ -9476,6 +9502,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             '</button>' +
           '</div>' +
           '<div class="permission-code-box">' + escapeHtml(codeDisplay) + '</div>' +
+          editPreviewHtml +
           (rawParams ? (
             '<div class="permission-params-toggle" data-action="toggle-perm-params">' +
               '<span class="params-chevron">&#x25B8;</span> ' +

@@ -209,6 +209,15 @@ export function getChatActivityStyles(): string {
       animation: activityPulse 1.4s ease-in-out infinite;
     }
 
+    .activity-row.activity-row-failed {
+      border-color: rgba(248, 81, 73, 0.3);
+      background: rgba(248, 81, 73, 0.04);
+    }
+
+    .activity-row.activity-row-failed .activity-action {
+      color: #f85149;
+    }
+
     .activity-row.stuck {
       border-color: rgba(251, 191, 36, 0.35);
       background: rgba(251, 191, 36, 0.04);

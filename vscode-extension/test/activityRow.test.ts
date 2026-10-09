@@ -178,42 +178,18 @@ describe("Antigravity Activity Row Unit Tests", () => {
     assert.ok(row.innerHTML.includes('+2'));
     assert.ok(row.innerHTML.includes('-2'));
 
-    // Test clicking the diff button
+    // The main client script's data-action delegation owns these clicks; the
+    // activity script must not post too, or every click opens the review twice.
     assert.equal(typeof clickHandler, "function");
-    const fakeDiffBtn = {
-      className: "activity-diff-btn",
-      attributes: { "data-file-path": "src/reconcilekit/matching.py" },
-      getAttribute: (k: string) => (fakeDiffBtn.attributes as any)[k],
-      closest: (sel: string) => sel === ".activity-diff-btn" ? fakeDiffBtn : null,
-    };
-    let stopped = false;
-    clickHandler({
-      target: fakeDiffBtn,
-      stopPropagation: () => { stopped = true; },
-    });
-
-    assert.equal(stopped, true);
-    assert.equal(messages.length, 1);
-    assert.equal(messages[0].type, "open_review_tab");
-    assert.equal(messages[0].filePath, "src/reconcilekit/matching.py");
-
-    // Test clicking stats (+2 -2)
-    const fakeStats = {
-      className: "activity-stats",
-      attributes: { "data-file-path": "src/reconcilekit/matching.py" },
-      getAttribute: (k: string) => (fakeStats.attributes as any)[k],
-      closest: (sel: string) => sel === ".activity-stats" ? fakeStats : null,
-    };
-    stopped = false;
-    clickHandler({
-      target: fakeStats,
-      stopPropagation: () => { stopped = true; },
-    });
-
-    assert.equal(stopped, true);
-    assert.equal(messages.length, 2);
-    assert.equal(messages[1].type, "open_review_tab");
-    assert.equal(messages[1].filePath, "src/reconcilekit/matching.py");
+    for (const cls of ["activity-diff-btn", "activity-stats", "activity-row-file"]) {
+      const fakeEl = {
+        className: cls,
+        getAttribute: () => "src/reconcilekit/matching.py",
+        closest: (sel: string) => sel === "." + cls ? fakeEl : null,
+      };
+      clickHandler({ target: fakeEl, stopPropagation: () => {} });
+    }
+    assert.equal(messages.length, 0);
   });
 
   it("getChatActivityStyles should return valid CSS tokens adhering to theme guidelines", () => {
