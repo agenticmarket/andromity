@@ -250,18 +250,32 @@ export function getChatActivityScript(): string {
         };
       };
 
+      // File tools report failure in their result text ("Error: ...") while the
+      // tool call itself still completes, so success alone cannot be trusted.
+      window.classifyFileEditResult = function(result, success) {
+        if (success === false) return 'error';
+        var text = typeof result === 'string' ? result.trim() : '';
+        if (/^Error\\b/.test(text)) return 'error';
+        if (/^Applied \\d+ edits successfully, but \\d+ edits failed/.test(text)) return 'partial';
+        return 'done';
+      };
+
       window.renderAntigravityActivityRow = function(toolName, toolArgs, status) {
         var stat = window.parseFileEditStats(toolName, toolArgs);
         if (!stat) return null;
 
         var isRunning = status === 'running';
+        var isFailed = status === 'error';
         var safeFile = escapeHtml(stat.filename);
         var safePath = escapeHtml(stat.filePath);
         var safeBadge = escapeHtml(stat.badgeText);
         var badgeCls = escapeHtml(stat.badgeClass);
+        var actionLabel = isRunning ? 'Editing' : (isFailed ? 'Edit failed' : (status === 'partial' ? 'Partly edited' : 'Edited'));
 
         var statsHtml = '';
-        if (isRunning) {
+        if (isFailed) {
+          statsHtml = '';
+        } else if (isRunning) {
           statsHtml = '<span class="activity-running-dot" title="Editing file..."></span>';
         } else {
           if (stat.additions > 0 || stat.deletions > 0) {
@@ -277,22 +291,92 @@ export function getChatActivityScript(): string {
         var diffIconSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M16 3h5v5"></path><path d="M4 20L21 3"></path><path d="M21 16v5h-5"></path><path d="M15 15l6 6"></path><path d="M4 4l5 5"></path></svg>';
 
         var row = document.createElement('div');
-        row.className = 'activity-row activity-row-file activity-row-clickable' + (isRunning ? ' running' : '');
+        row.className = 'activity-row activity-row-file activity-row-clickable' + (isRunning ? ' running' : '') + (isFailed ? ' activity-row-failed' : '');
         row.setAttribute('data-action', 'open-file');
         row.setAttribute('data-file-path', stat.filePath);
-        row.setAttribute('title', 'Click to open ' + safePath + ' in editor');
+        row.setAttribute('title', (isFailed ? 'Edit failed. ' : '') + 'Click to open ' + safePath + ' in editor');
 
-        row.innerHTML = '<span class="activity-action">' + (isRunning ? 'Editing' : 'Edited') + '</span>' +
+        row.innerHTML = '<span class="activity-action">' + actionLabel + '</span>' +
           '<span class="activity-badge ' + badgeCls + '">' + safeBadge + '</span>' +
           '<span class="activity-filename" title="' + safePath + '">' + safeFile + '</span>' +
           statsHtml +
-          (!isRunning ? (
+          (!isRunning && !isFailed ? (
             '<button class="activity-diff-btn" data-action="open-review-tab" data-file-path="' + safePath + '" title="Review diff for ' + safeFile + '">' +
               diffIconSvg +
             '</button>'
           ) : '');
 
         return row;
+      };
+
+      // Compact, height-capped preview of what a write/edit approval will change,
+      // so SAFE-mode users see the content they are approving without large
+      // edits taking over the chat. Returns null for non-file tools.
+      window.renderEditApprovalPreview = function(toolName, toolArgs) {
+        var MAX_LINES = 200;
+        var MAX_LINE_CHARS = 400;
+        var lowerTool = (toolName || '').toLowerCase();
+        var parsedArgs = {};
+        if (typeof toolArgs === 'string') {
+          try { parsedArgs = JSON.parse(toolArgs); } catch(e) { parsedArgs = {}; }
+        } else if (toolArgs && typeof toolArgs === 'object') {
+          parsedArgs = toolArgs;
+        }
+
+        var hunks = [];
+        if (lowerTool === 'write_file') {
+          hunks.push({ del: '', add: parsedArgs.content });
+        } else if (lowerTool === 'edit_file') {
+          hunks.push({ del: parsedArgs.old_str, add: parsedArgs.new_str });
+        } else if (lowerTool === 'edit_file_multi') {
+          var edits = Array.isArray(parsedArgs.edits) ? parsedArgs.edits : [];
+          for (var i = 0; i < edits.length; i++) {
+            if (edits[i]) hunks.push({ del: edits[i].old_str, add: edits[i].new_str });
+          }
+        } else {
+          return null;
+        }
+
+        function splitLines(str) {
+          if (typeof str !== 'string' || !str) return [];
+          var parts = str.split(/\\r?\\n/);
+          if (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
+          return parts;
+        }
+
+        var lines = [];
+        var additions = 0;
+        var deletions = 0;
+        for (var h = 0; h < hunks.length; h++) {
+          if (hunks.length > 1) lines.push({ cls: 'hunk', text: '@@ edit ' + (h + 1) + ' of ' + hunks.length + ' @@' });
+          var delLines = splitLines(hunks[h].del);
+          var addLines = splitLines(hunks[h].add);
+          deletions += delLines.length;
+          additions += addLines.length;
+          for (var d = 0; d < delLines.length; d++) lines.push({ cls: 'del', text: '- ' + delLines[d] });
+          for (var a = 0; a < addLines.length; a++) lines.push({ cls: 'add', text: '+ ' + addLines[a] });
+        }
+
+        var html = '';
+        var shown = Math.min(lines.length, MAX_LINES);
+        for (var k = 0; k < shown; k++) {
+          var text = lines[k].text;
+          if (text.length > MAX_LINE_CHARS) text = text.slice(0, MAX_LINE_CHARS) + ' …';
+          html += '<div class="perm-diff-line perm-diff-' + lines[k].cls + '">' + escapeHtml(text) + '</div>';
+        }
+        if (lines.length > MAX_LINES) {
+          html += '<div class="perm-diff-more">' + (lines.length - MAX_LINES) + ' more lines not shown. Open "View full parameters" for the complete change.</div>';
+        }
+        if (!html) {
+          html = '<div class="perm-diff-line perm-diff-hunk">(empty content)</div>';
+        }
+
+        return {
+          html: '<div class="permission-diff-box"><div class="perm-diff-lines">' + html + '</div></div>',
+          additions: additions,
+          deletions: deletions,
+          editCount: hunks.length
+        };
       };
 
       window.renderCommandActivityRow = function(toolName, toolArgs, status, toolResult) {
@@ -455,26 +539,8 @@ export function getChatActivityScript(): string {
           return;
         }
 
-        var diffBtn = e.target.closest('.activity-diff-btn');
-        var statsEl = !diffBtn ? e.target.closest('.activity-stats') : null;
-        if (diffBtn || statsEl) {
-          e.stopPropagation();
-          var targetEl = diffBtn || statsEl;
-          var p = targetEl.getAttribute('data-file-path') || targetEl.closest('[data-file-path]')?.getAttribute('data-file-path');
-          if (p) {
-            postToVsCode({ type: 'open_review_tab', filePath: p });
-          }
-          return;
-        }
-
-        var fileRow = e.target.closest('.activity-row-file');
-        if (fileRow) {
-          var p = fileRow.getAttribute('data-file-path');
-          if (p) {
-            postToVsCode({ type: 'open_file', filePath: p });
-          }
-          return;
-        }
+        // File edit rows (open-file / open-review-tab) are handled only by the
+        // main client script's data-action delegation, so each click posts once.
 
         var cmdRow = e.target.closest('.activity-row-command');
         if (cmdRow) {

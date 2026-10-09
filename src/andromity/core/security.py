@@ -93,21 +93,6 @@ def is_domain_allowed(url: str, allowed_domains: Optional[List[str]] = None) -> 
     return False
 
 
-SENSITIVE_PATTERNS = [
-    ".env",
-    ".ssh",
-    ".git",
-    "config.toml",
-    "id_rsa",
-    "id_ed25519",
-    "secret",
-    "password",
-    "credentials",
-    "token",
-    "/etc/shadow",
-    "/etc/passwd",
-    "/proc/self/environ",
-]
 
 SENSITIVE_NAMES = {
     ".env",
@@ -182,6 +167,23 @@ def is_sensitive_path(path: str) -> bool:
             return True
 
     return False
+
+
+# Writing these turns a file edit into later command execution (git fsmonitor/hooks,
+# project crons and MCP servers, editor tasks, direnv, npm scripts run by allowlisted
+# `npm run`), so they always need explicit approval outside FULL/YOLO.
+EXECUTION_CONTROL_DIRS = {".git", ".andromity", ".vscode", ".husky"}
+EXECUTION_CONTROL_NAMES = {".envrc", "package.json", ".mcp.json", ".gitmodules"}
+
+
+def is_execution_control_path(path: str) -> bool:
+    if not path:
+        return False
+    from pathlib import PurePath
+    parts = [p.lower() for p in PurePath(path.strip().replace("\\", "/")).parts]
+    if not parts:
+        return False
+    return parts[-1] in EXECUTION_CONTROL_NAMES or any(p in EXECUTION_CONTROL_DIRS for p in parts[:-1])
 
 
 def is_command_allowlisted(command: str, allowed: Optional[List[str]] = None) -> bool:

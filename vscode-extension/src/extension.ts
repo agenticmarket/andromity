@@ -30,6 +30,17 @@ function markEngineStartFailed() {
   }
 }
 
+/** Mirror an explicitly configured `andromity.includeCoAuthor` into the daemon's
+ *  config.toml so commits made by the agent itself honour the same choice.
+ *  Unset values are left alone so a choice made in the TUI is not overwritten. */
+function syncCoAuthorSetting(client: RpcClient | null | undefined) {
+  if (!client) return;
+  const inspected = vscode.workspace.getConfiguration("andromity").inspect<boolean>("includeCoAuthor");
+  const value = inspected?.workspaceFolderValue ?? inspected?.workspaceValue ?? inspected?.globalValue;
+  if (value === undefined) return;
+  void client.call("config.set", { section: "default", key: "include_co_author", value }).catch(() => {});
+}
+
 const activeRunningSessions = new Set<string>();
 
 /** Reflects daemon turn state in the status bar across all parallel sessions. */
@@ -132,7 +143,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.window.registerUriHandler({
       async handleUri(uri: vscode.Uri) {
-        log(`[Andromity] Received protocol URI: ${uri.toString()}`);
+        log(`[Andromity] Received protocol URI: ${uri.with({ query: "", fragment: "" }).toString()}`);
         const fullUriStr = uri.toString(true);
         let decodedStr = fullUriStr;
         try {
@@ -169,15 +180,14 @@ export async function activate(context: vscode.ExtensionContext) {
           const state = queryParams.get("state");
           const expectedState = context.secrets ? await context.secrets.get("andromity.oauth_state") : null;
 
-          // Verify state nonce if an expected state was registered to prevent CSRF / session fixation
-          if (expectedState) {
-            if (!state || state !== expectedState) {
-              log("[Andromity] OAuth CSRF state verification failed");
-              vscode.window.showErrorMessage("Andromity authentication rejected: OAuth state mismatch or expired (potential CSRF).");
-              return;
-            }
-            await context.secrets.delete("andromity.oauth_state");
+          // Every sign-in starts from openLogin(), which stores a nonce. A callback without a
+          // pending nonce is an unsolicited link and could sign the user into someone else's account.
+          if (!expectedState || !state || state !== expectedState) {
+            log("[Andromity] OAuth CSRF state verification failed");
+            vscode.window.showErrorMessage("Andromity sign-in link expired or was not started from this editor. Use Sign in again.");
+            return;
           }
+          await context.secrets.delete("andromity.oauth_state");
 
           const rawToken = queryParams.get("token") || queryParams.get("key") || queryParams.get("session") || queryParams.get("api_key") || queryParams.get("code");
           const token = rawToken ? rawToken.trim() : null;
@@ -229,6 +239,7 @@ export async function activate(context: vscode.ExtensionContext) {
     sessionTreeProvider.setRpcClient(rpcClient);
     cronTreeProvider.setRpcClient(rpcClient);
     changesTreeProvider.setRpcClient(rpcClient);
+    syncCoAuthorSetting(rpcClient);
     SettingsPanel.prewarm(rpcClient);
     SettingsPanel.currentPanel?.setRpcClient(rpcClient);
     // Reconnect live MCP sessions on every daemon launch, independently of the Hub.
@@ -365,6 +376,10 @@ export async function activate(context: vscode.ExtensionContext) {
           });
           log(`[Andromity] Telemetry configuration synced to daemon: ${isEnabled ? "ON" : "OFF"}`);
         } catch {}
+      }
+
+      if (e.affectsConfiguration("andromity.includeCoAuthor")) {
+        syncCoAuthorSetting(pythonBridge?.getClient());
       }
     })
   );

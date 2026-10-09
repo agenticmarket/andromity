@@ -29,6 +29,11 @@ READ_ONLY_TOOLS = {
     # Session & multi-agent coordination read-only tools
     "session_list", "session_read_messages", "shared_state_get", "read_handoff",
 }
+SESSION_DRIVING_TOOLS = {
+    "session_send_message", "session_ask_question", "session_broadcast",
+    "shared_state_set", "write_handoff",
+}
+_MODE_RANK = {"safe": 0, "trust": 1, "full": 2, "yolo": 3}
 CRON_SEED_PRESET_NAMES = {"Run Tests & Verify Build", "Daily Code Health & TODO Scanner"}
 from andromity.core.events import (
     Done,
@@ -164,7 +169,7 @@ class JsonRpcHandler:
         elif isinstance(event, SharedStateChanged):
             self.notify("session/sharedStateChanged", {
                 "key": event.key,
-                "value": event.value,
+                "value": event.new_value,
                 "author_session": event.author_session,
                 "timestamp": event.timestamp,
             })
@@ -276,9 +281,13 @@ class JsonRpcHandler:
             log.info("Auto-wake: session %s is already running a turn; skipping wake.", session.id)
             return
 
+        if not config.is_trusted(session.project_path):
+            log.info("Auto-wake: session %s is in an untrusted folder; skipping wake.", session.id)
+            return
+
         # 2. Check watching / auto-wake eligibility
         status = getattr(session, "status", "idle")
-        if status not in ("watching", "idle"):
+        if status not in ("watching", "idle", "cancelled", "error"):
             log.info("Auto-wake: session %s status is '%s'; skipping wake.", session.id, status)
             return
 
@@ -339,16 +348,33 @@ class JsonRpcHandler:
             "collaborators": session.collaborators,
         })
 
-        # 5. Dispatch turn
+        # 5. Dispatch turn with the target's own settings. Without them the turn would fall back to
+        # global defaults, so a SAFE/planner session could be woken as a FULL/YOLO builder by another
+        # session's content. Woken turns are also capped at TRUST because nobody asked for them.
+        own_mode = (getattr(session, "permission_mode", "") or "safe").lower()
+        wake_mode = own_mode if _MODE_RANK.get(own_mode, 0) <= _MODE_RANK["trust"] else "trust"
+        wake_params: Dict[str, Any] = {
+            "session_id": session.id,
+            "prompt": prompt_content,
+            "project_path": session.project_path,
+            "is_auto_wake": True,
+            "mode": wake_mode,
+            "profile": getattr(session, "profile", "") or "builder",
+        }
+        if getattr(session, "provider", "") and getattr(session, "model", ""):
+            wake_params["provider"] = session.provider
+            wake_params["model"] = session.model
         try:
-            await self.rpc_agent_prompt({
-                "session_id": session.id,
-                "prompt": prompt_content,
-                "project_path": session.project_path,
-                "is_auto_wake": True,
-            })
+            await self.rpc_agent_prompt(wake_params)
         except Exception as e:
             log.exception("Auto-wake execution failed for session %s: %s", session.id, e)
+            session.set_status("idle")
+            self.notify("session/updated", {"session_id": session.id, "status": "idle"})
+            return
+        if wake_mode != own_mode:
+            # rpc_agent_prompt stores the mode it ran with; keep the user's own choice for their next prompt.
+            session.permission_mode = own_mode
+            session.save()
 
     def notify(self, method: str, params: Dict[str, Any]):
         """Send a JSON-RPC notification to the client in a thread-safe manner."""
@@ -988,6 +1014,7 @@ class JsonRpcHandler:
             from_session_id=from_id,
             question_id=question_id,
             answer=answer,
+            answered_by_user=True,
         )
         return {"success": success}
 
@@ -1223,10 +1250,19 @@ class JsonRpcHandler:
 
             # 4. Mode-specific evaluation (exact match with TUI app.py:549-617)
             if tool_name in ("write_file", "edit_file", "edit_file_multi"):
+                from andromity.core.security import is_execution_control_path
                 if mode == "safe":
                     needs_approval = True
                 elif mode == "trust":
-                    return True
+                    if is_sensitive or is_execution_control_path(target_path):
+                        needs_approval = True
+                    else:
+                        return True
+
+            elif tool_name in SESSION_DRIVING_TOOLS:
+                # These reach other sessions, which may auto-wake and act on the content.
+                if mode == "safe":
+                    needs_approval = True
 
             elif tool_name in ("shell_exec", "shell_bg"):
                 command = str(args.get("command", "")).strip()
@@ -1951,6 +1987,7 @@ class JsonRpcHandler:
             "sound_done": config.get("default", "sound_done", True),
             "sound_attention": config.get("default", "sound_attention", True),
             "telemetry": config.get("default", "telemetry", True),
+            "include_co_author": config.get("default", "include_co_author", True),
             "is_trusted": config.is_trusted(params.get("project_path") or str(Path.cwd())) if params else False,
             "pinned_models": config.get_pinned_models(),
         }

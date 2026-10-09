@@ -73,6 +73,9 @@ def _save_update_cache(latest_version: str, update_available: bool, release_note
 
 def check_for_updates_sync(force: bool = False) -> Dict[str, any]:
     """Perform a synchronous update check against PyPI / GitHub (3s timeout)."""
+    if os.environ.get("ANDROMITY_AIRGAP") == "1":
+        return {"current_version": __version__, "update_available": False}
+
     if not force:
         cached = get_cached_update_info()
         if cached:
@@ -134,6 +137,9 @@ def check_for_updates_async(callback: Optional[Callable[[Dict[str, any]], None]]
 
 def perform_update() -> Tuple[bool, str]:
     """Execute the upgrade command (pipx or pip) in a subprocess."""
+    if os.environ.get("ANDROMITY_AIRGAP") == "1":
+        return False, "Updates are blocked by air-gap policy."
+
     pipx_bin = shutil.which("pipx")
     is_pipx = False
 

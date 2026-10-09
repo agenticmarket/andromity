@@ -582,10 +582,10 @@ class MCPClientManager:
     def load_config(self) -> Dict[str, Any]:
         """Load MCP server definitions from project or global config."""
         candidates = [
-            Path(self.project_path) / ".andromity" / "mcp.json",
-            Path(self.project_path) / ".vscode" / "mcp.json",
             Path.home() / ".andromity" / "mcp.json",
             Path.home() / ".gemini" / "config" / "mcp_config.json",
+            Path(self.project_path) / ".andromity" / "mcp.json",
+            Path(self.project_path) / ".vscode" / "mcp.json",
         ]
         merged_servers: Dict[str, Any] = {}
         for p in candidates:
@@ -663,7 +663,7 @@ class MCPClientManager:
 
         from andromity.config import config
         is_user_home = Path(self.project_path).resolve() == Path.home().resolve()
-        if not is_user_home and not trusted and not config.is_trusted(self.project_path) and not srv_conf.get("trusted"):
+        if not is_user_home and not trusted and not config.is_trusted(self.project_path):
             self._set_status(name, status="needs_trust", tools=0, error="Untrusted folder",
                              error_detail="Trust this workspace before connecting MCP servers.")
             return
@@ -681,7 +681,7 @@ class MCPClientManager:
         # ── Remote HTTP / SSE server ──────────────────────────────────────
         if server_url and not command:
             # Check for cached OAuth token
-            token = await ensure_fresh_token(name)
+            token = await ensure_fresh_token(name, server_url=server_url)
             headers = dict(srv_conf.get("headers", {}))
             if token:
                 headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}

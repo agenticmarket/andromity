@@ -7040,6 +7040,50 @@ export function getChatStyles(): string {
       overflow-y: auto;
     }
 
+    .permission-diff-box {
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 6px;
+      padding: 4px 0;
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      line-height: 1.45;
+      max-height: 180px;
+      overflow: auto;
+    }
+
+    .perm-diff-lines {
+      display: inline-block;
+      min-width: 100%;
+    }
+
+    .perm-diff-line {
+      white-space: pre;
+      padding: 0 10px;
+      color: #e4e4e7;
+    }
+
+    .perm-diff-add {
+      background: rgba(9, 249, 148, 0.08);
+      color: #09f994;
+    }
+
+    .perm-diff-del {
+      background: rgba(248, 81, 73, 0.1);
+      color: #f85149;
+    }
+
+    .perm-diff-hunk,
+    .perm-diff-more {
+      color: var(--muted, #a1a1aa);
+    }
+
+    .perm-diff-more {
+      white-space: normal;
+      padding: 4px 10px 0;
+      font-family: var(--font-ui, inherit);
+    }
+
     .permission-params-toggle {
       font-size: 11px;
       color: var(--muted, #a1a1aa);

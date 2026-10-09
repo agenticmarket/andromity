@@ -5,7 +5,7 @@
 
   **Trust-governed, BYOK, autonomous coding agent with subagents, live plans, native diffs & one-click rollback.**
 
-  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.15-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.17-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white)](https://discord.gg/taPJSNy4)
   [![PyPI](https://img.shields.io/pypi/v/andromity)](https://pypi.org/project/andromity/)
   [![GitHub Stars](https://img.shields.io/github/stars/agenticmarket/andromity?style=social)](https://github.com/agenticmarket/andromity)

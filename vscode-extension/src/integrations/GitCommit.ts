@@ -2,6 +2,24 @@ import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
 import { ChatViewProvider } from "../providers/ChatViewProvider.js";
 
+export const CO_AUTHOR_EMAIL = "333054755+andromity-bot@users.noreply.github.com";
+export const CO_AUTHOR_TRAILER = `Co-authored-by: Andromity <${CO_AUTHOR_EMAIL}>`;
+
+/**
+ * Append Andromity's Co-authored-by trailer unless it is already present.
+ * Git only parses trailers from the final paragraph, so an existing trailer
+ * block (e.g. a human co-author) is extended instead of split by a blank line.
+ */
+export function appendCoAuthorTrailer(message: string): string {
+  const trimmed = message.replace(/\s+$/, "");
+  if (trimmed.toLowerCase().includes(CO_AUTHOR_EMAIL)) return trimmed;
+  const paragraphs = trimmed.split(/\n\s*\n/);
+  const last = paragraphs[paragraphs.length - 1];
+  const lastIsTrailerBlock = paragraphs.length > 1 &&
+    last.split("\n").every(line => /^[A-Za-z][A-Za-z0-9-]*:\s+\S/.test(line.trim()));
+  return `${trimmed}${lastIsTrailerBlock ? "\n" : "\n\n"}${CO_AUTHOR_TRAILER}`;
+}
+
 /**
  * Extract commit message from AI response.
  * Handles <commit_message> tags, <think> tags, markdown code blocks, and reasoning leaks.
@@ -238,11 +256,8 @@ ${diff.slice(0, 8000)}`;
 
         // Check if user has enabled Co-authored-by trailer in Andromity settings
         const config = vscode.workspace.getConfiguration("andromity");
-        const includeCoAuthor = config.get<boolean>("includeCoAuthor", true);
-        const coAuthorTrailer = "Co-authored-by: Andromity <333054755+andromity-bot@users.noreply.github.com>";
-
-        if (includeCoAuthor && !commitMessage.includes("Co-authored-by:")) {
-          commitMessage = `${commitMessage}\n\n${coAuthorTrailer}`;
+        if (config.get<boolean>("includeCoAuthor", true)) {
+          commitMessage = appendCoAuthorTrailer(commitMessage);
         }
 
         // Inject into target repository's SCM inputBox (VS Code Git API)

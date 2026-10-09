@@ -57,6 +57,34 @@ def test_coder_allowed_tools():
     assert "write_plan" not in tools  # coder doesn't plan
 
 
+def _with_co_author_setting(monkeypatch, value):
+    from andromity.core import profiles
+
+    original_get = profiles.config.get
+
+    def fake_get(section, key, default=None, fallback=None):
+        if (section, key) == ("default", "include_co_author"):
+            return value
+        return original_get(section, key, default, fallback)
+
+    monkeypatch.setattr(profiles.config, "get", fake_get)
+
+
+def test_prompt_requests_co_author_trailer_by_default(monkeypatch):
+    from andromity.core.profiles import CO_AUTHOR_TRAILER
+
+    _with_co_author_setting(monkeypatch, True)
+    assert CO_AUTHOR_TRAILER == "Co-authored-by: Andromity <333054755+andromity-bot@users.noreply.github.com>"
+    assert CO_AUTHOR_TRAILER in get_system_prompt("builder")
+
+
+def test_prompt_omits_co_author_trailer_when_disabled(monkeypatch):
+    _with_co_author_setting(monkeypatch, False)
+    prompt = get_system_prompt("builder")
+    assert "Co-authored-by" not in prompt
+    assert "NEVER commit changes or push to git unless explicitly instructed by the user.\n- Never log" in prompt
+
+
 def test_slash_profile_accepts_every_registered_profile():
     """Regression: /profile parser must accept every key in PROFILES (coder was missing)."""
     from andromity.core.profiles import PROFILES

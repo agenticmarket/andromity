@@ -20,6 +20,13 @@ from andromity.core.events import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _trust_test_folders(monkeypatch):
+    # Collaboration needs a trusted folder; trust boundaries are covered in test_session_collab_security.py.
+    from andromity.config import config
+    monkeypatch.setattr(config, "is_trusted", lambda path: True)
+
+
 @pytest.fixture
 def temp_workspace(tmp_path):
     return tmp_path

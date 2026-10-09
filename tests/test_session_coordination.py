@@ -6,6 +6,13 @@ from andromity.core.session import Session
 
 
 @pytest.fixture(autouse=True)
+def _trust_test_folders(monkeypatch):
+    # Collaboration needs a trusted folder; trust boundaries are covered in test_session_collab_security.py.
+    from andromity.config import config
+    monkeypatch.setattr(config, "is_trusted", lambda path: True)
+
+
+@pytest.fixture(autouse=True)
 def clean_bus(tmp_path):
     bus = SessionBus.reset_instance()
     bus.set_audit_log_path(tmp_path / "test_bus.jsonl")

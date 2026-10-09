@@ -366,10 +366,16 @@ class AndromityApp(App):
                 pass
 
     def _on_session_bus_event(self, event):
+        # The bus publishes from whichever thread emitted the event; agent turns run on the app's
+        # own loop, where call_from_thread raises, so handle same-thread events directly.
+        import threading
         try:
-            self.call_from_thread(self._handle_session_bus_event_ui, event)
+            if threading.get_ident() == getattr(self, "_thread_id", None):
+                self._handle_session_bus_event_ui(event)
+            else:
+                self.call_from_thread(self._handle_session_bus_event_ui, event)
         except Exception:
-            pass
+            log.debug("Session bus event could not be shown", exc_info=True)
 
     def _handle_session_bus_event_ui(self, event):
         try:
@@ -405,9 +411,9 @@ class AndromityApp(App):
                 else:
                     self.notify(f"✔ {event.from_session} answered {event.to_session}")
             elif isinstance(event, SharedStateChanged):
-                chat.add_shared_state_notification(event.author_session, event.key, event.value)
+                chat.add_shared_state_notification(event.author_session, event.key, event.new_value)
             elif isinstance(event, HandoffWritten):
-                chat.add_handoff_notification(event.from_session, event.task_summary, event.handoff_id)
+                chat.add_handoff_notification(event.from_session, event.summary, event.phase)
         except Exception:
             pass
 
@@ -611,8 +617,15 @@ class AndromityApp(App):
         from andromity.core.security import is_sensitive_path
         target_path = str(args.get("path", "") or args.get("target_path", "") or args.get("target_file", ""))
         is_sensitive = is_sensitive_path(target_path) if target_path else False
-        
-        if tool_name in ("write_file", "edit_file", "edit_file_multi"):
+
+        from andromity.core.security import is_execution_control_path
+        write_needs_upfront_approval = (
+            tool_name in ("write_file", "edit_file", "edit_file_multi")
+            and mode not in ("yolo", "full")
+            and (is_sensitive or is_execution_control_path(target_path))
+        )
+
+        if tool_name in ("write_file", "edit_file", "edit_file_multi") and not write_needs_upfront_approval:
             # Only track for batch review in SAFE mode.
             # TRUST/FULL/YOLO all auto-approve writes — no review overlay needed.
             if mode == "safe":
@@ -632,7 +645,7 @@ class AndromityApp(App):
         if mode in ("yolo", "full"):
             return True
 
-        needs_approval = False
+        needs_approval = write_needs_upfront_approval
         if tool_name in ("shell_exec", "shell_bg"):
             command = str(args.get("command", "")).strip()
             if mode == "safe":

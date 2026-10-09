@@ -2,7 +2,7 @@
   "name": "andromity-agent",
   "displayName": "Andromity AI Coding Agent for VS Code",
   "description": "Open-source AI coding agent with BYOK, local Ollama, MCP tools and subagents. Review plans and diffs, fix bugs, generate tests and undo changes in VS Code.",
-  "version": "0.2.16",
+  "version": "0.2.17",
   "publisher": "agenticmarket",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -553,7 +553,7 @@
         "andromity.includeCoAuthor": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically append 'Co-authored-by: Andromity <333054755+andromity-bot@users.noreply.github.com>' to AI-generated commit messages."
+          "description": "Automatically append 'Co-authored-by: Andromity <333054755+andromity-bot@users.noreply.github.com>' to AI-generated commit messages and to commits the agent creates."
         },
         "andromity.autoOpenSidebar": {
           "type": "string",
@@ -569,6 +569,18 @@
           "type": "boolean",
           "default": true,
           "description": "Send anonymous launch and performance telemetry to edge worker."
+        },
+        "andromity.gatewayUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "description": "Override the AgenticMarket gateway URL (https on agenticmarket.dev, or loopback for local development). Empty uses the default."
+        },
+        "andromity.webAppUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "description": "Override the AgenticMarket sign-in site URL (https on agenticmarket.dev, or loopback for local development). Empty uses the default."
         },
         "andromity.serverPort": {
           "type": "number",

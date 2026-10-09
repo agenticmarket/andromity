@@ -1,6 +1,7 @@
 """Web search and URL content fetching tools with safety guardrails."""
 import html
 import logging
+import os
 import re
 import time
 import urllib.parse
@@ -107,6 +108,9 @@ def fetch_url(url: str, max_chars: int = 10000) -> str:
         url: The web URL to fetch (http/https).
         max_chars: Maximum characters to return.
     """
+    if os.environ.get("ANDROMITY_AIRGAP") == "1":
+        return "Error: Network fetching is blocked by air-gap policy."
+
     if not url.startswith(("http://", "https://")):
         return f"Error: URL must start with http:// or https://. Received: {url}"
 
@@ -125,6 +129,11 @@ def fetch_url(url: str, max_chars: int = 10000) -> str:
     class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, headers, newurl):
             from andromity.core.security import get_domain, _is_private_ip
+            parsed = urllib.parse.urlparse(newurl)
+            if parsed.scheme.lower() not in ("http", "https"):
+                raise urllib.error.HTTPError(
+                    newurl, code, f"Redirect to non-HTTP(S) scheme '{parsed.scheme}' blocked for security.", headers, fp
+                )
             target_host = get_domain(newurl)
             if not target_host or _is_private_ip(target_host):
                 raise urllib.error.HTTPError(
@@ -284,6 +293,9 @@ def web_search(
         fetch_top: Number of top search results to automatically fetch and extract content for (default 0).
         domains: Optional list of domains to restrict search to.
     """
+    if os.environ.get("ANDROMITY_AIRGAP") == "1":
+        return "Error: Web search is blocked by air-gap policy."
+
     clean_query = query.strip()
     if not clean_query:
         return "Error: Search query cannot be empty."

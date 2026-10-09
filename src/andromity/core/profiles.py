@@ -8,6 +8,19 @@ from andromity.config import config, get_shell
 
 _git_branch_cache: str | None = None
 
+CO_AUTHOR_EMAIL = "333054755+andromity-bot@users.noreply.github.com"
+CO_AUTHOR_TRAILER = f"Co-authored-by: Andromity <{CO_AUTHOR_EMAIL}>"
+
+
+def _co_author_rule() -> str:
+    if not config.get("default", "include_co_author", True):
+        return ""
+    return (
+        f"- When you create a git commit, end its message with the trailer `{CO_AUTHOR_TRAILER}` "
+        f"as its own final paragraph (e.g. pass it as a separate `-m` argument). "
+        f"Skip it only if the message already contains it or the user asks you not to add it.\n"
+    )
+
 
 def _get_git_branch(cwd: Path | None = None) -> str:
     try:
@@ -52,18 +65,17 @@ PROFILES = {
     "reviewer": {
         "tools": [
             "read_file", "grep_search", "find_files", "list_dir", "list_tools",
-            "web_search", "fetch_url", "session_send_message", "session_list",
-            "session_read_messages", "session_answer_question", "session_watch",
+            "web_search", "fetch_url", "session_list",
+            "session_read_messages", "session_answer_question",
             "shared_state_get", "read_handoff"
         ]
     },
     "planner": {
         "tools": [
             "read_file", "grep_search", "find_files", "list_dir", "write_plan",
-            "update_plan_step", "ask_questions", "list_tools", "spawn_subagent", "session_send_message",
-            "session_ask_question", "session_broadcast", "session_list",
-            "session_read_messages", "session_answer_question", "session_watch",
-            "shared_state_set", "shared_state_get", "write_handoff", "read_handoff"
+            "update_plan_step", "ask_questions", "list_tools", "spawn_subagent", "session_list",
+            "session_ask_question", "session_read_messages", "session_answer_question",
+            "shared_state_get", "write_handoff", "read_handoff"
         ]
     },
     "benchmark": {
@@ -123,7 +135,7 @@ def get_system_prompt(profile: str, project_path: str | None = None) -> str:
 - NEVER run destructive commands or overwrite files without verifying current content first via `read_file`.
 - NEVER guess or generate non-programming URLs. Use only user-provided or local URLs.
 - NEVER commit changes or push to git unless explicitly instructed by the user.
-- Never log, expose, or commit secrets, tokens, or credentials.
+{_co_author_rule()}- Never log, expose, or commit secrets, tokens, or credentials.
 - If a tool fails with an error, diagnose and explain it clearly; do not silently loop or retry failed actions repeatedly.
 
 # Code Quality & Conventions

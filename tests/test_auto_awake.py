@@ -8,6 +8,13 @@ from andromity.server.rpc_handler import JsonRpcHandler
 from andromity.core.events import SessionQuestionReceived, SessionAnswerReceived
 
 
+@pytest.fixture(autouse=True)
+def _trust_test_folders(monkeypatch):
+    # Collaboration needs a trusted folder; trust boundaries are covered in test_session_collab_security.py.
+    from andromity.config import config
+    monkeypatch.setattr(config, "is_trusted", lambda path: True)
+
+
 @pytest.fixture
 def clean_session(tmp_path):
     s = Session(name="WorkerSession", project_path=str(tmp_path))
