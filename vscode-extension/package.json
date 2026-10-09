@@ -2,7 +2,7 @@
   "name": "andromity-agent",
   "displayName": "Andromity AI Coding Agent for VS Code",
   "description": "Open-source AI coding agent with BYOK, local Ollama, MCP tools and subagents. Review plans and diffs, fix bugs, generate tests and undo changes in VS Code.",
-  "version": "0.2.17",
+  "version": "0.2.18",
   "publisher": "agenticmarket",
   "license": "MIT",
   "icon": "media/icon.png",
