@@ -1,9 +1,11 @@
 import { ChatViewState } from "./chatHtml.js";
 import { getPromptDisplayScript } from "../promptDisplay.js";
+import { getThinkingOrbsScript } from "./thinkingOrbs.js";
 
 export function getChatClientScript(sidebarIconUri: string, state: ChatViewState): string {
   return `
     ${getPromptDisplayScript()}
+    ${getThinkingOrbsScript()}
     const vscode = acquireVsCodeApi();
     window.__vscodeApi = vscode;
     const sidebarIconUri = "${sidebarIconUri}";
@@ -6880,6 +6882,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const hdr = currentThinkingDiv.querySelector('.thinking-header span');
         if (hdr) hdr.textContent = 'thought (' + elapsedSec + 's)';
         const pulse = currentThinkingDiv.querySelector('.thinking-pulse');
+        currentThinkingDiv.querySelector('.agent-thinking-orb')?.remove();
         if (pulse) {
           pulse.style.opacity = '0.4';
           pulse.style.animation = 'none';
@@ -6935,7 +6938,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const loader = document.createElement('div');
       loader.className = 'andromity-turn-loader';
       loader.id = 'turn-loading-indicator';
-      loader.innerHTML = '<span class="thinking-spinner"></span> <span class="thinking-text">Andromity is thinking... (0s)</span>';
+      loader.innerHTML = orbMarkup('connecting') + ' <span class="thinking-text">Waiting for ' + escapeHtml(currentModel || 'model') + '... (0s)</span>';
       wrap.appendChild(loader);
 
       const loaderTimer = setInterval(() => {
@@ -6945,13 +6948,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           return;
         }
         const elapsed = Math.floor((Date.now() - currentTurnStartTime) / 1000);
-        if (elapsed < 6) {
-          textSpan.textContent = 'Andromity is thinking... (' + elapsed + 's)';
-        } else if (elapsed < 16) {
-          textSpan.textContent = 'Contacting ' + (currentModel || 'model') + '... (' + elapsed + 's)';
-        } else {
-          textSpan.textContent = 'Waiting for ' + (currentProvider || 'provider') + ' stream... (' + elapsed + 's)';
-        }
+        textSpan.textContent = 'Waiting for ' + (currentModel || 'model') + '... (' + elapsed + 's)';
       }, 1000);
 
       currentAssistantContent = null;
@@ -7057,6 +7054,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function endAssistantTurn() {
+      setTurnOrb(null);
       removeTurnLoader();
       finishCurrentThinking();
       finishToolSequence();
@@ -7859,11 +7857,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               }
               for (const ev of buffered) {
                 if (ev.t === 'thinking_delta') {
+                  removeTurnLoader(); setTurnOrb(null);
                   if (!currentThinkingDiv) {
                     thinkingStartTime = Date.now();
                     currentThinkingDiv = document.createElement('div');
                     currentThinkingDiv.className = 'thinking-card expanded';
-                    currentThinkingDiv.innerHTML = '<div class="thinking-header"><div class="thinking-pulse"></div><span>thinking...</span><svg class="thinking-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg></div>';
+                    currentThinkingDiv.innerHTML = '<div class="thinking-header">' + orbMarkup('weaving') + '<span>thinking...</span><svg class="thinking-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg></div>';
                     currentThinkingContent = document.createElement('div');
                     currentThinkingContent.className = 'thinking-content';
                     currentThinkingDiv.appendChild(currentThinkingContent);
@@ -7881,7 +7880,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   }
                   currentAssistantContent._blockText = (currentAssistantContent._blockText||'') + ev.text;
                   currentAssistantContent.innerHTML = renderMarkdown(currentAssistantContent._blockText);
+                  setTurnOrb(null);
                 } else if (ev.t === 'tool_start') {
+                  setTurnOrb(null);
                   removeTurnLoader(); finishCurrentThinking(); currentAssistantContent = null;
                   const seq = ensureToolSequence(); toolSeqCount++; lastToolName = ev.tool_name||'tool'; lastToolRunning=true; updateToolSeqHeader();
                   const td = document.createElement('div'); td.className='tool-card expanded'; td.id='tool-'+ev.tool_id;
@@ -8010,6 +8011,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           currentAssistantContent._blockText = (currentAssistantContent._blockText || '') + _tdText;
           accumulatedAssistantText += _tdText;
           currentAssistantContent.innerHTML = renderMarkdown(currentAssistantContent._blockText);
+          removeTurnLoader();
+          setTurnOrb(null);
           scrollToBottomIfNeeded();
           break; }
 
@@ -8026,12 +8029,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           removeTurnLoader();
           if (!currentTurnAssistantDiv) startAssistantTurn();
+          removeTurnLoader();
+          setTurnOrb(null);
           if (!currentThinkingDiv) {
             thinkingStartTime = Date.now();
             currentThinkingDiv = document.createElement('div');
             currentThinkingDiv.className = 'thinking-card expanded';
             currentThinkingDiv.innerHTML = '<div class="thinking-header">' +
-              '<div class="thinking-pulse"></div>' +
+              orbMarkup('weaving') +
               '<span>thinking...</span>' +
               '<svg class="thinking-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
             '</div>';
@@ -8051,6 +8056,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break; }
 
         case 'tool_start': {
+          if (!msg.session_id || !currentSessionId || msg.session_id === currentSessionId) setTurnOrb(null);
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
             sessionsState[msg.session_id].isRunning = true;
