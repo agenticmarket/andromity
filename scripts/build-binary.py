@@ -16,6 +16,7 @@ import sys
 import platform
 import subprocess
 import shutil
+import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPEC = os.path.join(ROOT, "andromity-server.spec")
@@ -33,35 +34,19 @@ os.makedirs(out_dir, exist_ok=True)
 
 print(f"Building andromity-server for {platform_key} -> {temp_dist}")
 
-# Install package + pyinstaller deps.
-# Prefer uv (avoids PEP 668 "externally-managed-environment" errors on
-# Ubuntu 23+, Homebrew, and other managed Python environments).
-# Fall back to pip with --break-system-packages if uv is not available.
+# Install the exact dependency set recorded in uv.lock. Resolving fresh from
+# pyproject.toml lets LiteLLM and its native modules drift between releases,
+# which changes what the VS Code Marketplace virus scan has to process.
 uv_path = shutil.which("uv")
-if uv_path:
-    target_flag = ["--python", sys.executable]
-    subprocess.check_call([uv_path, "pip", "install", "-e", ".", "--quiet"] + target_flag, cwd=ROOT)
-    subprocess.check_call([uv_path, "pip", "install", "pyinstaller", "--quiet"] + target_flag, cwd=ROOT)
-else:
-    # Plain pip — works on Windows and in venvs where pip isn't restricted.
-    # On externally-managed systems (Linux/macOS), add --break-system-packages
-    # as a last-resort fallback so the build still succeeds in CI.
-    def _pip_install(pkg_args):
-        try:
-            subprocess.check_call(
-                [sys.executable, "-m", "pip", "install"] + pkg_args +
-                ["--quiet", "--no-warn-script-location"],
-                cwd=ROOT,
-            )
-        except subprocess.CalledProcessError:
-            subprocess.check_call(
-                [sys.executable, "-m", "pip", "install"] + pkg_args +
-                ["--quiet", "--no-warn-script-location", "--break-system-packages"],
-                cwd=ROOT,
-            )
-
-    _pip_install(["-e", "."])
-    _pip_install(["pyinstaller"])
+if not uv_path:
+    sys.exit("uv is required to install the locked dependency set (https://docs.astral.sh/uv/).")
+target_flag = ["--python", sys.executable]
+locked_requirements = os.path.join(tempfile.mkdtemp(), "requirements-locked.txt")
+subprocess.check_call([uv_path, "export", "--locked", "--extra", "dev", "--no-emit-project", "--no-hashes",
+                       "--format", "requirements-txt", "-o", locked_requirements], cwd=ROOT)
+subprocess.check_call([uv_path, "pip", "install", "-r", locked_requirements, "--quiet"] + target_flag, cwd=ROOT)
+subprocess.check_call([uv_path, "pip", "install", "--no-deps", "-e", ".", "--quiet"] + target_flag, cwd=ROOT)
+subprocess.check_call([uv_path, "pip", "install", "pyinstaller", "--quiet"] + target_flag, cwd=ROOT)
 
 # Build into temp_dist
 subprocess.check_call([

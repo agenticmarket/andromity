@@ -37,9 +37,16 @@ export function extractCommitMessage(raw: string): string {
   text = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 
   // 2. Extract content from <commit_message>...</commit_message> tag if present
-  const tagMatch = text.match(/<commit_message>([\s\S]*?)(?:<\/commit_message>|$)/i);
-  if (tagMatch && tagMatch[1].trim()) {
-    text = tagMatch[1].trim();
+  //    The model may quote the prompt's own "<commit_message> and </commit_message>" instruction,
+  //    so only a closed tag with real content counts and the last one wins.
+  const closedTags = [...text.matchAll(/<commit_message>([\s\S]*?)<\/commit_message>/gi)]
+    .map(m => m[1].trim())
+    .filter(m => m.length >= 5 && m.toLowerCase() !== "and");
+  const openTag = text.match(/<commit_message>\s*([^<]{5,})$/i);
+  if (closedTags.length > 0) {
+    text = closedTags[closedTags.length - 1];
+  } else if (openTag && openTag[1].trim().toLowerCase() !== "and") {
+    text = openTag[1].trim();
   } else {
     // 3. Fallback: model ignored tags â€” find the first conventional commit header line
     //    and take everything from there onward (skips any preceding thinking/preamble)
@@ -125,7 +132,11 @@ function isLikelyErrorOutput(text: string): boolean {
  * Generate AI commit message via Andromity daemon.
  * Uses vscode.git API to get diff, then asks daemon for Conventional Commit.
  */
-export async function generateCommitMessage(rpcClient: RpcClient | null, sourceControlOrRepo?: any): Promise<void> {
+export async function generateCommitMessage(
+  rpcClient: RpcClient | null,
+  sourceControlOrRepo?: any,
+  log: (msg: string) => void = () => {},
+): Promise<void> {
   if (!rpcClient) {
     vscode.window.showErrorMessage("Andromity engine not connected. Try: Andromity: Restart Server");
     return;
@@ -201,8 +212,8 @@ export async function generateCommitMessage(rpcClient: RpcClient | null, sourceC
 `Write a concise professional commit message for git following Conventional Commits (type(scope): subject <= 72 chars, plus optional bullet points for key changes) for the following git diff.
 ${fileListSummary}
 STRICT FORMAT RULES:
-1. You MUST enclose your final commit message strictly inside <commit_message> and </commit_message> tags.
-2. Put ONLY the commit message inside <commit_message>...</commit_message> — no markdown code fences, no backticks, no quotes, no explanations.
+1. Wrap your final commit message in a <commit_message> opening tag and a matching closing tag.
+2. Put ONLY the commit message between those tags — no markdown code fences, no backticks, no quotes, no explanations.
 3. Any thinking, analysis, reasoning, or draft notes MUST remain OUTSIDE the <commit_message> tags.
 
 Example of correct output:
@@ -230,7 +241,9 @@ ${diff.slice(0, 8000)}`;
             35000
           );
           commitMessage = typeof res === "string" ? res : res?.message || res?.result || res?.commitMessage || "";
+          log(`[GitCommit] quickPrompt (${activeProvider}/${activeModel}) returned ${commitMessage.length} chars: ${JSON.stringify(commitMessage.slice(0, 300))}`);
         } catch (e: any) {
+          log(`[GitCommit] quickPrompt (${activeProvider}/${activeModel}) failed: ${e?.message || e}`);
           // Fallback: open chat with the diff prompt if quickPrompt unavailable
           if (String(e.message || e).includes("not found")) {
             vscode.window.showInformationMessage("Quick commit requires daemon update. Opening chat with diff prompt instead.");
@@ -248,6 +261,7 @@ ${diff.slice(0, 8000)}`;
         commitMessage = extractCommitMessage(commitMessage);
 
         if (!commitMessage || commitMessage.trim().length < 5 || isLikelyErrorOutput(commitMessage)) {
+          log(`[GitCommit] rejected extracted message: ${JSON.stringify(commitMessage)}`);
           vscode.window.showErrorMessage(
             `Failed to generate commit message: ${commitMessage || "Empty or invalid response from AI model"}. Please check your provider settings.`
           );

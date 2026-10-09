@@ -1785,30 +1785,40 @@ class JsonRpcHandler:
 
             messages = [{"role": "user", "content": prompt}]
             kwargs: Dict[str, Any] = {
-                **resolved, "messages": messages, "temperature": 0.2, "max_tokens": 800,
+                **resolved, "messages": messages, "temperature": 0.2, "max_tokens": 2000,
             }
 
             resp = await asyncio.wait_for(asyncio.to_thread(lambda: litellm.completion(**kwargs)), timeout=25)
             text = ""
+            from_reasoning = False
             try:
                 msg_obj = resp.choices[0].message
                 text = getattr(msg_obj, "content", "") or ""
                 # For reasoning models that store output in reasoning_content
                 if not text and hasattr(msg_obj, "reasoning_content") and msg_obj.reasoning_content:
                     text = msg_obj.reasoning_content
+                    from_reasoning = True
                 if not text and hasattr(resp.choices[0], "text"):
                     text = resp.choices[0].text or ""
             except Exception:
                 text = str(resp)
+            log.info("quickPrompt %s/%s returned %d chars (reasoning_only=%s): %.300r",
+                     provider_name, model_name, len(text), from_reasoning, text)
 
             # Strip markdown code blocks (e.g. ```text ... ```) and backticks
             # Also strip <think>...</think> reasoning blocks emitted by reasoning models
             text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
 
-            # If the prompt used <commit_message> tag format, extract only that portion
-            tag_match = re.search(r"<commit_message>([\s\S]*?)(?:</commit_message>|$)", text, flags=re.DOTALL | re.IGNORECASE)
-            if tag_match and tag_match.group(1).strip():
-                text = tag_match.group(1).strip()
+            # Models often quote the prompt's own "<commit_message> and </commit_message>" instruction while
+            # reasoning, so only a closed tag with real content counts; the last one is the final answer.
+            closed = [m.strip() for m in re.findall(r"<commit_message>([\s\S]*?)</commit_message>", text, flags=re.IGNORECASE)]
+            closed = [m for m in closed if len(m) >= 5 and m.lower() != "and"]
+            if closed:
+                text = closed[-1]
+            elif from_reasoning:
+                text = ""
+            elif (unclosed := re.search(r"<commit_message>\s*([^<]{5,})$", text, flags=re.IGNORECASE)) and unclosed.group(1).strip().lower() != "and":
+                text = unclosed.group(1).strip()
             else:
                 # Fallback: scan for first conventional commit header line to skip any preamble
                 commit_line_match = re.search(
@@ -1821,7 +1831,10 @@ class JsonRpcHandler:
             cleaned = re.sub(r"^```[^\n]*\n?|```$", "", text.strip(), flags=re.MULTILINE).strip()
             if cleaned:
                 return {"message": cleaned, "result": cleaned}
-            raise RuntimeError(f"Model {provider_name}/{model_name} returned empty completion text.")
+            raise RuntimeError(
+                f"Model {provider_name}/{model_name} did not produce a commit message "
+                f"(it may have run out of tokens while reasoning). Try a non-reasoning model."
+            )
         except Exception as e:
             log.warning("quickPrompt direct completion failed: %s", e)
             raise RuntimeError(f"Failed to generate commit message via {provider_name}/{model_name}: {e}")

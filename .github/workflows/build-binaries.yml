@@ -65,9 +65,12 @@ jobs:
         with:
           version: "0.12.23"
 
+      # Install from uv.lock so every release bundles the same LiteLLM and native modules.
       - name: Install Python dependencies
         run: |
-          uv pip install -e ".[dev]" --system
+          uv export --locked --extra dev --no-emit-project --no-hashes --format requirements-txt -o requirements-locked.txt
+          uv pip install -r requirements-locked.txt --system
+          uv pip install --no-deps -e . --system
           uv pip install pyinstaller --system
 
       # ── Build binary ──────────────────────────────────────────────────────────
