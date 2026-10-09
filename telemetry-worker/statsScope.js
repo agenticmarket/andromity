@@ -63,9 +63,11 @@ export function measurementQueries(scope, db) {
       COUNT(DISTINCT CASE WHEN date >= date('now','-29 days') THEN user_id END) AS mau,
       COUNT(DISTINCT CASE WHEN date >= date('now','-6 days') AND session_id IN (SELECT session_id FROM sessions) THEN session_id END) AS sessions_7d,
       COUNT(DISTINCT CASE WHEN date >= date('now','-29 days') AND session_id IN (SELECT session_id FROM sessions) THEN session_id END) AS sessions_30d,
+      COUNT(DISTINCT CASE WHEN date >= date('now','-6 days') AND session_id IN (SELECT session_id FROM sessions) THEN user_id END) AS session_users_7d,
+      COUNT(DISTINCT CASE WHEN date >= date('now','-29 days') AND session_id IN (SELECT session_id FROM sessions) THEN user_id END) AS session_users_30d,
       COUNT(DISTINCT CASE WHEN user_id IN (SELECT user_id FROM users WHERE date(first_seen)>=date('now','-6 days')) THEN user_id END) AS new_users_7d,
       COUNT(DISTINCT CASE WHEN user_id IN (SELECT user_id FROM users WHERE date(first_seen)>=date('now','-29 days')) THEN user_id END) AS new_users_30d
-      FROM scoped_activity`),
+      FROM scoped_activity WHERE date >= date('now','-29 days')`),
     prepare(`SELECT
       SUM(last_date=date('now')) AS activeToday,
       SUM(last_date<date('now') AND last_date>=date('now','-6 days')) AS retainedWeekly,
