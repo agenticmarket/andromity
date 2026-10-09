@@ -3635,7 +3635,7 @@ export function getChatStyles(): string {
     /* Markdown Typography & Blocks */
     .assistant-text {
       font-size: 13px;
-      line-height: 1.6;
+      line-height: 1.65;
       color: var(--fg);
       word-break: break-word;
       overflow-wrap: break-word;
@@ -3645,8 +3645,8 @@ export function getChatStyles(): string {
       box-sizing: border-box;
     }
     .assistant-text p {
-      margin: 4px 0 6px;
-      line-height: 1.55;
+      margin: 0 0 12px;
+      line-height: 1.65;
     }
     .assistant-text p:last-child {
       margin-bottom: 0;
@@ -3670,40 +3670,41 @@ export function getChatStyles(): string {
     .assistant-text th code,
     .assistant-text blockquote code {
       font-family: var(--font-mono);
-      font-size: 11.5px;
+      font-size: 12px;
       font-feature-settings: "calt", "zero";
-      letter-spacing: -0.015em;
-      background: rgba(255, 255, 255, 0.05);
+      letter-spacing: 0;
+      background: var(--vscode-textCodeBlock-background, rgba(255, 255, 255, 0.025));
       color: var(--fg, #e6edf3);
       padding: 1px 4px;
       border-radius: 3px;
-      border: 1px solid rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.03));
       word-break: break-word;
     }
     /* Clickable file & folder links in assistant responses — clean inline styling with icons */
     .md-file-pill {
       display: inline-flex;
       align-items: center;
-      gap: 3px;
-      background: transparent;
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-radius: 6px;
-      padding: 2px 7px 2px 5px;
+      gap: 4px;
+      background: var(--vscode-textCodeBlock-background, rgba(255, 255, 255, 0.015));
+      border: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.035));
+      border-radius: 4px;
+      padding: 0 5px;
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 11.5px;
-      line-height: 1.35;
-      vertical-align: baseline;
+      line-height: 1.5;
+      vertical-align: middle;
+      margin-top: -2px;
       cursor: pointer;
       user-select: text;
       text-decoration: none;
       transition: background 0.12s ease, border-color 0.12s ease, transform 0.1s ease;
       white-space: nowrap;
-      max-width: 320px;
+      max-width: min(320px, 100%);
       overflow: hidden;
     }
     .md-file-pill:hover {
-      background: rgba(255, 255, 255, 0.09);
-      border-color: rgba(255, 255, 255, 0.1);
+      background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.05));
+      border-color: var(--vscode-focusBorder, rgba(255, 255, 255, 0.14));
       text-decoration: none;
     }
     .md-file-pill:active {
@@ -3716,7 +3717,7 @@ export function getChatStyles(): string {
       flex-shrink: 0;
       font-size: 13px;
       line-height: 1;
-      opacity: 0.9;
+      opacity: 0.75;
     }
     .md-file-pill.is-dir .pill-icon {
       color: var(--vscode-charts-blue, #38bdf8);
@@ -3754,20 +3755,21 @@ export function getChatStyles(): string {
       line-height: 1.35;
     }
     .assistant-text h2 {
-      font-size: 15px;
+      font-size: 16px;
       font-weight: 600;
       letter-spacing: -0.018em;
-      margin: 12px 0 6px;
+      margin: 24px 0 10px;
       color: #ffffff;
-      line-height: 1.35;
+      line-height: 1.4;
     }
+    .assistant-text h2:first-child { margin-top: 0; }
     .assistant-text h3 {
       font-size: 14px;
       font-weight: 600;
       letter-spacing: -0.015em;
-      margin: 10px 0 5px;
+      margin: 22px 0 9px;
       color: #ffffff;
-      line-height: 1.35;
+      line-height: 1.4;
     }
     .assistant-text h4 {
       font-size: 13px;
@@ -3785,27 +3787,28 @@ export function getChatStyles(): string {
       letter-spacing: 0.5px;
     }
     .assistant-text blockquote {
-      border-left: 2px solid rgba(255, 255, 255, 0.2);
-      padding: 4px 12px;
-      margin: 8px 0;
-      background: transparent;
-      color: var(--muted);
-      font-style: italic;
+      border-left: 2px solid var(--vscode-textBlockQuote-border, #888);
+      padding: 10px 14px;
+      margin: 16px 0;
+      background: var(--vscode-textBlockQuote-background, rgba(255, 255, 255, 0.012));
+      color: var(--fg);
+      font-style: normal;
     }
+    .assistant-text blockquote p { margin: 0; }
     .assistant-text hr {
       border: none;
       border-top: 1px solid rgba(255, 255, 255, 0.08);
-      margin: 12px 0;
+      margin: 20px 0;
     }
     .assistant-text ul,
     .assistant-text ol {
-      margin: 6px 0;
-      padding-left: 20px;
+      margin: 8px 0 14px;
+      padding-left: 22px;
     }
     .assistant-text li {
-      margin: 2.5px 0;
+      margin: 5px 0;
       padding-left: 1px;
-      line-height: 1.6;
+      line-height: 1.65;
     }
     /* Markers stay quiet and column-aligned: monospaced, tabular numerals,
        so "7." / "8." / "10." never nudge the item text sideways. */
@@ -3828,7 +3831,7 @@ export function getChatStyles(): string {
     }
     .assistant-text li > ul,
     .assistant-text li > ol {
-      margin: 3px 0 4px;
+      margin: 5px 0 8px;
     }
     .md-spacer {
       height: 8px;
@@ -3877,10 +3880,10 @@ export function getChatStyles(): string {
     .table-scroll-wrapper {
       width: 100%;
       overflow-x: auto;
-      margin: 8px 0;
-      border-radius: 6px;
+      margin: 10px 0 18px;
+      border-radius: 5px;
       border: 1px solid rgba(255, 255, 255, 0.08);
-      background: rgba(255, 255, 255, 0.02);
+      background: transparent;
     }
     .assistant-text table,
     .md-table,
@@ -3895,39 +3898,43 @@ export function getChatStyles(): string {
     .assistant-text thead,
     .md-table thead,
     thead {
-      background: rgba(255, 255, 255, 0.06);
+      background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.012));
     }
     .assistant-text th,
     .md-table th,
     th {
       font-weight: 600;
-      padding: 7px 12px;
+      padding: 9px 12px;
       border-bottom: 1px solid var(--border);
-      color: #ffffff;
+      color: var(--fg);
       white-space: nowrap;
-      font-size: 11.5px;
-      letter-spacing: 0.2px;
+      font-size: 12px;
+      letter-spacing: 0;
     }
     .assistant-text td,
     .md-table td,
     td {
-      padding: 6px 12px;
+      padding: 9px 12px;
       border-bottom: 1px solid rgba(255, 255, 255, 0.05);
       color: var(--fg);
-      line-height: 1.45;
+      line-height: 1.6;
+      vertical-align: top;
     }
     .assistant-text tr:nth-child(even) td,
     .md-table tr:nth-child(even) td {
-      background: rgba(255, 255, 255, 0.02);
+      background: transparent;
     }
     .assistant-text tr:hover td,
     .md-table tr:hover td {
-      background: rgba(255, 255, 255, 0.05);
+      background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.012));
     }
     .assistant-text tr:last-child td,
     .md-table tr:last-child td {
       border-bottom: none;
     }
+    .assistant-text table { min-width: 420px; }
+    .assistant-text td:first-child { min-width: 125px; }
+    .assistant-text td p { margin: 0; }
 
     /* Markdown Horizontal Rules & Task Lists */
     .md-hr {

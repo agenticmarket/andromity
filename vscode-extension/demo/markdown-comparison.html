@@ -1,0 +1,317 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Andromity · Markdown before and after</title><style>
+:root{color-scheme:dark;--fg:#dedede;--muted:#999;--border:#ffffff14;--font-mono:Consolas,'Courier New',monospace;--vscode-editor-font-family:Consolas;--vscode-charts-blue:#38bdf8}*{box-sizing:border-box}body{margin:0;background:#101112;color:var(--fg);font:13px 'Segoe UI',sans-serif}.lab{max-width:1600px;margin:auto;padding:32px 24px}.lab>h1{font-size:24px;letter-spacing:-.6px;margin:8px 0}.intro{color:#a5a5a5;line-height:1.6;margin-bottom:20px}.kicker{font-size:10px;letter-spacing:2px;color:#09d989}.controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 0 24px}.controls button,.controls select{background:#202020;color:#ddd;border:1px solid #3a3a3a;padding:7px 10px;border-radius:5px;font:inherit}.controls label{display:flex;gap:8px;align-items:center}.controls input{width:140px;accent-color:#bc8cff}.comparison{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;align-items:start}.preview{min-width:0}.caption{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px;font-size:12px}.caption span{font-size:11px;color:#999}.viewport{border:1px solid #333;border-radius:8px;background:#181818;width:100%;max-width:var(--preview-width,100%);margin:0 auto;overflow:hidden}.panel-bar{padding:12px 18px;border-bottom:1px solid #303030;color:#999;font-size:10px;letter-spacing:1px}.response{padding:20px 22px}.brand{display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:20px}.brand-icon{border:1px solid #334139;color:#09f994;border-radius:5px;padding:2px 5px}.foot{margin-top:20px;font-size:11px;color:#858585}.notes{margin-top:28px;padding-top:20px;border-top:1px solid #333;color:#aaa;line-height:1.7;max-width:850px}.notes strong{color:#ddd}.notice{min-height:20px;color:#bc8cff;font-size:12px}.single .comparison{grid-template-columns:minmax(0,1fr)}.single .preview{display:none}.single[data-view=before] .before-preview,.single[data-view=after] .after-preview{display:block}button:focus-visible,a:focus-visible,.table-scroll-wrapper:focus-visible{outline:2px solid #bc8cff;outline-offset:3px}
+    /* Markdown Typography & Blocks */
+    .assistant-text {
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--fg);
+      word-break: break-word;
+      overflow-wrap: break-word;
+      max-width: 100%;
+      min-width: 0;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .assistant-text p {
+      margin: 4px 0 6px;
+      line-height: 1.55;
+    }
+    .assistant-text p:last-child {
+      margin-bottom: 0;
+    }
+    .assistant-text strong {
+      font-weight: 600;
+      color: #ffffff;
+    }
+    .assistant-text em {
+      font-style: italic;
+      color: var(--fg);
+    }
+    .assistant-text del {
+      text-decoration: line-through;
+      opacity: 0.6;
+    }
+    .assistant-text :not(pre) > code,
+    .assistant-text p code,
+    .assistant-text li code,
+    .assistant-text td code,
+    .assistant-text th code,
+    .assistant-text blockquote code {
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      font-feature-settings: "calt", "zero";
+      letter-spacing: -0.015em;
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--fg, #e6edf3);
+      padding: 1px 4px;
+      border-radius: 3px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      word-break: break-word;
+    }
+    /* Clickable file & folder links in assistant responses — clean inline styling with icons */
+    .md-file-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      padding: 2px 7px 2px 5px;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 11.5px;
+      line-height: 1.35;
+      vertical-align: baseline;
+      cursor: pointer;
+      user-select: text;
+      text-decoration: none;
+      transition: background 0.12s ease, border-color 0.12s ease, transform 0.1s ease;
+      white-space: nowrap;
+      max-width: 320px;
+      overflow: hidden;
+    }
+    .md-file-pill:hover {
+      background: rgba(255, 255, 255, 0.09);
+      border-color: rgba(255, 255, 255, 0.1);
+      text-decoration: none;
+    }
+    .md-file-pill:active {
+      transform: translateY(0px);
+    }
+    .md-file-pill .pill-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      font-size: 13px;
+      line-height: 1;
+      opacity: 0.9;
+    }
+    .md-file-pill.is-dir .pill-icon {
+      color: var(--vscode-charts-blue, #38bdf8);
+    }
+    .md-file-pill.is-file .pill-icon {
+      /* color is set inline per-file-type via badgeInfo.color */
+    }
+    .md-file-pill .pill-badge {
+      display: inline-flex;
+      align-items: center;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .md-file-pill .pill-name {
+      font-family: var(--vscode-editor-font-family, monospace);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .md-file-link {
+      cursor: pointer;
+    }
+    .md-file-link:hover {
+      text-decoration: underline;
+    }
+    .assistant-text h1 {
+      font-size: 16px;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+      margin: 14px 0 6px;
+      color: #ffffff;
+      line-height: 1.35;
+    }
+    .assistant-text h2 {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.018em;
+      margin: 12px 0 6px;
+      color: #ffffff;
+      line-height: 1.35;
+    }
+    .assistant-text h3 {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.015em;
+      margin: 10px 0 5px;
+      color: #ffffff;
+      line-height: 1.35;
+    }
+    .assistant-text h4 {
+      font-size: 13px;
+      font-weight: 600;
+      margin: 8px 0 4px;
+      color: #ffffff;
+      line-height: 1.35;
+    }
+    .assistant-text h5, .assistant-text h6 {
+      font-size: 11.5px;
+      font-weight: 600;
+      margin: 8px 0 3px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .assistant-text blockquote {
+      border-left: 2px solid rgba(255, 255, 255, 0.2);
+      padding: 4px 12px;
+      margin: 8px 0;
+      background: transparent;
+      color: var(--muted);
+      font-style: italic;
+    }
+    .assistant-text hr {
+      border: none;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      margin: 12px 0;
+    }
+    .assistant-text ul,
+    .assistant-text ol {
+      margin: 6px 0;
+      padding-left: 20px;
+    }
+    .assistant-text li {
+      margin: 2.5px 0;
+      padding-left: 1px;
+      line-height: 1.6;
+    }
+    /* Markers stay quiet and column-aligned: monospaced, tabular numerals,
+       so "7." / "8." / "10." never nudge the item text sideways. */
+    .assistant-text li::marker {
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.2px;
+    }
+    /* Loose list items wrap their body in <p>; collapse the extra rhythm */
+    .assistant-text li > p {
+      margin: 3px 0;
+    }
+    .assistant-text li > p:first-child {
+      margin-top: 0;
+    }
+    .assistant-text li > p:last-child {
+      margin-bottom: 0;
+    }
+    .assistant-text li > ul,
+    .assistant-text li > ol {
+      margin: 3px 0 4px;
+    }
+    .md-spacer {
+      height: 8px;
+    }
+    .md-line {
+      margin: 2px 0;
+      line-height: 1.6;
+    }
+    .md-bullet {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      margin: 3px 0 3px 4px;
+      line-height: 1.6;
+    }
+    .md-dot {
+      color: var(--muted, #8b949e);
+      font-size: 13px;
+      line-height: 1.3;
+      user-select: none;
+      flex-shrink: 0;
+      opacity: 0.75;
+    }
+    .md-num {
+      color: var(--muted, #8b949e);
+      font-size: 12px;
+      font-weight: 500;
+      min-width: 14px;
+      user-select: none;
+      flex-shrink: 0;
+      opacity: 0.85;
+    }
+    .md-text {
+      flex: 1;
+    }
+    .md-quote {
+      border-left: 2px solid rgba(255, 255, 255, 0.2);
+      padding: 4px 12px;
+      margin: 8px 0;
+      background: transparent;
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    /* Markdown Tables & Universal Table Styling */
+    .table-scroll-wrapper {
+      width: 100%;
+      overflow-x: auto;
+      margin: 8px 0;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .assistant-text table,
+    .md-table,
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      text-align: left;
+      border-spacing: 0;
+      margin: 0;
+    }
+    .assistant-text thead,
+    .md-table thead,
+    thead {
+      background: rgba(255, 255, 255, 0.06);
+    }
+    .assistant-text th,
+    .md-table th,
+    th {
+      font-weight: 600;
+      padding: 7px 12px;
+      border-bottom: 1px solid var(--border);
+      color: #ffffff;
+      white-space: nowrap;
+      font-size: 11.5px;
+      letter-spacing: 0.2px;
+    }
+    .assistant-text td,
+    .md-table td,
+    td {
+      padding: 6px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      color: var(--fg);
+      line-height: 1.45;
+    }
+    .assistant-text tr:nth-child(even) td,
+    .md-table tr:nth-child(even) td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .assistant-text tr:hover td,
+    .md-table tr:hover td {
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .assistant-text tr:last-child td,
+    .md-table tr:last-child td {
+      border-bottom: none;
+    }
+
+
+.assistant-text pre{background:#111;border:1px solid #ffffff14;border-radius:6px;margin:10px 0;padding:12px 14px;overflow:auto;line-height:1.55}.assistant-text pre code{font:12px/1.55 var(--font-mono)}.assistant-text a{color:#79b8ff}.comment{color:#929292}.string{color:#b2d9a4}
+/* Proposed rules only affect the AFTER sample. */
+.after .assistant-text{font-size:13px;line-height:1.65;color:#e0e0e0}.after .assistant-text p{margin:0 0 12px;line-height:1.65}.after .assistant-text h2{font-size:16px;margin:24px 0 10px;line-height:1.4}.after .assistant-text h2:first-child{margin-top:0}.after .assistant-text h3{font-size:14px;margin:22px 0 9px;line-height:1.4}.after .assistant-text ul,.after .assistant-text ol{margin:8px 0 14px;padding-left:22px}.after .assistant-text li{margin:5px 0;line-height:1.65}.after .assistant-text li>ul{margin:5px 0 8px}.after .assistant-text blockquote{font-style:normal;border-left-color:#888;background:#ffffff03;color:#bababa;margin:16px 0;padding:10px 14px}.after .assistant-text blockquote p{margin:0}.after .assistant-text hr{margin:20px 0}.after .assistant-text :not(pre)>code{font-size:12px;letter-spacing:0;background:#ffffff06;border-color:#ffffff08;padding:1px 4px}.after .md-file-pill{gap:4px;border-color:#ffffff09;background:#ffffff04;border-radius:4px;padding:0 5px;line-height:1.5;vertical-align:middle;margin-top:-2px;max-width:min(320px,100%);color:#d5e5f1}.after .md-file-pill:hover{background:#ffffff0c;border-color:#ffffff24}.after .pill-icon{opacity:.75}.after .table-scroll-wrapper{margin:10px 0 18px;background:transparent;border-color:#ffffff12;border-radius:5px}.after .assistant-text table{font-size:12px;min-width:420px}.after .assistant-text thead{background:#ffffff03}.after .assistant-text th{padding:9px 12px;color:#d5d5d5;font-size:12px;letter-spacing:0}.after .assistant-text td{padding:9px 12px;line-height:1.6;vertical-align:top;border-bottom-color:#ffffff0b}.after .assistant-text td:first-child{min-width:125px}.after .assistant-text tr:nth-child(even) td{background:transparent}.after .assistant-text tr:hover td{background:#ffffff03}.after .assistant-text td p{margin:0}
+@media(max-width:900px){.comparison{grid-template-columns:1fr}.lab{padding:24px 14px}.response{padding:18px 16px}}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style><body><div class="lab"><div class="kicker">ANDROMITY / MARKDOWN REVIEW</div><h1>Same answer. Clearer reading.</h1><p class="intro">Compare typography, tables, and file/folder pills together. The before sample uses the current Markdown CSS extracted from the extension.<br>Content is identical on both sides. Code-block styling and demo icons are shared approximations. No production UI has changed.</p><div class="controls"><label>Show <select id="section"><option value="all">Everything</option><option value="typography">Markdown typography</option><option value="tables">Tables</option><option value="pills">File / folder pills</option></select></label><label>View <select id="view"><option value="both">Side by side</option><option value="before">Before only</option><option value="after">After only</option></select></label><label>Panel width <input id="width" type="range" min="280" max="900" value="680"><output id="width-label">680px</output></label><button id="reset">Reset</button></div><div class="comparison"><section class="preview before-preview"><div class="caption"><strong>Before · Current</strong><span>Existing Markdown styles</span></div><div class="viewport before"><div class="panel-bar">ANDROMITY · CHAT</div><div class="response"><div class="brand"><span class="brand-icon">◕</span>Andromity</div><article class="assistant-text"><section data-section="typography"><h2>Project overview</h2><p>The application combines a <strong>React frontend</strong> with a Django backend. The main entry point is <button class="md-file-pill is-dir" title="src/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">src/</span></button>; shared configuration lives in <button class="md-file-pill is-file" title="package.json" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2h5l3 3v9H4zM9 2v4h3M6 9h4M6 11h4"/></svg></span><span class="pill-name">package.json</span></button>.</p><p>Keep the existing API contract when updating the interface. Read <code>config.toml</code> before changing defaults, and verify the affected behaviour.</p><h3>Recommended approach</h3><ol><li>Inspect the current request and persistence paths.<ul><li>Start with <button class="md-file-pill is-dir" title="src/api/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">src/api/</span></button> and <button class="md-file-pill is-file" title="src/settings.py" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2h5l3 3v9H4zM9 2v4h3M6 9h4M6 11h4"/></svg></span><span class="pill-name">src/settings.py</span></button>.</li><li>Confirm how failures reach the user.</li></ul></li><li>Implement the smallest change that resolves the issue.</li><li>Run the relevant checks and report their outcome.</li></ol><blockquote><p>Workspace trust is required before workspace tools can run. Permission mode does not remove that requirement.</p></blockquote><h3>Configuration example</h3><pre><code><span class="comment"># Example configuration</span>
+[default]
+permission_mode = <span class="string">"safe"</span>
+profile = <span class="string">"builder"</span></code></pre><p>See the <a href="#demo-link">configuration reference</a> for details. <em>This is sample content for visual comparison.</em></p><hr></section>
+<section data-section="tables"><h3>Core File &amp; Search Tools</h3><p>Sample report content; checkmarks here are Markdown text, not verified runtime results.</p><div class="table-scroll-wrapper" tabindex="0" aria-label="Tool summary table, scroll horizontally if needed"><table><thead><tr><th>Tool</th><th>Status</th><th>Result</th></tr></thead><tbody><tr><td><code>list_dir</code></td><td>✅</td><td>Found 9 dirs, 12 files in workspace</td></tr><tr><td><code>find_files</code></td><td>✅</td><td>Matched 20 files across project</td></tr><tr><td><code>read_file</code></td><td>✅</td><td>Read <button class="md-file-pill is-file" title="python_version.txt" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2h5l3 3v9H4zM9 2v4h3M6 9h4M6 11h4"/></svg></span><span class="pill-name">python_version.txt</span></button>, HTML templates</td></tr><tr><td><code>write_file</code></td><td>✅</td><td>Created <button class="md-file-pill is-file" title="demo_notes.md" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2h5l3 3v9H4zM9 2v4h3M6 9h4M6 11h4"/></svg></span><span class="pill-name">demo_notes.md</span></button></td></tr><tr><td><code>edit_file</code></td><td>✅</td><td>Edited existing file content</td></tr><tr><td><code>grep_search</code></td><td>✅</td><td>Found 2 matches in JS files</td></tr></tbody></table></div><h3>Best Next Steps</h3><div class="table-scroll-wrapper" tabindex="0" aria-label="Recommendations table"><table><thead><tr><th>Area</th><th>Recommendation</th></tr></thead><tbody><tr><td><strong>Frontend</strong></td><td>Develop in <button class="md-file-pill is-dir" title="ecommerce-frontend/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">ecommerce-frontend/</span></button> (React SPA). The Django template layer is lightweight/static-only at the moment.</td></tr><tr><td><strong>Backend APIs</strong></td><td>Build REST/GraphQL endpoints inside <button class="md-file-pill is-dir" title="src/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">src/</span></button> Django apps (<button class="md-file-pill is-dir" title="products/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">products/</span></button>, <button class="md-file-pill is-dir" title="orders/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">orders/</span></button>) to serve both the React SPA and any external consumers.</td></tr><tr><td><strong>AI Integration</strong></td><td>Use <button class="md-file-pill is-dir" title="photon/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">photon/</span></button> for streaming features: chat, live agent responses, and progress feeds.</td></tr><tr><td><strong>Financial ops</strong></td><td>Integrate <button class="md-file-pill is-dir" title="reconcilekit/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">reconcilekit/</span></button> for automated reconciliation within the order flow.</td></tr></tbody></table></div></section>
+<section data-section="pills"><h3>Files and folders in context</h3><p>Open <button class="md-file-pill is-dir" title="src/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">src/</span></button>, inspect <button class="md-file-pill is-file" title="package.json" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2h5l3 3v9H4zM9 2v4h3M6 9h4M6 11h4"/></svg></span><span class="pill-name">package.json</span></button>, then update <button class="md-file-pill is-file" title="src/components/SettingsPanel.tsx" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2h5l3 3v9H4zM9 2v4h3M6 9h4M6 11h4"/></svg></span><span class="pill-name">src/components/SettingsPanel.tsx</span></button>.</p><p>The related directories are <button class="md-file-pill is-dir" title="products/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">products/</span></button>, <button class="md-file-pill is-dir" title="orders/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">orders/</span></button>, and <button class="md-file-pill is-dir" title="ecommerce-frontend/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">ecommerce-frontend/</span></button>.</p><p>Long path: <button class="md-file-pill is-file" title="src/andromity/providers/integrations/configuration/settings/preferences.ts" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2h5l3 3v9H4zM9 2v4h3M6 9h4M6 11h4"/></svg></span><span class="pill-name">src/andromity/providers/integrations/configuration/settings/preferences.ts</span></button>. Hover to read the full path.</p><ul><li>File reference: <button class="md-file-pill is-file" title="README.md" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2h5l3 3v9H4zM9 2v4h3M6 9h4M6 11h4"/></svg></span><span class="pill-name">README.md</span></button></li><li>Folder reference: <button class="md-file-pill is-dir" title="src/andromity/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">src/andromity/</span></button></li><li>Inline code stays distinct: <code>permission_mode = "safe"</code></li></ul></section></article><div class="foot">Sample answer · Copy</div></div></div></section><section class="preview after-preview"><div class="caption"><strong>After · Proposed</strong><span>Same font size, calmer hierarchy</span></div><div class="viewport after"><div class="panel-bar">ANDROMITY · CHAT</div><div class="response"><div class="brand"><span class="brand-icon">◕</span>Andromity</div><article class="assistant-text"><section data-section="typography"><h2>Project overview</h2><p>The application combines a <strong>React frontend</strong> with a Django backend. The main entry point is <button class="md-file-pill is-dir" title="src/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">src/</span></button>; shared configuration lives in <button class="md-file-pill is-file" title="package.json" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2h5l3 3v9H4zM9 2v4h3M6 9h4M6 11h4"/></svg></span><span class="pill-name">package.json</span></button>.</p><p>Keep the existing API contract when updating the interface. Read <code>config.toml</code> before changing defaults, and verify the affected behaviour.</p><h3>Recommended approach</h3><ol><li>Inspect the current request and persistence paths.<ul><li>Start with <button class="md-file-pill is-dir" title="src/api/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">src/api/</span></button> and <button class="md-file-pill is-file" title="src/settings.py" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2h5l3 3v9H4zM9 2v4h3M6 9h4M6 11h4"/></svg></span><span class="pill-name">src/settings.py</span></button>.</li><li>Confirm how failures reach the user.</li></ul></li><li>Implement the smallest change that resolves the issue.</li><li>Run the relevant checks and report their outcome.</li></ol><blockquote><p>Workspace trust is required before workspace tools can run. Permission mode does not remove that requirement.</p></blockquote><h3>Configuration example</h3><pre><code><span class="comment"># Example configuration</span>
+[default]
+permission_mode = <span class="string">"safe"</span>
+profile = <span class="string">"builder"</span></code></pre><p>See the <a href="#demo-link">configuration reference</a> for details. <em>This is sample content for visual comparison.</em></p><hr></section>
+<section data-section="tables"><h3>Core File &amp; Search Tools</h3><p>Sample report content; checkmarks here are Markdown text, not verified runtime results.</p><div class="table-scroll-wrapper" tabindex="0" aria-label="Tool summary table, scroll horizontally if needed"><table><thead><tr><th>Tool</th><th>Status</th><th>Result</th></tr></thead><tbody><tr><td><code>list_dir</code></td><td>✅</td><td>Found 9 dirs, 12 files in workspace</td></tr><tr><td><code>find_files</code></td><td>✅</td><td>Matched 20 files across project</td></tr><tr><td><code>read_file</code></td><td>✅</td><td>Read <button class="md-file-pill is-file" title="python_version.txt" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2h5l3 3v9H4zM9 2v4h3M6 9h4M6 11h4"/></svg></span><span class="pill-name">python_version.txt</span></button>, HTML templates</td></tr><tr><td><code>write_file</code></td><td>✅</td><td>Created <button class="md-file-pill is-file" title="demo_notes.md" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2h5l3 3v9H4zM9 2v4h3M6 9h4M6 11h4"/></svg></span><span class="pill-name">demo_notes.md</span></button></td></tr><tr><td><code>edit_file</code></td><td>✅</td><td>Edited existing file content</td></tr><tr><td><code>grep_search</code></td><td>✅</td><td>Found 2 matches in JS files</td></tr></tbody></table></div><h3>Best Next Steps</h3><div class="table-scroll-wrapper" tabindex="0" aria-label="Recommendations table"><table><thead><tr><th>Area</th><th>Recommendation</th></tr></thead><tbody><tr><td><strong>Frontend</strong></td><td>Develop in <button class="md-file-pill is-dir" title="ecommerce-frontend/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">ecommerce-frontend/</span></button> (React SPA). The Django template layer is lightweight/static-only at the moment.</td></tr><tr><td><strong>Backend APIs</strong></td><td>Build REST/GraphQL endpoints inside <button class="md-file-pill is-dir" title="src/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">src/</span></button> Django apps (<button class="md-file-pill is-dir" title="products/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">products/</span></button>, <button class="md-file-pill is-dir" title="orders/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">orders/</span></button>) to serve both the React SPA and any external consumers.</td></tr><tr><td><strong>AI Integration</strong></td><td>Use <button class="md-file-pill is-dir" title="photon/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">photon/</span></button> for streaming features: chat, live agent responses, and progress feeds.</td></tr><tr><td><strong>Financial ops</strong></td><td>Integrate <button class="md-file-pill is-dir" title="reconcilekit/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">reconcilekit/</span></button> for automated reconciliation within the order flow.</td></tr></tbody></table></div></section>
+<section data-section="pills"><h3>Files and folders in context</h3><p>Open <button class="md-file-pill is-dir" title="src/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">src/</span></button>, inspect <button class="md-file-pill is-file" title="package.json" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2h5l3 3v9H4zM9 2v4h3M6 9h4M6 11h4"/></svg></span><span class="pill-name">package.json</span></button>, then update <button class="md-file-pill is-file" title="src/components/SettingsPanel.tsx" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2h5l3 3v9H4zM9 2v4h3M6 9h4M6 11h4"/></svg></span><span class="pill-name">src/components/SettingsPanel.tsx</span></button>.</p><p>The related directories are <button class="md-file-pill is-dir" title="products/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">products/</span></button>, <button class="md-file-pill is-dir" title="orders/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">orders/</span></button>, and <button class="md-file-pill is-dir" title="ecommerce-frontend/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">ecommerce-frontend/</span></button>.</p><p>Long path: <button class="md-file-pill is-file" title="src/andromity/providers/integrations/configuration/settings/preferences.ts" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2h5l3 3v9H4zM9 2v4h3M6 9h4M6 11h4"/></svg></span><span class="pill-name">src/andromity/providers/integrations/configuration/settings/preferences.ts</span></button>. Hover to read the full path.</p><ul><li>File reference: <button class="md-file-pill is-file" title="README.md" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 2h5l3 3v9H4zM9 2v4h3M6 9h4M6 11h4"/></svg></span><span class="pill-name">README.md</span></button></li><li>Folder reference: <button class="md-file-pill is-dir" title="src/andromity/" type="button"><span class="pill-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 13V4h4l2 2h6v7z"/><path d="M2 8h12"/></svg></span><span class="pill-name">src/andromity/</span></button></li><li>Inline code stays distinct: <code>permission_mode = "safe"</code></li></ul></section></article><div class="foot">Sample answer · Copy</div></div></div></section></div><p class="notice" id="notice" aria-live="polite"></p><div class="notes"><strong>What changes:</strong> paragraph and heading spacing, list rhythm, upright readable quotes, subtler inline pills, quieter table headers, more comfortable rows, and enough room for short column labels.<br><strong>What to inspect:</strong> set width to 320px to judge a narrow sidebar; scroll tables horizontally. Hover and keyboard-focus pills. Click a pill to inspect its demo target. Markdown structure and file navigation would remain intact.</div></div><script>
+const lab=document.querySelector('.lab');const section=document.querySelector('#section'),view=document.querySelector('#view'),width=document.querySelector('#width');function refresh(){document.querySelectorAll('[data-section]').forEach(el=>el.hidden=section.value!=='all'&&el.dataset.section!==section.value);lab.classList.toggle('single',view.value!=='both');lab.dataset.view=view.value;document.documentElement.style.setProperty('--preview-width',width.value+'px');document.querySelector('#width-label').value=width.value+'px'}[section,view,width].forEach(el=>el.addEventListener('input',refresh));document.querySelector('#reset').onclick=()=>{section.value='all';view.value='both';width.value='680';refresh()};document.querySelectorAll('.md-file-pill').forEach(el=>el.onclick=()=>document.querySelector('#notice').textContent='Demo target: '+el.title+' · In VS Code this would open the file or reveal the folder.');document.querySelectorAll('a[href="#demo-link"]').forEach(el=>el.onclick=e=>{e.preventDefault();document.querySelector('#notice').textContent='Demo reference link; no external navigation.'});refresh();
+</script></body></html>
