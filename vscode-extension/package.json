@@ -553,7 +553,7 @@
         "andromity.includeCoAuthor": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically append 'Co-authored-by: Andromity <333054755+andromity-bot@users.noreply.github.com>' to AI-generated commit messages."
+          "description": "Automatically append 'Co-authored-by: Andromity <333054755+andromity-bot@users.noreply.github.com>' to AI-generated commit messages and to commits the agent creates."
         },
         "andromity.autoOpenSidebar": {
           "type": "string",

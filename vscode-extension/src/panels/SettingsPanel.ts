@@ -3148,7 +3148,7 @@ export class SettingsPanel {
             <input type="checkbox" id="setting-coauthor">
             <div>
               <div class="setting-label">Git Co-Author Attribution</div>
-              <div class="setting-desc">Append <code>Co-authored-by: Andromity &lt;333054755+andromity-bot@users.noreply.github.com&gt;</code> trailer to AI-generated commit messages.</div>
+              <div class="setting-desc">Append <code>Co-authored-by: Andromity &lt;333054755+andromity-bot@users.noreply.github.com&gt;</code> trailer to AI-generated commit messages and to commits the agent creates.</div>
             </div>
           </label>
         </div>

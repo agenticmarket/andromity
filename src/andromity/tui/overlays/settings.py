@@ -584,6 +584,11 @@ SettingsScreen {
                             yield Switch(value=config.get("default", "expand_tools_while_working", True), id="setting-auto-expand-tools")
                         with Horizontal(classes="adv-row"):
                             yield Label(
+                                "Co-author Commits  [dim](add Co-authored-by: Andromity to commits the agent makes)[/]",
+                                classes="adv-label")
+                            yield Switch(value=config.get("default", "include_co_author", True), id="setting-co-author")
+                        with Horizontal(classes="adv-row"):
+                            yield Label(
                                 "Sound Alerts (Attention)  [dim](play sound when AI needs approval)[/]",
                                 classes="adv-label")
                             yield Switch(id="setting-sound-attention")
@@ -1766,6 +1771,7 @@ SettingsScreen {
             
             expand_tools = self.query_one("#setting-auto-expand-tools", Switch).value
             config.set("default", "expand_tools_while_working", expand_tools)
+            config.set("default", "include_co_author", self.query_one("#setting-co-author", Switch).value)
             
             sound_attn = self.query_one("#setting-sound-attention", Switch).value
             config.set("default", "sound_attention", sound_attn)

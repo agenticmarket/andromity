@@ -1987,6 +1987,7 @@ class JsonRpcHandler:
             "sound_done": config.get("default", "sound_done", True),
             "sound_attention": config.get("default", "sound_attention", True),
             "telemetry": config.get("default", "telemetry", True),
+            "include_co_author": config.get("default", "include_co_author", True),
             "is_trusted": config.is_trusted(params.get("project_path") or str(Path.cwd())) if params else False,
             "pinned_models": config.get_pinned_models(),
         }

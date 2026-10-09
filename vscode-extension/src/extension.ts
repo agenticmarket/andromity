@@ -30,6 +30,17 @@ function markEngineStartFailed() {
   }
 }
 
+/** Mirror an explicitly configured `andromity.includeCoAuthor` into the daemon's
+ *  config.toml so commits made by the agent itself honour the same choice.
+ *  Unset values are left alone so a choice made in the TUI is not overwritten. */
+function syncCoAuthorSetting(client: RpcClient | null | undefined) {
+  if (!client) return;
+  const inspected = vscode.workspace.getConfiguration("andromity").inspect<boolean>("includeCoAuthor");
+  const value = inspected?.workspaceFolderValue ?? inspected?.workspaceValue ?? inspected?.globalValue;
+  if (value === undefined) return;
+  void client.call("config.set", { section: "default", key: "include_co_author", value }).catch(() => {});
+}
+
 const activeRunningSessions = new Set<string>();
 
 /** Reflects daemon turn state in the status bar across all parallel sessions. */
@@ -228,6 +239,7 @@ export async function activate(context: vscode.ExtensionContext) {
     sessionTreeProvider.setRpcClient(rpcClient);
     cronTreeProvider.setRpcClient(rpcClient);
     changesTreeProvider.setRpcClient(rpcClient);
+    syncCoAuthorSetting(rpcClient);
     SettingsPanel.prewarm(rpcClient);
     SettingsPanel.currentPanel?.setRpcClient(rpcClient);
     // Reconnect live MCP sessions on every daemon launch, independently of the Hub.
@@ -364,6 +376,10 @@ export async function activate(context: vscode.ExtensionContext) {
           });
           log(`[Andromity] Telemetry configuration synced to daemon: ${isEnabled ? "ON" : "OFF"}`);
         } catch {}
+      }
+
+      if (e.affectsConfiguration("andromity.includeCoAuthor")) {
+        syncCoAuthorSetting(pythonBridge?.getClient());
       }
     })
   );
