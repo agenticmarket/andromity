@@ -2,9 +2,13 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
-## [0.2.17] — 2026-10-08
+## [0.2.17] — 2026-10-09
+
+### Added
+- Commits the agent creates end with `Co-authored-by: Andromity <333054755+andromity-bot@users.noreply.github.com>`. Turn this off with `include_co_author = false` under `[default]` in `config.toml` or the Co-author Commits switch in TUI settings.
 
 ### Security
+- VS Code: SAFE-mode approvals for `write_file`, `edit_file` and `edit_file_multi` show the lines being removed and added, instead of only the file path or raw parameters.
 - Auto-woken sessions now run with their own permission mode and profile, capped at TRUST, and never in an untrusted folder.
 - Session tools that can wake or steer another session (send, ask, broadcast, watch, shared state writes, handoffs) require workspace trust again and need approval in SAFE mode. Sessions only reach peers in the same project, and only the addressed session (or the user) can answer a question.
 - Writes to `.git/`, `.andromity/`, `.vscode/`, `.husky/`, `package.json`, `.envrc` and `.mcp.json` need approval in SAFE and TRUST, since they can trigger later command execution.

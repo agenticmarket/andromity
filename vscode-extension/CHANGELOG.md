@@ -2,9 +2,10 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
-## [0.2.17] — 2026-10-08
+## [0.2.17] — 2026-10-09
 
 ### Security
+- File write and edit approvals show the lines being removed and added in a compact, scrollable box. `write_file` and multi-edit calls are recognised as file changes instead of showing "Execute" with raw parameters.
 - The sign-in token is only sent to AgenticMarket hosts configured in user settings; workspace settings can no longer redirect it.
 - Sign-in links must be started from this editor, and callback tokens are no longer written to the output log.
 - Chat renders model-supplied HTML as text and shows remote images as links.
@@ -12,6 +13,13 @@ All notable changes to the "andromity" extension will be documented in this file
 
 ### Fixed
 - Collaborator badges, per-session renames, and inbox items for sessions that are not on screen.
+- Clicking an edit row in chat no longer opens the review twice.
+- Edits that fail show "Edit failed" instead of "Edited" and are left out of the turn's changed files; multi-edits that only partly apply show "Partly edited".
+- Opening review from an older edit row uses that turn's files instead of the latest turn's.
+- Generated commit messages still credit Andromity when they already credit another co-author.
+
+### Changed
+- `andromity.includeCoAuthor` also applies to commits the agent creates.
 
 ## [0.2.16] — 2026-10-07
 
