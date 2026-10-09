@@ -6316,7 +6316,16 @@ export function getChatStyles(): string {
       left: 6px;
       width: 290px;
       max-width: calc(100vw - 24px);
+      z-index: 10020;
+      background: var(--vscode-editorWidget-background, #202020);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
     }
+    .input-section:has(.mode-popover[style*="display: flex"]) {
+      z-index: 10010;
+    }
+    .mode-popover .menu-popover-item { padding: 8px; }
+    .mode-popover .menu-popover-note { padding: 8px; font-size: 10.5px; }
 
     .profile-popover {
       bottom: calc(100% + 8px);

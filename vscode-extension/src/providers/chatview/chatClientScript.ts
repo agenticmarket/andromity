@@ -4004,7 +4004,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
       });
     }
-    prepareChoiceMenu(modePopover, btnPromptMode, 'Workspace trust and profile restrictions still apply. Full and YOLO share tool approval rules. Changes apply to subsequent turns.');
+    prepareChoiceMenu(modePopover, btnPromptMode, 'Workspace trust and profile restrictions apply. Full/YOLO share approval rules. Changes apply next turn.');
     window.addEventListener('resize', () => {
       document.querySelectorAll('.mode-popover, .profile-popover').forEach(menu => {
         if (menu.style.display !== 'none') positionChoiceMenu(menu);
