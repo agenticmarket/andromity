@@ -2085,6 +2085,8 @@ class JsonRpcHandler:
             pinned_list = config.get_pinned_models()
 
             async def _discover_connection(p: str) -> None:
+                if p == "ollama":
+                    return  # Installed models are probed below; never reuse a catalog snapshot.
                 saved = config.get_provider_config(p) or {}
                 if not force_refresh and get_cached_live_models(p):
                     return
@@ -2113,6 +2115,16 @@ class JsonRpcHandler:
 
             for p in providers_to_check:
                 cached = get_cached_live_models(p)
+                if p == "ollama":
+                    saved = config.get_provider_config(p) or {}
+                    try:
+                        cached = await asyncio.wait_for(asyncio.to_thread(
+                            fetch_live_models_sync, p, base_url=saved.get("base_url"),
+                        ), timeout=3.0)
+                    except Exception:
+                        cached = []
+                    if not cached:
+                        continue
                 if p == "openrouter" and openrouter_cached and not cached:
                     cached = openrouter_cached
 

@@ -330,6 +330,25 @@ export class SettingsPanel {
   }
 
   private async _handleMessage(message: any) {
+    if (message.type === "open_url" && ["https://ollama.com/download", "https://docs.ollama.com/quickstart"].includes(message.url)) {
+      await vscode.env.openExternal(vscode.Uri.parse(message.url));
+      return;
+    }
+    if (["check_ollama_status", "start_ollama_server", "pull_ollama_model"].includes(message.type)) {
+      try {
+        if (message.type === "start_ollama_server") {
+          const started = await SettingsPanel.chatProvider?.startOllamaServer();
+          if (!started) vscode.window.showWarningMessage("Ollama did not start. Open the Ollama app or run 'ollama serve', then check again.");
+        } else if (message.type === "pull_ollama_model") {
+          await SettingsPanel.chatProvider?.pullOllamaModel("qwen2.5-coder:7b");
+        }
+        const status = await SettingsPanel.chatProvider?.probeOllama();
+        this._panel.webview.postMessage({type:"ollama_status_updated", status:status || null});
+      } catch {
+        this._panel.webview.postMessage({type:"ollama_status_updated", status:null});
+      }
+      return;
+    }
     if (message.type === "export_usage_image") {
       try {
         const bytes = decodeUsagePng(message.image);
@@ -3512,6 +3531,8 @@ SOFTWARE.</pre>
     });
 
     let allModels = [];
+    let ollamaStatus = null;
+    let ollamaChecked = false;
     let allProviders = [];
     let pinnedModels = [];
     let allSkills = [];
@@ -3682,6 +3703,10 @@ SOFTWARE.</pre>
         document.querySelectorAll(".chip[data-provider]").forEach(c => c.classList.remove("active"));
         chip.classList.add("active");
         activeProvider = chip.dataset.provider;
+        if (activeProvider === 'ollama') {
+          ollamaChecked = false;
+          vscode.postMessage({type:'check_ollama_status'});
+        }
         renderModels();
       });
     });
@@ -3852,6 +3877,11 @@ SOFTWARE.</pre>
       
       if (action === "select-model") {
         selectModel(btn.dataset.id, btn.dataset.provider);
+      } else if (action === "start-ollama" || action === "check-ollama" || action === "pull-ollama") {
+        btn.disabled = true;
+        vscode.postMessage({type: action === 'start-ollama' ? 'start_ollama_server' : action === 'pull-ollama' ? 'pull_ollama_model' : 'check_ollama_status'});
+      } else if (action === "ollama-download" || action === "ollama-docs") {
+        vscode.postMessage({type:'open_url',url:action === 'ollama-download' ? 'https://ollama.com/download' : 'https://docs.ollama.com/quickstart'});
       } else if (action === "toggle-pin") {
         togglePin(btn.dataset.id, btn.dataset.provider, btn.dataset.name);
       } else if (action === "save-key") {
@@ -4076,6 +4106,18 @@ SOFTWARE.</pre>
     window.addEventListener("message", (event) => {
       const msg = event.data;
       switch (msg.type) {
+        case "ollama_status_updated": {
+          ollamaStatus = msg.status;
+          ollamaChecked = true;
+          if (ollamaStatus?.running) {
+            const installed = ollamaStatus.models || [];
+            const existing = allModels.filter(m => m.provider === 'ollama' && installed.includes(m.id));
+            allModels = allModels.filter(m => m.provider !== 'ollama').concat(installed.map(id => existing.find(m => m.id === id) || {id,name:id,provider:'ollama',desc:'Installed in Ollama',tags:['local'],is_free:true}));
+          }
+          renderModels();
+          renderProviders();
+          break;
+        }
         case "switch_tab": {
           switchTab(msg.tab);
           break;
@@ -4096,6 +4138,7 @@ SOFTWARE.</pre>
           break;
         }
         case "state_loaded": {
+          vscode.postMessage({type:'check_ollama_status'});
           allModels = (msg.models || []).filter(m => m.provider !== "andromity" || m.id === "auto");
           allProviders = msg.providers || [];
           pinnedModels = msg.pinnedModels || (msg.config && msg.config.pinned_models) || [];
@@ -4334,6 +4377,12 @@ SOFTWARE.</pre>
     }
 
     window.selectModel = function(modelId, provider) {
+      if ((provider || '').toLowerCase() === 'ollama' && (!ollamaStatus?.running || !(ollamaStatus.models || []).includes(modelId))) {
+        activeProvider = 'ollama';
+        renderModels();
+        vscode.postMessage({type:'check_ollama_status'});
+        return;
+      }
       activeModelId = modelId;
       activeModelProvider = (provider || "").toLowerCase();
       renderModels();
@@ -4418,6 +4467,10 @@ SOFTWARE.</pre>
       const banner = document.getElementById("active-model-banner");
       if (!banner) return;
       if (!activeModelId) { banner.style.display = "none"; return; }
+      if (activeModelProvider.toLowerCase() === 'ollama' && (!ollamaStatus?.running || !(ollamaStatus.models || []).includes(activeModelId))) {
+        banner.style.display = "none";
+        return;
+      }
       const foundExact = allModels.find(m => m.id === activeModelId && (m.provider||"").toLowerCase() === activeModelProvider.toLowerCase());
       const fallback = allModels.find(m => m.id === activeModelId);
       const target = foundExact || fallback;
@@ -4455,7 +4508,18 @@ SOFTWARE.</pre>
       const grid = document.getElementById("models-grid");
       if (!grid) return;
       updateActiveBanner();
+      if (activeProvider === 'ollama' && (!ollamaStatus?.running || !(ollamaStatus.models || []).length)) {
+        const title = !ollamaChecked ? 'Checking Ollama…' : !ollamaStatus ? 'Could not check Ollama' : ollamaStatus.running ? 'No models installed' : 'Ollama is not running';
+        const detail = !ollamaChecked ? 'Checking the configured Ollama server before showing installed models.' : ollamaStatus?.running ? 'Download a model first, then check again. Catalog models are not installed automatically.' : 'Start Ollama to see models installed on your server. Models from the catalog are not ready to use.';
+        grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;text-align:left;align-items:flex-start;">' +
+          '<h3>' + title + '</h3><p>' + detail + '</p><div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+          (ollamaStatus?.installed && !ollamaStatus.running ? '<button class="btn" data-action="start-ollama">Start Ollama</button>' : '') +
+          (ollamaStatus?.running ? '<button class="btn" data-action="pull-ollama">Download qwen2.5-coder:7b</button>' : '<button class="btn" data-action="ollama-download">Install Ollama</button>') +
+          '<button class="btn" data-action="check-ollama">Check again</button><button class="btn" data-action="ollama-docs">Setup documentation</button></div></div>';
+        return;
+      }
       const filtered = allModels.filter(m => {
+        if (m.provider === 'ollama' && (!ollamaStatus?.running || !(ollamaStatus.models || []).includes(m.id))) return false;
         if (activeProvider !== "all" && m.provider !== activeProvider) {
           return false;
         }
@@ -4631,7 +4695,7 @@ SOFTWARE.</pre>
               '<span class="status-dot ' + (hasKey ? 'connected' : '') + '"></span>' +
               '<span>' + escapeHtml(meta.name) + '</span>' +
             '</div>' +
-            '<span class="badge ' + (hasKey ? 'green' : '') + '">' + (hasKey ? 'Active' : 'Optional Key') + '</span>' +
+            '<span class="badge ' + (p.id === 'ollama' ? (ollamaStatus?.running ? 'green' : '') : hasKey ? 'green' : '') + '">' + (p.id === 'ollama' ? (!ollamaChecked ? 'Checking' : ollamaStatus?.running ? 'Running' : 'Offline') : hasKey ? 'Active' : 'Optional Key') + '</span>' +
           '</div>' +
           '<div class="item-card-desc">' + escapeHtml(meta.desc) + '</div>' +
           (p.id !== 'ollama'
@@ -4640,7 +4704,10 @@ SOFTWARE.</pre>
                 '<button class="btn" data-action="save-key" data-id="' + escapeHtml(p.id) + '">Save</button>' +
               '</div>' +
               (meta.portal ? '<a class="portal-link" data-action="open-portal" data-url="' + escapeHtml(meta.portal) + '">Get API Key &rarr;</a>' : '')
-            : '<div class="item-card-desc" style="color: var(--tag-green-fg); font-weight: 500;">✓ Ready (Managed by local daemon)</div>'
+            : '<div class="item-card-desc">' + (!ollamaChecked ? 'Checking Ollama…' : !ollamaStatus ? 'Could not check Ollama' : ollamaStatus.running ? 'Ollama running · ' + (ollamaStatus.models || []).length + ' installed models' : 'Ollama is not running') + '</div>' +
+              (ollamaChecked && ollamaStatus?.installed && !ollamaStatus.running ? '<button class="btn" data-action="start-ollama">Start Ollama</button>' : '') +
+              (ollamaChecked && !ollamaStatus?.running ? '<button class="btn" data-action="ollama-download">Install Ollama</button>' : '') +
+              '<button class="btn" data-action="check-ollama">Check again</button><button class="btn" data-action="ollama-docs">Setup documentation</button>'
           ) +
         '</div>';
       }).join("");

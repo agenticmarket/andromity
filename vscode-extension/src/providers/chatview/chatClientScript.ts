@@ -3033,9 +3033,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const onboardingOllamaStatusText = document.getElementById('onboarding-ollama-status-text');
 
     btnOnboardingOllamaSave?.addEventListener('click', () => {
+      if (!currentOllamaStatus?.running || !currentOllamaStatus.models?.length) return;
       btnOnboardingOllamaSave.disabled = true;
       btnOnboardingOllamaSave.innerHTML = '<span>Activating Ollama...</span>';
-      const bestModel = currentOllamaStatus?.bestModel || (currentOllamaStatus?.models?.[0]) || 'llama3.2:latest';
+      const bestModel = currentOllamaStatus.bestModel || currentOllamaStatus.models[0];
       vscode.postMessage({
         type: 'set_api_key',
         provider: 'ollama',
@@ -3079,7 +3080,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           onboardingOllamaStatusDot.className = 'ollama-status-dot warning';
           onboardingOllamaStatusText.textContent = 'Ollama running · 0 models installed';
           if (btnOnboardingOllamaPull) btnOnboardingOllamaPull.style.display = 'flex';
-          if (btnOnboardingOllamaSave) btnOnboardingOllamaSave.style.display = 'flex';
+          if (btnOnboardingOllamaSave) btnOnboardingOllamaSave.style.display = 'none';
           if (btnOnboardingOllamaStart) btnOnboardingOllamaStart.style.display = 'none';
           if (btnOnboardingOllamaDownload) btnOnboardingOllamaDownload.style.display = 'none';
         }
