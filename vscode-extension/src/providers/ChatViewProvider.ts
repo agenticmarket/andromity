@@ -15,6 +15,13 @@ import { handleInputMessage } from "../server/inputBridge.js";
 import { handleInteractionMessage, reportDisconnectedAction } from "../server/interactionBridge.js";
 import { SessionHydration } from "../server/sessionHydration.js";
 import {
+  allowOpenPath,
+  clampPromptMode,
+  confirmAndromityTrust,
+  confirmPermissionMode,
+  resolveWebviewConfigWrite,
+} from "../server/securityPolicy.js";
+import {
   ClarifyingQuestionsEvent,
   ModelInfo,
   PinnedModelInfo,
@@ -70,6 +77,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private _boundClient: RpcClient | null = null;
   private _rpcDisposables: Array<() => void> = [];
+
+  /** Startup state load shared by setRpcClient, resolveWebviewView and the
+   *  webview's ready message, which used to each run it in full. */
+  private _startupLoad: Promise<void> | null = null;
+  /** Incremented whenever the chat webview is (re)created. */
+  private _viewGeneration = 0;
+  private _delivered: { generation: number; client: RpcClient } | null = null;
+  private _webviewReady = false;
+  private _webviewReadyWaiters: Array<() => void> = [];
+  private _workspaceIndex: Promise<{ files: string[]; dirs: string[] }> | null = null;
+  private _workspaceIndexTimer: NodeJS.Timeout | null = null;
   private _latestTurnFiles: Set<string> = new Set<string>();
   private _hydration = new SessionHydration();
 
@@ -130,29 +148,38 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
         }),
         vscode.window.onDidChangeActiveTextEditor(syncActiveEditor),
-        vscode.window.onDidChangeTextEditorSelection(syncActiveEditor),
-        vscode.languages.onDidChangeDiagnostics(syncActiveEditor)
+        vscode.window.onDidChangeTextEditorSelection((e) => {
+          if (e.textEditor === vscode.window.activeTextEditor) syncActiveEditor();
+        }),
+        vscode.languages.onDidChangeDiagnostics((e) => {
+          const active = vscode.window.activeTextEditor?.document.uri.toString();
+          if (active && e.uris.some((uri) => uri.toString() === active)) syncActiveEditor();
+        })
+      );
+      const watcher = vscode.workspace.createFileSystemWatcher("**/*", false, true, false);
+      const invalidateIndex = () => this._scheduleWorkspaceIndexRefresh();
+      this._context.subscriptions.push(
+        watcher,
+        watcher.onDidCreate(invalidateIndex),
+        watcher.onDidDelete(invalidateIndex),
+        vscode.workspace.onDidChangeWorkspaceFolders(invalidateIndex)
       );
     }
   }
 
   public broadcastActiveEditorContext() {
-    const ctx = EditorBridge.getActiveContext();
+    const tabs = SessionTabPanel.getAllPanels();
+    if (!this._view?.visible && !tabs.some((tab) => tab.visible)) return;
+    const summary = EditorBridge.getActiveSummary();
     const payload = {
       type: "active_editor_context",
       context: {
-        relativePath: ctx.relativePath || null,
-        fileName: ctx.relativePath ? path.basename(ctx.relativePath) : null,
-        languageId: ctx.languageId || null,
-        cursorLine: ctx.cursorLine || null,
-        cursorColumn: ctx.cursorColumn || null,
-        hasSelection: !!ctx.selectedText,
-        errorCount: ctx.diagnostics?.filter((d) => d.severity === "error").length || 0,
-        warningCount: ctx.diagnostics?.filter((d) => d.severity === "warning").length || 0,
+        ...summary,
+        fileName: summary.relativePath ? path.basename(summary.relativePath) : null,
       },
     };
     this._postToWebview(payload);
-    for (const tab of SessionTabPanel.getAllPanels()) {
+    for (const tab of tabs) {
       try { tab.postMessage(payload); } catch {}
     }
   }
@@ -227,7 +254,65 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this._bindRpcEvents();
     this._postToWebview({ type: "backend_ready" });
-    this._loadInitialConfig(true);
+    void this._loadStartupState();
+  }
+
+  /** Load and deliver the initial chat state once per (webview, daemon client)
+   *  pair. Concurrent callers share the in-flight load; it repeats only if the
+   *  webview was recreated or the daemon reconnected while it ran. */
+  private _loadStartupState(): Promise<void> {
+    if (!this._startupLoad) {
+      this._startupLoad = (async () => {
+        try {
+          let generation: number;
+          let client: RpcClient | null;
+          let attempts = 0;
+          do {
+            generation = this._viewGeneration;
+            client = this._rpcClient;
+            attempts++;
+            await this._loadInitialConfig(true);
+          } while (
+            attempts < 3 &&
+            this._rpcClient &&
+            (generation !== this._viewGeneration ||
+              client !== this._rpcClient ||
+              (this._webviewReady && !this._isStartupStateDelivered()))
+          );
+        } finally {
+          this._startupLoad = null;
+        }
+      })();
+    }
+    return this._startupLoad;
+  }
+
+  private _isStartupStateDelivered(): boolean {
+    return !!this._delivered && this._delivered.generation === this._viewGeneration && this._delivered.client === this._rpcClient;
+  }
+
+  /** Resolves once the current webview's script has loaded (or after a timeout),
+   *  so state isn't posted into a page that can't receive it yet. */
+  private _whenWebviewReady(timeoutMs = 10000): Promise<void> {
+    if (!this._view || this._webviewReady) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        this._webviewReadyWaiters = this._webviewReadyWaiters.filter((w) => w !== done);
+        resolve();
+      }, timeoutMs);
+      this._webviewReadyWaiters.push(done);
+    });
+  }
+
+  private _markWebviewReady() {
+    this._webviewReady = true;
+    const waiters = this._webviewReadyWaiters;
+    this._webviewReadyWaiters = [];
+    for (const waiter of waiters) waiter();
   }
 
   private _disposeRpcEvents() {
@@ -496,6 +581,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         cleanPath = match[1];
         if (!line) line = parseInt(match[2], 10);
       }
+      if (!(await allowOpenPath(cleanPath))) return;
       const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       let resolvedPath = path.isAbsolute(cleanPath) ? cleanPath : (ws ? path.join(ws, cleanPath) : cleanPath);
 
@@ -557,12 +643,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const target = dirName.replace(/[\\/]+$/, "").toLowerCase();
     const ignore = new Set(["node_modules", ".git", ".venv", "venv", "dist", "build", ".pytest_cache", "__pycache__"]);
 
+    // Runs synchronously on a click, so cap the walk on very large trees.
+    let budget = 5000;
     for (const wf of wsFolders) {
       const root = wf.uri.fsPath;
       if (path.basename(root).toLowerCase() === target) return root;
       const queue = [root];
-      while (queue.length > 0) {
-        const current = queue.shift()!;
+      for (let head = 0; head < queue.length && budget-- > 0; head++) {
+        const current = queue[head];
         try {
           const entries = fs.readdirSync(current, { withFileTypes: true });
           for (const entry of entries) {
@@ -582,44 +670,59 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return null;
   }
 
-  public getWorkspacePaths(): { files: string[]; dirs: string[] } {
-    const wsFolders = vscode.workspace.workspaceFolders;
-    if (!wsFolders || wsFolders.length === 0) return { files: [], dirs: [] };
+  /** File and folder names the chat uses to turn paths in replies into
+   *  clickable chips. Built asynchronously with findFiles (the previous
+   *  synchronous readdir walk blocked the extension host on large repos),
+   *  cached, and refreshed when files are created or deleted. */
+  public getWorkspaceIndex(): Promise<{ files: string[]; dirs: string[] }> {
+    if (!this._workspaceIndex) {
+      this._workspaceIndex = ChatViewProvider._buildWorkspaceIndex().catch(() => ({ files: [], dirs: [] }));
+    }
+    return this._workspaceIndex;
+  }
+
+  private static readonly WORKSPACE_INDEX_LIMIT = 5000;
+  private static readonly WORKSPACE_INDEX_EXCLUDE =
+    "**/{node_modules,.git,.venv,venv,dist,build,.pytest_cache,__pycache__,.session_cache,.pyinstaller-build}/**";
+  private static readonly VISIBLE_DOT_DIRS = new Set([".github", ".vscode", ".andromity", ".kilo"]);
+
+  private static async _buildWorkspaceIndex(): Promise<{ files: string[]; dirs: string[] }> {
+    if (!vscode.workspace.workspaceFolders?.length) return { files: [], dirs: [] };
+    const uris = await vscode.workspace.findFiles(
+      "**/*",
+      ChatViewProvider.WORKSPACE_INDEX_EXCLUDE,
+      ChatViewProvider.WORKSPACE_INDEX_LIMIT
+    );
     const files = new Set<string>();
     const dirs = new Set<string>();
-    const ignore = new Set(["node_modules", ".git", ".venv", "venv", "dist", "build", ".pytest_cache", "__pycache__", ".session_cache", ".pyinstaller-build"]);
-
-    for (const wf of wsFolders) {
-      const root = wf.uri.fsPath;
-      try {
-        const traverse = (currentDir: string, depth = 0) => {
-          if (depth > 4) return;
-          let entries: fs.Dirent[] = [];
-          try {
-            entries = fs.readdirSync(currentDir, { withFileTypes: true });
-          } catch {
-            return;
-          }
-          for (const entry of entries) {
-            const name = entry.name;
-            if (name.startsWith(".") && name !== ".github" && name !== ".vscode" && name !== ".andromity" && name !== ".kilo") continue;
-            const full = path.join(currentDir, name);
-            const rel = path.relative(root, full).replace(/\\/g, "/");
-            if (entry.isDirectory()) {
-              if (ignore.has(name) || name.includes("venv") || name.includes("cache")) continue;
-              dirs.add(name);
-              dirs.add(rel);
-              traverse(full, depth + 1);
-            } else if (entry.isFile()) {
-              files.add(name);
-              files.add(rel);
-            }
-          }
-        };
-        traverse(root);
-      } catch {}
+    for (const uri of uris) {
+      const rel = vscode.workspace.asRelativePath(uri, false).split(path.sep).join("/");
+      const parts = rel.split("/");
+      const hidden = parts.some((part, i) =>
+        (part.startsWith(".") && !ChatViewProvider.VISIBLE_DOT_DIRS.has(part)) ||
+        (i < parts.length - 1 && (part.includes("venv") || part.includes("cache")))
+      );
+      if (hidden) continue;
+      files.add(parts[parts.length - 1]);
+      files.add(rel);
+      for (let i = 1; i < parts.length; i++) {
+        dirs.add(parts[i - 1]);
+        dirs.add(parts.slice(0, i).join("/"));
+      }
     }
     return { files: Array.from(files), dirs: Array.from(dirs) };
+  }
+
+  private _scheduleWorkspaceIndexRefresh() {
+    if (this._workspaceIndexTimer) clearTimeout(this._workspaceIndexTimer);
+    this._workspaceIndexTimer = setTimeout(() => {
+      this._workspaceIndexTimer = null;
+      this._workspaceIndex = null;
+      if (!this._view && SessionTabPanel.getAllPanels().length === 0) return;
+      void this.getWorkspaceIndex().then((index) => {
+        this.broadcastToWebviews({ type: "workspace_files_updated", files: index.files, dirs: index.dirs });
+      });
+    }, 3000);
   }
 
   /** Attach a file as prompt context in the webview. */
@@ -992,6 +1095,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     _token: vscode.CancellationToken
   ) {
     this._view = webviewView;
+    this._viewGeneration++;
+    this._webviewReady = false;
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [this._extensionUri],
@@ -999,14 +1104,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
-    webviewView.webview.onDidReceiveMessage(async (message) => {
-      await this._handleWebviewMessage(message);
+    const subscriptions = [
+      webviewView.webview.onDidReceiveMessage(async (message) => {
+        await this._handleWebviewMessage(message);
+      }),
+      webviewView.onDidChangeVisibility(() => {
+        if (webviewView.visible) this.broadcastActiveEditorContext();
+      }),
+    ];
+    webviewView.onDidDispose(() => {
+      for (const subscription of subscriptions) subscription.dispose();
+      if (this._view === webviewView) {
+        this._view = undefined;
+        this._webviewReady = false;
+      }
     });
 
     this.broadcastMascotConfig();
     this.broadcastActiveEditorContext();
     if (this._rpcClient) {
-      this._loadInitialConfig(true);
+      void this._loadStartupState();
     }
   }
 
@@ -1299,12 +1416,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const candidateHosts = [configuredHost, "http://127.0.0.1:11434", "http://localhost:11434"];
     const uniqueHosts = Array.from(new Set(candidateHosts));
 
-    for (const host of uniqueHosts) {
-      const res = await this._probeOllamaHost(host);
-      if (res.running) {
-        this._lastOllamaStatus = res;
-        return res;
-      }
+    // Probe in parallel: refused connections are slow on Windows (~2 s each).
+    const results = await Promise.all(uniqueHosts.map((host) => this._probeOllamaHost(host)));
+    const running = results.find((res) => res.running);
+    if (running) {
+      this._lastOllamaStatus = running;
+      return running;
     }
 
     const installed = await this._checkOllamaCliInstalled();
@@ -1606,6 +1723,47 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return null;
   }
 
+  private _addOllamaModel(model: string) {
+    if (this._models.some((m) => m.id === model || m.name === model)) return;
+    this._models.push({
+      id: model,
+      name: model,
+      provider: "ollama",
+      desc: "Local Ollama Model",
+      is_free: true,
+      tags: ["local", "coding"],
+    } as any);
+  }
+
+  private _ollamaRefresh: Promise<void> | null = null;
+
+  /** Background Ollama detection that patches the already-rendered chat state. */
+  private _refreshOllamaDetection(): Promise<void> {
+    if (!this._ollamaRefresh) {
+      this._ollamaRefresh = (async () => {
+        try {
+          const providerBefore = this._currentProvider;
+          const detected = await this._checkAndAutoConnectOllama(this._providers);
+          const status = this._lastOllamaStatus;
+          if (!detected) {
+            if (status) this._postToWebview({ type: "ollama_status_updated", status });
+            return;
+          }
+          this._addOllamaModel(detected);
+          this._postToWebview({ type: "ollama_detected", model: detected, models: this._models, status });
+          if (providerBefore === "ollama" && this._currentProvider === "ollama") {
+            this._postToWebview({ type: "config_updated", key: "model", value: this._currentModel, provider: "ollama" });
+          }
+        } catch {
+          // Ollama is optional; detection failures are not user-facing.
+        } finally {
+          this._ollamaRefresh = null;
+        }
+      })();
+    }
+    return this._ollamaRefresh;
+  }
+
   public broadcastToWebviews(msg: any) {
     this._postToWebview(msg);
     for (const tab of SessionTabPanel.getAllPanels()) {
@@ -1632,7 +1790,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this._rpcClient.call<ModelInfo[]>("config.list_models", {}).catch(() => []),
         this._rpcClient.call<ProviderInfo[]>("config.list_providers", {}).catch(() => []),
         this._rpcClient.call<SessionInfo[]>("session.list", { project_path: workspaceFolder }).catch(() => []),
-        this._rpcClient.call<any>("trust.status", { project_path: workspaceFolder }).catch(() => ({ is_trusted: true })),
+        this._rpcClient.call<any>("trust.status", { project_path: workspaceFolder }).catch(() => ({ is_trusted: false })),
         this._rpcClient.call<any[]>("skills.list", { project_path: workspaceFolder }).catch(() => []),
       ]);
 
@@ -1669,6 +1827,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this._currentProfile = configData?.default_profile || "builder";
       this._currentReasoning = configData?.reasoning_effort || "auto";
       this._currentMode = configData?.permission_mode || "safe";
+
+      // The RPCs above overlap with the webview's own loading; only posting waits for it.
+      await this._whenWebviewReady();
+      const deliveredToReadyPage = this._webviewReady;
+      const deliveryGeneration = this._viewGeneration;
+      const deliveryClient = this._rpcClient;
 
       if (loadSession) {
         const startupMode = vscode.workspace
@@ -1741,20 +1905,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       // The plan tracker is session-scoped (session.plan). Workspace plan is
       // only loaded on demand when the Plan tab is opened.
 
-      const detectedOllama = await this._checkAndAutoConnectOllama(this._providers);
-      if (detectedOllama) {
-        const existingOllamaModel = (this._models || []).find((m) => m.id === detectedOllama || m.name === detectedOllama);
-        if (!existingOllamaModel) {
-          this._models.push({
-            id: detectedOllama,
-            name: detectedOllama,
-            provider: "ollama",
-            desc: "Local Ollama Model",
-            is_free: true,
-            tags: ["local", "coding"],
-          } as any);
-        }
-      }
+      // Ollama is probed after init_state: a refused connection takes ~2 s per
+      // address on Windows and used to hold the whole chat UI back.
+      const knownOllamaModel = this._lastOllamaStatus?.running ? this._lastOllamaStatus.bestModel : null;
+      if (knownOllamaModel) this._addOllamaModel(knownOllamaModel);
 
       this._postToWebview({
         type: "init_state",
@@ -1780,9 +1934,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         waterfallFirstSessionShown: this._context?.globalState.get<boolean>("andromity.waterfallFirstSessionShown", false) || false,
         wallpaper: this.getWallpaperConfig(this._view?.webview),
         mascotEnabled: vscode.workspace.getConfiguration("andromity").get<boolean>("mascotEnabled", true),
-        ollamaDetectedModel: detectedOllama,
+        ollamaDetectedModel: knownOllamaModel,
         ollamaStatus: this._lastOllamaStatus,
       });
+      // A ready-wait that timed out may have posted into a page that wasn't
+      // listening yet; leave it undelivered so the late ready message resends.
+      if (loadSession && this._view && deliveredToReadyPage && deliveryClient && deliveryGeneration === this._viewGeneration) {
+        this._delivered = { generation: deliveryGeneration, client: deliveryClient };
+      }
+      void this._refreshOllamaDetection();
 
       const storedToken = await this._context?.secrets.get("andromity.authToken");
       const storedUser = await this._context?.secrets.get("andromity.userName");
@@ -1855,6 +2015,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private async _handleWebviewMessage(message: any) {
     if (message.type === "ready" || message.type === "webview_ready") {
+      this._markWebviewReady();
+      void this.getWorkspaceIndex().then((index) => {
+        this._postToWebview({ type: "workspace_files_updated", files: index.files, dirs: index.dirs });
+      });
       if (!this._rpcClient && this._pythonBridge) {
         const client = await this._pythonBridge.waitForClient(3000);
         if (client) {
@@ -1863,14 +2027,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       if (this._rpcClient) {
         this._postToWebview({ type: "backend_ready" });
-        await this._loadInitialConfig(true);
+        if (!this._isStartupStateDelivered()) await this._loadStartupState();
       }
-      const wsPaths = this.getWorkspacePaths();
-      this._postToWebview({
-        type: "workspace_files_updated",
-        files: wsPaths.files,
-        dirs: wsPaths.dirs,
-      });
       return;
     }
 
@@ -1958,7 +2116,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const data = event as { type: string; session_id?: string };
       if (data.type === "input_session" && data.session_id) this._currentSessionId = data.session_id;
       this._postToWebview(event);
-    })) return;
+    }, this._currentMode)) return;
 
     if (await handleInteractionMessage(this._rpcClient, message, this._currentSessionId, (event) => this._postToWebview(event))) return;
 
@@ -2045,7 +2203,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             profile: message.profile || this._currentProfile,
             model: cleanModel,
             provider: message.provider || this._currentProvider,
-            mode: message.mode || this._currentMode,
+            mode: clampPromptMode(message.mode, this._currentMode),
             reasoning_effort: message.reasoningEffort || this._currentReasoning,
             image_uris: message.images || [],
           }, 600000);
@@ -2427,37 +2585,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "cycle_mode": {
         const modes = ["safe", "trust", "full", "yolo"];
         const nextIdx = (modes.indexOf(this._currentMode) + 1) % modes.length;
-        let nextMode = (message.nextMode && modes.includes(message.nextMode.toLowerCase()))
+        const requestedMode = typeof message.nextMode === "string" && modes.includes(message.nextMode.toLowerCase())
           ? message.nextMode.toLowerCase()
           : modes[nextIdx];
-
-        if (nextMode === "yolo") {
-          const confirm = await vscode.window.showWarningMessage(
-            "Enter YOLO Mode? Autonomous agent will execute shell commands and edit files without confirmation.",
-            { modal: true },
-            "Enable YOLO Mode",
-            "Keep Safe Mode"
-          );
-          if (confirm !== "Enable YOLO Mode") {
-            nextMode = this._currentMode || "safe";
-          }
+        const nextMode = await confirmPermissionMode(requestedMode, this._currentMode);
+        if (!nextMode) {
+          // Declined or invalid: resync the webview's badge to the unchanged mode.
+          this._postToWebview({ type: "config_updated", key: "mode", value: this._currentMode });
+        } else {
+          this._currentMode = nextMode;
+          const config = vscode.workspace.getConfiguration("andromity");
+          await config.update("permissionMode", this._currentMode, vscode.ConfigurationTarget.Global);
+          await this._rpcClient?.call("config.set", {
+            section: "default",
+            key: "permission_mode",
+            value: this._currentMode,
+          });
+          const modeChangeNotice = this._isExecuting
+            ? `Permissions set to ${this._currentMode.toUpperCase()} for the next turn. Eligible pending approvals may proceed now.`
+            : `Permissions: ${this._currentMode.toUpperCase()}`;
+          this._postToWebview({ type: "config_updated", key: "mode", value: this._currentMode, notice: modeChangeNotice, appliesNextTurn: this._isExecuting });
+          void this._rpcClient?.call("telemetry.recordFeature", { feature: "mode_" + this._currentMode }).catch(() => {});
+          SettingsPanel.currentPanel?.loadData();
+          vscode.window.showInformationMessage(modeChangeNotice);
         }
-
-        this._currentMode = nextMode;
-        const config = vscode.workspace.getConfiguration("andromity");
-        await config.update("permissionMode", this._currentMode, vscode.ConfigurationTarget.Global);
-        await this._rpcClient?.call("config.set", {
-          section: "default",
-          key: "permission_mode",
-          value: this._currentMode,
-        });
-        const modeChangeNotice = this._isExecuting
-          ? `Permissions set to ${this._currentMode.toUpperCase()} for the next turn. Eligible pending approvals may proceed now.`
-          : `Permissions: ${this._currentMode.toUpperCase()}`;
-        this._postToWebview({ type: "config_updated", key: "mode", value: this._currentMode, notice: modeChangeNotice, appliesNextTurn: this._isExecuting });
-        void this._rpcClient?.call("telemetry.recordFeature", { feature: "mode_" + this._currentMode }).catch(() => {});
-        SettingsPanel.currentPanel?.loadData();
-        vscode.window.showInformationMessage(modeChangeNotice);
         break;
       }
 
@@ -2509,7 +2660,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
 
       case "trust_workspace": {
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const workspaceFolder = await confirmAndromityTrust();
+        if (!workspaceFolder) {
+          this._postToWebview({ type: "trust_updated", isTrusted: false });
+          break;
+        }
         await this._rpcClient?.call("trust.set", { project_path: workspaceFolder });
         vscode.window.showInformationMessage("Workspace trusted. File editing and shell commands enabled.");
         this._postToWebview({ type: "trust_updated", isTrusted: true });
@@ -3002,21 +3157,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "update_config": {
         const key = message.key || (message.modelId || message.model ? "model" : undefined);
         const value = message.value ?? message.modelId ?? message.model;
-        if (key) {
-          const keyMap: Record<string, string> = {
-            model: "model",
-            provider: "provider",
-            profile: "profile",
-            reasoningEffort: "reasoning_effort",
-            mode: "permission_mode",
-          };
-          const daemonKey = keyMap[key] || key;
-          void this._rpcClient?.call("telemetry.recordFeature", { feature: `config_${daemonKey}`, session_id: this._currentSessionId }).catch(() => {});
-          await this._rpcClient.call("config.set", {
-            section: "default",
-            key: daemonKey,
-            value: value,
-          });
+        if (key === "mode") {
+          await this._handleWebviewMessage({ type: "cycle_mode", nextMode: value });
+          break;
+        }
+        const write = key ? resolveWebviewConfigWrite(key, value) : null;
+        if (key && !write) {
+          console.warn(`[Andromity Chat] Ignored config write for "${key}" from the chat view.`);
+          break;
+        }
+        if (write && (key !== "model" || !message.provider || resolveWebviewConfigWrite("provider", message.provider))) {
+          void this._rpcClient?.call("telemetry.recordFeature", { feature: `config_${write.key}`, session_id: this._currentSessionId }).catch(() => {});
+          await this._rpcClient.call("config.set", write);
           if (key === "model" && message.provider) {
             this._currentProvider = message.provider;
             await this._rpcClient.call("config.set", {
@@ -3048,7 +3200,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             }
             case "provider": this._currentProvider = value; break;
             case "profile": this._currentProfile = value; break;
-            case "mode": this._currentMode = value; break;
             case "reasoningEffort": this._currentReasoning = value; break;
           }
           this._postToWebview({
@@ -3107,7 +3258,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   public _getHtmlForWebview(webview: vscode.Webview, customState?: Partial<ChatViewState>): string {
-    const wsPaths = this.getWorkspacePaths();
+    // The workspace index arrives by postMessage after load instead of being
+    // computed synchronously and inlined into every HTML build.
     return getChatViewHtml(webview, this._extensionUri, {
       currentSessionId: customState?.currentSessionId ?? this._currentSessionId,
       currentModel: customState?.currentModel ?? this._currentModel,
@@ -3119,8 +3271,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       pinnedModels: customState?.pinnedModels ?? this._pinnedModels,
       wallpaperConfig: customState?.wallpaperConfig ?? this.getWallpaperConfig(webview),
       defaultWallpaperUri: customState?.defaultWallpaperUri ?? webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, "media", "wildcat-panther-dusk.jpg")).toString(),
-      workspaceFiles: customState?.workspaceFiles ?? wsPaths.files,
-      workspaceFolders: customState?.workspaceFolders ?? wsPaths.dirs,
+      workspaceFiles: customState?.workspaceFiles ?? [],
+      workspaceFolders: customState?.workspaceFolders ?? [],
       extensionVersion: customState?.extensionVersion ?? (this._context?.extension?.packageJSON?.version || "0.2.15"),
     });
   }

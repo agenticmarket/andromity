@@ -1,14 +1,18 @@
 import { getPromptDisplayScript } from "../promptDisplay.js";
+import { scriptJson } from "../webviewSecurity.js";
+import { getSafeMarkdownScript } from "../safeMarkdown.js";
 
 export function getWaterfallScript(sessionId: string): string {
   return `
     (function() {
       ${getPromptDisplayScript()}
+      ${getSafeMarkdownScript()}
+      andromityUseSafeMarkdown();
       const vscode = acquireVsCodeApi();
 
       // State
       const state = {
-        sessionId: ${JSON.stringify(sessionId)},
+        sessionId: ${scriptJson(sessionId)},
         turns: new Map(),
         spans: new Map(),
         currentTurnId: null,

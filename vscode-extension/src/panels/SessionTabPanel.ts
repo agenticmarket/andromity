@@ -1,4 +1,10 @@
 import * as vscode from "vscode";
+import {
+  clampPromptMode,
+  confirmAndromityTrust,
+  confirmPermissionMode,
+  resolveWebviewConfigWrite,
+} from "../server/securityPolicy.js";
 import * as path from "path";
 import { RpcClient } from "../server/RpcClient.js";
 import { handleInputMessage } from "../server/inputBridge.js";
@@ -199,6 +205,10 @@ export class SessionTabPanel {
     return this._panel.webview;
   }
 
+  public get visible(): boolean {
+    return this._panel.visible;
+  }
+
   public postMessage(msg: any) {
     this._postMessage(msg);
   }
@@ -372,6 +382,9 @@ export class SessionTabPanel {
 
     if (message.type === "ready" || message.type === "webview_ready") {
       this._postMessage({ type: "backend_ready" });
+      void this._viewProvider.getWorkspaceIndex().then((index) => {
+        this._postMessage({ type: "workspace_files_updated", files: index.files, dirs: index.dirs });
+      });
       await this._loadSession();
       return;
     }
@@ -509,7 +522,7 @@ export class SessionTabPanel {
       return;
     }
 
-    if (await handleInputMessage(this._rpcClient, message, this._sessionId, (event) => this._postMessage(event))) return;
+    if (await handleInputMessage(this._rpcClient, message, this._sessionId, (event) => this._postMessage(event), this._currentMode)) return;
     if (await handleInteractionMessage(this._rpcClient, message, this._sessionId, (event) => this._postMessage(event))) return;
 
     switch (message.type) {
@@ -548,7 +561,11 @@ export class SessionTabPanel {
         break;
       }
       case "trust_workspace": {
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const workspaceFolder = await confirmAndromityTrust();
+        if (!workspaceFolder) {
+          this._postMessage({ type: "trust_updated", isTrusted: false });
+          break;
+        }
         const trust = await this._rpcClient.call<{ is_trusted: boolean }>("trust.set", { project_path: workspaceFolder });
         this._postMessage({ type: "trust_updated", isTrusted: trust.is_trusted });
         break;
@@ -605,7 +622,7 @@ export class SessionTabPanel {
             profile: message.profile || this._currentProfile,
             model: cleanModel,
             provider: message.provider || this._currentProvider,
-            mode: message.mode || this._currentMode,
+            mode: clampPromptMode(message.mode, this._currentMode),
             reasoning_effort: message.reasoningEffort || this._currentReasoning,
             image_uris: message.images || [],
           }, 600000);
@@ -627,17 +644,11 @@ export class SessionTabPanel {
       }
 
       case "cycle_mode": {
-        let nextMode = message.nextMode || (this._currentMode === "safe" ? "trust" : this._currentMode === "trust" ? "yolo" : "safe");
-        if (nextMode === "yolo") {
-          const confirm = await vscode.window.showWarningMessage(
-            "Enter YOLO Mode? Autonomous agent will execute shell commands and edit files without confirmation.",
-            { modal: true },
-            "Enable YOLO Mode",
-            "Keep Safe Mode"
-          );
-          if (confirm !== "Enable YOLO Mode") {
-            nextMode = "safe";
-          }
+        const requestedMode = message.nextMode || (this._currentMode === "safe" ? "trust" : this._currentMode === "trust" ? "yolo" : "safe");
+        const nextMode = await confirmPermissionMode(requestedMode, this._currentMode);
+        if (!nextMode) {
+          this._postMessage({ type: "config_updated", key: "mode", value: this._currentMode });
+          break;
         }
         this._currentMode = nextMode;
         const config = vscode.workspace.getConfiguration("andromity");
@@ -701,7 +712,13 @@ export class SessionTabPanel {
       case "update_config": {
         const key = message.key || (message.modelId || message.model ? "model" : undefined);
         const value = message.value ?? message.modelId ?? message.model;
-        if (key) {
+        if (key === "mode") {
+          await this._handleMessage({ type: "cycle_mode", nextMode: value });
+          break;
+        }
+        const write = key ? resolveWebviewConfigWrite(key, value) : null;
+        const providerOk = key !== "model" || !message.provider || resolveWebviewConfigWrite("provider", message.provider);
+        if (key && write && providerOk) {
           switch (key) {
             case "model":
               this._currentModel = value;
@@ -709,14 +726,9 @@ export class SessionTabPanel {
               break;
             case "provider": this._currentProvider = value; break;
             case "profile": this._currentProfile = value; break;
-            case "mode": this._currentMode = value; break;
             case "reasoningEffort": this._currentReasoning = value; break;
           }
-          await this._rpcClient?.call("config.set", {
-            section: "default",
-            key: key === "reasoningEffort" ? "reasoning_effort" : key === "mode" ? "permission_mode" : key,
-            value: value,
-          });
+          await this._rpcClient?.call("config.set", write);
           if (key === "model" && message.provider) {
             await this._rpcClient.call("config.set", { section: "default", key: "provider", value: message.provider });
           }

@@ -17,7 +17,42 @@ export interface EditorContext {
   openFiles?: string[];
 }
 
+export interface EditorSummary {
+  relativePath: string | null;
+  languageId: string | null;
+  cursorLine: number | null;
+  cursorColumn: number | null;
+  hasSelection: boolean;
+  errorCount: number;
+  warningCount: number;
+}
+
 export class EditorBridge {
+  /** Cheap snapshot for the chat's editor chip. Runs on every cursor move, so
+   *  unlike getActiveContext it never copies document text. */
+  public static getActiveSummary(): EditorSummary {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      return { relativePath: null, languageId: null, cursorLine: null, cursorColumn: null, hasSelection: false, errorCount: 0, warningCount: 0 };
+    }
+    const doc = editor.document;
+    let errorCount = 0;
+    let warningCount = 0;
+    for (const d of vscode.languages.getDiagnostics(doc.uri)) {
+      if (d.severity === vscode.DiagnosticSeverity.Error) errorCount++;
+      else if (d.severity === vscode.DiagnosticSeverity.Warning) warningCount++;
+    }
+    return {
+      relativePath: vscode.workspace.getWorkspaceFolder(doc.uri) ? vscode.workspace.asRelativePath(doc.uri, false) : doc.fileName,
+      languageId: doc.languageId,
+      cursorLine: editor.selection.active.line + 1,
+      cursorColumn: editor.selection.active.character + 1,
+      hasSelection: !editor.selection.isEmpty,
+      errorCount,
+      warningCount,
+    };
+  }
+
   public static getActiveContext(): EditorContext {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {

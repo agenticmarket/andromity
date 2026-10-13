@@ -39,8 +39,10 @@ export function getThinkingOrbsScript(): string {
       }
       if (painted && !orbMotionPreference.matches) orbFrameRequest = requestAnimationFrame(drawThinkingOrbs);
     }
+    // Called for every DOM mutation while a reply streams; a frame that is
+    // already queued will pick the change up, so don't re-queue it.
     function refreshThinkingOrbs() {
-      if (orbFrameRequest) cancelAnimationFrame(orbFrameRequest);
+      if (orbFrameRequest) return;
       orbLastFrame = 0;
       orbFrameRequest = requestAnimationFrame(drawThinkingOrbs);
     }

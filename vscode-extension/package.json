@@ -16,7 +16,15 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "Andromity requires workspace trust to edit files and execute terminal commands."
+      "description": "Andromity requires workspace trust to edit files and execute terminal commands.",
+      "restrictedConfigurations": [
+        "andromity.pythonPath",
+        "andromity.serverPort",
+        "andromity.ollamaHost",
+        "andromity.permissionMode",
+        "andromity.includeCoAuthor",
+        "andromity.wallpaper.rippleIntensity"
+      ]
     }
   },
   "categories": [
@@ -675,7 +683,7 @@
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run build",
+    "vscode:prepublish": "node esbuild.js --production",
     "compile": "tsc -p ./",
     "watch": "node esbuild.js --watch",
     "watch:tsc": "tsc -watch -p ./",

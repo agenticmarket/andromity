@@ -2,7 +2,26 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
-## [0.2.18] — 2026-10-09
+## [0.2.18] — 2026-10-13
+
+### Security
+- Opening a folder no longer runs Python from it: workspace virtualenvs, the Python extension's interpreter and `src/` packages are used only in trusted workspaces, interpreter probes run outside the workspace, and the daemon starts with `-P` so the workspace is never on its import path.
+- `andromity.pythonPath`, `serverPort`, `ollamaHost`, `permissionMode`, `includeCoAuthor` and the wallpaper ripple setting are ignored when set by an untrusted workspace. Python paths on network shares are refused.
+- TCP daemon mode authenticates with the daemon token.
+- Enabling Andromity's file and shell access for a folder requires VS Code workspace trust and a confirmation, and only applies to the open folder. Switching to FULL or YOLO always asks first, including from Settings and session tabs, and a single prompt can no longer raise the permission mode.
+- Settings and chat can only change a fixed set of configuration keys, with validated values. Starting MCP servers requires workspace trust.
+- The background task tab has a strict Content Security Policy and escapes the command it shows. Waterfall and plan views render model output with the same rules as chat: HTML as text, safe links only, remote images as links.
+- Values embedded in webview scripts are escaped so they cannot close the script element. Webview nonces come from a secure random source, and Google Fonts are no longer loaded.
+- Links in chat to network paths are refused, and files outside the workspace open only after confirmation.
+
+### Performance
+- The chat panel appears about 3 s sooner on Windows. Model listing no longer waits on Ollama's connection timeout (the daemon pins `localhost` to the address that answers), and Ollama detection runs after the chat is shown.
+- Startup loads chat state once instead of up to four times. Settings data is prefetched after startup settles, and the daemon defers its provider-library import until the first requests are answered.
+- Streaming replies render at most once per frame and re-parse only the unfinished part of the message, so long answers no longer slow down as they grow. Tool arguments and thinking text append without re-processing.
+- The workspace file index used for clickable paths is built asynchronously and cached.
+- The status bar and context keys update when a turn starts or stops, not on every token. Editor-context updates skip hidden views and other files' diagnostics.
+- A daemon that crashes on startup now backs off and stops after five attempts instead of restarting every 2 seconds. Process shutdown no longer blocks the editor.
+- The packaged extension is minified, and background task tabs poll only while visible.
 
 ### Added
 - Ollama setup states in the Hub: show when the server is unavailable, offer Start Ollama for an installed but stopped server, and provide installation and official setup documentation links.

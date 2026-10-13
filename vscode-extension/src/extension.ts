@@ -3,10 +3,7 @@ import { AndromityCodeActionProvider } from "./integrations/CodeActionProvider.j
 import { EditorBridge } from "./integrations/EditorBridge.js";
 import { generateCommitMessage } from "./integrations/GitCommit.js";
 import { ChatViewProvider } from "./providers/ChatViewProvider.js";
-import { ChangesTreeProvider } from "./providers/ChangesTreeProvider.js";
-import { CronTreeProvider } from "./providers/CronTreeProvider.js";
 import { PlanViewProvider } from "./providers/PlanViewProvider.js";
-import { SessionTreeProvider } from "./providers/SessionTreeProvider.js";
 import { SettingsPanel } from "./panels/SettingsPanel.js";
 import { PlanEditorPanel } from "./panels/PlanEditorPanel.js";
 import { WaterfallPanel, WaterfallTraceStore } from "./panels/WaterfallPanel.js";
@@ -36,7 +33,10 @@ function markEngineStartFailed() {
 function syncCoAuthorSetting(client: RpcClient | null | undefined) {
   if (!client) return;
   const inspected = vscode.workspace.getConfiguration("andromity").inspect<boolean>("includeCoAuthor");
-  const value = inspected?.workspaceFolderValue ?? inspected?.workspaceValue ?? inspected?.globalValue;
+  // This writes the global config.toml, so an untrusted repo's value must not reach it.
+  const value = vscode.workspace.isTrusted === false
+    ? inspected?.globalValue
+    : inspected?.workspaceFolderValue ?? inspected?.workspaceValue ?? inspected?.globalValue;
   if (value === undefined) return;
   void client.call("config.set", { section: "default", key: "include_co_author", value }).catch(() => {});
 }
@@ -58,11 +58,17 @@ function bindStatusBarEvents(client: RpcClient) {
     }
   };
 
+  // Called for every streamed token: only touch the status bar and context key
+  // when a session actually transitions to running.
   const markRunning = (params?: any) => {
     const sid = params?.session_id || "main";
+    if (activeRunningSessions.has(sid)) return;
+    const wasIdle = activeRunningSessions.size === 0;
     activeRunningSessions.add(sid);
     updateStatusBar();
-    void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", true);
+    if (wasIdle) {
+      void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", true);
+    }
   };
 
   const markFinished = (params?: any) => {
@@ -125,9 +131,6 @@ export async function activate(context: vscode.ExtensionContext) {
   SettingsPanel.chatProvider = chatProvider;
   const planProvider = new PlanViewProvider(context.extensionUri);
   chatProvider.setPlanViewProvider(planProvider);
-  const sessionTreeProvider = new SessionTreeProvider();
-  const cronTreeProvider = new CronTreeProvider();
-  const changesTreeProvider = new ChangesTreeProvider();
 
   // Plan approve/reject flows through the chat session + queue (TUI parity).
   planProvider.setPlanActionHandler(async (approved, feedback, sessionId) => {
@@ -236,11 +239,8 @@ export async function activate(context: vscode.ExtensionContext) {
     connectedPreviously = true;
     chatProvider.setRpcClient(rpcClient);
     planProvider.setRpcClient(rpcClient);
-    sessionTreeProvider.setRpcClient(rpcClient);
-    cronTreeProvider.setRpcClient(rpcClient);
-    changesTreeProvider.setRpcClient(rpcClient);
     syncCoAuthorSetting(rpcClient);
-    SettingsPanel.prewarm(rpcClient);
+    SettingsPanel.schedulePrewarm(rpcClient);
     SettingsPanel.currentPanel?.setRpcClient(rpcClient);
     // Reconnect live MCP sessions on every daemon launch, independently of the Hub.
     void rpcClient.call<Array<{ name: string; status: string; disabled: boolean }>>(
@@ -508,8 +508,6 @@ export async function activate(context: vscode.ExtensionContext) {
           });
           if (res?.id) {
             chatProvider.setCurrentSessionId(res.id);
-            sessionTreeProvider.setCurrentSessionId(res.id);
-            sessionTreeProvider.refresh();
             await vscode.commands.executeCommand("andromity.chatView.focus");
           }
         } catch (e: any) {
@@ -522,7 +520,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand("andromity.switchSessionById", (sessionId: string) => {
       chatProvider.setCurrentSessionId(sessionId);
-      sessionTreeProvider.setCurrentSessionId(sessionId);
       vscode.commands.executeCommand("andromity.chatView.focus");
     }),
 
@@ -663,7 +660,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("andromity.refreshSessions", () => {
-      sessionTreeProvider.refresh();
+      void chatProvider.fetchAndPostSessions();
     }),
 
     vscode.commands.registerCommand("andromity.openSessionInTab", (item?: any) => {
@@ -798,11 +795,10 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("andromity.refreshCrons", () => {
-      cronTreeProvider.refresh();
+      void chatProvider.fetchAndPostCrons();
     }),
 
     vscode.commands.registerCommand("andromity.refreshChanges", () => {
-      changesTreeProvider.refresh();
       if (ChangesReviewPanel.currentPanel) {
         void ChangesReviewPanel.currentPanel.loadChanges();
       }
@@ -823,7 +819,7 @@ export async function activate(context: vscode.ExtensionContext) {
           void vscode.window.showErrorMessage(result.error || "Could not delete this chat. Please retry.");
           return;
         }
-        sessionTreeProvider.refresh();
+        void chatProvider.fetchAndPostSessions();
         vscode.window.showInformationMessage("Session deleted.");
       } catch {
         void vscode.window.showErrorMessage("Could not delete this chat. Check the connection and retry.");

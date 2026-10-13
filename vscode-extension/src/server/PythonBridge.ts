@@ -1,9 +1,89 @@
 import * as cp from "child_process";
 import * as fs from "fs";
 import * as net from "net";
+import * as os from "os";
 import * as path from "path";
+import { StringDecoder } from "string_decoder";
 import * as vscode from "vscode";
 import { RpcClient } from "./RpcClient.js";
+import { isUncPath } from "./securityPolicy.js";
+
+/** A daemon must stay up this long before a later crash restarts the backoff schedule. */
+export const STABLE_UPTIME_MS = 20_000;
+const STDERR_TAIL_LIMIT = 16 * 1024;
+
+export function isWorkspaceTrusted(): boolean {
+  return vscode.workspace.isTrusted !== false;
+}
+
+/** Resolve a bare executable name against absolute PATH entries only. Windows'
+ *  process search includes the child's cwd (the workspace), so spawning a bare
+ *  "python" there could run a repo-planted python.exe. */
+export function resolveOnPath(command: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  const isWin = process.platform === "win32";
+  const pathValue = env.PATH ?? env.Path ?? "";
+  // Only real executables: spawning a .bat/.cmd shim without a shell throws
+  // EINVAL on current Node, so let those fall back to the OS lookup instead.
+  const exts = isWin ? [".exe", ".com"] : [""];
+  for (const dir of pathValue.split(path.delimiter)) {
+    if (!dir || !path.isAbsolute(dir) || isUncPath(dir)) continue;
+    for (const ext of exts) {
+      const candidate = path.join(dir, command + ext);
+      try {
+        if (fs.statSync(candidate).isFile()) return candidate;
+      } catch {
+        // not in this directory
+      }
+    }
+  }
+  return null;
+}
+
+/** Kill a process tree without blocking the extension host. Resolves once the
+ *  process has exited, or after timeoutMs if it never reports an exit. */
+export function killProcessTree(proc: cp.ChildProcess, timeoutMs = 3000): Promise<void> {
+  const exited = proc.exitCode !== null || proc.signalCode !== null
+    ? Promise.resolve()
+    : new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, timeoutMs);
+        proc.once("exit", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+  const pid = proc.pid;
+  if (process.platform === "win32" && pid) {
+    cp.execFile("taskkill", ["/F", "/T", "/PID", String(pid)], { windowsHide: true }, (err) => {
+      if (err) {
+        try { proc.kill(); } catch { /* already exited */ }
+      }
+    });
+  } else {
+    try { proc.kill(); } catch { /* already exited */ }
+  }
+  return exited;
+}
+
+/** Token the daemon's TCP mode requires as its first frame (see server/main.py). */
+export function readDaemonToken(env: NodeJS.ProcessEnv = process.env): string | null {
+  const configDir = env.ANDROMITY_CONFIG_DIR
+    ? env.ANDROMITY_CONFIG_DIR.replace(/^~(?=$|[\\/])/, os.homedir())
+    : process.platform === "win32"
+      ? path.join(env.APPDATA || os.homedir(), "andromity")
+      : path.join(os.homedir(), ".andromity");
+  try {
+    const token = fs.readFileSync(path.join(configDir, "daemon.token"), "utf-8").trim();
+    return token || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Neutral cwd for interpreter probes. Probes that can import modules also pass
+ *  -P, because `-c`/`-m` put the cwd first on sys.path and the temp dir may be shared. */
+function probeCwd(): string {
+  return os.tmpdir();
+}
 
 export function formatTimestamp(date: Date = new Date()): string {
   const pad = (n: number, z = 2) => String(n).padStart(z, "0");
@@ -39,6 +119,9 @@ export class PythonBridge {
   private _lastPythonStatus: PythonStatus | null = null;
   private _packageInstallAttempted = false;
   private _lastExitWasPackageError = false;
+  /** Exit of the daemon being replaced; a new one starts only after it, so two
+   *  daemons never contend for the session database or MCP servers. */
+  private _previousExit: Promise<void> = Promise.resolve();
 
   private _log(msg: string): void {
     this._outputChannel.appendLine(`[${formatTimestamp()}] ${msg}`);
@@ -92,7 +175,8 @@ export class PythonBridge {
     this._outputChannel = outputChannel;
   }
 
-  public onClientReady(callback: (client: RpcClient) => void) {
+  /** Returns a function that unregisters the callback. */
+  public onClientReady(callback: (client: RpcClient) => void): () => void {
     this._clientCallbacks.push(callback);
     if (this._client) {
       try {
@@ -101,6 +185,10 @@ export class PythonBridge {
         console.error("[Andromity] Error in immediate onClientReady callback:", e);
       }
     }
+    return () => {
+      const index = this._clientCallbacks.indexOf(callback);
+      if (index !== -1) this._clientCallbacks.splice(index, 1);
+    };
   }
 
   /** Fired whenever the daemon goes away (crash / restart / dispose) so the UI
@@ -110,7 +198,7 @@ export class PythonBridge {
   }
 
   private _notifyDisconnected() {
-    for (const cb of this._disconnectedCallbacks) {
+    for (const cb of [...this._disconnectedCallbacks]) {
       try {
         cb();
       } catch (e) {
@@ -120,7 +208,8 @@ export class PythonBridge {
   }
 
   private _notifyClientReady(client: RpcClient) {
-    for (const cb of this._clientCallbacks) {
+    // Copy: one-shot callbacks (waitForClient) unregister themselves while running.
+    for (const cb of [...this._clientCallbacks]) {
       try {
         cb(client);
       } catch (e) {
@@ -136,21 +225,21 @@ export class PythonBridge {
   public async checkPythonStatus(): Promise<PythonStatus> {
     const pythonPath = await this._resolvePythonPath();
     const projectRoot = this._findProjectRoot();
-    const cwd = projectRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+    const cwd = probeCwd();
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
       PYTHONUNBUFFERED: "1",
       PYTHONIOENCODING: "utf-8",
     };
 
-    const srcDir = projectRoot ? path.join(projectRoot, "src") : path.join(cwd, "src");
-    if (fs.existsSync(srcDir)) {
+    const srcDir = projectRoot ? path.join(projectRoot, "src") : null;
+    if (srcDir && fs.existsSync(srcDir)) {
       env.PYTHONPATH = env.PYTHONPATH ? `${srcDir}${path.delimiter}${env.PYTHONPATH}` : srcDir;
     }
 
     try {
       const versionOutput = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
-        const proc = cp.spawn(pythonPath, ["-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"], {
+        const proc = cp.spawn(pythonPath, ["-I", "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"], {
           cwd,
           env,
           windowsHide: true,
@@ -180,9 +269,10 @@ export class PythonBridge {
       const parts = version.split(".").map(Number);
       const isVersionSupported = (parts[0] === 3 && parts[1] >= 11) || parts[0] > 3;
 
-      // Probe whether andromity server module is importable
-      const pkgCheck = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
-        const proc = cp.spawn(pythonPath, ["-c", "import andromity.server; print('ok')"], {
+      // Probe whether andromity server module is importable (-P needs 3.11+,
+      // and older interpreters cannot run the daemon anyway).
+      const pkgCheck = !isVersionSupported ? { code: 1, stdout: "", stderr: "" } : await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+        const proc = cp.spawn(pythonPath, ["-P", "-c", "import andromity.server; print('ok')"], {
           cwd,
           env,
           windowsHide: true,
@@ -221,6 +311,8 @@ export class PythonBridge {
 
   public async start(): Promise<RpcClient> {
     const config = vscode.workspace.getConfiguration("andromity");
+    // serverPort is a restricted configuration, so VS Code ignores workspace
+    // values for it in untrusted folders.
     const serverPort = config.get<number>("serverPort", 0);
 
     if (serverPort > 0) {
@@ -232,18 +324,24 @@ export class PythonBridge {
 
   private async _connectTcp(port: number, host = "127.0.0.1"): Promise<RpcClient> {
     this._log(`[Andromity] Connecting to TCP server on ${host}:${port}...`);
+    const token = readDaemonToken();
+    if (!token) {
+      throw new Error("Andromity TCP mode needs the daemon token. Start the daemon with --port once so it creates daemon.token, then reload.");
+    }
 
     return new Promise((resolve, reject) => {
       const socket = net.createConnection({ host, port }, () => {
         this._log(`[Andromity] Connected to TCP server.`);
         this._socket = socket;
+        socket.write(JSON.stringify({ auth: token }) + "\n");
 
         const client = new RpcClient((msg) => {
           socket.write(msg);
         }, { log: (m) => this._log(m) });
 
+        const decoder = new StringDecoder("utf8");
         socket.on("data", (data) => {
-          client.handleIncomingMessage(data.toString("utf-8"));
+          client.handleIncomingMessage(decoder.write(data));
         });
 
         socket.on("error", (err) => {
@@ -293,8 +391,8 @@ export class PythonBridge {
         const isTrustedWorkspace = vscode.workspace.isTrusted ?? true;
         const hasPyproject = isTrustedWorkspace && fs.existsSync(path.join(cwd, "pyproject.toml"));
         const pipArgs = hasPyproject
-          ? ["-m", "pip", "install", ".", "--quiet", "--no-warn-script-location"]
-          : ["-m", "pip", "install", "--upgrade", "andromity", "--index-url", "https://pypi.org/simple/", "--quiet", "--no-warn-script-location"];
+          ? ["-P", "-m", "pip", "install", ".", "--quiet", "--no-warn-script-location"]
+          : ["-P", "-m", "pip", "install", "--upgrade", "andromity", "--index-url", "https://pypi.org/simple/", "--quiet", "--no-warn-script-location"];
 
         const source = hasPyproject ? "workspace" : "PyPI";
         progress.report({ message: `Installing from ${source}...` });
@@ -302,7 +400,7 @@ export class PythonBridge {
 
         const result = await new Promise<{ code: number; stderr: string }>((resolve) => {
           const proc = cp.spawn(pythonPath, pipArgs, {
-            cwd,
+            cwd: hasPyproject ? cwd : probeCwd(),
             env,
             windowsHide: true,
             stdio: ["ignore", "pipe", "pipe"],
@@ -357,8 +455,10 @@ export class PythonBridge {
       dir = parent;
     }
 
-    // 2. Check open workspace folders and their parents
-    for (const wf of vscode.workspace.workspaceFolders ?? []) {
+    // 2. Check open workspace folders and their parents. Their src/ is put on
+    //    PYTHONPATH, so an untrusted repo must never be treated as the project.
+    const workspaceFolders = isWorkspaceTrusted() ? vscode.workspace.workspaceFolders ?? [] : [];
+    for (const wf of workspaceFolders) {
       const p = wf.uri.fsPath;
       if (isProjectRoot(p)) {
         return p;
@@ -369,7 +469,8 @@ export class PythonBridge {
       }
     }
 
-    // 3. Check process.cwd() and its parent
+    // 3. Check process.cwd() and its parent (`code .` makes this the opened repo)
+    if (!isWorkspaceTrusted()) return null;
     try {
       const cwd = process.cwd();
       if (isProjectRoot(cwd)) return cwd;
@@ -396,8 +497,8 @@ export class PythonBridge {
     return new Promise((resolve) => {
       const proc = cp.spawn(
         pythonPath,
-        ["-c", "import andromity.server; print('ok')"],
-        { env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }
+        ["-P", "-c", "import andromity.server; print('ok')"],
+        { cwd: probeCwd(), env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }
       );
       let out = "";
       let err = "";
@@ -528,7 +629,8 @@ export class PythonBridge {
 
     this._log(`[Andromity] Launching daemon (Python ${status.version || ""}): ${pythonPath}`);
 
-    const args = ["-m", "andromity.server", "--stdio"];
+    // -P (Python 3.11+, enforced above): don't put the cwd (the workspace) on sys.path.
+    const args = ["-P", "-m", "andromity.server", "--stdio"];
 
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
@@ -537,12 +639,15 @@ export class PythonBridge {
       ANDROMITY_CLIENT: "vscode",
     };
 
-    const daemonSrcDir = projectRoot ? path.join(projectRoot, "src") : path.join(cwd, "src");
-    if (fs.existsSync(daemonSrcDir)) {
+    const daemonSrcDir = projectRoot ? path.join(projectRoot, "src") : null;
+    if (daemonSrcDir && fs.existsSync(daemonSrcDir)) {
       env.PYTHONPATH = env.PYTHONPATH ? `${daemonSrcDir}${path.delimiter}${env.PYTHONPATH}` : daemonSrcDir;
     }
 
-    return this._spawnDaemon(pythonPath, args, projectRoot || cwd, env, startAttemptTime);
+    // A bare command name is resolved by the OS relative to the child's cwd first on
+    // Windows, so never pair one with an untrusted workspace as the cwd.
+    const daemonCwd = path.isAbsolute(pythonPath) || isWorkspaceTrusted() ? projectRoot || cwd : probeCwd();
+    return this._spawnDaemon(pythonPath, args, daemonCwd, env, startAttemptTime);
   }
 
   /**
@@ -574,13 +679,13 @@ export class PythonBridge {
   }
 
   /** Shared daemon spawn logic used by both binary and Python paths. */
-  private _spawnDaemon(
+  private async _spawnDaemon(
     execPath: string,
     args: string[],
     cwd: string,
     env: Record<string, string>,
     totalStartTime?: number
-  ): RpcClient {
+  ): Promise<RpcClient> {
     // Respect user privacy: check VS Code global telemetry & andromity.telemetry setting
     try {
       const vscodeConfig = vscode.workspace.getConfiguration("andromity");
@@ -601,22 +706,10 @@ export class PythonBridge {
 
     // Ensure any previously running daemon process is cleanly terminated before spawning a new one
     if (this._process) {
-      try {
-        const oldPid = this._process.pid;
-        if (process.platform === "win32" && oldPid) {
-          try {
-            cp.execSync(`taskkill /F /T /PID ${oldPid}`, { stdio: "ignore" });
-          } catch {
-            this._process.kill();
-          }
-        } else {
-          this._process.kill();
-        }
-      } catch {
-        // ignore
-      }
+      this._previousExit = killProcessTree(this._process);
       this._process = null;
     }
+    await this._previousExit;
 
     const spawnStartTime = Date.now();
     const overallStartTime = totalStartTime ?? spawnStartTime;
@@ -624,6 +717,7 @@ export class PythonBridge {
       cwd,
       env,
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     });
 
     this._process = proc;
@@ -637,8 +731,16 @@ export class PythonBridge {
       }
     }, { log: (m) => this._log(m) });
 
+    // Only the tail is needed to classify a crash; the full log is in the output channel.
     let stderrBuffer = "";
     let hasReceivedFirstOutput = false;
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
+    // Reset the backoff only once this daemon has proven stable; resetting at
+    // spawn time made a daemon that crashes on startup respawn forever.
+    const stableTimer = setTimeout(() => {
+      if (this._process === proc) this._reconnectAttempts = 0;
+    }, STABLE_UPTIME_MS);
 
     const onFirstDaemonOutput = (source: "stdout" | "stderr") => {
       if (!hasReceivedFirstOutput) {
@@ -650,13 +752,13 @@ export class PythonBridge {
 
     proc.stdout.on("data", (data) => {
       onFirstDaemonOutput("stdout");
-      client.handleIncomingMessage(data.toString("utf-8"));
+      client.handleIncomingMessage(stdoutDecoder.write(data));
     });
 
     proc.stderr.on("data", (data) => {
       onFirstDaemonOutput("stderr");
-      const text = data.toString("utf-8");
-      stderrBuffer += text;
+      const text = stderrDecoder.write(data);
+      stderrBuffer = (stderrBuffer + text).slice(-STDERR_TAIL_LIMIT);
       this._outputChannel.append(`[Daemon Log] ${text}`);
     });
 
@@ -666,6 +768,7 @@ export class PythonBridge {
     });
 
     proc.on("exit", (code, signal) => {
+      clearTimeout(stableTimer);
       this._log(`[Daemon Exit] Process exited with code ${code} (signal: ${signal})`);
 
       // Always reject pending RPCs on the client bound to this process.
@@ -719,7 +822,10 @@ export class PythonBridge {
         this._log(
           `[Andromity] Restarting daemon in ${delay}ms (attempt ${this._reconnectAttempts}/${this._maxReconnectAttempts})...`
         );
-        setTimeout(() => this._startSubprocess(), delay);
+        setTimeout(() => {
+          if (this._isDisposed) return;
+          this._startSubprocess().catch((err) => this._log(`[Andromity] Daemon restart failed: ${err.message}`));
+        }, delay);
       } else if (!this._isDisposed && this._reconnectAttempts >= this._maxReconnectAttempts) {
         this._log(`[Andromity] Max reconnect attempts reached. Stopping auto-restart.`);
         vscode.window.showErrorMessage(
@@ -734,7 +840,6 @@ export class PythonBridge {
     });
 
     this._client = client;
-    this._reconnectAttempts = 0;
     this._notifyClientReady(client);
     return client;
   }
@@ -746,20 +851,16 @@ export class PythonBridge {
   public async waitForClient(timeoutMs: number = 5000): Promise<RpcClient | null> {
     if (this._client) return this._client;
     return new Promise((resolve) => {
-      let resolved = false;
+      let unregister: (() => void) | null = null;
       const timer = setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          resolve(this._client);
-        }
+        unregister?.();
+        resolve(this._client);
       }, timeoutMs);
 
-      this.onClientReady((client) => {
-        if (!resolved) {
-          resolved = true;
-          clearTimeout(timer);
-          resolve(client);
-        }
+      unregister = this.onClientReady((client) => {
+        clearTimeout(timer);
+        unregister?.();
+        resolve(client);
       });
     });
   }
@@ -785,20 +886,7 @@ export class PythonBridge {
       }
     }
     if (this._process) {
-      try {
-        const pid = this._process.pid;
-        if (process.platform === "win32" && pid) {
-          try {
-            cp.execSync(`taskkill /F /T /PID ${pid}`, { stdio: "ignore" });
-          } catch {
-            this._process.kill();
-          }
-        } else {
-          this._process.kill();
-        }
-      } catch (e) {
-        // ignore
-      }
+      this._previousExit = killProcessTree(this._process);
       this._process = null;
     }
     if (this._socket) {
@@ -814,12 +902,17 @@ export class PythonBridge {
 
   private async _resolvePythonPath(): Promise<string> {
     const config = vscode.workspace.getConfiguration("andromity");
+    // pythonPath is a restricted configuration: untrusted folders cannot set it.
     const configuredPath = config.get<string>("pythonPath", "").trim();
-    if (configuredPath && fs.existsSync(configuredPath)) {
+    if (configuredPath && isUncPath(configuredPath)) {
+      // Even probing a UNC path makes Windows authenticate to that host.
+      this._log(`[Andromity] Ignoring andromity.pythonPath on a network share: ${configuredPath}`);
+    } else if (configuredPath && fs.existsSync(configuredPath)) {
       return configuredPath;
     }
 
     const isWin = process.platform === "win32";
+    const trusted = isWorkspaceTrusted();
     const searchDirs: string[] = [];
 
     const projectRoot = this._findProjectRoot();
@@ -827,15 +920,18 @@ export class PythonBridge {
       searchDirs.push(projectRoot);
     }
 
-    for (const wf of vscode.workspace.workspaceFolders ?? []) {
-      searchDirs.push(wf.uri.fsPath);
-      searchDirs.push(path.dirname(wf.uri.fsPath));
-    }
+    // A virtualenv committed to a repo would run as soon as the folder opens.
+    if (trusted) {
+      for (const wf of vscode.workspace.workspaceFolders ?? []) {
+        searchDirs.push(wf.uri.fsPath);
+        searchDirs.push(path.dirname(wf.uri.fsPath));
+      }
 
-    try {
-      searchDirs.push(process.cwd());
-      searchDirs.push(path.dirname(process.cwd()));
-    } catch {}
+      try {
+        searchDirs.push(process.cwd());
+        searchDirs.push(path.dirname(process.cwd()));
+      } catch {}
+    }
 
     let curr = __dirname;
     for (let i = 0; i < 5; i++) {
@@ -869,9 +965,9 @@ export class PythonBridge {
       }
     }
 
-    // Try VS Code Python extension interpreter if available
+    // The Python extension's active interpreter is usually the workspace venv.
     try {
-      const pythonExtension = vscode.extensions.getExtension("ms-python.python");
+      const pythonExtension = trusted ? vscode.extensions.getExtension("ms-python.python") : undefined;
       if (pythonExtension) {
         const api = pythonExtension.exports;
         if (api?.environments?.getActiveEnvironmentPath) {
@@ -912,6 +1008,7 @@ export class PythonBridge {
       }
     }
 
-    return process.platform === "win32" ? "python" : "python3";
+    const bareName = process.platform === "win32" ? "python" : "python3";
+    return resolveOnPath(bareName) ?? bareName;
   }
 }

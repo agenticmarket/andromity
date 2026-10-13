@@ -39,3 +39,7 @@ assets/**
 **/*.disabled
 
 
+*.log
+**/*.log
+demo/**
+THEME_GUIDELINES.md

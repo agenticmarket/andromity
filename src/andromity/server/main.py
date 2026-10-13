@@ -72,7 +72,13 @@ def _prewarm_dependencies():
     except Exception:
         pass
 
-threading.Thread(target=_prewarm_dependencies, daemon=True).start()
+# Importing litellm takes seconds of CPU and holds the GIL, so start it only
+# after the client's first burst of startup requests has been answered.
+PREWARM_DELAY_S = 1.0
+
+
+def _start_prewarm() -> None:
+    threading.Thread(target=_prewarm_dependencies, daemon=True).start()
 
 
 import secrets
@@ -173,6 +179,7 @@ async def start_stdio_server():
                 log.exception("Error processing RPC request: %s", e)
 
     log.info("Andromity JSON-RPC stdio server ready and listening.")
+    loop.call_later(PREWARM_DELAY_S, _start_prewarm)
     from andromity.telemetry import send_feature_used
     send_feature_used("app_started")
 
@@ -213,6 +220,7 @@ async def start_tcp_server(host: str = "127.0.0.1", port: int = 8765, allow_remo
         )
 
     daemon_token = _get_or_create_daemon_token()
+    asyncio.get_running_loop().call_later(PREWARM_DELAY_S, _start_prewarm)
     log.info("Starting Andromity JSON-RPC TCP server on %s:%d (auth enabled)...", host, port)
 
     async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):

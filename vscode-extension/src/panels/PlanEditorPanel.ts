@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
+import { getNonce, scriptJson } from "../providers/webviewSecurity.js";
 import { RpcClient } from "../server/RpcClient.js";
+import { getSafeMarkdownScript } from "../providers/safeMarkdown.js";
 
 export class PlanEditorPanel {
   public static currentPanel: PlanEditorPanel | undefined;
@@ -163,15 +165,11 @@ export class PlanEditorPanel {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline' https://fonts.googleapis.com; script-src 'nonce-${nonce}' ${webview.cspSource}; img-src ${webview.cspSource} https: data:; font-src ${webview.cspSource} https://fonts.gstatic.com data:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${webview.cspSource}; img-src ${webview.cspSource} data:; font-src ${webview.cspSource} data:;">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Implementation Plan</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..700;1,14..32,300..700&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap" rel="stylesheet">
   <script nonce="${nonce}" src="${markedUri}"></script>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..700;1,14..32,300..700&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap');
 
     :root {
       --bg: var(--vscode-editor-background);
@@ -631,8 +629,9 @@ export class PlanEditorPanel {
   </div>
 
   <script nonce="${nonce}">
+    ${getSafeMarkdownScript()}
     const vscode = acquireVsCodeApi();
-    let currentPlanSessionId = ${JSON.stringify(this._sessionId || "")};
+    let currentPlanSessionId = ${scriptJson(this._sessionId || "")};
 
     const titleEl = document.getElementById('header-plan-title');
     const badgeEl = document.getElementById('header-plan-badge');
@@ -821,13 +820,21 @@ export class PlanEditorPanel {
           out += '<code>' + escapeHtml(parts[i]) + '</code>';
         } else {
           var t = escapeHtml(parts[i]);
-          t = t.replace(/!\\[([^\\]]*)\\]\\(([^)]+)\\)/g, '<img class="md-image" src="$2" alt="$1" title="$1" loading="lazy" style="max-width:100%; border-radius:6px; margin:8px 0;" />');
+          t = t.replace(/!\\[([^\\]]*)\\]\\(([^)]+)\\)/g, function(_m, alt, src) {
+            return andromityIsSafeHref(src) && /^https?:/i.test(src)
+              ? '<a href="' + src + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:underline;">' + (alt || src) + '</a>'
+              : (alt || src);
+          });
           t = t.replace(/~~([^~]+)~~/g, '<del>$1</del>');
           t = t.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
           t = t.replace(/__([^_]+)__/g, '<strong>$1</strong>');
           t = t.replace(/\\*([^*]+)\\*/g, '<em>$1</em>');
           t = t.replace(/_([^_]+)_/g, '<em>$1</em>');
-          t = t.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank" style="color:var(--accent); text-decoration:underline;">$1</a>');
+          t = t.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, function(_m, label, href) {
+            return andromityIsSafeHref(href)
+              ? '<a href="' + href + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:underline;">' + label + '</a>'
+              : label;
+          });
           out += t;
         }
       }
@@ -863,7 +870,7 @@ export class PlanEditorPanel {
             return '<div style="overflow-x:auto; margin:10px 0; border:1px solid var(--border); border-radius:6px;"><table style="width:100%; border-collapse:collapse; font-size:12px;">' + headerHtml + bodyHtml + '</table></div>';
           }
         };
-        marked.use({ renderer: markedRenderer, gfm: true, breaks: true });
+        andromityUseSafeMarkdown(markedRenderer);
       }
     } catch (e) {}
 
@@ -975,7 +982,7 @@ export class PlanEditorPanel {
     }
 
     // Render embedded initial plan if available
-    var embeddedPlan = ${JSON.stringify(this._currentPlan || null)};
+    var embeddedPlan = ${scriptJson(this._currentPlan || null)};
     if (embeddedPlan) {
       renderPlan(embeddedPlan);
     }
@@ -986,11 +993,3 @@ export class PlanEditorPanel {
   }
 }
 
-function getNonce() {
-  let text = "";
-  const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
-}

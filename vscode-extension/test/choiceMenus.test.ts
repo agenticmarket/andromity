@@ -29,10 +29,28 @@ test('permission change during a running turn reports next-turn timing after ack
   const notices: string[] = [];
   const host = {_currentMode:'trust', _isExecuting:true, _rpcClient:{call:async () => ({})}, _postToWebview:(event: any) => events.push(event)};
   const vscode = {workspace:{getConfiguration:() => ({update:async () => {}})}, ConfigurationTarget:{Global:1}, window:{showInformationMessage:(text: string) => notices.push(text)}};
-  await vm.runInNewContext('(async function() {' + block + '}).call(host)', {host, vscode, message:{nextMode:'full'}, SettingsPanel:{currentPanel:null}});
+  const confirmed: string[] = [];
+  const confirmPermissionMode = async (mode: string) => { confirmed.push(mode); return mode; };
+  await vm.runInNewContext('(async function() {' + block + '}).call(host)', {host, vscode, message:{nextMode:'full'}, SettingsPanel:{currentPanel:null}, confirmPermissionMode});
+  assert.deepEqual(confirmed, ['full']);
   assert.equal(events[0].value, 'full');
   assert.equal(events[0].appliesNextTurn, true);
   assert.match(events[0].notice, /next turn/);
   assert.match(events[0].notice, /pending approvals/);
   assert.equal(notices[0], events[0].notice);
+});
+
+test('declining an elevated permission mode keeps the current mode and resyncs the webview', async () => {
+  const provider = readFileSync('src/providers/ChatViewProvider.ts', 'utf8');
+  const block = provider.slice(provider.indexOf('      case "cycle_mode": {'), provider.indexOf('      case "cycle_profile":'))
+    .replace(/^\s*case "cycle_mode": \{/, '').replace(/break;\s*\}\s*$/, '');
+  const events: any[] = [];
+  const configWrites: unknown[] = [];
+  const host = {_currentMode:'safe', _isExecuting:false, _rpcClient:{call:async (_m: string, p: unknown) => { configWrites.push(p); return {}; }}, _postToWebview:(event: any) => events.push(event)};
+  const vscode = {workspace:{getConfiguration:() => ({update:async () => { configWrites.push('vscode'); }})}, ConfigurationTarget:{Global:1}, window:{showInformationMessage:() => {}}};
+  const confirmPermissionMode = async () => null;
+  await vm.runInNewContext('(async function() {' + block + '}).call(host)', {host, vscode, message:{nextMode:'yolo'}, SettingsPanel:{currentPanel:null}, confirmPermissionMode});
+  assert.equal(host._currentMode, 'safe');
+  assert.deepEqual(configWrites, []);
+  assert.deepEqual(JSON.parse(JSON.stringify(events)), [{ type: 'config_updated', key: 'mode', value: 'safe' }]);
 });

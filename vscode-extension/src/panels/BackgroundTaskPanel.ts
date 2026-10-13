@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
+import { escapeHtml, getNonce } from "../providers/webviewSecurity.js";
 
 export class BackgroundTaskPanel {
   public static readonly viewType = "andromity.backgroundTaskTab";
@@ -13,6 +14,7 @@ export class BackgroundTaskPanel {
   private _rpcClient: RpcClient | null;
   private _disposables: vscode.Disposable[] = [];
   private _pollTimer: NodeJS.Timeout | null = null;
+  private _fetchInFlight = false;
   private _isExited: boolean = false;
   private _startTime: number = Date.now();
 
@@ -78,6 +80,16 @@ export class BackgroundTaskPanel {
     this._panel.webview.html = this._getHtml();
 
     this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
+    // Output is only polled while someone can see it.
+    this._panel.onDidChangeViewState(() => {
+      if (this._isExited) return;
+      if (this._panel.visible) {
+        this._fetchLogs();
+        this._startPolling();
+      } else {
+        this._stopPolling();
+      }
+    }, null, this._disposables);
 
     this._panel.webview.onDidReceiveMessage(
       async (message) => {
@@ -120,7 +132,7 @@ export class BackgroundTaskPanel {
   private _startPolling() {
     this._stopPolling();
     this._pollTimer = setInterval(() => {
-      if (!this._isExited) {
+      if (!this._isExited && this._panel.visible) {
         this._fetchLogs();
       }
     }, 1000);
@@ -134,7 +146,8 @@ export class BackgroundTaskPanel {
   }
 
   private async _fetchLogs() {
-    if (!this._rpcClient) return;
+    if (!this._rpcClient || this._fetchInFlight) return;
+    this._fetchInFlight = true;
     try {
       const res = await this._rpcClient.call("process.read", {
         process_id: this._processId,
@@ -148,7 +161,11 @@ export class BackgroundTaskPanel {
           command: this._command,
         });
       }
-    } catch {}
+    } catch {
+      // transient daemon errors: the next poll retries
+    } finally {
+      this._fetchInFlight = false;
+    }
   }
 
   private async _killProcess() {
@@ -182,13 +199,17 @@ export class BackgroundTaskPanel {
   }
 
   private _getHtml(): string {
-    const safePid = this._processId.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    const safeCmd = this._command.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    // The command is model-controlled; it must stay inert in both text and attributes.
+    const safePid = escapeHtml(this._processId);
+    const safeCmd = escapeHtml(this._command);
+    const nonce = getNonce();
+    const cspSource = this._panel.webview.cspSource;
 
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; font-src ${cspSource}; img-src ${cspSource} data:; script-src 'nonce-${nonce}';">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Task: ${safePid}</title>
   <style>
@@ -422,7 +443,7 @@ export class BackgroundTaskPanel {
 
   <div class="terminal-container" id="terminal-output">Loading background process output...</div>
 
-  <script>
+  <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const terminalEl = document.getElementById('terminal-output');
     const statusBadge = document.getElementById('status-badge');

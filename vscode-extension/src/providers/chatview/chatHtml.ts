@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { getNonce } from "../webviewSecurity.js";
 import { getChatStyles } from "./chatStyles.js";
 import { getChatActivityStyles } from "./chatActivityStyles.js";
 import { getChatPolishStyles } from "./chatPolishStyles.js";
@@ -65,14 +66,7 @@ export function getProfileSvg(profile?: string): string {
   }
 }
 
-export function getNonce(): string {
-  let text = "";
-  const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
-}
+export { getNonce };
 
 export function getChatViewHtml(webview: vscode.Webview, extensionUri: vscode.Uri, state: ChatViewState): string {
   const nonce = getNonce();
@@ -94,12 +88,9 @@ export function getChatViewHtml(webview: vscode.Webview, extensionUri: vscode.Ur
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline' https://fonts.googleapis.com; script-src 'nonce-${nonce}' ${webview.cspSource}; img-src ${webview.cspSource} data:; font-src ${webview.cspSource} https://fonts.gstatic.com data:; media-src ${webview.cspSource};">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${webview.cspSource}; img-src ${webview.cspSource} data:; font-src ${webview.cspSource} data:; media-src ${webview.cspSource};">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Andromity</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..700;1,14..32,300..700&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap" rel="stylesheet">
   <style>
     @font-face {
       font-family: "codicon";

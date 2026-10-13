@@ -2,7 +2,6 @@ import { getPromptStyles } from "./chatPromptStyles.js";
 
 export function getChatStyles(): string {
   return `
-    @import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..700;1,14..32,300..700&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap');
 
     :root {
       --bg: var(--vscode-sideBar-background, #18181b);
@@ -5171,12 +5170,15 @@ export function getChatStyles(): string {
     }
 
     /* Antennae gentle sway */
+    /* Static glow + opacity pulse: animating filter re-rasterised the glow every frame while idle. */
     .chat-mascot .antenna-bulb {
+      fill: #7dd3fc;
+      filter: drop-shadow(0 0 2px #06b6d4);
       animation: antennaPulse 2s ease-in-out infinite alternate;
     }
     @keyframes antennaPulse {
-      0% { fill: #38bdf8; filter: drop-shadow(0 0 1px #38bdf8); }
-      100% { fill: #7dd3fc; filter: drop-shadow(0 0 4px #06b6d4); }
+      0% { opacity: 0.7; }
+      100% { opacity: 1; }
     }
 
     /* Working / Generating state */

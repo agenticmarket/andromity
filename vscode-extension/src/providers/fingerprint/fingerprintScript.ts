@@ -1,3 +1,5 @@
+import { scriptJson } from "../webviewSecurity.js";
+
 export function getFingerprintScript(sessionId: string): string {
   return `
     (function() {
@@ -67,7 +69,7 @@ export function getFingerprintScript(sessionId: string): string {
       }
 
       let traceData = {
-        session_id: ${JSON.stringify(sessionId)},
+        session_id: ${scriptJson(sessionId)},
         nodes: [],
         connections: [],
         metrics: {

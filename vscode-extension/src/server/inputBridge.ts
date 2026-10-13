@@ -2,11 +2,14 @@ import * as vscode from "vscode";
 import { RpcClient } from "./RpcClient.js";
 import { InputBridgeMessage, InputQueueState, SessionInfo } from "./types.js";
 import { EditorBridge } from "../integrations/EditorBridge.js";
+import { clampPromptMode } from "./securityPolicy.js";
 
-/** Common queue transport for the sidebar and standalone session tabs. */
+/** Common queue transport for the sidebar and standalone session tabs.
+ *  approvedMode is the permission mode the user confirmed on the host; a
+ *  message may lower it for one turn but never raise it. */
 export async function handleInputMessage(
   rpc: RpcClient, message: InputBridgeMessage, currentSession: string,
-  post: (message: unknown) => void,
+  post: (message: unknown) => void, approvedMode = "safe",
 ): Promise<boolean> {
   const methods: Record<string, string> = {
     queue_snapshot: "agent.queue", queue_promote: "agent.promote",
@@ -34,7 +37,7 @@ export async function handleInputMessage(
         session_id: sid, request_id: message.requestId, delivery: message.delivery || "queue",
         prompt, image_uris: message.images || [], project_path: projectPath,
         profile: message.profile, model: message.model, provider: message.provider,
-        mode: message.mode, reasoning_effort: message.reasoningEffort,
+        mode: clampPromptMode(message.mode, approvedMode), reasoning_effort: message.reasoningEffort,
       });
       post({ type: "input_accepted", request_id: message.requestId, session_id: sid, input_id: result.input_id });
       post({ type: "queue_state", ...result.queue, supported: true });

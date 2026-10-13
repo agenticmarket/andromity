@@ -5,6 +5,9 @@ import {
   JsonRpcResponse,
 } from "./types.js";
 
+/** Matches the daemon's own 64 MB frame limit (server/main.py MAX_LINE_LENGTH). */
+export const MAX_BUFFERED_LINE_CHARS = 64 * 1024 * 1024;
+
 export class RpcClient extends EventEmitter {
   private _nextId = 1;
   private _pendingRequests = new Map<
@@ -24,11 +27,26 @@ export class RpcClient extends EventEmitter {
   }
 
   public handleIncomingMessage(raw: string): void {
+    // Only scan the new chunk for newlines: rescanning the whole buffer made a
+    // multi-MB session payload arriving in 64 KB chunks quadratic.
+    const scanFrom = this._buffer.length;
     this._buffer += raw;
-    let newlineIndex: number;
-    while ((newlineIndex = this._buffer.indexOf("\n")) !== -1) {
-      const line = this._buffer.slice(0, newlineIndex).trim();
-      this._buffer = this._buffer.slice(newlineIndex + 1);
+    let lineStart = 0;
+    let newlineIndex = this._buffer.indexOf("\n", scanFrom);
+    const lines: string[] = [];
+    while (newlineIndex !== -1) {
+      lines.push(this._buffer.slice(lineStart, newlineIndex));
+      lineStart = newlineIndex + 1;
+      newlineIndex = this._buffer.indexOf("\n", lineStart);
+    }
+    if (lineStart > 0) this._buffer = this._buffer.slice(lineStart);
+    if (this._buffer.length > MAX_BUFFERED_LINE_CHARS) {
+      this._log(`[Andromity RPC] Dropped an unterminated message larger than ${MAX_BUFFERED_LINE_CHARS} characters.`);
+      this._buffer = "";
+    }
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
       if (!line) continue;
 
       try {

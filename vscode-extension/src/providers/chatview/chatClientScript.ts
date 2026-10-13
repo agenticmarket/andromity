@@ -1,7 +1,9 @@
 import { ChatViewState } from "./chatHtml.js";
+import { scriptJson } from "../webviewSecurity.js";
 import { getPromptDisplayScript } from "../promptDisplay.js";
 import { getThinkingOrbsScript } from "./thinkingOrbs.js";
 import { getToolTargetsScript } from "./toolTargets.js";
+import { getStreamingRenderScript } from "./streamingRender.js";
 
 export function getChatClientScript(sidebarIconUri: string, state: ChatViewState): string {
   return `
@@ -20,8 +22,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
     const vscode = acquireVsCodeApi();
     window.__vscodeApi = vscode;
-    const sidebarIconUri = "${sidebarIconUri}";
-    const extensionVersion = "${state.extensionVersion || '0.2.15'}";
+    const sidebarIconUri = ${scriptJson(sidebarIconUri)};
+    const extensionVersion = ${scriptJson(state.extensionVersion || '0.2.15')};
 
     window.onerror = function(msg, url, lineNo, columnNo, error) {
       console.error("[Andromity Webview Error]", msg, lineNo, columnNo, error);
@@ -46,8 +48,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       } catch(e) {}
     });
 
-    let workspaceFiles = new Set(${JSON.stringify((state.workspaceFiles || []).map(f => String(f).toLowerCase()))});
-    let workspaceFolders = new Set(${JSON.stringify((state.workspaceFolders || []).map(d => String(d).toLowerCase()))});
+    let workspaceFiles = new Set(${scriptJson((state.workspaceFiles || []).map(f => String(f).toLowerCase()))});
+    let workspaceFolders = new Set(${scriptJson((state.workspaceFolders || []).map(d => String(d).toLowerCase()))});
 
     const chatContainer = document.getElementById('chat-messages');
     const zeroState = document.getElementById('zero-state');
@@ -233,7 +235,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let allProviders = [];
     let sessionDisplayLimit = 10;
     const sessionsState = {};
-    const sessionDomCache = new Map(); // sessionId -> { html:string, isRunning:boolean }
     const sessionLiveBuffer = new Map(); // sessionId -> Array<raw msg> for replay when switching to a live session
     let turnEditedFiles = new Set();
     let globalDiffStats = {};
@@ -737,12 +738,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     }
 
-    let currentSessionId = ${JSON.stringify(state.currentSessionId || "")};
-    let currentModel = ${JSON.stringify(state.currentModel || "auto")};
-    let currentProvider = ${JSON.stringify(state.currentProvider || "andromity")};
-    let currentMode = ${JSON.stringify(state.currentMode || "safe")};
-    let currentProfile = ${JSON.stringify(state.currentProfile || "builder")};
-    let currentReasoning = ${JSON.stringify(state.currentReasoning || "medium")};
+    let currentSessionId = ${scriptJson(state.currentSessionId || "")};
+    let currentModel = ${scriptJson(state.currentModel || "auto")};
+    let currentProvider = ${scriptJson(state.currentProvider || "andromity")};
+    let currentMode = ${scriptJson(state.currentMode || "safe")};
+    let currentProfile = ${scriptJson(state.currentProfile || "builder")};
+    let currentReasoning = ${scriptJson(state.currentReasoning || "medium")};
     let isAndromityActive = false;
     const DEFAULT_POPULAR_MODELS = [
       { id: 'auto', name: 'Andromity Auto (Smart Router)', provider: 'andromity', pricing: 'Free' },
@@ -752,7 +753,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       { id: 'openrouter/auto', name: 'OpenRouter Auto (Frontier)', provider: 'openrouter', pricing: 'Free' }
     ];
     let allModels = [...DEFAULT_POPULAR_MODELS];
-    let pinnedModels = ${JSON.stringify(state.pinnedModels || [])};
+    let pinnedModels = ${scriptJson(state.pinnedModels || [])};
     let isRunning = false;
     const promptQueue = [];
     const serverQueues = {};
@@ -3388,7 +3389,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const msgsText = s.message_count + (s.message_count === 1 ? ' msg' : ' msgs');
         const modelTag = s.model ? escapeHtml(s.model.split('/').pop().replace(/-/g, ' ')) : '';
 
-        return '<div class="recent-session-card" data-action="switch-session" data-session-id="' + s.id + '">' +
+        return '<div class="recent-session-card" data-action="switch-session" data-session-id="' + escapeHtml(s.id) + '">' +
           '<div class="recent-session-main">' +
             '<div class="recent-session-title">' + name + '</div>' +
             '<div class="recent-session-sub">' +
@@ -3506,7 +3507,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       let toggleBtn = '';
       if (!isSubsession && childrenCount > 0) {
-        toggleBtn = '<button class="subsession-toggle-btn" data-action="toggle-subsessions" data-parent-id="' + s.id + '" title="' + (isExpanded ? 'Collapse' : 'Expand') + ' ' + childrenCount + ' subagent(s)">' +
+        toggleBtn = '<button class="subsession-toggle-btn" data-action="toggle-subsessions" data-parent-id="' + escapeHtml(s.id) + '" title="' + (isExpanded ? 'Collapse' : 'Expand') + ' ' + childrenCount + ' subagent(s)">' +
           '<svg class="subsession-chevron' + (isExpanded ? ' expanded' : '') + '" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
           '<span>' + childrenCount + ' subtask' + (childrenCount === 1 ? '' : 's') + '</span>' +
         '</button>';
@@ -3515,8 +3516,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const parentRef = (!isSubsession && parentName) ? ('<span>· Parent: ' + escapeHtml(parentName) + '</span>') : '';
       const itemClass = 'session-item ' + (isSubsession ? 'session-subsession-item ' : '') + (isCur ? 'active' : '');
 
-      return '<div class="' + itemClass + '" data-action="switch-session" data-session-id="' + s.id + '">' +
-        '<div class="session-item-info" data-session-id="' + s.id + '">' +
+      return '<div class="' + itemClass + '" data-action="switch-session" data-session-id="' + escapeHtml(s.id) + '">' +
+        '<div class="session-item-info" data-session-id="' + escapeHtml(s.id) + '">' +
           '<div class="session-item-title">' +
             branchSymbol +
             activeDot +
@@ -3534,13 +3535,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           '</div>' +
         '</div>' +
         '<div class="session-item-actions">' +
-          '<button class="session-action-icon" data-action="open-session-tab" data-session-id="' + s.id + '" data-session-name="' + name + '" title="Open in New Editor Tab (Side-by-Side)">' +
+          '<button class="session-action-icon" data-action="open-session-tab" data-session-id="' + escapeHtml(s.id) + '" data-session-name="' + name + '" title="Open in New Editor Tab (Side-by-Side)">' +
             '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>' +
           '</button>' +
-          '<button class="session-action-icon" data-action="rename-session" data-session-id="' + s.id + '" data-session-name="' + name + '" title="Rename">' +
+          '<button class="session-action-icon" data-action="rename-session" data-session-id="' + escapeHtml(s.id) + '" data-session-name="' + name + '" title="Rename">' +
             '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>' +
           '</button>' +
-          '<button class="session-action-icon session-action-delete" data-action="delete-session" data-session-id="' + s.id + '" title="Delete">' +
+          '<button class="session-action-icon session-action-delete" data-action="delete-session" data-session-id="' + escapeHtml(s.id) + '" title="Delete">' +
             '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>' +
           '</button>' +
         '</div>' +
@@ -3677,7 +3678,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
           return '<div class="session-tree-group">' +
             parentHtml +
-            '<div class="session-subsessions-list' + (isExpanded ? '' : ' collapsed') + '" id="subsessions-' + s.id + '">' +
+            '<div class="session-subsessions-list' + (isExpanded ? '' : ' collapsed') + '" id="subsessions-' + escapeHtml(s.id) + '">' +
               childrenHtml +
             '</div>' +
           '</div>';
@@ -5141,7 +5142,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       container.innerHTML = attachedImages.map((imgUri, idx) => {
         const title = 'Attachment ' + (idx + 1) + (attachedImages.length > 1 ? (' of ' + attachedImages.length) : '');
         return '<div class="image-attachment-chip" data-action="preview-image" data-src="' + escapeHtml(imgUri) + '" data-title="' + escapeHtml(title) + '" title="Click to preview image">' +
-          '<img class="image-attachment-thumb" src="' + imgUri + '" alt="Attachment ' + (idx + 1) + '" />' +
+          '<img class="image-attachment-thumb" src="' + escapeHtml(imgUri) + '" alt="Attachment ' + (idx + 1) + '" />' +
           '<button class="image-attachment-remove" data-action="remove-image-attachment" data-idx="' + idx + '" title="Remove image">&#x2715;</button>' +
         '</div>';
       }).join('');
@@ -5944,9 +5945,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               continue;
             }
 
-            // HTML details, summary, and custom error card elements
-            if (trimmed.startsWith('<details') || trimmed.startsWith('</details') || trimmed.startsWith('<summary') || trimmed.startsWith('</summary') || trimmed.startsWith('<div') || trimmed.startsWith('</div') || trimmed.startsWith('<span') || trimmed.startsWith('</span') || trimmed.startsWith('<button') || trimmed.startsWith('</button') || trimmed.startsWith('<code') || trimmed.startsWith('</code') || trimmed.startsWith('<pre') || trimmed.startsWith('</pre')) {
-              html += trimmed;
+            // Raw HTML in model output renders as text, matching the marked renderer.
+            if (trimmed.startsWith('<')) {
+              html += '<p>' + escapeHtml(trimmed) + '</p>';
               continue;
             }
 
@@ -6916,6 +6917,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     }
 
+    ${getStreamingRenderScript()}
+
     function removeTurnLoader() {
       const el = document.getElementById('turn-loading-indicator');
       if (el) el.remove();
@@ -7195,6 +7198,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function handleBackendMessage(msg) {
+      if (!msg) return;
+      if (needsStreamSettle(msg.type)) settleStreamingRender();
+      dispatchBackendMessage(msg);
+    }
+
+    function dispatchBackendMessage(msg) {
       switch (msg.type) {
         case 'workspace_files_updated': {
           if (Array.isArray(msg.files)) {
@@ -7355,6 +7364,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         }
 
+        case 'ollama_detected': {
+          if (Array.isArray(msg.models) && msg.models.length > 0) {
+            allModels = msg.models.filter(m => m.provider !== 'andromity' || m.id === 'auto');
+            updateModelBadge();
+          }
+          if (msg.model) showOllamaBanner(msg.model);
+          if (msg.status) updateOllamaStatusUI(msg.status);
+          break;
+        }
+
         case 'auth_state_changed': {
           const isAuthed = !!msg.isAuthenticated;
           isAndromityActive = isAuthed;
@@ -7459,7 +7478,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (currentSessionId) {
             sessionsState[currentSessionId] = sessionsState[currentSessionId] || {};
             sessionsState[currentSessionId].draftInput = promptInput ? promptInput.value : '';
-            try { sessionDomCache.set(currentSessionId, { html: chatContainer.innerHTML, isRunning: isRunning }); } catch {}
             // Detach live turn state — next session must not reuse previous turn divs
             currentTurnAssistantDiv = null;
             currentThinkingDiv = null;
@@ -7920,7 +7938,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     if (currentToolSequence) currentToolSequence.querySelector('.tool-seq-body').appendChild(currentThinkingDiv);
                     else if (currentTurnAssistantDiv) currentTurnAssistantDiv.appendChild(currentThinkingDiv);
                   }
-                  if (currentThinkingContent) { currentThinkingContent.textContent += ev.text; currentThinkingContent.scrollTop = currentThinkingContent.scrollHeight; }
+                  if (currentThinkingContent) appendStreamText(currentThinkingContent, ev.text);
                 } else if (ev.t === 'text_delta') {
                   removeTurnLoader(); finishCurrentThinking(); if (currentToolSequence) finishToolSequence();
                   if (!currentAssistantContent) {
@@ -7930,23 +7948,24 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     if (currentTurnAssistantDiv) currentTurnAssistantDiv.appendChild(currentAssistantContent);
                   }
                   currentAssistantContent._blockText = (currentAssistantContent._blockText||'') + ev.text;
-                  currentAssistantContent.innerHTML = renderMarkdown(currentAssistantContent._blockText);
+                  queueTextRender(currentAssistantContent);
                   setTurnOrb(null);
                 } else if (ev.t === 'tool_start') {
                   setTurnOrb(null);
                   removeTurnLoader(); finishCurrentThinking(); currentAssistantContent = null;
                   const seq = ensureToolSequence(); toolSeqCount++; lastToolName = ev.tool_name||'tool'; lastToolRunning=true; updateToolSeqHeader();
-                  const td = document.createElement('div'); td.className='tool-card expanded'; td.id='tool-'+ev.tool_id;
-                  td.innerHTML = '<div class="tool-header"><div class="tool-title-group"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg><span>'+escapeHtml(ev.tool_name)+'</span></div><div style="display:flex; align-items:center;"><span class="tool-tag">RUNNING</span><svg class="tool-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg></div></div><div class="tool-body" id="args-'+ev.tool_id+'"></div>';
+                  const td = document.createElement('div'); td.className='tool-card expanded'; td.id='tool-'+ev.tool_id; td.setAttribute('data-tool-name', ev.tool_name||'');
+                  td.innerHTML = '<div class="tool-header"><div class="tool-title-group"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg><span>'+escapeHtml(ev.tool_name)+'</span></div><div style="display:flex; align-items:center;"><span class="tool-tag">RUNNING</span><svg class="tool-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg></div></div><div class="tool-body" id="args-'+escapeHtml(ev.tool_id)+'"></div>';
                   seq.querySelector('.tool-seq-body').appendChild(td);
                 } else if (ev.t === 'tool_delta') {
-                  const ae = document.getElementById('args-'+ev.tool_id); if (ae) { ae.textContent += ev.chunk; const card = document.getElementById('tool-'+ev.tool_id); updateToolTarget(card, card?.querySelector('.tool-title-group span')?.textContent || '', ae.textContent); }
+                  const ae = document.getElementById('args-'+ev.tool_id); if (ae) { appendStreamText(ae, ev.chunk); const card = document.getElementById('tool-'+ev.tool_id); updateToolTarget(card, card?.querySelector('.tool-title-group span')?.textContent || '', ae.textContent); }
                 } else if (ev.t === 'tool_result') {
                   const tt = document.getElementById('tool-'+ev.tool_id);
                   if (tt) { const tag=tt.querySelector('.tool-tag'); if(tag){tag.textContent='DONE'; tag.style.background='rgba(63,185,80,0.2)'; tag.style.color='var(--green)';} tt.classList.remove('expanded'); }
                 }
               }
               sessionLiveBuffer.delete(currentSessionId);
+              settleStreamingRender();
               scrollToBottomIfNeeded();
             }
           }
@@ -8028,14 +8047,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             sessionsState[msg.session_id].isRunning = true;
             sessionsState[msg.session_id].hasUnread = true;
             updateSessionActivityIndicator();
-            const buf = sessionLiveBuffer.get(msg.session_id) || [];
-            buf.push({ t:'text_delta', text: msg.text });
-            sessionLiveBuffer.set(msg.session_id, buf);
-            // keep DOM cache html if we have snapshot
-            try {
-              const c = sessionDomCache.get(msg.session_id);
-              if (c && c.html !== undefined) { /* buffer is replayed on switch */ }
-            } catch {}
+            bufferLiveEvent(msg.session_id, { t:'text_delta', text: msg.text });
             break;
           }
           const _tdText = msg.text || '';
@@ -8061,10 +8073,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           currentAssistantContent._blockText = (currentAssistantContent._blockText || '') + _tdText;
           accumulatedAssistantText += _tdText;
-          currentAssistantContent.innerHTML = renderMarkdown(currentAssistantContent._blockText);
-          removeTurnLoader();
+          queueTextRender(currentAssistantContent);
           setTurnOrb(null);
-          scrollToBottomIfNeeded();
           break; }
 
         case 'thinking_delta': {
@@ -8073,9 +8083,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             sessionsState[msg.session_id].isRunning = true;
             sessionsState[msg.session_id].hasUnread = true;
             updateSessionActivityIndicator();
-            const buf = sessionLiveBuffer.get(msg.session_id) || [];
-            buf.push({ t:'thinking_delta', text: msg.text });
-            sessionLiveBuffer.set(msg.session_id, buf);
+            bufferLiveEvent(msg.session_id, { t:'thinking_delta', text: msg.text });
             break;
           }
           removeTurnLoader();
@@ -8101,9 +8109,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               currentTurnAssistantDiv.appendChild(currentThinkingDiv);
             }
           }
-          currentThinkingContent.textContent += msg.text;
-          currentThinkingContent.scrollTop = currentThinkingContent.scrollHeight;
-          scrollToBottomIfNeeded();
+          appendStreamText(currentThinkingContent, msg.text);
+          const thinkingEl = currentThinkingContent;
+          queueStreamTask(thinkingEl, () => { thinkingEl.scrollTop = thinkingEl.scrollHeight; });
           break; }
 
         case 'tool_start': {
@@ -8113,9 +8121,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             sessionsState[msg.session_id].isRunning = true;
             sessionsState[msg.session_id].hasUnread = true;
             updateSessionActivityIndicator();
-            const buf = sessionLiveBuffer.get(msg.session_id) || [];
-            buf.push({ t:'tool_start', tool_id: msg.tool_id, tool_name: msg.tool_name });
-            sessionLiveBuffer.set(msg.session_id, buf);
+            bufferLiveEvent(msg.session_id, { t:'tool_start', tool_id: msg.tool_id, tool_name: msg.tool_name });
             break;
           }
           removeTurnLoader();
@@ -8145,10 +8151,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             toolDiv.setAttribute('data-start-ts', String(Date.now()));
             toolDiv.setAttribute('data-label-resolved', '0');
             toolDiv.innerHTML = '<span class="activity-action">' + (isCmd ? 'Running' : 'Editing') + '</span>' +
-              '<span class="activity-filename" id="label-' + msg.tool_id + '">' + escapeHtml(msg.tool_name) + '…</span>' +
-              '<span class="tool-elapsed" id="elapsed-' + msg.tool_id + '">0s</span>' +
+              '<span class="activity-filename" id="label-' + escapeHtml(msg.tool_id) + '">' + escapeHtml(msg.tool_name) + '…</span>' +
+              '<span class="tool-elapsed" id="elapsed-' + escapeHtml(msg.tool_id) + '">0s</span>' +
               '<span class="activity-running-dot"></span>' +
-              '<div class="tool-body" id="args-' + msg.tool_id + '" style="display:none;"></div>';
+              '<div class="tool-body" id="args-' + escapeHtml(msg.tool_id) + '" style="display:none;"></div>';
           } else {
             toolDiv.className = 'tool-card expanded';
             toolDiv.setAttribute('data-start-ts', String(Date.now()));
@@ -8158,12 +8164,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 '<span>' + escapeHtml(msg.tool_name) + '</span>' +
               '</div>' +
               '<div style="display:flex; align-items:center; gap:6px;">' +
-                '<span class="tool-elapsed" id="elapsed-' + msg.tool_id + '">0s</span>' +
+                '<span class="tool-elapsed" id="elapsed-' + escapeHtml(msg.tool_id) + '">0s</span>' +
                 '<span class="tool-tag">RUNNING</span>' +
                 '<svg class="tool-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
               '</div>' +
             '</div>' +
-            '<div class="tool-body" id="args-' + msg.tool_id + '"></div>';
+            '<div class="tool-body" id="args-' + escapeHtml(msg.tool_id) + '"></div>';
           }
           seq.querySelector('.tool-seq-body').appendChild(toolDiv);
           scrollToBottomIfNeeded();
@@ -8173,35 +8179,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
             sessionsState[msg.session_id].isRunning = true;
-            const buf = sessionLiveBuffer.get(msg.session_id) || [];
-            buf.push({ t:'tool_delta', tool_id: msg.tool_id, chunk: msg.chunk });
-            sessionLiveBuffer.set(msg.session_id, buf);
+            bufferLiveEvent(msg.session_id, { t:'tool_delta', tool_id: msg.tool_id, chunk: msg.chunk });
             break;
           }
           const argsEl = document.getElementById('args-' + msg.tool_id);
           if (argsEl) {
-            argsEl.textContent += msg.chunk;
-            const toolRow = document.getElementById('tool-' + msg.tool_id);
-            updateToolTarget(toolRow, toolRow?.getAttribute('data-tool-name') || '', argsEl.textContent);
-            if (toolRow && toolRow.getAttribute('data-label-resolved') === '0') {
-              const partial = argsEl.textContent;
-              const fileMatch = partial.match(/"(?:TargetFile|file_path|target_file|path)"\\s*:\\s*"([^"]+)"/);
-              const cmdMatch = partial.match(/"(?:CommandLine|command|cmd)"\\s*:\\s*"([^"]+)"/);
-              const labelEl = document.getElementById('label-' + msg.tool_id);
-              if (labelEl) {
-                if (fileMatch && fileMatch[1]) {
-                  const fname = fileMatch[1].replace(/\\\\/g, '/').split('/').pop() || fileMatch[1];
-                  labelEl.textContent = fname;
-                  labelEl.title = fileMatch[1];
-                  toolRow.setAttribute('data-label-resolved', '1');
-                } else if (cmdMatch && cmdMatch[1] && cmdMatch[1].length > 3) {
-                  labelEl.textContent = cmdMatch[1];
-                  labelEl.title = cmdMatch[1];
-                  toolRow.setAttribute('data-label-resolved', '1');
-                }
-              }
-            }
-            scrollToBottomIfNeeded();
+            appendStreamText(argsEl, msg.chunk);
+            const toolId = msg.tool_id;
+            queueStreamTask('tool-label:' + toolId, () => resolveStreamingToolLabel(toolId, argsEl));
           }
           break; }
 
@@ -8255,9 +8240,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         case 'tool_result': {
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
-            const buf = sessionLiveBuffer.get(msg.session_id) || [];
-            buf.push({ t:'tool_result', tool_id: msg.tool_id, result: msg.result });
-            sessionLiveBuffer.set(msg.session_id, buf);
+            bufferLiveEvent(msg.session_id, { t:'tool_result', tool_id: msg.tool_id, result: msg.result });
             break;
           }
           const targetTool = document.getElementById('tool-' + msg.tool_id);
@@ -8532,7 +8515,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               '<button class="btn-carousel-prev" id="btn-q-prev" data-action="q-prev" style="visibility:hidden;">Back</button>' +
               '<div style="display:flex; gap:8px;">' +
                 (totalQ > 1 ? '<button class="btn-carousel-next" id="btn-q-next" data-action="q-next">Next</button>' : '') +
-                '<button class="btn-carousel-submit" id="btn-q-submit" data-action="submit-questions" data-question-id="' + msg.question_id + '" data-total-q="' + totalQ + '" style="' + (totalQ > 1 ? 'display:none;' : '') + '">Submit ' + (totalQ > 1 ? 'Answers' : 'Answer') + '</button>' +
+                '<button class="btn-carousel-submit" id="btn-q-submit" data-action="submit-questions" data-question-id="' + escapeHtml(msg.question_id) + '" data-total-q="' + totalQ + '" style="' + (totalQ > 1 ? 'display:none;' : '') + '">Submit ' + (totalQ > 1 ? 'Answers' : 'Answer') + '</button>' +
               '</div>' +
             '</div>' +
           '</div>';
@@ -8865,7 +8848,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               sessionsState[msg.session_id].hasUnread = true;
             }
             updateSessionActivityIndicator();
-            try { sessionDomCache.delete(msg.session_id); sessionLiveBuffer.delete(msg.session_id); } catch {}
+            sessionLiveBuffer.delete(msg.session_id);
           }
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
           if (cancelFallbackTimer) { clearTimeout(cancelFallbackTimer); cancelFallbackTimer = null; }
@@ -10098,9 +10081,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     initChatMascot();
     setRandomStatement();
-    updateModeBadge("${state.currentMode || 'safe'}");
+    updateModeBadge(${scriptJson(state.currentMode || 'safe')});
     vscode.postMessage({ type: 'ready' });
-    vscode.postMessage({ type: 'webview_ready' });
     // Also request host to transfer focus into webview (required on first show)
     setTimeout(() => focusPrompt(), 100);
 `;

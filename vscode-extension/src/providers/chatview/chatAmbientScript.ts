@@ -1,3 +1,5 @@
+import { scriptJson } from "../webviewSecurity.js";
+
 export interface WallpaperConfig {
   enabled: boolean;
   rippleIntensity: "off" | "light" | "medium" | "strong";
@@ -6,7 +8,7 @@ export interface WallpaperConfig {
 }
 
 export function getChatAmbientScript(defaultWallpaperUri: string, initialConfig?: WallpaperConfig): string {
-  const configJson = JSON.stringify(initialConfig || {
+  const configJson = scriptJson(initialConfig || {
     enabled: false,
     rippleIntensity: "medium",
     floatingAsterisks: true,
@@ -16,7 +18,7 @@ export function getChatAmbientScript(defaultWallpaperUri: string, initialConfig?
   return `
   (function() {
     let cfg = ${configJson};
-    const defaultWpUri = "${defaultWallpaperUri}";
+    const defaultWpUri = ${scriptJson(defaultWallpaperUri)};
 
     const container = document.getElementById('andromity-ambient-container');
     const waterCanvas = document.getElementById('andromity-water-canvas');

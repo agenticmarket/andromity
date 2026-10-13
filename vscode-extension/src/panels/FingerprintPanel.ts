@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { allowOpenPath } from "../server/securityPolicy.js";
 import * as path from "node:path";
 import { RpcClient } from "../server/RpcClient.js";
 import { getFingerprintHtml } from "../providers/fingerprint/fingerprintHtml.js";
@@ -84,7 +85,9 @@ export class FingerprintPanel {
       viewColumn,
       {
         enableScripts: true,
-        retainContextWhenHidden: true,
+        // A static report rebuilt from the daemon on fingerprint_ready, so it
+        // need not stay resident while hidden.
+        retainContextWhenHidden: false,
         localResourceRoots: [extensionUri],
       }
     );
@@ -214,8 +217,9 @@ export class FingerprintPanel {
       }
 
       case "open_file": {
-        if (message.filePath) {
+        if (typeof message.filePath === "string" && message.filePath) {
           try {
+            if (!(await allowOpenPath(message.filePath))) break;
             let fullPath = message.filePath;
             if (!path.isAbsolute(fullPath)) {
               const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;

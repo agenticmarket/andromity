@@ -189,5 +189,7 @@ export function getChatPolishStyles(): string {
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
     }
+    /* Wrappers that exist only while a reply streams; they must not affect layout. */
+    .assistant-text > .md-stream-part { display: contents; }
   `;
 }

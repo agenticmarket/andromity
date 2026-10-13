@@ -1,4 +1,5 @@
 """Model catalog - available models per provider with descriptions."""
+import errno
 from pathlib import Path
 import threading
 from typing import Any
@@ -215,9 +216,104 @@ def get_context_limit_for_model(provider_key: str, model_id: str) -> int:
     return 131072
 
 
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_LOOPBACK_CLOSED_TTL_S = 5.0
+_LOOPBACK_CONNECT_TIMEOUT_S = 0.15
+_loopback_closed_until: dict[tuple[str, int], float] = {}
+_CONNECT_IN_PROGRESS = {errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY, 10035}  # 10035: WSAEWOULDBLOCK
+
+
+def reachable_loopback_url(url: str) -> str | None:
+    """Return ``url`` pinned to a loopback address that accepts connections,
+    ``None`` if nothing listens there, or ``url`` unchanged for remote hosts.
+
+    Windows retries refused TCP connections for about two seconds per address,
+    and "localhost" tries ::1 before 127.0.0.1 (where Ollama listens by
+    default), so plain urllib probes stalled model listing for seconds whether
+    or not Ollama was running. A local listener accepts in well under a
+    millisecond, so a short connect timeout cannot miss a running server.
+    Negative results are cached briefly so repeated listings stay instant.
+    """
+    import socket
+    import time
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if host not in _LOOPBACK_HOSTS:
+        return url
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    key = (host, port)
+    if _loopback_closed_until.get(key, 0.0) > time.monotonic():
+        return None
+    candidates = ["127.0.0.1", "::1"] if host == "localhost" else [host]
+    accepted = _first_accepting_address(candidates, port, _LOOPBACK_CONNECT_TIMEOUT_S)
+    if accepted is None:
+        _loopback_closed_until[key] = time.monotonic() + _LOOPBACK_CLOSED_TTL_S
+        return None
+    _loopback_closed_until.pop(key, None)
+    if parts.scheme == "https":
+        return url  # Pinning to an IP would fail the certificate's hostname check.
+    netloc = f"[{accepted}]:{port}" if ":" in accepted else f"{accepted}:{port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
+def _first_accepting_address(addresses: list[str], port: int, timeout: float) -> str | None:
+    """Connect to all addresses concurrently; return the first that accepts, in list order."""
+    import selectors
+    import socket
+    import time
+
+    pending: dict[socket.socket, str] = {}
+    accepted: list[str] = []
+    selector = selectors.DefaultSelector()
+    try:
+        for address in addresses:
+            family = socket.AF_INET6 if ":" in address else socket.AF_INET
+            try:
+                sock = socket.socket(family, socket.SOCK_STREAM)
+            except OSError:
+                continue
+            sock.setblocking(False)
+            err = sock.connect_ex((address, port))
+            if err == 0:
+                accepted.append(address)
+                sock.close()
+                continue
+            if err not in _CONNECT_IN_PROGRESS:
+                # Refused synchronously (common on Linux loopback). Waiting on
+                # it would report it writable with the error already consumed.
+                sock.close()
+                continue
+            pending[sock] = address
+            selector.register(sock, selectors.EVENT_WRITE)
+        deadline = time.monotonic() + timeout
+        while pending and not accepted:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            for event_key, _ in selector.select(remaining):
+                sock = event_key.fileobj
+                address = pending.pop(sock)
+                selector.unregister(sock)
+                if sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) == 0:
+                    accepted.append(address)
+                sock.close()
+    finally:
+        for sock in pending:
+            sock.close()
+        selector.close()
+    if not accepted:
+        return None
+    return min(accepted, key=addresses.index)
+
+
 def get_ollama_num_ctx(model: str, base_url: str = "http://localhost:11434") -> int:
     """Query Ollama /api/show to get actual num_ctx for the running model."""
     import urllib.request, json
+    base_url = reachable_loopback_url(base_url)
+    if base_url is None:
+        return 32768
     try:
         data = json.dumps({"name": model}).encode()
         req = urllib.request.Request(
@@ -349,7 +445,10 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
 
     # ── Ollama (local daemon) ──────────────────────────────────────────────────
     if provider_key == "ollama":
-        url = (base_url or "http://localhost:11434").rstrip("/") + "/api/tags"
+        ollama_root = reachable_loopback_url(base_url or "http://localhost:11434")
+        if ollama_root is None:
+            return []
+        url = ollama_root.rstrip("/") + "/api/tags"
         data = _get(url, {}, timeout=1.5)
         if not data:
             return []
@@ -365,7 +464,7 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
                 continue
             size_bytes = item.get("size", 0)
             size_gb = f"{size_bytes / (1024**3):.1f}GB" if size_bytes else ""
-            num_ctx = get_ollama_num_ctx(name, base_url or "http://localhost:11434")
+            num_ctx = get_ollama_num_ctx(name, ollama_root)
             models.append({
                 "id": name,
                 "name": name,

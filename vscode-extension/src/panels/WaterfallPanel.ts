@@ -4,7 +4,27 @@ import { getWaterfallHtml } from "../providers/waterfall/waterfallHtml.js";
 import { SettingsPanel } from "./SettingsPanel.js";
 import { FingerprintPanel } from "./FingerprintPanel.js";
 
+/** Append a trace event, merging consecutive streaming deltas into one event so
+ *  a long reply doesn't evict the turn's structural events from the bounded
+ *  buffer. With keepFirst, eviction never drops the turn's agent_started. */
+export function appendCoalesced(buf: any[], msg: any, limit: number, keepFirst: boolean): void {
+  const last = buf[buf.length - 1];
+  if (last && last.type === msg.type && last.session_id === msg.session_id) {
+    if ((msg.type === "text_delta" || msg.type === "thinking_delta") && typeof msg.text === "string") {
+      buf[buf.length - 1] = { ...last, text: (last.text || "") + msg.text };
+      return;
+    }
+    if (msg.type === "tool_delta" && last.tool_id === msg.tool_id && typeof msg.chunk === "string") {
+      buf[buf.length - 1] = { ...last, chunk: (last.chunk || "") + msg.chunk };
+      return;
+    }
+  }
+  buf.push(msg);
+  if (buf.length > limit) buf.splice(keepFirst ? 1 : 0, 1);
+}
+
 export class WaterfallTraceStore {
+  private static readonly MAX_SESSIONS = 20;
   private static _buffers = new Map<string, any[]>();
   private static _activeTurnEvents = new Map<string, any[]>();
   private static _client: RpcClient | null = null;
@@ -18,14 +38,19 @@ export class WaterfallTraceStore {
     const record = (sessionId: string, msg: any) => {
       if (!sessionId) return;
       let buf = WaterfallTraceStore._buffers.get(sessionId);
-      if (!buf) {
+      if (buf) {
+        // Re-insert so the map's iteration order is least-recently-used first.
+        WaterfallTraceStore._buffers.delete(sessionId);
+      } else {
         buf = [];
-        WaterfallTraceStore._buffers.set(sessionId, buf);
       }
-      buf.push(msg);
-      if (buf.length > 500) {
-        buf.shift();
+      WaterfallTraceStore._buffers.set(sessionId, buf);
+      while (WaterfallTraceStore._buffers.size > WaterfallTraceStore.MAX_SESSIONS) {
+        const oldest = WaterfallTraceStore._buffers.keys().next().value as string;
+        WaterfallTraceStore._buffers.delete(oldest);
+        WaterfallTraceStore._activeTurnEvents.delete(oldest);
       }
+      appendCoalesced(buf, msg, 500, false);
 
       // Track active in-progress turn events
       if (msg.type === "agent_started") {
@@ -34,11 +59,8 @@ export class WaterfallTraceStore {
         // Turn finished: clear active turn buffer
         WaterfallTraceStore._activeTurnEvents.delete(sessionId);
       } else {
-        let active = WaterfallTraceStore._activeTurnEvents.get(sessionId);
-        if (active) {
-          active.push(msg);
-          if (active.length > 200) active.shift();
-        }
+        const active = WaterfallTraceStore._activeTurnEvents.get(sessionId);
+        if (active) appendCoalesced(active, msg, 200, true);
       }
     };
 

@@ -56,10 +56,7 @@ export class ChangesReviewPanel {
       {
         enableScripts: true,
         retainContextWhenHidden: true,
-        localResourceRoots: [
-          extensionUri,
-          ...(vscode.workspace.workspaceFolders?.map((ws) => ws.uri) || []),
-        ],
+        localResourceRoots: [extensionUri],
       }
     );
 

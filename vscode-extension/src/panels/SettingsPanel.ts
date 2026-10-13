@@ -1,4 +1,11 @@
 import * as vscode from "vscode";
+import { getNonce } from "../providers/webviewSecurity.js";
+import {
+  confirmAndromityTrust,
+  confirmPermissionMode,
+  requireWorkspaceTrust,
+  resolveWebviewConfigWrite,
+} from "../server/securityPolicy.js";
 import { RpcClient } from "../server/RpcClient.js";
 import { ModelInfo, ProviderInfo, IntegrationResult, McpServerConfig } from "../server/types.js";
 import { join } from "path";
@@ -23,6 +30,20 @@ export class SettingsPanel {
   public static chatProvider?: any;
   public static _cachedState: any = null;
   private static _prewarmPromise: Promise<void> | null = null;
+  private static _prewarmTimer: NodeJS.Timeout | null = null;
+  /** Latest result of the extension's startup mcp.list, reused so prewarm doesn't repeat it. */
+  private static _lastMcpServers: unknown[] | null = null;
+  public static readonly PREWARM_DELAY_MS = 10_000;
+
+  /** Prewarm once startup traffic has settled, so the Hub opens instantly
+   *  without competing with the chat view's own initial load. */
+  public static schedulePrewarm(rpcClient: RpcClient | null, delayMs = SettingsPanel.PREWARM_DELAY_MS): void {
+    if (SettingsPanel._prewarmTimer) clearTimeout(SettingsPanel._prewarmTimer);
+    SettingsPanel._prewarmTimer = setTimeout(() => {
+      SettingsPanel._prewarmTimer = null;
+      if (!SettingsPanel.currentPanel) void SettingsPanel.prewarm(rpcClient);
+    }, delayMs);
+  }
 
   public static async prewarm(rpcClient: RpcClient | null): Promise<void> {
     if (!rpcClient) return;
@@ -51,10 +72,12 @@ export class SettingsPanel {
           rpcClient.call<ModelInfo[]>("config.list_models", {}, 8000).catch(() => []),
           rpcClient.call<ProviderInfo[]>("config.list_providers", {}, 8000).catch(() => []),
           rpcClient.call<any[]>("skills.list", { project_path: workspaceFolder }, 8000).catch(() => []),
-          rpcClient.call<any[]>("mcp.list", { project_path: workspaceFolder }, 120000).catch(() => []),
+          SettingsPanel._lastMcpServers
+            ? Promise.resolve(SettingsPanel._lastMcpServers as any[])
+            : rpcClient.call<any[]>("mcp.list", { project_path: workspaceFolder }, 120000).catch(() => []),
           rpcClient.call<any>("usage.get", { project_path: null, time_range: "all" }, 8000).catch(() => ({})),
           rpcClient.call<any>("system.info", {}, 8000).catch(() => ({})),
-          rpcClient.call<any>("trust.status", { project_path: workspaceFolder }, 8000).catch(() => ({ is_trusted: true, trusted_projects: [] })),
+          rpcClient.call<any>("trust.status", { project_path: workspaceFolder }, 8000).catch(() => ({ is_trusted: false, trusted_projects: [] })),
           rpcClient.call<any[]>("cron.list", { project_path: workspaceFolder }, 8000).catch(() => []),
         ]);
 
@@ -73,7 +96,7 @@ export class SettingsPanel {
           mcpServers: mcpServers || [],
           usage: usage || {},
           systemInfo: systemInfo || {},
-          trustData: trustData || { is_trusted: true, trusted_projects: [] },
+          trustData: trustData || { is_trusted: false, trusted_projects: [] },
           crons: crons || [],
           currentWorkspace: workspaceFolder || "",
           startupSession: vscodeConfig.get<string>("startupSession", "last"),
@@ -187,6 +210,7 @@ export class SettingsPanel {
   }
 
   public static updateMcpServers(mcpServers: unknown[]): void {
+    SettingsPanel._lastMcpServers = mcpServers;
     if (SettingsPanel._cachedState) SettingsPanel._cachedState.mcpServers = mcpServers;
     SettingsPanel.currentPanel?._panel.webview.postMessage({ type: "mcp_refreshed", mcpServers });
   }
@@ -233,7 +257,7 @@ export class SettingsPanel {
           this._rpcClient!.call<any>("config.get", { project_path: workspaceFolder }, 6000).catch(() => ({})),
           this._rpcClient!.call<ProviderInfo[]>("config.list_providers", {}, 6000).catch(() => []),
           this._rpcClient!.call<any>("system.info", {}, 6000).catch(() => ({})),
-          this._rpcClient!.call<any>("trust.status", { project_path: workspaceFolder }, 6000).catch(() => ({ is_trusted: true, trusted_projects: [] })),
+          this._rpcClient!.call<any>("trust.status", { project_path: workspaceFolder }, 6000).catch(() => ({ is_trusted: false, trusted_projects: [] })),
         ]).then(([configData, providers, systemInfo, trustData]) => {
           const vscodeConfig = vscode.workspace.getConfiguration("andromity");
           const permissionMode = vscodeConfig.get<string>("permissionMode", configData?.permission_mode || "safe");
@@ -244,7 +268,7 @@ export class SettingsPanel {
             providers: providers || [],
             account,
             systemInfo: systemInfo || {},
-            trustData: trustData || { is_trusted: true, trusted_projects: [] },
+            trustData: trustData || { is_trusted: false, trusted_projects: [] },
             currentWorkspace: workspaceFolder || "",
             startupSession: vscodeConfig.get<string>("startupSession", "last"),
             waterfallAutoOpen: vscodeConfig.get<boolean>("waterfallAutoOpen", true),
@@ -285,7 +309,7 @@ export class SettingsPanel {
           mcpServers: mcpServers || [],
           usage: usage || {},
           systemInfo: fastRes.systemInfo || {},
-          trustData: fastRes.trustData || { is_trusted: true, trusted_projects: [] },
+          trustData: fastRes.trustData || { is_trusted: false, trusted_projects: [] },
           crons: crons || [],
           currentWorkspace: workspaceFolder || "",
           startupSession: fastRes.vscodeConfig.get<string>("startupSession", "last"),
@@ -657,7 +681,12 @@ export class SettingsPanel {
 
       case "trust_folder": {
         try {
-          await this._rpcClient.call("trust.set", { project_path: message.path });
+          const folder = await confirmAndromityTrust(message.path);
+          if (!folder) {
+            await this.loadData();
+            break;
+          }
+          await this._rpcClient.call("trust.set", { project_path: folder });
           vscode.window.showInformationMessage(`Folder marked as trusted.`);
           await this.loadData();
           this._onConfigChangeCallback?.();
@@ -681,22 +710,24 @@ export class SettingsPanel {
 
       case "update_setting": {
         try {
-          const keyMap: Record<string, { section: string; key: string }> = {
-            profile: { section: "default", key: "profile" },
-            mode: { section: "default", key: "permission_mode" },
-            reasoningEffort: { section: "default", key: "reasoning_effort" },
-            userName: { section: "user", key: "name" },
-            userEmail: { section: "user", key: "email" },
-            maxSubagents: { section: "subagents", key: "max_parallel" },
-            autoCompact: { section: "advanced", key: "auto_compact" },
-            maxFileSize: { section: "advanced", key: "max_file_size_kb" },
-          };
-          const target = keyMap[message.key] || { section: "default", key: message.key };
-          await this._rpcClient.call("config.set", {
-            section: target.section,
-            key: target.key,
-            value: message.value,
-          });
+          let target: { section: string; key: string; value: unknown } | null;
+          if (message.key === "mode") {
+            const current = (await this._rpcClient.call<any>("config.get", {}).catch(() => null))?.permission_mode || "safe";
+            const mode = await confirmPermissionMode(message.value, current);
+            target = mode ? { section: "default", key: "permission_mode", value: mode } : null;
+            if (!mode) {
+              await this.loadData(true);
+              break;
+            }
+            message.value = mode;
+          } else {
+            target = resolveWebviewConfigWrite(message.key, message.value);
+          }
+          if (!target) {
+            vscode.window.showWarningMessage(`Andromity ignored an invalid value for "${String(message.key)}".`);
+            break;
+          }
+          await this._rpcClient.call("config.set", target);
           if (message.key === "mode") {
             const config = vscode.workspace.getConfiguration("andromity");
             await config.update("permissionMode", message.value, vscode.ConfigurationTarget.Global);
@@ -1058,6 +1089,7 @@ export class SettingsPanel {
       }
 
       case "mcp_restart": {
+        if (!requireWorkspaceTrust("start MCP servers")) break;
         try {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           const name = message.name || message.server_name;
@@ -1081,6 +1113,7 @@ export class SettingsPanel {
       case "mcp_toggle":
       case "mcp_enable":
       case "mcp_disable": {
+        if (message.type !== "mcp_disable" && message.disabled !== true && !requireWorkspaceTrust("start MCP servers")) break;
         try {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           const name = message.name || message.server_name;
@@ -1178,12 +1211,7 @@ export class SettingsPanel {
   }
 
   private _getNonce(): string {
-    let text = "";
-    const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    for (let i = 0; i < 32; i++) {
-      text += possible.charAt(Math.floor(Math.random() * possible.length));
-    }
-    return text;
+    return getNonce();
   }
 
   private _getHtmlForWebview(): string {
@@ -1203,14 +1231,10 @@ export class SettingsPanel {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${this._panel.webview.cspSource} 'unsafe-inline' https://fonts.googleapis.com; script-src 'nonce-${nonce}' ${this._panel.webview.cspSource}; img-src ${this._panel.webview.cspSource} https: data:; font-src ${this._panel.webview.cspSource} https://fonts.gstatic.com data:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${this._panel.webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${this._panel.webview.cspSource}; img-src ${this._panel.webview.cspSource} data:; font-src ${this._panel.webview.cspSource} data:;">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Andromity Hub</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..700;1,14..32,300..700&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap" rel="stylesheet">
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300..700;1,14..32,300..700&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap');
 
     :root {
       --bg: var(--vscode-editor-background, #1e1e1e);
