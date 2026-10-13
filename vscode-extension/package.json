@@ -267,6 +267,37 @@
         "title": "Fix Terminal Error with Andromity",
         "category": "Andromity",
         "icon": "$(tools)"
+      },
+      {
+        "command": "andromity.inlineEdit",
+        "title": "Edit with AI",
+        "category": "Andromity",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "andromity.inlineEdit.accept",
+        "title": "Accept Inline Edit",
+        "category": "Andromity"
+      },
+      {
+        "command": "andromity.inlineEdit.reject",
+        "title": "Reject Inline Edit",
+        "category": "Andromity"
+      },
+      {
+        "command": "andromity.inlineEdit.compare",
+        "title": "Compare Inline Edit",
+        "category": "Andromity"
+      },
+      {
+        "command": "andromity.chat.resolveApproval",
+        "title": "Respond to Tool Approval",
+        "category": "Andromity"
+      },
+      {
+        "command": "andromity.chat.answerQuestions",
+        "title": "Answer Agent Questions",
+        "category": "Andromity"
       }
     ],
     "keybindings": [
@@ -292,6 +323,23 @@
         "key": "ctrl+alt+t",
         "mac": "cmd+alt+t",
         "when": "editorHasSelection"
+      },
+      {
+        "command": "andromity.inlineEdit",
+        "key": "ctrl+i",
+        "mac": "cmd+i",
+        "when": "editorTextFocus && !editorReadonly && !inlineChatHasProvider && !andromity.inlineEditPending"
+      },
+      {
+        "command": "andromity.inlineEdit.accept",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorTextFocus && andromity.inlineEditPending"
+      },
+      {
+        "command": "andromity.inlineEdit.reject",
+        "key": "escape",
+        "when": "editorTextFocus && andromity.inlineEditPending && !suggestWidgetVisible && !inlineSuggestionVisible"
       }
     ],
     "submenus": [
@@ -329,6 +377,30 @@
         {
           "command": "andromity.welcome",
           "when": "false"
+        },
+        {
+          "command": "andromity.inlineEdit.accept",
+          "when": "andromity.inlineEditPending"
+        },
+        {
+          "command": "andromity.inlineEdit.reject",
+          "when": "andromity.inlineEditPending"
+        },
+        {
+          "command": "andromity.inlineEdit.compare",
+          "when": "andromity.inlineEditPending"
+        },
+        {
+          "command": "andromity.chat.resolveApproval",
+          "when": "false"
+        },
+        {
+          "command": "andromity.chat.answerQuestions",
+          "when": "false"
+        },
+        {
+          "command": "andromity.inlineEdit",
+          "when": "editorIsOpen && !editorReadonly"
         }
       ],
       "editor/context": [
@@ -338,6 +410,11 @@
         }
       ],
       "andromity.editorMenu": [
+        {
+          "command": "andromity.inlineEdit",
+          "group": "1_actions@0",
+          "when": "!editorReadonly"
+        },
         {
           "command": "andromity.askAboutSelection",
           "group": "1_actions@1",
@@ -679,6 +756,52 @@
             ]
           }
         ]
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "andromity.agent",
+        "name": "andromity",
+        "fullName": "Andromity",
+        "description": "Ask the Andromity coding agent to explain, fix or build",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "explain",
+            "description": "Explain code without changing files"
+          },
+          {
+            "name": "fix",
+            "description": "Find and fix a problem"
+          },
+          {
+            "name": "tests",
+            "description": "Write unit tests"
+          }
+        ]
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "andromity_delegate",
+        "displayName": "Andromity Agent",
+        "toolReferenceName": "andromity",
+        "canBeReferencedInPrompt": true,
+        "icon": "media/icon.png",
+        "userDescription": "Delegate a coding task to the Andromity agent",
+        "modelDescription": "Runs a complete coding task with the Andromity agent in the user's workspace (it can read, edit and run code, subject to the user's Andromity permission mode) and returns its final answer plus the files it changed. Use for multi-step implementation, debugging or refactoring tasks the user wants Andromity to handle.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "task": {
+              "type": "string",
+              "description": "The full task description, including relevant file paths and acceptance criteria."
+            }
+          },
+          "required": [
+            "task"
+          ]
+        }
       }
     ]
   },

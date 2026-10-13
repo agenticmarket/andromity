@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import { AndromityCodeActionProvider } from "./integrations/CodeActionProvider.js";
 import { EditorBridge } from "./integrations/EditorBridge.js";
+import { registerChatIntegration } from "./integrations/ChatParticipant.js";
+import { registerInlineEdit } from "./integrations/InlineEdit.js";
 import { generateCommitMessage } from "./integrations/GitCommit.js";
 import { ChatViewProvider } from "./providers/ChatViewProvider.js";
 import { PlanViewProvider } from "./providers/PlanViewProvider.js";
@@ -220,6 +222,13 @@ export async function activate(context: vscode.ExtensionContext) {
       },
     })
   );
+
+  const integrationDeps = {
+    waitForClient: (timeoutMs: number) => pythonBridge?.waitForClient(timeoutMs) ?? Promise.resolve(null),
+    getTurnDefaults: () => chatProvider.getTurnDefaults(),
+  };
+  registerChatIntegration(context, integrationDeps);
+  registerInlineEdit(context, integrationDeps);
 
   // 4. Register Code Actions Provider
   context.subscriptions.push(

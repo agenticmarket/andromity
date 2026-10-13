@@ -1735,6 +1735,10 @@ class JsonRpcHandler:
         project_path = params.get("project_path")
         model = params.get("model")
         provider = params.get("provider")
+        # raw: return the model's text as-is (minus reasoning blocks) for callers
+        # such as inline edit, instead of commit-message extraction.
+        raw = bool(params.get("raw"))
+        max_tokens = min(int(params.get("max_tokens") or 2000), 16000) if raw else 2000
 
         # Fallback to user's active/configured provider that actually has a valid API key
         def find_working_provider(preferred_prov: Optional[str] = None):
@@ -1785,10 +1789,10 @@ class JsonRpcHandler:
 
             messages = [{"role": "user", "content": prompt}]
             kwargs: Dict[str, Any] = {
-                **resolved, "messages": messages, "temperature": 0.2, "max_tokens": 2000,
+                **resolved, "messages": messages, "temperature": 0.2, "max_tokens": max_tokens,
             }
 
-            resp = await asyncio.wait_for(asyncio.to_thread(lambda: litellm.completion(**kwargs)), timeout=25)
+            resp = await asyncio.wait_for(asyncio.to_thread(lambda: litellm.completion(**kwargs)), timeout=120 if raw else 25)
             text = ""
             from_reasoning = False
             try:
@@ -1808,6 +1812,10 @@ class JsonRpcHandler:
             # Strip markdown code blocks (e.g. ```text ... ```) and backticks
             # Also strip <think>...</think> reasoning blocks emitted by reasoning models
             text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+            if raw:
+                if not text:
+                    raise RuntimeError(f"Model {provider_name}/{model_name} returned no text.")
+                return {"message": text, "result": text}
 
             # Models often quote the prompt's own "<commit_message> and </commit_message>" instruction while
             # reasoning, so only a closed tag with real content counts; the last one is the final answer.
@@ -1837,6 +1845,8 @@ class JsonRpcHandler:
             )
         except Exception as e:
             log.warning("quickPrompt direct completion failed: %s", e)
+            if raw:
+                raise RuntimeError(f"Completion via {provider_name}/{model_name} failed: {e}")
             raise RuntimeError(f"Failed to generate commit message via {provider_name}/{model_name}: {e}")
 
     async def rpc_agent_approve_tool(self, params: Dict[str, Any]) -> Dict[str, Any]:

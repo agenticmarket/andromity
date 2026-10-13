@@ -120,6 +120,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return this._currentModel || undefined;
   }
 
+  /** Settings a turn started outside the chat view (native chat, Copilot tool) should use. */
+  public getTurnDefaults(): { model: string; provider: string; mode: string; profile: string; reasoningEffort: string } {
+    return {
+      model: this._currentModel,
+      provider: this._currentProvider,
+      mode: this._currentMode,
+      profile: this._currentProfile,
+      reasoningEffort: this._currentReasoning,
+    };
+  }
+
   public getCurrentProvider(): string | undefined {
     return this._currentProvider || undefined;
   }

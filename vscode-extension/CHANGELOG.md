@@ -24,6 +24,9 @@ All notable changes to the "andromity" extension will be documented in this file
 - The packaged extension is minified, and background task tabs poll only while visible.
 
 ### Added
+- `@andromity` in VS Code's native chat (VS Code 1.95+). Replies stream into the chat, tool approvals and clarifying questions appear as buttons, `/explain`, `/fix` and `/tests` shortcuts are available, and follow-ups in the same chat thread continue the same Andromity session.
+- An **Andromity Agent** tool (`#andromity`) that Copilot agent mode can use to hand a task to Andromity. You confirm each delegation, and Andromity's own permission mode still applies.
+- **Edit with AI** (Ctrl+I / Cmd+I, or the editor context menu): describe a change to the selection or current line. Andromity applies it in place and highlights it, with Accept (Ctrl+Enter), Reject (Esc) and Compare above the edit. Ctrl+I stays with another inline-chat extension (such as Copilot) when one is installed.
 - Ollama setup states in the Hub: show when the server is unavailable, offer Start Ollama for an installed but stopped server, and provide installation and official setup documentation links.
 - Running Ollama servers with no installed models show a download action and a Check again button.
 - Connecting and reasoning activity animations, with a steady assistant header while response text streams.
