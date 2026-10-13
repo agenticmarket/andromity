@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: andromity
-Version: 0.2.16
+Version: 0.2.18
 Summary: Open-source AI coding agent for terminal and IDE workflows with BYOK, local Ollama, MCP tools and subagents.
 Author-email: Agentic Market <hello@agenticmarket.dev>
 License: MIT
@@ -48,7 +48,7 @@ Dynamic: license-file
 
   **Trust-governed, BYOK, autonomous coding agent with subagents, live plans, native diffs & one-click rollback.**
 
-  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.15-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.18-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white)](https://discord.gg/taPJSNy4)
   [![PyPI](https://img.shields.io/pypi/v/andromity)](https://pypi.org/project/andromity/)
   [![GitHub Stars](https://img.shields.io/github/stars/agenticmarket/andromity?style=social)](https://github.com/agenticmarket/andromity)
