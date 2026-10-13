@@ -2235,6 +2235,8 @@ class JsonRpcHandler:
                     "description": s.description or "",
                     "path": str(s.path) if hasattr(s, "path") else "",
                     "scope": getattr(s, "scope", "project"),
+                    "source": getattr(s, "source", ""),
+                    "version": getattr(s, "version", ""),
                 })
         except Exception as e:
             log.warning("Error listing skills: %s", e)
@@ -2257,12 +2259,37 @@ class JsonRpcHandler:
                     "source_label": r.source_label,
                     "repo": r.repo,
                     "dir": r.dir,
+                    "category": r.category,
+                    "category_label": r.category_label,
+                    "tags": r.tags,
+                    "commit": r.commit,
+                    "version": r.version,
+                    "verified": r.verified,
+                    "featured": r.featured,
                 }
                 for r in remotes
             ]
         except Exception as e:
             log.warning("Error browsing skills registry: %s", e)
             return []
+
+    async def rpc_skills_read(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a skill's SKILL.md for the detail view (installed copy when a path is given)."""
+        name = params.get("name")
+        if not name:
+            raise ValueError("Skill name is required")
+        project_path = params.get("project_path")
+        target_path = str(Path(project_path).resolve()) if project_path else str(Path.cwd().resolve())
+        try:
+            from andromity.core.skills import SkillsManager
+            mgr = SkillsManager(target_path)
+            content = await asyncio.to_thread(mgr.read_skill_md, name, params.get("source_id"), params.get("path"))
+        except Exception as e:
+            log.warning("Failed to read skill %s: %s", name, e)
+            return {"content": "", "error": "Could not load this skill's instructions. Check your connection and try again."}
+        if content is None:
+            return {"content": "", "error": "This skill's instructions are not available."}
+        return {"content": content}
 
     async def rpc_skills_install(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Install a remote skill from GitHub registries into local skills library."""
@@ -2273,10 +2300,12 @@ class JsonRpcHandler:
         target_path = str(Path(project_path).resolve()) if project_path else str(Path.cwd().resolve())
         if not name:
             raise ValueError("Skill name is required")
+        if scope == "project" and not config.is_trusted(target_path):
+            return {"success": False, "error": "Trust this workspace before installing project skills."}
         try:
             from andromity.core.skills import SkillsManager
             mgr = SkillsManager(target_path)
-            installed = await asyncio.to_thread(mgr.install, name, source_id, scope)
+            installed = await asyncio.to_thread(mgr.install, name, source_id, scope, params.get("ref") or None)
             return {
                 "success": bool(installed),
                 "name": name,

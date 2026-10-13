@@ -583,11 +583,23 @@ export class SettingsPanel {
       }
 
       case "install_skill": {
+        const scope = message.scope === "project" ? "project" : "user";
+        const projectPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         try {
+          if (scope === "project" && !projectPath) {
+            vscode.window.showWarningMessage("Open a folder before installing a skill for this project only.");
+            break;
+          }
+          if (scope === "project" && !vscode.workspace.isTrusted) {
+            vscode.window.showWarningMessage("Trust this workspace before installing project skills.");
+            break;
+          }
           const res = await this._rpcClient.call<any>("skills.install", {
             name: message.name,
             source_id: message.sourceId || "anthropic",
-            project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+            ref: message.ref || undefined,
+            scope,
+            project_path: projectPath,
           }, 60000);
           if (res.success) {
             vscode.window.showInformationMessage(`Installed skill '${message.name}' successfully.`);
@@ -598,7 +610,25 @@ export class SettingsPanel {
           }
         } catch (err: any) {
           vscode.window.showErrorMessage(`Failed to install skill: ${err.message}`);
+        } finally {
+          this._panel?.webview.postMessage({ type: "skill_install_finished" });
         }
+        break;
+      }
+
+      case "skill_read": {
+        let result: { content?: string; error?: string };
+        try {
+          result = await this._rpcClient.call<{ content?: string; error?: string }>("skills.read", {
+            name: message.name,
+            source_id: message.sourceId || undefined,
+            path: message.path || undefined,
+            project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+          }, 20000);
+        } catch {
+          result = { error: "Could not load this skill's instructions. Reconnect to an updated Andromity server and retry." };
+        }
+        this._panel?.webview.postMessage({ type: "skill_detail_loaded", key: message.key, content: result.content, error: result.error });
         break;
       }
 
@@ -1937,6 +1967,133 @@ export class SettingsPanel {
       border-color: var(--primary);
     }
 
+    .chip .chip-count {
+      opacity: 0.65;
+      margin-left: 3px;
+    }
+
+    .skill-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      justify-content: flex-end;
+    }
+
+    .skill-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 8px;
+    }
+
+    .skill-tag {
+      font-size: 10.5px;
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+
+    .skill-tag:hover {
+      color: var(--text);
+    }
+
+    .item-card[data-action="skill-open"] {
+      cursor: pointer;
+    }
+
+    .skill-detail-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(0, 0, 0, 0.55);
+    }
+
+    .skill-detail {
+      width: min(720px, 100%);
+      max-height: 100%;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 18px 20px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+    }
+
+    .skill-detail-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .skill-detail-title {
+      margin: 0;
+      font-size: 16px;
+      word-break: break-word;
+    }
+
+    .skill-detail-desc {
+      margin: 0;
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: var(--text);
+    }
+
+    .skill-detail-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 12px;
+    }
+
+    .skill-detail-row {
+      display: flex;
+      gap: 10px;
+    }
+
+    .skill-detail-label {
+      flex: 0 0 96px;
+      color: var(--text-muted);
+    }
+
+    .skill-detail-doc {
+      margin: 0;
+      max-height: 260px;
+      overflow: auto;
+      padding: 10px 12px;
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+    }
+
+    .skill-detail-doc-note {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .skill-detail-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding-top: 4px;
+    }
+
+    .skills-footer {
+      grid-column: 1 / -1;
+      display: flex;
+      justify-content: center;
+      padding: 6px 0 2px;
+    }
+
     /* Custom Model Input */
     .custom-model-bar {
       display: flex;
@@ -2849,7 +3006,7 @@ export class SettingsPanel {
       <div class="section-header">
         <div>
           <h2 class="section-title">Skills & Instruction Packs</h2>
-          <p class="section-desc">Modular skills loaded from local workspace, global config, and Anthropic/Community registries.</p>
+          <p class="section-desc">Modular skills loaded from local workspace, global config, and the Andromity skills catalog. Browse by category and search by name or tag.</p>
         </div>
       </div>
 
@@ -2859,9 +3016,28 @@ export class SettingsPanel {
           <div class="chip active" id="filter-skills-installed">Installed (<span id="installed-skills-num">0</span>)</div>
           <div class="chip" id="filter-skills-registry">Browse Online Registry (<span id="remote-skills-num">0</span>)</div>
         </div>
+
+        <div class="search-row">
+          <div class="search-input-wrap">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" class="search-input" id="skills-search" placeholder="Search skills by name, description, or tag (e.g. pdf, testing, deploy)...">
+          </div>
+        </div>
+
+        <div class="filter-chips" id="skills-category-chips" style="display:none;"></div>
+        <div class="filter-chips" id="skills-source-chips" style="display:none;"></div>
+        <div class="filter-chips" id="skills-scope-chips" style="display:none;">
+          <span class="chip-label">Install to:</span>
+          <div class="chip active" data-action="skills-scope" data-value="user">All projects</div>
+          <div class="chip" data-action="skills-scope" data-value="project">This project only</div>
+        </div>
       </div>
 
       <div class="cards-grid" id="skills-grid"></div>
+      <div class="skill-detail-overlay" id="skill-detail-overlay"></div>
     </div>
 
     <!-- ── TAB 4: MCP SERVERS ───────────────────────────────────────── -->
@@ -3546,6 +3722,14 @@ SOFTWARE.</pre>
     let activeCategory = "all";
     let activeProvider = "all";
     let activeSkillsTab = "installed";
+    const SKILLS_PAGE_SIZE = 60;
+    let skillsQuery = "";
+    let skillsCategory = "all";
+    let skillsSource = "all";
+    let skillsInstallScope = "user";
+    let skillsLimit = SKILLS_PAGE_SIZE;
+    let skillDetail = null;
+    const skillDocs = {};
     let searchQuery = "";
     let usageData = {};
     let currentUsageRange = "all";
@@ -3726,6 +3910,19 @@ SOFTWARE.</pre>
       btnSkillsRegistry.classList.add("active");
       btnSkillsInstalled.classList.remove("active");
       activeSkillsTab = "registry";
+      renderSkills();
+    });
+
+    document.getElementById("skill-detail-overlay").addEventListener("click", (e) => {
+      if (e.target.id === "skill-detail-overlay") closeSkillDetail();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && skillDetail) closeSkillDetail();
+    });
+
+    document.getElementById("skills-search").addEventListener("input", (e) => {
+      skillsQuery = e.target.value.toLowerCase().trim();
+      skillsLimit = SKILLS_PAGE_SIZE;
       renderSkills();
     });
 
@@ -3934,9 +4131,37 @@ SOFTWARE.</pre>
       } else if (action === "install-skill") {
         const name = btn.dataset.skillName;
         const sourceId = btn.dataset.sourceId;
+        const ref = btn.dataset.skillRef || "";
+        const scope = btn.dataset.skillScope || skillsInstallScope;
         btn.disabled = true;
         btn.innerHTML = '<span class="spinning-loader"></span> Installing...';
-        vscode.postMessage({ type: "install_skill", name, sourceId });
+        vscode.postMessage({ type: "install_skill", name, sourceId, ref, scope });
+      } else if (action === "skills-category") {
+        skillsCategory = btn.dataset.value || "all";
+        skillsLimit = SKILLS_PAGE_SIZE;
+        renderSkills();
+      } else if (action === "skills-source") {
+        skillsSource = btn.dataset.value || "all";
+        skillsLimit = SKILLS_PAGE_SIZE;
+        renderSkills();
+      } else if (action === "skills-scope") {
+        skillsInstallScope = btn.dataset.value === "project" ? "project" : "user";
+        document.querySelectorAll("#skills-scope-chips .chip").forEach(c => c.classList.toggle("active", c.dataset.value === skillsInstallScope));
+        renderSkillDetail();
+      } else if (action === "skill-open") {
+        openSkillDetail(btn.dataset.skillName, btn.dataset.sourceId, btn.dataset.skillPath);
+      } else if (action === "skill-close") {
+        closeSkillDetail();
+      } else if (action === "skills-tag") {
+        skillDetail = null;
+        skillsQuery = (btn.dataset.value || "").toLowerCase();
+        skillsCategory = "all";
+        skillsLimit = SKILLS_PAGE_SIZE;
+        document.getElementById("skills-search").value = skillsQuery;
+        renderSkills();
+      } else if (action === "skills-show-more") {
+        skillsLimit += SKILLS_PAGE_SIZE;
+        renderSkills();
       } else if (action === "open-session") {
         const sId = btn.dataset.sessionId;
         const sName = btn.dataset.sessionName || "Cron Session";
@@ -4257,6 +4482,15 @@ SOFTWARE.</pre>
         }
         case "mcp_refresh_failed": {
           renderMcp();
+          break;
+        }
+        case "skill_detail_loaded": {
+          skillDocs[msg.key] = msg.error ? { error: msg.error } : { content: msg.content || "" };
+          renderSkillDetail();
+          break;
+        }
+        case "skill_install_finished": {
+          renderSkills();
           break;
         }
         case "remote_skills_loaded": {
@@ -4969,59 +5203,316 @@ SOFTWARE.</pre>
       }).join("");
     }
 
+    function skillSourceName(r) {
+      return (r.source_label || r.source_id || "").split(" — ")[0];
+    }
+
+    function skillSearchScore(s, terms) {
+      const name = (s.name || "").toLowerCase();
+      const tags = (s.tags || []).map(t => String(t).toLowerCase());
+      const hay = [s.name, s.description, (s.tags || []).join(" "), s.category_label].join(" ").toLowerCase();
+      let score = 0;
+      for (const t of terms) {
+        if (hay.indexOf(t) === -1) return -1;
+        if (name === t) score += 6;
+        else if (name.indexOf(t) === 0) score += 4;
+        else if (name.indexOf(t) !== -1) score += 3;
+        else if (tags.indexOf(t) !== -1) score += 2;
+        else score += 1;
+      }
+      return score;
+    }
+
+    function filterSkillsByQuery(list) {
+      const terms = skillsQuery.split(" ").filter(Boolean);
+      if (terms.length === 0) return list;
+      return list
+        .map((s, i) => ({ s: s, i: i, score: skillSearchScore(s, terms) }))
+        .filter(x => x.score >= 0)
+        .sort((a, b) => b.score - a.score || a.i - b.i)
+        .map(x => x.s);
+    }
+
+    function findInstalledSkill(name) {
+      const lower = (name || "").toLowerCase();
+      return allSkills.find(s => (s.name || "").toLowerCase() === lower) || null;
+    }
+
+    function skillUpdateFor(installed) {
+      if (!installed || !installed.source || !installed.version) return null;
+      const remote = allRemoteSkills.find(r => r.source_id === installed.source && r.name === installed.name);
+      return remote && remote.version && remote.version !== installed.version ? remote : null;
+    }
+
+    function skillChip(action, value, label, active, count) {
+      return '<div class="chip' + (active ? ' active' : '') + '" data-action="' + action + '" data-value="' + escapeHtml(value) + '">' +
+        escapeHtml(label) + (count === undefined ? '' : '<span class="chip-count">' + count + '</span>') + '</div>';
+    }
+
+    function renderSkillFilters(base) {
+      const catEl = document.getElementById("skills-category-chips");
+      const srcEl = document.getElementById("skills-source-chips");
+      const scopeEl = document.getElementById("skills-scope-chips");
+      const registry = activeSkillsTab === "registry";
+      if (scopeEl) scopeEl.style.display = registry ? "" : "none";
+
+      const totals = {};
+      const labels = {};
+      allRemoteSkills.forEach(r => {
+        const c = r.category || "other";
+        totals[c] = (totals[c] || 0) + 1;
+        labels[c] = r.category_label || c;
+      });
+      const order = Object.keys(totals).sort((a, b) => (a === "other") - (b === "other") || totals[b] - totals[a]);
+      if (catEl) {
+        if (!registry || order.length < 2) {
+          catEl.style.display = "none";
+        } else {
+          const counts = {};
+          base.forEach(r => { const c = r.category || "other"; counts[c] = (counts[c] || 0) + 1; });
+          catEl.style.display = "";
+          catEl.innerHTML = '<span class="chip-label">Category:</span>' +
+            skillChip("skills-category", "all", "All", skillsCategory === "all", base.length) +
+            order.filter(c => counts[c] || c === skillsCategory)
+              .map(c => skillChip("skills-category", c, labels[c], skillsCategory === c, counts[c] || 0)).join("");
+        }
+      }
+      if (srcEl) {
+        const sources = [];
+        allRemoteSkills.forEach(r => {
+          if (!sources.some(x => x.id === r.source_id)) sources.push({ id: r.source_id, label: skillSourceName(r) });
+        });
+        if (!registry || sources.length < 2) {
+          srcEl.style.display = "none";
+        } else {
+          srcEl.style.display = "";
+          srcEl.innerHTML = '<span class="chip-label">Source:</span>' +
+            skillChip("skills-source", "all", "All sources", skillsSource === "all") +
+            skillChip("skills-source", "verified", "Verified", skillsSource === "verified") +
+            sources.map(x => skillChip("skills-source", x.id, x.label, skillsSource === x.id)).join("");
+        }
+      }
+    }
+
+    function skillsEmptyState(message) {
+      return '<div class="empty-state" style="grid-column: 1 / -1;">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' +
+        '<div>' + message + '</div>' +
+      '</div>';
+    }
+
+    function installedSkillCard(s) {
+      const update = skillUpdateFor(s);
+      return '<div class="item-card" data-action="skill-open" data-skill-name="' + escapeHtml(s.name) + '" data-source-id="' + escapeHtml(s.source || '') + '" data-skill-path="' + escapeHtml(s.path || '') + '">' +
+        '<div class="item-card-top">' +
+          '<div class="item-card-title">' +
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' +
+            '<span>' + escapeHtml(s.name) + '</span>' +
+          '</div>' +
+          '<div class="skill-badges">' +
+            (update ? '<span class="badge orange">Update available</span>' : '') +
+            '<span class="badge purple">' + escapeHtml(s.scope || 'skill') + '</span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="item-card-desc">' + escapeHtml(s.description || 'Custom agent workflow skill.') + '</div>' +
+        '<div style="font-size: 11px; font-family: var(--font-mono); color: var(--text-muted); word-break: break-all;">' + escapeHtml(s.path || '') + '</div>' +
+        '<div style="display: flex; gap: 6px;">' +
+          (update ? '<button class="btn" style="padding: 4px 10px; font-size: 11px;" data-action="install-skill" data-skill-name="' + escapeHtml(s.name) + '" data-source-id="' + escapeHtml(update.source_id) + '" data-skill-ref="' + escapeHtml(update.commit || '') + '" data-skill-scope="' + (s.scope === 'project' ? 'project' : 'user') + '">Update</button>' : '') +
+          (s.scope === 'builtin' ? '' : '<button class="btn btn-secondary" data-action="remove-skill" data-skill-name="' + escapeHtml(s.name) + '" data-skill-path="' + escapeHtml(s.path || '') + '">Remove Skill</button>') +
+        '</div>' +
+      '</div>';
+    }
+
+    function remoteSkillCard(r) {
+      const installed = findInstalledSkill(r.name);
+      const fromOtherSource = !!(installed && installed.source && installed.source !== r.source_id);
+      const hasUpdate = !!(installed && !fromOtherSource && installed.version && r.version && installed.version !== r.version);
+      const buttonLabel = !installed ? 'Install Skill' : hasUpdate ? 'Update' : fromOtherSource ? 'Replace' : 'Reinstall';
+      const tags = (r.tags || []).slice(0, 4).map(t =>
+        '<span class="skill-tag" data-action="skills-tag" data-value="' + escapeHtml(t) + '">#' + escapeHtml(t) + '</span>').join('');
+      return '<div class="item-card" data-action="skill-open" data-skill-name="' + escapeHtml(r.name) + '" data-source-id="' + escapeHtml(r.source_id || '') + '">' +
+        '<div class="item-card-top">' +
+          '<div class="item-card-title">' +
+            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' +
+            '<span>' + escapeHtml(r.name) + '</span>' +
+          '</div>' +
+          '<div class="skill-badges">' +
+            (r.featured ? '<span class="badge orange">Featured</span>' : '') +
+            (r.verified ? '<span class="badge green">Verified</span>' : '') +
+            (r.category_label && r.category !== 'other' ? '<span class="badge purple">' + escapeHtml(r.category_label) + '</span>' : '') +
+            '<span class="badge blue">' + escapeHtml(skillSourceName(r)) + '</span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="item-card-desc">' + escapeHtml(r.description || 'Remote instruction pack from ' + r.repo) + '</div>' +
+        (tags ? '<div class="skill-tags">' + tags + '</div>' : '') +
+        '<div style="display: flex; align-items: center; justify-content: space-between; margin-top: 8px;">' +
+          '<span class="skill-badges">' +
+            (installed ? '<span class="badge green" style="font-size:10px; font-weight:600;">' + (fromOtherSource ? 'Installed (other source)' : 'Installed') + '</span>' : '') +
+            (hasUpdate ? '<span class="badge orange" style="font-size:10px; font-weight:600;">Update available</span>' : '') +
+          '</span>' +
+          '<button class="btn ' + (installed && !hasUpdate ? 'btn-secondary' : '') + '" style="padding: 4px 10px; font-size: 11px;" data-action="install-skill" data-skill-name="' + escapeHtml(r.name) + '" data-source-id="' + escapeHtml(r.source_id || 'anthropic') + '" data-skill-ref="' + escapeHtml(r.commit || '') + '">' + buttonLabel + '</button>' +
+        '</div>' +
+      '</div>';
+    }
+
+    function skillDocKey(d) {
+      return [d.name, d.sourceId || "", d.path || ""].join("|");
+    }
+
+    function openSkillDetail(name, sourceId, path) {
+      skillDetail = { name: name, sourceId: sourceId || "", path: path || "" };
+      const key = skillDocKey(skillDetail);
+      if (!skillDocs[key] || skillDocs[key].error) {
+        skillDocs[key] = { loading: true };
+        vscode.postMessage({ type: "skill_read", key: key, name: name, sourceId: skillDetail.sourceId, path: skillDetail.path });
+      }
+      renderSkillDetail();
+    }
+
+    function closeSkillDetail() {
+      skillDetail = null;
+      renderSkillDetail();
+    }
+
+    function resolveSkillDetail() {
+      if (!skillDetail) return null;
+      const installed = (skillDetail.path
+        ? allSkills.find(s => s.name === skillDetail.name && s.path === skillDetail.path)
+        : null) || findInstalledSkill(skillDetail.name);
+      const sourceId = skillDetail.sourceId || (installed && installed.source) || "";
+      const remote = allRemoteSkills.find(r => r.name === skillDetail.name && (!sourceId || r.source_id === sourceId)) || null;
+      return installed || remote ? { installed: installed, remote: remote } : null;
+    }
+
+    function skillDetailRow(label, valueHtml) {
+      return '<div class="skill-detail-row"><span class="skill-detail-label">' + label + '</span><span>' + valueHtml + '</span></div>';
+    }
+
+    function renderSkillDetail() {
+      const overlay = document.getElementById("skill-detail-overlay");
+      if (!overlay) return;
+      const detail = resolveSkillDetail();
+      if (!skillDetail || !detail) {
+        skillDetail = null;
+        overlay.style.display = "none";
+        overlay.innerHTML = "";
+        return;
+      }
+      const installed = detail.installed;
+      const remote = detail.remote;
+      const name = (remote || installed).name;
+      const description = (remote && remote.description) || (installed && installed.description) || "No description provided.";
+      const fromOtherSource = !!(installed && remote && installed.source && installed.source !== remote.source_id);
+      const hasUpdate = !!(installed && remote && !fromOtherSource && installed.version && remote.version && installed.version !== remote.version);
+      const doc = skillDocs[skillDocKey(skillDetail)] || {};
+
+      const badges = (remote && remote.featured ? '<span class="badge orange">Featured</span>' : '') +
+        (remote && remote.verified ? '<span class="badge green">Verified</span>' : '') +
+        (remote && remote.category_label && remote.category !== "other" ? '<span class="badge purple">' + escapeHtml(remote.category_label) + '</span>' : '') +
+        (remote ? '<span class="badge blue">' + escapeHtml(skillSourceName(remote)) + '</span>' : '') +
+        (installed ? '<span class="badge green">Installed (' + escapeHtml(installed.scope || "skill") + ')</span>' : '') +
+        (hasUpdate ? '<span class="badge orange">Update available</span>' : '');
+
+      const tags = remote ? (remote.tags || []).map(t =>
+        '<span class="skill-tag" data-action="skills-tag" data-value="' + escapeHtml(t) + '">#' + escapeHtml(t) + '</span>').join("") : "";
+
+      let rows = "";
+      if (remote) {
+        const ref = remote.commit || "main";
+        rows += skillDetailRow("Source", escapeHtml(remote.source_label || remote.source_id));
+        rows += skillDetailRow("Repository", '<a href="#" style="color:var(--accent); text-decoration:none;" data-action="open-portal" data-url="https://github.com/' +
+          escapeHtml(remote.repo) + '/tree/' + escapeHtml(ref) + '/' + escapeHtml(remote.dir) + '">' + escapeHtml(remote.repo + "/" + remote.dir) + '</a>');
+        if (remote.commit) rows += skillDetailRow("Pinned commit", '<code>' + escapeHtml(remote.commit.slice(0, 7)) + '</code>');
+      }
+      if (installed) {
+        rows += skillDetailRow("Installed at", '<code style="word-break:break-all;">' + escapeHtml(installed.path || "") + '</code>');
+      }
+
+      const needsScope = remote && (!installed || fromOtherSource);
+      const scopeChips = needsScope
+        ? '<div class="filter-chips"><span class="chip-label">Install to:</span>' +
+          '<div class="chip' + (skillsInstallScope === "user" ? " active" : "") + '" data-action="skills-scope" data-value="user">All projects</div>' +
+          '<div class="chip' + (skillsInstallScope === "project" ? " active" : "") + '" data-action="skills-scope" data-value="project">This project only</div></div>'
+        : "";
+
+      const installAttrs = remote
+        ? ' data-skill-name="' + escapeHtml(remote.name) + '" data-source-id="' + escapeHtml(remote.source_id) + '" data-skill-ref="' + escapeHtml(remote.commit || "") + '"'
+        : "";
+      let actions = "";
+      if (installed && installed.scope !== "builtin") {
+        actions += '<button class="btn btn-secondary" data-action="remove-skill" data-skill-name="' + escapeHtml(installed.name) + '" data-skill-path="' + escapeHtml(installed.path || "") + '">Remove</button>';
+      }
+      if (hasUpdate) {
+        actions += '<button class="btn"' + installAttrs + ' data-skill-scope="' + (installed.scope === "project" ? "project" : "user") + '" data-action="install-skill">Update</button>';
+      } else if (remote && !installed) {
+        actions += '<button class="btn"' + installAttrs + ' data-action="install-skill">Install</button>';
+      } else if (fromOtherSource) {
+        actions += '<button class="btn"' + installAttrs + ' data-action="install-skill">Replace with this version</button>';
+      }
+
+      const docHtml = doc.loading
+        ? '<div class="skill-detail-doc-note">Loading instructions...</div>'
+        : doc.error
+          ? '<div class="skill-detail-doc-note">' + escapeHtml(doc.error) + '</div>'
+          : '<pre class="skill-detail-doc">' + escapeHtml(doc.content || "") + '</pre>';
+
+      overlay.style.display = "flex";
+      overlay.innerHTML = '<div class="skill-detail" role="dialog" aria-label="Skill details">' +
+        '<div class="skill-detail-head">' +
+          '<h3 class="skill-detail-title">' + escapeHtml(name) + '</h3>' +
+          '<button class="btn btn-secondary" style="padding: 2px 9px;" data-action="skill-close" aria-label="Close">✕</button>' +
+        '</div>' +
+        '<div class="skill-badges" style="justify-content:flex-start;">' + badges + '</div>' +
+        '<p class="skill-detail-desc">' + escapeHtml(description) + '</p>' +
+        (tags ? '<div class="skill-tags">' + tags + '</div>' : '') +
+        '<div class="skill-detail-meta">' + rows + '</div>' +
+        '<div class="chip-label" style="margin-top:4px;">Instructions (SKILL.md)</div>' +
+        docHtml +
+        scopeChips +
+        '<div class="skill-detail-actions">' + actions + '</div>' +
+      '</div>';
+    }
+
     function renderSkills() {
+      renderSkillList();
+      renderSkillDetail();
+    }
+
+    function renderSkillList() {
       const grid = document.getElementById("skills-grid");
       if (!grid) return;
       if (activeSkillsTab === "installed") {
+        renderSkillFilters([]);
         if (allSkills.length === 0) {
-          grid.innerHTML = '<div class="empty-state" style="grid-column: 1 / -1;">' +
-            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' +
-            '<div>No skills installed yet. Switch to "Browse Online Registry" to install instruction packs.</div>' +
-          '</div>';
+          grid.innerHTML = skillsEmptyState('No skills installed yet. Switch to "Browse Online Registry" to install instruction packs.');
           return;
         }
-        grid.innerHTML = allSkills.map(s => 
-          '<div class="item-card">' +
-            '<div class="item-card-top">' +
-              '<div class="item-card-title">' +
-                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' +
-                '<span>' + escapeHtml(s.name) + '</span>' +
-              '</div>' +
-              '<span class="badge purple">' + escapeHtml(s.scope || 'skill') + '</span>' +
-            '</div>' +
-            '<div class="item-card-desc">' + escapeHtml(s.description || 'Custom agent workflow skill.') + '</div>' +
-            '<div style="font-size: 11px; font-family: var(--font-mono); color: var(--text-muted); word-break: break-all;">' + escapeHtml(s.path || '') + '</div>' +
-            (s.scope === 'builtin' ? '' : '<button class="btn btn-secondary" data-action="remove-skill" data-skill-name="' + escapeHtml(s.name) + '" data-skill-path="' + escapeHtml(s.path || '') + '">Remove Skill</button>') +
-          '</div>'
-        ).join("");
-      } else {
-        if (allRemoteSkills.length === 0) {
-          grid.innerHTML = '<div class="empty-state" style="grid-column: 1 / -1;">' +
-            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' +
-            '<div>Connecting to GitHub registries (Anthropic & Community)...</div>' +
-          '</div>';
-          return;
-        }
-        grid.innerHTML = allRemoteSkills.map(r => {
-          const isInstalled = allSkills.some(s => (s.name || "").toLowerCase() === (r.name || "").toLowerCase());
-          return '<div class="item-card">' +
-            '<div class="item-card-top">' +
-              '<div class="item-card-title">' +
-                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' +
-                '<span>' + escapeHtml(r.name) + '</span>' +
-              '</div>' +
-              '<span class="badge blue">' + escapeHtml(r.source_label || r.source_id) + '</span>' +
-            '</div>' +
-            '<div class="item-card-desc">' + escapeHtml(r.description || 'Remote instruction pack from ' + r.repo) + '</div>' +
-            '<div style="display: flex; align-items: center; justify-content: space-between; margin-top: 8px;">' +
-              (isInstalled ? '<span class="badge green" style="font-size:10px; font-weight:600;">Installed</span>' : '<span></span>') +
-              '<button class="btn ' + (isInstalled ? 'btn-secondary' : '') + '" style="padding: 4px 10px; font-size: 11px;" data-action="install-skill" data-skill-name="' + escapeHtml(r.name) + '" data-source-id="' + escapeHtml(r.source_id || 'anthropic') + '">' +
-                (isInstalled ? 'Reinstall' : 'Install Skill') +
-              '</button>' +
-            '</div>' +
-          '</div>';
-        }).join("");
+        const list = filterSkillsByQuery(allSkills);
+        grid.innerHTML = list.length === 0
+          ? skillsEmptyState('No installed skills match your search.')
+          : list.map(installedSkillCard).join("");
+        return;
       }
+
+      if (allRemoteSkills.length === 0) {
+        renderSkillFilters([]);
+        grid.innerHTML = skillsEmptyState('Loading the skills catalog...');
+        return;
+      }
+      const bySource = allRemoteSkills.filter(r =>
+        skillsSource === "all" || (skillsSource === "verified" ? r.verified : r.source_id === skillsSource));
+      const base = filterSkillsByQuery(bySource);
+      renderSkillFilters(base);
+      const matches = base.filter(r => skillsCategory === "all" || (r.category || "other") === skillsCategory);
+      if (matches.length === 0) {
+        grid.innerHTML = skillsEmptyState('No skills match your filters.');
+        return;
+      }
+      const page = matches.slice(0, skillsLimit);
+      grid.innerHTML = page.map(remoteSkillCard).join("") +
+        (matches.length > page.length
+          ? '<div class="skills-footer"><button class="btn btn-secondary" data-action="skills-show-more">Show more (' + (matches.length - page.length) + ' remaining)</button></div>'
+          : '');
     }
 
     function renderMcp() {

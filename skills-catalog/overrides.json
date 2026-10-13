@@ -1,0 +1,13 @@
+{
+  "anthropic/template": { "hidden": true },
+  "anthropic/pdf": { "featured": true },
+  "anthropic/docx": { "featured": true },
+  "anthropic/xlsx": { "featured": true },
+  "anthropic/pptx": { "featured": true },
+  "anthropic/skill-creator": { "featured": true, "category": "engineering" },
+  "anthropic/mcp-builder": { "featured": true },
+  "anthropic/frontend-design": { "featured": true },
+  "anthropic/webapp-testing": { "featured": true },
+  "anthropic/claude-api": { "featured": true },
+  "community/statistical-analyst": { "category": "data" }
+}
