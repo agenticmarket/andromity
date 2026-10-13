@@ -5964,6 +5964,9 @@ export function getChatStyles(): string {
       text-overflow: ellipsis;
       white-space: nowrap;
       min-width: 0;
+      /* overflow:hidden clips glyph descenders unless the line box is tall enough */
+      line-height: 16px;
+      padding-bottom: 1px;
     }
     #btn-prompt-model { max-width: 180px; }
     #btn-prompt-reasoning { min-width: 58px; justify-content: center; gap: 4px; }
@@ -5974,7 +5977,7 @@ export function getChatStyles(): string {
     }
     #btn-prompt-reasoning #prompt-reasoning-label { min-width: 24px; text-align: center; }
     #btn-prompt-model { min-width: 0; }
-    #prompt-model-label { max-width: 140px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.4; }
+    #prompt-model-label { max-width: 140px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     /* ─── Stepped Reasoning Effort Popover & Slider (Clean & Minimal) ─────── */
     .reasoning-popover {
