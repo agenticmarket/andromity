@@ -587,6 +587,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (!filePath) return;
       let cleanPath = filePath.trim();
       cleanPath = cleanPath.replace(/^[`'"]+|[`'"]+$/g, "");
+      let endLine: number | undefined;
+      // "Add to Andromity" chips reference "path#L19-27" (or "#L19").
+      const anchor = cleanPath.match(/^(.+?)#L(\d+)(?:-L?(\d+))?$/i);
+      if (anchor) {
+        cleanPath = anchor[1];
+        if (!line) line = parseInt(anchor[2], 10);
+        if (anchor[3]) endLine = parseInt(anchor[3], 10);
+      }
       const match = cleanPath.match(/^(.+?):(\d+)(?::\d+)?$/);
       if (match) {
         cleanPath = match[1];
@@ -640,8 +648,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const editor = await vscode.window.showTextDocument(doc, { preview: false, preserveFocus: false });
       if (line && line > 0) {
         const pos = new vscode.Position(line - 1, 0);
-        editor.selection = new vscode.Selection(pos, pos);
-        editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+        const end = endLine && endLine >= line
+          ? doc.lineAt(Math.min(endLine, doc.lineCount) - 1).range.end
+          : pos;
+        editor.selection = new vscode.Selection(pos, end);
+        editor.revealRange(new vscode.Range(pos, end), vscode.TextEditorRevealType.InCenter);
       }
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to open: ${err.message}`);
