@@ -5450,6 +5450,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
       const promptModelLabel = document.getElementById('prompt-model-label');
       if (promptModelLabel) {
+        // The label starts as an 11px-high loading skeleton; leaving those
+        // classes on clipped the bottom of the real model name.
+        promptModelLabel.classList.remove('skeleton', 'skeleton-text');
+        promptModelLabel.removeAttribute('aria-busy');
+        promptModelLabel.style.minWidth = '';
         promptModelLabel.textContent = compactModelName(name);
         if (promptModelLabel.parentElement) {
           promptModelLabel.parentElement.title = "Active Model: " + currentModel + " (" + currentProvider + ") - Click to switch";
@@ -7186,7 +7191,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function clearSkeletonState() {
       try {
         document.body.classList.remove('loading');
-        document.querySelectorAll('.skeleton').forEach(el => el.classList.remove('skeleton'));
+        // skeleton-text fixes the height at 11px, which clips real labels.
+        document.querySelectorAll('.skeleton, .skeleton-text').forEach(el => el.classList.remove('skeleton', 'skeleton-text'));
         document.querySelectorAll('[aria-busy="true"]').forEach(el => el.removeAttribute('aria-busy'));
       } catch {}
     }
