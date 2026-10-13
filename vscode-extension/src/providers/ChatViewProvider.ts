@@ -758,6 +758,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  /** Attach a line range of a file as prompt context ("Add to Andromity"). */
+  public attachSelection(fsPath: string, startLine: number, endLine: number) {
+    if (!fsPath) return;
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const relPath = ws && fsPath.startsWith(ws) ? path.relative(ws, fsPath).split(path.sep).join("/") : fsPath;
+    const lines = startLine === endLine ? `${startLine}` : `${startLine}-${endLine}`;
+    this._postToWebview({
+      type: "file_attached",
+      file: { name: `${path.basename(fsPath)}:${lines}`, path: `${relPath}#L${lines}`, fsPath },
+    });
+    this._view?.show?.(true);
+  }
+
   /** Open native file picker to manually attach file(s) to chat prompt context. */
   public async pickAndAttachFile(): Promise<void> {
     const uris = await vscode.window.showOpenDialog({

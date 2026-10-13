@@ -1815,7 +1815,9 @@ class JsonRpcHandler:
             if raw:
                 if not text:
                     raise RuntimeError(f"Model {provider_name}/{model_name} returned no text.")
-                return {"message": text, "result": text}
+                # from_reasoning: the model put everything in its reasoning, so the
+                # caller should take the final code block rather than the first.
+                return {"message": text, "result": text, "from_reasoning": from_reasoning}
 
             # Models often quote the prompt's own "<commit_message> and </commit_message>" instruction while
             # reasoning, so only a closed tag with real content counts; the last one is the final answer.

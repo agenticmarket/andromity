@@ -22,15 +22,28 @@ const CONTEXT_LINES_BEFORE = 60;
 const CONTEXT_LINES_AFTER = 40;
 const FENCE = "`".repeat(3);
 
-/** Code from the model's reply: the first fenced block, or the whole reply. */
-export function extractReplacement(reply: string): string {
-  const open = reply.indexOf(FENCE);
-  if (open !== -1) {
+function fencedBlocks(reply: string): string[] {
+  const blocks: string[] = [];
+  let from = 0;
+  for (;;) {
+    const open = reply.indexOf(FENCE, from);
+    if (open === -1) break;
     const bodyStart = reply.indexOf("\n", open);
     const close = bodyStart === -1 ? -1 : reply.indexOf(FENCE, bodyStart + 1);
-    if (bodyStart !== -1 && close !== -1) return reply.slice(bodyStart + 1, close).replace(/\s+$/, "");
+    if (close === -1) break;
+    blocks.push(reply.slice(bodyStart + 1, close).trimEnd());
+    from = close + FENCE.length;
   }
-  return reply.trim();
+  return blocks;
+}
+
+/** Code from the model's reply: the first fenced block of a normal answer, or
+ *  the last one when the answer came from reasoning (earlier blocks are
+ *  drafts). A reasoning reply without any block has no usable code. */
+export function extractReplacement(reply: string, fromReasoning = false): string {
+  const blocks = fencedBlocks(reply);
+  if (blocks.length) return fromReasoning ? blocks[blocks.length - 1] : blocks[0];
+  return fromReasoning ? "" : reply.trim();
 }
 
 export function buildInlineEditPrompt(opts: {
@@ -106,7 +119,7 @@ export function registerInlineEdit(context: vscode.ExtensionContext, deps: Inlin
     }
   };
 
-  const run = async () => {
+  const run = async (presetInstruction?: string) => {
     const editor = vscode.window.activeTextEditor;
     if (!editor) return;
     if (pending) accept();
@@ -118,8 +131,8 @@ export function registerInlineEdit(context: vscode.ExtensionContext, deps: Inlin
       : new vscode.Range(sel.start.line, 0, sel.end.line, doc.lineAt(sel.end.line).text.length);
     const original = doc.getText(range);
 
-    const instruction = await vscode.window.showInputBox({
-      title: "Andromity: Edit with AI",
+    const instruction = typeof presetInstruction === "string" && presetInstruction ? presetInstruction : await vscode.window.showInputBox({
+      title: "Edit with Andromity",
       prompt: original.trim() ? "Describe how to change the selected code" : "Describe the code to write here",
       placeHolder: "e.g. handle the empty-list case and add a docstring",
       ignoreFocusOut: true,
@@ -149,7 +162,7 @@ export function registerInlineEdit(context: vscode.ExtensionContext, deps: Inlin
     const reply = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: "Andromity is editing…", cancellable: true },
       async (_progress, token) => {
-        const request = rpc.call<{ message?: string; result?: string }>("agent.quickPrompt", {
+        const request = rpc.call<{ message?: string; result?: string; from_reasoning?: boolean }>("agent.quickPrompt", {
           prompt,
           raw: true,
           max_tokens: 8000,
@@ -161,9 +174,10 @@ export function registerInlineEdit(context: vscode.ExtensionContext, deps: Inlin
         return Promise.race([request, cancelled]);
       }
     ).then(
-      (res) => (res ? res.message || res.result || "" : null),
+      (res) => (res ? { text: res.message || res.result || "", fromReasoning: res.from_reasoning === true } : null),
       (err: Error) => {
-        const unsupported = /not found|-32601/.test(err.message);
+        // Engines before raw mode reject non-commit replies with this message.
+        const unsupported = /not found|-32601|did not produce a commit message/.test(err.message);
         void vscode.window.showErrorMessage(unsupported
           ? "Inline edit needs a newer Andromity engine. Update the extension and reload."
           : "Andromity could not generate the edit. Check your model and provider in Settings, then retry.");
@@ -172,7 +186,7 @@ export function registerInlineEdit(context: vscode.ExtensionContext, deps: Inlin
     );
     if (reply === null) return;
 
-    const replacement = extractReplacement(reply);
+    const replacement = extractReplacement(reply.text, reply.fromReasoning);
     if (!replacement) {
       void vscode.window.showWarningMessage("The model returned no code. Try rephrasing the instruction.");
       return;

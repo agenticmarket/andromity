@@ -95,6 +95,13 @@ describe("inline edit helpers", () => {
     assert.match(prompt, /Rewrite the code inside <selection>/);
   });
 
+  it("uses the last code block when the reply came from reasoning", () => {
+    const reply = ["Thinking:", fence + "go", "draft", fence, "Final answer:", fence + "go", "final()", fence].join("\n");
+    assert.equal(extractReplacement(reply, true), "final()");
+    assert.equal(extractReplacement(reply, false), "draft");
+    assert.equal(extractReplacement("Thinking about it, no code yet", true), "");
+  });
+
   it("asks for an insertion when nothing is selected", () => {
     const prompt = buildInlineEditPrompt({ instruction: "x", relativePath: "a.py", languageId: "python", before: "", selection: "", after: "" });
     assert.match(prompt, /Write the code to insert at <selection>/);
@@ -110,6 +117,8 @@ describe("chat and inline edit contributions", () => {
     assert.equal(manifest.contributes.chatParticipants[0].name, "andromity");
     assert.equal(manifest.contributes.languageModelTools[0].name, "andromity_delegate");
     assert.deepEqual(manifest.contributes.languageModelTools[0].inputSchema.required, ["task"]);
+    // A tool reference named "andromity" showed up as a second @andromity entry.
+    assert.equal(manifest.contributes.languageModelTools[0].toolReferenceName, undefined);
   });
 
   it("binds Ctrl+I only when no other inline chat provider owns it", () => {

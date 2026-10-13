@@ -644,6 +644,19 @@ export async function activate(context: vscode.ExtensionContext) {
       );
     }),
 
+    vscode.commands.registerCommand("andromity.addToChat", (uri?: vscode.Uri, range?: vscode.Range) => {
+      const editor = vscode.window.activeTextEditor;
+      const target = uri instanceof vscode.Uri ? uri : editor?.document.uri;
+      if (!target) return;
+      const selection = range ?? editor?.selection;
+      const start = (selection?.start.line ?? 0) + 1;
+      // A selection ending at column 0 of the next line doesn't include that line.
+      const endLine = selection && !selection.isEmpty && selection.end.character === 0 && selection.end.line > selection.start.line
+        ? selection.end.line
+        : (selection?.end.line ?? 0) + 1;
+      chatProvider.attachSelection(target.fsPath, start, endLine);
+    }),
+
     vscode.commands.registerCommand("andromity.attachFileToContext", async (uri?: vscode.Uri) => {
       let targetPath = uri?.fsPath;
       if (!targetPath) {

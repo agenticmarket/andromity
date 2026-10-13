@@ -61,3 +61,15 @@ async def test_default_mode_still_extracts_commit_messages(fake_litellm):
     result = await JsonRpcHandler().rpc_agent_quickPrompt({"prompt": "commit", "provider": "openai", "model": "m"})
     assert result["message"] == "fix: handle empty input"
     assert fake_litellm.calls[0]["max_tokens"] == 2000
+
+
+@pytest.mark.asyncio
+async def test_raw_mode_flags_replies_that_only_came_from_reasoning(fake_litellm, monkeypatch):
+    class ReasoningOnly:
+        content = ""
+        reasoning_content = "Thinking...\n```go\ndraft\n```\nFinal:\n```go\nfinal\n```"
+
+    monkeypatch.setattr(fake_litellm, "completion", lambda **kwargs: types.SimpleNamespace(choices=[types.SimpleNamespace(message=ReasoningOnly())]))
+    result = await JsonRpcHandler().rpc_agent_quickPrompt({"prompt": "edit", "raw": True, "provider": "openai", "model": "m"})
+    assert result["from_reasoning"] is True
+    assert "final" in result["message"]
