@@ -5430,6 +5430,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       scrollToBottomIfNeeded();
     }
 
+    /** Chip label: catalogs name models "Vendor: Model (free)"; the vendor and
+     *  suffix are already in the tooltip and only push the model name off the chip. */
+    function compactModelName(name) {
+      const withoutVendor = String(name || '').replace(/^[^:]{1,40}:[ ]+/, '');
+      const withoutSuffix = withoutVendor.replace(/[ ]+[(][^)]*[)]$/, '');
+      return withoutSuffix || withoutVendor || String(name || '');
+    }
+
     function updateModelBadge() {
       const found = allModels.find(m => m.id === currentModel);
       let name = found ? (found.name || found.id) : formatModelDisplayName(currentModel);
@@ -5442,7 +5450,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
       const promptModelLabel = document.getElementById('prompt-model-label');
       if (promptModelLabel) {
-        promptModelLabel.textContent = name;
+        promptModelLabel.textContent = compactModelName(name);
         if (promptModelLabel.parentElement) {
           promptModelLabel.parentElement.title = "Active Model: " + currentModel + " (" + currentProvider + ") - Click to switch";
         }
