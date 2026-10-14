@@ -12,6 +12,8 @@
   ![Python](https://img.shields.io/badge/python-3.11+-blue)
   [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
+  **[Website](https://andromity.agenticmarket.dev)** · **[Documentation](https://andromity.agenticmarket.dev/docs)** · **[Quickstart](https://andromity.agenticmarket.dev/docs/quickstart)** · **[Blog](https://andromity.agenticmarket.dev/blog)**
+
   English | [简体中文](README.zh-CN.md) | [Русский](README.ru.md) | [Português (Brasil)](README.pt-BR.md) | [日本語](README.ja.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [हिन्दी](README.hi.md)
 
 </div>
@@ -22,9 +24,9 @@
 
 ---
 
-**Andromity** is a private, BYOK (Bring Your Own Key) autonomous AI coding agent. Use it inside VS Code with the extension, or run it as a standalone terminal workspace. It plans complex tasks, manages parallel subagents, shows live step-by-step blueprints, lets you review diffs before applying, and gives you instant one-click rollback.
+**Andromity** is an open-source (MIT), BYOK (Bring Your Own Key) autonomous AI coding agent for VS Code and the terminal. Use it inside VS Code with the extension, or run it as a standalone terminal workspace. It plans complex tasks, manages parallel subagents, shows live step-by-step blueprints, lets you review diffs before applying, and gives you instant one-click rollback.
 
-Connect your preferred AI model (**Claude 3.7 Sonnet, GPT-4o, Gemini 2.5 Pro, DeepSeek R1 & V3, Groq, OpenRouter**) or run **100% locally and free with Ollama**.
+Connect your preferred AI provider (**Anthropic Claude, OpenAI, Google Gemini, DeepSeek, Groq, OpenRouter, NVIDIA NIM**, or any OpenAI-compatible endpoint) or run models **locally and free with Ollama**.
 
 ---
 
@@ -69,19 +71,19 @@ pipx install andromity
 </div>
 
 ### 📝 Live Task Planner & Blueprints
-Andromity analyzes your codebase, creates an interactive step-by-step implementation plan, and waits for your approval before writing a single line of code. Review, approve, or skip any step.
+Andromity analyzes your codebase and writes a step-by-step implementation plan. In SAFE and TRUST modes it waits for your approval before editing; review the plan, approve it, or send feedback. FULL and YOLO modes approve plans automatically.
 
 ### 🌊 Live Execution Waterfall Profiler
-Inspect agent reasoning turns, tool execution latencies (bash commands, file operations, web queries), and parallel subagents in real time on an interactive chronological timeline grid directly inside VS Code (`/waterfall`).
+Inspect agent reasoning turns, tool execution latencies (bash commands, file operations, web queries), and parallel subagents in real time on an interactive timeline inside VS Code. Open it from the waterfall button in the chat toolbar or with the **Andromity: Waterfall Trace** command.
 
 ---
 
 <div align="center">
-  <img src="https://cdn.agenticmarket.dev/andromity/git/models.webp?v=0.2.8" alt="396+ Model Support including local Ollama" width="100%" />
+  <img src="https://cdn.agenticmarket.dev/andromity/git/models.webp?v=0.2.8" alt="Andromity model picker with cloud providers and local Ollama models" width="100%" />
 </div>
 
-### 🤖 396+ Models — Including Free Local Ollama
-Connect Claude 3.7, GPT-4o, Gemini 2.5 Pro, DeepSeek R1, Groq, or run 100% offline with Ollama. Swap models mid-session with `Ctrl+L`.
+### 🤖 Any Model — Cloud Providers or Free Local Ollama
+Connect Anthropic Claude, OpenAI, Google Gemini, DeepSeek, Groq, or OpenRouter with your own API key, or run local models with Ollama. Andromity uses LiteLLM, so models LiteLLM supports work too. Swap models mid-session with `Ctrl+L`.
 
 ---
 
@@ -91,45 +93,51 @@ Connect Claude 3.7, GPT-4o, Gemini 2.5 Pro, DeepSeek R1, Groq, or run 100% offli
 
 ### 🔐 Trust Governance — You Are Always in Control
 
-| Mode | Plans | File Writes | Terminal Commands |
+| Mode | Plans | File edits | Terminal commands |
 |------|-------|-------------|-------------------|
-| **SAFE** *(default)* | Approve each | Approve each | Approve each |
-| **TRUST** | Approve | Direct | Direct |
-| **FULL** | Auto | Direct | Direct |
-| **YOLO** | Auto | Silent | Silent |
+| **SAFE** *(default)* | You approve | You approve (VS Code asks per edit; the terminal app reviews the turn's edits as a batch) | You approve each |
+| **TRUST** | You approve | Applied directly, except sensitive or execution-control files (`.git`, `.vscode`, `.andromity`, `package.json`, …), which ask | Allowlisted commands run directly; others ask |
+| **FULL** | Auto-approved | Applied directly | Run directly |
+| **YOLO** | Auto-approved | Applied directly | Run directly. In the terminal app YOLO lasts for the current session only and resets to SAFE on restart |
 
-Nothing runs until you say a folder is trusted. Start in SAFE, move to YOLO when you know what the agent does.
+Folder trust comes first: in an untrusted folder the agent cannot read files, edit them, or run commands, whatever the mode. Planner and reviewer profiles are read-only in every mode. Start in SAFE, and move up when you know what the agent does.
 
 ---
 
 ## How it compares
 
-| | Andromity | Aider | Cursor | Claude Code |
-|--|-----------|-------|--------|-------------|
-| Folder trust model | ✅ | ❌ | ❌ | ❌ |
-| Permission levels (SAFE → YOLO) | ✅ | ❌ | Partial | ❌ |
-| **Live execution waterfall profiler** | ✅ | ❌ | ❌ | ❌ |
-| **Built-in cron scheduler** | ✅ | ❌ | ❌ | ❌ |
-| **Parallel sessions & subagents** | ✅ | ❌ | ❌ | Partial |
-| Inline diff viewer | ✅ | ✅ | ✅ | ✅ |
-| Session management + `/undo` | ✅ | ❌ | Partial | ❌ |
-| Agent profiles | ✅ | ❌ | ❌ | Partial |
-| Local-first / Ollama / BYOK | ✅ | ✅ | ❌ | ❌ |
-| MCP support | ✅ | ❌ | Partial | ✅ |
-| VS Code Extension | ✅ | ❌ | ✅ | ✅ |
+Checked against each tool's official documentation on October 14, 2026. These tools change quickly; if something here is out of date, please open an issue.
+
+| | Andromity | Claude Code | Cursor | Cline | Aider |
+|--|-----------|-------------|--------|-------|-------|
+| License | MIT | Proprietary | Proprietary | Apache-2.0 | Apache-2.0 |
+| Where it runs | VS Code extension, terminal app, headless CLI | Terminal, VS Code extension, desktop app, web | Its own editor (a VS Code fork) | VS Code extension, CLI, SDK | Terminal; works alongside any editor via `--watch-files` |
+| Models | Any provider via LiteLLM with your own key, or local Ollama | Claude models only | Cursor's models, or your own OpenAI, Anthropic, Google, Azure or Bedrock key for chat (requests still go through Cursor) | Your own key for many providers, or local Ollama / LM Studio | Your own key for many providers, or local Ollama |
+| Local models | Yes (Ollama) | No | Not in official docs | Yes | Yes |
+| Folder / workspace trust | Required before any file read, edit, or command (`andromity run --yes` grants it to the current folder) | Trust prompt in interactive sessions (not shown with `-p`) | Not in official docs | Not in official docs | Not in official docs |
+| Approval modes | SAFE, TRUST, FULL, YOLO | 6 modes, from `default` to `bypassPermissions` | Not in official docs | Per-category auto-approve, plus YOLO | Not in official docs |
+| Undo / checkpoints | `/undo` reverts the last turn's file changes | `/rewind` restores code and/or conversation | Checkpoints restore files | Checkpoints restore files, task, or both | `/undo` reverts Aider's last git commit |
+| Subagents | Yes, parallel and in the background | Yes, parallel and in the background | Not in official docs | CLI and desktop app only | Not in official docs |
+| MCP | Yes; tool schemas load on demand | Yes; tool search loads tools on demand | Yes | Yes | Not built in ([open request](https://github.com/Aider-AI/aider/issues/4506)) |
+| Scheduled tasks | `/cron`, saved per project | `/loop` and cron within a session (expire after 7 days), desktop scheduled tasks, cloud routines | Not in official docs | Cron scheduler in the CLI and SDK | Not in official docs |
+| Live execution waterfall | Yes, in VS Code | Not in official docs | Not in official docs | Not in official docs | Not in official docs |
+
+"Not in official docs" means we could not find the feature in the tool's documentation; it does not prove the feature is absent.
+
+Sources: Claude Code [permissions](https://code.claude.com/docs/en/permissions), [security](https://code.claude.com/docs/en/security), [checkpointing](https://code.claude.com/docs/en/checkpointing), [subagents](https://code.claude.com/docs/en/sub-agents), [MCP](https://code.claude.com/docs/en/mcp), [VS Code](https://code.claude.com/docs/en/vs-code), [scheduled tasks](https://code.claude.com/docs/en/scheduled-tasks), [LLM gateways](https://code.claude.com/docs/en/llm-gateway) · Cursor [API keys](https://cursor.com/docs/settings/api-keys), [MCP](https://cursor.com/docs/context/mcp), [checkpoints](https://cursor.com/docs/agent/chat/checkpoints) · Cline [local models](https://docs.cline.bot/running-models-locally/overview), [MCP](https://docs.cline.bot/mcp/mcp-overview), [checkpoints](https://docs.cline.bot/features/checkpoints), [auto-approve](https://docs.cline.bot/features/auto-approve), [subagents](https://docs.cline.bot/features/subagents), [scheduling](https://docs.cline.bot/cli/scheduling) · Aider [commands](https://aider.chat/docs/usage/commands.html), [watch mode](https://aider.chat/docs/usage/watch.html), [Ollama](https://aider.chat/docs/llms/ollama.html)
 
 ---
 
 ## ⏰ Cron Scheduler — AI That Works While You Sleep
 
-No other AI coding agent has this. Open `/cron` inside Andromity, write your task, set a schedule — and the agent executes it autonomously on a timer while you're away.
+Open `/cron` inside Andromity, write your task, set a schedule, and the agent runs it on a timer while you're away.
 
 ```bash
 # Example: auto-run test suite and fix failures every night at 2 AM
 /cron  →  "run pytest, fix any failing tests, commit the fix"  →  0 2 * * *
 ```
 
-Jobs persist in `.andromity/crons.json` per project. Use FULL or YOLO mode for fully unattended overnight runs. Wake up to commits already made.
+Jobs persist in `.andromity/crons.json` per project, and in an untrusted folder they cannot edit files or run commands. Each job has its own permission mode: in SAFE, TRUST, and FULL, a scheduled job runs only terminal commands on your allowlist (for the example above, allow `pytest` and `git commit`); a YOLO job runs any command.
 
 ---
 
@@ -161,14 +169,14 @@ Switch between all sessions with `Ctrl+O`. Every session has its own context, hi
 - `reviewer` — read-only, produces findings
 - `planner` — plans only, touches nothing
 
-**MCP support.** Drop a `mcp.json` in your project. Tool schemas load on demand — keeps token use sane with 50+ tools connected.
+**MCP support.** Add servers in `.andromity/mcp.json` or `.vscode/mcp.json` in your project, or `~/.andromity/mcp.json` for all projects. Tool schemas load on demand, which keeps token use down when many tools are connected.
 
 **Sessions.** Everything is saved. `/sessions` or `Ctrl+O` to switch. `/compact` when context gets heavy. `/undo` to revert the last turn and all its file changes.
 
 **Headless / scripted runs.**
 ```bash
 andromity run "add error handling to auth.py"
-andromity run "refactor this to async" --yes      # auto-approve everything
+andromity run "refactor this to async" --yes      # auto-approve everything (also marks the current folder as trusted)
 andromity run "review session.py" --dry-run       # see what it would do
 ```
 
@@ -178,21 +186,30 @@ andromity run "review session.py" --dry-run       # see what it would do
 
 ## Privacy
 
-Your code goes to one place: the LLM provider you configure. Not us.
+Your code goes to the model provider you configure. With a local Ollama model, inference stays on your machine. The built-in `andromity` provider routes requests through the Andromity edge gateway, which forwards them without storing prompts, source code, or completions.
 
-- API keys live in `~/.andromity/config.toml` — encrypted locally
+- API keys stay on your machine in `~/.andromity/config.toml` (`%APPDATA%\andromity\config.toml` on Windows); keep that file private
 - Sessions stored locally in `~/.andromity/sessions/`
-- Opt out of telemetry: `export DO_NOT_TRACK=1`
+- Opt out of anonymous usage telemetry: `export DO_NOT_TRACK=1` or `ANDROMITY_NO_TELEMETRY=1`
 
 ---
 
-## SWE-bench Lite: local evaluation
+## FAQ
 
-Andromity resolved **150 of 300 SWE-bench Lite tasks (50.0%)** in our local evaluation dated October 4, 2026. The evaluation produced 296 task reports; the remaining four tasks count as unresolved in the full-dataset score. This is a self-reported result, not an official leaderboard ranking or a guarantee of contamination-free model training.
+**What is Andromity?**
+Andromity is an open-source AI coding agent for VS Code and the terminal. It reads your repository, proposes a plan, edits files, and runs commands such as your tests. Folder trust and permission modes control what it may do, and you choose the model: a cloud provider with your own API key or a local Ollama model.
 
-The agent workspace was initialized from each task's base commit. Tool execution used command restrictions, proxy settings, and Python socket guards; these are not an OS-enforced air gap. Model inference used a remote provider.
+**Is Andromity free?**
+Yes. Andromity is open source under the MIT license. With your own API key, your model provider bills its own usage. Local Ollama models have no API charge; performance depends on your hardware and model.
 
-See [benchmark methodology and limitations](BENCHMARK.md) and the [evaluation evidence](evaluation/swe-bench-lite-2026-10-04/) for deduplicated predictions, per-task outcomes, and hashes. The model alias was recorded as Space Bunny Alpha; the archived predictions identify the system as `andromity/auto`, so the underlying model identity is not independently established.
+**Can Andromity run locally with Ollama?**
+Yes. Select Ollama in the model picker (or `/model` in the terminal) and choose an installed model that supports tool calling. Inference then runs on your machine. See the [local Ollama guide](https://andromity.agenticmarket.dev/docs/guides/local-ollama).
+
+**Can the agent run commands without asking?**
+Not in an untrusted folder: file writes and commands are blocked there whatever the permission mode. In a trusted folder, SAFE mode asks before each plan, edit, and command; YOLO runs without prompts. See [workspace trust and permission modes](https://andromity.agenticmarket.dev/docs/security).
+
+**Does Andromity support MCP?**
+Yes. Add MCP servers in a project `mcp.json`. Tool schemas load on demand instead of filling the prompt up front, so many connected tools don't exhaust the context window.
 
 ---
 
@@ -213,7 +230,7 @@ Join our growing community of autonomous AI developers, students, and engineers:
 - **Discord:** [Join the Andromity Community Discord](https://discord.gg/taPJSNy4) for live discussions, local Ollama setups, prompt engineering, and MCP skill sharing.
 - **Skills & MCP Hub:** Discover and publish community agent skills, custom prompts, and MCP tool servers on [AgenticMarket](https://agenticmarket.dev).
 
-⭐ **Loved the Live Waterfall profiler or saved hours debugging?** Consider giving Andromity a star on GitHub — it helps more developers discover 100% free, private, open-source AI tooling!
+⭐ **Loved the Live Waterfall profiler or saved hours debugging?** Consider giving Andromity a star on GitHub — it helps more developers discover free, open-source AI tooling!
 
 ---
 
