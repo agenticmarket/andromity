@@ -6,6 +6,10 @@
   "publisher": "agenticmarket",
   "license": "MIT",
   "icon": "media/icon.png",
+  "homepage": "https://andromity.agenticmarket.dev",
+  "bugs": {
+    "url": "https://github.com/agenticmarket/andromity/issues"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/agenticmarket/andromity"

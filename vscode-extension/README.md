@@ -1,9 +1,9 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/agenticmarket/andromity/main/andromity.png" alt="Andromity" width="80" height="80" />
 
-  # Andromity – Autonomous AI Coding Agent for VS Code
+  # Andromity — AI Coding Agent for VS Code
 
-  **The only AI coding agent with trust governance, subagents, live plans, native diffs & one-click rollback.**
+  **Open-source AI coding agent for VS Code and the terminal. Bring your own API key or run local models with Ollama; folder trust and permission modes keep you in control.**
 
   [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.18-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![VS Code](https://img.shields.io/badge/VS_Code-%5E1.85.0-blue?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
@@ -11,15 +11,15 @@
 
   [![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/agenticmarket/andromity/blob/main/LICENSE)
 
-  [Website](https://andromity.agenticmarket.dev) • [GitHub](https://github.com/agenticmarket/andromity) • [Docs](https://andromity.agenticmarket.dev/docs) • [Report Issue](https://github.com/agenticmarket/andromity/issues)
+  [Website](https://andromity.agenticmarket.dev) • [Docs](https://andromity.agenticmarket.dev/docs) • [Quickstart](https://andromity.agenticmarket.dev/docs/quickstart) • [GitHub](https://github.com/agenticmarket/andromity) • [Report Issue](https://github.com/agenticmarket/andromity/issues)
 
 </div>
 
 ---
 
-**Andromity** is a private, BYOK (Bring Your Own Key) autonomous AI coding agent for VS Code. Designed as an extensible Copilot and Cursor alternative, it doesn't just autocomplete code — it plans out complex tasks with an interactive task planner, manages parallel subagents, shows you live step-by-step blueprints, lets you review diffs before applying, and gives you instant one-click rollback if you change your mind.
+**Andromity** is an open-source (MIT), BYOK (Bring Your Own Key) AI coding agent for VS Code. It plans multi-file tasks, edits code, runs commands and tests, and manages parallel subagents, while you review its plans, inspect native diffs, and roll back a turn with one click. Use it as an open-source alternative to the agent modes in Copilot or Cursor.
 
-Connect your preferred AI model (**Claude 3.7 Sonnet, GPT-4o, Gemini 2.5 Pro, DeepSeek R1 & V3, Groq, OpenRouter**) or run **100% locally and free with Ollama**.
+Connect your preferred AI provider (**Anthropic Claude, OpenAI, Google Gemini, DeepSeek, Groq, OpenRouter, NVIDIA NIM**) or run models **locally and free with Ollama**.
 
 <div align="center">
   <img src="https://cdn.agenticmarket.dev/andromity/git/with_waterfall.webp?v=0.2.8" alt="Andromity AI Coding Agent with Live Waterfall Trace in VS Code" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
@@ -29,103 +29,111 @@ Connect your preferred AI model (**Claude 3.7 Sonnet, GPT-4o, Gemini 2.5 Pro, De
 
 ## ✨ Interactive Welcome Walkthrough
 
-New to Andromity? VS Code includes a built-in interactive walkthrough to get you oriented in under a minute:
+New to Andromity? The built-in walkthrough gets you oriented in about a minute:
 1. Press `Ctrl+Shift+P` (`Cmd+Shift+P` on macOS) to open the Command Palette.
-2. Select **`Andromity: Welcome / Getting Started`** (or click the 🚀 rocket icon in the Andromity panel header).
-3. Follow the guided walkthrough to tour your AI coding partner, inspect planning blueprints, and adjust workspace governance.
+2. Select **`Andromity: Welcome / Getting Started`** (or use the welcome icon in the Andromity panel header).
+3. Follow **Get started with Andromity** to tour the agent, planning, and workspace governance.
 
 ---
 
-## ⚡ Quick Start — Up and Running in Seconds
+## ⚡ Quick Start
 
 ### 1. Install Extension
-Click **Install** on this Marketplace page. That's it!
+Click **Install** on this Marketplace page, or run `code --install-extension agenticmarket.andromity-agent`.
 
 ### 2. Add Your API Key (or Use Local Ollama)
-1. Open the **Andromity** tab in your Activity Bar (left sidebar).
-2. Click the ⚙️ **Settings** icon in the header.
-3. Paste the API key for your favorite provider:
-   - **Anthropic** (Claude 3.7 / 3.5 Sonnet)
-   - **OpenAI** (GPT-4o, o3-mini)
-   - **Google Gemini** (Gemini 2.5 Pro / Flash)
-   - **Groq** (Llama 3.3 70B, DeepSeek)
-   - **DeepSeek / OpenRouter**
-   - **Ollama (Free / Local)**: No API key required! Just have Ollama running locally on your machine.
+1. Open the **Andromity** panel in the Secondary Side Bar (press `Ctrl+Alt+C` / `Cmd+Alt+C`).
+2. Click the ⚙️ **Settings** icon in the panel header.
+3. Add the API key for your provider:
+   - **Anthropic** (Claude)
+   - **OpenAI**
+   - **Google Gemini**
+   - **DeepSeek**
+   - **Groq**
+   - **OpenRouter**
+   - **NVIDIA NIM**
+   - **Ollama (free, local)**: no API key required; just have Ollama running on your machine. Pick a model that supports tool calling.
 
 <div align="center">
-  <img src="https://cdn.agenticmarket.dev/andromity/git/models.webp?v=0.2.8" alt="Model Hub and Local AI Support" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+  <img src="https://cdn.agenticmarket.dev/andromity/git/models.webp?v=0.2.8" alt="Andromity model picker with cloud providers and local Ollama models" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
 </div>
 
-### 3. Start Coding!
-Press `Ctrl+Alt+C` (`Cmd+Alt+C` on macOS) or open the sidebar. Ask a question, select a file, or describe a feature you want to build.
+### 3. Trust Your Workspace and Start
+Click **Trust Folder** in the chat panel (or type `/trust`) once you've reviewed the repository; the agent cannot read, edit, or run anything in an untrusted folder. Then ask a question or describe a feature you want to build.
 
 ---
 
 ## 🚀 How to Use Andromity in Your Workflow
 
 ### 💬 1. Interactive Sidebar Chat
-- Chat directly with the AI about your workspace.
-- Reference files with `@` mentions.
+- Chat with the agent about your workspace.
+- Attach files or selected lines with **Add to Andromity** from the editor's right-click menu.
+- Type `@` to call a skill.
 - The agent reads files, diagnoses bugs, implements features, and writes tests.
 
 ### 📝 2. Live Task Planner & Blueprints
-When tackling complex tasks, Andromity creates an interactive implementation plan first.
-- Review steps before changes happen.
-- Approve, skip, or edit steps individually.
-- Watch real-time execution status for each task.
+For larger tasks, the Builder profile writes an implementation plan before editing.
+- In SAFE and TRUST modes, review the plan, then approve it or send feedback. FULL and YOLO modes approve plans automatically.
+- Watch each step's status update as the agent works.
 
 <div align="center">
   <img src="https://cdn.agenticmarket.dev/andromity/git/planning.webp" alt="Live Task Planner and Step Blueprints" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
 </div>
 
-### 🔍 3. Side-by-Side Diff Review
-Every change proposed by the agent is presented as a native VS Code diff.
-- See exact additions and deletions.
-- Accept changes file-by-file or accept all at once.
+### 🔍 3. Native Diff Review
+- In SAFE mode, you approve each file edit before it is written.
+- The **Changes Review** panel lists every file the agent changed, opens each one in a native VS Code diff, and lets you revert files individually.
 
-### ⏪ 4. One-Click Rollback (`/undo`)
-Made a turn you don't like? Simply trigger **Undo Last Turn** from the header menu or command palette. Andromity rolls back all file changes from that turn instantly without touching your git history.
+### ⏪ 4. One-Click Rollback
+Took a wrong turn? Run **Undo Last Turn & Rollback Diff** from the panel header or the Command Palette. Andromity restores the files changed in that turn without rewriting your Git history.
 
 ### 🤖 5. Multi-Agent & Parallel Subagents
-Spawn background subagents for research, file scanning, or isolated task implementation while you continue chatting in the main session.
+Spawn background subagents for research, file scanning, or isolated implementation work while you keep chatting in the main session.
 
 ### 🔌 6. Model Context Protocol (MCP) Ready
-Connect any MCP server (tools, documentation, database connectors) directly into the agent workflow. Schemas load on demand to minimize token usage.
+Connect MCP servers (tools, documentation, database connectors) through `.andromity/mcp.json` or `.vscode/mcp.json` in your project. Tool schemas load on demand to keep token use down.
 
-### 🖱️ 7. Right-Click Context Menu Superpowers
-Highlight any snippet in your code editor, right-click, and choose:
-- **Ask About Selection** (`Ctrl+Alt+A`): Inquire about logic or behavior.
-- **Explain Code** (`Ctrl+Alt+E`): Get a breakdown of what the code does.
-- **Fix Diagnostics & Errors**: Auto-resolve type errors, linter warnings, or crashes.
-- **Generate Unit Tests** (`Ctrl+Alt+T`): Auto-generate complete test suites for your functions or classes.
+### ✏️ 7. Inline Edit
+Select code and press `Ctrl+I` (`Cmd+I`), describe the change, then accept with `Ctrl+Enter` (`Cmd+Enter`) or reject with `Escape`.
 
-### ✍️ 8. AI Git Commit Messages
-Click the **Andromity icon** directly in the Source Control panel title bar to generate a clean, descriptive commit message based on your staged changes.
+### 🖱️ 8. Right-Click Context Menu
+Highlight code, right-click, and open the **Andromity** menu:
+- **Inline Edit** (`Ctrl+I`)
+- **Ask About Selection** (`Ctrl+Alt+A`)
+- **Explain Code** (`Ctrl+Alt+E`)
+- **Fix Diagnostics & Errors**
+- **Generate Unit Tests** (`Ctrl+Alt+T`)
 
-### 🌊 9. Live Execution Waterfall & Profiler
-Inspect your AI agent's execution under the hood in real-time.
-- Click the 🌊 **Waterfall** icon in the chat header, run `/waterfall`, or use the Command Palette (`Andromity: Open Live Execution Waterfall`).
-- View chronological timeline spans for reasoning turns, terminal commands, file edits, web search, and parallel subagent forks.
-- Inspect execution latencies, status codes, and input/output payloads with millisecond precision.
+### 🧩 9. Works with Copilot Chat
+Mention **@andromity** in VS Code's Chat view to ask the Andromity agent to explain, fix, or build something.
+
+### ✍️ 10. AI Git Commit Messages
+Click the **Andromity icon** in the Source Control panel title bar to generate a commit message from your changes.
+
+### 🌊 11. Live Execution Waterfall & Profiler
+See what the agent is doing in real time.
+- Click the 🌊 **Waterfall** button in the chat header, or run **Andromity: Waterfall Trace** from the Command Palette.
+- Follow reasoning turns, terminal commands, file edits, web searches, and parallel subagents on a timeline.
+- Inspect each span's timing and details.
 
 ---
 
 ## 🔐 Trust Governance (Permission Modes)
 
-You are always in control of what the agent does in your workspace:
+Folder trust comes first: in an untrusted folder the agent cannot read files, edit them, or run commands, whatever the mode. Within a trusted folder, the permission mode decides what needs your approval:
 
-| Mode | Plans | File Writes | Terminal Commands |
+| Mode | Plans | File edits | Terminal commands |
 |------|-------|-------------|-------------------|
-| **SAFE** *(default)* | You approve each one | You approve each one | You approve each one |
-| **TRUST** | You approve | Direct (No review needed) | Direct (No review needed) |
-| **FULL** | Auto-runs with live log | Direct | Direct |
-| **YOLO** | Auto-runs silently | Silent | Silent |
+| **SAFE** *(default)* | You approve | You approve each edit | You approve each command |
+| **TRUST** | You approve | Applied directly, except sensitive or execution-control files (`.git`, `.vscode`, `.andromity`, `package.json`, …), which ask | Allowlisted commands run directly; others ask |
+| **FULL** | Auto-approved | Applied directly | Run directly |
+| **YOLO** | Auto-approved | Applied directly | Run directly |
+
+Profile restrictions still apply in every mode: Planner and Reviewer never edit files or run commands. Switch modes anytime from the mode menu in the chat panel.
 
 <div align="center">
   <img src="https://cdn.agenticmarket.dev/andromity/git/trusted.webp" alt="Trust and Workspace Governance" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
 </div>
-
-Switch modes anytime by clicking the permission badge in the top bar or via `Andromity: Switch Permission Mode`.
 
 ---
 
@@ -133,10 +141,10 @@ Switch modes anytime by clicking the permission badge in the top bar or via `And
 
 Switch profiles depending on what you're working on:
 
-- **🏗️ Builder** *(default)*: Plans out tasks first, then implements them.
-- **⚡ Coder**: Fast direct implementation without an upfront planning stage.
-- **🧐 Reviewer**: Read-only mode for code audits, security checks, and PR reviews.
-- **📐 Planner**: Generates architectural specs and technical plans without modifying code.
+- **🏗️ Builder** *(default)*: Plans complex changes first, then implements them.
+- **⚡ Coder**: Implements directly, without a structured planning step.
+- **🧐 Reviewer**: Inspects code and reports findings without edits or commands.
+- **📐 Planner**: Creates plans without editing project code or running commands.
 
 ---
 
@@ -145,6 +153,9 @@ Switch profiles depending on what you're working on:
 | Shortcut | macOS | Action |
 |----------|-------|--------|
 | `Ctrl+Alt+C` | `Cmd+Alt+C` | Open Andromity Chat |
+| `Ctrl+I` | `Cmd+I` | Inline Edit |
+| `Ctrl+Enter` | `Cmd+Enter` | Accept Inline Edit |
+| `Escape` | `Escape` | Reject Inline Edit |
 | `Ctrl+Alt+A` | `Cmd+Alt+A` | Ask About Selected Code |
 | `Ctrl+Alt+E` | `Cmd+Alt+E` | Explain Selected Code |
 | `Ctrl+Alt+T` | `Cmd+Alt+T` | Generate Unit Tests for Selection |
@@ -156,25 +167,47 @@ Switch profiles depending on what you're working on:
 Customize Andromity in **Settings** (`Ctrl+,` → search `Andromity`):
 
 - `andromity.defaultProvider`: Default AI provider (`anthropic`, `openai`, `google`, `groq`, `openrouter`, `ollama`, `nvidia`).
-- `andromity.defaultModel`: Default model (e.g., `claude-sonnet-4-6`, `gpt-4o`, `gemini-2.5-pro`).
+- `andromity.defaultModel`: Default model (default `claude-sonnet-4-6`).
 - `andromity.defaultProfile`: Default agent profile (`builder`, `coder`, `reviewer`, `planner`).
-- `andromity.permissionMode`: Default trust mode (`safe`, `trust`, `full`, `yolo`).
-- `andromity.reasoningEffort`: Thinking level for reasoning models (`off`, `low`, `medium`, `high`).
-- `andromity.soundNotifications`: Enable or disable turn completion sound cues.
+- `andromity.permissionMode`: Default permission mode (`safe`, `trust`, `full`, `yolo`).
+- `andromity.reasoningEffort`: Thinking effort for reasoning models (default `auto`; pick supported levels in the chat model picker, or `budget:<tokens>` for models with a thinking-token budget).
+- `andromity.soundNotifications`: Turn completion sound cues on or off.
+- `andromity.telemetry`: Anonymous launch and performance telemetry (on by default; also follows VS Code's telemetry setting).
 
 ---
 
-## 🔒 Privacy & Security First
+## 🔒 Privacy & Security
 
-- **Zero Data Collection:** Your code and prompts go strictly between your machine and your chosen AI provider.
-- **Local Secret Storage:** API keys are encrypted locally using VS Code's native Secret Storage API.
-- **100% Offline Capability:** Use Ollama to keep all code and conversations strictly local on your machine.
+- **Where your code goes:** to the model provider you choose. The built-in Andromity provider routes requests through the Andromity edge gateway, which forwards them without storing prompts, code, or completions.
+- **API keys:** stored on your machine in the Andromity config file (`~/.andromity/config.toml`, or `%APPDATA%\andromity\config.toml` on Windows); keep that file private. Sign-in tokens use VS Code Secret Storage.
+- **Telemetry:** anonymous launch and performance data only. Turn it off with `andromity.telemetry`, VS Code's telemetry setting, or `DO_NOT_TRACK=1`.
+- **Local models:** with Ollama, model inference runs on your machine. Web tools, remote MCP servers, and package installs can still use the network.
+
+---
+
+## ❓ FAQ
+
+**What is Andromity?**
+An open-source AI coding agent for VS Code and the terminal. It reads your repository, proposes a plan, edits files, and runs commands such as your tests. Folder trust and permission modes control what it may do, and you choose the model.
+
+**Is it free?**
+Yes. Andromity is open source under the MIT license. With your own API key, your provider bills its own usage; local Ollama models have no API charge.
+
+**Can it run locally with Ollama?**
+Yes. Choose Ollama in the model picker and an installed model that supports tool calling. See the [local Ollama guide](https://andromity.agenticmarket.dev/docs/guides/local-ollama).
+
+**Can the agent run commands without asking?**
+Not in an untrusted folder. In a trusted folder, SAFE mode asks before each edit and command; FULL and YOLO run without prompts. See [workspace trust and permission modes](https://andromity.agenticmarket.dev/docs/security).
+
+**How does it compare with Claude Code, Cursor, Cline, or Aider?**
+See the [comparison table](https://github.com/agenticmarket/andromity#how-it-compares), checked against each tool's official documentation.
 
 ---
 
 ## 🌐 Links & Community
 
 - 🏠 **Website:** [andromity.agenticmarket.dev](https://andromity.agenticmarket.dev)
+- 📚 **Documentation:** [andromity.agenticmarket.dev/docs](https://andromity.agenticmarket.dev/docs)
 - 🐙 **GitHub:** [agenticmarket/andromity](https://github.com/agenticmarket/andromity)
 - 📋 **Changelog:** [CHANGELOG.md](CHANGELOG.md)
 - 💬 **Discussions & Feedback:** [GitHub Discussions](https://github.com/agenticmarket/andromity/discussions)
