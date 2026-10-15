@@ -246,6 +246,16 @@ Join our growing community of autonomous AI developers, students, and engineers:
 
 ---
 
+<!-- andromity:latest-release:start -->
+## Latest release: v0.2.19
+
+- A background command (`shell_bg`) that exits within its first two seconds is no longer reported to the agent as running. The tool result now includes the exit code and output, with a reminder of the active shell's syntax. On Windows that shell is PowerShell, so a bash loop such as `for i in $(seq 1 180); do …; done` exits at once with a parse error. Previously the agent was told the process had started and kept saying it was running. The agent is no longer woken a second time for an exit it already saw.
+- Background processes are registered before their output reader starts, so a process that ends instantly is no longer missed.
+- Background process notices are no longer lost:
+
+[Release notes](https://github.com/agenticmarket/andromity/releases/tag/v0.2.19) · [Full changelog](CHANGELOG.md)
+<!-- andromity:latest-release:end -->
+
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed release history and version notes.
