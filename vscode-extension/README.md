@@ -11,7 +11,7 @@
 
   [![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/agenticmarket/andromity/blob/main/LICENSE)
 
-  [Website](https://andromity.agenticmarket.dev) • [Docs](https://andromity.agenticmarket.dev/docs) • [Quickstart](https://andromity.agenticmarket.dev/docs/quickstart) • [GitHub](https://github.com/agenticmarket/andromity) • [Report Issue](https://github.com/agenticmarket/andromity/issues)
+  [Website](https://andromity.agenticmarket.dev) • [Docs](https://andromity.agenticmarket.dev/docs) • [Integrations](https://andromity.agenticmarket.dev/integrations) • [Quickstart](https://andromity.agenticmarket.dev/docs/quickstart) • [GitHub](https://github.com/agenticmarket/andromity) • [Report Issue](https://github.com/agenticmarket/andromity/issues)
 
 </div>
 
@@ -91,7 +91,7 @@ Took a wrong turn? Run **Undo Last Turn & Rollback Diff** from the panel header 
 Spawn background subagents for research, file scanning, or isolated implementation work while you keep chatting in the main session.
 
 ### 🔌 6. App Connectors & MCP
-Open **Andromity Hub → MCP Servers → Discover** and connect Notion, Linear, Jira & Confluence, Gmail, Google Calendar, Google Drive, Stripe, Sentry, Supabase, Neon and more in one click. Each is the app's official remote MCP server; you sign in once in your browser and it works in every trusted workspace. Gmail, Calendar and Drive need your own Google OAuth client. GitHub, Airtable, Render and PagerDuty connect with an access token, which Andromity checks before saving.
+Open **Andromity Hub → MCP Servers → Discover** ([see every app and its setup guide](https://andromity.agenticmarket.dev/integrations)) and connect Notion, Linear, Jira & Confluence, Gmail, Google Calendar, Google Drive, Stripe, Sentry, Supabase, Neon and more in one click. Each is the app's official remote MCP server; you sign in once in your browser and it works in every trusted workspace. Gmail, Calendar and Drive need your own Google OAuth client. GitHub, Airtable, Render and PagerDuty connect with an access token, which Andromity checks before saving.
 
 **Yours** lists everything you've connected, with status, tools, re-authenticate and remove. You can still add any other MCP server through `.andromity/mcp.json` or `.vscode/mcp.json`. Tool schemas load on demand to keep token use down.
 
@@ -210,6 +210,7 @@ See the [comparison table](https://github.com/agenticmarket/andromity#how-it-com
 
 - 🏠 **Website:** [andromity.agenticmarket.dev](https://andromity.agenticmarket.dev)
 - 📚 **Documentation:** [andromity.agenticmarket.dev/docs](https://andromity.agenticmarket.dev/docs)
+- 🔌 **Integrations:** [andromity.agenticmarket.dev/integrations](https://andromity.agenticmarket.dev/integrations)
 - 🐙 **GitHub:** [agenticmarket/andromity](https://github.com/agenticmarket/andromity)
 - 📋 **Changelog:** [CHANGELOG.md](CHANGELOG.md)
 - 💬 **Discussions & Feedback:** [GitHub Discussions](https://github.com/agenticmarket/andromity/discussions)

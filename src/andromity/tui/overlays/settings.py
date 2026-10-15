@@ -663,7 +663,8 @@ SettingsScreen {
             with Vertical():
                 yield Label(
                     "Sign in once in your browser. Saved to ~/.andromity/mcp.json "
-                    "and available in every trusted project.",
+                    "and available in every trusted project. Setup guides: "
+                    "https://andromity.agenticmarket.dev/integrations",
                     classes="mcp-add-note")
                 category = ""
                 for c in CATALOG:

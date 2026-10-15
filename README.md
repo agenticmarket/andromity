@@ -12,7 +12,7 @@
   ![Python](https://img.shields.io/badge/python-3.11+-blue)
   [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-  **[Website](https://andromity.agenticmarket.dev)** · **[Documentation](https://andromity.agenticmarket.dev/docs)** · **[Quickstart](https://andromity.agenticmarket.dev/docs/quickstart)** · **[Blog](https://andromity.agenticmarket.dev/blog)**
+  **[Website](https://andromity.agenticmarket.dev)** · **[Documentation](https://andromity.agenticmarket.dev/docs)** · **[Integrations](https://andromity.agenticmarket.dev/integrations)** · **[Quickstart](https://andromity.agenticmarket.dev/docs/quickstart)** · **[Blog](https://andromity.agenticmarket.dev/blog)**
 
   English | [简体中文](README.zh-CN.md) | [Русский](README.ru.md) | [Português (Brasil)](README.pt-BR.md) | [日本語](README.ja.md) | [Deutsch](README.de.md) | [Français](README.fr.md) | [Español](README.es.md) | [हिन्दी](README.hi.md)
 
@@ -169,7 +169,7 @@ Switch between all sessions with `Ctrl+O`. Every session has its own context, hi
 - `reviewer` — read-only, produces findings
 - `planner` — plans only, touches nothing
 
-**App connectors.** Connect Notion, Linear, Jira & Confluence, Gmail, Google Calendar, Google Drive, Stripe, Sentry, Supabase, Neon and 40 more apps in one click. Each connector is the app's own official remote MCP server: you sign in once in your browser, and the app is available in every trusted project. GitHub, Airtable, Render and PagerDuty connect with an access token instead; Andromity checks the token before saving it and keeps it in the encrypted token store. Open `/settings` → **MCP** → **Connect an app** in the terminal, or **MCP Servers** → **Discover** in VS Code. Gmail, Calendar and Drive are in Google's Workspace Developer Preview and need your own Google OAuth client, because Google doesn't let apps register themselves.
+**App connectors.** Connect Notion, Linear, Jira & Confluence, Gmail, Google Calendar, Google Drive, Stripe, Sentry, Supabase, Neon and 40 more apps in one click. Each connector is the app's own official remote MCP server: you sign in once in your browser, and the app is available in every trusted project. GitHub, Airtable, Render and PagerDuty connect with an access token instead; Andromity checks the token before saving it and keeps it in the encrypted token store. Open `/settings` → **MCP** → **Connect an app** in the terminal, or **MCP Servers** → **Discover** in VS Code. Browse every app and its setup guide at [andromity.agenticmarket.dev/integrations](https://andromity.agenticmarket.dev/integrations). Gmail, Calendar and Drive are in Google's Workspace Developer Preview and need your own Google OAuth client, because Google doesn't let apps register themselves.
 
 **MCP support.** Add any other server in `.andromity/mcp.json` or `.vscode/mcp.json` in your project, or `~/.andromity/mcp.json` for all projects. Tool schemas load on demand, which keeps token use down when many tools are connected.
 
@@ -211,7 +211,7 @@ Yes. Select Ollama in the model picker (or `/model` in the terminal) and choose 
 Not in an untrusted folder: file writes and commands are blocked there whatever the permission mode. In a trusted folder, SAFE mode asks before each plan, edit, and command; YOLO runs without prompts. See [workspace trust and permission modes](https://andromity.agenticmarket.dev/docs/security).
 
 **Does Andromity support MCP?**
-Yes. Connect apps such as Notion, Linear, Gmail or Stripe in one click from Settings, or add any MCP server in a project `mcp.json`. Tool schemas load on demand instead of filling the prompt up front, so many connected tools don't exhaust the context window.
+Yes. Connect apps such as Notion, Linear, Gmail or Stripe in one click from Settings ([all apps and setup guides](https://andromity.agenticmarket.dev/integrations)), or add any MCP server in a project `mcp.json`. Tool schemas load on demand instead of filling the prompt up front, so many connected tools don't exhaust the context window.
 
 ---
 

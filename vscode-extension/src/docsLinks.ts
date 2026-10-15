@@ -1,5 +1,8 @@
 /** Website documentation pages linked from the extension's UI. */
-export const DOCS_BASE = "https://andromity.agenticmarket.dev/docs";
+export const SITE_BASE = "https://andromity.agenticmarket.dev";
+export const DOCS_BASE = `${SITE_BASE}/docs`;
+/** Hub of app connector setup guides; each guide lives at `${INTEGRATIONS_URL}/<slug>`. */
+export const INTEGRATIONS_URL = `${SITE_BASE}/integrations`;
 
 export const DOCS = {
   apiKeys: `${DOCS_BASE}/api-keys`,

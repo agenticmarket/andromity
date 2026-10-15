@@ -26,6 +26,7 @@ Module.prototype.require = function (name: string) {
 };
 const { SettingsPanel } = require("../src/panels/SettingsPanel.js");
 const { CONNECTOR_ICONS } = require("../src/panels/connectorIcons.js");
+const { CONNECTOR_GUIDE_SLUGS } = require("../src/panels/connectorGuides.js");
 Module.prototype.require = originalRequire;
 
 function panelHarness() {
@@ -68,7 +69,8 @@ function runMcpScript(call: string, state: { servers?: unknown[]; connectors?: u
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
   const context: Record<string, any> = {
     allMcpServers: state.servers ?? [], allConnectors: state.connectors ?? [], connectorQuery: state.query ?? "",
-    mcpView: "", CONNECTOR_ICONS, escapeHtml, document: { getElementById: element },
+    mcpView: "", CONNECTOR_ICONS, CONNECTOR_GUIDE_SLUGS, INTEGRATIONS_URL: "https://andromity.agenticmarket.dev/integrations",
+    escapeHtml, document: { getElementById: element },
   };
   vm.runInNewContext(html.slice(start, end) + "\n" + call, context);
   return { html: elements["connectors-list"]?.innerHTML ?? elements["mcp-grid"]?.innerHTML ?? "", context, elements };
@@ -156,6 +158,15 @@ describe("Settings integration management", () => {
     assert.ok(html.includes('fill="#ffffff"'), "dark Notion tile gets a white glyph");
     assert.ok(html.includes('connector-icon-letter" aria-hidden="true">C</span>'));
     assert.ok(!html.includes("http"), "icons are inline, never fetched");
+  });
+
+  it("links each app that has a website guide to its page on the official site", () => {
+    const html = renderConnectorTiles([NOTION, { ...NOTION, id: "atlassian", name: "Jira" }, { ...NOTION, id: "basecamp", name: "Basecamp" }]);
+    assert.ok(html.includes('data-action="open_connector_guide" data-slug="notion"'));
+    assert.ok(html.includes('data-slug="jira-confluence"'));
+    assert.ok(!html.includes('data-slug="basecamp"'), "apps without a guide get no link");
+    const panelHtml: string = panelHarness().panel._getHtmlForWebview();
+    assert.ok(panelHtml.includes('data-docs-url="https://andromity.agenticmarket.dev/integrations"'));
   });
 
   it("filters Discover by name, description, or category", () => {

@@ -14,8 +14,9 @@ import { homedir } from "os";
 import { getUsageScript } from "./usage/usageScript.js";
 import { decodeUsagePng } from "./usage/usageImage.js";
 import { recordFeatureUse } from "../telemetry/featureUsage.js";
-import { DOCS } from "../docsLinks.js";
+import { DOCS, INTEGRATIONS_URL } from "../docsLinks.js";
 import { CONNECTOR_ICONS } from "./connectorIcons.js";
+import { CONNECTOR_GUIDE_SLUGS } from "./connectorGuides.js";
 
 // Hub actions recorded as anonymous feature use (the action name only, never the values).
 const HUB_FEATURES: Record<string, string> = {
@@ -2571,6 +2572,7 @@ export class SettingsPanel {
     .connector-name { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
     .connector-desc { font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
     .connector-tile .btn { flex-shrink: 0; font-size: 11px; padding: 4px 10px; }
+    .connector-guide { display: inline-block; margin-top: 3px; font-size: 11px; color: var(--tag-blue-fg); text-decoration: underline; text-underline-offset: 2px; }
     #mcp-grid {
       grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
     }
@@ -3313,7 +3315,7 @@ export class SettingsPanel {
         <div class="cards-grid" id="mcp-grid"></div>
       </div>
       <div id="mcp-view-discover" style="display:none;">
-        <p class="section-desc">Official servers from each app. Sign in once in your browser; connected apps are saved to ~/.andromity/mcp.json and work in every trusted workspace.</p>
+        <p class="section-desc">Official servers from each app. Sign in once in your browser; connected apps are saved to ~/.andromity/mcp.json and work in every trusted workspace. <a href="#" class="docs-link" data-docs-url="${INTEGRATIONS_URL}">Setup guides for every app</a></p>
         <div id="connectors-list"></div>
       </div>
     </div>
@@ -3978,6 +3980,8 @@ SOFTWARE.</pre>
     let allMcpServers = [];
     let allConnectors = [];
     const CONNECTOR_ICONS = ${JSON.stringify(CONNECTOR_ICONS)};
+    const CONNECTOR_GUIDE_SLUGS = ${JSON.stringify(CONNECTOR_GUIDE_SLUGS)};
+    const INTEGRATIONS_URL = ${JSON.stringify(INTEGRATIONS_URL)};
     let mcpView = "";
     let connectorQuery = "";
     let currentConfig = {};
@@ -4466,6 +4470,9 @@ SOFTWARE.</pre>
         btn.disabled = true;
         btn.innerHTML = '<span class="spinning-loader"></span> Authenticating in browser...';
         vscode.postMessage({ type: "mcp_auth", name: btn.dataset.name });
+      } else if (action === "open_connector_guide") {
+        e.preventDefault();
+        vscode.postMessage({ type: "open_url", url: INTEGRATIONS_URL + "/" + encodeURIComponent(btn.dataset.slug || "") });
       } else if (action === "mcp_show_discover") {
         setMcpView("discover");
       } else if (action === "connector_connect") {
@@ -5801,6 +5808,7 @@ SOFTWARE.</pre>
               '<div class="connector-name">' + escapeHtml(c.name) + '</div>' +
               '<div class="connector-desc">' + escapeHtml(c.description) +
                 (c.connected ? '' : c.needs_client ? ' Needs your own Google OAuth client.' : c.auth === 'token' ? ' Connects with an access token.' : '') + '</div>' +
+              (CONNECTOR_GUIDE_SLUGS[c.id] ? '<a href="#" class="connector-guide" data-action="open_connector_guide" data-slug="' + escapeHtml(CONNECTOR_GUIDE_SLUGS[c.id]) + '">Setup guide</a>' : '') +
             '</div>' +
             (c.connected
               ? '<span class="badge green">Connected</span>'
