@@ -1,6 +1,6 @@
 {
   "name": "andromity-workspace",
-  "version": "0.2.19",
+  "version": "0.2.20",
   "private": true,
   "description": "Andromity Agent Workspace",
   "scripts": {

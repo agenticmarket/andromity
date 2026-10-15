@@ -5,7 +5,7 @@
 
   **Open-source AI coding agent for VS Code and the terminal. Bring your own API key or run local models with Ollama; folder trust and permission modes keep you in control.**
 
-  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.19-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.20-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![VS Code](https://img.shields.io/badge/VS_Code-%5E1.85.0-blue?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-informational)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
 
