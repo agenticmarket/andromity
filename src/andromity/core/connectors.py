@@ -57,7 +57,6 @@ CATALOG: Tuple[Connector, ...] = (
     Connector("miro", "Miro", "Productivity", "https://mcp.miro.com/", "Boards and diagrams."),
     Connector("granola", "Granola", "Productivity", "https://mcp.granola.ai/mcp", "Meeting notes."),
     Connector("zapier", "Zapier", "Productivity", "https://mcp.zapier.com/api/v1/connect", "Run actions across your Zapier apps."),
-    Connector("canva", "Canva", "Design & content", "https://mcp.canva.com/mcp", "Search and create designs."),
     Connector("webflow", "Webflow", "Design & content", "https://mcp.webflow.com/mcp", "Sites, pages, and CMS content."),
     Connector("wix", "Wix", "Design & content", "https://mcp.wix.com/mcp", "Sites and business data."),
     Connector("contentful", "Contentful", "Design & content", "https://mcp.contentful.com/mcp", "Content types and entries."),
