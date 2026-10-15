@@ -1214,9 +1214,10 @@ export class SettingsPanel {
           }
           if (connector.needs_client) {
             const pick = await vscode.window.showInformationMessage(
-              `${connector.name} needs your own Google OAuth client. Create a "Desktop app" client in Google Cloud, then paste its ID and secret.`,
-              { modal: true }, "Enter client", "Open Google Cloud");
-            if (pick === "Open Google Cloud") {
+              `${connector.name} is in the Google Workspace Developer Preview and needs your own Google OAuth client. ` +
+              `Create a "Web application" client with the redirect URI http://127.0.0.1:54321/callback, then paste its ID and secret.`,
+              { modal: true }, "Enter client", "Open setup guide");
+            if (pick === "Open setup guide") {
               await vscode.env.openExternal(vscode.Uri.parse(connector.setup_url));
               break;
             }

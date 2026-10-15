@@ -4,7 +4,9 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from andromity.config import config
 
-GOOGLE_CLIENT_SETUP_URL = "https://console.cloud.google.com/apis/credentials"
+GOOGLE_CLIENT_SETUP_URL = "https://developers.google.com/workspace/guides/configure-mcp-servers"
+# The OAuth callback server tries this port first; Google Web application clients need the exact redirect URI.
+GOOGLE_REDIRECT_URI = "http://127.0.0.1:54321/callback"
 # Google issues refresh tokens only for offline access with explicit consent.
 _GOOGLE_AUTH_PARAMS = {"access_type": "offline", "prompt": "consent"}
 
@@ -43,7 +45,7 @@ CATALOG: Tuple[Connector, ...] = (
     _google("google-calendar", "Google Calendar", "https://calendarmcp.googleapis.com/mcp/v1", "View and manage calendar events."),
     _google("google-drive", "Google Drive", "https://drivemcp.googleapis.com/mcp/v1", "Search and read Drive files."),
     Connector("notion", "Notion", "Productivity", "https://mcp.notion.com/mcp", "Search and edit pages and databases."),
-    Connector("atlassian", "Jira & Confluence", "Productivity", "https://mcp.atlassian.com/v1/mcp", "Issues, projects, and wiki pages."),
+    Connector("atlassian", "Jira & Confluence", "Productivity", "https://mcp.atlassian.com/v2/mcp", "Issues, projects, and wiki pages."),
     Connector("linear", "Linear", "Productivity", "https://mcp.linear.app/mcp", "Issues, projects, and cycles."),
     Connector("clickup", "ClickUp", "Productivity", "https://mcp.clickup.com/mcp", "Tasks, lists, and docs."),
     Connector("monday", "monday.com", "Productivity", "https://mcp.monday.com/mcp", "Boards, items, and updates."),
@@ -68,7 +70,6 @@ CATALOG: Tuple[Connector, ...] = (
            "https://github.com/settings/personal-access-tokens/new"),
     Connector("gitlab", "GitLab", "Developer", "https://gitlab.com/api/v4/mcp", "Projects, issues, and merge requests."),
     Connector("sentry", "Sentry", "Developer", "https://mcp.sentry.dev/mcp", "Errors, issues, and releases."),
-    Connector("vercel", "Vercel", "Developer", "https://mcp.vercel.com", "Projects, deployments, and logs."),
     Connector("netlify", "Netlify", "Developer", "https://mcp.netlify.com/mcp", "Sites, deploys, and functions."),
     Connector("railway", "Railway", "Developer", "https://mcp.railway.com/mcp", "Projects, services, and deployments."),
     _token("render", "Render", "Developer", "https://mcp.render.com/mcp", "Services, deploys, and logs.",
@@ -204,7 +205,8 @@ async def connect(connector_id: str, project_path: str, on_status: Callable[[str
         store_token(connector.id, {"access_token": access_token}, "", "", connector.url)
     else:
         if connector.needs_client and not (client_id and client_secret):
-            return False, f"{connector.name} needs your own OAuth client ID and secret. Create a Desktop app client at {connector.setup_url}."
+            return False, (f"{connector.name} needs your own Google OAuth client ID and secret: a Web application client "
+                           f"with redirect URI {GOOGLE_REDIRECT_URI}. Setup guide: {connector.setup_url}")
         progress: List[str] = []
 
         def _status(msg: str) -> None:

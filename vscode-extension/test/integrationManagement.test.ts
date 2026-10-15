@@ -50,7 +50,7 @@ function panelHarness() {
 const NOTION = { id: "notion", name: "Notion", category: "Productivity", url: "https://mcp.notion.com/mcp",
   description: "Search and edit pages.", needs_client: false, setup_url: "", connected: false };
 const GMAIL = { id: "gmail", name: "Gmail", category: "Google", url: "https://gmailmcp.googleapis.com/mcp/v1",
-  description: "Read email.", needs_client: true, setup_url: "https://console.cloud.google.com/apis/credentials", connected: false };
+  description: "Read email.", needs_client: true, setup_url: "https://developers.google.com/workspace/guides/configure-mcp-servers", connected: false };
 
 interface McpRender { html: string; context: Record<string, any>; elements: Record<string, any> }
 
@@ -127,7 +127,7 @@ describe("Settings integration management", () => {
 
   it("opens Google Cloud or stops without connecting when the client step is not finished", async () => {
     const h = panelHarness();
-    infoPick = "Open Google Cloud";
+    infoPick = "Open setup guide";
     await h.panel._handleMessage({ type: "connector_connect", id: "gmail" });
     assert.deepEqual(opened, [GMAIL.setup_url]);
     infoPick = "Enter client";
