@@ -2,6 +2,11 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
+## [Unreleased]
+
+### Fixed
+- OpenRouter showed Andromity as two different apps: requests made with your own OpenRouter key said "Andromity" from `andromity.agenticmarket.dev`, while gateway requests said "Andromity Coding Agent" from `agenticmarket.dev`. The gateway now sends "Andromity" from `https://andromity.agenticmarket.dev` too, so OpenRouter counts them as one app.
+
 ## [0.2.19] — 2026-10-15
 
 ### Fixed

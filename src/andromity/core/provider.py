@@ -12,6 +12,14 @@ from andromity.core.events import (
 
 log = get_logger("provider")
 
+# OpenRouter groups requests into one app by HTTP-Referer. These must match the
+# gateway (gateway-worker OPENROUTER_APP_HEADERS) so BYOK and gateway traffic share one app.
+OPENROUTER_APP_HEADERS = {
+    "HTTP-Referer": "https://andromity.agenticmarket.dev",
+    "X-Title": "Andromity",
+    "X-OpenRouter-Title": "Andromity",
+}
+
 
 class ProviderStalledError(Exception):
     """Raised by the first-token watchdog when a provider sends no chunk at all
@@ -268,9 +276,7 @@ async def stream_completion(
 
         kwargs["extra_headers"] = {
             "User-Agent": "Andromity",
-            "HTTP-Referer": "https://andromity.agenticmarket.dev",
-            "X-Title": "Andromity",
-            "X-OpenRouter-Title": "Andromity",
+            **OPENROUTER_APP_HEADERS,
             "X-OpenRouter-Categories": categories,
         }
         # Enable provider fallbacks so overloaded endpoints do not stall in queue
