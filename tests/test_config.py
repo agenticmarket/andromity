@@ -19,6 +19,29 @@ def test_config_defaults():
         assert "npm run dev" in cm.get("default", "allowed_commands")
 
 
+def test_unreadable_config_is_kept_before_it_can_be_overwritten():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        broken = b'[[providers]]\nname = "anthropic"\napi_key = "sk-ant-keep-me"\n[default\n'
+        (Path(tmpdir) / "config.toml").write_bytes(broken)
+        cm = ConfigManager(config_dir=Path(tmpdir))
+        assert cm.load_error and cm.unreadable_copy is not None
+        assert cm.unreadable_copy.read_bytes() == broken
+        assert cm.get("default", "provider", "fallback") == "fallback"
+
+        cm.set("default", "provider", "anthropic")
+        assert b"sk-ant-keep-me" in cm.unreadable_copy.read_bytes(), "saving must not lose the original keys"
+
+        (Path(tmpdir) / "config.toml").write_bytes(broken)
+        again = ConfigManager(config_dir=Path(tmpdir))
+        assert again.unreadable_copy == cm.unreadable_copy
+        assert len(list(Path(tmpdir).glob("config.toml.unreadable-*"))) == 1
+
+        (Path(tmpdir) / "config.toml").write_text('[default]\nprovider = "groq"\n', encoding="utf-8")
+        fixed = ConfigManager(config_dir=Path(tmpdir))
+        assert fixed.load_error is None and fixed.unreadable_copy is None
+        assert fixed.get("default", "provider") == "groq"
+
+
 def test_config_get_set():
     with tempfile.TemporaryDirectory() as tmpdir:
         cm = ConfigManager(config_dir=Path(tmpdir))
@@ -145,3 +168,31 @@ def test_pinned_models_config():
 
 
 
+
+
+def test_set_ollama_base_url_updates_the_ollama_connection():
+    import pytest
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cm = ConfigManager(config_dir=Path(tmpdir))
+        assert cm.set_ollama_base_url("http://192.168.1.20:11434/") == "http://192.168.1.20:11434"
+        assert cm.get_provider_config("ollama")["base_url"] == "http://192.168.1.20:11434"
+        assert ConfigManager(config_dir=Path(tmpdir)).get_provider_config("ollama")["base_url"] == "http://192.168.1.20:11434"
+        for bad in ("ftp://host:11434", "http://user:pw@host:11434", "http://host:11434/?x=1", ""):
+            with pytest.raises(ValueError):
+                cm.set_ollama_base_url(bad)
+        assert cm.get_provider_config("ollama")["base_url"] == "http://192.168.1.20:11434"
+
+
+async def test_config_status_and_ollama_host_rpcs():
+    import pytest
+    from andromity.config import config
+    from andromity.server.rpc_handler import JsonRpcHandler
+    handler = JsonRpcHandler(send_notification=lambda n: None)
+    status = await handler.rpc_config_status({})
+    assert status == {"path": str(config.config_path), "load_error": None, "unreadable_copy": None}
+
+    result = await handler.rpc_config_set_ollama_host({"url": "http://10.0.0.5:11434/"})
+    assert result == {"success": True, "base_url": "http://10.0.0.5:11434"}
+    assert config.get_provider_config("ollama")["base_url"] == "http://10.0.0.5:11434"
+    with pytest.raises(ValueError):
+        await handler.rpc_config_set_ollama_host({"url": "http://user:secret@10.0.0.5:11434"})

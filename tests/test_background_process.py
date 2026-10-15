@@ -105,6 +105,7 @@ async def test_rpc_process_list_and_kill(tmp_path, monkeypatch):
 
     notifications = []
     handler = JsonRpcHandler(send_notification=lambda n: notifications.append(n))
+    handler.PROCESS_NOTICE_DELAY = 0
 
     sleep_cmd = "ping 127.0.0.1 -n 10" if sys.platform == "win32" else "sleep 10"
     tools_mod.shell_bg(sleep_cmd, process_id="rpc_test_proc")
@@ -138,6 +139,7 @@ async def test_rpc_process_exit_auto_wake(tmp_path, monkeypatch):
 
     notifications = []
     handler = JsonRpcHandler(send_notification=lambda n: notifications.append(n))
+    handler.PROCESS_NOTICE_DELAY = 0
 
     # Mock _handle_auto_awake
     auto_wake_calls = []
@@ -192,6 +194,8 @@ async def test_shell_kill_cross_project_and_async_notification(tmp_path, monkeyp
 
     handler = JsonRpcHandler(send_notification=async_send_notif)
 
+    handler.PROCESS_NOTICE_DELAY = 0
+
     sleep_cmd = "ping 127.0.0.1 -n 15" if sys.platform == "win32" else "sleep 15"
     start_res = tools_mod.shell_bg(sleep_cmd, process_id="bg_cross_test")
     assert "Background process started" in start_res
@@ -227,6 +231,8 @@ async def test_user_stopped_process_notifies_ai(tmp_path, monkeypatch):
 
     handler = JsonRpcHandler(send_notification=lambda n: None)
 
+    handler.PROCESS_NOTICE_DELAY = 0
+
     auto_wake_calls = []
     async def mock_auto_awake(**kwargs):
         auto_wake_calls.append(kwargs)
@@ -261,3 +267,117 @@ async def test_user_stopped_process_notifies_ai(tmp_path, monkeypatch):
     assert "[User Action]: Background process 'user_kill_test'" in call["prompt_content"]
     assert "was manually stopped by the user" in call["prompt_content"]
 
+
+
+def test_shell_bg_reports_a_command_that_fails_at_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools_mod, "_is_trusted", lambda: True)
+    monkeypatch.setattr(tools_mod, "_get_project_root", lambda: tmp_path.resolve())
+    exited_events = []
+    tools_mod.register_process_exited_callback(exited_events.append)
+    try:
+        # Valid in bash, sh and PowerShell alike.
+        res = tools_mod.shell_bg("echo boom; exit 3", process_id="fails_fast")
+        assert "Background process started with id 'fails_fast'" in res
+        assert "with code 3" in res
+        assert "nothing is running" in res
+        assert "boom" in res
+        assert len(exited_events) == 1
+        assert exited_events[0]["exit_code"] == 3
+        assert exited_events[0]["reported_to_agent"] is True
+    finally:
+        tools_mod.unregister_process_exited_callback(exited_events.append)
+
+
+def test_shell_bg_still_running_after_startup_watch(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools_mod, "_is_trusted", lambda: True)
+    monkeypatch.setattr(tools_mod, "_get_project_root", lambda: tmp_path.resolve())
+    monkeypatch.setattr(tools_mod, "_BG_STARTUP_WATCH_SECONDS", 0.3)
+    sleep_cmd = "Start-Sleep -Seconds 30" if sys.platform == "win32" else "sleep 30"
+    res = tools_mod.shell_bg(sleep_cmd, process_id="keeps_running")
+    assert "Background process started with id 'keeps_running'" in res
+    assert "exited" not in res
+    with tools_mod._bg_lock:
+        entry = next(v for k, v in tools_mod._bg_processes.items() if k[1] == "keeps_running")
+    assert entry["startup_watch"] is False
+
+
+async def test_rpc_skips_auto_wake_for_exit_already_in_tool_result(tmp_path, monkeypatch):
+    notifications = []
+    handler = JsonRpcHandler(send_notification=lambda n: notifications.append(n))
+    handler.PROCESS_NOTICE_DELAY = 0
+    auto_wake_calls = []
+
+    async def mock_auto_awake(**kwargs):
+        auto_wake_calls.append(kwargs)
+
+    monkeypatch.setattr(handler, "_handle_auto_awake", mock_auto_awake)
+    handler._handle_process_exit_threadsafe({
+        "process_id": "fails_fast",
+        "pid": 1,
+        "command": "bad syntax",
+        "exit_code": 1,
+        "duration": 1.4,
+        "session_id": "sess-reported",
+        "project_path": str(tmp_path),
+        "reported_to_agent": True,
+    })
+    await asyncio.sleep(0.05)
+    assert auto_wake_calls == []
+    assert [n.params["process_id"] for n in notifications if n.method == "process/exited"] == ["fails_fast"]
+
+
+async def test_process_exits_at_once_reach_the_agent_as_one_message(monkeypatch):
+    handler = JsonRpcHandler(send_notification=lambda n: None)
+    handler.PROCESS_NOTICE_DELAY = 0.05
+    wakes = []
+
+    async def fake_wake(**kwargs):
+        wakes.append(kwargs)
+
+    monkeypatch.setattr(handler, "_handle_auto_awake", fake_wake)
+    handler._user_killed_processes.update({("sess-many", "a"), ("sess-many", "b")})
+    for pid in ("a", "b", "c"):
+        handler._handle_process_exit_threadsafe({"process_id": pid, "command": f"loop {pid}", "exit_code": 1, "session_id": "sess-many"})
+    await asyncio.sleep(0.2)
+    assert len(wakes) == 1
+    content = wakes[0]["prompt_content"]
+    assert "Background process 'a'" in content and "Background process 'b'" in content and "Process 'c'" in content
+    assert content.count("was manually stopped by the user") == 2
+
+
+async def test_process_exit_during_a_running_turn_is_steered_into_it(monkeypatch):
+    handler = JsonRpcHandler(send_notification=lambda n: None)
+    handler.PROCESS_NOTICE_DELAY = 0
+
+    class Session:
+        id = "sess-busy"
+        project_path = "."
+        permission_mode = "full"
+        profile = "builder"
+        provider = ""
+        model = ""
+
+    running = asyncio.get_running_loop().create_future()
+    handler._running_tasks["sess-busy"] = running
+    monkeypatch.setattr(handler, "_get_or_load_session", lambda sid, path=None: Session())
+    submitted, wakes = [], []
+
+    async def fake_submit(params):
+        submitted.append(params)
+        return {}
+
+    async def fake_wake(**kwargs):
+        wakes.append(kwargs)
+
+    monkeypatch.setattr(handler, "rpc_agent_submit", fake_submit)
+    monkeypatch.setattr(handler, "_handle_auto_awake", fake_wake)
+    handler._user_killed_processes.add(("sess-busy", "dev"))
+    handler._handle_process_exit_threadsafe({"process_id": "dev", "command": "npm run dev", "exit_code": 1, "session_id": "sess-busy"})
+    await asyncio.sleep(0.05)
+    running.cancel()
+    assert wakes == []
+    assert len(submitted) == 1
+    assert submitted[0]["delivery"] == "steer"
+    assert "was manually stopped by the user" in submitted[0]["prompt"]
+    # A turn nobody typed never runs above TRUST.
+    assert submitted[0]["mode"] == "trust"

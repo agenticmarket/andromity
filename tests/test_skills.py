@@ -149,6 +149,26 @@ def test_install_scope_project_writes_to_project():
     assert manager.installed()[0].scope == "project"
 
 
+def test_project_skills_stay_out_of_the_prompt_until_the_folder_is_trusted(monkeypatch):
+    from andromity.config import config
+    proj = tempfile.mkdtemp()
+    user = tempfile.mkdtemp()
+    for root, name, desc in ((Path(proj) / "skills", "repo-skill", "Planted by the repository."),
+                             (Path(user), "my-skill", "Installed by the user.")):
+        (root / name).mkdir(parents=True)
+        (root / name / "SKILL.md").write_text(f"---\ndescription: {desc}\n---\n# {name}\n", encoding="utf-8")
+    manager = SkillsManager(proj, fetch=_fake_fetch(_tree_paths(), _files()), user_dir=Path(user))
+
+    monkeypatch.setattr(config, "is_trusted", lambda path: False)
+    block = manager.prompt_block()
+    assert "my-skill" in block
+    assert "repo-skill" not in block and "Planted" not in block
+    assert {s.name for s in manager.installed()} == {"repo-skill", "my-skill"}, "Settings still lists every skill"
+
+    monkeypatch.setattr(config, "is_trusted", lambda path: True)
+    assert "repo-skill" in manager.prompt_block()
+
+
 def test_install_unknown_skill_returns_none():
     proj = tempfile.mkdtemp()
     user = tempfile.mkdtemp()

@@ -186,6 +186,19 @@ def is_execution_control_path(path: str) -> bool:
     return parts[-1] in EXECUTION_CONTROL_NAMES or any(p in EXECUTION_CONTROL_DIRS for p in parts[:-1])
 
 
+MCP_CHANGE_WORDS = ("write", "insert", "update", "delete", "create", "drop", "push", "exec", "post")
+
+
+def mcp_tool_may_change(tool_name: str) -> bool:
+    """TRUST mode asks before an MCP tool whose own name suggests a change.
+
+    Only the tool part of ``mcp__<server>__<tool>`` counts, so a server named
+    e.g. ``postgres`` does not make every one of its tools ask.
+    """
+    tool = tool_name.split("__", 2)[-1].lower()
+    return any(word in tool for word in MCP_CHANGE_WORDS)
+
+
 def is_command_allowlisted(command: str, allowed: Optional[List[str]] = None) -> bool:
     if not command or not allowed:
         return False

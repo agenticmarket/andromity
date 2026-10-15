@@ -34,6 +34,9 @@ _bg_processes: Dict[tuple, Any] = {}
 _bg_lock = threading.Lock()
 _PROCESS_STARTED_CALLBACKS: List[Callable] = []  # callables(dict) to notify when a bg process starts
 _PROCESS_EXITED_CALLBACKS: List[Callable] = []   # callables(dict) to notify when a bg process exits
+# shell_bg watches a new process this long so a command that dies at once (wrong syntax for the
+# shell, missing binary) is reported in the tool result instead of as running.
+_BG_STARTUP_WATCH_SECONDS = 2.0
 
 def _bg_project_key() -> str:
     try:
@@ -81,7 +84,7 @@ def _notify_process_exited(info: Dict[str, Any]):
             pass
 
 
-def _fire_exit_notification(target_key: Any, pid: str, os_pid: int, command: str, exit_code: int, session_id: Optional[str], proj_key: str):
+def _fire_exit_notification(target_key: Any, pid: str, os_pid: int, command: str, exit_code: int, session_id: Optional[str], proj_key: str, reported_to_agent: bool = False):
     duration = 0.0
     with _bg_lock:
         entry = _bg_processes.get(target_key)
@@ -91,6 +94,10 @@ def _fire_exit_notification(target_key: Any, pid: str, os_pid: int, command: str
                     entry = v
                     break
         if entry:
+            if entry.get("startup_watch"):
+                # shell_bg is still watching this process; it reports the exit itself.
+                entry["pending_exit"] = exit_code
+                return
             if entry.get("notified_exit"):
                 return
             entry["notified_exit"] = True
@@ -106,6 +113,7 @@ def _fire_exit_notification(target_key: Any, pid: str, os_pid: int, command: str
         "duration": duration,
         "session_id": session_id,
         "project_path": proj_key,
+        "reported_to_agent": reported_to_agent,
     })
 
 
@@ -824,6 +832,8 @@ def shell_bg(command: str, process_id: str = "") -> str:
 
     buf: collections.deque = collections.deque(maxlen=500)  # keep last 500 lines
 
+    exit_marker = f"[process '{pid}' exited with code "
+
     def _reader():
         try:
             assert proc.stdout is not None
@@ -833,23 +843,26 @@ def shell_bg(command: str, process_id: str = "") -> str:
             pass
         finally:
             exit_code = proc.wait()
-            buf.append(f"[process '{pid}' exited with code {exit_code}]")
+            buf.append(f"{exit_marker}{exit_code}]")
             _fire_exit_notification(full_key, pid, proc.pid, command, exit_code, session_id, proj_key)
+
+    start_time = _time.time()
+    entry = {
+        "proc": proc,
+        "buf": buf,
+        "cmd": command,
+        "started": start_time,
+        "project": proj_key,
+        "session_id": session_id,
+        "notified_exit": False,
+        "startup_watch": True,
+    }
+    # Registered before the reader starts, so even an instant exit finds its entry.
+    with _bg_lock:
+        _bg_processes[full_key] = entry
 
     t = threading.Thread(target=_reader, daemon=True, name=f"bg-reader-{pid}")
     t.start()
-
-    start_time = _time.time()
-    with _bg_lock:
-        _bg_processes[full_key] = {
-            "proc": proc,
-            "buf": buf,
-            "cmd": command,
-            "started": start_time,
-            "project": proj_key,
-            "session_id": session_id,
-            "notified_exit": False,
-        }
 
     _notify_process_started({
         "process_id": pid,
@@ -860,11 +873,38 @@ def shell_bg(command: str, process_id: str = "") -> str:
         "project_path": proj_key,
     })
 
-    return (
-        f"Background process started with id '{pid}' (PID {proc.pid}).\n"
-        f"Use shell_read('{pid}') to see live output, "
-        f"shell_kill('{pid}') to stop it."
-    )
+    deadline = start_time + _BG_STARTUP_WATCH_SECONDS
+    while proc.poll() is None and _time.time() < deadline:
+        _time.sleep(0.05)
+    exit_code = proc.poll()
+    if exit_code is not None:
+        t.join(timeout=1.0)  # let the reader collect the last output
+    with _bg_lock:
+        entry["startup_watch"] = False
+        pending_exit = entry.pop("pending_exit", None)
+    if pending_exit is not None:
+        _fire_exit_notification(full_key, pid, proc.pid, command, pending_exit, session_id, proj_key, reported_to_agent=exit_code is not None)
+
+    output = [line for line in list(buf) if not line.startswith(exit_marker)]
+    header = f"Background process started with id '{pid}' (PID {proc.pid})"
+    if exit_code is None:
+        result = (
+            f"{header}.\n"
+            f"Use shell_read('{pid}') to see live output, "
+            f"shell_kill('{pid}') to stop it."
+        )
+        if output:
+            result += "\nOutput so far:\n" + "\n".join(output[-15:])
+        return result
+
+    elapsed = round(_time.time() - start_time, 1)
+    result = f"{header}, but it exited after {elapsed}s with code {exit_code}, so nothing is running in the background."
+    if exit_code != 0:
+        result += f" The command failed; check that it is valid {get_shell()} syntax and try again."
+    else:
+        result += " For commands that finish on their own, use shell_exec."
+    result += "\nOutput:\n" + ("\n".join(output[-40:]) if output else "(no output)")
+    return result
 
 
 def shell_read(process_id: str, lines: int = 50) -> str:
@@ -1674,8 +1714,7 @@ CORE_TOOLS = [
                 "Executes a shell command (running tests, build commands, git, etc.). "
                 "IMPORTANT: This is a blocking call — the command must exit before control returns. "
                 "Do NOT use for long-running processes like dev servers (npm run dev, python manage.py runserver, etc.) "
-                "as they will block until timeout. For such processes, use a background flag: "
-                "`npm run dev &` on Unix/Mac or `Start-Process npm -ArgumentList 'run','dev'` on Windows."
+                "as they will block until timeout; start those with shell_bg instead."
             ),
             "parameters": {
                 "type": "object",
@@ -1693,7 +1732,8 @@ CORE_TOOLS = [
             "name": "shell_bg",
             "description": (
                 "Start a long-running command in the background (dev servers, watchers, compilers, etc.). "
-                "Returns immediately with a process_id — the process keeps running. "
+                "Returns after about two seconds with a process_id and any early output; if the command "
+                "exits in that time, the result says so and includes its exit code and output. "
                 "Use shell_read(process_id) to check live output at any time. "
                 "Use shell_kill(process_id) to stop it. "
                 "Use this instead of shell_exec for: npm run dev, vite, webpack --watch, "

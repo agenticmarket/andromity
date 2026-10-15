@@ -7,6 +7,7 @@ from andromity.core.provider import stream_completion, sanitize_messages_for_api
 from andromity.core.session import Session
 from andromity.core.profiles import get_system_prompt, filter_tools_for_profile
 from andromity.core.tools import CORE_TOOLS, ToolRegistry, execute_tool, register_session, requires_workspace_trust
+from andromity.core.context_breakdown import AUTO_COMPACT_THRESHOLD
 from andromity.core.events import (
     StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired, PlanUpdated,
     LLMCallStart, LLMCallEnd, InputApplied
@@ -283,7 +284,7 @@ class Agent:
             current_tokens = getattr(self.session, "context_tokens", 0)
             if current_tokens <= 0:
                 current_tokens = _estimate_tokens(self.session.messages)
-            if current_tokens > limit * 0.80:
+            if current_tokens > limit * AUTO_COMPACT_THRESHOLD:
                 limit_k = f"{limit / 1000:.0f}K" if limit < 1_000_000 else f"{limit / 1_000_000:.1f}M"
                 pct = min(current_tokens / limit * 100, 100.0)
                 compact_reason = f"context limit reached (~{pct:.0f}% of {limit_k} tokens)"
@@ -391,6 +392,12 @@ class Agent:
         self.session.messages = sanitize_messages_for_api(new_messages)
         self.session.context_tokens = 0
         self.session.save()
+        if not force:
+            try:
+                from andromity.telemetry import send_feature_used
+                send_feature_used("compact_auto", session_id=self.session.id)
+            except Exception:
+                pass
         yield TextDelta(text=f"*Context compacted successfully ({old_count} → {len(new_messages)} messages).*\n\n")
 
     async def run(self, user_input: str, images: list = None, image_uris: list = None) -> AsyncGenerator[StreamEvent, None]:

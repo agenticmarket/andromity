@@ -103,3 +103,26 @@ async def test_permission_mode_trust_web_allowlist():
                 # Unallowed domain -> triggers approval
                 await app._on_tool_approval("fetch_url", {"url": "https://untrusted-site.com/exploit"})
                 mock_future.assert_called_once()
+
+
+def test_mcp_change_check_reads_the_tool_name_only():
+    from andromity.core.security import mcp_tool_may_change
+    assert not mcp_tool_may_change("mcp__postgres__query")
+    assert not mcp_tool_may_change("mcp__exec-runner__list_jobs")
+    assert mcp_tool_may_change("mcp__postgres__insert_rows")
+    assert mcp_tool_may_change("mcp__github__create_issue")
+    assert not mcp_tool_may_change("mcp__github__list_issues")
+
+
+@pytest.mark.asyncio
+async def test_permission_mode_trust_mcp_ignores_the_server_name():
+    app = AndromityApp()
+    app.session.permission_mode = "trust"
+    with patch("andromity.tui.app.config.get", side_effect=lambda section, key, default=None: "trust" if key == "permission_mode" else default):
+        with patch.object(app, "query_one", return_value=MagicMock()):
+            with patch("asyncio.Future", return_value=get_resolved_future()) as mock_future:
+                await app._on_tool_approval("mcp__postgres__query", {"sql": "select 1"})
+                mock_future.assert_not_called()
+
+                await app._on_tool_approval("mcp__postgres__delete_rows", {"table": "users"})
+                mock_future.assert_called_once()

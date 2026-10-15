@@ -102,6 +102,7 @@ class JsonRpcHandler:
         self._pending_plan_approvals: Dict[str, asyncio.Future] = {}
         self._cron_schedulers: Dict[str, Any] = {}
         self._active_agents: Dict[str, Any] = {}
+        self._pending_process_notices: Dict[str, List[str]] = {}
         self._input_queues: Dict[str, Any] = {}
         self._input_locks: Dict[str, asyncio.Lock] = {}
         self._last_prompt_requests: Dict[str, Dict[str, Any]] = {}
@@ -222,7 +223,8 @@ class JsonRpcHandler:
         if was_user_killed:
             self._user_killed_processes.discard(pid_str)
             self._user_killed_processes.discard(scoped_pid)
-        if session_id:
+        # An exit that shell_bg already returned to the agent needs no wake-up turn.
+        if session_id and not info.get("reported_to_agent"):
             exit_code = info.get("exit_code", 0)
             cmd_str = info.get("command", "")
             if was_user_killed:
@@ -236,24 +238,66 @@ class JsonRpcHandler:
                     f"Process '{pid_str}' (Command: `{cmd_str}`) has finished with exit code {exit_code}.\n"
                     f"Use shell_read('{pid_str}') to review its final output if needed."
                 )
-            coro = self._handle_auto_awake(
-                target_session_id=session_id,
-                from_session=f"bg_proc_{pid_str}",
-                from_session_id="",
-                prompt_content=prompt_content,
-                trigger_type="process_exit",
-            )
+            self._queue_process_notice(session_id, prompt_content)
+
+    # Several processes often end together (the user stops them all), and a notice can arrive
+    # while a turn is running. Collect a session's notices briefly so the agent gets one message,
+    # and steer it into a running turn rather than dropping it.
+    PROCESS_NOTICE_DELAY = 0.75
+
+    def _queue_process_notice(self, session_id: str, notice: str) -> None:
+        pending = self._pending_process_notices.setdefault(session_id, [])
+        pending.append(notice)
+        if len(pending) > 1:
+            return  # a flush for this session is already scheduled
+        coro = self._flush_process_notices(session_id)
+        try:
+            asyncio.get_running_loop().create_task(coro)
+        except RuntimeError:
+            if self._loop and self._loop.is_running():
+                asyncio.run_coroutine_threadsafe(coro, self._loop)
+            else:
+                self._pending_process_notices.pop(session_id, None)
+                coro.close()
+
+    async def _flush_process_notices(self, session_id: str) -> None:
+        await asyncio.sleep(self.PROCESS_NOTICE_DELAY)
+        notices = self._pending_process_notices.pop(session_id, [])
+        if not notices:
+            return
+        content = "\n\n".join(notices)
+        task = self._running_tasks.get(session_id)
+        if task and not task.done():
             try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(coro)
-            except RuntimeError:
-                if self._loop and self._loop.is_running():
-                    asyncio.run_coroutine_threadsafe(coro, self._loop)
-                else:
-                    try:
-                        coro.close()
-                    except Exception:
-                        pass
+                session = self._get_or_load_session(session_id)
+                await self.rpc_agent_submit({**self._wake_params(session, content), "delivery": "steer"})
+            except Exception as e:
+                log.warning("Could not deliver background process notice to running session %s: %s", session_id, e)
+            return
+        await self._handle_auto_awake(
+            target_session_id=session_id,
+            from_session="bg_processes",
+            from_session_id="",
+            prompt_content=content,
+            trigger_type="process_exit",
+        )
+
+    def _wake_params(self, session: Any, prompt_content: str) -> Dict[str, Any]:
+        """Turn settings for a turn nobody typed: the session's own mode capped at TRUST, its profile and model."""
+        own_mode = (getattr(session, "permission_mode", "") or "safe").lower()
+        wake_mode = own_mode if _MODE_RANK.get(own_mode, 0) <= _MODE_RANK["trust"] else "trust"
+        params: Dict[str, Any] = {
+            "session_id": session.id,
+            "prompt": prompt_content,
+            "project_path": session.project_path,
+            "is_auto_wake": True,
+            "mode": wake_mode,
+            "profile": getattr(session, "profile", "") or "builder",
+        }
+        if getattr(session, "provider", "") and getattr(session, "model", ""):
+            params["provider"] = session.provider
+            params["model"] = session.model
+        return params
 
     async def _handle_auto_awake(
         self,
@@ -352,18 +396,8 @@ class JsonRpcHandler:
         # global defaults, so a SAFE/planner session could be woken as a FULL/YOLO builder by another
         # session's content. Woken turns are also capped at TRUST because nobody asked for them.
         own_mode = (getattr(session, "permission_mode", "") or "safe").lower()
-        wake_mode = own_mode if _MODE_RANK.get(own_mode, 0) <= _MODE_RANK["trust"] else "trust"
-        wake_params: Dict[str, Any] = {
-            "session_id": session.id,
-            "prompt": prompt_content,
-            "project_path": session.project_path,
-            "is_auto_wake": True,
-            "mode": wake_mode,
-            "profile": getattr(session, "profile", "") or "builder",
-        }
-        if getattr(session, "provider", "") and getattr(session, "model", ""):
-            wake_params["provider"] = session.provider
-            wake_params["model"] = session.model
+        wake_params = self._wake_params(session, prompt_content)
+        wake_mode = wake_params["mode"]
         try:
             await self.rpc_agent_prompt(wake_params)
         except Exception as e:
@@ -812,6 +846,35 @@ class JsonRpcHandler:
         self.notify("session/updated", {"session_id": session.id, "name": session.name})
         return {"success": True, "id": session.id, "name": session.name}
 
+    def _context_estimate(self, session: Any, agent: Any = None) -> int:
+        """Estimated size of the session's next request: system prompt, tool definitions and messages."""
+        agent = agent or self._active_agents.get(session.id)
+        try:
+            from andromity.core.context_breakdown import context_breakdown
+            return int(context_breakdown(
+                session,
+                profile=getattr(agent, "profile", None),
+                provider=getattr(agent, "provider", None),
+                model=getattr(agent, "model", None),
+                tools=getattr(agent, "allowed_tools", None),
+            )["estimated_tokens"])
+        except Exception:
+            from andromity.core.agent import _estimate_tokens
+            return _estimate_tokens(session.messages)
+
+    async def rpc_session_context(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Per-category estimate of the session's context window for the VS Code context popover."""
+        from andromity.core.context_breakdown import context_breakdown
+        session = self._get_or_load_session(params.get("session_id"), params.get("project_path"))
+        agent = self._active_agents.get(session.id)
+        return context_breakdown(
+            session,
+            profile=getattr(agent, "profile", None),
+            provider=getattr(agent, "provider", None),
+            model=getattr(agent, "model", None),
+            tools=getattr(agent, "allowed_tools", None),
+        )
+
     async def rpc_session_compact(self, params: Dict[str, Any]) -> Dict[str, Any]:
         session_id = params.get("session_id")
         if session_id in self._running_tasks and not self._running_tasks[session_id].done():
@@ -876,31 +939,31 @@ class JsonRpcHandler:
                 "context_tokens": getattr(session, "context_tokens", 0),
             }
 
-        # Recalculate context tokens (use same estimator as agent: include thinking + tool_calls)
-        try:
-            from andromity.core.agent import _estimate_tokens as _est
-            total_tokens = _est(session.messages)
-        except Exception:
-            total_tokens = sum(len(str(m.get("content", ""))) // 4 + len(str(m.get("thinking", ""))) // 4 for m in session.messages)
-        session.context_tokens = total_tokens
+        # The next request reports the real size (0 means unknown, as after automatic compaction);
+        # until then clients show an estimate of the compacted context, flagged as one.
+        session.context_tokens = 0
         session.save()
+        estimate = self._context_estimate(session, agent)
         self.notify("session/updated", {
             "session_id": session.id,
             "name": session.name,
             "message_count": len(session.messages),
-            "context_tokens": session.context_tokens,
+            "context_tokens": estimate,
+            "context_estimated": True,
         })
         self.notify("session/compacted", {
             "session_id": session.id,
             "old_count": old_count,
             "message_count": len(session.messages),
-            "context_tokens": session.context_tokens,
+            "context_tokens": estimate,
+            "context_estimated": True,
         })
         return {
             "success": True,
             "old_count": old_count,
             "message_count": len(session.messages),
-            "context_tokens": session.context_tokens,
+            "context_tokens": estimate,
+            "context_estimated": True,
         }
 
     async def rpc_session_undo(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1308,8 +1371,8 @@ class JsonRpcHandler:
                 if mode == "safe":
                     needs_approval = True
                 elif mode == "trust":
-                    lower_name = tool_name.lower()
-                    if any(m in lower_name for m in ("write", "insert", "update", "delete", "create", "drop", "push", "exec", "post")):
+                    from andromity.core.security import mcp_tool_may_change
+                    if mcp_tool_may_change(tool_name):
                         needs_approval = True
 
             if not needs_approval:
@@ -1441,6 +1504,8 @@ class JsonRpcHandler:
                                 "session_id": session_id,
                                 "message_count": len(session.messages),
                                 "compacted_history": getattr(session, "compacted_history", []),
+                                "context_tokens": self._context_estimate(session, agent),
+                                "context_estimated": True,
                             })
                         self.notify("agent/textDelta", {"session_id": session_id, "text": event.text})
                         self.notify("session/update", {
@@ -2006,7 +2071,7 @@ class JsonRpcHandler:
             "reasoning_effort": config.get("default", "reasoning_effort", "auto"),
             "user_name": user.get("name", ""),
             "user_email": user.get("email", ""),
-            "max_subagents": config.get("subagents", "max_parallel", 3),
+            "max_subagents": config.get("subagents", "max_concurrent", 5),
             "auto_compact": config.get("advanced", "auto_compact", True),
             "max_file_size_kb": config.get("advanced", "max_file_size_kb", 500),
             "sound_done": config.get("default", "sound_done", True),
@@ -2061,7 +2126,7 @@ class JsonRpcHandler:
                 if getattr(session, "profile", "builder") in ("planner", "reviewer") and tool_name in ("write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill"):
                     continue
                 if str(value).lower() == "trust":
-                    from andromity.core.security import is_sensitive_path, is_execution_control_path, is_command_allowlisted, is_domain_allowed
+                    from andromity.core.security import is_sensitive_path, is_execution_control_path, is_command_allowlisted, is_domain_allowed, mcp_tool_may_change
                     target = str(args.get("path") or args.get("target_path") or args.get("target_file") or args.get("file_path") or "")
                     if is_sensitive_path(target):
                         continue
@@ -2077,7 +2142,7 @@ class JsonRpcHandler:
                         if not is_domain_allowed(str(args.get("url", "")), domains):
                             continue
                     elif tool_name.startswith("mcp__"):
-                        if any(m in tool_name.lower() for m in ("write", "insert", "update", "delete", "create", "drop", "push", "exec", "post")):
+                        if mcp_tool_may_change(tool_name):
                             continue
                     elif tool_name not in READ_ONLY_TOOLS | SESSION_DRIVING_TOOLS | {"shell_kill", "spawn_subagent", "web_search"}:
                         continue
@@ -2442,6 +2507,18 @@ class JsonRpcHandler:
     async def rpc_config_list_providers(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         from andromity.core.connections import provider_info
         return provider_info()
+
+    async def rpc_config_status(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Where config.toml lives and whether it could be read at startup."""
+        return {
+            "path": str(config.config_path),
+            "load_error": config.load_error,
+            "unreadable_copy": str(config.unreadable_copy) if config.unreadable_copy else None,
+        }
+
+    async def rpc_config_set_ollama_host(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        base_url = config.set_ollama_base_url(str(params.get("url") or ""))
+        return {"success": True, "base_url": base_url}
 
     async def rpc_config_save_provider(self, params: Dict[str, Any]) -> Dict[str, Any]:
         name = config.save_provider(params)

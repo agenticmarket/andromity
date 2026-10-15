@@ -84,14 +84,15 @@ TrustPromptOverlay {
                 yield Static(escape(self._project_path), id="tp-path")
                 yield Static(
                     "Do you trust the files in this folder?\n\n"
-                    "  [green]✓[/]  Read files [dim]— always allowed[/]\n"
+                    "  [yellow]⚠[/]  Read and search files [dim]— requires trust[/]\n"
                     "  [yellow]⚠[/]  Write and edit files [dim]— requires trust[/]\n"
-                    "  [yellow]⚠[/]  Run shell commands [dim]— requires trust[/]\n\n"
+                    "  [yellow]⚠[/]  Run shell commands [dim]— requires trust[/]\n"
+                    "  [green]✓[/]  Web search and chat [dim]— always allowed[/]\n\n"
                     "[dim]Trust is saved permanently. Use /untrust to revoke.[/]",
                     id="tp-info"
                 )
             with Horizontal(id="tp-footer"):
-                yield Button("Read-only (Esc)", id="tp-readonly")
+                yield Button("Not now (Esc)", id="tp-readonly")
                 yield Button("Trust Folder", id="tp-trust")
 
     def on_button_pressed(self, event: Button.Pressed):

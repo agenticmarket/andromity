@@ -684,8 +684,8 @@ class AndromityApp(App):
             if mode == "safe":
                 needs_approval = True
             elif mode == "trust":
-                lower_name = tool_name.lower()
-                if any(m in lower_name for m in ("write", "insert", "update", "delete", "create", "drop", "push", "exec", "post")):
+                from andromity.core.security import mcp_tool_may_change
+                if mcp_tool_may_change(tool_name):
                     needs_approval = True
                 
         if needs_approval:
@@ -1778,6 +1778,12 @@ Your output must be:
         parts = cmd.split(maxsplit=1)
         command = parts[0].lower()
         chat = self.query_one(ChatPanel)
+        if command in COMMANDS or command == "/effort":
+            try:
+                from andromity.telemetry import send_feature_used
+                send_feature_used("tui_" + command[1:].replace("-", "_"))
+            except Exception:
+                pass
 
         if command == "/model":
             self.action_toggle_model()

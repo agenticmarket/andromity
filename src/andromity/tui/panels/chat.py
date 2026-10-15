@@ -55,11 +55,11 @@ ChatMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
 
         actions = []
         if "open-settings" in content:
-            actions.append("Press Ctrl+P -> Settings to configure BYOK")
+            actions.append("Press Ctrl+E to open Settings and add a BYOK key")
         if "open-account-login" in content:
-            actions.append("Run 'andromity auth login' or sign in via Hub")
+            actions.append("Sign in with AgenticMarket from the Andromity VS Code extension")
         if "switch-model-flyout" in content:
-            actions.append("Press Ctrl+M to switch model")
+            actions.append("Press Ctrl+L to switch model")
         if "retry-turn" in content:
             actions.append("Type /retry or re-submit prompt")
         if "trigger-compact" in content:

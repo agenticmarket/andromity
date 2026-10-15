@@ -112,14 +112,34 @@ class ConfigManager:
         self._load()
 
     def _load(self):
+        self.load_error: Optional[str] = None
+        self.unreadable_copy: Optional[Path] = None
         if not self.config_path.exists():
             self._create_default_config()
-        with open(self.config_path, "rb") as f:
-            try:
-                self._config_cache = tomllib.load(f)
-            except Exception as e:
-                print(f"Warning: Failed to parse {self.config_path}: {e}")
-                self._config_cache = {}
+        raw = self.config_path.read_bytes()
+        try:
+            self._config_cache = tomllib.loads(raw.decode("utf-8"))
+        except Exception as e:
+            # The next save rewrites the file from defaults, so keep the user's keys and settings first.
+            self.load_error = str(e)
+            self.unreadable_copy = self._keep_unreadable_copy(raw)
+            kept = f" A copy was saved to {self.unreadable_copy}." if self.unreadable_copy else ""
+            print(f"Warning: Failed to parse {self.config_path}: {e}.{kept} Using default settings.", file=sys.stderr)
+            self._config_cache = {}
+
+    def _keep_unreadable_copy(self, raw: bytes) -> Optional[Path]:
+        try:
+            for existing in sorted(self.config_dir.glob("config.toml.unreadable-*")):
+                if existing.read_bytes() == raw:
+                    return existing
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            copy = self.config_dir / f"config.toml.unreadable-{stamp}"
+            fd = os.open(copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(raw)
+            return copy
+        except OSError:
+            return None
 
     def _create_default_config(self):
         default_config = {
@@ -326,6 +346,23 @@ class ConfigManager:
         invalidate_model_catalog(saved["name"])
         return saved["name"]
 
+    def set_ollama_base_url(self, url: str) -> str:
+        from andromity.core.connections import validate_base_url
+        base_url = validate_base_url(url, "ollama")
+        providers = self.list_providers()
+        entry = next((p for p in providers if p.get("name") == "ollama"), None)
+        if entry is None:
+            providers.append({"name": "ollama", "type": "ollama", "base_url": base_url})
+        elif entry.get("base_url") == base_url:
+            return base_url
+        else:
+            entry["base_url"] = base_url
+        self._config_cache["providers"] = providers
+        self.save()
+        from andromity.core.models import invalidate_model_catalog
+        invalidate_model_catalog("ollama")
+        return base_url
+
     def delete_provider(self, provider: str) -> None:
         from andromity.core.connections import PRESETS
         if provider in PRESETS:
@@ -473,40 +510,6 @@ class ConfigManager:
         except Exception:
             return False
 
-    def convert_remote_to_mcp_remote(
-        self, project_path: str, server_name: str, token: str
-    ) -> bool:
-        """
-        Convert a remote HTTP server (serverUrl only) to use npx mcp-remote
-        with an Authorization: Bearer header, so it can be launched as stdio.
-        Searches project and global config. Returns True on success.
-        """
-        path, data, srv_key = self._find_mcp_file_for_server(project_path, server_name)
-        if path is None:
-            return False
-        try:
-            import json
-            conf = data[srv_key][server_name]
-            remote_url = conf.get("serverUrl") or conf.get("url") or ""
-            if not remote_url:
-                return False
-            # Preserve safe metadata fields only
-            meta = {k: v for k, v in conf.items()
-                    if k not in ("command", "args", "env", "serverUrl", "url",
-                                 "type", "$typeName")}
-            data[srv_key][server_name] = {
-                "command": "npx",
-                "args": [
-                    "-y", "mcp-remote", remote_url,
-                    "--header", f"Authorization:Bearer {token}",
-                ],
-                "env": {},
-                **meta,
-            }
-            path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            return True
-        except Exception:
-            return False
 
     # ─── Trust Management ────────────────────────────────────────────────
     def _trust_key(self, path: str) -> str:

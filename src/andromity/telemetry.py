@@ -12,6 +12,9 @@ What is collected:
   - Reasoning effort setting (off / low / medium / high)
   - Number of MCP tools enabled at session start (integer count only)
   - Session end: turn count, had_error (bool), duration bucket, coarse tool counts
+  - Feature usage: the name of a feature that was used (e.g. "fingerprint",
+    "cmd_openwaterfall", "turn_rail_used"), with the anonymous UUID and session id,
+    so we can see which features people use and which nobody does
 
 What is NEVER collected:
   - Prompts, code, file contents, file paths, API keys

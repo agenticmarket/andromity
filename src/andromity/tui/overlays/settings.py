@@ -469,7 +469,7 @@ SettingsScreen {
                         curr_profile = config.get("default", "profile", "builder")
                         yield Label(
                             f"Active: [bold green]{curr_profile}[/]  "
-                            "·  [dim]Ctrl+J for quick picker[/]",
+                            "·  [dim]Ctrl+U for quick picker[/]",
                             classes="section-hint")
                         from andromity.tui.overlays.profile import PROFILES
                         with RadioSet(id="setting-profiles"):
@@ -1519,35 +1519,21 @@ SettingsScreen {
                     self.app.notify("Please paste a token first.", severity="warning")
                     return
                 
-                # Save the PAT token
-                ok = config.convert_remote_to_mcp_remote(
-                    self.project_path, s_name, token)
-                if ok:
-                    self._mcp_servers = (
-                        self.mcp_manager.load_config().get("mcpServers", {})
-                        if self.mcp_manager else {})
-
-                    if self.mcp_manager:
-                        await self.mcp_manager.stop_server(s_name)
-                        # Live-state auth: connect immediately, don't make the
-                        # user hunt for a toggle.
-                        self.app.notify(
-                            f"{s_name}: PAT saved — connecting…",
-                            severity="information")
-                        async def _connect_after_pat():
-                            await self.mcp_manager.start_server(s_name)
-                            self._update_mcp_card_state(s_name)
-                        self.run_worker(_connect_after_pat(), group="settings")
-                        # Card shape changed (remote → mcp-remote): rebuild once
-                        # the event settles
-                        self._schedule_card_rebuild(s_name)
-                        return
-
-                    # Card shape changed (remote → mcp-remote): rebuild once
-                    # the event settles
-                    self._schedule_card_rebuild(s_name)
+                # Same store as OAuth and the VS Code token flow; the remote
+                # client sends it as the Authorization header on connect.
+                from andromity.core.oauth import store_token
+                store_token(s_name, {"access_token": token}, "", "")
+                self.query_one(f"#mcp-pat-{s_name}", Input).value = ""
+                self.query_one(f"#mcp-pat-container-{s_name}").styles.display = "none"
+                if self.mcp_manager:
+                    await self.mcp_manager.stop_server(s_name)
+                    self.app.notify(f"{s_name}: PAT saved — connecting…", severity="information")
+                    async def _connect_after_pat():
+                        await self.mcp_manager.start_server(s_name)
+                        self._update_mcp_card_state(s_name)
+                    self.run_worker(_connect_after_pat(), group="settings")
                 else:
-                    self.app.notify("Failed to save token.", severity="error")
+                    self.app.notify(f"{s_name}: PAT saved.", severity="information")
             except Exception as e:
                 self.app.notify(f"Error: {e}", severity="error")
 
@@ -1748,16 +1734,9 @@ SettingsScreen {
         try:
             url = self.query_one("#setting-ollama-url", Input).value.strip()
             if url:
-                providers = config.get_root("providers", [])
-                updated = False
-                for p in providers:
-                    if p.get("name") == "ollama":
-                        p["base_url"] = url
-                        updated = True
-                        break
-                if not updated:
-                    providers.append({"name": "ollama", "type": "ollama", "base_url": url})
-                config.set_root("providers", providers)
+                config.set_ollama_base_url(url)
+        except ValueError as e:
+            self.app.notify(f"Ollama Base URL not saved: {e}", severity="error")
         except Exception:
             pass
 

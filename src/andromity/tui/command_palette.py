@@ -19,7 +19,7 @@ class PaletteOptionList(OptionList):
 COMMAND_DESCRIPTIONS = {
     "/help":     "Show all commands & shortcuts",
     "/model":    "Switch provider & model (Ctrl+L)",
-    "/profile":  "Switch profile — builder / reviewer / planner (Ctrl+J)",
+    "/profile":  "Switch profile — builder / reviewer / planner (Ctrl+U)",
     "/reason":   "Set model-specific effort; auto uses the provider default",
     "/mode":     "Set permission mode — safe / trust / full / yolo",
     "/undo":     "Undo last prompt & revert all file changes",

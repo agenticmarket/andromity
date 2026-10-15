@@ -1,7 +1,7 @@
 """The status bar above the input box is clickable:
 
 - provider/model segment  -> opens the model picker (like Ctrl+L)
-- profile segment         -> opens the profile picker (like Ctrl+J)
+- profile segment         -> opens the profile picker (like Ctrl+U)
 - permission-mode segment -> cycles safe -> trust -> full
 """
 import asyncio

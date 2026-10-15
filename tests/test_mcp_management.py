@@ -216,6 +216,28 @@ async def test_remote_manager_preserves_headers_and_allows_public_servers(tmp_pa
     assert manager.server_status["public"]["status"] == "running"
 
 
+async def test_mcp_remote_command_keeps_its_header_arguments(tmp_path, monkeypatch):
+    config.set_trusted(str(tmp_path))
+    monkeypatch.setattr(oauth, "ensure_fresh_token", AsyncMock(return_value=None))
+    seen = []
+    class Remote:
+        def __init__(self, **kwargs):
+            seen.append(kwargs)
+            self.tools = []
+            self.transport = kwargs["transport"]
+        async def start(self):
+            return True
+    monkeypatch.setattr("andromity.core.mcp.MCPSseSession", Remote)
+    manager = MCPClientManager(str(tmp_path))
+    await manager.start_server("legacy", {
+        "command": "npx",
+        "args": ["-y", "mcp-remote", "https://mcp.example/sse", "--header", "Authorization:Bearer pat-123",
+                 "--header", "X-Team: core"],
+    })
+    assert seen[0]["url"] == "https://mcp.example/sse"
+    assert seen[0]["headers"] == {"Authorization": "Bearer pat-123", "X-Team": "core"}
+
+
 async def test_remote_manager_blocks_untrusted_before_auth(tmp_path, monkeypatch):
     token = AsyncMock()
     monkeypatch.setattr(oauth, "ensure_fresh_token", token)

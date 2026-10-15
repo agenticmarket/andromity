@@ -670,19 +670,25 @@ class MCPClientManager:
 
         # Check if this is an explicit remote server OR a legacy mcp-remote proxy command
         is_legacy_sse = "mcp-remote" in args or "mcp-remote" in command
+        legacy_headers: Dict[str, str] = {}
         if is_legacy_sse:
             # Extract URL from args (e.g. ['-y', 'mcp-remote', 'https://mcp.neon.tech/sse'])
             for arg in args:
                 if arg.startswith("http://") or arg.startswith("https://"):
                     server_url = arg
                     break
+            # mcp-remote takes headers as `--header "Name:Value"`; connecting directly must keep them.
+            for flag, value in zip(args, args[1:]):
+                if flag == "--header" and isinstance(value, str) and ":" in value:
+                    key, val = value.split(":", 1)
+                    legacy_headers[key.strip()] = val.strip()
             command = "" # Nullify command to force remote mode
 
         # ── Remote HTTP / SSE server ──────────────────────────────────────
         if server_url and not command:
             # Check for cached OAuth token
             token = await ensure_fresh_token(name, server_url=server_url)
-            headers = dict(srv_conf.get("headers", {}))
+            headers = {**legacy_headers, **dict(srv_conf.get("headers", {}))}
             if token:
                 headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
                 headers["Authorization"] = f"Bearer {token}"

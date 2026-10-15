@@ -12,7 +12,7 @@ from andromity.tui.command_palette import COMMAND_DESCRIPTIONS
 
 SHORTCUTS = [
     ("Ctrl+L", "Switch model / provider"),
-    ("Ctrl+J", "Switch profile"),
+    ("Ctrl+U", "Switch profile"),
     ("Ctrl+O", "Browse sessions"),
     ("Ctrl+B", "Toggle file tree"),
     ("Ctrl+R", "Toggle context panel"),

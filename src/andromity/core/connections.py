@@ -31,6 +31,14 @@ def normalize_base_url(base_url: str, adapter: str) -> str:
     return base_url
 
 
+def validate_base_url(base_url: str, adapter: str) -> str:
+    base_url = base_url.strip().rstrip("/")
+    parsed = urlsplit(base_url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.fragment or parsed.query:
+        raise ValueError("Enter an HTTP or HTTPS base URL without embedded credentials, query parameters, or fragments.")
+    return normalize_base_url(base_url, adapter)
+
+
 def validate_connection(values: dict[str, Any]) -> dict[str, str]:
     connection_id = str(values.get("id") or values.get("name") or "").strip().lower()
     if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", connection_id):
@@ -40,10 +48,7 @@ def validate_connection(values: dict[str, Any]) -> dict[str, str]:
         raise ValueError("Enter a LiteLLM provider type, such as openai, anthropic, or azure.")
     base_url = str(values.get("base_url") or "").strip().rstrip("/")
     if base_url:
-        parsed = urlsplit(base_url)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.fragment or parsed.query:
-            raise ValueError("Enter an HTTP or HTTPS base URL without embedded credentials, query parameters, or fragments.")
-        base_url = normalize_base_url(base_url, adapter)
+        base_url = validate_base_url(base_url, adapter)
     if connection_id not in PRESETS and adapter == "openai" and not base_url:
         raise ValueError("An OpenAI-compatible connection requires a base URL.")
     model = str(values.get("model") or "").strip()

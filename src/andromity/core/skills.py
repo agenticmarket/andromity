@@ -240,14 +240,14 @@ class SkillsManager:
 
     # ── Installed skills ───────────────────────────────────────────────────
 
-    def installed(self) -> List[SkillInfo]:
+    def installed(self, include_project: bool = True) -> List[SkillInfo]:
         found: Dict[str, SkillInfo] = {}
         roots = [
             ("project", self._project_path / ".agents" / "skills"),
             ("project", self._project_path / ".andromity" / "skills"),
             ("project", self._project_path / "skills"),
-            ("user", self._user_dir),
-        ]
+        ] if include_project else []
+        roots.append(("user", self._user_dir))
         # Add IDE-specific paths if active config dir is ~/.gemini or ~/.andromity (not a test temp dir)
         if not self._user_dir_override and not any(part.startswith("pytest-") or "temp" in part.lower() or "tmp" in part.lower() for part in self._user_dir.parts):
             gemini_skills = Path.home() / ".gemini" / "config" / "skills"
@@ -289,7 +289,9 @@ class SkillsManager:
 
     def prompt_block(self) -> str:
         """Markdown section appended to the agent's system prompt."""
-        skills = self.installed()
+        # An untrusted repository's skill descriptions must not reach the prompt before trust is granted.
+        from andromity.config import config
+        skills = self.installed(include_project=config.is_trusted(str(self._project_path)))
         if not skills:
             return ""
         

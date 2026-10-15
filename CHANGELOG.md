@@ -2,6 +2,44 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
+## [0.2.19] — 2026-10-15
+
+### Fixed
+- A background command (`shell_bg`) that exits within its first two seconds is no longer reported to the agent as running. The tool result now includes the exit code and output, with a reminder of the active shell's syntax. On Windows that shell is PowerShell, so a bash loop such as `for i in $(seq 1 180); do …; done` exits at once with a parse error. Previously the agent was told the process had started and kept saying it was running. The agent is no longer woken a second time for an exit it already saw.
+- Background processes are registered before their output reader starts, so a process that ends instantly is no longer missed.
+- Background process notices are no longer lost:
+  - **During a turn:** if a process ends or you stop it while the agent is working, the notice is added to the running turn. Before, it was dropped.
+  - **Several at once:** when several processes end within a moment (for example, you stop them all), the agent gets one message listing every one. Before, only the first reached it.
+  - **Settings:** these turns use the session's own mode capped at TRUST, plus its profile and model, as before.
+- Compacting by hand no longer stores a rough estimate as if the provider had reported it. As with automatic compaction, the size is unknown until the next request. Both kinds of compaction now send an estimate of the compacted context, flagged with `context_estimated`; it covers the system prompt, tool definitions and messages.
+- A `config.toml` with a syntax error could lose your API keys. Andromity started with defaults, and the next setting it saved overwrote the file. It now keeps a copy as `config.toml.unreadable-<time>` before anything can be saved, says where in its warning, and reports it through the new `config.status` RPC. The warning goes to stderr instead of stdout.
+- MCP:
+  - **TRUST mode** checked the whole tool name, server included, for words like `post` or `exec`, so every tool of a server named `postgres` asked for approval. Only the tool's own name counts now.
+  - **TUI "Use PAT"** rewrote the server into an `npx mcp-remote … --header` command whose header was never sent, so the token didn't work. The token is now stored like an OAuth or VS Code token and sent on connect.
+  - **`mcp-remote` configs** keep their `--header "Name:Value"` arguments when Andromity connects to the URL directly.
+- The **Max Parallel Subagents** setting wrote `[subagents] max_parallel`, which nothing read. `config.get` now reports `[subagents] max_concurrent`, the limit the subagent orchestrator uses (default 5).
+- TUI text that didn't match the app:
+  - **Trust prompt:** it said reading files is always allowed in an untrusted folder; reading is blocked until you trust it. Its dismiss button now reads **Not now** instead of **Read-only**.
+  - **Error hints:** they pointed to `Ctrl+M`, `Ctrl+P -> Settings` and an `andromity auth login` command that doesn't exist. They now say `Ctrl+L` to switch model, `Ctrl+E` for Settings, and signing in from the VS Code extension.
+  - **Help and command palette:** they listed `Ctrl+J` for switching profile; the key is `Ctrl+U`.
+
+### Security
+- Skills that come with a project (`.agents/skills/`, `.andromity/skills/`, `skills/`) are left out of the system prompt until the folder is trusted. Before, an untrusted repository's skill names and descriptions reached the model even though the agent could not open them. Settings still lists them.
+
+### Added
+- `session.context` RPC: an estimate of what fills a session's context window, by category. The categories are the system prompt, tool definitions, MCP and deferred tools, skills, the compacted summary, your messages, replies, tool calls and tool results. It also returns the provider-reported size of the last request, the model's window and the auto-compact threshold. The VS Code context popover uses it.
+- Anonymous feature-usage events for automatic compaction (`compact_auto`) and TUI slash commands (`tui_<command>`).
+- `config.status` RPC: the path of `config.toml`, and the parse error and kept copy if it couldn't be read.
+- `config.set_ollama_host` RPC: sets the Ollama address, with the same URL checks as custom providers. The TUI's Ollama Base URL field uses the same checks and now reports an invalid URL instead of ignoring it.
+
+### Changed
+- The `shell_exec` tool description now points long-running commands to `shell_bg` instead of suggesting `&` or `Start-Process`.
+- The auto-compaction threshold (80% of the context window) is a named constant shared with the context breakdown.
+- The telemetry notice in `telemetry.py` lists feature-usage events: feature names only, with the anonymous install ID and session ID.
+
+### Telemetry Dashboard
+- A new **Feature Usage** page lists every tracked feature grouped by area, including ones nobody has used. Each feature shows users, uses and adoption, with search and used/unused filters. The overview's feature list is no longer cut at 25 entries, and its stale labels are fixed. These dashboard changes deploy independently of the core release.
+
 ## [0.2.18] — 2026-10-09
 
 ### Fixed

@@ -647,7 +647,7 @@ def classify_error_info(
         )
         actions_tui = [
             "Retry prompt without image attachments",
-            "Press Ctrl+M to switch to a vision model (e.g. Claude 3.7 Sonnet, GPT-4o)",
+            "Press Ctrl+L to switch to a vision model (e.g. Claude 3.7 Sonnet, GPT-4o)",
         ]
     elif is_upstream:
         err_type = "provider_unavailable"
@@ -669,7 +669,7 @@ def classify_error_info(
         )
         actions_tui = [
             "Type /retry to re-send this turn",
-            "Press Ctrl+M to switch to another provider or model",
+            "Press Ctrl+L to switch to another provider or model",
         ]
     elif is_rate:
         is_daily_quota = (
@@ -713,8 +713,8 @@ def classify_error_info(
                     f'{icon_model}Switch Model</button>'
                 )
                 actions_tui = [
-                    "Press Ctrl+P -> Settings to configure BYOK for unlimited usage",
-                    "Press Ctrl+M to switch model",
+                    "Press Ctrl+E to open Settings and add a BYOK key for unlimited usage",
+                    "Press Ctrl+L to switch model",
                 ]
             else:
                 desc_text = (
@@ -734,8 +734,8 @@ def classify_error_info(
                     f'{icon_model}Switch Model</button>'
                 )
                 actions_tui = [
-                    "Run 'andromity auth login' or sign in via Hub",
-                    "Press Ctrl+P -> Settings to configure BYOK for unlimited usage",
+                    "Sign in with AgenticMarket from the Andromity VS Code extension",
+                    "Press Ctrl+E to open Settings and add a BYOK key for unlimited usage",
                 ]
         else:
             err_type = "rate_limit"
@@ -761,7 +761,7 @@ def classify_error_info(
             )
             actions_tui = [
                 "Wait a moment and type /retry",
-                "Press Ctrl+M to switch model",
+                "Press Ctrl+L to switch model",
             ]
     elif is_context:
         err_type = "context_exceeded"
@@ -802,7 +802,7 @@ def classify_error_info(
             f'{icon_settings}Open Settings</button>'
         )
         actions_tui = [
-            f"Press Ctrl+P -> Settings to configure key for {disp_prov}",
+            f"Press Ctrl+E to open Settings and add a key for {disp_prov}",
         ]
     elif is_ollama_off:
         err_type = "ollama_offline"
@@ -843,7 +843,7 @@ def classify_error_info(
         )
         actions_tui = [
             "Type /retry to re-send this turn",
-            "Press Ctrl+M to switch to another model",
+            "Press Ctrl+L to switch to another model",
         ]
     elif is_not_found:
         err_type = "model_not_found"
@@ -863,7 +863,7 @@ def classify_error_info(
             f'{icon_retry}Retry Turn</button>'
         )
         actions_tui = [
-            "Press Ctrl+M to switch to another model",
+            "Press Ctrl+L to switch to another model",
             "Type /retry to re-send this turn",
         ]
     else:
@@ -887,7 +887,7 @@ def classify_error_info(
             f'{icon_model}Switch Model</button>'
         )
         actions_tui = [
-            "Press Ctrl+M to switch to another model",
+            "Press Ctrl+L to switch to another model",
         ]
 
     clean_msg_raw = re.sub(r'\bof \d+ (?:requests|turns)\b', '', msg)
