@@ -164,6 +164,21 @@ export interface IntegrationResult {
   status?: string;
 }
 
+export interface ConnectorInfo {
+  id: string;
+  name: string;
+  category: string;
+  url: string;
+  description: string;
+  needs_client: boolean;
+  setup_url: string;
+  connected: boolean;
+}
+
+export interface ConnectorConnectResult extends IntegrationResult {
+  message?: string;
+}
+
 export interface McpServerConfig {
   command?: string;
   args?: string[];

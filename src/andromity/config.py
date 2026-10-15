@@ -496,9 +496,15 @@ class ConfigManager:
 
         Merges into any existing mcpServers so other servers are preserved.
         Returns True on success."""
+        return self._write_mcp_server(Path(project_path) / ".andromity" / "mcp.json", server_name, conf)
+
+    def add_user_mcp_server(self, server_name: str, conf: dict) -> bool:
+        """Add or replace an MCP server entry in the user-level ~/.andromity/mcp.json."""
+        return self._write_mcp_server(Path.home() / ".andromity" / "mcp.json", server_name, conf)
+
+    def _write_mcp_server(self, path: Path, server_name: str, conf: dict) -> bool:
         try:
             import json
-            path = Path(project_path) / ".andromity" / "mcp.json"
             path.parent.mkdir(parents=True, exist_ok=True)
             data = {}
             if path.exists():

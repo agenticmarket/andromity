@@ -222,10 +222,11 @@ async def discover_metadata(server_url: str) -> Optional[dict]:
                 if r.status_code == 200:
                     document = r.json()
                     advertised = document.get("resource")
-                    if advertised != resource:
+                    if not isinstance(advertised, str) or advertised.rstrip("/") != resource.rstrip("/"):
                         continue
                     issuers = document.get("authorization_servers", [])
                     if issuers:
+                        resource = advertised
                         resource_scopes = document.get("scopes_supported")
                         break
             except (httpx.HTTPError, ValueError, AttributeError):
@@ -249,7 +250,7 @@ async def discover_metadata(server_url: str) -> Optional[dict]:
                     if r.status_code != 200:
                         continue
                     meta = r.json()
-                    if meta.get("issuer") != issuer:
+                    if str(meta.get("issuer", "")).rstrip("/") != issuer.rstrip("/"):
                         continue
                     if meta.get("authorization_endpoint") and meta.get("token_endpoint"):
                         meta["resource"] = resource
@@ -614,6 +615,7 @@ async def full_oauth_flow(
     on_status: Callable[[str], None],
     client_id: Optional[str] = None,
     client_secret: Optional[str] = None,
+    authorization_params: Optional[dict] = None,
 ) -> Optional[str]:
     """
     Complete OAuth 2.1 + PKCE + DCR flow.
@@ -688,6 +690,9 @@ async def full_oauth_flow(
     }
     if scope_str:
         auth_params["scope"] = scope_str
+    for key, value in (authorization_params or {}).items():
+        if isinstance(key, str) and isinstance(value, str):
+            auth_params.setdefault(key, value)
     auth_url = auth_ep + ("&" if "?" in auth_ep else "?") + urllib.parse.urlencode(auth_params)
 
     on_status(f"🌐 Opening browser… (waiting up to {CALLBACK_TIMEOUT_S}s)")

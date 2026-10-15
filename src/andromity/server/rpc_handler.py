@@ -3488,8 +3488,6 @@ Your output must be:
             if not server_url:
                 return {"success": False, "error": f"No serverUrl found in config for '{name}'"}
 
-            from andromity.core.oauth import full_oauth_flow
-
             progress = []
             def _status_cb(msg: str):
                 progress.append(msg)
@@ -3502,9 +3500,8 @@ Your output must be:
                     return {"success": False, "error": "Enter a valid access token."}
                 store_token(name, {"access_token": token.strip()}, "", "")
             else:
-                token = await full_oauth_flow(name, server_url, _status_cb,
-                                              client_id=cfg.get("oauth", {}).get("client_id"),
-                                              client_secret=cfg.get("oauth", {}).get("client_secret"))
+                from andromity.core.connectors import authenticate
+                token = await authenticate(name, {**cfg, "serverUrl": server_url}, _status_cb)
             if not token:
                 return {"success": False, "error": progress[-1] if progress else "Authentication failed. Please retry."}
 
@@ -3521,6 +3518,37 @@ Your output must be:
     async def rpc_mcp_auth(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Alias for mcp.authenticate."""
         return await self.rpc_mcp_authenticate(params)
+
+    async def rpc_connectors_list(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        from andromity.core.connectors import list_connectors
+        project_path = (params or {}).get("project_path") or str(Path.cwd().resolve())
+        return list_connectors(project_path)
+
+    async def rpc_connectors_connect(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Sign in to a catalog connector and start it as a user-level MCP server."""
+        params = params or {}
+        project_path = params.get("project_path") or str(Path.cwd().resolve())
+        if not config.is_trusted(project_path):
+            return {"success": False, "error": "Trust this workspace before connecting apps."}
+        connector_id = params.get("id")
+        client_id, client_secret = params.get("client_id", ""), params.get("client_secret", "")
+        if not isinstance(connector_id, str) or not isinstance(client_id, str) or not isinstance(client_secret, str):
+            return {"success": False, "error": "Select a connector to connect."}
+        from andromity.core.connectors import connect
+        try:
+            ok, message = await connect(connector_id, project_path,
+                                        lambda msg: self.notify("mcp/authProgress", {"name": connector_id, "status": msg}),
+                                        client_id, client_secret)
+        except Exception as e:
+            log.warning("connectors.connect error: %s", e)
+            return {"success": False, "error": "Could not connect. Check your network and retry."}
+        if not ok:
+            return {"success": False, "error": message}
+        mgr = await self._ensure_mcp_started(project_path)
+        await mgr.start_server(connector_id)
+        status = dict(mgr.server_status.get(connector_id, {}))
+        self.notify("mcp/statusChanged", {"name": connector_id, "status": status})
+        return {"success": True, "name": connector_id, "message": message, "status": status.get("status", "unknown")}
 
     # ── Session Bus & Shared State ──────────────────────────────────────────────
 

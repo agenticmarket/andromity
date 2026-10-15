@@ -233,6 +233,10 @@ SettingsScreen {
 .mcp-warning { color: $warning; height: 1; }
 /* ── Add Server form ── */
 .mcp-add-collapsible { height: auto; margin-bottom: 1; }
+.conn-row    { height: 3; }
+.conn-name   { width: 1fr; content-align: left middle; height: 3; }
+.conn-btn    { width: 12; }
+.conn-status { height: auto; color: $text-muted; }
 .mcp-add-note { color: $text-muted; margin-bottom: 1; }
 .mcp-add-fld-remote { display: none; }
 .mcp-tools-head { color: $text-muted; height: 1; margin-top: 1; text-style: bold; }
@@ -631,6 +635,7 @@ SettingsScreen {
         """All widgets for the MCP pane. Used both by compose() and rebuilds
         after add/remove so the whole pane stays consistent."""
         yield Label("Model Context Protocol (MCP)", classes="settings-label")
+        yield from self._compose_connectors_section()
         yield from self._compose_add_server_section()
         servers = self._mcp_servers
         if not servers:
@@ -649,6 +654,71 @@ SettingsScreen {
         yield Label(
             f"\nConfig: [dim]{mcp_path}[/]",
             classes="section-hint")
+
+    def _compose_connectors_section(self):
+        """One-click catalog of official remote servers that sign in with OAuth."""
+        from andromity.core.connectors import CATALOG
+        with Collapsible(title="+ Connect an app", id="mcp-connectors",
+                         classes="mcp-add-collapsible"):
+            with Vertical():
+                yield Label(
+                    "Sign in once in your browser. Saved to ~/.andromity/mcp.json "
+                    "and available in every trusted project.",
+                    classes="mcp-add-note")
+                category = ""
+                for c in CATALOG:
+                    if c.category != category:
+                        category = c.category
+                        yield Label(category, classes="mcp-tools-head")
+                    connected = c.id in self._mcp_servers
+                    with Horizontal(classes="conn-row"):
+                        yield Label(f"[b]{c.name}[/]  [dim]{c.description}[/]", classes="conn-name")
+                        yield Button("✓ Added" if connected else "Connect", id=f"conn-connect-{c.id}",
+                                     disabled=connected, classes="conn-btn")
+                    if c.needs_client and not connected:
+                        yield Label(f"[dim]Needs your own Google OAuth client (Desktop app): {c.setup_url}[/]",
+                                    classes="mcp-token-hint")
+                        with Horizontal(classes="mcp-token-row"):
+                            yield Input(placeholder="Client ID", id=f"conn-cid-{c.id}")
+                            yield Input(placeholder="Client secret", id=f"conn-secret-{c.id}", password=True)
+                    yield Label("", id=f"conn-status-{c.id}", classes="conn-status")
+
+    async def _connect_connector(self, connector_id: str):
+        from andromity.core.connectors import connect, get_connector
+        connector = get_connector(connector_id)
+        if connector is None:
+            return
+        client_id = client_secret = ""
+        if connector.needs_client:
+            try:
+                client_id = self.query_one(f"#conn-cid-{connector_id}", Input).value
+                client_secret = self.query_one(f"#conn-secret-{connector_id}", Input).value
+            except Exception:
+                pass
+
+        def _set_status(msg: str):
+            try:
+                self.query_one(f"#conn-status-{connector_id}", Label).update(f"[dim]{msg}[/]")
+            except Exception:
+                pass
+
+        btn = self.query_one(f"#conn-connect-{connector_id}", Button)
+        btn.disabled = True
+        ok, message = await connect(connector_id, self.project_path, _set_status, client_id, client_secret)
+        if not ok:
+            btn.disabled = False
+            _set_status(message)
+            self.app.notify(message, severity="warning")
+            return
+        self.app.notify(f"✓ {message}", severity="information")
+        if self.mcp_manager:
+            self._mcp_servers = self.mcp_manager.load_config().get("mcpServers", {})
+            await self.mcp_manager.start_server(connector_id)
+        self._schedule_pane_rebuild()
+        try:
+            self.app._update_status()
+        except Exception:
+            pass
 
     def _compose_add_server_section(self):
         """Inline 'Add Server' form — name, transport, and fields per type."""
@@ -1390,6 +1460,10 @@ SettingsScreen {
             provider = btn_id[len("connection-edit-"):] if btn_id.startswith("connection-edit-") else ""
             self.app.push_screen(ProviderConnectionScreen(provider), self._refresh_connections)
             return
+        if btn_id.startswith("conn-connect-"):
+            self.run_worker(self._connect_connector(btn_id[len("conn-connect-"):]),
+                            exclusive=False, group="settings")
+            return
         if btn_id.startswith("connection-remove-"):
             try:
                 config.delete_provider(btn_id[len("connection-remove-"):])
@@ -1598,11 +1672,9 @@ SettingsScreen {
                     pass
 
             async def _do_oauth():
-                from andromity.core.oauth import full_oauth_flow
+                from andromity.core.connectors import authenticate
                 _set_status("🔍 Discovering endpoints…")
-                token = await full_oauth_flow(s_name, server_url, _set_status,
-                                              client_id=srv_conf.get("oauth", {}).get("client_id"),
-                                              client_secret=srv_conf.get("oauth", {}).get("client_secret"))
+                token = await authenticate(s_name, {**srv_conf, "serverUrl": server_url}, _set_status)
 
                 if not token:
                     # If OAuth fails (e.g., no metadata for Supabase), show PAT field automatically

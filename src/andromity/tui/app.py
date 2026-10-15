@@ -2025,7 +2025,8 @@ Your output must be:
             if not servers:
                 chat.add_system_message(
                     "[yellow]No MCP servers configured.[/]\n"
-                    f"Add servers to [bold].andromity/mcp.json[/] in your project.\n\n"
+                    "Connect apps like Notion, Linear, or Gmail in [bold]/settings → MCP → Connect an app[/].\n"
+                    f"Or add servers to [bold].andromity/mcp.json[/] in your project.\n\n"
                     "[dim]Format:\n"
                     '{  "mcpServers": {\n'
                     '    "my-server": {\n'

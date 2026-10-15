@@ -7,6 +7,8 @@ const originalRequire = Module.prototype.require;
 let inputs: Array<string | undefined> = [];
 let picks: Array<string | undefined> = [];
 let confirmation: string | undefined = "Remove";
+let infoPick: string | undefined;
+const opened: string[] = [];
 const mockVscode = {
   workspace: { isTrusted: true, workspaceFolders: [{ uri: { fsPath: "D:/test/workspace" } }] },
   window: {
@@ -14,9 +16,10 @@ const mockVscode = {
     showQuickPick: async () => picks.shift(),
     showWarningMessage: async () => confirmation,
     showErrorMessage: () => {},
-    showInformationMessage: () => {},
+    showInformationMessage: async () => infoPick,
   },
-  Uri: { joinPath: () => ({ fsPath: "icon.svg" }) },
+  env: { openExternal: async (uri: { toString(): string }) => { opened.push(uri.toString()); return true; } },
+  Uri: { joinPath: () => ({ fsPath: "icon.svg" }), parse: (value: string) => ({ toString: () => value }) },
 };
 Module.prototype.require = function (name: string) {
   return name === "vscode" ? mockVscode : originalRequire.apply(this, arguments);
@@ -32,13 +35,34 @@ function panelHarness() {
   const panel = Object.create(SettingsPanel.prototype);
   panel._rpcClient = { call: async (method: string, params: Record<string, unknown>) => {
     calls.push({ method, params });
-    return method === "mcp.list" ? [] : { success: true };
+    if (method === "mcp.list") return [];
+    if (method === "connectors.list") return [{ ...NOTION, connected: true }, GMAIL];
+    return { success: true, status: "running" };
   } };
   panel._panel = { webview: { cspSource: "vscode-webview:", asWebviewUri: () => "icon.svg", postMessage: (post: unknown) => posts.push(post) } };
   panel._extensionUri = { fsPath: "D:/extension" };
   panel.loadData = async () => { refreshes++; };
   panel._onConfigChangeCallback = () => { changes++; };
   return { panel, calls, posts, refreshes: () => refreshes, changes: () => changes };
+}
+
+const NOTION = { id: "notion", name: "Notion", category: "Productivity", url: "https://mcp.notion.com/mcp",
+  description: "Search and edit pages.", needs_client: false, setup_url: "", connected: false };
+const GMAIL = { id: "gmail", name: "Gmail", category: "Google", url: "https://gmailmcp.googleapis.com/mcp/v1",
+  description: "Read email.", needs_client: true, setup_url: "https://console.cloud.google.com/apis/credentials", connected: false };
+
+function renderConnectorTiles(connectors: unknown[]): string {
+  const html: string = panelHarness().panel._getHtmlForWebview();
+  const start = html.indexOf("    function renderConnectors() {");
+  const end = html.indexOf("    function renderMcp() {", start);
+  assert.ok(start >= 0 && end > start);
+  const list = { innerHTML: "" };
+  const escapeHtml = (value: unknown) => String(value).replace(/[&<>"']/g, character =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
+  vm.runInNewContext(html.slice(start, end) + "\nrenderConnectors();", {
+    allConnectors: connectors, escapeHtml, document: { getElementById: () => list },
+  });
+  return list.innerHTML;
 }
 
 function renderMcpCards(servers: unknown[]): string {
@@ -56,7 +80,58 @@ function renderMcpCards(servers: unknown[]): string {
 }
 
 describe("Settings integration management", () => {
-  beforeEach(() => { inputs = []; picks = []; confirmation = "Remove"; mockVscode.workspace.isTrusted = true; });
+  beforeEach(() => {
+    inputs = []; picks = []; confirmation = "Remove"; infoPick = undefined; opened.length = 0;
+    mockVscode.workspace.isTrusted = true;
+    SettingsPanel._cachedState = { connectors: [NOTION, GMAIL] };
+  });
+
+  it("connects a catalog app in one step and refreshes servers and connectors", async () => {
+    const h = panelHarness();
+    await h.panel._handleMessage({ type: "connector_connect", id: "notion" });
+    assert.deepEqual(h.calls[0], { method: "connectors.connect",
+      params: { id: "notion", project_path: "D:/test/workspace", client_id: "", client_secret: "" } });
+    assert.deepEqual(h.calls.slice(1).map(c => c.method).sort(), ["connectors.list", "mcp.list"]);
+    assert.equal(h.changes(), 1);
+    const refreshed = h.posts.find((p: any) => p.type === "connectors_refreshed") as any;
+    assert.equal(refreshed.connectors[0].connected, true);
+    assert.equal(SettingsPanel._cachedState.connectors[0].connected, true);
+  });
+
+  it("collects the Google OAuth client in the host before signing in", async () => {
+    const h = panelHarness();
+    infoPick = "Enter client";
+    inputs = [" client-id ", "client-secret"];
+    await h.panel._handleMessage({ type: "connector_connect", id: "gmail" });
+    assert.equal(h.calls[0].method, "connectors.connect");
+    assert.equal(h.calls[0].params.client_id, " client-id ");
+    assert.equal(h.calls[0].params.client_secret, "client-secret");
+  });
+
+  it("opens Google Cloud or stops without connecting when the client step is not finished", async () => {
+    const h = panelHarness();
+    infoPick = "Open Google Cloud";
+    await h.panel._handleMessage({ type: "connector_connect", id: "gmail" });
+    assert.deepEqual(opened, [GMAIL.setup_url]);
+    infoPick = "Enter client";
+    inputs = ["client-id", undefined];
+    await h.panel._handleMessage({ type: "connector_connect", id: "gmail" });
+    mockVscode.workspace.isTrusted = false;
+    await h.panel._handleMessage({ type: "connector_connect", id: "notion" });
+    await h.panel._handleMessage({ type: "connector_connect", id: "unknown" });
+    assert.ok(!h.calls.some(c => c.method === "connectors.connect"));
+    assert.ok(h.posts.every((p: any) => p.type !== "connectors_refreshed" || Array.isArray(p.connectors)));
+  });
+
+  it("renders connectors by category with escaped text and connected badges", () => {
+    const html = renderConnectorTiles([{ ...NOTION, name: "<b>Notion</b>" }, { ...GMAIL, connected: true }]);
+    assert.ok(html.indexOf("Productivity") < html.indexOf("Google"));
+    assert.ok(html.includes("&lt;b&gt;Notion&lt;/b&gt;"));
+    assert.ok(html.includes('data-action="connector_connect" data-id="notion"'));
+    assert.ok(!html.includes('data-id="gmail"'));
+    assert.ok(html.includes("Connected"));
+    assert.ok(renderConnectorTiles([]).includes("updated Andromity server"));
+  });
 
   it("adds a remote HTTP server to the current workspace once", async () => {
     const h = panelHarness();

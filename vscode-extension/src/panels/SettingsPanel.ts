@@ -7,7 +7,7 @@ import {
   resolveWebviewConfigWrite,
 } from "../server/securityPolicy.js";
 import { RpcClient } from "../server/RpcClient.js";
-import { ModelInfo, ProviderInfo, IntegrationResult, McpServerConfig } from "../server/types.js";
+import { ModelInfo, ProviderInfo, IntegrationResult, McpServerConfig, ConnectorInfo, ConnectorConnectResult } from "../server/types.js";
 import { join } from "path";
 import { existsSync, readFileSync } from "fs";
 import { homedir } from "os";
@@ -28,6 +28,7 @@ const HUB_FEATURES: Record<string, string> = {
   mcp_add: "mcp_added", mcp_remove: "mcp_removed", mcp_restart: "mcp_restarted",
   mcp_toggle: "mcp_toggled", mcp_enable: "mcp_toggled", mcp_disable: "mcp_toggled",
   mcp_auth: "mcp_auth_started", mcp_authenticate: "mcp_auth_started",
+  connector_connect: "connector_connected",
 };
 // Browsing actions people repeat; counted once per session.
 const HUB_ONCE = new Set(["skill_viewed", "cron_history_viewed"]);
@@ -86,7 +87,7 @@ export class SettingsPanel {
           };
         }
 
-        const [configData, models, providers, skills, mcpServers, usage, systemInfo, trustData, crons] = await Promise.all([
+        const [configData, models, providers, skills, mcpServers, usage, systemInfo, trustData, crons, connectors] = await Promise.all([
           rpcClient.call<any>("config.get", { project_path: workspaceFolder }, 8000).catch(() => ({})),
           rpcClient.call<ModelInfo[]>("config.list_models", {}, 8000).catch(() => []),
           rpcClient.call<ProviderInfo[]>("config.list_providers", {}, 8000).catch(() => []),
@@ -98,6 +99,7 @@ export class SettingsPanel {
           rpcClient.call<any>("system.info", {}, 8000).catch(() => ({})),
           rpcClient.call<any>("trust.status", { project_path: workspaceFolder }, 8000).catch(() => ({ is_trusted: false, trusted_projects: [] })),
           rpcClient.call<any[]>("cron.list", { project_path: workspaceFolder }, 8000).catch(() => []),
+          rpcClient.call<ConnectorInfo[]>("connectors.list", { project_path: workspaceFolder }, 8000).catch(() => []),
         ]);
 
         const vscodeConfig = vscode.workspace.getConfiguration("andromity");
@@ -113,6 +115,7 @@ export class SettingsPanel {
           skills: skills || [],
           remoteSkills: SettingsPanel._cachedState?.remoteSkills || [],
           mcpServers: mcpServers || [],
+          connectors: connectors || [],
           usage: usage || {},
           systemInfo: systemInfo || {},
           trustData: trustData || { is_trusted: false, trusted_projects: [] },
@@ -314,9 +317,10 @@ export class SettingsPanel {
           this._rpcClient!.call<any[]>("mcp.list", { project_path: workspaceFolder }, 10000).catch(() => []),
           this._rpcClient!.call<any>("usage.get", { project_path: null, time_range: "all" }, 10000).catch(() => ({})),
           this._rpcClient!.call<any[]>("cron.list", { project_path: workspaceFolder }, 10000).catch(() => []),
+          this._rpcClient!.call<ConnectorInfo[]>("connectors.list", { project_path: workspaceFolder }, 10000).catch(() => []),
         ]);
 
-        const [fastRes, [models, skills, mcpServers, usage, crons]] = await Promise.all([fastPromise, heavyPromise]);
+        const [fastRes, [models, skills, mcpServers, usage, crons, connectors]] = await Promise.all([fastPromise, heavyPromise]);
 
         const fullState = {
           type: "state_loaded",
@@ -327,6 +331,7 @@ export class SettingsPanel {
           skills: skills || [],
           remoteSkills: SettingsPanel._cachedState?.remoteSkills || [],
           mcpServers: mcpServers || [],
+          connectors: connectors || [],
           usage: usage || {},
           systemInfo: fastRes.systemInfo || {},
           trustData: fastRes.trustData || { is_trusted: false, trusted_projects: [] },
@@ -1181,6 +1186,57 @@ export class SettingsPanel {
         } catch (e: any) {
           vscode.window.showErrorMessage("Authentication could not finish. Reconnect and try Authenticate again.");
           this._panel.webview.postMessage({ type: "mcp_refresh_failed" });
+        }
+        break;
+      }
+
+      case "connector_connect": {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const connector = (SettingsPanel._cachedState?.connectors as ConnectorInfo[] | undefined)?.find(c => c.id === message.id);
+        try {
+          if (!connector || !workspaceFolder || !requireWorkspaceTrust("connect apps")) break;
+          let client_id = "";
+          let client_secret = "";
+          if (connector.needs_client) {
+            const pick = await vscode.window.showInformationMessage(
+              `${connector.name} needs your own Google OAuth client. Create a "Desktop app" client in Google Cloud, then paste its ID and secret.`,
+              { modal: true }, "Enter client", "Open Google Cloud");
+            if (pick === "Open Google Cloud") {
+              await vscode.env.openExternal(vscode.Uri.parse(connector.setup_url));
+              break;
+            }
+            if (pick !== "Enter client") break;
+            client_id = (await vscode.window.showInputBox({ title: `${connector.name}: OAuth client ID`, ignoreFocusOut: true,
+              validateInput: value => value.trim() ? undefined : "Enter the client ID." })) || "";
+            if (!client_id) break;
+            client_secret = (await vscode.window.showInputBox({ title: `${connector.name}: OAuth client secret`, password: true, ignoreFocusOut: true,
+              validateInput: value => value.trim() ? undefined : "Enter the client secret." })) || "";
+            if (!client_secret) break;
+          }
+          vscode.window.showInformationMessage(`Sign in to ${connector.name} in your browser...`);
+          const res = await this._rpcClient.call<ConnectorConnectResult>("connectors.connect",
+            { id: connector.id, project_path: workspaceFolder, client_id, client_secret }, 240000);
+          if (res?.success) {
+            vscode.window.showInformationMessage(res.status === "running"
+              ? `${connector.name} connected.`
+              : `${connector.name} signed in. Connection status: ${res.status || "unknown"}. Check its card below.`);
+            this._onConfigChangeCallback?.();
+          } else {
+            vscode.window.showWarningMessage(res?.error || `Could not connect ${connector.name}. Retry.`);
+          }
+        } catch {
+          vscode.window.showErrorMessage("Could not connect the app. Reconnect to an updated Andromity server and retry.");
+        } finally {
+          const [mcpServers, connectors] = await Promise.all([
+            this._rpcClient.call<any[]>("mcp.list", { project_path: workspaceFolder }, 10000).catch(() => null),
+            this._rpcClient.call<ConnectorInfo[]>("connectors.list", { project_path: workspaceFolder }, 10000).catch(() => null),
+          ]);
+          if (SettingsPanel._cachedState) {
+            if (mcpServers) SettingsPanel._cachedState.mcpServers = mcpServers;
+            if (connectors) SettingsPanel._cachedState.connectors = connectors;
+          }
+          if (mcpServers) this._panel.webview.postMessage({ type: "mcp_refreshed", mcpServers });
+          this._panel.webview.postMessage({ type: "connectors_refreshed", connectors: connectors || SettingsPanel._cachedState?.connectors || [] });
         }
         break;
       }
@@ -2486,6 +2542,15 @@ export class SettingsPanel {
       line-height: 1.4;
     }
 
+    .connectors-section { margin-bottom: 20px; }
+    .connectors-title { font-size: 13px; font-weight: 600; margin: 0 0 6px; }
+    .connector-category { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin: 12px 0 6px; }
+    .connector-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+    .connector-tile { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--card-border); border-radius: 4px; min-width: 0; }
+    .connector-text { flex: 1; min-width: 0; }
+    .connector-name { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+    .connector-desc { font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
+    .connector-tile .btn { flex-shrink: 0; font-size: 11px; padding: 4px 10px; }
     #mcp-grid {
       grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
     }
@@ -3208,6 +3273,12 @@ export class SettingsPanel {
           </button>
         </div>
       </div>
+      <div class="connectors-section">
+        <h3 class="connectors-title">Connect an app</h3>
+        <p class="section-desc">Sign in once in your browser. Connected apps are saved to ~/.andromity/mcp.json and available in every trusted workspace.</p>
+        <div id="connectors-list"></div>
+      </div>
+      <h3 class="connectors-title">Your MCP servers</h3>
       <div class="cards-grid" id="mcp-grid"></div>
     </div>
 
@@ -3869,6 +3940,7 @@ SOFTWARE.</pre>
     let allSkills = [];
     let allRemoteSkills = [];
     let allMcpServers = [];
+    let allConnectors = [];
     let currentConfig = {};
     let trustInfo = {};
     let currentWorkspacePath = "";
@@ -4348,6 +4420,10 @@ SOFTWARE.</pre>
         btn.disabled = true;
         btn.innerHTML = '<span class="spinning-loader"></span> Authenticating in browser...';
         vscode.postMessage({ type: "mcp_auth", name: btn.dataset.name });
+      } else if (action === "connector_connect") {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinning-loader"></span> Connecting...';
+        vscode.postMessage({ type: "connector_connect", id: btn.dataset.id });
       } else if (action === "mcp_add" || action === "mcp_remove") {
         vscode.postMessage({ type: action, name: btn.dataset.name });
       } else if (action === "remove-skill") {
@@ -4527,6 +4603,7 @@ SOFTWARE.</pre>
           allSkills = msg.skills || [];
           allRemoteSkills = msg.remoteSkills || [];
           allMcpServers = msg.mcpServers || [];
+          allConnectors = msg.connectors || [];
           if (usageRequestId === 0 && !usagePending && currentUsageRange === "all" && currentUsageScope === "global") usageData = msg.usage || {};
           allCrons = msg.crons || [];
 
@@ -4552,6 +4629,7 @@ SOFTWARE.</pre>
           renderProviders();
           renderSkills();
           renderMcp();
+          renderConnectors();
           renderCrons();
           renderTrust();
           renderUsage();
@@ -4639,6 +4717,11 @@ SOFTWARE.</pre>
         }
         case "mcp_refresh_failed": {
           renderMcp();
+          break;
+        }
+        case "connectors_refreshed": {
+          allConnectors = msg.connectors || [];
+          renderConnectors();
           break;
         }
         case "skill_detail_loaded": {
@@ -5634,6 +5717,34 @@ SOFTWARE.</pre>
         (matches.length > page.length
           ? '<div class="skills-footer"><button class="btn btn-secondary" data-action="skills-show-more">Show more (' + (matches.length - page.length) + ' remaining)</button></div>'
           : '');
+    }
+
+    function renderConnectors() {
+      const list = document.getElementById("connectors-list");
+      if (!list) return;
+      if (allConnectors.length === 0) {
+        list.innerHTML = '<div class="section-desc">App connectors need an updated Andromity server. Update Andromity, then refresh.</div>';
+        return;
+      }
+      const groups = [];
+      allConnectors.forEach(c => {
+        let group = groups.find(g => g.category === c.category);
+        if (!group) { group = { category: c.category, items: [] }; groups.push(group); }
+        group.items.push(c);
+      });
+      list.innerHTML = groups.map(g =>
+        '<div class="connector-category">' + escapeHtml(g.category) + '</div>' +
+        '<div class="connector-grid">' + g.items.map(c =>
+          '<div class="connector-tile">' +
+            '<div class="connector-text">' +
+              '<div class="connector-name">' + escapeHtml(c.name) + '</div>' +
+              '<div class="connector-desc">' + escapeHtml(c.description) + (c.needs_client && !c.connected ? ' Needs your own Google OAuth client.' : '') + '</div>' +
+            '</div>' +
+            (c.connected
+              ? '<span class="badge green">Connected</span>'
+              : '<button class="btn" data-action="connector_connect" data-id="' + escapeHtml(c.id) + '">Connect</button>') +
+          '</div>').join('') +
+        '</div>').join('');
     }
 
     function renderMcp() {
