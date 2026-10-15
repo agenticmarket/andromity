@@ -15,6 +15,7 @@ import { getUsageScript } from "./usage/usageScript.js";
 import { decodeUsagePng } from "./usage/usageImage.js";
 import { recordFeatureUse } from "../telemetry/featureUsage.js";
 import { DOCS } from "../docsLinks.js";
+import { CONNECTOR_ICONS } from "./connectorIcons.js";
 
 // Hub actions recorded as anonymous feature use (the action name only, never the values).
 const HUB_FEATURES: Record<string, string> = {
@@ -2542,8 +2543,12 @@ export class SettingsPanel {
       line-height: 1.4;
     }
 
-    .connectors-section { margin-bottom: 20px; }
-    .connectors-title { font-size: 13px; font-weight: 600; margin: 0 0 6px; }
+    .connector-icon { width: 28px; height: 28px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid var(--card-border); }
+    .connector-icon svg { width: 16px; height: 16px; }
+    .connector-icon-letter { background: var(--primary-hover); font-size: 13px; font-weight: 700; }
+    .connector-icon.small { width: 20px; height: 20px; border-radius: 4px; }
+    .connector-icon.small svg { width: 12px; height: 12px; }
+    .connector-icon.small.connector-icon-letter { font-size: 10px; }
     .connector-category { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin: 12px 0 6px; }
     .connector-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
     .connector-tile { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--card-border); border-radius: 4px; min-width: 0; }
@@ -3273,13 +3278,29 @@ export class SettingsPanel {
           </button>
         </div>
       </div>
-      <div class="connectors-section">
-        <h3 class="connectors-title">Connect an app</h3>
-        <p class="section-desc">Sign in once in your browser. Connected apps are saved to ~/.andromity/mcp.json and available in every trusted workspace.</p>
+      <div class="model-controls">
+        <div class="filter-chips">
+          <span class="chip-label">View:</span>
+          <div class="chip active" id="filter-mcp-yours">Yours (<span id="mcp-yours-num">0</span>)</div>
+          <div class="chip" id="filter-mcp-discover">Discover (<span id="mcp-discover-num">0</span>)</div>
+        </div>
+        <div class="search-row" id="connectors-search-row" style="display:none;">
+          <div class="search-input-wrap">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" class="search-input" id="connectors-search" placeholder="Search apps by name or category (e.g. email, issues, payments)...">
+          </div>
+        </div>
+      </div>
+      <div id="mcp-view-yours">
+        <div class="cards-grid" id="mcp-grid"></div>
+      </div>
+      <div id="mcp-view-discover" style="display:none;">
+        <p class="section-desc">Official servers from each app. Sign in once in your browser; connected apps are saved to ~/.andromity/mcp.json and work in every trusted workspace.</p>
         <div id="connectors-list"></div>
       </div>
-      <h3 class="connectors-title">Your MCP servers</h3>
-      <div class="cards-grid" id="mcp-grid"></div>
     </div>
 
     <!-- ── TAB 5: USAGE & COSTS ─────────────────────────────────────── -->
@@ -3941,6 +3962,9 @@ SOFTWARE.</pre>
     let allRemoteSkills = [];
     let allMcpServers = [];
     let allConnectors = [];
+    const CONNECTOR_ICONS = ${JSON.stringify(CONNECTOR_ICONS)};
+    let mcpView = "";
+    let connectorQuery = "";
     let currentConfig = {};
     let trustInfo = {};
     let currentWorkspacePath = "";
@@ -4125,6 +4149,13 @@ SOFTWARE.</pre>
     });
 
     // Skills Sub-tabs
+    document.getElementById("filter-mcp-yours")?.addEventListener("click", () => setMcpView("yours"));
+    document.getElementById("filter-mcp-discover")?.addEventListener("click", () => setMcpView("discover"));
+    document.getElementById("connectors-search")?.addEventListener("input", e => {
+      connectorQuery = e.target.value || "";
+      renderConnectors();
+    });
+
     const btnSkillsInstalled = document.getElementById("filter-skills-installed");
     const btnSkillsRegistry = document.getElementById("filter-skills-registry");
 
@@ -4420,6 +4451,8 @@ SOFTWARE.</pre>
         btn.disabled = true;
         btn.innerHTML = '<span class="spinning-loader"></span> Authenticating in browser...';
         vscode.postMessage({ type: "mcp_auth", name: btn.dataset.name });
+      } else if (action === "mcp_show_discover") {
+        setMcpView("discover");
       } else if (action === "connector_connect") {
         btn.disabled = true;
         btn.innerHTML = '<span class="spinning-loader"></span> Connecting...';
@@ -4630,6 +4663,7 @@ SOFTWARE.</pre>
           renderSkills();
           renderMcp();
           renderConnectors();
+          renderMcpCounts();
           renderCrons();
           renderTrust();
           renderUsage();
@@ -4713,6 +4747,7 @@ SOFTWARE.</pre>
         case "mcp_refreshed": {
           allMcpServers = msg.mcpServers || [];
           renderMcp();
+          renderMcpCounts();
           break;
         }
         case "mcp_refresh_failed": {
@@ -4722,6 +4757,8 @@ SOFTWARE.</pre>
         case "connectors_refreshed": {
           allConnectors = msg.connectors || [];
           renderConnectors();
+          renderMcp();
+          renderMcpCounts();
           break;
         }
         case "skill_detail_loaded": {
@@ -4776,6 +4813,7 @@ SOFTWARE.</pre>
         case "mcp_refreshed": {
           allMcpServers = msg.mcpServers || [];
           renderMcp();
+          renderMcpCounts();
           // reset refresh button if present
           const btn = document.getElementById("btn-refresh-mcp");
           if (btn) { btn.disabled = false; btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg><span>Refresh</span>'; }
@@ -5726,8 +5764,15 @@ SOFTWARE.</pre>
         list.innerHTML = '<div class="section-desc">App connectors need an updated Andromity server. Update Andromity, then refresh.</div>';
         return;
       }
+      const query = connectorQuery.trim().toLowerCase();
+      const matches = allConnectors.filter(c => !query ||
+        [c.name, c.description, c.category].some(v => String(v || "").toLowerCase().includes(query)));
+      if (matches.length === 0) {
+        list.innerHTML = '<div class="section-desc">No apps match your search. Use Add MCP Server for any other MCP server URL.</div>';
+        return;
+      }
       const groups = [];
-      allConnectors.forEach(c => {
+      matches.forEach(c => {
         let group = groups.find(g => g.category === c.category);
         if (!group) { group = { category: c.category, items: [] }; groups.push(group); }
         group.items.push(c);
@@ -5736,6 +5781,7 @@ SOFTWARE.</pre>
         '<div class="connector-category">' + escapeHtml(g.category) + '</div>' +
         '<div class="connector-grid">' + g.items.map(c =>
           '<div class="connector-tile">' +
+            connectorIcon(c.id, c.name, "") +
             '<div class="connector-text">' +
               '<div class="connector-name">' + escapeHtml(c.name) + '</div>' +
               '<div class="connector-desc">' + escapeHtml(c.description) + (c.needs_client && !c.connected ? ' Needs your own Google OAuth client.' : '') + '</div>' +
@@ -5747,13 +5793,46 @@ SOFTWARE.</pre>
         '</div>').join('');
     }
 
+    function connectorIcon(id, name, size) {
+      const icon = CONNECTOR_ICONS[id];
+      const cls = "connector-icon" + (size ? " " + size : "");
+      if (!icon || !/^[0-9a-f]{6}$/i.test(icon.hex)) {
+        return '<span class="' + cls + ' connector-icon-letter" aria-hidden="true">' + escapeHtml(String(name || id || "?").charAt(0).toUpperCase()) + '</span>';
+      }
+      const rgb = [0, 2, 4].map(i => parseInt(icon.hex.slice(i, i + 2), 16) / 255)
+        .map(v => v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+      const fg = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2] > 0.4 ? "#000000" : "#ffffff";
+      return '<span class="' + cls + '" style="background:#' + icon.hex + ';" aria-hidden="true">' +
+        '<svg viewBox="0 0 24 24"><path fill="' + fg + '" d="' + escapeHtml(icon.path) + '"></path></svg></span>';
+    }
+
+    function setMcpView(view) {
+      mcpView = view;
+      const yours = view === "yours";
+      const toggle = (id, show) => { const el = document.getElementById(id); if (el) el.style.display = show ? "" : "none"; };
+      toggle("mcp-view-yours", yours);
+      toggle("mcp-view-discover", !yours);
+      toggle("connectors-search-row", !yours);
+      document.getElementById("filter-mcp-yours")?.classList.toggle("active", yours);
+      document.getElementById("filter-mcp-discover")?.classList.toggle("active", !yours);
+    }
+
+    function renderMcpCounts() {
+      const yoursNum = document.getElementById("mcp-yours-num");
+      if (yoursNum) yoursNum.textContent = String(allMcpServers.length);
+      const discoverNum = document.getElementById("mcp-discover-num");
+      if (discoverNum) discoverNum.textContent = String(allConnectors.length);
+      if (!mcpView) setMcpView(allMcpServers.length === 0 && allConnectors.length > 0 ? "discover" : "yours");
+    }
+
     function renderMcp() {
       const grid = document.getElementById("mcp-grid");
       if (!grid) return;
       if (allMcpServers.length === 0) {
         grid.innerHTML = '<div class="empty-state" style="grid-column: 1 / -1;">' +
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M9 9h6v6H9z"></path></svg>' +
-          '<div>No MCP servers configured. Use Add MCP Server to connect a remote service or local tool server.</div>' +
+          '<div>No MCP servers yet. Connect an app from Discover, or use Add MCP Server for any remote or local server.</div>' +
+          (allConnectors.length ? '<button class="btn" style="margin-top:10px;" data-action="mcp_show_discover">Discover apps</button>' : '') +
         '</div>';
         return;
       }
@@ -5800,6 +5879,7 @@ SOFTWARE.</pre>
           '<div class="item-card-top">' +
             '<div class="item-card-title">' +
               '<span class="status-dot ' + dotClass + '" style="' + dotStyle + '"></span>' +
+              (allConnectors.some(c => c.id === s.name && c.connected) ? connectorIcon(s.name, s.name, "small") : '') +
               '<span>' + escapeHtml(s.name) + '</span>' +
             '</div>' +
             '<span class="badge ' + badgeColor + '" style="' + badgeStyle + '">' + escapeHtml(badgeLabel) + '</span>' +

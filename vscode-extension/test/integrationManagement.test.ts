@@ -25,6 +25,7 @@ Module.prototype.require = function (name: string) {
   return name === "vscode" ? mockVscode : originalRequire.apply(this, arguments);
 };
 const { SettingsPanel } = require("../src/panels/SettingsPanel.js");
+const { CONNECTOR_ICONS } = require("../src/panels/connectorIcons.js");
 Module.prototype.require = originalRequire;
 
 function panelHarness() {
@@ -51,33 +52,32 @@ const NOTION = { id: "notion", name: "Notion", category: "Productivity", url: "h
 const GMAIL = { id: "gmail", name: "Gmail", category: "Google", url: "https://gmailmcp.googleapis.com/mcp/v1",
   description: "Read email.", needs_client: true, setup_url: "https://console.cloud.google.com/apis/credentials", connected: false };
 
-function renderConnectorTiles(connectors: unknown[]): string {
+interface McpRender { html: string; context: Record<string, any>; elements: Record<string, any> }
+
+/** Runs the webview's MCP render functions against stub elements. */
+function runMcpScript(call: string, state: { servers?: unknown[]; connectors?: unknown[]; query?: string }): McpRender {
   const html: string = panelHarness().panel._getHtmlForWebview();
   const start = html.indexOf("    function renderConnectors() {");
-  const end = html.indexOf("    function renderMcp() {", start);
-  assert.ok(start >= 0 && end > start);
-  const list = { innerHTML: "" };
-  const escapeHtml = (value: unknown) => String(value).replace(/[&<>"']/g, character =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
-  vm.runInNewContext(html.slice(start, end) + "\nrenderConnectors();", {
-    allConnectors: connectors, escapeHtml, document: { getElementById: () => list },
-  });
-  return list.innerHTML;
-}
-
-function renderMcpCards(servers: unknown[]): string {
-  const html: string = panelHarness().panel._getHtmlForWebview();
-  const start = html.indexOf("    function renderMcp() {");
   const end = html.indexOf("    let allCrons", start);
   assert.ok(start >= 0 && end > start);
-  const grid = { innerHTML: "" };
+  const elements: Record<string, any> = {};
+  const element = (id: string) => elements[id] ??= {
+    innerHTML: "", textContent: "", style: { display: "" }, classList: { toggle(name: string, on: boolean) { elements[id].active = on; } },
+  };
   const escapeHtml = (value: unknown) => String(value).replace(/[&<>"']/g, character =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
-  vm.runInNewContext(html.slice(start, end) + "\nrenderMcp();", {
-    allMcpServers: servers, escapeHtml, document: { getElementById: () => grid },
-  });
-  return grid.innerHTML;
+  const context: Record<string, any> = {
+    allMcpServers: state.servers ?? [], allConnectors: state.connectors ?? [], connectorQuery: state.query ?? "",
+    mcpView: "", CONNECTOR_ICONS, escapeHtml, document: { getElementById: element },
+  };
+  vm.runInNewContext(html.slice(start, end) + "\n" + call, context);
+  return { html: elements["connectors-list"]?.innerHTML ?? elements["mcp-grid"]?.innerHTML ?? "", context, elements };
 }
+
+const renderConnectorTiles = (connectors: unknown[], query = "") =>
+  runMcpScript("renderConnectors();", { connectors, query }).html;
+const renderMcpCards = (servers: unknown[], connectors: unknown[] = []) =>
+  runMcpScript("renderMcp();", { servers, connectors }).html;
 
 describe("Settings integration management", () => {
   beforeEach(() => {
@@ -131,6 +131,31 @@ describe("Settings integration management", () => {
     assert.ok(!html.includes('data-id="gmail"'));
     assert.ok(html.includes("Connected"));
     assert.ok(renderConnectorTiles([]).includes("updated Andromity server"));
+  });
+
+  it("draws bundled brand icons with contrasting glyphs and letters for apps without one", () => {
+    const html = renderConnectorTiles([NOTION, GMAIL, { ...NOTION, id: "canva", name: "Canva" }]);
+    assert.ok(html.includes("background:#" + CONNECTOR_ICONS.notion.hex));
+    assert.ok(html.includes('fill="#ffffff"'), "dark Notion tile gets a white glyph");
+    assert.ok(html.includes('connector-icon-letter" aria-hidden="true">C</span>'));
+    assert.ok(!html.includes("http"), "icons are inline, never fetched");
+  });
+
+  it("filters Discover by name, description, or category", () => {
+    assert.ok(renderConnectorTiles([NOTION, GMAIL], "google").includes("Gmail"));
+    assert.ok(!renderConnectorTiles([NOTION, GMAIL], "google").includes("Notion"));
+    assert.ok(renderConnectorTiles([NOTION, GMAIL], "zzz").includes("No apps match"));
+  });
+
+  it("opens Discover first when there are no servers, and Yours once servers exist", () => {
+    const empty = runMcpScript("renderMcp(); renderMcpCounts();", { connectors: [NOTION, GMAIL] });
+    assert.equal(empty.context.mcpView, "discover");
+    assert.equal(empty.elements["mcp-discover-num"].textContent, "2");
+    assert.ok(empty.elements["mcp-grid"].innerHTML.includes('data-action="mcp_show_discover"'));
+    const some = runMcpScript("renderMcpCounts();", { servers: [{ name: "notion" }], connectors: [NOTION] });
+    assert.equal(some.context.mcpView, "yours");
+    assert.equal(some.elements["mcp-view-discover"].style.display, "none");
+    assert.ok(renderMcpCards([{ name: "notion", status: "running" }], [{ ...NOTION, connected: true }]).includes("connector-icon small"));
   });
 
   it("adds a remote HTTP server to the current workspace once", async () => {

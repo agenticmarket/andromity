@@ -4,7 +4,12 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 
 ## [Unreleased]
 
+### Added
+- **App connectors.** A catalog of 29 official remote MCP servers (Notion, Linear, Jira & Confluence, Gmail, Google Calendar, Google Drive, Stripe, Sentry, Supabase, Vercel and more) that connect with one browser sign-in. In the TUI: `/settings` → MCP → **Connect an app**. Connectors are saved to `~/.andromity/mcp.json`; nothing is saved if sign-in fails or is cancelled. Gmail, Calendar and Drive take your own Google OAuth client ID and secret.
+- New RPC methods `connectors.list` and `connectors.connect`.
+
 ### Fixed
+- MCP OAuth discovery rejected servers whose metadata differed only by a trailing slash in the resource or issuer URL, such as Vercel and Google. Google sign-ins now ask for offline access, so their tokens refresh instead of expiring after an hour.
 - OpenRouter showed Andromity as two different apps: requests made with your own OpenRouter key said "Andromity" from `andromity.agenticmarket.dev`, while gateway requests said "Andromity Coding Agent" from `agenticmarket.dev`. The gateway now sends "Andromity" from `https://andromity.agenticmarket.dev` too, so OpenRouter counts them as one app.
 
 ## [0.2.19] — 2026-10-15

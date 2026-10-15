@@ -175,6 +175,11 @@ export interface ConnectorInfo {
   connected: boolean;
 }
 
+export interface ConnectorIcon {
+  hex: string;
+  path: string;
+}
+
 export interface ConnectorConnectResult extends IntegrationResult {
   message?: string;
 }

@@ -169,7 +169,9 @@ Switch between all sessions with `Ctrl+O`. Every session has its own context, hi
 - `reviewer` — read-only, produces findings
 - `planner` — plans only, touches nothing
 
-**MCP support.** Add servers in `.andromity/mcp.json` or `.vscode/mcp.json` in your project, or `~/.andromity/mcp.json` for all projects. Tool schemas load on demand, which keeps token use down when many tools are connected.
+**App connectors.** Connect Notion, Linear, Jira & Confluence, Gmail, Google Calendar, Google Drive, Stripe, Sentry, Supabase, Vercel and 19 more apps in one click. Each connector is the app's own official remote MCP server: you sign in once in your browser, and the app is available in every trusted project. Open `/settings` → **MCP** → **Connect an app** in the terminal, or **MCP Servers** → **Discover** in VS Code. Gmail, Calendar and Drive need your own Google OAuth client (a "Desktop app" client from Google Cloud), because Google doesn't let apps register themselves.
+
+**MCP support.** Add any other server in `.andromity/mcp.json` or `.vscode/mcp.json` in your project, or `~/.andromity/mcp.json` for all projects. Tool schemas load on demand, which keeps token use down when many tools are connected.
 
 **Sessions.** Everything is saved. `/sessions` or `Ctrl+O` to switch. `/compact` when context gets heavy. `/undo` to revert the last turn and all its file changes.
 
@@ -209,7 +211,7 @@ Yes. Select Ollama in the model picker (or `/model` in the terminal) and choose 
 Not in an untrusted folder: file writes and commands are blocked there whatever the permission mode. In a trusted folder, SAFE mode asks before each plan, edit, and command; YOLO runs without prompts. See [workspace trust and permission modes](https://andromity.agenticmarket.dev/docs/security).
 
 **Does Andromity support MCP?**
-Yes. Add MCP servers in a project `mcp.json`. Tool schemas load on demand instead of filling the prompt up front, so many connected tools don't exhaust the context window.
+Yes. Connect apps such as Notion, Linear, Gmail or Stripe in one click from Settings, or add any MCP server in a project `mcp.json`. Tool schemas load on demand instead of filling the prompt up front, so many connected tools don't exhaust the context window.
 
 ---
 
