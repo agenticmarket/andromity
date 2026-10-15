@@ -691,7 +691,8 @@ class MCPClientManager:
             headers = {**legacy_headers, **dict(srv_conf.get("headers", {}))}
             if token:
                 headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
-                headers["Authorization"] = f"Bearer {token}"
+                prefix = srv_conf.get("token_prefix")
+                headers["Authorization"] = f"{prefix if isinstance(prefix, str) and prefix else 'Bearer '}{token}"
             from urllib.parse import urlparse
             transport = srv_conf.get("type") or srv_conf.get("transport")
             auto_transport = transport not in ("sse", "http", "streamable-http")

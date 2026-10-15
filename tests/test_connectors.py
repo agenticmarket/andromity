@@ -133,3 +133,89 @@ async def test_rpc_connect_requires_trust_and_starts_server(tmp_path, home, monk
     assert started == ["linear"]
     listed = await handler.rpc_connectors_list({"project_path": str(tmp_path)})
     assert next(c for c in listed if c["id"] == "linear")["connected"]
+
+
+async def test_token_connector_verifies_then_stores_token_encrypted_not_in_config(tmp_path, home, monkeypatch):
+    seen = []
+
+    async def accept(connector, token):
+        seen.append((connector.id, token))
+        return None
+    monkeypatch.setattr(connectors, "verify_token", accept)
+    flow = AsyncMock()
+    monkeypatch.setattr(oauth, "full_oauth_flow", flow)
+    ok, message = await connectors.connect("pagerduty", str(tmp_path), lambda _: None, access_token=" pd-key ")
+    assert ok, message
+    flow.assert_not_called()
+    assert seen == [("pagerduty", "pd-key")]
+    raw = (home / ".andromity" / "mcp.json").read_text()
+    assert "pd-key" not in raw
+    assert json.loads(raw)["mcpServers"]["pagerduty"]["token_prefix"] == "Token token="
+    assert oauth.load_token("pagerduty", "https://mcp.pagerduty.com/mcp")["access_token"] == "pd-key"
+    assert oauth.load_token("pagerduty", "https://evil.example/mcp") is None
+
+
+async def test_rejected_or_missing_token_saves_nothing(tmp_path, home, monkeypatch):
+    async def reject(connector, token):
+        return "GitHub rejected the token."
+    monkeypatch.setattr(connectors, "verify_token", reject)
+    ok, message = await connectors.connect("github", str(tmp_path), lambda _: None, access_token="bad")
+    assert not ok and "rejected" in message
+    ok, message = await connectors.connect("github", str(tmp_path), lambda _: None)
+    assert not ok and "github.com/settings/personal-access-tokens" in message
+    assert not (home / ".andromity" / "mcp.json").exists()
+    assert oauth.load_token("github") is None
+
+
+@pytest.mark.parametrize("status,headers,expect", [
+    (200, {}, None),
+    (401, {}, "rejected"),
+    (400, {"www-authenticate": 'Bearer error="invalid_token"'}, "rejected"),
+    (500, {}, "HTTP 500"),
+])
+async def test_verify_token_reads_status_and_challenge(monkeypatch, status, headers, expect):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(status, headers=headers)
+    client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: client(transport=httpx.MockTransport(respond), **kw))
+    problem = await connectors.verify_token(connectors.get_connector("pagerduty"), "k")
+    assert (problem is None) if expect is None else (expect in problem)
+    assert requests[0].headers["Authorization"] == "Token token=k"
+
+
+async def test_verify_url_checks_token_where_initialize_does_not(monkeypatch):
+    urls = []
+
+    def respond(request):
+        urls.append(str(request.url))
+        return httpx.Response(401)
+    client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: client(transport=httpx.MockTransport(respond), **kw))
+    assert "rejected" in await connectors.verify_token(connectors.get_connector("render"), "k")
+    assert urls == ["https://api.render.com/v1/owners?limit=1"]
+
+
+async def test_mcp_session_uses_configured_token_prefix(tmp_path, home, monkeypatch):
+    from andromity.core import mcp as mcp_mod
+    captured = {}
+
+    class FakeSession:
+        def __init__(self, name, url, headers=None, transport="sse"):
+            captured.update(headers or {})
+            self.transport, self.legacy_endpoint, self.tools = transport, False, []
+
+        async def start(self):
+            return True
+    monkeypatch.setattr(mcp_mod, "MCPSseSession", FakeSession)
+    oauth.store_token("pagerduty", {"access_token": "k"}, "", "", "https://mcp.pagerduty.com/mcp")
+    config.set_trusted(str(tmp_path))
+    mgr = mcp_mod.MCPClientManager(str(tmp_path))
+    await mgr.start_server("pagerduty", {"serverUrl": "https://mcp.pagerduty.com/mcp", "token_prefix": "Token token="})
+    assert captured["Authorization"] == "Token token=k"
+    captured.clear()
+    oauth.store_token("github", {"access_token": "g"}, "", "", "https://api.githubcopilot.com/mcp/")
+    await mgr.start_server("github", {"serverUrl": "https://api.githubcopilot.com/mcp/"})
+    assert captured["Authorization"] == "Bearer g"

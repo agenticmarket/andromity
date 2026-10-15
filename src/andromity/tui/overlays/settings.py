@@ -675,6 +675,10 @@ SettingsScreen {
                         yield Label(f"[b]{c.name}[/]  [dim]{c.description}[/]", classes="conn-name")
                         yield Button("✓ Added" if connected else "Connect", id=f"conn-connect-{c.id}",
                                      disabled=connected, classes="conn-btn")
+                    if c.auth == "token" and not connected:
+                        yield Label(f"[dim]Paste an access token. Create one at {c.setup_url}[/]",
+                                    classes="mcp-token-hint")
+                        yield Input(placeholder="Access token", id=f"conn-token-{c.id}", password=True)
                     if c.needs_client and not connected:
                         yield Label(f"[dim]Needs your own Google OAuth client (Desktop app): {c.setup_url}[/]",
                                     classes="mcp-token-hint")
@@ -688,7 +692,12 @@ SettingsScreen {
         connector = get_connector(connector_id)
         if connector is None:
             return
-        client_id = client_secret = ""
+        client_id = client_secret = access_token = ""
+        if connector.auth == "token":
+            try:
+                access_token = self.query_one(f"#conn-token-{connector_id}", Input).value
+            except Exception:
+                pass
         if connector.needs_client:
             try:
                 client_id = self.query_one(f"#conn-cid-{connector_id}", Input).value
@@ -704,7 +713,7 @@ SettingsScreen {
 
         btn = self.query_one(f"#conn-connect-{connector_id}", Button)
         btn.disabled = True
-        ok, message = await connect(connector_id, self.project_path, _set_status, client_id, client_secret)
+        ok, message = await connect(connector_id, self.project_path, _set_status, client_id, client_secret, access_token)
         if not ok:
             btn.disabled = False
             _set_status(message)

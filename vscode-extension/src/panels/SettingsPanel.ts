@@ -1198,6 +1198,20 @@ export class SettingsPanel {
           if (!connector || !workspaceFolder || !requireWorkspaceTrust("connect apps")) break;
           let client_id = "";
           let client_secret = "";
+          let access_token = "";
+          if (connector.auth === "token") {
+            const pick = await vscode.window.showInformationMessage(
+              `${connector.name} connects with an access token you create in your ${connector.name} account.`,
+              { modal: true }, "Enter token", "Create a token");
+            if (pick === "Create a token") {
+              await vscode.env.openExternal(vscode.Uri.parse(connector.setup_url));
+              break;
+            }
+            if (pick !== "Enter token") break;
+            access_token = (await vscode.window.showInputBox({ title: `${connector.name}: access token`, password: true, ignoreFocusOut: true,
+              validateInput: value => value.trim() ? undefined : "Enter the access token." })) || "";
+            if (!access_token) break;
+          }
           if (connector.needs_client) {
             const pick = await vscode.window.showInformationMessage(
               `${connector.name} needs your own Google OAuth client. Create a "Desktop app" client in Google Cloud, then paste its ID and secret.`,
@@ -1214,9 +1228,9 @@ export class SettingsPanel {
               validateInput: value => value.trim() ? undefined : "Enter the client secret." })) || "";
             if (!client_secret) break;
           }
-          vscode.window.showInformationMessage(`Sign in to ${connector.name} in your browser...`);
+          vscode.window.showInformationMessage(access_token ? `Checking the token with ${connector.name}...` : `Sign in to ${connector.name} in your browser...`);
           const res = await this._rpcClient.call<ConnectorConnectResult>("connectors.connect",
-            { id: connector.id, project_path: workspaceFolder, client_id, client_secret }, 240000);
+            { id: connector.id, project_path: workspaceFolder, client_id, client_secret, access_token }, 240000);
           if (res?.success) {
             vscode.window.showInformationMessage(res.status === "running"
               ? `${connector.name} connected.`
@@ -5784,7 +5798,8 @@ SOFTWARE.</pre>
             connectorIcon(c.id, c.name, "") +
             '<div class="connector-text">' +
               '<div class="connector-name">' + escapeHtml(c.name) + '</div>' +
-              '<div class="connector-desc">' + escapeHtml(c.description) + (c.needs_client && !c.connected ? ' Needs your own Google OAuth client.' : '') + '</div>' +
+              '<div class="connector-desc">' + escapeHtml(c.description) +
+                (c.connected ? '' : c.needs_client ? ' Needs your own Google OAuth client.' : c.auth === 'token' ? ' Connects with an access token.' : '') + '</div>' +
             '</div>' +
             (c.connected
               ? '<span class="badge green">Connected</span>'

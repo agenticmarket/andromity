@@ -169,7 +169,7 @@ Switch between all sessions with `Ctrl+O`. Every session has its own context, hi
 - `reviewer` — read-only, produces findings
 - `planner` — plans only, touches nothing
 
-**App connectors.** Connect Notion, Linear, Jira & Confluence, Gmail, Google Calendar, Google Drive, Stripe, Sentry, Supabase, Vercel and 19 more apps in one click. Each connector is the app's own official remote MCP server: you sign in once in your browser, and the app is available in every trusted project. Open `/settings` → **MCP** → **Connect an app** in the terminal, or **MCP Servers** → **Discover** in VS Code. Gmail, Calendar and Drive need your own Google OAuth client (a "Desktop app" client from Google Cloud), because Google doesn't let apps register themselves.
+**App connectors.** Connect Notion, Linear, Jira & Confluence, Gmail, Google Calendar, Google Drive, Stripe, Sentry, Supabase, Vercel and 47 more apps in one click. Each connector is the app's own official remote MCP server: you sign in once in your browser, and the app is available in every trusted project. GitHub, Airtable, Render and PagerDuty connect with an access token instead; Andromity checks the token before saving it and keeps it in the encrypted token store. Open `/settings` → **MCP** → **Connect an app** in the terminal, or **MCP Servers** → **Discover** in VS Code. Gmail, Calendar and Drive need your own Google OAuth client (a "Desktop app" client from Google Cloud), because Google doesn't let apps register themselves.
 
 **MCP support.** Add any other server in `.andromity/mcp.json` or `.vscode/mcp.json` in your project, or `~/.andromity/mcp.json` for all projects. Tool schemas load on demand, which keeps token use down when many tools are connected.
 

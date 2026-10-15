@@ -90,7 +90,7 @@ describe("Settings integration management", () => {
     const h = panelHarness();
     await h.panel._handleMessage({ type: "connector_connect", id: "notion" });
     assert.deepEqual(h.calls[0], { method: "connectors.connect",
-      params: { id: "notion", project_path: "D:/test/workspace", client_id: "", client_secret: "" } });
+      params: { id: "notion", project_path: "D:/test/workspace", client_id: "", client_secret: "", access_token: "" } });
     assert.deepEqual(h.calls.slice(1).map(c => c.method).sort(), ["connectors.list", "mcp.list"]);
     assert.equal(h.changes(), 1);
     const refreshed = h.posts.find((p: any) => p.type === "connectors_refreshed") as any;
@@ -106,6 +106,23 @@ describe("Settings integration management", () => {
     assert.equal(h.calls[0].method, "connectors.connect");
     assert.equal(h.calls[0].params.client_id, " client-id ");
     assert.equal(h.calls[0].params.client_secret, "client-secret");
+  });
+
+  it("asks for an access token in the host for token connectors, or opens the token page", async () => {
+    const GITHUB = { ...NOTION, id: "github", name: "GitHub", auth: "token", setup_url: "https://github.com/settings/personal-access-tokens/new" };
+    SettingsPanel._cachedState = { connectors: [GITHUB] };
+    const h = panelHarness();
+    infoPick = "Create a token";
+    await h.panel._handleMessage({ type: "connector_connect", id: "github" });
+    assert.deepEqual(opened, [GITHUB.setup_url]);
+    assert.ok(!h.calls.some(c => c.method === "connectors.connect"));
+    SettingsPanel._cachedState = { connectors: [GITHUB] };
+    infoPick = "Enter token";
+    inputs = ["ghp_test"];
+    await h.panel._handleMessage({ type: "connector_connect", id: "github" });
+    const connect = h.calls.find(c => c.method === "connectors.connect")!;
+    assert.equal(connect.params.access_token, "ghp_test");
+    assert.ok(renderConnectorTiles([GITHUB]).includes("Connects with an access token."));
   });
 
   it("opens Google Cloud or stops without connecting when the client step is not finished", async () => {

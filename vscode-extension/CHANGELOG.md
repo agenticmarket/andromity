@@ -5,7 +5,7 @@ All notable changes to the "andromity" extension will be documented in this file
 ## [Unreleased]
 
 ### Added
-- **App connectors.** The MCP Servers page has two views. **Discover** lists 29 official app servers (Notion, Linear, Gmail, Stripe, Sentry and more) with their brand icons, grouped by category and searchable; **Connect** opens a browser sign-in. **Yours** lists the servers you've added. Icons come from Simple Icons (CC0) and are bundled, so nothing is fetched from the internet. Gmail, Calendar and Drive ask for your Google OAuth client ID and secret in VS Code input boxes, not in the webview.
+- **App connectors.** The MCP Servers page has two views. **Discover** lists 57 official app servers (Notion, Linear, Gmail, Stripe, Sentry and more) with their brand icons, grouped by category and searchable; **Connect** opens a browser sign-in. **Yours** lists the servers you've added. Icons come from Simple Icons (CC0) and are bundled, so nothing is fetched from the internet. Gmail, Calendar and Drive ask for your Google OAuth client ID and secret in VS Code input boxes, not in the webview.
 
 ## [0.2.19] — 2026-10-15
 

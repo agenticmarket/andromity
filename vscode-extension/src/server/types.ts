@@ -172,6 +172,7 @@ export interface ConnectorInfo {
   description: string;
   needs_client: boolean;
   setup_url: string;
+  auth?: "oauth" | "token";
   connected: boolean;
 }
 

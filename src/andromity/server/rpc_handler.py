@@ -3532,13 +3532,14 @@ Your output must be:
             return {"success": False, "error": "Trust this workspace before connecting apps."}
         connector_id = params.get("id")
         client_id, client_secret = params.get("client_id", ""), params.get("client_secret", "")
-        if not isinstance(connector_id, str) or not isinstance(client_id, str) or not isinstance(client_secret, str):
+        access_token = params.get("access_token", "")
+        if not all(isinstance(v, str) for v in (connector_id, client_id, client_secret, access_token)):
             return {"success": False, "error": "Select a connector to connect."}
         from andromity.core.connectors import connect
         try:
             ok, message = await connect(connector_id, project_path,
                                         lambda msg: self.notify("mcp/authProgress", {"name": connector_id, "status": msg}),
-                                        client_id, client_secret)
+                                        client_id, client_secret, access_token)
         except Exception as e:
             log.warning("connectors.connect error: %s", e)
             return {"success": False, "error": "Could not connect. Check your network and retry."}

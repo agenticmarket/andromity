@@ -91,7 +91,7 @@ Took a wrong turn? Run **Undo Last Turn & Rollback Diff** from the panel header 
 Spawn background subagents for research, file scanning, or isolated implementation work while you keep chatting in the main session.
 
 ### 🔌 6. App Connectors & MCP
-Open **Andromity Hub → MCP Servers → Discover** and connect Notion, Linear, Jira & Confluence, Gmail, Google Calendar, Google Drive, Stripe, Sentry, Supabase, Vercel and more in one click. Each is the app's official remote MCP server; you sign in once in your browser and it works in every trusted workspace. Gmail, Calendar and Drive need your own Google OAuth client.
+Open **Andromity Hub → MCP Servers → Discover** and connect Notion, Linear, Jira & Confluence, Gmail, Google Calendar, Google Drive, Stripe, Sentry, Supabase, Vercel and more in one click. Each is the app's official remote MCP server; you sign in once in your browser and it works in every trusted workspace. Gmail, Calendar and Drive need your own Google OAuth client. GitHub, Airtable, Render and PagerDuty connect with an access token, which Andromity checks before saving.
 
 **Yours** lists everything you've connected, with status, tools, re-authenticate and remove. You can still add any other MCP server through `.andromity/mcp.json` or `.vscode/mcp.json`. Tool schemas load on demand to keep token use down.
 
