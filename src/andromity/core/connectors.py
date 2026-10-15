@@ -56,8 +56,7 @@ CATALOG: Tuple[Connector, ...] = (
            "https://airtable.com/create/tokens"),
     Connector("miro", "Miro", "Productivity", "https://mcp.miro.com/", "Boards and diagrams."),
     Connector("granola", "Granola", "Productivity", "https://mcp.granola.ai/mcp", "Meeting notes."),
-    Connector("dropbox", "Dropbox", "Productivity", "https://mcp.dropbox.com/mcp", "Search and read files."),
-    Connector("zapier", "Zapier", "Productivity", "https://mcp.zapier.com/api/mcp/mcp", "Run actions across your Zapier apps."),
+    Connector("zapier", "Zapier", "Productivity", "https://mcp.zapier.com/api/v1/connect", "Run actions across your Zapier apps."),
     Connector("canva", "Canva", "Design & content", "https://mcp.canva.com/mcp", "Search and create designs."),
     Connector("webflow", "Webflow", "Design & content", "https://mcp.webflow.com/mcp", "Sites, pages, and CMS content."),
     Connector("wix", "Wix", "Design & content", "https://mcp.wix.com/mcp", "Sites and business data."),
@@ -70,12 +69,11 @@ CATALOG: Tuple[Connector, ...] = (
            "https://github.com/settings/personal-access-tokens/new"),
     Connector("gitlab", "GitLab", "Developer", "https://gitlab.com/api/v4/mcp", "Projects, issues, and merge requests."),
     Connector("sentry", "Sentry", "Developer", "https://mcp.sentry.dev/mcp", "Errors, issues, and releases."),
-    Connector("netlify", "Netlify", "Developer", "https://mcp.netlify.com/mcp", "Sites, deploys, and functions."),
-    Connector("railway", "Railway", "Developer", "https://mcp.railway.com/mcp", "Projects, services, and deployments."),
+    Connector("netlify", "Netlify", "Developer", "https://netlify-mcp.netlify.app/mcp", "Sites, deploys, and functions."),
+    Connector("railway", "Railway", "Developer", "https://mcp.railway.com", "Projects, services, and deployments."),
     _token("render", "Render", "Developer", "https://mcp.render.com/mcp", "Services, deploys, and logs.",
            "https://render.com/docs/mcp-server", verify_url="https://api.render.com/v1/owners?limit=1"),
-    Connector("cloudflare", "Cloudflare Workers", "Developer", "https://bindings.mcp.cloudflare.com/mcp", "Workers, KV, R2, and D1."),
-    Connector("cloudflare-builds", "Cloudflare Builds", "Developer", "https://builds.mcp.cloudflare.com/mcp", "Workers build history and logs."),
+    Connector("cloudflare", "Cloudflare", "Developer", "https://mcp.cloudflare.com/mcp", "Cloudflare API and docs: Workers, DNS, R2."),
     Connector("supabase", "Supabase", "Developer", "https://mcp.supabase.com/mcp", "Projects, databases, and functions."),
     Connector("neon", "Neon", "Developer", "https://mcp.neon.tech/mcp", "Serverless Postgres projects and branches."),
     Connector("prisma", "Prisma Postgres", "Developer", "https://mcp.prisma.io/mcp", "Databases and backups."),
@@ -93,15 +91,11 @@ CATALOG: Tuple[Connector, ...] = (
     Connector("grafana", "Grafana", "Monitoring", "https://mcp.grafana.com/mcp", "Dashboards, metrics, and alerts."),
     Connector("honeycomb", "Honeycomb", "Monitoring", "https://mcp.honeycomb.io/mcp", "Traces and queries."),
     Connector("axiom", "Axiom", "Monitoring", "https://mcp.axiom.co/mcp", "Logs and queries."),
-    Connector("cloudflare-observability", "Cloudflare Observability", "Monitoring", "https://observability.mcp.cloudflare.com/mcp",
-              "Workers logs and analytics."),
     Connector("posthog", "PostHog", "Analytics", "https://mcp.posthog.com/mcp", "Product analytics and feature flags."),
     Connector("amplitude", "Amplitude", "Analytics", "https://mcp.amplitude.com/mcp", "Charts, events, and experiments."),
     Connector("mixpanel", "Mixpanel", "Analytics", "https://mcp.mixpanel.com/mcp", "Events, reports, and funnels."),
     Connector("stripe", "Stripe", "Payments", "https://mcp.stripe.com", "Customers, payments, and invoices."),
     Connector("paypal", "PayPal", "Payments", "https://mcp.paypal.com/mcp", "Orders, invoices, and disputes."),
-    Connector("square", "Square", "Payments", "https://mcp.squareup.com/sse", "Payments, catalog, and orders."),
-    Connector("plaid", "Plaid", "Payments", "https://mcp.plaid.com/mcp", "Integration diagnostics and usage."),
 )
 
 _BY_ID: Dict[str, Connector] = {c.id: c for c in CATALOG}
@@ -206,7 +200,7 @@ async def connect(connector_id: str, project_path: str, on_status: Callable[[str
     else:
         if connector.needs_client and not (client_id and client_secret):
             return False, (f"{connector.name} needs your own Google OAuth client ID and secret: a Web application client "
-                           f"with redirect URI {GOOGLE_REDIRECT_URI}. Setup guide: {connector.setup_url}")
+                           f"marked for an AI-powered agent, with redirect URI {GOOGLE_REDIRECT_URI}. Setup guide: {connector.setup_url}")
         progress: List[str] = []
 
         def _status(msg: str) -> None:

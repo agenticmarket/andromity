@@ -680,8 +680,8 @@ SettingsScreen {
                                     classes="mcp-token-hint")
                         yield Input(placeholder="Access token", id=f"conn-token-{c.id}", password=True)
                     if c.needs_client and not connected:
-                        yield Label("[dim]Google Workspace Developer Preview. Needs your own Web application OAuth client "
-                                    f"with redirect URI http://127.0.0.1:54321/callback. Guide: {c.setup_url}[/]",
+                        yield Label("[dim]Google Workspace Developer Preview. Needs your own Web application OAuth client marked "
+                                    f"for an AI-powered agent, with redirect URI http://127.0.0.1:54321/callback. Guide: {c.setup_url}[/]",
                                     classes="mcp-token-hint")
                         with Horizontal(classes="mcp-token-row"):
                             yield Input(placeholder="Client ID", id=f"conn-cid-{c.id}")
