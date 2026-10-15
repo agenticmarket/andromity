@@ -65,7 +65,7 @@ export function featureSummaries(rows) {
   }
   const wfOrder=['1 trace (Explorer)','2-4 traces (Engaged)','5+ traces (Habitual Power User)'];
   return {
-    featuresRes: result(grouped(()=>true,'feature',name=>name).slice(0,25)),
+    featuresRes: result(grouped(()=>true,'feature',name=>name).slice(0,500)),
     onboardingRes: result([{viewed_users:users(named('onboarding_viewed')),
       provider_selected_users:users(f=>/^onboard.prov./.test(f)),
       key_saved_users:users(named('onboarding_key_saved')),completed_users:users(named('onboarding_completed'))}]),
