@@ -162,7 +162,7 @@ export class BackgroundTaskPanel {
         });
       }
     } catch {
-      // transient daemon errors: the next poll retries
+      this._panel.webview.postMessage({ type: "task_error", message: "Connection interrupted. Retrying…" });
     } finally {
       this._fetchInFlight = false;
     }
@@ -173,14 +173,15 @@ export class BackgroundTaskPanel {
     try {
       await this._rpcClient.call("process.kill", { process_id: this._processId, session_id: this._sessionId || undefined });
       this._handleExited(1, undefined, true);
-    } catch (err: any) {
-      vscode.window.showErrorMessage(`Failed to terminate task ${this._processId}: ${err?.message || err}`);
+    } catch {
+      this._panel.webview.postMessage({ type: "task_error", message: "Could not stop this task. Try again.", stop_failed: true });
     }
   }
 
   private _handleExited(exitCode: number, duration?: number, wasKilled: boolean = false) {
     this._isExited = true;
     this._stopPolling();
+    void this._fetchLogs();
     this._panel.webview.postMessage({
       type: "process_exited",
       exit_code: exitCode,
@@ -224,8 +225,8 @@ export class BackgroundTaskPanel {
       --cyan: #38bdf8;
       --green: #10b981;
       --red: #f85149;
-      --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Courier New', monospace;
-      --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: var(--vscode-editor-font-family, 'Cascadia Code', monospace);
+      --font-sans: var(--vscode-font-family, system-ui, sans-serif);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -244,7 +245,7 @@ export class BackgroundTaskPanel {
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      padding: 8px 16px;
+      padding: 16px 20px;
       background: var(--header-bg);
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
@@ -268,7 +269,7 @@ export class BackgroundTaskPanel {
       display: flex;
       flex-direction: column;
       min-width: 0;
-      gap: 2px;
+      gap: 6px;
     }
     .task-title-row {
       display: flex;
@@ -289,7 +290,7 @@ export class BackgroundTaskPanel {
     .status-badge {
       display: inline-flex;
       align-items: center;
-      font-size: 10.5px;
+      font-size: 12px;
       font-weight: 600;
       color: var(--cyan);
       letter-spacing: 0.02em;
@@ -331,6 +332,22 @@ export class BackgroundTaskPanel {
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .task-heading { font-size: 14px; font-weight: 600; }
+    .task-title-row { flex-wrap: wrap; }
+    .task-id { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .command-details { padding: 12px 20px; border-bottom: 1px solid var(--border); }
+    .command-details summary { cursor: pointer; color: var(--fg-muted); font-size: 12px; overflow-wrap: anywhere; }
+    .command-preview { margin-left: 10px; font-family: var(--font-mono); }
+    .command-details code { display: block; margin-top: 10px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.7 var(--font-mono); user-select: text; }
+    .command-details[open] .command-preview { display: none; }
+    .output-toolbar, .output-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 20px; color: var(--fg-muted); font-size: 11px; flex-shrink: 0; }
+    .output-toolbar { border-bottom: 1px solid var(--border); }
+    .output-label { font-weight: 600; color: var(--fg); font-size: 12px; }
+    .output-footer { border-top: 1px solid var(--border); min-height: 36px; }
+    button:focus-visible, summary:focus-visible, .terminal-container:focus-visible { outline: 1px solid var(--vscode-focusBorder, #38bdf8); outline-offset: 2px; }
+    .header { flex-wrap: wrap; }
+    .output-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    @media (max-width: 500px) { .output-toolbar { align-items: flex-start; flex-direction: column; } .command-preview { display: none; } }
     .header-actions {
       display: flex;
       align-items: center;
@@ -342,7 +359,7 @@ export class BackgroundTaskPanel {
       color: var(--fg);
       border: 1px solid var(--border);
       border-radius: 4px;
-      padding: 3px 8px;
+      padding: 5px 10px;
       font-size: 11px;
       font-weight: 500;
       cursor: pointer;
@@ -382,10 +399,10 @@ export class BackgroundTaskPanel {
       overflow-y: auto;
       background: var(--bg);
       font-family: var(--font-mono);
-      font-size: 11.5px;
+      font-size: var(--vscode-editor-font-size, 13px);
       line-height: 1.6;
       white-space: pre-wrap;
-      word-break: break-all;
+      overflow-wrap: anywhere;
     }
     .terminal-container::-webkit-scrollbar {
       width: 7px;
@@ -422,26 +439,38 @@ export class BackgroundTaskPanel {
       </div>
       <div class="task-meta">
         <div class="task-title-row">
+          <span class="task-heading">Background task</span>
           <span class="task-id">${safePid}</span>
+        </div>
+        <div class="task-title-row">
           <span class="status-badge running" id="status-badge">
-            <span id="status-text">RUNNING</span>
+            <span id="status-text">Connecting…</span>
           </span>
           <span class="timer-text" id="timer-text">0s</span>
         </div>
-        <div class="task-cmd" id="cmd-text" title="${safeCmd}">${safeCmd || 'Background process'}</div>
       </div>
     </div>
     <div class="header-actions">
-      <button class="btn-autoscroll active" id="btn-autoscroll" title="Toggle Auto-scroll">Auto-scroll</button>
-      <button id="btn-clear" title="Clear View">Clear</button>
-      <button id="btn-copy" title="Copy Output to Clipboard">Copy</button>
       <button class="btn-stop" id="btn-stop" title="Stop this background process">
-        <span>Stop</span>
+        <span>Stop task</span>
       </button>
     </div>
   </div>
 
-  <div class="terminal-container" id="terminal-output">Loading background process output...</div>
+  <details class="command-details">
+    <summary>Command <span class="command-preview" id="command-preview">${escapeHtml(this._command.slice(0, 90))}</span></summary>
+    <code id="cmd-text">${safeCmd || 'Waiting for command…'}</code>
+  </details>
+  <div class="output-toolbar">
+    <span class="output-label">Output <span class="timer-text">· latest 300 lines</span></span>
+    <div class="output-actions">
+      <button class="btn-autoscroll active" id="btn-autoscroll" aria-pressed="true" title="Follow new output">Follow output</button>
+      <button id="btn-clear" title="Hide current output until it changes">Clear view</button>
+      <button id="btn-copy" title="Copy visible output">Copy output</button>
+    </div>
+  </div>
+  <div class="terminal-container" id="terminal-output" tabindex="0" role="region" aria-label="Background task output">Connecting to task…</div>
+  <div class="output-footer"><span id="output-notice" role="status">Waiting for output</span><span id="exit-summary"></span></div>
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
@@ -454,11 +483,24 @@ export class BackgroundTaskPanel {
     const btnCopy = document.getElementById('btn-copy');
     const btnStop = document.getElementById('btn-stop');
     const cmdText = document.getElementById('cmd-text');
+    const notice = document.getElementById('output-notice');
+    const exitSummary = document.getElementById('exit-summary');
 
     let autoScroll = true;
     let startTime = Date.now();
     let isRunning = true;
     let fullOutput = '';
+    let clearedOutput = null;
+
+    function syncFollow() {
+      btnAutoScroll.classList.toggle('active', autoScroll);
+      btnAutoScroll.setAttribute('aria-pressed', String(autoScroll));
+      btnAutoScroll.textContent = autoScroll ? 'Following output' : 'Follow output';
+    }
+    terminalEl.addEventListener('scroll', () => {
+      autoScroll = terminalEl.scrollHeight - terminalEl.scrollTop - terminalEl.clientHeight < 24;
+      syncFollow();
+    });
 
     const timerInterval = setInterval(() => {
       if (isRunning) {
@@ -476,18 +518,20 @@ export class BackgroundTaskPanel {
 
     btnAutoScroll.onclick = () => {
       autoScroll = !autoScroll;
-      btnAutoScroll.classList.toggle('active', autoScroll);
+      syncFollow();
       if (autoScroll) {
         terminalEl.scrollTop = terminalEl.scrollHeight;
       }
     };
 
     btnClear.onclick = () => {
-      terminalEl.textContent = '(Logs cleared)';
+      clearedOutput = fullOutput;
+      terminalEl.textContent = '';
+      notice.textContent = 'View cleared. Waiting for output to change.';
     };
 
     btnCopy.onclick = () => {
-      vscode.postMessage({ type: 'copy_text', text: fullOutput || terminalEl.textContent });
+      vscode.postMessage({ type: 'copy_text', text: terminalEl.textContent });
     };
 
     btnStop.onclick = () => {
@@ -501,9 +545,26 @@ export class BackgroundTaskPanel {
       if (!msg) return;
 
       if (msg.type === 'logs_update') {
-        if (msg.output) {
-          fullOutput = msg.output;
-          terminalEl.textContent = msg.output;
+        if (typeof msg.output === 'string') {
+          const envelope = msg.output.match(/^Process '[^\\n]*' \\| (running|exited \\(code (-?\\d+)\\)) \\| (\\d+)s elapsed\\nCommand: ([\\s\\S]*?)\\n--- last \\d+ lines ---\\n([\\s\\S]*)$/);
+          const output = envelope ? envelope[5] : msg.output;
+          if (envelope) {
+            if (!msg.command) msg.command = envelope[4];
+            startTime = Date.now() - Number(envelope[3]) * 1000;
+            timerText.textContent = formatSecs(Number(envelope[3]));
+            if (isRunning && envelope[1] === 'running') statusText.textContent = 'Running';
+            if (isRunning && envelope[2] !== undefined) {
+              showExited({ exit_code: Number(envelope[2]) });
+            }
+          }
+          fullOutput = output;
+          if (clearedOutput !== output) {
+            clearedOutput = null;
+            const scrollTop = terminalEl.scrollTop;
+            terminalEl.textContent = output === '(no output yet)' ? '' : output;
+            if (!autoScroll) terminalEl.scrollTop = scrollTop;
+            notice.textContent = output === '(no output yet)' ? 'Task has not written output yet' : (isRunning ? 'Output updates every second' : 'Task finished');
+          }
           if (autoScroll) {
             terminalEl.scrollTop = terminalEl.scrollHeight;
           }
@@ -511,26 +572,34 @@ export class BackgroundTaskPanel {
         if (msg.command && cmdText) {
           cmdText.textContent = msg.command;
           cmdText.title = msg.command;
+          document.getElementById('command-preview').textContent = msg.command.slice(0, 90);
         }
+      } else if (msg.type === 'task_error') {
+        notice.textContent = msg.message;
+        if (msg.stop_failed && isRunning) { btnStop.disabled = false; btnStop.textContent = 'Stop task'; }
       } else if (msg.type === 'process_exited') {
+        showExited(msg);
+      }
+    });
+
+    function showExited(msg) {
         isRunning = false;
         clearInterval(timerInterval);
         const code = msg.exit_code !== undefined ? msg.exit_code : 0;
         statusBadge.className = 'status-badge ' + (code === 0 ? 'done' : 'stopped');
-        statusText.textContent = msg.was_killed ? 'STOPPED' : (code === 0 ? 'EXITED (0)' : ('EXITED (' + code + ')'));
+        statusText.textContent = msg.was_killed ? 'Stopped' : (code === 0 ? 'Completed' : 'Failed');
         btnStop.disabled = true;
         btnStop.remove();
 
-        const exitDiv = document.createElement('div');
-        exitDiv.className = 'exit-line';
-        exitDiv.textContent = '\\n[Process terminated with exit code ' + code + (msg.duration ? ' in ' + msg.duration + 's' : '') + ']';
-        terminalEl.appendChild(exitDiv);
+        exitSummary.textContent = 'Exit code ' + code;
+        notice.textContent = msg.was_killed ? 'Task stopped' : 'Task finished';
+        if (msg.duration !== undefined) timerText.textContent = formatSecs(Math.floor(msg.duration));
         if (autoScroll) {
           terminalEl.scrollTop = terminalEl.scrollHeight;
         }
-      }
-    });
+    }
 
+    syncFollow();
     vscode.postMessage({ type: 'ready' });
   </script>
 </body>

@@ -1,4 +1,5 @@
 import { getPromptStyles } from "./chatPromptStyles.js";
+import { getTurnRailStyles } from "./turnRail.js";
 
 export function getChatStyles(): string {
   return `
@@ -1311,12 +1312,17 @@ export function getChatStyles(): string {
       justify-content: center;
     }
     .bg-strip-timer {
+      display: none;
       font-size: 10px;
       font-family: var(--font-mono, monospace);
       color: var(--vscode-descriptionForeground, #a1a1aa);
       margin-left: 2px;
     }
     .btn-bg-stop-all {
+      width: auto;
+      padding: 3px 6px;
+      gap: 5px;
+      font-size: 11px;
       color: #f85149 !important;
       opacity: 0.8;
       transition: all 0.12s ease;
@@ -1398,7 +1404,9 @@ export function getChatStyles(): string {
       color: var(--vscode-descriptionForeground, #a1a1aa);
     }
     .bg-item-stop-btn {
-      padding: 2px 4px;
+      width: auto;
+      padding: 4px 8px;
+      font-size: 11px;
       border-radius: 3px;
       color: #f85149;
     }
@@ -1406,6 +1414,21 @@ export function getChatStyles(): string {
       background: rgba(248, 81, 73, 0.15);
       color: #ff7b72;
     }
+    .bg-item-open {
+      background: transparent;
+      border: 0;
+      border-radius: 4px;
+      padding: 4px 0;
+      text-align: left;
+      color: inherit;
+      cursor: pointer;
+      font: inherit;
+      overflow: hidden;
+    }
+    .bg-open-hint { color: var(--vscode-descriptionForeground, #a1a1aa); font-size: 10px; white-space: nowrap; }
+    .bg-item-open:hover .bg-open-hint { color: var(--vscode-textLink-foreground, #58a6ff); }
+    .bg-item-open:focus-visible, #bg-strip-info:focus-visible, .bg-item-stop-btn:focus-visible { outline: 1px solid var(--vscode-focusBorder, #58a6ff); outline-offset: 2px; }
+    @media (max-width: 400px) { .bg-open-hint { display: none; } }
     @media (max-width: 320px) {
       .bg-process-strip {
         padding: 5px 8px;
@@ -3335,6 +3358,113 @@ export function getChatStyles(): string {
       font-variant-numeric: tabular-nums;
       font-size: 12px;
     }
+
+    /* Context popover: theme colours and the expandable breakdown */
+    .context-popover {
+      background: var(--popover-bg);
+      border-color: var(--popover-border);
+      box-shadow: 0 18px 44px var(--popover-shadow);
+      color: var(--fg);
+      max-height: calc(100vh - 90px);
+      overflow-y: auto;
+      transition: opacity 0.18s cubic-bezier(0.16, 1, 0.3, 1), transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.18s, width 0.18s ease;
+    }
+    .context-popover.expanded { width: 300px; }
+    .context-popover .context-popover-title,
+    .context-popover .context-ring-text,
+    .context-popover .context-row-val { color: var(--fg); }
+    .context-popover .context-popover-subtitle,
+    .context-popover .context-row-label { color: var(--muted); }
+    .context-popover .context-popover-divider { background: var(--border); }
+    .context-popover .context-ring-bg { stroke: color-mix(in srgb, var(--fg) 14%, transparent); }
+    .context-popover .dot-used { background: var(--fg); }
+    .context-popover .dot-avail { background: color-mix(in srgb, var(--fg) 22%, transparent); }
+
+    .context-breakdown-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      margin-top: 10px;
+      padding: 6px 0 0;
+      border: 0;
+      border-top: 1px solid var(--border);
+      background: none;
+      color: var(--muted);
+      font: inherit;
+      font-size: 11.5px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .context-breakdown-toggle:hover { color: var(--fg); }
+    .context-breakdown-toggle:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+    .context-breakdown-toggle svg { transition: transform 0.18s ease; }
+    .context-breakdown-toggle.open svg { transform: rotate(180deg); }
+
+    .context-breakdown { margin-top: 9px; }
+    .context-stack {
+      position: relative;
+      display: flex;
+      height: 7px;
+      border-radius: 4px;
+      overflow: visible;
+      background: color-mix(in srgb, var(--fg) 10%, transparent);
+      margin-bottom: 10px;
+    }
+    .context-stack-seg { height: 100%; min-width: 2px; }
+    .context-stack-seg:first-child { border-radius: 4px 0 0 4px; }
+    .context-stack-mark {
+      position: absolute;
+      top: -3px;
+      bottom: -3px;
+      width: 2px;
+      border-radius: 1px;
+      background: var(--fg);
+      opacity: 0.55;
+    }
+    .context-cat-list { display: flex; flex-direction: column; gap: 5px; }
+    .context-cat-row {
+      display: grid;
+      grid-template-columns: 10px 1fr auto 46px;
+      align-items: center;
+      gap: 8px;
+      font-size: 11.5px;
+    }
+    .context-cat-swatch { width: 9px; height: 9px; border-radius: 2px; }
+    .context-cat-row.free .context-cat-swatch { border: 1px solid color-mix(in srgb, var(--fg) 30%, transparent); }
+    .context-cat-row.buffer .context-cat-swatch {
+      background: repeating-linear-gradient(45deg, color-mix(in srgb, var(--fg) 35%, transparent) 0 2px, transparent 2px 4px) !important;
+    }
+    .context-cat-label { color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .context-cat-row.free .context-cat-label, .context-cat-row.buffer .context-cat-label { color: var(--muted); }
+    .context-cat-val { font-variant-numeric: tabular-nums; color: var(--fg); }
+    .context-cat-pct { font-variant-numeric: tabular-nums; color: var(--muted); text-align: right; }
+    .context-breakdown-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+      font-size: 11.5px;
+      color: var(--muted);
+    }
+    .context-compact-btn {
+      border: 1px solid var(--border);
+      background: var(--surface-hover);
+      color: var(--fg);
+      font: inherit;
+      font-size: 11px;
+      padding: 3px 9px;
+      border-radius: 5px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .context-compact-btn:hover:not(:disabled) { border-color: var(--accent); }
+    .context-compact-btn:disabled { opacity: 0.45; cursor: default; }
+    .context-breakdown-note { margin-top: 7px; font-size: 10.5px; line-height: 1.4; color: var(--muted); }
+
 
     /* Messages */
     .message {
@@ -5614,6 +5744,13 @@ export function getChatStyles(): string {
     .slash-item:hover {
       background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
     }
+    .slash-item.mention-empty {
+      justify-content: space-between;
+      cursor: default;
+    }
+    .slash-item.mention-empty:hover {
+      background: transparent;
+    }
     .slash-item.active {
       background: var(--vscode-list-activeSelectionBackground, rgba(255, 255, 255, 0.12));
       color: var(--vscode-list-activeSelectionForeground, var(--fg));
@@ -6350,6 +6487,7 @@ export function getChatStyles(): string {
     }
     .mode-popover .menu-popover-item { padding: 8px; }
     .mode-popover .menu-popover-note { padding: 8px; font-size: 10.5px; }
+    .menu-docs-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; white-space: nowrap; }
 
     .profile-popover {
       bottom: calc(100% + 8px);
@@ -8595,5 +8733,6 @@ export function getChatStyles(): string {
     }
 
     ${getPromptStyles()}
+    ${getTurnRailStyles()}
 `;
 }

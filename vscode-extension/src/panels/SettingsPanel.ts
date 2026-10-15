@@ -13,6 +13,24 @@ import { existsSync, readFileSync } from "fs";
 import { homedir } from "os";
 import { getUsageScript } from "./usage/usageScript.js";
 import { decodeUsagePng } from "./usage/usageImage.js";
+import { recordFeatureUse } from "../telemetry/featureUsage.js";
+import { DOCS } from "../docsLinks.js";
+
+// Hub actions recorded as anonymous feature use (the action name only, never the values).
+const HUB_FEATURES: Record<string, string> = {
+  select_model: "model_selected", toggle_pin: "model_pinned",
+  save_provider: "provider_saved", delete_provider: "provider_deleted", test_provider: "provider_tested",
+  set_api_key: "api_key_saved",
+  install_skill: "skill_installed", skill_read: "skill_viewed", remove_skill: "skill_removed",
+  trust_folder: "trust_granted", revoke_trust: "trust_revoked",
+  toggle_sound: "sound_toggled", toggle_coauthor: "coauthor_toggled", configure_python_path: "python_path_set",
+  cron_delete: "cron_deleted", fetch_cron_runs: "cron_history_viewed", open_cron_session: "cron_session_opened",
+  mcp_add: "mcp_added", mcp_remove: "mcp_removed", mcp_restart: "mcp_restarted",
+  mcp_toggle: "mcp_toggled", mcp_enable: "mcp_toggled", mcp_disable: "mcp_toggled",
+  mcp_auth: "mcp_auth_started", mcp_authenticate: "mcp_auth_started",
+};
+// Browsing actions people repeat; counted once per session.
+const HUB_ONCE = new Set(["skill_viewed", "cron_history_viewed"]);
 
 export class SettingsPanel {
   public static currentPanel: SettingsPanel | undefined;
@@ -22,6 +40,7 @@ export class SettingsPanel {
   private readonly _extensionUri: vscode.Uri;
   private _disposables: vscode.Disposable[] = [];
   private _rpcClient: RpcClient | null = null;
+  private _cronEventDisposers: Array<() => void> = [];
   private _onConfigChangeCallback?: () => void;
   private _initialTab: string = "models";
   private _loadingPromise: Promise<void> | null = null;
@@ -190,7 +209,8 @@ export class SettingsPanel {
     };
 
     this._update();
-    void this._rpcClient?.call("telemetry.recordFeature", { feature: "settings_opened" }).catch(() => {});
+    this._bindCronEvents();
+    recordFeatureUse("settings_opened", { client: this._rpcClient });
 
     this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
 
@@ -205,7 +225,7 @@ export class SettingsPanel {
 
   public setRpcClient(client: RpcClient) {
     this._rpcClient = client;
-    void this._rpcClient.call("telemetry.recordFeature", { feature: "settings_opened" }).catch(() => {});
+    this._bindCronEvents();
     this.loadData();
   }
 
@@ -354,6 +374,9 @@ export class SettingsPanel {
   }
 
   private async _handleMessage(message: any) {
+    const hubFeature = HUB_FEATURES[message?.type];
+    if (hubFeature) recordFeatureUse(hubFeature, { oncePerSession: HUB_ONCE.has(hubFeature) });
+    if (message?.type === "update_setting" && typeof message.key === "string") recordFeatureUse("pref_" + message.key);
     if (message.type === "open_url" && ["https://ollama.com/download", "https://docs.ollama.com/quickstart"].includes(message.url)) {
       await vscode.env.openExternal(vscode.Uri.parse(message.url));
       return;
@@ -808,8 +831,7 @@ export class SettingsPanel {
       case "tab_switched": {
         const tab = message.tab;
         if (tab && typeof tab === "string") {
-          const cleanTab = tab.slice(0, 32).replace(/[^a-z0-9_-]/g, "");
-          void this._rpcClient?.call("telemetry.recordFeature", { feature: `settings_tab_${cleanTab}` }).catch(() => {});
+          recordFeatureUse(`settings_tab_${tab.slice(0, 18)}`, { client: this._rpcClient });
         }
         break;
       }
@@ -824,14 +846,7 @@ export class SettingsPanel {
         });
         this._onConfigChangeCallback?.();
         if (message.key === "enabled") {
-          void this._rpcClient?.call("telemetry.recordFeature", {
-            feature: message.value ? "wallpaper_enabled" : "wallpaper_disabled",
-          }).catch(() => {});
-        } else if (message.key === "preset" && typeof message.value === "string") {
-          const cleanPreset = message.value.slice(0, 24).replace(/[^a-z0-9_-]/g, "");
-          void this._rpcClient?.call("telemetry.recordFeature", {
-            feature: `wallpaper_preset_${cleanPreset}`,
-          }).catch(() => {});
+          recordFeatureUse(message.value ? "wallpaper_enabled" : "wallpaper_disabled", { client: this._rpcClient });
         }
         break;
       }
@@ -840,9 +855,7 @@ export class SettingsPanel {
         const config = vscode.workspace.getConfiguration("andromity");
         await config.update("mascotEnabled", !!message.enabled, vscode.ConfigurationTarget.Global);
         this._onConfigChangeCallback?.();
-        void this._rpcClient?.call("telemetry.recordFeature", {
-          feature: message.enabled ? "mascot_enabled" : "mascot_disabled",
-        }).catch(() => {});
+        recordFeatureUse(message.enabled ? "mascot_enabled" : "mascot_disabled", { client: this._rpcClient });
         try {
           const { ChatViewProvider } = await import("../providers/ChatViewProvider.js");
           ChatViewProvider.currentProvider?.broadcastMascotConfig();
@@ -918,7 +931,7 @@ export class SettingsPanel {
             project_path: workspaceFolder,
           });
           vscode.window.showInformationMessage("Scheduled cron job created.");
-          await this.loadData();
+          await this._refreshCronList();
         } catch (e: any) {
           vscode.window.showErrorMessage(`Failed to create cron job: ${e.message}`);
         }
@@ -932,7 +945,7 @@ export class SettingsPanel {
             id: message.id,
             project_path: workspaceFolder,
           });
-          await this.loadData();
+          await this._refreshCronList();
         } catch (e: any) {
           vscode.window.showErrorMessage(`Failed to toggle cron job: ${e.message}`);
         }
@@ -954,7 +967,7 @@ export class SettingsPanel {
             project_path: workspaceFolder,
           });
           vscode.window.showInformationMessage("Scheduled cron job deleted.");
-          await this.loadData();
+          await this._refreshCronList();
         } catch (e: any) {
           vscode.window.showErrorMessage(`Failed to delete cron job: ${e.message}`);
         }
@@ -964,13 +977,13 @@ export class SettingsPanel {
       case "cron_run_now": {
         try {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-          vscode.window.showInformationMessage(`Triggering cron job "${message.name || message.id}"...`);
+          // Progress arrives as cron/run_started and cron/run_completed events.
           await this._rpcClient.call("cron.run_now", {
             id: message.id,
             project_path: workspaceFolder,
           });
-          await this.loadData();
         } catch (e: any) {
+          this._panel.webview.postMessage({ type: "cron_run_event", phase: "completed", job_id: message.id });
           vscode.window.showErrorMessage(`Failed to trigger cron job: ${e.message}`);
         }
         break;
@@ -978,17 +991,7 @@ export class SettingsPanel {
 
       case "refresh_crons": {
         try {
-          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-          const crons = await this._rpcClient.call<any[]>("cron.list", {
-            project_path: workspaceFolder,
-          });
-          if (SettingsPanel._cachedState) {
-            SettingsPanel._cachedState.crons = crons || [];
-          }
-          this._panel.webview.postMessage({
-            type: "crons_refreshed",
-            crons: crons || [],
-          });
+          await this._refreshCronList();
         } catch (err: any) {
           vscode.window.showErrorMessage(`Failed to refresh cron jobs: ${err.message}`);
         }
@@ -1201,7 +1204,34 @@ export class SettingsPanel {
     this._panel.webview.html = this._getHtmlForWebview();
   }
 
+  private async _refreshCronList(): Promise<void> {
+    if (!this._rpcClient) return;
+    const crons = await this._rpcClient.call<any[]>("cron.list", {
+      project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+    });
+    if (SettingsPanel._cachedState) SettingsPanel._cachedState.crons = crons || [];
+    this._panel.webview.postMessage({ type: "crons_refreshed", crons: crons || [] });
+  }
+
+  // Live run state for the Cron Jobs page: a card shows Running until its run completes.
+  private _bindCronEvents(): void {
+    this._cronEventDisposers.forEach((off) => off());
+    this._cronEventDisposers = [];
+    const client = this._rpcClient;
+    if (!client) return;
+    const forward = (phase: "started" | "completed") => (params: any) => {
+      this._panel.webview.postMessage({ type: "cron_run_event", phase, job_id: params?.job_id, run: params?.run, job: params?.job });
+    };
+    const started = forward("started");
+    const completed = forward("completed");
+    client.on("cron/run_started", started);
+    client.on("cron/run_completed", completed);
+    this._cronEventDisposers.push(() => client.off("cron/run_started", started), () => client.off("cron/run_completed", completed));
+  }
+
   public dispose() {
+    this._cronEventDisposers.forEach((off) => off());
+    this._cronEventDisposers = [];
     SettingsPanel.currentPanel = undefined;
     this._panel.dispose();
     while (this._disposables.length) {
@@ -1348,17 +1378,17 @@ export class SettingsPanel {
     .cron-card {
       background: var(--card-bg);
       border: 1px solid var(--card-border);
-      padding: 14px 16px;
+      border-left: 3px solid var(--tag-green-fg);
+      padding: 12px 14px 10px;
       display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 16px;
+      flex-direction: column;
+      gap: 9px;
       transition: border-color 0.15s;
     }
-
-    .cron-card:hover {
-      border-color: var(--card-hover-border);
-    }
+    .cron-card.paused { border-left-color: var(--card-border); }
+    .cron-card.running { border-left-color: var(--tag-blue-fg); }
+    .cron-card:hover { border-color: var(--card-hover-border); }
+    .cron-card.paused .cron-card-name, .cron-card.paused .cron-card-prompt { opacity: 0.75; }
 
     /* Usage Analytics Styles */
     .usage-progress-bar-wrap {
@@ -1412,82 +1442,180 @@ export class SettingsPanel {
       font-family: var(--font-family);
     }
 
-    .cron-card-left {
-      flex: 1;
-      min-width: 0;
+    .cron-summary {
       display: flex;
-      flex-direction: column;
-      gap: 6px;
+      flex-wrap: wrap;
+      gap: 6px 16px;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin: -6px 0 14px;
     }
+    .cron-summary strong { color: var(--text); font-weight: 600; }
+    .section-desc .docs-link { color: var(--tag-blue-fg); text-decoration: underline; text-underline-offset: 2px; }
 
-    .cron-card-title-row {
+    .cron-card-head {
       display: flex;
       align-items: center;
-      gap: 10px;
+      justify-content: space-between;
+      gap: 12px;
       flex-wrap: wrap;
     }
-
-    .cron-card-name {
-      font-size: 14px;
-      font-weight: 600;
-      color: var(--text);
-    }
+    .cron-card-heading { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+    .cron-card-name { font-size: 13.5px; font-weight: 600; color: var(--text); }
 
     .cron-interval-pill {
       font-size: 11px;
       font-weight: 600;
-      padding: 2px 6px;
-      background: rgba(6, 182, 212, 0.15);
+      padding: 1px 6px;
+      background: rgba(6, 182, 212, 0.12);
       color: #06b6d4;
       border: 1px solid rgba(6, 182, 212, 0.3);
+      font-family: var(--font-mono);
     }
-
-    .cron-status-pill {
-      font-size: 10.5px;
-      padding: 2px 6px;
-      font-weight: 600;
+    .cron-status-pill { font-size: 10.5px; padding: 1px 6px; font-weight: 600; border: 1px solid transparent; }
+    .cron-status-pill.active { background: var(--tag-green-bg); color: var(--tag-green-fg); border-color: rgba(46, 160, 67, 0.3); }
+    .cron-status-pill.paused { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text-muted); border-color: var(--card-border); }
+    .cron-status-pill.running { background: var(--tag-blue-bg); color: var(--tag-blue-fg); border-color: rgba(56, 139, 253, 0.35); }
+    .cron-status-pill.running::before {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      margin-right: 5px;
+      border-radius: 50%;
+      background: currentColor;
+      vertical-align: 1px;
+      animation: cronPulse 1.2s ease-in-out infinite;
     }
+    @keyframes cronPulse { 50% { opacity: 0.3; } }
 
-    .cron-status-pill.active {
-      background: rgba(46, 160, 67, 0.15);
-      color: #3fb950;
-      border: 1px solid rgba(46, 160, 67, 0.3);
-    }
-
-    .cron-status-pill.paused {
-      background: rgba(255, 255, 255, 0.08);
-      color: var(--text-muted);
+    .cron-card-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .cron-card-actions .btn { padding: 4px 10px; font-size: 12px; }
+    .btn-icon-danger {
+      background: transparent;
       border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      padding: 4px 7px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
     }
+    .btn-icon-danger:hover { color: #f85149; border-color: rgba(248, 81, 73, 0.5); }
 
     .cron-card-prompt {
       font-size: 12px;
       color: var(--text);
-      line-height: 1.4;
-      background: rgba(0, 0, 0, 0.2);
-      padding: 8px 10px;
-      border: 1px solid rgba(255, 255, 255, 0.05);
+      line-height: 1.45;
+      background: color-mix(in srgb, var(--text) 4%, transparent);
+      padding: 7px 10px;
+      border: 1px solid var(--card-border);
       font-family: var(--font-mono);
-      font-feature-settings: "calt", "zero";
+      white-space: pre-wrap;
+      word-break: break-word;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .cron-facts {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 6px 14px;
+      margin: 0;
+    }
+    .cron-fact { min-width: 0; }
+    .cron-fact dt { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 1px; }
+    .cron-fact dd { margin: 0; font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cron-outcome.success { color: var(--tag-green-fg); }
+    .cron-outcome.failed, .cron-outcome.timeout { color: #f85149; }
+    .cron-outcome.interrupted { color: var(--tag-orange-fg); }
+    .cron-last-error {
+      font-size: 11.5px;
+      color: #f85149;
+      background: rgba(248, 81, 73, 0.08);
+      border: 1px solid rgba(248, 81, 73, 0.25);
+      padding: 5px 8px;
       white-space: pre-wrap;
       word-break: break-word;
     }
 
-    .cron-card-meta {
-      font-size: 11px;
+    .cron-history-toggle {
+      align-self: flex-start;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: none;
+      border: 0;
+      padding: 2px 0;
       color: var(--text-muted);
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .cron-history-toggle:hover { color: var(--text); }
+    .cron-history-toggle svg { transition: transform 0.15s ease; }
+    .cron-history-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+
+    .cron-runs-container { border-top: 1px solid var(--card-border); padding-top: 8px; }
+    .cron-runs-head {
       display: flex;
       align-items: center;
-      gap: 12px;
-      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 11.5px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
     }
-
-    .cron-card-actions {
-      display: flex;
+    .cron-runs-head .btn { padding: 2px 8px; font-size: 11px; }
+    .cron-runs-empty, .cron-runs-loading { font-size: 11.5px; color: var(--text-muted); padding: 4px 0; }
+    .cron-runs { display: flex; flex-direction: column; border: 1px solid var(--card-border); }
+    .cron-run + .cron-run { border-top: 1px solid var(--card-border); }
+    .cron-run-summary {
+      display: grid;
+      grid-template-columns: 14px 128px 82px 1fr 12px;
       align-items: center;
       gap: 8px;
-      flex-shrink: 0;
+      width: 100%;
+      background: none;
+      border: 0;
+      padding: 6px 9px;
+      color: var(--text);
+      font: inherit;
+      font-size: 11.5px;
+      text-align: left;
+      cursor: pointer;
     }
+    .cron-run-summary:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+    .cron-run-icon { font-weight: 700; }
+    .cron-run.success .cron-run-icon, .cron-run.success .cron-run-status { color: var(--tag-green-fg); }
+    .cron-run.failed .cron-run-icon, .cron-run.failed .cron-run-status,
+    .cron-run.timeout .cron-run-icon, .cron-run.timeout .cron-run-status { color: #f85149; }
+    .cron-run.interrupted .cron-run-icon, .cron-run.interrupted .cron-run-status { color: var(--tag-orange-fg); }
+    .cron-run.running .cron-run-icon, .cron-run.running .cron-run-status { color: var(--tag-blue-fg); }
+    .cron-run-meta { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cron-run-summary svg { transition: transform 0.15s ease; color: var(--text-muted); }
+    .cron-run-summary[aria-expanded="true"] svg { transform: rotate(90deg); }
+    .cron-run-detail { padding: 2px 9px 9px 31px; display: flex; flex-direction: column; gap: 6px; font-size: 11.5px; }
+    .cron-run-detail[hidden], .cron-runs-container[hidden] { display: none; }
+    .cron-run-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+    .cron-run-output {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 240px;
+      overflow: auto;
+      background: color-mix(in srgb, var(--text) 4%, transparent);
+      border: 1px solid var(--card-border);
+      padding: 6px 8px;
+      margin: 0;
+      user-select: text;
+    }
+    .cron-run-actions { display: flex; align-items: center; gap: 6px; }
+    .cron-run-actions .btn { padding: 2px 8px; font-size: 11px; }
+    .cron-run-session { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); }
 
     body {
       background-color: var(--bg);
@@ -2837,7 +2965,7 @@ export class SettingsPanel {
       <div class="section-header">
         <div>
           <h2 class="section-title">Live Model Hub</h2>
-          <p class="section-desc">Discover models from your connected providers. Filter free routes or choose an exact model ID.</p>
+          <p class="section-desc">Discover models from your connected providers. Filter free routes or choose an exact model ID. <a href="#" class="docs-link" data-docs-url="${DOCS.modelHub}">How the Model Hub works</a></p>
         </div>
         <button class="btn btn-secondary" id="btn-refresh-models">
           <svg id="icon-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -2917,7 +3045,7 @@ export class SettingsPanel {
       <div class="section-header">
         <div>
           <h2 class="section-title">Scheduled Cron Jobs</h2>
-          <p class="section-desc">Automate recurring agent tasks, diagnostics, test runs, and codebase maintenance on a schedule.</p>
+          <p class="section-desc">Automate recurring agent tasks, diagnostics, test runs, and codebase maintenance on a schedule. <a href="#" class="docs-link" data-docs-url="${DOCS.cron}">How cron jobs work</a></p>
         </div>
         <div class="cron-header-actions">
           <button class="btn btn-secondary" id="btn-refresh-crons">
@@ -2929,6 +3057,7 @@ export class SettingsPanel {
           </button>
         </div>
       </div>
+      <div class="cron-summary" id="cron-summary"></div>
 
       <!-- Add Cron Job Form Drawer -->
       <div class="cron-form" id="cron-create-form" style="display:none;">
@@ -2952,7 +3081,7 @@ export class SettingsPanel {
               <option value="daily at 18:00">Daily at 6:00 PM (daily at 18:00)</option>
               <option value="custom">Custom Date, Time, or Cron...</option>
             </select>
-            <input type="text" id="cron-custom-schedule" style="display:none; margin-top:6px;" placeholder="e.g. daily at 09:00, 2026-09-20 14:00, or 0 9 * * *">
+            <input type="text" id="cron-custom-schedule" style="display:none; margin-top:6px;" placeholder="every 45m · daily at 09:00 · 2026-09-20 14:00 · 0 9 * * *">
           </div>
         </div>
         <div class="cron-form-row">
@@ -2988,7 +3117,7 @@ export class SettingsPanel {
       <div class="section-header">
         <div>
           <h2 class="section-title">API Keys & Provider Connectors</h2>
-          <p class="section-desc">Manage provider connections and credentials in your local configuration.</p>
+          <p class="section-desc">Manage provider connections and credentials in your local configuration. <a href="#" class="docs-link" data-docs-url="${DOCS.apiKeys}">API keys and environment variables</a> &middot; <a href="#" class="docs-link" data-docs-url="${DOCS.customProviders}">Custom providers</a></p>
         </div>
         <button class="btn btn-secondary" data-action="add-provider">Add custom provider</button>
       </div>
@@ -3030,7 +3159,7 @@ export class SettingsPanel {
       <div class="section-header">
         <div>
           <h2 class="section-title">Skills & Instruction Packs</h2>
-          <p class="section-desc">Modular skills loaded from local workspace, global config, and the Andromity skills catalog. Browse by category and search by name or tag.</p>
+          <p class="section-desc">Modular skills loaded from local workspace, global config, and the Andromity skills catalog. Browse by category and search by name or tag. <a href="#" class="docs-link" data-docs-url="${DOCS.skills}">Writing and installing skills</a></p>
         </div>
       </div>
 
@@ -3069,7 +3198,7 @@ export class SettingsPanel {
       <div class="section-header">
         <div>
           <h2 class="section-title">Model Context Protocol (MCP)</h2>
-          <p class="section-desc">External database connectors, tool servers, and enterprise context integrations.</p>
+          <p class="section-desc">External database connectors, tool servers, and enterprise context integrations. <a href="#" class="docs-link" data-docs-url="${DOCS.mcp}">Connecting MCP servers</a></p>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
           <button class="btn" data-action="mcp_add">Add MCP Server</button>
@@ -3205,7 +3334,7 @@ export class SettingsPanel {
       <div class="section-header">
         <div>
           <h2 class="section-title">Trust & Workspace Governance</h2>
-          <p class="section-desc">Manage folder trust permissions, review auto-approved directories, and safety boundaries.</p>
+          <p class="section-desc">Manage folder trust permissions, review auto-approved directories, and safety boundaries. <a href="#" class="docs-link" data-docs-url="${DOCS.security}">How folder trust works</a></p>
         </div>
       </div>
 
@@ -3230,21 +3359,22 @@ export class SettingsPanel {
           <table class="diag-table" style="margin-top: 6px;">
             <tr>
               <td style="color: var(--tag-green-fg); font-weight: 600;">SAFE</td>
-              <td>Prompts for explicit confirmation before every single file edit and shell command execution.</td>
+              <td>Asks before file edits, commands, web and MCP actions, subagents and messages to other sessions. Reading and searching files runs without asking.</td>
             </tr>
             <tr>
               <td style="color: var(--tag-blue-fg); font-weight: 600;">TRUST</td>
-              <td>Auto-approves direct file writes within trusted project directories; prompts for shell commands.</td>
+              <td>Edits files and runs allowlisted commands without asking. Asks before other commands, unlisted domains, MCP tools that change things, and edits to sensitive or execution-control files.</td>
             </tr>
             <tr>
               <td style="color: var(--tag-purple-fg); font-weight: 600;">FULL</td>
-              <td>Auto-approves all tool actions and logs them directly to the UI execution stream.</td>
+              <td>Nothing asks for approval. Folder trust, profile limits and Andromity's file protections still apply.</td>
             </tr>
             <tr>
               <td style="color: var(--tag-orange-fg); font-weight: 600;">YOLO</td>
-              <td>Autonomous silent execution with all security confirmations bypassed.</td>
+              <td>The same as FULL in VS Code. In the terminal app, YOLO lasts for the current session only.</td>
             </tr>
           </table>
+          <p class="section-desc" style="margin-top: 8px;"><a href="#" class="docs-link" data-docs-url="${DOCS.permissionModes}">Full rules, allowlists and approval choices</a></p>
         </div>
       </div>
     </div>
@@ -3254,7 +3384,7 @@ export class SettingsPanel {
       <div class="section-header">
         <div>
           <h2 class="section-title">Agent Preferences & Configuration</h2>
-          <p class="section-desc">Configure governance rules, agent profiles, subagent concurrency, and storage thresholds.</p>
+          <p class="section-desc">Configure governance rules, agent profiles, subagent concurrency, and storage thresholds. <a href="#" class="docs-link" data-docs-url="${DOCS.preferences}">Every preference explained</a></p>
         </div>
       </div>
 
@@ -3274,8 +3404,8 @@ export class SettingsPanel {
           <div class="setting-label">Startup Session Restoration</div>
           <div class="setting-desc">Control whether to resume the previous conversation or always open a fresh empty session on IDE relaunch.</div>
           <select class="setting-select" id="setting-startup-session">
-            <option value="last">Last Session — Resume previous active session (Default)</option>
-            <option value="fresh">Fresh Session — Always start empty (history stays in drawer)</option>
+            <option value="fresh">Fresh Session — Always start empty, history stays in the drawer (Default)</option>
+            <option value="last">Last Session — Resume the previous active session</option>
           </select>
         </div>
 
@@ -3325,8 +3455,9 @@ export class SettingsPanel {
           <select class="setting-select" id="setting-max-subagents">
             <option value="1">1 Subagent (Sequential execution)</option>
             <option value="2">2 Subagents</option>
-            <option value="3">3 Subagents (Default)</option>
+            <option value="3">3 Subagents</option>
             <option value="4">4 Subagents</option>
+            <option value="5">5 Subagents (Default)</option>
             <option value="6">6 Subagents</option>
             <option value="8">8 Subagents (High Concurrency)</option>
           </select>
@@ -3379,7 +3510,7 @@ export class SettingsPanel {
       <div class="section-header">
         <div>
           <h2 class="section-title">Personalisation & Visual Atmosphere</h2>
-          <p class="section-desc">Customize ambient background atmosphere, real-time fluid ripple dynamics, retro matrix dither, and cursor spotlight aura.</p>
+          <p class="section-desc">Customize ambient background atmosphere, real-time fluid ripple dynamics, retro matrix dither, and cursor spotlight aura. <a href="#" class="docs-link" data-docs-url="${DOCS.personalisation}">Personalisation guide</a></p>
         </div>
       </div>
 
@@ -3772,21 +3903,23 @@ SOFTWARE.</pre>
       btn.addEventListener("click", () => {
         const tab = btn.dataset.tab;
         if (tab) {
-          switchTab(tab);
+          switchTab(tab, true);
         }
       });
     });
 
-    function switchTab(tab) {
+    function switchTab(tab, fromUser) {
       tabButtons.forEach(b => {
         if (b.dataset.tab) {
           b.classList.toggle("active", b.dataset.tab === tab);
         }
       });
       panes.forEach(p => p.classList.toggle("active", p.id === "pane-" + tab));
-      try {
-        vscode.postMessage({ type: "tab_switched", tab: tab });
-      } catch (e) {}
+      if (fromUser) {
+        try {
+          vscode.postMessage({ type: "tab_switched", tab: tab });
+        } catch (e) {}
+      }
     }
 
     // Sidebar Manual Collapse & Auto Low-Space Detection
@@ -4145,7 +4278,7 @@ SOFTWARE.</pre>
           vscode.postMessage({ type: "trust_folder", path: targetPath });
         }
       } else if (action === "restart-daemon") {
-        vscode.postMessage({ command: "restartDaemon" });
+        vscode.postMessage({ type: "restartDaemon" });
       } else if (action === "run-setup-check") {
         vscode.postMessage({ type: "check_setup" });
       } else if (action === "configure-python-path") {
@@ -4412,7 +4545,7 @@ SOFTWARE.</pre>
           const cronModelSel = document.getElementById("cron-model-select");
           if (cronModelSel && allModels && allModels.length > 0) {
             cronModelSel.innerHTML = '<option value="">Default Active Model (' + escapeHtml(activeModelId) + ')</option>' +
-              allModels.map(m => '<option value="' + escapeHtml(m.id) + '">' + escapeHtml(m.name || m.id) + ' (' + escapeHtml(m.provider || '') + ')</option>').join('');
+              allModels.map(m => '<option value="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || '') + '">' + escapeHtml(m.name || m.id) + ' (' + escapeHtml(m.provider || '') + ')</option>').join('');
           }
 
           renderModels();
@@ -4535,62 +4668,26 @@ SOFTWARE.</pre>
           break;
         }
         case "cron_runs_loaded": {
-          const runsDiv = document.getElementById("cron-runs-" + msg.jobId);
-          if (runsDiv) {
-            const runs = msg.runs || [];
-            if (runs.length === 0) {
-              runsDiv.innerHTML = '<div style="font-size:11px; color:var(--text-muted); padding:6px 0;">No recorded runs yet for this job. Click "Run Now" to trigger.</div>';
-            } else {
-              runsDiv.innerHTML = '<div style="font-size:11px; font-weight:600; margin-bottom:8px; color:var(--fg); display:flex; justify-content:space-between; align-items:center;"><span>Execution History (' + runs.length + ' runs):</span><button class="btn btn-secondary" style="padding:2px 8px; font-size:10.5px;" data-action="refresh-history" data-id="' + escapeHtml(msg.jobId) + '">↻ Refresh</button></div>' +
-                runs.map(r => {
-                  const runTime = r.started_at ? new Date(r.started_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Unknown time';
-                  const isOk = r.status === 'success';
-                  const stClass = isOk ? 'active' : (r.status === 'running' ? 'badge blue' : 'paused');
-                  const dur = r.duration_ms ? ((r.duration_ms / 1000).toFixed(1) + 's') : '';
-                  const toolsStr = r.tools_used && r.tools_used.length > 0 ? r.tools_used.join(', ') : '';
-                  const outText = r.output || r.output_preview || '';
-                  const sId = r.session_id || '';
-                  const hasRunSession = !!sId;
-                  const runSessionName = "Cron Run: " + (r.job_name || "Task") + " (" + runTime + ")";
-
-                  return '<div style="display:flex; flex-direction:column; gap:5px; padding:9px 11px; background:rgba(255,255,255,0.025); margin-bottom:7px; font-size:11.5px; border:1px solid var(--card-border); border-radius:6px;">' +
-                    '<div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">' +
-                      '<div style="display:flex; align-items:center; gap:6px;">' +
-                        '<span class="cron-status-pill ' + stClass + '" style="font-size:9.5px; padding:2px 6px;">' + escapeHtml((r.status || 'unknown').toUpperCase()) + '</span>' +
-                        '<span style="font-weight:500;">' + escapeHtml(runTime) + '</span>' +
-                      '</div>' +
-                      '<div style="display:flex; align-items:center; gap:6px;">' +
-                        (r.model ? ('<span style="color:var(--text-muted); font-size:10px;">' + escapeHtml(r.model) + '</span>') : '') +
-                        (dur ? ('<span style="color:var(--accent); font-size:10.5px; font-weight:600;">' + escapeHtml(dur) + '</span>') : '') +
-                      '</div>' +
-                    '</div>' +
-                    (toolsStr ? ('<div style="font-size:10.5px; color:var(--text-muted); margin-top:2px;"><span style="font-weight:600;">Tools:</span> ' + escapeHtml(toolsStr) + '</div>') : '') +
-                    (outText ? (
-                      '<details style="margin-top:4px; background:rgba(0,0,0,0.25); border:1px solid var(--border); border-radius:4px; padding:4px 8px;">' +
-                        '<summary style="font-size:11px; font-weight:600; color:var(--accent); cursor:pointer; user-select:none;">AI Model Response Output</summary>' +
-                        '<div style="font-family:var(--vscode-editor-font-family, monospace); font-size:11px; color:var(--fg); white-space:pre-wrap; line-height:1.5; margin-top:6px; max-height:220px; overflow-y:auto; padding-top:4px; border-top:1px solid rgba(255,255,255,0.06);">' + escapeHtml(outText) + '</div>' +
-                      '</details>'
-                    ) : '') +
-                    (r.error ? ('<div style="color:var(--red); font-size:11px; margin-top:2px; padding:4px 6px; background:rgba(239,68,68,0.1); border-radius:4px; border:1px solid rgba(239,68,68,0.25);">Error: ' + escapeHtml(r.error) + '</div>') : '') +
-                    '<div style="display:flex; align-items:center; justify-content:space-between; gap:6px; margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,0.05);">' +
-                      (hasRunSession ? (
-                        '<div style="display:flex; align-items:center; gap:6px;">' +
-                          '<button class="btn btn-secondary" data-action="open-session" data-session-id="' + escapeHtml(sId) + '" data-session-name="' + escapeHtml(runSessionName) + '" style="font-size:10.5px; padding:2px 8px;" title="Open this run session in chat sidebar">' +
-                            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11" style="margin-right:4px; vertical-align:-1.5px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>Show Session' +
-                          '</button>' +
-                          '<button class="btn btn-secondary" data-action="open-session-tab" data-session-id="' + escapeHtml(sId) + '" data-session-name="' + escapeHtml(runSessionName) + '" style="padding:2px 6px; font-size:10.5px;" title="Open this run session in editor tab">' +
-                            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11" style="vertical-align:-1.5px;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="12" y1="3" x2="12" y2="21"></line></svg>' +
-                          '</button>' +
-                          '<span style="font-family:var(--font-mono); font-size:10px; color:var(--text-muted);">' + escapeHtml(sId.slice(0, 18)) + '…</span>' +
-                        '</div>'
-                      ) : (
-                        '<span style="font-size:10.5px; color:var(--text-muted); font-style:italic;">No session recorded for this run</span>'
-                      )) +
-                    '</div>' +
-                  '</div>';
-                }).join('');
-            }
+          cronRunsCache[msg.jobId] = msg.runs || [];
+          renderCronRuns(msg.jobId);
+          break;
+        }
+        case "cron_run_event": {
+          const jobId = String(msg.job_id || "");
+          if (!jobId) break;
+          if (msg.phase === "started") cronRunning.add(jobId);
+          else cronRunning.delete(jobId);
+          if (msg.job) {
+            const index = allCrons.findIndex(j => String(j.id) === jobId);
+            if (index >= 0) allCrons[index] = Object.assign({}, allCrons[index], msg.job);
           }
+          if (msg.run && cronRunsCache[jobId]) {
+            const runs = cronRunsCache[jobId].filter(r => r.id !== msg.run.id);
+            runs.unshift(msg.run);
+            cronRunsCache[jobId] = runs;
+          }
+          renderCrons();
+          if (msg.phase === "completed") vscode.postMessage({ type: "refresh_crons" });
           break;
         }
         case "mcp_refreshed": {
@@ -4871,7 +4968,7 @@ SOFTWARE.</pre>
       if (!grid) return;
       const providerMeta = {
         andromity: { name: "Andromity Cloud Gateway", desc: "Managed cloud intelligence for autonomous coding. Zero setup required.", portal: "https://agenticmarket.dev" },
-        openrouter: { name: "OpenRouter", desc: "Access 396+ models across Claude, GPT, Gemini, Llama, DeepSeek with unified billing.", portal: "https://openrouter.ai/keys" },
+        openrouter: { name: "OpenRouter", desc: "One key for models from Anthropic, OpenAI, Google, Meta, DeepSeek and more, with unified billing.", portal: "https://openrouter.ai/keys" },
         anthropic: { name: "Anthropic", desc: "Direct access to Claude Opus 4.6, Claude Sonnet 4.6/3.7, and Claude Haiku.", portal: "https://console.anthropic.com/settings/keys" },
         openai: { name: "OpenAI", desc: "Direct access to GPT-4o, GPT-4.1, o1, o3, and o4-mini models.", portal: "https://platform.openai.com/api-keys" },
         google: { name: "Google Gemini", desc: "Direct access to Gemini 2.5 Pro, 2.5 Flash, and Gemini 2.0 Flash.", portal: "https://aistudio.google.com/app/apikey" },
@@ -5667,6 +5764,9 @@ SOFTWARE.</pre>
         }
         const prompt = (promptInput ? promptInput.value : "").trim();
         const model = (modelSelect ? modelSelect.value : "") || activeModelId;
+        // A picked model carries its own provider; the default uses the active one.
+        const pickedOption = modelSelect && modelSelect.value ? modelSelect.options[modelSelect.selectedIndex] : null;
+        const provider = (pickedOption && pickedOption.dataset.provider) || activeModelProvider;
         const allowedCommands = (commandsInput ? commandsInput.value : "").trim();
 
         if (!prompt) {
@@ -5684,7 +5784,7 @@ SOFTWARE.</pre>
             schedule: schedule,
             prompt: prompt,
             model: model,
-            provider: activeModelProvider,
+            provider: provider,
             allowed_commands: allowedCommands,
           }
         });
@@ -5711,52 +5811,62 @@ SOFTWARE.</pre>
     }
 
 
+    document.querySelectorAll("[data-docs-url]").forEach(link => {
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        vscode.postMessage({ type: "open_url", url: link.getAttribute("data-docs-url") });
+      });
+    });
     const cronContainer = document.getElementById("cron-list-container");
     if (cronContainer) {
       cronContainer.addEventListener("click", (e) => {
-        const btn = e.target.closest("button[data-action]");
-        if (!btn) return;
+        const btn = e.target.closest("[data-action]");
+        if (!btn || !cronContainer.contains(btn)) return;
+        // The document-level handler also knows open-session; handle it once, here.
+        e.stopPropagation();
         const action = btn.dataset.action;
         const id = btn.dataset.id;
         if (action === "toggle") {
           vscode.postMessage({ type: "cron_toggle", id });
         } else if (action === "run") {
-          const name = btn.dataset.name || "";
-          const prompt = decodeURIComponent(btn.dataset.prompt || "");
-          vscode.postMessage({ type: "cron_run_now", id, name, prompt });
+          cronRunning.add(String(id));
+          renderCrons();
+          vscode.postMessage({ type: "cron_run_now", id });
         } else if (action === "delete") {
           vscode.postMessage({ type: "cron_delete", id });
+        } else if (action === "new-cron") {
+          if (btnToggleAddCron && cronCreateForm && cronCreateForm.style.display === "none") btnToggleAddCron.click();
         } else if (action === "history" || action === "refresh-history") {
           const runsDiv = document.getElementById("cron-runs-" + id);
-          if (runsDiv) {
-            if (action === "history" && runsDiv.style.display === "block") {
-              runsDiv.style.display = "none";
-            } else {
-              runsDiv.style.display = "block";
-              runsDiv.innerHTML = '<div style="padding:10px; color:var(--text-muted); font-size:11.5px; display:flex; align-items:center; gap:6px;"><span style="display:inline-block; width:10px; height:10px; border:1.5px solid currentColor; border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite;"></span> Loading execution history...</div>';
-              vscode.postMessage({ type: "fetch_cron_runs", id: id });
-            }
+          if (!runsDiv) return;
+          if (action === "history" && cronOpenHistory.has(id)) {
+            cronOpenHistory.delete(id);
+            runsDiv.hidden = true;
+            btn.setAttribute("aria-expanded", "false");
+            return;
           }
-        } else if (action === "open-session") {
-          const sId = btn.dataset.sessionId;
-          const sName = btn.dataset.sessionName || "Cron Session";
-          if (!sId) {
-            vscode.postMessage({ type: "show_info", text: "This cron job has not run yet. Click 'Run Now' to execute it and create a session." });
-          } else {
-            vscode.postMessage({ type: "open_cron_session", sessionId: sId, sessionName: sName, target: "sidebar" });
+          cronOpenHistory.add(id);
+          runsDiv.hidden = false;
+          const toggleBtn = cronContainer.querySelector('.cron-history-toggle[data-id="' + CSS.escape(id) + '"]');
+          if (toggleBtn) toggleBtn.setAttribute("aria-expanded", "true");
+          if (!cronRunsCache[id] || action === "refresh-history") {
+            runsDiv.innerHTML = '<div class="cron-runs-loading">Loading runs…</div>';
           }
-        } else if (action === "open-session-tab") {
+          vscode.postMessage({ type: "fetch_cron_runs", id: id });
+        } else if (action === "expand-run") {
+          const detail = btn.nextElementSibling;
+          if (detail) {
+            detail.hidden = !detail.hidden;
+            btn.setAttribute("aria-expanded", String(!detail.hidden));
+          }
+        } else if (action === "open-session" || action === "open-session-tab") {
           const sId = btn.dataset.sessionId;
-          const sName = btn.dataset.sessionName || "Cron Session";
-          if (!sId) {
-            vscode.postMessage({ type: "show_info", text: "This cron job has not run yet. Click 'Run Now' to execute it and create a session." });
-          } else {
-            vscode.postMessage({ type: "open_cron_session", sessionId: sId, sessionName: sName, target: "tab" });
+          if (sId) {
+            vscode.postMessage({ type: "open_cron_session", sessionId: sId, sessionName: btn.dataset.sessionName || "Cron run", target: action === "open-session-tab" ? "tab" : "sidebar" });
           }
         }
       });
     }
-
     const btnRefreshMcp = document.getElementById("btn-refresh-mcp");
     if (btnRefreshMcp) {
       btnRefreshMcp.addEventListener("click", () => {
@@ -5768,54 +5878,178 @@ SOFTWARE.</pre>
       });
     }
 
+    // Cron jobs: each card shows schedule, next and last run, model and mode; history rows expand for output.
+    const cronRunsCache = {};
+    const cronOpenHistory = new Set();
+    const cronRunning = new Set();
+    const CRON_OUTCOME = { success: "Succeeded", failed: "Failed", timeout: "Timed out", interrupted: "Interrupted", running: "Running", never: "Never run" };
+    const cronSvg = (body) => '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + body + '</svg>';
+    const CRON_ICON = {
+      success: cronSvg('<polyline points="20 6 9 17 4 12"></polyline>'),
+      failed: cronSvg('<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>'),
+      timeout: cronSvg('<circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline>'),
+      interrupted: cronSvg('<line x1="12" y1="6" x2="12" y2="13"></line><line x1="12" y1="18" x2="12.01" y2="18"></line>'),
+      running: cronSvg('<circle cx="12" cy="12" r="4" fill="currentColor"></circle>'),
+    };
+    const CHEVRON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+
+    function formatCronWhen(iso) {
+      if (!iso) return "";
+      const date = new Date(iso);
+      if (isNaN(date.getTime())) return "";
+      const time = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      return date.toDateString() === new Date().toDateString() ? "Today " + time : date.toLocaleDateString([], { month: "short", day: "numeric" }) + ", " + time;
+    }
+
+    function formatCronDuration(ms) {
+      if (!ms) return "";
+      if (ms < 1000) return Math.round(ms) + "ms";
+      if (ms < 60000) return (ms / 1000).toFixed(1) + "s";
+      return Math.floor(ms / 60000) + "m " + Math.round((ms % 60000) / 1000) + "s";
+    }
+
+    // next_run_in comes from the daemon as "now", "45m", "1h 5m", "2d 3h" or "completed".
+    function cronMinutesUntil(nextIn) {
+      if (!nextIn || nextIn === "completed") return Infinity;
+      if (nextIn === "now") return 0;
+      let minutes = 0;
+      String(nextIn).split(" ").forEach(part => {
+        const value = parseFloat(part);
+        if (isNaN(value)) return;
+        if (part.endsWith("d")) minutes += value * 1440;
+        else if (part.endsWith("h")) minutes += value * 60;
+        else if (part.endsWith("m")) minutes += value;
+        else if (part.endsWith("s")) minutes += value / 60;
+      });
+      return minutes;
+    }
+
+    function updateCronSummary() {
+      const summary = document.getElementById("cron-summary");
+      if (!summary) return;
+      if (!allCrons.length) {
+        summary.innerHTML = "";
+        return;
+      }
+      const active = allCrons.filter(j => j.enabled !== false);
+      const next = active.slice().sort((a, b) => cronMinutesUntil(a.next_run_in) - cronMinutesUntil(b.next_run_in))[0];
+      const parts = ["<span><strong>" + allCrons.length + "</strong> job" + (allCrons.length === 1 ? "" : "s") + "</span>",
+        "<span><strong>" + active.length + "</strong> active</span>"];
+      if (cronRunning.size) parts.push("<span><strong>" + cronRunning.size + "</strong> running now</span>");
+      if (next && cronMinutesUntil(next.next_run_in) !== Infinity) {
+        parts.push("<span>Next: <strong>" + escapeHtml(next.name || next.id) + "</strong> " + (next.next_run_in === "now" ? "due now" : "in " + escapeHtml(next.next_run_in)) + "</span>");
+      }
+      summary.innerHTML = parts.join("");
+    }
+
+    function cronFact(label, valueHtml) {
+      return '<div class="cron-fact"><dt>' + label + '</dt><dd>' + valueHtml + '</dd></div>';
+    }
+
+    function cronCardHtml(job) {
+      const id = String(job.id);
+      const enabled = job.enabled !== false;
+      const running = cronRunning.has(id);
+      const state = running ? "running" : enabled ? "active" : "paused";
+      const stateLabel = running ? "Running" : enabled ? "Active" : "Paused";
+      const nextIn = job.next_run_in;
+      const next = running ? "Running now" : !enabled ? "Paused" : nextIn === "now" ? "Due now" : nextIn === "completed" ? "No more runs" : nextIn ? "In " + nextIn : "—";
+      const lastStatus = job.last_status || "never";
+      const lastWhen = formatCronWhen(job.last_run);
+      const last = lastWhen
+        ? escapeHtml(lastWhen) + ' · <span class="cron-outcome ' + escapeHtml(lastStatus) + '">' + escapeHtml(CRON_OUTCOME[lastStatus] || lastStatus) + '</span>'
+        : "Never run";
+      const model = job.model ? escapeHtml(job.model) + (job.provider ? ' <span style="color:var(--text-muted)">· ' + escapeHtml(job.provider) + '</span>' : '') : "Default model";
+      const cmds = Array.isArray(job.allowed_commands) ? job.allowed_commands.join(", ") : String(job.allowed_commands || "");
+      const historyOpen = cronOpenHistory.has(id);
+      return '<article class="cron-card ' + state + '" data-job-id="' + escapeHtml(id) + '">' +
+        '<div class="cron-card-head">' +
+          '<div class="cron-card-heading">' +
+            '<span class="cron-card-name">' + escapeHtml(job.name || id) + '</span>' +
+            '<span class="cron-interval-pill" title="Schedule">' + escapeHtml(job.schedule || "") + '</span>' +
+            '<span class="cron-status-pill ' + state + '">' + stateLabel + '</span>' +
+          '</div>' +
+          '<div class="cron-card-actions">' +
+            '<button class="btn" data-action="run" data-id="' + escapeHtml(id) + '"' + (running ? ' disabled' : '') + '>' + (running ? 'Running…' : 'Run now') + '</button>' +
+            '<button class="btn btn-secondary" data-action="toggle" data-id="' + escapeHtml(id) + '">' + (enabled ? 'Pause' : 'Resume') + '</button>' +
+            '<button class="btn-icon-danger" data-action="delete" data-id="' + escapeHtml(id) + '" title="Delete job" aria-label="Delete ' + escapeHtml(job.name || "job") + '"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="cron-card-prompt" title="' + escapeHtml(job.prompt || "") + '">' + escapeHtml(job.prompt || "") + '</div>' +
+        '<dl class="cron-facts">' +
+          cronFact("Next run", escapeHtml(next)) +
+          cronFact("Last run", last) +
+          cronFact("Model", model) +
+          cronFact("Permission mode", escapeHtml(String(job.mode || "trust").toUpperCase())) +
+          (cmds ? cronFact("Allowed commands", '<code>' + escapeHtml(cmds) + '</code>') : "") +
+        '</dl>' +
+        (lastStatus === "failed" && job.last_error ? '<div class="cron-last-error">' + escapeHtml(job.last_error) + '</div>' : "") +
+        '<button class="cron-history-toggle" data-action="history" data-id="' + escapeHtml(id) + '" aria-expanded="' + historyOpen + '" aria-controls="cron-runs-' + escapeHtml(id) + '">' + CHEVRON + '<span>Run history</span></button>' +
+        '<div id="cron-runs-' + escapeHtml(id) + '" class="cron-runs-container"' + (historyOpen ? '' : ' hidden') + '></div>' +
+      '</article>';
+    }
+
     function renderCrons() {
       const container = document.getElementById("cron-list-container");
       const badge = document.getElementById("crons-count-badge");
       if (badge) badge.textContent = allCrons.length;
+      updateCronSummary();
       if (!container) return;
 
       if (!allCrons || allCrons.length === 0) {
-        container.innerHTML = '<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg><div>No scheduled cron jobs configured yet. Click <strong>+ New Cron Job</strong> above to automate background tests, reviews, or diagnostics.</div></div>';
+        container.innerHTML = '<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
+          '<div>No scheduled jobs yet. A job runs a prompt on a schedule, for example running the tests every morning or reviewing new changes every hour.</div>' +
+          '<button class="btn" data-action="new-cron">+ New Cron Job</button></div>';
         return;
       }
 
-      container.innerHTML = allCrons.map(job => {
-        const isEnabled = job.enabled !== false;
-        const lastStatus = job.last_status || "never";
-        const statusClass = isEnabled ? "active" : "paused";
-        const statusLabel = isEnabled ? "Active" : "Paused";
-        const lastRun = job.last_run ? new Date(job.last_run).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Never run";
-        const promptEnc = encodeURIComponent(job.prompt || '');
-        const cmds = job.allowed_commands && job.allowed_commands.length > 0
-          ? (Array.isArray(job.allowed_commands) ? job.allowed_commands.join(", ") : String(job.allowed_commands))
-          : "";
+      container.innerHTML = allCrons.map(cronCardHtml).join("");
+      cronOpenHistory.forEach(id => renderCronRuns(id));
+    }
 
-        return '<div class="cron-card">' +
-          '<div class="cron-card-left">' +
-            '<div class="cron-card-title-row">' +
-              '<span class="cron-card-name">' + escapeHtml(job.name || job.id) + '</span>' +
-              '<span class="cron-interval-pill">' + escapeHtml(job.schedule || 'every 1h') + '</span>' +
-              '<span class="cron-status-pill ' + statusClass + '">' + statusLabel + '</span>' +
-              (job.model ? ('<span class="badge blue" style="font-size:10px;">' + escapeHtml(job.model) + '</span>') : '') +
-            '</div>' +
-            '<div class="cron-card-prompt">' + escapeHtml(job.prompt || '') + '</div>' +
-            (cmds ? ('<div style="font-size:11px; color:var(--text-muted); margin-top:4px;"><span style="font-weight:600;">Allowed Commands:</span> <code style="background:rgba(255,255,255,0.06); padding:1px 4px;">' + escapeHtml(cmds) + '</code></div>') : '') +
-            '<div class="cron-card-meta">' +
-              '<span>Runs: ' + (job.run_count || 0) + '</span>' +
-              '<span>Last: ' + escapeHtml(lastRun) + ' (' + escapeHtml(lastStatus) + ')</span>' +
-            '</div>' +
-            '<div id="cron-runs-' + escapeHtml(job.id) + '" class="cron-runs-container" style="display:none; margin-top:8px; padding-top:8px; border-top:1px solid var(--border);"></div>' +
-          '</div>' +
-          '<div class="cron-card-actions">' +
-            '<button class="btn btn-secondary" data-action="toggle" data-id="' + escapeHtml(job.id) + '">' + (isEnabled ? 'Pause' : 'Enable') + '</button>' +
-            '<button class="btn" data-action="run" data-id="' + escapeHtml(job.id) + '" data-name="' + escapeHtml(job.name || '') + '" data-prompt="' + promptEnc + '">Run Now</button>' +
-            '<button class="btn btn-secondary" data-action="history" data-id="' + escapeHtml(job.id) + '" title="View execution history runs for this job">' +
-              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="margin-right:4px; vertical-align:-1.5px;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>History' + ((job.run_count && job.run_count > 0) ? ' (' + job.run_count + ')' : '') +
-            '</button>' +
-            '<button class="btn btn-danger" data-action="delete" data-id="' + escapeHtml(job.id) + '" title="Delete"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>' +
-          '</div>' +
-        '</div>';
-      }).join('');
+    function cronRunHtml(run) {
+      const status = run.status || "unknown";
+      const when = formatCronWhen(run.started_at) || "Unknown time";
+      const tools = (run.tools_used || []).length;
+      const meta = [run.model, tools ? tools + " tool" + (tools === 1 ? "" : "s") : "", run.cost_usd ? "$" + Number(run.cost_usd).toFixed(4) : ""].filter(Boolean).join(" · ");
+      const output = run.output || run.output_preview || "";
+      const sId = run.session_id || "";
+      const sessionName = "Cron run: " + (run.job_name || "job") + " (" + when + ")";
+      let detail = "";
+      if (run.error) detail += '<div class="cron-last-error">' + escapeHtml(run.error) + '</div>';
+      if (tools) detail += '<div><span class="cron-run-label">Tools</span> ' + escapeHtml(run.tools_used.join(", ")) + '</div>';
+      detail += output ? '<div class="cron-run-label">Output</div><pre class="cron-run-output">' + escapeHtml(output) + '</pre>' : '<div class="cron-runs-empty">No output recorded.</div>';
+      detail += '<div class="cron-run-actions">' + (sId
+        ? '<button class="btn btn-secondary" data-action="open-session" data-session-id="' + escapeHtml(sId) + '" data-session-name="' + escapeHtml(sessionName) + '">Open session</button>' +
+          '<button class="btn btn-secondary" data-action="open-session-tab" data-session-id="' + escapeHtml(sId) + '" data-session-name="' + escapeHtml(sessionName) + '">Open in tab</button>' +
+          '<span class="cron-run-session">' + escapeHtml(sId.slice(0, 22)) + '</span>'
+        : '<span class="cron-run-session">No session was recorded for this run.</span>') + '</div>';
+      return '<div class="cron-run ' + escapeHtml(status) + '">' +
+        '<button class="cron-run-summary" data-action="expand-run" aria-expanded="false">' +
+          '<span class="cron-run-icon">' + (CRON_ICON[status] || "") + '</span>' +
+          '<span>' + escapeHtml(when) + '</span>' +
+          '<span class="cron-run-status">' + escapeHtml(CRON_OUTCOME[status] || status) + (run.duration_ms ? ' · ' + formatCronDuration(run.duration_ms) : '') + '</span>' +
+          '<span class="cron-run-meta">' + escapeHtml(meta) + '</span>' +
+          CHEVRON +
+        '</button>' +
+        '<div class="cron-run-detail" hidden>' + detail + '</div>' +
+      '</div>';
+    }
+
+    function renderCronRuns(jobId) {
+      const div = document.getElementById("cron-runs-" + jobId);
+      const runs = cronRunsCache[jobId];
+      if (!div || !runs) return;
+      if (!runs.length) {
+        div.innerHTML = '<div class="cron-runs-empty">No runs yet. Use Run now to try this job.</div>';
+        return;
+      }
+      const ok = runs.filter(r => r.status === "success").length;
+      const durations = runs.map(r => r.duration_ms).filter(Boolean);
+      const avg = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : 0;
+      div.innerHTML = '<div class="cron-runs-head"><span>' + runs.length + ' run' + (runs.length === 1 ? '' : 's') + ' · ' + ok + ' succeeded' + (avg ? ' · average ' + formatCronDuration(avg) : '') + '</span>' +
+        '<button class="btn btn-secondary" data-action="refresh-history" data-id="' + escapeHtml(jobId) + '">Refresh</button></div>' +
+        '<div class="cron-runs">' + runs.map(cronRunHtml).join("") + '</div>';
     }
 
     vscode.postMessage({ type: "ready" });

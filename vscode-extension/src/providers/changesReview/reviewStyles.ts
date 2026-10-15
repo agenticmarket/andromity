@@ -203,6 +203,32 @@ export function getReviewStyles(): string {
       border-bottom: 1px solid var(--border-color);
     }
 
+    .sidebar-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 14px 12px 4px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .tree-actions { display: flex; gap: 4px; }
+    .tree-action {
+      border: 0;
+      background: transparent;
+      color: var(--vscode-descriptionForeground);
+      font: inherit;
+      font-size: 11px;
+      font-weight: 400;
+      padding: 4px;
+      border-radius: 3px;
+      cursor: pointer;
+    }
+    .tree-action:hover { background: var(--hover-bg); color: var(--vscode-foreground); }
+    .tree-empty { padding: 20px 14px; color: var(--vscode-descriptionForeground); line-height: 1.6; }
+    .folder-icon { color: var(--vscode-symbolIcon-folderForeground, #64b5f6); font-size: 14px; }
+    .folder-count { margin-left: auto; color: var(--vscode-descriptionForeground); font-size: 11px; padding-left: 6px; }
+
     .sidebar-search-input {
       width: 100%;
       padding: 5px 8px;
@@ -243,18 +269,25 @@ export function getReviewStyles(): string {
     }
 
     .folder-chevron {
-      font-size: 11px;
       width: 14px;
-      text-align: center;
-      opacity: 0.7;
-      transition: transform 0.15s ease;
+      height: 14px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
     }
-
-    .folder-chevron.collapsed {
-      transform: rotate(-90deg);
+    .folder-chevron::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-right: 1.5px solid currentColor;
+      border-bottom: 1.5px solid currentColor;
+      transform: translateY(-2px) rotate(45deg);
     }
+    .folder-chevron.collapsed::before { transform: translateX(-2px) rotate(-45deg); }
 
     .folder-name {
+      flex: 1;
       font-weight: 500;
       opacity: 0.9;
       white-space: nowrap;
@@ -266,7 +299,7 @@ export function getReviewStyles(): string {
       display: flex;
       align-items: center;
       gap: 6px;
-      padding: 4px 8px;
+      padding: 6px 8px;
       cursor: pointer;
       font-size: 12px;
       border-radius: 4px;
@@ -346,6 +379,7 @@ export function getReviewStyles(): string {
 
     /* ── Right Main Area (Diff Viewer) ───────────────────────────── */
     .review-content {
+      min-width: 0;
       flex: 1;
       display: flex;
       flex-direction: column;
@@ -357,8 +391,10 @@ export function getReviewStyles(): string {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      height: 40px;
-      padding: 0 16px;
+      min-height: 52px;
+      padding: 10px 14px;
+      gap: 10px;
+      flex-wrap: wrap;
       background: rgba(128, 128, 128, 0.05);
       border-bottom: 1px solid var(--border-color);
       flex-shrink: 0;
@@ -381,7 +417,12 @@ export function getReviewStyles(): string {
       display: flex;
       align-items: center;
       gap: 6px;
+      flex-shrink: 0;
     }
+    .change-kind { font-size: 11px; font-weight: 400; color: var(--vscode-descriptionForeground); }
+    .discard-btn { margin-left: 6px; color: var(--vscode-errorForeground, #f48771); }
+    .diff-file-title { flex: 1; }
+    .diff-file-title > span:nth-child(2) { user-select: text; }
 
     .icon-btn {
       background: transparent;
@@ -427,11 +468,11 @@ export function getReviewStyles(): string {
     }
 
     .diff-line.add {
-      background-color: var(--diff-add-bg);
+      background-color: color-mix(in srgb, var(--diff-add-bg) 65%, transparent);
     }
 
     .diff-line.del {
-      background-color: var(--diff-del-bg);
+      background-color: color-mix(in srgb, var(--diff-del-bg) 65%, transparent);
     }
 
     .gutter-old,
@@ -529,11 +570,11 @@ export function getReviewStyles(): string {
     }
 
     .split-pane.add {
-      background-color: var(--diff-add-bg);
+      background-color: color-mix(in srgb, var(--diff-add-bg) 65%, transparent);
     }
 
     .split-pane.del {
-      background-color: var(--diff-del-bg);
+      background-color: color-mix(in srgb, var(--diff-del-bg) 65%, transparent);
     }
 
     .split-pane.empty {
@@ -648,10 +689,18 @@ export function getReviewStyles(): string {
     .header-left { flex-wrap: wrap; gap: 8px; min-width: 0; }
     .file-status-badge.R { color: var(--vscode-gitDecoration-renamedResourceForeground); }
     .file-status-badge[data-status="!"] { color: var(--vscode-gitDecoration-conflictingResourceForeground); }
+    @media (max-width: 850px) {
+      .diff-file-title { flex-basis: 100%; }
+    }
     @media (max-width: 650px) {
       .review-sidebar { width: 190px; min-width: 150px; }
+      .sidebar-heading { flex-wrap: wrap; }
       .target-badge { display: none; }
       .metrics-summary { font-size: 11px; }
+    }
+    @media (forced-colors: active) {
+      .tree-file-row.active { outline: 1px solid Highlight; }
+      .action-btn, .view-btn, .tree-action { border: 1px solid ButtonText; }
     }
   `;
 }

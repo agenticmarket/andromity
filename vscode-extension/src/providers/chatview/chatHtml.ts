@@ -369,7 +369,7 @@ ${styles}
 
   <div class="model-flyout" id="model-flyout" style="display:none;">
     <div class="flyout-header">
-      <input type="text" class="flyout-search" id="flyout-search" placeholder="Search 396+ models...">
+      <input type="text" class="flyout-search" id="flyout-search" placeholder="Search models...">
       <button class="flyout-hub-link" id="btn-flyout-open-hub" title="Open Full Model Hub">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path></svg>
         <span>Full Hub</span>
@@ -868,7 +868,7 @@ ${styles}
       <!-- Collapsible Background Process Strip (Merged directly above Prompt Box, zero cheap borders) -->
       <div class="bg-process-strip" id="bg-process-strip" style="display:none;">
         <div class="tracker-row" id="bg-strip-header" title="Click to collapse / expand running processes">
-          <div class="tracker-info" id="bg-strip-info">
+          <div class="tracker-info" id="bg-strip-info" role="button" tabindex="0" aria-expanded="true" aria-controls="bg-process-list" aria-label="Toggle background tasks">
             <span class="tracker-chevron" id="bg-strip-chevron">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
             </span>
@@ -877,11 +877,12 @@ ${styles}
             </span>
             <span class="tracker-title" id="bg-strip-title">Background Tasks</span>
             <span class="tracker-count" id="bg-strip-count">1 running</span>
-            <span class="bg-strip-timer" id="bg-strip-timer">0s</span>
+            <span class="bg-strip-timer" id="bg-strip-timer" aria-hidden="true">0s</span>
           </div>
           <div class="tracker-actions">
             <button class="btn-tracker-close btn-bg-stop-all" id="btn-bg-stop-all" aria-label="Stop running background processes" title="Stop running background processes">
               <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg>
+              Stop all
             </button>
           </div>
         </div>
@@ -1128,6 +1129,20 @@ ${styles}
               </div>
               <span class="context-row-val" id="context-popover-avail">200,000</span>
             </div>
+          </div>
+
+          <button class="context-breakdown-toggle" id="context-breakdown-toggle" type="button" aria-expanded="false" aria-controls="context-breakdown">
+            <span>Breakdown</span>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </button>
+          <div class="context-breakdown" id="context-breakdown" hidden>
+            <div class="context-stack" id="context-stack" aria-hidden="true"></div>
+            <div class="context-cat-list" id="context-cat-list"></div>
+            <div class="context-breakdown-foot">
+              <span id="context-compact-note"></span>
+              <button class="context-compact-btn" id="context-compact-btn" type="button">Compact now</button>
+            </div>
+            <div class="context-breakdown-note" id="context-breakdown-note"></div>
           </div>
         </div>
       </div>

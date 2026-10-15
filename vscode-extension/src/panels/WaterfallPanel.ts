@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { DOCS } from "../docsLinks.js";
 import { RpcClient } from "../server/RpcClient.js";
 import { getWaterfallHtml } from "../providers/waterfall/waterfallHtml.js";
 import { SettingsPanel } from "./SettingsPanel.js";
@@ -425,6 +426,10 @@ export class WaterfallPanel {
       }
       case "open_settings": {
         SettingsPanel.createOrShow(this._extensionUri, this._rpcClient, "general");
+        break;
+      }
+      case "open_docs": {
+        void vscode.env.openExternal(vscode.Uri.parse(DOCS.waterfall));
         break;
       }
       case "open_fingerprint": {

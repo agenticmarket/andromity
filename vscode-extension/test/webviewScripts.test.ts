@@ -83,10 +83,13 @@ describe("Shared sidebar and session-tab retry transport", () => {
     const rpc: any = { call: async (method: string, params: any) => { calls.push({ method, params }); return {}; } };
     assert.equal(await handleInputMessage(rpc, { type: "retry_turn", sessionId: "tab", stripImages: true },
       "sidebar", message => posts.push(message)), true);
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0].method, "agent.retry");
-    assert.equal(calls[0].params.session_id, "tab");
-    assert.equal(calls[0].params.strip_images, true);
+    // Usage events are fire-and-forget extras next to the real RPC.
+    const rpcCalls = calls.filter(c => c.method !== "telemetry.recordFeature");
+    assert.equal(rpcCalls.length, 1);
+    assert.equal(rpcCalls[0].method, "agent.retry");
+    assert.equal(rpcCalls[0].params.session_id, "tab");
+    assert.equal(rpcCalls[0].params.strip_images, true);
+    assert.deepEqual(calls.filter(c => c.method === "telemetry.recordFeature").map(c => c.params.feature), ["turn_retried_no_image"]);
     assert.equal(posts[0].type, "retry_result");
     assert.equal(posts[0].success, true);
   });
@@ -559,8 +562,8 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(html.includes("nonce-"), "Must have script nonce in CSP");
     assert.ok(html.includes('<script nonce="'), "Script tags must be nonce-protected");
     assert.ok(!html.includes("onclick="), "Must NOT contain inline onclick handlers that violate CSP");
-    assert.ok(html.includes('id="btn-safety-guard"'), "Must contain safety guard button");
-    assert.ok(html.includes('id="btn-fit-canvas"'), "Must contain fit canvas button");
+    assert.ok(!html.includes('id="btn-safety-guard"'), "Must not show the safety-guarantee button");
+    assert.ok(!/Safety Guarantee|Zero-Leak|0 Leaks/.test(html), "Must not claim leak protection it does not check");
     assert.ok(html.includes('id="tab-dag"'), "Must contain Causal DAG tab button");
     assert.ok(html.includes('id="tab-blast"'), "Must contain Blast Radius tab button");
     assert.ok(html.includes('id="btn-zoom-fit"'), "Must contain Fit zoom button in toolbar");
@@ -575,7 +578,8 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     const panelPath = fs.existsSync(path.join(__dirname, "../src/panels/FingerprintPanel.ts"))
       ? path.join(__dirname, "../src/panels/FingerprintPanel.ts")
       : path.join(__dirname, "../../src/panels/FingerprintPanel.ts");
-    const panelSource = fs.readFileSync(panelPath, "utf8");
+    const tracePath = path.join(path.dirname(panelPath), "..", "providers", "fingerprint", "fingerprintTrace.ts");
+    const panelSource = fs.readFileSync(panelPath, "utf8") + fs.readFileSync(tracePath, "utf8");
     assert.ok(!panelSource.includes("_getSampleTraceData"), "FingerprintPanel must NOT contain any fake sample data stubs");
     assert.ok(panelSource.includes("tools_called"), "FingerprintPanel must extract child tools called by subagents");
 
@@ -1907,7 +1911,9 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     const panelPath = fs.existsSync(path.join(__dirname, "../src/panels/FingerprintPanel.ts"))
       ? path.join(__dirname, "../src/panels/FingerprintPanel.ts")
       : path.join(__dirname, "../../src/panels/FingerprintPanel.ts");
-    const panelSource = fs.readFileSync(panelPath, "utf8");
+    // The panel delegates trace extraction to fingerprintTrace.ts.
+    const tracePath = path.join(path.dirname(panelPath), "..", "providers", "fingerprint", "fingerprintTrace.ts");
+    const panelSource = fs.readFileSync(panelPath, "utf8") + fs.readFileSync(tracePath, "utf8");
     assert.ok(panelSource.includes("subagents"), "FingerprintPanel must extract subagents trace map");
     assert.ok(panelSource.includes("subagentsMap"), "FingerprintPanel must maintain subagentsMap");
     assert.ok(panelSource.includes("hasSubagentDrilldown"), "Subagent nodes must have hasSubagentDrilldown flag");

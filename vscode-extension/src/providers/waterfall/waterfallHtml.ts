@@ -67,6 +67,7 @@ export function getWaterfallHtml(
       </div>
       <div class="wf-actions">
         <button class="wf-btn" id="btn-guide" title="Developer Guide & Metrics Glossary">? Guide</button>
+        <button class="wf-btn" id="btn-docs" title="Open the Waterfall documentation">Docs</button>
         <button class="wf-btn" id="btn-fingerprint" title="View AI Execution Fingerprint & Blast Radius">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><path d="M12 2a10 10 0 0 0-10 10c0 4.4 2.9 8.2 7 9.5"/><path d="M12 6a6 6 0 0 0-6 6c0 2.2 1.2 4.1 3 5.1"/><path d="M12 10a2 2 0 0 0-2 2c0 1.1.9 2 2 2s2-.9 2-2a2 2 0 0 0-2-2"/><path d="M18 10a6 6 0 0 0-6-6"/><path d="M22 12c0-5.5-4.5-10-10-10"/></svg>
           Fingerprint
@@ -79,7 +80,7 @@ export function getWaterfallHtml(
 
     <!-- Summary Metrics -->
     <div class="wf-metrics-row">
-      <div class="wf-metric" title="Total wall-clock duration of the session">
+      <div class="wf-metric" title="Sum of each turn's duration, plus anything still running">
         <span class="wf-metric-label">Duration</span>
         <span class="wf-metric-value accent" id="wf-total-duration">0.00s</span>
       </div>
@@ -150,11 +151,11 @@ export function getWaterfallHtml(
               <p>Model reasoning & token generation. The light purple bar segment highlights <strong>TTFB</strong> (prompt processing delay before first token).</p>
             </div>
             <div class="wf-guide-item">
-              <strong style="color: var(--cyan); display:flex; align-items:center; gap:6px;"><span style="width:8px; height:8px; border-radius:50%; background:var(--cyan); display:inline-block;"></span>Tool Execution (Cyan / Green)</strong>
+              <strong style="color: var(--blue, #58a6ff); display:flex; align-items:center; gap:6px;"><span style="width:8px; height:8px; border-radius:50%; background:var(--blue, #58a6ff); display:inline-block;"></span>Tool Execution (Blue)</strong>
               <p>Local commands run by the agent (file edits, read_file, shell_exec, git operations, searches).</p>
             </div>
             <div class="wf-guide-item">
-              <strong style="color: var(--amber); display:flex; align-items:center; gap:6px;"><span style="width:8px; height:8px; border-radius:50%; background:var(--amber); display:inline-block;"></span>Subagent (Amber / Blue)</strong>
+              <strong style="color: var(--green, #3fb950); display:flex; align-items:center; gap:6px;"><span style="width:8px; height:8px; border-radius:50%; background:var(--green, #3fb950); display:inline-block;"></span>Subagent (Green)</strong>
               <p>Autonomous delegated child agent. Click to expand and inspect its inner tool waterfall and final result.</p>
             </div>
             <div class="wf-guide-item">

@@ -4,6 +4,8 @@ import { getPromptDisplayScript } from "../promptDisplay.js";
 import { getThinkingOrbsScript } from "./thinkingOrbs.js";
 import { getToolTargetsScript } from "./toolTargets.js";
 import { getStreamingRenderScript } from "./streamingRender.js";
+import { getTurnRailScript } from "./turnRail.js";
+import { DOCS } from "../../docsLinks.js";
 
 export function getChatClientScript(sidebarIconUri: string, state: ChatViewState): string {
   return `
@@ -132,13 +134,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const count = activeBgProcesses.size;
       if (bgStripCount) bgStripCount.textContent = count === 1 ? '1 running' : (count + ' running');
 
-      if (count === 1) {
-        const first = activeBgProcesses.values().next().value;
-        const shortCmd = (first && first.command ? first.command : 'Background Task').trim().split(String.fromCharCode(10)).join(' ');
-        if (bgStripTitle) bgStripTitle.textContent = shortCmd.length > 28 ? (shortCmd.slice(0, 26) + '...') : shortCmd;
-      } else {
-        if (bgStripTitle) bgStripTitle.textContent = 'Background Tasks';
-      }
+      if (bgStripTitle) bgStripTitle.textContent = count === 1 ? 'Background task' : 'Background tasks';
+      if (btnBgStopAll) btnBgStopAll.style.display = count > 1 ? '' : 'none';
+      if (bgStripInfo) bgStripInfo.setAttribute('aria-expanded', String(!isBgStripCollapsed));
 
       if (bgProcessList) {
         let itemsHtml = '';
@@ -151,13 +149,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           const safeCmd = escapeHtml((proc.command || 'Process ' + procId).split(String.fromCharCode(10)).join(' '));
           const safeProcId = escapeHtml(procId);
           itemsHtml += '<div class="bg-process-item" data-process-id="' + safeProcId + '" title="Click to view live logs in new tab">' +
-            '<div class="bg-item-left">' +
+            '<button class="bg-item-left bg-item-open" data-process-id="' + safeProcId + '" aria-label="Open output for task ' + safeProcId + '">' +
               '<span class="bg-item-id">' + safeProcId + '</span>' +
               '<span class="bg-item-cmd" title="' + safeCmd + '">' + safeCmd + '</span>' +
-            '</div>' +
+              '<span class="bg-open-hint">Open output ↗</span>' +
+            '</button>' +
             '<div class="bg-item-right">' +
               '<span class="bg-item-elapsed" id="bg-elapsed-' + safeProcId + '">' + elStr + '</span>' +
-              '<button class="btn-tracker-close bg-item-stop-btn" data-process-id="' + safeProcId + '" title="Stop process"><svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg></button>' +
+              '<button class="btn-tracker-close bg-item-stop-btn" data-process-id="' + safeProcId + '" title="Stop process" aria-label="Stop task ' + safeProcId + '">Stop</button>' +
             '</div>' +
           '</div>';
         });
@@ -184,6 +183,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       bgStripInfo.addEventListener('click', function() {
         isBgStripCollapsed = !isBgStripCollapsed;
         if (bgProcessStrip) bgProcessStrip.classList.toggle('collapsed', isBgStripCollapsed);
+        bgStripInfo.setAttribute('aria-expanded', String(!isBgStripCollapsed));
+      });
+      bgStripInfo.addEventListener('keydown', function(ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); bgStripInfo.click(); }
       });
     }
 
@@ -589,15 +592,53 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       return Math.round(num * mult);
     }
 
-    function updateTokenDisplay(sessionOrUsage) {
-      // TUI parity:
-      // Status bar displays the latest request input size (self.session.context_tokens)
-      // formatted as: "{tok_str}/{ctx_k} tok" (e.g. "7.2K/1.3M tok" or "5.3K/1.3M tok").
-      // Cumulative billed usage (token_total) is displayed in the hover tooltip.
-      let contextTok = 0;
-      let totalTok = 0;
-      let cost = 0;
+    // Context window display. The status bar shows the size of the latest request
+    // (session.context_tokens, as reported by the provider). When no size has been
+    // reported yet (new session, after compaction, providers that report none) the
+    // daemon's per-category estimate from session.context fills in, marked with "~".
+    let lastTokenState = { sessionId: '', contextTok: 0, estimate: 0, totalTok: 0, cost: 0 };
+    let contextBreakdown = null;
+    let contextBreakdownTimer = null;
+    let contextBreakdownExpanded = typeof localStorage !== 'undefined' && localStorage.getItem('andromity.contextBreakdownOpen') === '1';
+    const CONTEXT_COLORS = {
+      system_prompt: '#94a3b8', tool_definitions: '#f59e0b', deferred_tools: '#fb923c', skills: '#22c55e',
+      summary: '#a855f7', user: '#3b82f6', assistant: '#06b6d4', tool_calls: '#ec4899', tool_results: '#14b8a6', other: '#71717a'
+    };
 
+    function modelContextCapacity() {
+      let matched = null;
+      if (currentModel) {
+        const cur = String(currentModel);
+        matched = allModels.find(m => m.id === cur)
+          || allModels.find(m => cur.endsWith('/' + m.id) || cur.endsWith(m.id))
+          || allModels.find(m => m.id && (m.id.endsWith('/' + cur.split('/').pop()) || m.id.split('/').pop() === cur.split('/').pop()));
+      }
+      if (matched) {
+        if (matched.context_limit) return matched.context_limit;
+        if (matched.context) {
+          const parsed = parseContextToTokens(matched.context);
+          if (parsed) return parsed;
+        }
+      }
+      // Fallbacks by known family — keep in sync with src/andromity/core/models.py MODEL_CATALOG
+      const cm = String(currentModel).toLowerCase();
+      if (cm.includes('gemini') || cm.includes('claude-opus') || cm.includes('claude-sonnet') || cm.includes('gpt-4.1') || cm.includes('deepseek-v4') || cm.includes('deepseek')) return 1310720;
+      if (cm.includes('claude-haiku') || cm.includes('o3') || cm.includes('o4')) return 200000;
+      return 131072;
+    }
+
+    function currentBreakdown() {
+      return contextBreakdown && contextBreakdown.sessionId === currentSessionId ? contextBreakdown.data : null;
+    }
+
+    function updateTokenDisplay(sessionOrUsage) {
+      // Partial updates (e.g. after compaction) keep the fields they do not carry, within one session.
+      const sid = (sessionOrUsage && (sessionOrUsage.session_id || sessionOrUsage.id)) || currentSessionId || '';
+      const same = sid === lastTokenState.sessionId;
+      let contextTok = same ? lastTokenState.contextTok : 0;
+      let totalTok = same ? lastTokenState.totalTok : 0;
+      let cost = same ? lastTokenState.cost : 0;
+      let estimate = 0;
       if (sessionOrUsage) {
         if (typeof sessionOrUsage.context_tokens === 'number') {
           contextTok = sessionOrUsage.context_tokens;
@@ -612,40 +653,30 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (typeof sessionOrUsage.cost_usd === 'number') {
           cost = sessionOrUsage.cost_usd;
         }
-      }
-
-      let capacity = 0;
-      // Match active model context limit
-      let matched = null;
-      if (currentModel) {
-        const cur = String(currentModel);
-        matched = allModels.find(m => m.id === cur)
-          || allModels.find(m => cur.endsWith('/' + m.id) || cur.endsWith(m.id))
-          || allModels.find(m => m.id && (m.id.endsWith('/' + cur.split('/').pop()) || m.id.split('/').pop() === cur.split('/').pop()));
-      }
-      if (matched) {
-        if (matched.context_limit) {
-          capacity = matched.context_limit;
-        } else if (matched.context) {
-          capacity = parseContextToTokens(matched.context);
+        // A compacted context has no provider-reported size until the next request; show the estimate.
+        if (sessionOrUsage.context_estimated) {
+          estimate = contextTok;
+          contextTok = 0;
         }
       }
-      if (!capacity) {
-        // Fallbacks by known family — keep in sync with src/andromity/core/models.py MODEL_CATALOG
-        const cm = String(currentModel).toLowerCase();
-        if (cm.includes('gemini') || cm.includes('claude-opus') || cm.includes('claude-sonnet') || cm.includes('gpt-4.1') || cm.includes('deepseek-v4') || cm.includes('deepseek')) {
-          capacity = 1310720; // 1.3M / 1M for deepseek, gemini, claude
-        } else if (cm.includes('claude-haiku') || cm.includes('o3') || cm.includes('o4')) {
-          capacity = 200000;
-        } else if (cm.includes('llama') || cm.includes('qwen') || cm.includes('gpt-4o') || cm.includes('gpt-5')) {
-          capacity = 131072; // 128K
-        } else {
-          capacity = 131072;
-        }
-      }
+      lastTokenState = { sessionId: sid, contextTok: contextTok, estimate: estimate, totalTok: totalTok, cost: cost };
+      renderTokenDisplay();
+      scheduleContextBreakdown();
+    }
 
-      const tokStr = formatTokCompact(contextTok);
-      const capStr = formatTokCompact(capacity);
+    function renderTokenDisplay() {
+      const breakdown = currentBreakdown();
+      let capacity = breakdown && breakdown.limit ? breakdown.limit : modelContextCapacity();
+      let contextTok = lastTokenState.contextTok;
+      let estimated = false;
+      if (!contextTok && breakdown && breakdown.used_tokens) {
+        contextTok = breakdown.used_tokens;
+        estimated = breakdown.used_source === 'estimate';
+      } else if (!contextTok && lastTokenState.estimate) {
+        contextTok = lastTokenState.estimate;
+        estimated = true;
+      }
+      const approx = estimated ? '~' : '';
       const pct = capacity > 0 ? Math.min(100, Math.max(0, (contextTok / capacity) * 100)) : 0;
 
       const miniBar = document.getElementById('token-mini-bar');
@@ -655,48 +686,101 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         else if (pct > 65) miniBar.style.background = '#f59e0b';
         else miniBar.style.background = 'linear-gradient(90deg, #06b6d4, #10b981)';
       }
-
       if (tokenLabel) {
-        tokenLabel.textContent = capacity > 0 ? (tokStr + '/' + capStr + ' tok') : (tokStr + ' tok');
+        tokenLabel.textContent = approx + formatTokCompact(contextTok) + (capacity > 0 ? '/' + formatTokCompact(capacity) : '') + ' tok';
       }
       if (costLabel) {
-        costLabel.textContent = cost > 0 ? ('$' + cost.toFixed(4) + ' USD') : '$0.0000 USD';
+        costLabel.textContent = lastTokenState.cost > 0 ? ('$' + lastTokenState.cost.toFixed(4) + ' USD') : '$0.0000 USD';
       }
-
-      // Update Rich Context Popover Card
       const popoverPct = document.getElementById('context-popover-pct');
-      if (popoverPct) {
-        popoverPct.textContent = Math.round(pct) + '%';
-      }
-
+      if (popoverPct) popoverPct.textContent = Math.round(pct) + '%';
       const ringFill = document.getElementById('context-ring-fill');
       if (ringFill) {
         const circum = 87.96;
-        const offset = circum * (1 - Math.min(100, Math.max(0, pct)) / 100);
-        ringFill.style.strokeDashoffset = offset.toFixed(2);
-        if (pct > 85) ringFill.style.stroke = '#ef4444';
-        else if (pct > 65) ringFill.style.stroke = '#f59e0b';
-        else ringFill.style.stroke = '#e4e4e7';
+        ringFill.style.strokeDashoffset = (circum * (1 - pct / 100)).toFixed(2);
+        ringFill.style.stroke = pct > 85 ? '#ef4444' : pct > 65 ? '#f59e0b' : 'var(--fg)';
       }
-
       const popoverRatio = document.getElementById('context-popover-ratio');
-      if (popoverRatio) {
-        popoverRatio.textContent = Number(contextTok).toLocaleString() + ' / ' + Number(capacity).toLocaleString();
-      }
-
+      if (popoverRatio) popoverRatio.textContent = approx + Number(contextTok).toLocaleString() + ' / ' + Number(capacity).toLocaleString();
       const popoverUsed = document.getElementById('context-popover-used');
-      if (popoverUsed) {
-        popoverUsed.textContent = Number(contextTok).toLocaleString();
-      }
-
+      if (popoverUsed) popoverUsed.textContent = approx + Number(contextTok).toLocaleString();
       const popoverAvail = document.getElementById('context-popover-avail');
-      if (popoverAvail) {
-        popoverAvail.textContent = Number(Math.max(0, capacity - contextTok)).toLocaleString();
-      }
-
+      if (popoverAvail) popoverAvail.textContent = Number(Math.max(0, capacity - contextTok)).toLocaleString();
       const widget = document.getElementById('token-capacity-widget');
-      if (widget) {
-        widget.removeAttribute('title');
+      if (widget) widget.removeAttribute('title');
+      renderContextBreakdown();
+    }
+
+    function scheduleContextBreakdown() {
+      if (!currentSessionId) return;
+      clearTimeout(contextBreakdownTimer);
+      contextBreakdownTimer = setTimeout(() => {
+        vscode.postMessage({ type: 'get_context_breakdown', sessionId: currentSessionId });
+      }, 300);
+    }
+
+    function renderContextBreakdown() {
+      const panel = document.getElementById('context-breakdown');
+      const toggle = document.getElementById('context-breakdown-toggle');
+      const popover = document.getElementById('context-popover');
+      const data = currentBreakdown();
+      if (toggle) {
+        toggle.hidden = !data;
+        toggle.setAttribute('aria-expanded', String(!!(data && contextBreakdownExpanded)));
+        toggle.classList.toggle('open', !!(data && contextBreakdownExpanded));
+      }
+      if (popover) popover.classList.toggle('expanded', !!(data && contextBreakdownExpanded));
+      if (!panel) return;
+      panel.hidden = !(data && contextBreakdownExpanded);
+      if (!data || panel.hidden) return;
+
+      const limit = data.limit || modelContextCapacity();
+      const used = lastTokenState.contextTok || data.used_tokens || 0;
+      const rows = (data.categories || []).filter(c => c.tokens > 0).map(c => ({ key: c.key, label: c.label, tokens: c.tokens }));
+      const attributed = rows.reduce((sum, r) => sum + r.tokens, 0);
+      // The provider's count includes request overhead Andromity cannot attribute to a category.
+      if (used > attributed * 1.02 && used - attributed > 50) {
+        rows.push({ key: 'other', label: 'Other (provider overhead)', tokens: used - attributed });
+      }
+      const pctOf = (n) => limit > 0 ? (n / limit) * 100 : 0;
+      const fmtPct = (n) => { const p = pctOf(n); return p > 0 && p < 0.1 ? '<0.1%' : p.toFixed(1) + '%'; };
+      const threshold = typeof data.compact_threshold === 'number' ? data.compact_threshold : 0.8;
+      const compactAt = data.compact_at_tokens || Math.round(limit * threshold);
+      const free = Math.max(0, limit - Math.max(used, attributed));
+      const buffer = data.auto_compact ? Math.max(0, limit - compactAt) : 0;
+
+      const stack = document.getElementById('context-stack');
+      if (stack) {
+        stack.innerHTML = rows.map(r =>
+          '<span class="context-stack-seg" style="width:' + Math.max(0.4, pctOf(r.tokens)).toFixed(2) + '%;background:' + (CONTEXT_COLORS[r.key] || CONTEXT_COLORS.other) + '"></span>'
+        ).join('') + (data.auto_compact ? '<span class="context-stack-mark" style="left:' + (threshold * 100).toFixed(1) + '%"></span>' : '');
+      }
+      const list = document.getElementById('context-cat-list');
+      if (list) {
+        const row = (color, label, tokens, extraClass) =>
+          '<div class="context-cat-row' + (extraClass ? ' ' + extraClass : '') + '">' +
+            '<span class="context-cat-swatch" style="background:' + color + '"></span>' +
+            '<span class="context-cat-label">' + escapeHtml(label) + '</span>' +
+            '<span class="context-cat-val">' + formatTokCompact(tokens) + '</span>' +
+            '<span class="context-cat-pct">' + fmtPct(tokens) + '</span>' +
+          '</div>';
+        list.innerHTML = rows.map(r => row(CONTEXT_COLORS[r.key] || CONTEXT_COLORS.other, r.label, r.tokens)).join('') +
+          row('transparent', 'Free space', free, 'free') +
+          (buffer ? row('transparent', 'Auto-compact buffer', buffer, 'buffer') : '');
+      }
+      const note = document.getElementById('context-compact-note');
+      if (note) {
+        if (!data.auto_compact) note.textContent = 'Auto-compact is off';
+        else if (used < compactAt) note.textContent = formatTokCompact(compactAt - used) + ' until auto-compact';
+        else note.textContent = 'Compacts before the next turn';
+      }
+      const compactBtn = document.getElementById('context-compact-btn');
+      if (compactBtn) compactBtn.disabled = isRunning || (data.message_count || 0) < 4;
+      const foot = document.getElementById('context-breakdown-note');
+      if (foot) {
+        foot.textContent = data.used_source === 'estimate'
+          ? 'Estimated until the next model reply. Category sizes are always estimates.'
+          : 'Total is the size the provider reported for the last request; categories are estimates.';
       }
     }
 
@@ -705,9 +789,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     if (tokenWidgetEl) {
       tokenWidgetEl.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (e.target.closest && e.target.closest('#context-popover')) return;
         tokenWidgetEl.classList.toggle('active');
+        if (tokenWidgetEl.classList.contains('active')) scheduleContextBreakdown();
       });
+      tokenWidgetEl.addEventListener('mouseenter', scheduleContextBreakdown);
       tokenWidgetEl.addEventListener('keydown', (e) => {
+        if (e.target !== tokenWidgetEl) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           e.stopPropagation();
@@ -719,6 +807,30 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           tokenWidgetEl.classList.remove('active');
         }
       });
+      const breakdownToggle = document.getElementById('context-breakdown-toggle');
+      if (breakdownToggle) {
+        breakdownToggle.hidden = true;
+        breakdownToggle.addEventListener('click', (e) => {
+          e.stopPropagation();
+          contextBreakdownExpanded = !contextBreakdownExpanded;
+          if (typeof localStorage !== 'undefined') localStorage.setItem('andromity.contextBreakdownOpen', contextBreakdownExpanded ? '1' : '0');
+          tokenWidgetEl.classList.add('active');
+          if (contextBreakdownExpanded) {
+            vscode.postMessage({ type: 'telemetry_feature', feature: 'context_breakdown', once: true });
+            scheduleContextBreakdown();
+          }
+          renderContextBreakdown();
+        });
+      }
+      const compactBtn = document.getElementById('context-compact-btn');
+      if (compactBtn) {
+        compactBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (compactBtn.disabled) return;
+          compactBtn.disabled = true;
+          vscode.postMessage({ type: 'compact_session' });
+        });
+      }
     }
 
     function hideZeroState() {
@@ -1190,6 +1302,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       renderMentionPalette();
     }
 
+    function showMentionEmptyState() {
+      if (!mentionPalette || !mentionPaletteList) return;
+      hideSlashPalette();
+      currentMentionMatches = [];
+      activeMentionIdx = 0;
+      mentionPalette.style.display = 'flex';
+      mentionPaletteList.innerHTML = '<div class="slash-item mention-empty" role="option" aria-disabled="true">' +
+        '<span class="slash-desc">No skills installed yet.</span>' +
+        '<button class="btn-card-action" data-action="open-skills-settings">Browse skills</button>' +
+      '</div>';
+    }
+
     function hideMentionPalette() {
       if (mentionPalette) mentionPalette.style.display = 'none';
       currentMentionMatches = [];
@@ -1219,6 +1343,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function executeMentionSkill(skillObj) {
       if (!skillObj) return;
+      vscode.postMessage({ type: 'telemetry_feature', feature: 'skill_mentioned', once: true });
       hideMentionPalette();
       const skillName = skillObj.name || skillObj.id || '';
       insertSkillIntoInput(skillName);
@@ -1245,6 +1370,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function executeSlashCommand(cmdObj) {
       if (!cmdObj) return;
+      if (cmdObj.cmd) vscode.postMessage({ type: 'telemetry_feature', feature: 'slash_' + String(cmdObj.cmd).replace('/', ''), once: true });
       hideSlashPalette();
       promptInput.value = '';
       promptInput.style.height = 'auto';
@@ -1467,13 +1593,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           const atMatch = textBefore.match(/@([a-zA-Z0-9_-]*)$/);
           if (atMatch) {
             const query = atMatch[1].toLowerCase();
-            const skillsPool = (allSkills && allSkills.length > 0) ? allSkills : [
-              { name: 'browser', description: 'Browse and interact with web pages' },
-              { name: 'terminal', description: 'Run shell and command-line tasks' },
-              { name: 'editor', description: 'Inspect and edit codebase files' },
-              { name: 'git', description: 'Version control and commit actions' },
-            ];
-            const matches = skillsPool.filter(s => {
+            if (!allSkills || allSkills.length === 0) {
+              showMentionEmptyState();
+              return;
+            }
+            const matches = allSkills.filter(s => {
               const name = (s.name || s.id || '').toLowerCase();
               return name.includes(query);
             });
@@ -4002,6 +4126,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       menu.style.transform = 'translateX(' + shift + 'px)';
       menu.style.maxHeight = Math.max(80, Math.min(innerHeight - 24, rect.bottom - 12)) + 'px';
     }
+    const DOCS_LINKS = ${scriptJson(DOCS)};
+    const docsLink = (url, label) => ' <a href="#" class="menu-docs-link" data-action="open-docs" data-url="' + escapeHtml(url) + '">' + label + '</a>';
     function prepareChoiceMenu(menu, trigger, note) {
       if (!menu) return;
       menu.insertAdjacentHTML?.('beforeend', '<div class="menu-popover-note">' + note + '</div>');
@@ -4018,7 +4144,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
       });
     }
-    prepareChoiceMenu(modePopover, btnPromptMode, 'Workspace trust and profile restrictions apply. Full/YOLO share approval rules. Changes apply next turn.');
+    prepareChoiceMenu(modePopover, btnPromptMode, 'Workspace trust and profile restrictions apply. Full/YOLO share approval rules. Changes apply next turn.' + docsLink(DOCS_LINKS.permissionModes, 'How modes work'));
     window.addEventListener('resize', () => {
       document.querySelectorAll('.mode-popover, .profile-popover').forEach(menu => {
         if (menu.style.display !== 'none') positionChoiceMenu(menu);
@@ -4427,6 +4553,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           break;
         }
+        case 'open-docs': {
+          e.preventDefault?.();
+          const url = target.getAttribute('data-url');
+          if (url) vscode.postMessage({ type: 'open_external_url', url });
+          break;
+        }
         case 'retry-turn': {
           const errCard = target.closest('.andromity-error-card, .error-card');
           if (errCard?.dataset.retryPending === 'true') break;
@@ -4501,6 +4633,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         }
         case 'open-skills-settings':
+          hideMentionPalette();
           vscode.postMessage({ type: 'open_skills_settings' });
           break;
         case 'close-skills-card': {
@@ -5212,7 +5345,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     const btnProfileEl = document.getElementById('btn-prompt-profile');
     const profilePopover = document.getElementById('profile-popover');
-    prepareChoiceMenu(profilePopover, document.getElementById('btn-prompt-profile'), 'Choose how the agent approaches the task. Changes apply to subsequent turns.');
+    prepareChoiceMenu(profilePopover, document.getElementById('btn-prompt-profile'), 'Choose how the agent approaches the task. Changes apply to subsequent turns.' + docsLink(DOCS_LINKS.profiles, 'Compare profiles'));
 
     function toggleProfilePopover(forceState) {
       if (!profilePopover) return;
@@ -5919,7 +6052,30 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       return t;
     }
 
+    // Provider errors arrive from the backend as an andromity-error-card HTML block inside the reply text.
+    // Raw HTML renders as text, so a card that starts a line outside a code fence is rebuilt from its
+    // plain text and allowlisted actions instead of being trusted as markup.
+    const ERROR_CARD_OPEN = '<div class="andromity-error-card"';
     function renderMarkdown(md) {
+      if (!md || md.indexOf(ERROR_CARD_OPEN) === -1) return renderMarkdownText(md);
+      let html = '';
+      let from = 0;
+      let start;
+      while ((start = md.indexOf(ERROR_CARD_OPEN, from)) !== -1) {
+        const end = errorCardMarkupEnd(md, start);
+        const card = end !== -1 && startsLineOutsideFence(md, start) ? errorCardFromMarkup(md.slice(start, end)) : '';
+        if (card) {
+          html += renderMarkdownText(md.slice(0, start)) + card;
+          md = md.slice(end);
+          from = 0;
+        } else {
+          from = start + ERROR_CARD_OPEN.length;
+        }
+      }
+      return html + renderMarkdownText(md);
+    }
+
+    function renderMarkdownText(md) {
       if (!md) return '';
       if (typeof marked !== 'undefined' && marked.parse) {
         try {
@@ -6931,6 +7087,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     ${getStreamingRenderScript()}
+    ${getTurnRailScript()}
 
     function removeTurnLoader() {
       const el = document.getElementById('turn-loading-indicator');
@@ -7177,6 +7334,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         celebrateMascot();
       }
       renderConversationTimeline();
+      scheduleTurnRail();
     }
 
     const trustBanner = document.getElementById('trust-banner');
@@ -7455,6 +7613,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           } else if (msg.key === 'model') {
             currentModel = msg.value;
             if (msg.provider) currentProvider = msg.provider;
+            // The window size depends on the model; the daemon's limit is refreshed too.
+            contextBreakdown = null;
+            renderTokenDisplay();
+            scheduleContextBreakdown();
             if (msg.reasoningCapability) {
               currentModelReasoningCapability = {
                 ...msg.reasoningCapability,
@@ -7801,7 +7963,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                       renderedActivity = window.renderAntigravityActivityRow(toolName, toolArgs, loadedEditStatus);
                     }
                     if (!renderedActivity && typeof window.renderBackgroundProcessActivityRow === 'function' && /^shell_bg$/i.test(toolName)) {
-                      renderedActivity = window.renderBackgroundProcessActivityRow(toolName, toolArgs, 'running_bg', (typeof m !== 'undefined' && m ? m.result : ''));
+                      // History only says the process started; it is running only if the daemon still lists it.
+                      const bgResult = toolResultsForLoad.get(tc.id) || '';
+                      const bgIdMatch = /with id '([^']+)'/.exec(String(bgResult));
+                      const bgRunning = !!bgIdMatch && (runtime?.processes || []).some(p => p.process_id === bgIdMatch[1]);
+                      const bgStatus = window.bgStatusFromResult(bgResult) || (bgRunning ? 'running_bg' : 'ended');
+                      renderedActivity = window.renderBackgroundProcessActivityRow(toolName, toolArgs, bgStatus, bgResult);
                     } else if (!renderedActivity && typeof window.renderCommandActivityRow === 'function' && /^(shell_exec|run_command|bash|exec|cmd)$/i.test(toolName)) {
                       renderedActivity = window.renderCommandActivityRow(toolName, toolArgs, 'done');
                     }
@@ -8318,7 +8485,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 activityEl = window.renderAntigravityActivityRow(toolName, rawArgs, editStatus);
               }
               if (!activityEl && typeof window.renderBackgroundProcessActivityRow === 'function' && /^shell_bg$/i.test(toolName)) {
-                activityEl = window.renderBackgroundProcessActivityRow(toolName, rawArgs, msg.success === false ? 'error' : 'running_bg', msg.result);
+                activityEl = window.renderBackgroundProcessActivityRow(toolName, rawArgs,
+                  msg.success === false ? 'error' : (window.bgStatusFromResult(msg.result) || 'running_bg'), msg.result);
               } else if (!activityEl && typeof window.renderCommandActivityRow === 'function' && /^(shell_exec|run_command|bash|exec|cmd)$/i.test(toolName)) {
                 activityEl = window.renderCommandActivityRow(toolName, rawArgs, msg.success === false ? 'error' : 'done', msg.result);
               }
@@ -8834,7 +9002,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         case 'session_compacted':
           hideCompactionBannerWithSuccess(msg);
+          if (!msg.skipped && !msg.error && (!msg.session_id || msg.session_id === currentSessionId)) {
+            // The pre-compaction size is stale now; show the estimate until the next reply reports the real one.
+            contextBreakdown = null;
+            updateTokenDisplay({ session_id: currentSessionId, context_tokens: msg.context_estimated ? (msg.context_tokens || 0) : 0, context_estimated: true });
+          } else {
+            scheduleContextBreakdown();
+          }
           break;
+
+        case 'context_breakdown': {
+          if (msg.data && msg.session_id && msg.session_id === currentSessionId) {
+            contextBreakdown = { sessionId: msg.session_id, data: msg.data };
+            renderTokenDisplay();
+          }
+          break;
+        }
 
         case 'turn_undone': {
           const undoneCount = msg.turnsUndone || 1;
@@ -9167,16 +9350,131 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       return (firstLine && firstLine.trim()) || str;
     }
 
+    const iconRetry = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>';
+    const iconModel = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>';
+    const iconCompact = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>';
+    const iconPlus = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>';
+    const iconSettings = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83-2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>';
+    const iconAccount = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>';
+
+    const ERROR_CARD_ACTION_ICONS = {
+      'retry-turn': iconRetry,
+      'retry-without-image': iconRetry,
+      'switch-model-flyout': iconModel,
+      'trigger-compact': iconCompact,
+      'new-session': iconPlus,
+      'open-settings': iconSettings,
+      'open-account-login': iconAccount,
+    };
+
+    function errorCardMarkupEnd(text, start) {
+      const tag = /<(\\/?)div\\b[^>]*>/gi;
+      tag.lastIndex = start;
+      let depth = 0;
+      let match;
+      while ((match = tag.exec(text))) {
+        depth += match[1] ? -1 : 1;
+        if (depth === 0) return tag.lastIndex;
+      }
+      return -1;
+    }
+
+    function startsLineOutsideFence(text, index) {
+      if (index > 0 && text.charAt(index - 1) !== String.fromCharCode(10)) return false;
+      const fence = String.fromCharCode(96, 96, 96);
+      let inFence = false;
+      text.slice(0, index).split(String.fromCharCode(10)).forEach((line) => {
+        const trimmedLine = line.trim();
+        if (trimmedLine.startsWith(fence) || trimmedLine.startsWith('~~~')) inFence = !inFence;
+      });
+      return !inFence;
+    }
+
+    // Reads the card through an inert DOMParser document and keeps only text, inline emphasis,
+    // the quota timer, and buttons whose data-action the click handler already supports.
+    function errorCardFromMarkup(markup) {
+      if (typeof DOMParser === 'undefined') return '';
+      const source = new DOMParser().parseFromString(markup, 'text/html').querySelector('.andromity-error-card');
+      if (!source) return '';
+      const textOf = (selector) => {
+        const node = source.querySelector(selector);
+        return node ? node.textContent.replace(/\\s+/g, ' ').trim() : '';
+      };
+      const errorType = (source.getAttribute('data-error-type') || 'generic').replace(/[^a-z_]/gi, '') || 'generic';
+      let bodyHtml = '';
+      let timerText = '';
+      const body = source.querySelector('.error-card-body');
+      if (body) {
+        body.childNodes.forEach((node) => {
+          const nodeText = node.textContent || '';
+          if (node.nodeType !== 1) {
+            bodyHtml += escapeHtml(nodeText);
+          } else if (['STRONG', 'B', 'EM', 'CODE'].includes(node.tagName)) {
+            const tagName = node.tagName.toLowerCase();
+            bodyHtml += '<' + tagName + '>' + escapeHtml(nodeText) + '</' + tagName + '>';
+          } else if (node.tagName === 'BR') {
+            bodyHtml += '<br>';
+          } else if (nodeText.trim().startsWith('Quota resets in')) {
+            timerText = nodeText.trim();
+          } else {
+            bodyHtml += escapeHtml(nodeText);
+          }
+        });
+      }
+      const timerHtml = timerText
+        ? '<br><div style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-family:var(--font-mono,monospace);color:#10b981;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.22);padding:3px 9px;border-radius:4px;margin-top:8px;">' +
+          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
+          escapeHtml(timerText) +
+          '</div>'
+        : '';
+      const seenActions = new Set();
+      let actionsHtml = '';
+      source.querySelectorAll('.error-card-actions [data-action]').forEach((button) => {
+        const action = button.getAttribute('data-action') || '';
+        if (!Object.prototype.hasOwnProperty.call(ERROR_CARD_ACTION_ICONS, action) || seenActions.has(action)) return;
+        const label = (button.textContent || '').replace(/\\s+/g, ' ').trim();
+        if (!label) return;
+        actionsHtml += '<button class="' + (seenActions.size === 0 ? 'btn-error-retry' : 'btn-error-secondary') + '" data-action="' + action + '" title="' + escapeHtml(button.getAttribute('title') || label) + '">' +
+          ERROR_CARD_ACTION_ICONS[action] + escapeHtml(label) + '</button>';
+        seenActions.add(action);
+      });
+      const detailsNode = source.querySelector('.error-details .error-code');
+      const detailsText = detailsNode ? detailsNode.textContent.trim() : '';
+      const iconAlert = '<span class="error-header-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span>';
+      return '<div class="andromity-error-card" data-error-type="' + errorType + '" data-retryable="true">' +
+          '<div class="error-card-header">' +
+            '<div class="error-header-left">' +
+              iconAlert +
+              '<span class="error-badge">' + escapeHtml(textOf('.error-badge') || 'ERROR') + '</span>' +
+              '<span class="error-title">' + escapeHtml(textOf('.error-title') || 'Turn Interrupted') + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="error-card-body">' + bodyHtml.trim() + timerHtml + '</div>' +
+          (detailsText
+            ? '<details class="error-details">' +
+                '<summary>' + escapeHtml(textOf('.error-details summary') || 'Technical Details') + '</summary>' +
+                '<pre class="error-code"><code>' + escapeHtml(detailsText) + '</code></pre>' +
+              '</details>'
+            : '') +
+          (actionsHtml ? '<div class="error-card-actions">' + actionsHtml + '</div>' : '') +
+        '</div>';
+    }
+
     function appendErrorCard(text, rawError, errorType) {
       if (!text) text = 'An unexpected agent error occurred.';
       const trimmed = String(text).trim();
       const wrap = document.createElement('div');
 
       if (trimmed.includes('andromity-error-card')) {
-        wrap.innerHTML = trimmed;
-        chatContainer.appendChild(wrap.firstElementChild || wrap);
-        scrollToBottomIfNeeded();
-        return;
+        const start = trimmed.indexOf(ERROR_CARD_OPEN);
+        const end = start === -1 ? -1 : errorCardMarkupEnd(trimmed, start);
+        const card = end === -1 ? '' : errorCardFromMarkup(trimmed.slice(start, end));
+        if (card) {
+          wrap.innerHTML = card;
+          chatContainer.appendChild(wrap.firstElementChild || wrap);
+          scrollToBottomIfNeeded();
+          return;
+        }
       }
 
       const cleanMsg = extractCleanErrorMessage(trimmed);
@@ -9187,12 +9485,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       let timerHtml = '';
       let eType = errorType || 'generic';
 
-      const iconRetry = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>';
-      const iconModel = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>';
-      const iconCompact = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>';
-      const iconPlus = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>';
-      const iconSettings = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83-2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>';
-      const iconAccount = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>';
 
       let actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">' + iconRetry + 'Retry Turn</button>';
 

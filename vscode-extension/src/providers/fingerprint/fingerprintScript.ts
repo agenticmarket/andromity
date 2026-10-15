@@ -4,83 +4,88 @@ export function getFingerprintScript(sessionId: string): string {
   return `
     (function() {
       const vscode = acquireVsCodeApi();
+      const saved = vscode.getState() || {};
 
-      let activeView = "dag";
-      let activeTurnFilter = "all";
-      let activeCategoryFilter = "all";
-      let searchQuery = "";
+      const CARD_W = 250;
+      const MIN_ZOOM = 0.2;
+      const MAX_ZOOM = 2;
+      const MAX_SAVED_POSITIONS = 400;
+
+      let activeView = saved.view === 'blast' ? 'blast' : 'dag';
+      let activeTurnFilter = 'all';
+      let activeCategoryFilter = 'all';
+      let searchQuery = '';
       let selectedNodeId = null;
       let activeSubagentId = null;
-      let zoomScale = 0.88;
+      let zoomScale = 1;
       let panX = 0;
       let panY = 0;
+      // Until the user pans or zooms, every refresh re-fits so new work stays in view.
+      let cameraTouched = false;
       let isCanvasPanning = false;
       let panStartX = 0;
       let panStartY = 0;
-
       let draggingNodeId = null;
       let nodeDragStartX = 0;
       let nodeDragStartY = 0;
       let nodeOrigX = 0;
       let nodeOrigY = 0;
       let hasDraggedNode = false;
-
-      let isLeftSidebarCollapsed = false;
+      let isLeftSidebarCollapsed = !!saved.leftCollapsed;
       let isInspectorCollapsed = true;
       let isInspectorPinned = false;
-
-      function toggleLeftSidebar(collapse) {
-        const sb = document.getElementById('fp-sidebar');
-        const btn = document.getElementById('btn-toggle-left-sidebar');
-        if (!sb) return;
-        if (collapse !== undefined) {
-          isLeftSidebarCollapsed = collapse;
-        } else {
-          isLeftSidebarCollapsed = !isLeftSidebarCollapsed;
-        }
-        sb.classList.toggle('collapsed', isLeftSidebarCollapsed);
-        if (btn) btn.classList.toggle('active', !isLeftSidebarCollapsed);
-      }
-
-      function toggleInspector(collapse) {
-        const insp = document.getElementById('fp-inspector');
-        const btn = document.getElementById('btn-toggle-right-sidebar');
-        if (!insp) return;
-        if (collapse !== undefined) {
-          isInspectorCollapsed = collapse;
-        } else {
-          isInspectorCollapsed = !isInspectorCollapsed;
-        }
-        insp.classList.toggle('collapsed', isInspectorCollapsed);
-        if (btn) btn.classList.toggle('active', !isInspectorCollapsed);
-      }
-
-      function togglePinInspector() {
-        isInspectorPinned = !isInspectorPinned;
-        const pinBtn = document.getElementById('btn-pin-inspector');
-        const pinIcon = document.getElementById('pin-icon');
-        if (pinBtn) {
-          pinBtn.classList.toggle('pinned', isInspectorPinned);
-          pinBtn.title = isInspectorPinned ? 'Unpin Inspector (Auto-close on canvas click)' : 'Pin Inspector (Keep open on canvas click)';
-        }
-        if (pinIcon) {
-          pinIcon.setAttribute('fill', isInspectorPinned ? 'currentColor' : 'none');
-        }
-      }
+      let inspectorSignature = '';
+      // Dragged card positions survive live refreshes and reopening the panel.
+      let manualPositions = saved.positions && typeof saved.positions === 'object' ? saved.positions : {};
+      let renderedNodes = new Map();
+      let lastFitMinScale = MIN_ZOOM;
 
       let traceData = {
         session_id: ${scriptJson(sessionId)},
+        status: 'idle',
         nodes: [],
         connections: [],
-        metrics: {
-          durationMs: 0,
-          filesModified: 0,
-          filesRead: 0,
-          commandsRun: 0,
-          airgapCount: 0
-        },
+        turns: [],
+        metrics: { durationMs: 0, filesModified: 0, filesRead: 0, commandsRun: 0, searches: 0, sensitiveBlocked: 0, sensitiveAccessed: 0 },
         subagents: {}
       };
+
+      const TAG_LABELS = { llm: 'Turn', read: 'Read', write: 'Change', explore: 'Search', web: 'Web', shell: 'Shell', subagent: 'Subagent', plan: 'Plan', coord: 'Sessions', other: 'Tool' };
+      const STATUS_LABELS = { ok: 'OK', error: 'Error', blocked: 'Blocked', running: 'Running', none: 'No result', done: 'Done', failed: 'Failed' };
+
+      function saveState() {
+        const keys = Object.keys(manualPositions);
+        if (keys.length > MAX_SAVED_POSITIONS) keys.slice(0, keys.length - MAX_SAVED_POSITIONS).forEach(k => delete manualPositions[k]);
+        vscode.setState({ view: activeView, leftCollapsed: isLeftSidebarCollapsed, positions: manualPositions });
+      }
+
+      function escapeHtml(str) {
+        if (str === undefined || str === null) return '';
+        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      }
+
+      function formatDuration(ms) {
+        if (!ms || ms < 0) return '0s';
+        if (ms < 10000) return (ms / 1000).toFixed(1) + 's';
+        const totalSeconds = Math.round(ms / 1000);
+        if (totalSeconds < 60) return totalSeconds + 's';
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        if (minutes < 60) return minutes + 'm' + (seconds ? ' ' + seconds + 's' : '');
+        const hours = Math.floor(minutes / 60);
+        return hours + 'h' + (minutes % 60 ? ' ' + (minutes % 60) + 'm' : '');
+      }
+
+      function formatTime(ts) {
+        if (!ts) return '';
+        const date = new Date(ts);
+        if (isNaN(date.getTime())) return '';
+        return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      }
+
+      function plural(n, word) {
+        return n + ' ' + word + (n === 1 ? '' : 's');
+      }
 
       function getCurrentDataset() {
         if (activeSubagentId && traceData.subagents && traceData.subagents[activeSubagentId]) {
@@ -89,47 +94,91 @@ export function getFingerprintScript(sessionId: string): string {
         return traceData;
       }
 
+      function datasetKey() {
+        return activeSubagentId || 'main';
+      }
+
+      function positionKey(nodeId) {
+        return activeView + '|' + datasetKey() + '|' + nodeId;
+      }
+
       function getNodeIconSvg(type) {
-        if (type === "llm") {
-          return '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>';
-        }
-        if (type === "read") {
-          return '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
-        }
-        if (type === "write") {
-          return '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
-        }
-        if (type === "shell") {
-          return '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>';
-        }
-        if (type === "subagent") {
-          return '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg>';
-        }
-        if (type === "security") {
-          return '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
-        }
-        return '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><circle cx="12" cy="12" r="10"/></svg>';
+        const open = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">';
+        const icons = {
+          llm: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+          read: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+          write: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>',
+          explore: '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+          web: '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+          shell: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
+          subagent: '<rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/>',
+          plan: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
+          coord: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/>',
+          lock: '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'
+        };
+        return open + (icons[type] || '<circle cx="12" cy="12" r="9"/>') + '</svg>';
       }
 
-      function escapeHtml(str) {
-        if (!str) return '';
-        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      // ── Panels ─────────────────────────────────────────────────────────
+      function toggleLeftSidebar(collapse) {
+        const sb = document.getElementById('fp-sidebar');
+        const btn = document.getElementById('btn-toggle-left-sidebar');
+        if (!sb) return;
+        isLeftSidebarCollapsed = collapse !== undefined ? collapse : !isLeftSidebarCollapsed;
+        sb.classList.toggle('collapsed', isLeftSidebarCollapsed);
+        if (btn) {
+          btn.classList.toggle('active', !isLeftSidebarCollapsed);
+          btn.setAttribute('aria-pressed', String(!isLeftSidebarCollapsed));
+        }
+        saveState();
       }
 
+      function toggleInspector(collapse) {
+        const insp = document.getElementById('fp-inspector');
+        const btn = document.getElementById('btn-toggle-right-sidebar');
+        if (!insp) return;
+        isInspectorCollapsed = collapse !== undefined ? collapse : !isInspectorCollapsed;
+        insp.classList.toggle('collapsed', isInspectorCollapsed);
+        if (btn) {
+          btn.classList.toggle('active', !isInspectorCollapsed);
+          btn.setAttribute('aria-pressed', String(!isInspectorCollapsed));
+        }
+      }
+
+      function togglePinInspector() {
+        isInspectorPinned = !isInspectorPinned;
+        const pinBtn = document.getElementById('btn-pin-inspector');
+        const pinIcon = document.getElementById('pin-icon');
+        if (pinBtn) {
+          pinBtn.classList.toggle('pinned', isInspectorPinned);
+          pinBtn.title = isInspectorPinned ? 'Close the inspector when clicking the canvas' : 'Keep the inspector open when clicking the canvas';
+        }
+        if (pinIcon) pinIcon.setAttribute('fill', isInspectorPinned ? 'currentColor' : 'none');
+      }
+
+      // ── Header ─────────────────────────────────────────────────────────
       function updateMetricsBar() {
-        const ds = getCurrentDataset();
-        const m = ds.metrics || {};
-        const durEl = document.getElementById('metric-duration');
-        const modEl = document.getElementById('metric-modified');
-        const readEl = document.getElementById('metric-read');
-        const cmdEl = document.getElementById('metric-commands');
-        const secEl = document.getElementById('metric-security');
-
-        if (durEl) durEl.innerText = ((m.durationMs || 0) / 1000).toFixed(2) + 's';
-        if (modEl) modEl.innerText = (m.filesModified || 0) + ' Files';
-        if (readEl) readEl.innerText = (m.filesRead || 0) + ' Context Ingested';
-        if (cmdEl) cmdEl.innerText = (m.commandsRun || 0) + ' Executed';
-        if (secEl) secEl.innerText = (m.airgapCount || 0) > 0 ? (m.airgapCount + ' Protected (.env)') : '0 Leaks · Clean';
+        const m = getCurrentDataset().metrics || {};
+        const set = (id, text) => {
+          const el = document.getElementById(id);
+          if (el) el.textContent = text;
+        };
+        set('metric-duration', formatDuration(m.durationMs || 0));
+        set('metric-modified', String(m.filesModified || 0));
+        set('metric-read', String(m.filesRead || 0) + (m.searches ? ' · ' + plural(m.searches, 'search').replace('searchs', 'searches') : ''));
+        set('metric-commands', String(m.commandsRun || 0));
+        const sec = document.getElementById('metric-security');
+        if (sec) {
+          const parts = [];
+          if (m.sensitiveAccessed) parts.push(m.sensitiveAccessed + ' accessed');
+          if (m.sensitiveBlocked) parts.push(m.sensitiveBlocked + ' blocked');
+          sec.textContent = parts.length ? parts.join(' · ') : 'None';
+          sec.className = 'wf-metric-value ' + (m.sensitiveAccessed ? 'red' : m.sensitiveBlocked ? 'amber' : 'muted');
+        }
+        const live = traceData.status === 'running';
+        const pill = document.getElementById('status-pill');
+        if (pill) pill.classList.toggle('live', live);
+        set('status-text', live ? 'Live' : 'Idle');
       }
 
       function updateTurnsSidebar() {
@@ -139,70 +188,57 @@ export function getFingerprintScript(sessionId: string): string {
         const labelAllEl = document.getElementById('turn-item-all-label');
         const subSecEl = document.getElementById('sidebar-subagents-section');
         const subListEl = document.getElementById('dynamic-subagent-list');
-
+        const allEl = document.getElementById('turn-item-all');
         if (!turnListEl) return;
 
         const ds = getCurrentDataset();
-        const turns = new Set();
-        (ds.nodes || []).forEach(n => {
-          if (n.turn) turns.add(n.turn);
-        });
-
-        if (badgeAll) {
-          badgeAll.innerText = String(turns.size);
-        }
+        const turns = ds.turns || [];
+        if (badgeAll) badgeAll.textContent = String(turns.length);
+        if (allEl) allEl.classList.toggle('active', activeTurnFilter === 'all');
 
         if (activeSubagentId) {
-          if (titleEl) titleEl.innerText = 'Subagent Lineage';
-          if (labelAllEl) labelAllEl.innerText = 'All Subagent Actions';
+          if (titleEl) titleEl.textContent = 'Subagent';
+          if (labelAllEl) labelAllEl.textContent = 'All actions';
           if (subSecEl) subSecEl.style.display = 'none';
         } else {
-          if (titleEl) titleEl.innerText = 'Turn Sequence';
-          if (labelAllEl) labelAllEl.innerText = 'All Turns & Lineage';
-
-          // Spawned Subagents in main sidebar
+          if (titleEl) titleEl.textContent = 'Turns';
+          if (labelAllEl) labelAllEl.textContent = 'All turns';
           const subagentKeys = traceData.subagents ? Object.keys(traceData.subagents) : [];
-          if (subSecEl) {
-            if (subagentKeys.length > 0) {
-              subSecEl.style.display = 'block';
-              if (subListEl) {
-                subListEl.innerHTML = '';
-                subagentKeys.forEach(aid => {
-                  const sub = traceData.subagents[aid];
-                  const item = document.createElement('div');
-                  item.className = 'fp-subagent-item';
-                  item.dataset.subagentId = aid;
-                  item.innerHTML = \`
-                    <div class="fp-subagent-item-left">
-                      \${getNodeIconSvg('subagent')}
-                      <span>\${escapeHtml((sub.role || 'subagent').toUpperCase())}</span>
-                    </div>
-                    <div style="display:flex; align-items:center; gap:4px;">
-                      <span class="fp-subagent-actions-badge" style="font-size:10px; padding:1px 5px;">\${sub.tools ? sub.tools.length : 0}</span>
-                      <span class="fp-badge-subagent \${(sub.status || 'done').toLowerCase()}">\${escapeHtml((sub.status || 'OK').toUpperCase())}</span>
-                    </div>
-                  \`;
-                  subListEl.appendChild(item);
-                });
-              }
-            } else {
-              subSecEl.style.display = 'none';
-            }
+          if (subSecEl) subSecEl.style.display = subagentKeys.length ? 'block' : 'none';
+          if (subListEl) {
+            subListEl.innerHTML = subagentKeys.map(aid => {
+              const sub = traceData.subagents[aid];
+              const status = (sub.status || 'done').toLowerCase();
+              return '<div class="fp-subagent-item" data-subagent-id="' + escapeHtml(aid) + '" role="button" tabindex="0" title="' + escapeHtml(sub.task || '') + '">' +
+                '<div class="fp-subagent-item-left">' + getNodeIconSvg('subagent') + '<span>' + escapeHtml(sub.role || 'subagent') + '</span></div>' +
+                '<div class="fp-subagent-item-right">' +
+                  '<span class="fp-subagent-actions-badge">' + (sub.tools ? sub.tools.length : 0) + '</span>' +
+                  '<span class="fp-badge-subagent ' + escapeHtml(status) + '">' + escapeHtml(STATUS_LABELS[status] || status) + '</span>' +
+                '</div></div>';
+            }).join('');
           }
         }
 
-        turnListEl.innerHTML = '';
-        Array.from(turns).forEach(t => {
-          const item = document.createElement('div');
-          item.className = 'fp-turn-item' + (activeTurnFilter === t ? ' active' : '');
-          item.dataset.turn = t;
-          const count = (ds.nodes || []).filter(n => n.turn === t).length;
-          item.innerHTML = \`
-            <span>\${escapeHtml(t.replace('-', ' ').toUpperCase())}</span>
-            <span class="fp-badge">\${count}</span>
-          \`;
-          turnListEl.appendChild(item);
-        });
+        turnListEl.innerHTML = turns.map(turn => {
+          const meta = [formatTime(turn.ts), turn.durationMs ? formatDuration(turn.durationMs) : '', plural(turn.actions || 0, 'action')].filter(Boolean);
+          const statusHtml = turn.status === 'error' || turn.status === 'running'
+            ? '<span class="fp-turn-status ' + turn.status + '">' + (turn.status === 'error' ? 'Error' : 'Running') + '</span>'
+            : '';
+          return '<div class="fp-turn-item' + (activeTurnFilter === turn.id ? ' active' : '') + '" data-turn="' + escapeHtml(turn.id) + '" role="button" tabindex="0" title="' + escapeHtml(turn.prompt || '') + '">' +
+            '<div class="fp-turn-main"><span class="fp-turn-num">' + String(turn.index).padStart(2, '0') + '</span><span class="fp-turn-prompt">' + escapeHtml(turn.prompt || '') + '</span></div>' +
+            '<div class="fp-turn-meta">' + meta.map(part => '<span>' + escapeHtml(part) + '</span>').join('') + statusHtml + '</div>' +
+          '</div>';
+        }).join('');
+      }
+
+      // ── Subagent drilldown ─────────────────────────────────────────────
+      function resetFilters() {
+        activeTurnFilter = 'all';
+        activeCategoryFilter = 'all';
+        searchQuery = '';
+        const sInp = document.getElementById('search-input');
+        if (sInp) sInp.value = '';
+        document.querySelectorAll('.wf-filter-pill').forEach(p => p.classList.toggle('active', p.getAttribute('data-filter') === 'all'));
       }
 
       function drilldownSubagent(subagentId) {
@@ -210,546 +246,425 @@ export function getFingerprintScript(sessionId: string): string {
         activeSubagentId = subagentId;
         vscode.postMessage({ command: 'telemetry_feature', feature: 'fingerprint_drilldown' });
         const sub = traceData.subagents[subagentId];
-
         const bc = document.getElementById('subagent-breadcrumb');
         if (bc) bc.style.display = 'flex';
         const rEl = document.getElementById('crumb-subagent-role');
-        if (rEl) rEl.innerText = 'Subagent: ' + (sub.role || 'agent').toUpperCase();
+        if (rEl) rEl.textContent = 'Subagent: ' + (sub.role || 'subagent');
         const idEl = document.getElementById('crumb-subagent-id');
-        if (idEl) idEl.innerText = sub.id || '';
+        if (idEl) idEl.textContent = sub.id || '';
+        const status = (sub.status || 'done').toLowerCase();
         const sEl = document.getElementById('subagent-badge-status');
         if (sEl) {
-          sEl.innerText = (sub.status || 'OK').toUpperCase();
-          sEl.className = 'fp-badge-subagent ' + (sub.status || 'done').toLowerCase();
+          sEl.textContent = STATUS_LABELS[status] || status;
+          sEl.className = 'fp-badge-subagent ' + status;
         }
         const aEl = document.getElementById('subagent-badge-actions');
-        if (aEl) aEl.innerText = (sub.tools ? sub.tools.length : 0) + ' Actions';
-
-        activeTurnFilter = 'all';
-        activeCategoryFilter = 'all';
-        searchQuery = '';
-        const sInp = document.getElementById('search-input');
-        if (sInp) sInp.value = '';
-        document.querySelectorAll('.wf-filter-pill').forEach(p => {
-          p.classList.toggle('active', p.getAttribute('data-filter') === 'all');
-        });
-
+        if (aEl) aEl.textContent = plural(sub.tools ? sub.tools.length : 0, 'action');
+        resetFilters();
+        selectedNodeId = null;
+        cameraTouched = false;
         updateMetricsBar();
         updateTurnsSidebar();
         renderCanvas();
-
-        if (sub.nodes && sub.nodes.length > 0) {
-          selectedNodeId = sub.nodes[0].id;
-          populateInspectorContent(selectedNodeId);
-        }
-        resetZoom();
+        fitToContent();
+        if (sub.nodes && sub.nodes.length) selectNode(sub.nodes[0].id);
       }
 
       function exitSubagentDrilldown() {
         const prevSubId = activeSubagentId;
         activeSubagentId = null;
-
         const bc = document.getElementById('subagent-breadcrumb');
         if (bc) bc.style.display = 'none';
-
-        activeTurnFilter = 'all';
-        activeCategoryFilter = 'all';
-        searchQuery = '';
-        const sInp = document.getElementById('search-input');
-        if (sInp) sInp.value = '';
-        document.querySelectorAll('.wf-filter-pill').forEach(p => {
-          p.classList.toggle('active', p.getAttribute('data-filter') === 'all');
-        });
-
+        resetFilters();
+        cameraTouched = false;
         updateMetricsBar();
         updateTurnsSidebar();
         renderCanvas();
-
+        fitToContent();
         if (prevSubId) {
-          const subNode = (traceData.nodes || []).find(n => n.subagentId === prevSubId || n.id === prevSubId);
-          if (subNode) {
-            selectedNodeId = subNode.id;
-            selectNode(subNode.id);
-          }
+          const subNode = (traceData.nodes || []).find(n => n.subagentId === prevSubId);
+          if (subNode) selectNode(subNode.id);
         }
-        resetZoom();
       }
 
+      // ── Camera ─────────────────────────────────────────────────────────
       function applyTransform() {
         const vp = document.getElementById('viewport');
-        if (vp) {
-          vp.style.transform = 'translate(' + panX + 'px, ' + panY + 'px) scale(' + zoomScale + ')';
-        }
+        if (vp) vp.style.transform = 'translate(' + panX + 'px, ' + panY + 'px) scale(' + zoomScale + ')';
         const lbl = document.getElementById('zoom-label');
-        if (lbl) {
-          lbl.innerText = Math.round(zoomScale * 100) + '%';
-        }
+        if (lbl) lbl.textContent = Math.round(zoomScale * 100) + '%';
       }
 
-      function zoomCanvas(delta) {
-        zoomScale = Math.max(0.4, Math.min(2.0, zoomScale + delta));
+      function zoomAt(nextScale, clientX, clientY) {
+        const container = document.querySelector('.fp-canvas-container');
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
+        const x = clientX === undefined ? rect.width / 2 : clientX - rect.left;
+        const y = clientY === undefined ? rect.height / 2 : clientY - rect.top;
+        const scale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, nextScale));
+        // Keep the point under the cursor (or the centre) where it is.
+        panX = x - (x - panX) * (scale / zoomScale);
+        panY = y - (y - panY) * (scale / zoomScale);
+        zoomScale = scale;
+        cameraTouched = true;
         applyTransform();
       }
 
-      function resetZoom() {
-        zoomScale = 0.88;
-        panX = 0;
-        panY = 0;
-        applyTransform();
-      }
-
-      function renderConnections(nodeMap) {
-        const svg = document.getElementById('svg-layer');
-        if (!svg) return;
-        svg.querySelectorAll('path').forEach(p => p.remove());
-
-        const ds = getCurrentDataset();
-        (ds.connections || []).forEach(conn => {
-          const from = nodeMap.get(conn.from);
-          const to = nodeMap.get(conn.to);
-          if (from && to) {
-            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-
-            if (activeView === 'blast') {
-              if (from.isTurnHub && to.isTurnHub) {
-                // Inter-turn hub bridge
-                const x1 = from.posX + 250;
-                const y1 = from.posY + 40;
-                const x2 = to.posX;
-                const y2 = to.posY + 40;
-                const span = (x2 - x1) * 0.5;
-                const d = 'M ' + x1 + ' ' + y1 + ' C ' + (x1 + span) + ' ' + (y1 - 70) + ', ' + (x2 - span) + ' ' + (y2 - 70) + ', ' + x2 + ' ' + y2;
-                path.setAttribute('d', d);
-                path.setAttribute('stroke', 'url(#grad-dag-1)');
-                path.setAttribute('stroke-width', '3');
-              } else {
-                // Radial ray connecting turn hub or subagent to satellite
-                const x1 = from.posX + 125;
-                const y1 = from.posY + 40;
-                const x2 = to.posX + 125;
-                const y2 = to.posY + 40;
-                const mx = (x1 + x2) * 0.5;
-                const my = (y1 + y2) * 0.5;
-                const d = 'M ' + x1 + ' ' + y1 + ' Q ' + mx + ' ' + my + ' ' + x2 + ' ' + y2;
-                path.setAttribute('d', d);
-                path.setAttribute('stroke', 'url(#' + (conn.grad || 'grad-dag-2') + ')');
-                path.setAttribute('stroke-width', '1.8');
-              }
-            } else {
-              // Causal DAG smooth horizontal bezier
-              const x1 = from.posX + 250;
-              const y1 = from.posY + 40;
-              const x2 = to.posX;
-              const y2 = to.posY + 40;
-              const sign = x2 >= x1 ? 1 : -1;
-              const span = Math.max(30, Math.abs(x2 - x1) * 0.45);
-              const d = 'M ' + x1 + ' ' + y1 + ' C ' + (x1 + span * sign) + ' ' + y1 + ', ' + (x2 - span * sign) + ' ' + y2 + ', ' + x2 + ' ' + y2;
-              path.setAttribute('d', d);
-              path.setAttribute('stroke', 'url(#' + (conn.grad || 'grad-dag-1') + ')');
-              path.setAttribute('stroke-width', '2');
-            }
-
-            path.setAttribute('fill', 'none');
-            if (conn.dashed || conn.to === 'security-env' || to.category === 'security') {
-              path.setAttribute('stroke-dasharray', '4 4');
-            }
-            svg.appendChild(path);
-          }
+      function contentBounds() {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        renderedNodes.forEach(node => {
+          minX = Math.min(minX, node.posX);
+          minY = Math.min(minY, node.posY);
+          maxX = Math.max(maxX, node.posX + CARD_W);
+          maxY = Math.max(maxY, node.posY + (node.h || 90));
         });
+        return minX === Infinity ? null : { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+      }
+
+      // Fit everything; when that would make cards unreadable, keep a readable scale and show the start.
+      function fitToContent(minScale) {
+        const container = document.querySelector('.fp-canvas-container');
+        const bounds = contentBounds();
+        lastFitMinScale = minScale || MIN_ZOOM;
+        if (!container || !bounds) return;
+        const pad = 32;
+        const width = container.clientWidth;
+        const height = container.clientHeight;
+        const fit = Math.min((width - pad * 2) / bounds.w, (height - pad * 2) / bounds.h, 1);
+        zoomScale = Math.max(minScale || MIN_ZOOM, Math.min(MAX_ZOOM, fit));
+        const scaledW = bounds.w * zoomScale;
+        const scaledH = bounds.h * zoomScale;
+        panX = scaledW <= width - pad * 2 ? (width - scaledW) / 2 - bounds.x * zoomScale : pad - bounds.x * zoomScale;
+        panY = scaledH <= height - pad * 2 ? (height - scaledH) / 2 - bounds.y * zoomScale : pad - bounds.y * zoomScale;
+        applyTransform();
+      }
+
+      // ── Canvas ─────────────────────────────────────────────────────────
+      function nodeMatches(node) {
+        if (activeCategoryFilter !== 'all') {
+          if (activeCategoryFilter === 'sensitive' ? !node.sensitive : node.category !== activeCategoryFilter) return false;
+        }
+        if (searchQuery.trim()) {
+          const q = searchQuery.trim().toLowerCase();
+          const calls = (node.details && node.details.calls) || [];
+          const haystack = [node.title, node.sub, node.filePath].concat(calls.map(c => (c.target || '') + ' ' + (c.command || ''))).join(' ').toLowerCase();
+          if (!haystack.includes(q)) return false;
+        }
+        return true;
+      }
+
+      function visibleNodes(ds) {
+        let nodes = ds.nodes || [];
+        if (activeTurnFilter !== 'all') nodes = nodes.filter(n => n.turn === activeTurnFilter);
+        if (activeCategoryFilter === 'all' && !searchQuery.trim()) return nodes;
+        const matches = nodes.filter(n => !n.isTurnHub && nodeMatches(n));
+        const turns = new Set(matches.map(n => n.turn));
+        // Keep each matching turn's hub so results stay anchored to their turn.
+        return nodes.filter(n => (n.isTurnHub && turns.has(n.turn)) || matches.includes(n));
+      }
+
+      function layoutBlast(nodes) {
+        const hubs = nodes.filter(n => n.isTurnHub);
+        let cursorX = 0;
+        hubs.forEach(hub => {
+          const satellites = nodes.filter(n => n !== hub && n.turn === hub.turn);
+          const outer = satellites.length > 6;
+          const rx = outer ? 470 : 330;
+          const ry = outer ? 330 : 230;
+          const clusterCx = cursorX + rx + CARD_W / 2;
+          const cy = ry + 80;
+          hub.bx = clusterCx - CARD_W / 2;
+          hub.by = cy - 40;
+          satellites.forEach((sat, i) => {
+            const inner = !outer || i < 6;
+            const count = inner ? Math.min(6, satellites.length) : satellites.length - 6;
+            const index = inner ? i : i - 6;
+            const angle = (index / count) * 2 * Math.PI - Math.PI / 2 + (inner ? 0 : Math.PI / count);
+            const radiusX = inner && outer ? 300 : rx;
+            const radiusY = inner && outer ? 205 : ry;
+            sat.bx = clusterCx + Math.cos(angle) * radiusX - CARD_W / 2;
+            sat.by = cy + Math.sin(angle) * radiusY - 40;
+          });
+          cursorX += rx * 2 + CARD_W + 140;
+        });
+      }
+
+      function cardHtml(node) {
+        const tagLabel = TAG_LABELS[node.type] || 'Tool';
+        let footer = '';
+        if (node.isTurnHub && node.details) {
+          const meta = [formatTime(node.details.ts), node.details.durationMs ? formatDuration(node.details.durationMs) : '', plural(node.details.actions || 0, 'action')].filter(Boolean);
+          footer += '<div class="fp-node-meta">' + escapeHtml(meta.join(' · ')) + '</div>';
+        }
+        const actions = [];
+        if (node.sensitive) actions.push('<span class="fp-node-flag" title="Matches the sensitive-path rules">' + getNodeIconSvg('lock') + ' Sensitive</span>');
+        if (node.filePath) actions.push('<button class="fp-node-open" data-action="open-file" data-filepath="' + escapeHtml(node.filePath) + '" data-line="' + (node.line || 1) + '" title="Open in the editor">Open file</button>');
+        if (node.hasSubagentDrilldown && node.subagentId) {
+          actions.push('<button class="fp-card-drilldown-btn" data-action="drilldown-subagent" data-subagent-id="' + escapeHtml(node.subagentId) + '">View ' + plural(node.subagentActionCount || 0, 'action') + ' →</button>');
+        }
+        if (actions.length) footer += '<div class="fp-node-actions">' + actions.join('') + '</div>';
+        return '<div class="fp-node-top">' +
+            '<span class="fp-node-tag ' + escapeHtml(node.type) + '">' + getNodeIconSvg(node.type) + ' ' + tagLabel + '</span>' +
+            '<span class="fp-node-badge ' + escapeHtml(node.badgeType || 'muted') + '">' + escapeHtml(node.badge || 'OK') + '</span>' +
+          '</div>' +
+          '<div class="fp-node-name" title="' + escapeHtml(node.title) + '">' + escapeHtml(node.title) + '</div>' +
+          (node.sub ? '<div class="fp-node-sub' + (node.isTurnHub ? ' prompt' : '') + '" title="' + escapeHtml(node.sub) + '">' + escapeHtml(node.sub) + '</div>' : '') +
+          footer;
       }
 
       function renderCanvas() {
         const nodesLayer = document.getElementById('nodes-layer');
         const emptyEl = document.getElementById('empty-state');
         if (!nodesLayer) return;
-
         nodesLayer.innerHTML = '';
+        renderedNodes = new Map();
 
         const ds = getCurrentDataset();
-        let nodes = ds.nodes || [];
-
-        if (nodes.length === 0) {
-          if (emptyEl) emptyEl.style.display = 'flex';
-          const svg = document.getElementById('svg-layer');
-          if (svg) svg.querySelectorAll('path').forEach(p => p.remove());
-          return;
-        } else {
-          if (emptyEl) emptyEl.style.display = 'none';
+        const nodes = visibleNodes(ds);
+        if (emptyEl) {
+          emptyEl.style.display = nodes.length ? 'none' : 'flex';
+          const filtered = (ds.nodes || []).length > 0;
+          const title = document.getElementById('empty-title');
+          const text = document.getElementById('empty-text');
+          if (title) title.textContent = filtered ? 'Nothing matches' : 'No activity yet';
+          if (text) text.textContent = filtered ? 'Try another filter or search.' : 'Send a prompt to the agent. The files it reads, changes and runs appear here.';
         }
-
-        if (activeTurnFilter !== 'all') {
-          nodes = nodes.filter(n => n.turn === activeTurnFilter);
-        }
-        if (activeCategoryFilter !== 'all') {
-          nodes = nodes.filter(n => n.category === activeCategoryFilter);
-        }
-        if (searchQuery.trim()) {
-          const q = searchQuery.toLowerCase();
-          nodes = nodes.filter(n => (n.title && n.title.toLowerCase().includes(q)) || (n.sub && n.sub.toLowerCase().includes(q)));
-        }
-
-        const nodeMap = new Map();
-
-        // Multi-Turn Planetary Clusters in Blast Radius View
-        if (activeView === 'blast') {
-          const turnHubs = nodes.filter(n => n.isTurnHub);
-          const turnKeys = turnHubs.length > 0
-            ? turnHubs.map(h => h.turn)
-            : Array.from(new Set(nodes.map(n => n.turn || 'turn-1')));
-
-          turnKeys.forEach((tKey, hIdx) => {
-            const clusterCx = activeTurnFilter !== 'all' ? 520 : (520 + hIdx * 1100);
-            const clusterCy = 420;
-
-            const hub = nodes.find(n => n.isTurnHub && n.turn === tKey) || nodes.find(n => n.turn === tKey);
-            const satellites = nodes.filter(n => n !== hub && n.turn === tKey);
-
-            if (hub) {
-              hub.posX = clusterCx - 125;
-              hub.posY = clusterCy - 40;
-            }
-
-            const total = satellites.length;
-            satellites.forEach((sat, sIdx) => {
-              let satX, satY;
-              if (total <= 6) {
-                const rx = 320;
-                const ry = 220;
-                const angle = (sIdx / total) * 2 * Math.PI - Math.PI / 2;
-                satX = clusterCx + Math.cos(angle) * rx - 125;
-                satY = clusterCy + Math.sin(angle) * ry - 40;
-              } else {
-                if (sIdx < 6) {
-                  const rx1 = 290;
-                  const ry1 = 200;
-                  const angle = (sIdx / 6) * 2 * Math.PI - Math.PI / 2;
-                  satX = clusterCx + Math.cos(angle) * rx1 - 125;
-                  satY = clusterCy + Math.sin(angle) * ry1 - 40;
-                } else {
-                  const rx2 = 450;
-                  const ry2 = 320;
-                  const outerTotal = total - 6;
-                  const angle = ((sIdx - 6) / outerTotal) * 2 * Math.PI - Math.PI / 2 + (Math.PI / 6);
-                  satX = clusterCx + Math.cos(angle) * rx2 - 125;
-                  satY = clusterCy + Math.sin(angle) * ry2 - 40;
-                }
-              }
-              sat.posX = satX;
-              sat.posY = satY;
-            });
-          });
-        }
+        if (activeView === 'blast') layoutBlast(nodes);
 
         nodes.forEach(node => {
-          let posX = activeView === 'blast' ? node.posX : node.x;
-          let posY = activeView === 'blast' ? node.posY : node.y;
-
-          node.posX = posX;
-          node.posY = posY;
-          nodeMap.set(node.id, node);
-
+          const manual = manualPositions[positionKey(node.id)];
+          node.posX = manual ? manual.x : activeView === 'blast' ? node.bx : node.x;
+          node.posY = manual ? manual.y : activeView === 'blast' ? node.by : node.y;
           const card = document.createElement('div');
-          card.className = 'fp-node-card' + (node.type === 'subagent' ? ' subagent' : '') + (node.id === selectedNodeId ? ' selected' : '');
+          card.className = 'fp-node-card ' + node.type + (node.isTurnHub ? ' hub' : '') + (node.sensitive ? ' sensitive' : '') + (node.id === selectedNodeId ? ' selected' : '');
           card.dataset.nodeId = node.id;
-          if (node.subagentId) {
-            card.dataset.subagentId = node.subagentId;
-          }
-          card.style.left = posX + 'px';
-          card.style.top = posY + 'px';
-
-          const iconSvg = getNodeIconSvg(node.type);
-
-          let fileActionHtml = '';
-          if (node.filePath) {
-            fileActionHtml = \`
-              <div class="fp-node-file-link">
-                <span class="fp-file-path-text" data-action="open-file" data-filepath="\${escapeHtml(node.filePath)}" data-line="\${node.line || 1}">
-                  \${escapeHtml(node.filePath)}
-                </span>
-                <span class="fp-file-open-icon" data-action="open-file" data-filepath="\${escapeHtml(node.filePath)}" data-line="\${node.line || 1}">
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                  open
-                </span>
-              </div>
-            \`;
-          }
-
-          if (node.type === 'subagent' || node.subagentId) {
-            fileActionHtml += \`
-              <button class="fp-card-drilldown-btn" data-action="drilldown-subagent" data-subagent-id="\${escapeHtml(node.subagentId || node.id)}">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-                <span>Go Inside Subagent (\${node.subagentActionCount || (node.details?.actionsCount || 0)} Actions) &rarr;</span>
-              </button>
-            \`;
-          }
-
-          card.innerHTML = \`
-            <div class="fp-node-top">
-              <span class="fp-node-tag \${node.type}">\${iconSvg} \${node.type}</span>
-              <span class="fp-node-badge \${node.badgeType || 'muted'}">\${escapeHtml(node.badge || 'OK')}</span>
-            </div>
-            <div class="fp-node-name">\${escapeHtml(node.title)}</div>
-            <div class="fp-node-sub">\${escapeHtml(node.sub || '')}</div>
-            \${fileActionHtml}
-          \`;
-
+          card.tabIndex = 0;
+          card.setAttribute('role', 'button');
+          card.setAttribute('aria-label', (TAG_LABELS[node.type] || 'Tool') + ': ' + node.title + (node.badge ? ', ' + node.badge : ''));
+          card.style.left = node.posX + 'px';
+          card.style.top = node.posY + 'px';
+          card.innerHTML = cardHtml(node);
           nodesLayer.appendChild(card);
+          renderedNodes.set(node.id, node);
         });
+        nodesLayer.querySelectorAll('.fp-node-card').forEach(card => {
+          const node = renderedNodes.get(card.dataset.nodeId);
+          if (node) node.h = card.offsetHeight;
+        });
+        renderConnections();
+      }
 
-        // Draw SVG Connections
-        renderConnections(nodeMap);
+      function renderConnections() {
+        const svg = document.getElementById('svg-layer');
+        if (!svg) return;
+        svg.querySelectorAll('path').forEach(p => p.remove());
+        const ds = getCurrentDataset();
+        let maxX = 0, maxY = 0;
+        renderedNodes.forEach(n => {
+          maxX = Math.max(maxX, n.posX + CARD_W);
+          maxY = Math.max(maxY, n.posY + (n.h || 90));
+        });
+        svg.style.width = (maxX + 400) + 'px';
+        svg.style.height = (maxY + 400) + 'px';
+
+        (ds.connections || []).forEach(conn => {
+          const from = renderedNodes.get(conn.from);
+          const to = renderedNodes.get(conn.to);
+          if (!from || !to) return;
+          const fromH = from.h || 90;
+          const toH = to.h || 90;
+          let d;
+          if (activeView === 'blast') {
+            const x1 = from.posX + CARD_W / 2, y1 = from.posY + fromH / 2;
+            const x2 = to.posX + CARD_W / 2, y2 = to.posY + toH / 2;
+            d = conn.kind === 'turn'
+              ? 'M ' + x1 + ' ' + y1 + ' C ' + (x1 + 200) + ' ' + (y1 - 160) + ', ' + (x2 - 200) + ' ' + (y2 - 160) + ', ' + x2 + ' ' + y2
+              : 'M ' + x1 + ' ' + y1 + ' L ' + x2 + ' ' + y2;
+          } else if (conn.kind === 'turn') {
+            const x = from.posX + 24;
+            const y1 = from.posY + fromH;
+            const x2 = to.posX + 24;
+            const y2 = to.posY;
+            d = 'M ' + x + ' ' + y1 + ' C ' + x + ' ' + (y1 + 30) + ', ' + x2 + ' ' + (y2 - 30) + ', ' + x2 + ' ' + y2;
+          } else {
+            const x1 = from.posX + CARD_W, y1 = from.posY + Math.min(fromH / 2, 44);
+            const x2 = to.posX, y2 = to.posY + Math.min(toH / 2, 44);
+            const span = Math.max(24, Math.abs(x2 - x1) * 0.5);
+            d = 'M ' + x1 + ' ' + y1 + ' C ' + (x1 + span) + ' ' + y1 + ', ' + (x2 - span) + ' ' + y2 + ', ' + x2 + ' ' + y2;
+          }
+          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          path.setAttribute('d', d);
+          path.setAttribute('fill', 'none');
+          path.setAttribute('stroke', conn.kind === 'turn' ? 'var(--line-strong)' : 'url(#' + (conn.grad || 'grad-dag-2') + ')');
+          path.setAttribute('stroke-width', conn.kind === 'turn' ? '1.5' : '1.8');
+          if (conn.dashed || to.sensitive) path.setAttribute('stroke-dasharray', '4 4');
+          svg.appendChild(path);
+        });
+      }
+
+      // ── Inspector ──────────────────────────────────────────────────────
+      function box(label, body, tone) {
+        return '<div class="fp-box' + (tone ? ' ' + tone : '') + '"><div class="fp-box-label">' + escapeHtml(label) + '</div>' + body + '</div>';
+      }
+
+      function outputBlock(text, length) {
+        if (!text) return '<p class="fp-muted">No output.</p>';
+        const truncated = length && length > text.length ? '<p class="fp-muted">Showing the first ' + text.length.toLocaleString() + ' of ' + length.toLocaleString() + ' characters.</p>' : '';
+        return '<div class="fp-output collapsed"><pre>' + escapeHtml(text) + '</pre><button class="fp-output-toggle" data-action="toggle-output">Show all</button></div>' + truncated;
+      }
+
+      function callHtml(call, index, total) {
+        const status = call.status || 'ok';
+        let html = '<div class="fp-call">' +
+          '<div class="fp-call-head"><span class="fp-call-title">' + (total > 1 ? '<span class="fp-call-num">' + (index + 1) + '</span>' : '') + escapeHtml(call.title || call.name) + '</span>' +
+          '<span class="fp-node-badge ' + (status === 'error' ? 'red' : status === 'blocked' || status === 'running' ? 'amber' : 'muted') + '">' + escapeHtml(STATUS_LABELS[status] || status) + '</span></div>';
+        if (call.command) html += '<div class="fp-term-line">$ ' + escapeHtml(call.command) + '</div>';
+        else if (call.target) html += '<div class="fp-call-target">' + escapeHtml(call.target) + '</div>';
+        html += '<div class="fp-call-label">' + (call.name === 'shell_exec' || call.name === 'shell_bg' || call.name === 'shell_read' ? 'Output' : 'Tool result') + '</div>';
+        html += outputBlock(call.output, call.outputLength);
+        html += '<details class="fp-call-args"><summary>Arguments</summary><pre>' + escapeHtml(call.args || '{}') + '</pre></details>';
+        return html + '</div>';
+      }
+
+      function sensitiveBox(node) {
+        const calls = (node.details && node.details.calls) || [];
+        const blocked = calls.length > 0 && calls.every(c => c.status === 'blocked');
+        return blocked
+          ? box('Sensitive file', '<p>Andromity refused this access under its sensitive-path rules. The content did not reach the model.</p>', 'amber')
+          : box('Sensitive file', '<p>This matches the sensitive-path rules and the access was not blocked, so its content may have reached the model.</p>', 'red');
       }
 
       function populateInspectorContent(id) {
         const ds = getCurrentDataset();
-        const node = (ds.nodes || []).find(n => n.id === id) || (traceData.nodes || []).find(n => n.id === id);
-        if (!node) return;
+        const node = (ds.nodes || []).find(n => n.id === id);
+        const bodyEl = document.getElementById('insp-content');
+        if (!node || !bodyEl) return;
+        const signature = JSON.stringify(node) + '|' + activeSubagentId;
+        if (signature === inspectorSignature) return;
+        inspectorSignature = signature;
 
         const titleEl = document.getElementById('insp-tab-title');
         const iconEl = document.getElementById('insp-icon');
-        const bodyEl = document.getElementById('insp-content');
-
-        if (titleEl) titleEl.innerText = node.title || 'Inspector';
+        if (titleEl) titleEl.textContent = node.title || 'Inspector';
         if (iconEl) iconEl.innerHTML = getNodeIconSvg(node.type);
+        const d = node.details || {};
+        let html = '';
 
-        let html = \`
-          <div class="fp-box">
-            <div class="fp-box-label">Node Class</div>
-            <div class="fp-box-val" style="color:var(--cyan);">\${escapeHtml(node.type.toUpperCase())} \${node.turn ? ('· ' + escapeHtml(node.turn.toUpperCase())) : ''}</div>
-          </div>
-        \`;
-
-        // Subagent node inspector view
-        if (node.type === "subagent" || node.subagentId) {
-          const subId = node.subagentId || node.id;
-          const subObj = (traceData.subagents && traceData.subagents[subId]) || null;
-          const subRole = (subObj?.role || node.details?.role || "subagent").toUpperCase();
-          const subStatus = (subObj?.status || node.details?.status || "OK").toUpperCase();
-          const subDur = ((subObj?.durationMs || node.details?.durationMs || 0) / 1000).toFixed(2);
-          const actCount = subObj?.tools ? subObj.tools.length : (node.subagentActionCount || node.details?.actionsCount || 0);
-
-          html += \`
-            <div class="fp-box" style="border-color: rgba(188, 140, 255, 0.4);">
-              <div class="fp-box-label" style="color:var(--purple);">Subagent Details</div>
-              <div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:11.5px;">
-                <span>Role: <strong style="color:var(--cyan);">\${escapeHtml(subRole)}</strong></span>
-                <span class="fp-badge-subagent \${(subObj?.status || 'done').toLowerCase()}">\${escapeHtml(subStatus)}</span>
-              </div>
-              <div style="font-size:11px; color:var(--muted); margin-bottom:8px;">
-                Duration: <span style="color:var(--fg);">\${subDur}s</span> · Actions: <span style="color:var(--fg);">\${actCount}</span>
-                \${node.details?.model ? (' · Model: <span style="color:var(--fg);">' + escapeHtml(node.details.model) + '</span>') : ''}
-              </div>
-              <button class="fp-btn-primary-drilldown" data-action="drilldown-subagent" data-subagent-id="\${escapeHtml(subId)}">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><path d="M15 3h6v6"/><path d="M10 14L21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
-                <span>Enter Subagent Trace (\${actCount} Actions) &rarr;</span>
-              </button>
-            </div>
-          \`;
-
-          if (node.details && (node.details.task || node.details.summary)) {
-            html += \`
-              <div class="fp-box">
-                <div class="fp-box-label">Assigned Task Prompt</div>
-                <p style="color:var(--fg); font-size:11.5px; line-height:1.4;">\${escapeHtml(node.details.task || node.details.summary)}</p>
-              </div>
-            \`;
+        if (node.isTurnHub) {
+          const meta = [formatTime(d.ts), d.durationMs ? formatDuration(d.durationMs) : '', plural(d.actions || 0, 'action')].filter(Boolean).join(' · ');
+          html += box(node.type === 'subagent' ? 'Task' : 'Prompt', '<p class="fp-prewrap">' + escapeHtml(d.prompt || node.sub || '') + '</p>' + (meta ? '<p class="fp-muted">' + escapeHtml(meta) + '</p>' : ''));
+          if (d.followUps && d.followUps.length) {
+            html += box('Follow-ups sent while it worked', d.followUps.map(f => '<p class="fp-prewrap">' + escapeHtml(f) + '</p>').join(''));
           }
-
-          const toolsList = subObj?.tools || node.details?.toolsPreview;
-          if (Array.isArray(toolsList) && toolsList.length > 0) {
-            html += \`
-              <div class="fp-box">
-                <div class="fp-box-label">Executed Actions Preview</div>
-                <div class="fp-subagent-tools-list">
-                  \${toolsList.map(t => \`
-                    <div class="fp-subagent-tool-row" data-action="drilldown-subagent" data-subagent-id="\${escapeHtml(subId)}">
-                      <span class="fp-subagent-tool-name">\${escapeHtml(t.name || 'tool')}</span>
-                      <span class="fp-subagent-tool-desc">\${escapeHtml(t.desc || t.args?.file_path || t.args?.path || t.args?.command || '')}</span>
-                      <span class="fp-subagent-tool-tag \${t.status === 'error' ? 'fp-badge-subagent failed' : 'fp-badge-subagent done'}">\${escapeHtml(t.status || 'OK')}</span>
-                    </div>
-                  \`).join('')}
-                </div>
-              </div>
-            \`;
+          if (node.type === 'subagent') {
+            const facts = [d.role ? 'Role: ' + d.role : '', d.model ? 'Model: ' + d.model : '', d.provider ? 'Provider: ' + d.provider : ''].filter(Boolean);
+            if (facts.length) html += box('Subagent', '<p class="fp-muted">' + escapeHtml(facts.join(' · ')) + '</p>');
+            if (d.error) html += box('Error', '<p class="fp-prewrap">' + escapeHtml(d.error) + '</p>', 'red');
+            if (d.finalSummary) html += box('Result', outputBlock(d.finalSummary));
           }
-
-          if (node.details?.finalSummary || (node.details?.summary && node.details?.summary !== node.details?.task)) {
-            html += \`
-              <div class="fp-box">
-                <div class="fp-box-label">Subagent Final Output</div>
-                <p style="color:var(--fg); font-size:11.5px; line-height:1.4;">\${escapeHtml(node.details.finalSummary || node.details.summary)}</p>
-              </div>
-            \`;
+        } else if (node.hasSubagentDrilldown) {
+          const sub = (traceData.subagents || {})[node.subagentId] || {};
+          const facts = ['Role: ' + (sub.role || 'subagent'), 'Status: ' + (STATUS_LABELS[sub.status] || sub.status || 'done'), sub.durationMs ? 'Time: ' + formatDuration(sub.durationMs) : '', sub.model ? 'Model: ' + sub.model : ''].filter(Boolean);
+          html += box('Subagent', '<p class="fp-muted">' + escapeHtml(facts.join(' · ')) + '</p>' +
+            '<button class="fp-btn-primary-drilldown" data-action="drilldown-subagent" data-subagent-id="' + escapeHtml(node.subagentId) + '">View its ' + plural((sub.tools || []).length, 'action') + ' →</button>');
+          if (sub.task) html += box('Task', '<p class="fp-prewrap">' + escapeHtml(sub.task) + '</p>');
+          if ((sub.tools || []).length) {
+            html += box('Actions', '<div class="fp-subagent-tools-list">' + sub.tools.slice(0, 12).map(t =>
+              '<div class="fp-subagent-tool-row"><span class="fp-subagent-tool-name">' + escapeHtml(t.name) + '</span><span class="fp-subagent-tool-desc">' + escapeHtml(t.target || '') + '</span></div>'
+            ).join('') + (sub.tools.length > 12 ? '<p class="fp-muted">+' + (sub.tools.length - 12) + ' more</p>' : '') + '</div>');
           }
+          if (sub.error) html += box('Error', '<p class="fp-prewrap">' + escapeHtml(sub.error) + '</p>', 'red');
+          if (sub.summary) html += box('Result', outputBlock(sub.summary));
+        } else {
+          if (node.sensitive) html += sensitiveBox(node);
+          if (node.filePath) {
+            html += box('File', '<div class="fp-box-val">' + escapeHtml(node.sub || node.filePath) + '</div>' +
+              '<button class="fp-btn-open-file" data-action="open-file" data-filepath="' + escapeHtml(node.filePath) + '" data-line="' + (node.line || 1) + '">Open in editor</button>');
+          }
+          const calls = d.calls || [];
+          html += box(calls.length > 1 ? plural(calls.length, 'call') : 'Call', calls.map((call, i) => callHtml(call, i, calls.length)).join(''));
         }
-
-        if (node.details && node.details.diff && Array.isArray(node.details.diff)) {
-          html += \`
-            <div class="fp-box">
-              <div class="fp-box-label">Modified File Diff</div>
-              <div class="fp-box-val" style="color:var(--green);">\${escapeHtml(node.details.filePath || node.filePath)}</div>
-              <div class="fp-diff-container">
-                \${node.details.diff.map(d => \`
-                  <div class="fp-diff-row \${d.type}">
-                    <span class="fp-diff-num">\${d.ln || ''}</span>
-                    <span>\${escapeHtml(d.text)}</span>
-                  </div>
-                \`).join('')}
-              </div>
-              <button class="fp-btn-open-file" data-action="open-file" data-filepath="\${escapeHtml(node.details.filePath || node.filePath)}" data-line="\${node.line || 1}">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                <span>Open in VS Code Editor</span>
-              </button>
-            </div>
-          \`;
-        } else if (node.filePath) {
-          html += \`
-            <div class="fp-box">
-              <div class="fp-box-label">File Details</div>
-              <div class="fp-box-val">\${escapeHtml(node.filePath)}</div>
-              <p style="color:var(--muted); font-size:11.5px; margin-top:6px;">\${escapeHtml(node.details?.purpose || node.sub || '')}</p>
-              <button class="fp-btn-open-file" data-action="open-file" data-filepath="\${escapeHtml(node.filePath)}" data-line="\${node.line || 1}">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                <span>Open File in Editor (Line \${node.line || 1})</span>
-              </button>
-            </div>
-          \`;
-        }
-
-        if (node.details && node.details.cmd) {
-          html += \`
-            <div class="fp-box">
-              <div class="fp-box-label">Shell Command & Output</div>
-              <div class="fp-term-box">
-                <div style="color:var(--cyan); margin-bottom:4px;">$ \${escapeHtml(node.details.cmd)}</div>
-                <div>\${escapeHtml(node.details.stdout || '')}</div>
-              </div>
-            </div>
-          \`;
-        }
-
-        if (node.type !== "subagent" && !node.subagentId && node.details && node.details.summary) {
-          html += \`
-            <div class="fp-box">
-              <div class="fp-box-label">LLM Reasoning & Output</div>
-              <p style="color:var(--fg); font-size:11.5px; line-height:1.4;">\${escapeHtml(node.details.summary)}</p>
-            </div>
-          \`;
-        }
-
-        if (node.details && node.details.reason) {
-          html += \`
-            <div class="fp-box" style="border-color: rgba(248, 81, 73, 0.3);">
-              <div class="fp-box-label" style="color:var(--red);">AirGap Policy Interception</div>
-              <p style="color:var(--fg); font-size:11.5px; margin-bottom:6px;">\${escapeHtml(node.details.reason)}</p>
-              <div class="fp-box-val" style="color:var(--green);">\${escapeHtml(node.details.auditResult || 'Zero-Leak Protected')}</div>
-            </div>
-          \`;
-        }
-
-        if (bodyEl) bodyEl.innerHTML = html;
+        bodyEl.innerHTML = html;
       }
 
       function selectNode(id) {
         selectedNodeId = id;
-        document.querySelectorAll('.fp-node-card').forEach(c => {
-          c.classList.toggle('selected', c.dataset.nodeId === id);
-        });
-
-        // Open inspector when explicitly selecting a node
+        document.querySelectorAll('.fp-node-card').forEach(c => c.classList.toggle('selected', c.dataset.nodeId === id));
         toggleInspector(false);
+        inspectorSignature = '';
         populateInspectorContent(id);
       }
 
       function triggerOpenFile(filePath, line) {
-        if (!filePath) return;
-        vscode.postMessage({ command: 'open_file', filePath: filePath, line: line || 1 });
+        if (filePath) vscode.postMessage({ command: 'open_file', filePath: filePath, line: line || 1 });
       }
 
       function switchView(view) {
         activeView = view;
         const tabDag = document.getElementById('tab-dag');
         const tabBlast = document.getElementById('tab-blast');
-        if (tabDag) tabDag.classList.toggle('active', view === 'dag');
-        if (tabBlast) tabBlast.classList.toggle('active', view === 'blast');
-        if (view === 'blast') {
-          vscode.postMessage({ command: 'telemetry_feature', feature: 'fingerprint_blast_view' });
-        }
+        if (tabDag) { tabDag.classList.toggle('active', view === 'dag'); tabDag.setAttribute('aria-selected', String(view === 'dag')); }
+        if (tabBlast) { tabBlast.classList.toggle('active', view === 'blast'); tabBlast.setAttribute('aria-selected', String(view === 'blast')); }
+        if (view === 'blast') vscode.postMessage({ command: 'telemetry_feature', feature: 'fingerprint_blast_view' });
+        saveState();
         renderCanvas();
+        cameraTouched = false;
+        fitToContent();
       }
 
-      function selectTurn(turn, el) {
-        activeTurnFilter = turn;
-        document.querySelectorAll('.fp-turn-item').forEach(item => item.classList.remove('active'));
-        if (el) el.classList.add('active');
+      function refit() {
+        cameraTouched = false;
         renderCanvas();
+        fitToContent();
+      }
+
+      function selectTurn(turn) {
+        activeTurnFilter = turn;
+        document.querySelectorAll('.fp-turn-item').forEach(item => item.classList.toggle('active', item.dataset.turn === turn));
+        refit();
       }
 
       function setFilter(cat, el) {
         activeCategoryFilter = cat;
-        document.querySelectorAll('.wf-filter-pill').forEach(pill => pill.classList.remove('active'));
-        if (el) el.classList.add('active');
-        renderCanvas();
-      }
-
-      function showSafetyNotice() {
-        vscode.postMessage({
-          command: 'show_info',
-          message: 'The Fingerprint panel is 100% READ-ONLY. It listens passively to the in-memory trace event log and cannot modify code, execute commands, or infiltrate agent core.'
-        });
+        document.querySelectorAll('.wf-filter-pill').forEach(pill => pill.classList.toggle('active', pill === el));
+        refit();
       }
 
       function exportTraceJSON() {
         const ds = getCurrentDataset();
         vscode.postMessage({
           command: 'export_fingerprint',
-          data: activeSubagentId ? { session_id: traceData.session_id, subagent_id: activeSubagentId, ...ds } : traceData
+          data: activeSubagentId ? Object.assign({ session_id: traceData.session_id, subagent_id: activeSubagentId }, ds) : traceData
         });
       }
 
+      // ── Pointer and keyboard ───────────────────────────────────────────
       function setupInteractions() {
         const container = document.querySelector('.fp-canvas-container');
         if (!container) return;
 
         container.addEventListener('mousedown', (e) => {
-          // If clicking on toolbar, buttons, inputs, file link actions, or drilldown actions, do not initiate canvas pan
-          if (
-            e.target.closest('.fp-canvas-toolbar') ||
-            e.target.closest('button') ||
-            e.target.closest('input') ||
-            e.target.closest('[data-action="open-file"]') ||
-            e.target.closest('[data-action="drilldown-subagent"]')
-          ) {
-            return;
-          }
-
+          if (e.button !== 0) return;
+          if (e.target.closest('.fp-canvas-toolbar, button, input, a, [data-action]')) return;
           const card = e.target.closest('.fp-node-card');
           if (card) {
-            // Node Dragging initiated
-            const nId = card.dataset.nodeId;
-            const ds = getCurrentDataset();
-            const node = (ds.nodes || []).find(n => n.id === nId);
+            const node = renderedNodes.get(card.dataset.nodeId);
             if (node) {
-              draggingNodeId = nId;
+              draggingNodeId = node.id;
               nodeDragStartX = e.clientX;
               nodeDragStartY = e.clientY;
-              nodeOrigX = node.posX !== undefined ? node.posX : node.x;
-              nodeOrigY = node.posY !== undefined ? node.posY : node.y;
+              nodeOrigX = node.posX;
+              nodeOrigY = node.posY;
               hasDraggedNode = false;
               card.classList.add('dragging');
             }
             return;
           }
-
-          // Canvas Panning initiated on empty background
-          if (!isInspectorPinned && !isInspectorCollapsed) {
-            toggleInspector(true);
-          }
+          if (!isInspectorPinned && !isInspectorCollapsed) toggleInspector(true);
           if (selectedNodeId) {
             selectedNodeId = null;
             document.querySelectorAll('.fp-node-card.selected').forEach(c => c.classList.remove('selected'));
           }
-
           isCanvasPanning = true;
           panStartX = e.clientX - panX;
           panStartY = e.clientY - panY;
@@ -758,47 +673,31 @@ export function getFingerprintScript(sessionId: string): string {
 
         container.addEventListener('dblclick', (e) => {
           const card = e.target.closest('.fp-node-card');
-          if (card && card.dataset.nodeId) {
-            const ds = getCurrentDataset();
-            const node = (ds.nodes || []).find(n => n.id === card.dataset.nodeId);
-            if (node && (node.type === 'subagent' || node.subagentId)) {
-              drilldownSubagent(node.subagentId || node.id);
-            }
-          }
+          const node = card && renderedNodes.get(card.dataset.nodeId);
+          if (node && node.hasSubagentDrilldown) drilldownSubagent(node.subagentId);
         });
 
         window.addEventListener('mousemove', (e) => {
           if (isCanvasPanning) {
             panX = e.clientX - panStartX;
             panY = e.clientY - panStartY;
+            cameraTouched = true;
             applyTransform();
             return;
           }
-
-          if (draggingNodeId) {
-            const dx = (e.clientX - nodeDragStartX) / zoomScale;
-            const dy = (e.clientY - nodeDragStartY) / zoomScale;
-
-            if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
-              hasDraggedNode = true;
-            }
-
-            const ds = getCurrentDataset();
-            const node = (ds.nodes || []).find(n => n.id === draggingNodeId);
-            const card = document.querySelector('.fp-node-card[data-node-id="' + draggingNodeId + '"]');
-            if (node && card) {
-              node.posX = nodeOrigX + dx;
-              node.posY = nodeOrigY + dy;
-              node.x = node.posX;
-              node.y = node.posY;
-              card.style.left = node.posX + 'px';
-              card.style.top = node.posY + 'px';
-
-              // Redraw connections in real time
-              const nodeMap = new Map();
-              (ds.nodes || []).forEach(n => nodeMap.set(n.id, n));
-              renderConnections(nodeMap);
-            }
+          if (!draggingNodeId) return;
+          const dx = (e.clientX - nodeDragStartX) / zoomScale;
+          const dy = (e.clientY - nodeDragStartY) / zoomScale;
+          if (Math.abs(dx) > 3 || Math.abs(dy) > 3) hasDraggedNode = true;
+          if (!hasDraggedNode) return;
+          const node = renderedNodes.get(draggingNodeId);
+          const card = document.querySelector('.fp-node-card[data-node-id="' + CSS.escape(draggingNodeId) + '"]');
+          if (node && card) {
+            node.posX = nodeOrigX + dx;
+            node.posY = nodeOrigY + dy;
+            card.style.left = node.posX + 'px';
+            card.style.top = node.posY + 'px';
+            renderConnections();
           }
         });
 
@@ -807,220 +706,151 @@ export function getFingerprintScript(sessionId: string): string {
             isCanvasPanning = false;
             container.classList.remove('panning');
           }
-
-          if (draggingNodeId) {
-            const card = document.querySelector('.fp-node-card[data-node-id="' + draggingNodeId + '"]');
-            if (card) {
-              card.classList.remove('dragging');
-            }
-
-            if (!hasDraggedNode) {
-              selectNode(draggingNodeId);
-            }
-
-            draggingNodeId = null;
+          if (!draggingNodeId) return;
+          const card = document.querySelector('.fp-node-card[data-node-id="' + CSS.escape(draggingNodeId) + '"]');
+          if (card) card.classList.remove('dragging');
+          const node = renderedNodes.get(draggingNodeId);
+          if (hasDraggedNode && node) {
+            manualPositions[positionKey(node.id)] = { x: Math.round(node.posX), y: Math.round(node.posY) };
+            saveState();
+          } else if (node) {
+            selectNode(node.id);
           }
+          draggingNodeId = null;
         });
 
-        // Mouse Wheel: Pan or Ctrl+Wheel to Zoom
         container.addEventListener('wheel', (e) => {
           e.preventDefault();
           if (e.ctrlKey || e.metaKey) {
-            const delta = e.deltaY < 0 ? 0.08 : -0.08;
-            zoomScale = Math.max(0.4, Math.min(2.0, zoomScale + delta));
-            applyTransform();
+            zoomAt(zoomScale * (e.deltaY < 0 ? 1.1 : 1 / 1.1), e.clientX, e.clientY);
           } else {
-            panX -= e.deltaX;
-            panY -= e.deltaY;
+            panX -= e.shiftKey && !e.deltaX ? e.deltaY : e.deltaX;
+            panY -= e.shiftKey && !e.deltaX ? 0 : e.deltaY;
+            cameraTouched = true;
             applyTransform();
           }
         }, { passive: false });
+
+        container.addEventListener('keydown', (e) => {
+          const card = e.target.closest && e.target.closest('.fp-node-card');
+          if (!card || (e.key !== 'Enter' && e.key !== ' ')) return;
+          e.preventDefault();
+          selectNode(card.dataset.nodeId);
+        });
+      }
+
+      function activate(target) {
+        const drillEl = target.closest('[data-action="drilldown-subagent"]');
+        if (drillEl) {
+          drilldownSubagent(drillEl.getAttribute('data-subagent-id'));
+          return true;
+        }
+        const subItem = target.closest('.fp-subagent-item');
+        if (subItem && subItem.dataset.subagentId) {
+          drilldownSubagent(subItem.dataset.subagentId);
+          return true;
+        }
+        const openFileEl = target.closest('[data-action="open-file"]');
+        if (openFileEl) {
+          triggerOpenFile(openFileEl.getAttribute('data-filepath'), parseInt(openFileEl.getAttribute('data-line') || '1', 10));
+          return true;
+        }
+        const toggle = target.closest('[data-action="toggle-output"]');
+        if (toggle) {
+          const wrap = toggle.closest('.fp-output');
+          const collapsed = wrap.classList.toggle('collapsed');
+          toggle.textContent = collapsed ? 'Show all' : 'Show less';
+          return true;
+        }
+        const turnEl = target.closest('.fp-turn-item');
+        if (turnEl && turnEl.dataset.turn) {
+          selectTurn(turnEl.dataset.turn);
+          return true;
+        }
+        if (target.closest('#crumb-main-session')) {
+          exitSubagentDrilldown();
+          return true;
+        }
+        return false;
       }
 
       function bindControls() {
-        const btnBannerSafety = document.getElementById('btn-banner-safety');
-        if (btnBannerSafety) {
-          btnBannerSafety.addEventListener('click', showSafetyNotice);
-        }
-
-        const btnBannerDismiss = document.getElementById('btn-banner-dismiss');
-        if (btnBannerDismiss) {
-          btnBannerDismiss.addEventListener('click', () => {
-            const pill = document.getElementById('banner-pill');
-            if (pill) pill.style.display = 'none';
-          });
-        }
-
-        const btnBack = document.getElementById('btn-back-to-session');
-        if (btnBack) {
-          btnBack.addEventListener('click', exitSubagentDrilldown);
-        }
-
-        const crumbMain = document.getElementById('crumb-main-session');
-        if (crumbMain) {
-          crumbMain.addEventListener('click', exitSubagentDrilldown);
-        }
-
-        const btnToggleLeft = document.getElementById('btn-toggle-left-sidebar');
-        if (btnToggleLeft) {
-          btnToggleLeft.addEventListener('click', () => toggleLeftSidebar());
-        }
-
-        const btnCollapseLeft = document.getElementById('btn-collapse-left');
-        if (btnCollapseLeft) {
-          btnCollapseLeft.addEventListener('click', () => toggleLeftSidebar(true));
-        }
-
-        const btnPin = document.getElementById('btn-pin-inspector');
-        if (btnPin) {
-          btnPin.addEventListener('click', () => togglePinInspector());
-        }
-
-        const btnToggleRight = document.getElementById('btn-toggle-right-sidebar');
-        if (btnToggleRight) {
-          btnToggleRight.addEventListener('click', () => toggleInspector());
-        }
-
-        const btnCollapseRight = document.getElementById('btn-collapse-right');
-        if (btnCollapseRight) {
-          btnCollapseRight.addEventListener('click', () => toggleInspector(true));
-        }
-
-        const btnSafetyGuard = document.getElementById('btn-safety-guard');
-        if (btnSafetyGuard) {
-          btnSafetyGuard.addEventListener('click', showSafetyNotice);
-        }
-
-        const btnFit = document.getElementById('btn-fit-canvas');
-        if (btnFit) {
-          btnFit.addEventListener('click', resetZoom);
-        }
-
-        const btnExport = document.getElementById('btn-export-json');
-        if (btnExport) {
-          btnExport.addEventListener('click', exportTraceJSON);
-        }
-
-        const tabDag = document.getElementById('tab-dag');
-        if (tabDag) {
-          tabDag.addEventListener('click', () => switchView('dag'));
-        }
-
-        const tabBlast = document.getElementById('tab-blast');
-        if (tabBlast) {
-          tabBlast.addEventListener('click', () => switchView('blast'));
-        }
+        const on = (id, handler) => {
+          const el = document.getElementById(id);
+          if (el) el.addEventListener('click', handler);
+        };
+        on('btn-banner-dismiss', () => {
+          const pill = document.getElementById('banner-pill');
+          if (pill) pill.remove();
+          vscode.postMessage({ command: 'dismiss_notice' });
+        });
+        on('btn-back-to-session', exitSubagentDrilldown);
+        on('btn-toggle-left-sidebar', () => toggleLeftSidebar());
+        on('btn-collapse-left', () => toggleLeftSidebar(true));
+        on('btn-pin-inspector', togglePinInspector);
+        on('btn-toggle-right-sidebar', () => toggleInspector());
+        on('btn-collapse-right', () => toggleInspector(true));
+        on('btn-export-json', exportTraceJSON);
+        on('btn-docs', () => vscode.postMessage({ command: 'open_docs' }));
+        on('tab-dag', () => switchView('dag'));
+        on('tab-blast', () => switchView('blast'));
+        on('btn-zoom-out', () => zoomAt(zoomScale / 1.2));
+        on('btn-zoom-in', () => zoomAt(zoomScale * 1.2));
+        on('btn-zoom-fit', () => { cameraTouched = false; fitToContent(); });
 
         document.querySelectorAll('.wf-filter-pill').forEach(pill => {
-          pill.addEventListener('click', () => {
-            const filter = pill.getAttribute('data-filter') || 'all';
-            setFilter(filter, pill);
-          });
+          pill.addEventListener('click', () => setFilter(pill.getAttribute('data-filter') || 'all', pill));
         });
-
         const searchInp = document.getElementById('search-input');
         if (searchInp) {
           searchInp.addEventListener('input', () => {
             searchQuery = searchInp.value;
-            renderCanvas();
+            refit();
           });
         }
-
-        const btnZoomOut = document.getElementById('btn-zoom-out');
-        if (btnZoomOut) {
-          btnZoomOut.addEventListener('click', () => zoomCanvas(-0.1));
-        }
-
-        const btnZoomIn = document.getElementById('btn-zoom-in');
-        if (btnZoomIn) {
-          btnZoomIn.addEventListener('click', () => zoomCanvas(0.1));
-        }
-
-        const btnZoomFit = document.getElementById('btn-zoom-fit');
-        if (btnZoomFit) {
-          btnZoomFit.addEventListener('click', resetZoom);
-        }
-
-        const turnItemAll = document.getElementById('turn-item-all');
-        if (turnItemAll) {
-          turnItemAll.addEventListener('click', () => selectTurn('all', turnItemAll));
-        }
-
-        // Delegated click handler for file links, drilldowns, and dynamic sidebar turns
         document.addEventListener('click', (e) => {
-          const target = e.target;
-          if (!target) return;
-
-          const drillEl = target.closest('[data-action="drilldown-subagent"]');
-          if (drillEl) {
-            e.stopPropagation();
-            const subId = drillEl.getAttribute('data-subagent-id');
-            if (subId) {
-              drilldownSubagent(subId);
-            }
-            return;
-          }
-
-          const subItem = target.closest('.fp-subagent-item');
-          if (subItem && subItem.dataset.subagentId) {
-            e.stopPropagation();
-            drilldownSubagent(subItem.dataset.subagentId);
-            return;
-          }
-
-          const openFileEl = target.closest('[data-action="open-file"]');
-          if (openFileEl) {
-            e.stopPropagation();
-            const filePath = openFileEl.getAttribute('data-filepath');
-            const line = parseInt(openFileEl.getAttribute('data-line') || '1', 10);
-            if (filePath) {
-              triggerOpenFile(filePath, line);
-            }
-            return;
-          }
-
-          const turnEl = target.closest('.fp-turn-item');
-          if (turnEl && turnEl.dataset.turn) {
-            e.stopPropagation();
-            selectTurn(turnEl.dataset.turn, turnEl);
-            return;
-          }
+          if (e.target && activate(e.target)) e.stopPropagation();
+        });
+        document.addEventListener('keydown', (e) => {
+          if ((e.key !== 'Enter' && e.key !== ' ') || !e.target || !e.target.closest) return;
+          if (!e.target.closest('.fp-turn-item, .fp-subagent-item, #crumb-main-session')) return;
+          e.preventDefault();
+          activate(e.target);
         });
       }
 
-      // Message Handling from VS Code Extension Host
+      // ── Data from the extension ────────────────────────────────────────
       window.addEventListener('message', event => {
         const msg = event.data;
-        if (!msg) return;
-
-        if (msg.type === 'fingerprint_init') {
-          if (msg.data) {
-            traceData = msg.data;
-            if (activeSubagentId && (!traceData.subagents || !traceData.subagents[activeSubagentId])) {
-              activeSubagentId = null;
-              const bc = document.getElementById('subagent-breadcrumb');
-              if (bc) bc.style.display = 'none';
-            }
-            updateMetricsBar();
-            updateTurnsSidebar();
-            renderCanvas();
-
-            const ds = getCurrentDataset();
-            if (ds.nodes && ds.nodes.length > 0) {
-              if (!selectedNodeId || !ds.nodes.find(n => n.id === selectedNodeId)) {
-                selectedNodeId = ds.nodes[0].id;
-              }
-              populateInspectorContent(selectedNodeId);
-            }
-          }
+        if (!msg || msg.type !== 'fingerprint_init' || !msg.data) return;
+        traceData = msg.data;
+        if (activeSubagentId && (!traceData.subagents || !traceData.subagents[activeSubagentId])) {
+          activeSubagentId = null;
+          const bc = document.getElementById('subagent-breadcrumb');
+          if (bc) bc.style.display = 'none';
         }
+        updateMetricsBar();
+        updateTurnsSidebar();
+        renderCanvas();
+        if (!cameraTouched) fitToContent(0.55);
+        const ds = getCurrentDataset();
+        if (selectedNodeId && (ds.nodes || []).some(n => n.id === selectedNodeId)) populateInspectorContent(selectedNodeId);
       });
 
-      // Signal ready with robust readyState check
       function init() {
+        toggleLeftSidebar(isLeftSidebarCollapsed);
+        const tabDag = document.getElementById('tab-dag');
+        const tabBlast = document.getElementById('tab-blast');
+        if (tabDag) tabDag.classList.toggle('active', activeView === 'dag');
+        if (tabBlast) tabBlast.classList.toggle('active', activeView === 'blast');
         applyTransform();
         bindControls();
         setupInteractions();
+        // The inspector and sidebar animate their widths; keep the fit until the user takes over the camera.
+        const canvas = document.querySelector('.fp-canvas-container');
+        if (canvas && typeof ResizeObserver !== 'undefined') {
+          new ResizeObserver(() => { if (!cameraTouched) fitToContent(lastFitMinScale); }).observe(canvas);
+        }
         vscode.postMessage({ type: 'fingerprint_ready' });
       }
 

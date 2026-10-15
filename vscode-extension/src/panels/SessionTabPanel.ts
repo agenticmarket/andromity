@@ -13,6 +13,7 @@ import { SessionHydration } from "../server/sessionHydration.js";
 import { ChatViewProvider } from "../providers/ChatViewProvider.js";
 import { ModelInfo, ProviderInfo, SessionInfo } from "../server/types.js";
 import { EditorBridge } from "../integrations/EditorBridge.js";
+import { recordFeatureUse } from "../telemetry/featureUsage.js";
 import { SettingsPanel } from "./SettingsPanel.js";
 import { PlanEditorPanel } from "./PlanEditorPanel.js";
 import { WaterfallPanel } from "./WaterfallPanel.js";
@@ -414,6 +415,11 @@ export class SessionTabPanel {
       return;
     }
 
+    if (message.type === "open_skills_settings") {
+      SettingsPanel.createOrShow(this._extensionUri, this._rpcClient, "skills");
+      return;
+    }
+
     if (message.type === "update_mascot_setting") {
       const config = vscode.workspace.getConfiguration("andromity");
       await config.update("mascotEnabled", !!message.enabled, vscode.ConfigurationTarget.Global);
@@ -526,6 +532,26 @@ export class SessionTabPanel {
     if (await handleInteractionMessage(this._rpcClient, message, this._sessionId, (event) => this._postMessage(event))) return;
 
     switch (message.type) {
+      case "get_context_breakdown": {
+        try {
+          const data = await this._rpcClient.call<any>("session.context", {
+            session_id: this._sessionId,
+            project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+          });
+          this._postMessage({ type: "context_breakdown", session_id: this._sessionId, data });
+        } catch {
+          // Older daemons have no session.context; the popover keeps its simple view.
+        }
+        break;
+      }
+
+      case "telemetry_feature": {
+        if (message.feature) {
+          recordFeatureUse(String(message.feature), { sessionId: this._sessionId, oncePerSession: message.once === true });
+        }
+        break;
+      }
+
       case "set_api_key": {
         try {
           if (!message.provider) throw new Error("Missing provider");
@@ -553,7 +579,8 @@ export class SessionTabPanel {
         this._postMessage({ type: "ollama_status_updated", status: await this._viewProvider.probeOllama() });
         break;
       }
-      case "open_external": {
+      case "open_external":
+      case "open_external_url": {
         try {
           const uri = vscode.Uri.parse(message.url);
           if (uri.scheme === "http" || uri.scheme === "https") await vscode.env.openExternal(uri);
@@ -813,6 +840,7 @@ export class SessionTabPanel {
       case "undo_turn": {
         const undone = await this._viewProvider.undoSession(this._sessionId, message.turnIndex, message.turnsToUndo);
         if (undone) {
+          recordFeatureUse("turn_undone", { sessionId: this._sessionId });
           try {
             vscode.commands.executeCommand("git.refresh");
             vscode.commands.executeCommand("andromity.refreshChanges");
@@ -828,6 +856,7 @@ export class SessionTabPanel {
       }
 
       case "compact_session": {
+        recordFeatureUse("compact_manual", { sessionId: this._sessionId });
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         const res = await this._rpcClient.call<any>("session.compact", {
           session_id: this._sessionId,

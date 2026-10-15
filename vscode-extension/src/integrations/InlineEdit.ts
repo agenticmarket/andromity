@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
+import { recordFeatureUse } from "../telemetry/featureUsage.js";
 
 export interface InlineEditDeps {
   waitForClient(timeoutMs: number): Promise<RpcClient | null>;
@@ -212,11 +213,21 @@ export function registerInlineEdit(context: vscode.ExtensionContext, deps: Inlin
   context.subscriptions.push(
     lensesChanged,
     highlight,
-    vscode.commands.registerCommand("andromity.inlineEdit", run),
-    vscode.commands.registerCommand("andromity.inlineEdit.accept", accept),
-    vscode.commands.registerCommand("andromity.inlineEdit.reject", reject),
+    vscode.commands.registerCommand("andromity.inlineEdit", (instruction?: string) => {
+      recordFeatureUse("inline_edit");
+      return run(instruction);
+    }),
+    vscode.commands.registerCommand("andromity.inlineEdit.accept", () => {
+      if (pending) recordFeatureUse("inline_edit_accepted");
+      return accept();
+    }),
+    vscode.commands.registerCommand("andromity.inlineEdit.reject", () => {
+      if (pending) recordFeatureUse("inline_edit_rejected");
+      return reject();
+    }),
     vscode.commands.registerCommand("andromity.inlineEdit.compare", async () => {
       if (!pending) return;
+      recordFeatureUse("inline_edit_compared");
       const original = vscode.Uri.from({ scheme: ORIGINAL_SCHEME, path: pending.uri.path, query: String(Date.now()) });
       await vscode.commands.executeCommand("vscode.diff", original, pending.uri, "Andromity edit: before ↔ after");
     }),

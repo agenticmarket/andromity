@@ -2,6 +2,65 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [0.2.19] — 2026-10-15
+
+### Added
+- **Turn rail.** When the chat panel is wide enough, a tick for each prompt appears in the left gutter. Hover shows a preview of the turn (prompt, start of the reply, time, duration, tools and files). Click jumps to it, and Alt+Up/Down steps through turns. It hides itself in narrow panels such as the sidebar.
+- **Context window breakdown.** The context popover expands to show what fills the window: system prompt, tool definitions, MCP and deferred tools, skills, compacted summary, your messages, replies, tool calls and tool results. It also shows free space, the auto-compact buffer and how many tokens remain until auto-compaction, with a **Compact now** button. The popover follows the VS Code theme.
+- **Cron Jobs page redesign.**
+  - Each job shows its next run, last run with date and outcome, model and provider, permission mode, allowed commands and last error.
+  - A live **Running** state appears while a job runs, and a summary line shows how many jobs are active and which runs next.
+  - Run history shows the success count and average duration, with expandable output and links to each run's session.
+- **Fingerprint redesign.**
+  - Turns read top to bottom, with actions in order, and the view fits on screen when it opens.
+  - Repeated reads and a turn's searches collapse into one card, and paths are shown relative to the workspace.
+  - The turn list shows each prompt with its time, duration and status.
+  - The inspector lists every call, collapses long output and labels it as tool output.
+  - Cards you drag stay where you put them across refreshes, and the panel works in light themes.
+- Every Settings tab now links to its documentation page: Model Hub, API keys and custom providers, skills, MCP servers, folder trust, preferences and personalisation.
+- Anonymous feature-usage events for commands, chat actions, Hub sections, `@andromity`, inline edit and session tabs. Each event is a feature name only; turn telemetry off with `andromity.telemetry` or VS Code's telemetry setting.
+
+### Fixed
+- Provider error cards (for example "credit balance is too low") showed as raw HTML. They render as cards again, rebuilt from their text with only the existing safe actions, so model output still cannot inject markup.
+- The Waterfall **TOKENS** total stayed at 0 for live sessions.
+- The context indicator showed 0 used tokens for new sessions, after compaction, and with providers that report no usage. It now shows an estimate marked `~`, and switching model updates the window size immediately.
+- After compaction, by hand or automatic, the token count kept its old value until the next reply. It now updates as soon as compaction finishes, to an estimate marked `~`, until the next reply reports the real size. Updates that don't include a cost no longer reset the cost to $0.0000.
+- After reopening VS Code or reloading a session, background processes that had finished showed **RUNNING (BG)** forever. A card now shows RUNNING only while the engine still runs the process. Otherwise it shows ENDED, DONE or FAILED. An exit event for one process no longer marks other processes as stopped, and a command that fails at once shows FAILED.
+- Cron Jobs:
+  - **Show Session** no longer opens the session twice.
+  - A job created with a model from another provider no longer saves the wrong provider.
+  - Run counts on the card and in the history now agree.
+  - **Last run** includes the date.
+  - The page updates live when a run starts and finishes.
+- Fingerprint:
+  - **Agent time:** shows time spent on turns, not how long ago the session was created.
+  - **Files changed / read:** count unique files.
+  - **Searches and commands:** searches and plan updates are no longer counted as file reads, and reading a process's output no longer counts as a command.
+  - **Turns:** messages sent while a turn runs no longer count as separate turns, and IDE context is removed from turn titles. Turns from before a context compaction are kept.
+  - **Subagents:** subagents sharing a role are no longer mixed up.
+  - **Sensitive files:** "AirGap Sentinel / 0 Leaks" is replaced by a sensitive-files count that uses Andromity's own sensitive-path rules and says whether access was blocked.
+  - **Refresh:** the panel refreshes at most every 0.75 s and never while hidden.
+  - **Export:** saves to the workspace folder.
+- If `config.toml` can't be read, VS Code now says so once, with the error, where Andromity kept a copy of the file (with your API keys), and **Open Saved Copy** / **Open config.toml** buttons. Before, settings and keys silently reset to defaults.
+- `andromity.ollamaHost` only changed where the extension checked for Ollama; the engine kept using `config.toml`. Setting it now updates the engine's Ollama address too, and the status check uses the engine's address when the setting is unset. It can only be set in user settings, so a repository can't redirect Ollama traffic.
+- Typing `@` with no skills installed listed four made-up skills (browser, terminal, editor, git) that did nothing. It now says no skills are installed and offers **Browse skills**. The **Browse Hub** button on the `/skills` card also works in session tabs now.
+- The model picker, Model Hub and OpenRouter card no longer claim a fixed "396+" model count.
+- Settings:
+  - **Restart Engine** in About & Diagnostics did nothing. It now restarts the engine.
+  - **Max Parallel Subagents** saved a value the engine never read. It now sets the limit subagents actually use, and shows the real default, 5.
+  - **Startup Session Restoration** labelled Last Session as the default; the default is Fresh Session.
+- Telemetry accuracy:
+  - Hub tab visits counted tabs opened by commands.
+  - **Hub opened** was counted again on every reconnect.
+  - **Turn undone** was recorded even when the undo failed.
+  - An unused wallpaper event was removed.
+
+### Changed
+- `andromity.defaultProvider`, `andromity.defaultModel`, `andromity.defaultProfile` and `andromity.reasoningEffort` are marked deprecated. They never had an effect; VS Code now strikes them through and points to the Model Hub and Preferences, where these are set.
+- The `andromity.telemetry` description and the README describe the feature-usage events.
+- The permission-mode and profile menus, Waterfall, Fingerprint and the Cron Jobs page link to new documentation on the website.
+- The Hub's permission-mode table now describes what each mode actually does: TRUST runs allowlisted commands without asking, and YOLO behaves like FULL in VS Code. The Waterfall Guide shows the correct colours (tools blue, subagents green), and its Duration tooltip no longer calls the sum of turn times "wall-clock".
+
 ## [0.2.18] — 2026-10-13
 
 ### Security

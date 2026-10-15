@@ -33,6 +33,7 @@ import {
 import { getChatViewHtml, ChatViewState } from "./chatview/chatHtml.js";
 import { PlanViewProvider } from "./PlanViewProvider.js";
 import { accountUrl } from "./accountEndpoints.js";
+import { recordFeatureUse } from "../telemetry/featureUsage.js";
 
 export interface OllamaStatus {
   running: boolean;
@@ -1446,8 +1447,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   public async probeOllama(): Promise<OllamaStatus> {
-    const config = vscode.workspace.getConfiguration("andromity");
-    const configuredHost = config.get<string>("ollamaHost", "http://127.0.0.1:11434");
+    const configuredHost =
+      vscode.workspace.getConfiguration("andromity").inspect<string>("ollamaHost")?.globalValue ||
+      (await this._engineOllamaHost()) ||
+      "http://127.0.0.1:11434";
     const candidateHosts = [configuredHost, "http://127.0.0.1:11434", "http://localhost:11434"];
     const uniqueHosts = Array.from(new Set(candidateHosts));
 
@@ -1469,6 +1472,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
     this._lastOllamaStatus = res;
     return res;
+  }
+
+  /** The Ollama address in config.toml, so the status shown is for the server the engine uses. */
+  private async _engineOllamaHost(): Promise<string | undefined> {
+    const providers = await this._rpcClient
+      ?.call<Array<{ id: string; base_url?: string }>>("config.list_providers", {}, 3000)
+      .catch(() => null);
+    return providers?.find((p) => p.id === "ollama")?.base_url || undefined;
   }
 
   private _probeOllamaHost(host: string): Promise<OllamaStatus> {
@@ -2158,6 +2169,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     switch (message.type) {
 
       case "kill_process": {
+        recordFeatureUse("bg_task_stopped", { sessionId: this._currentSessionId });
         const procId = message.processId || message.process_id;
         if (procId && this._rpcClient) {
           try {
@@ -2170,6 +2182,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "open_bg_task_tab": {
+        recordFeatureUse("bg_task_opened", { sessionId: this._currentSessionId, oncePerSession: true });
         const procId = message.processId || message.process_id;
         const cmd = message.command || "";
         if (procId) {
@@ -2484,6 +2497,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "open_login":
       case "open_github_login": {
+        recordFeatureUse("login_started");
         try {
           await this.openLogin();
         } catch (err: any) {
@@ -2493,6 +2507,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "logout_account": {
+        recordFeatureUse("logout", { sessionId: this._currentSessionId });
         await this.logout();
         break;
       }
@@ -2503,6 +2518,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "start_ollama_server": {
+        recordFeatureUse("ollama_started", { sessionId: this._currentSessionId });
         const ok = await this.startOllamaServer();
         const status = await this.probeOllama();
         this._postToWebview({
@@ -2528,6 +2544,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "pull_ollama_model": {
+        recordFeatureUse("ollama_model_pulled", { sessionId: this._currentSessionId });
         const modelName = message.model || message.modelName || "qwen2.5-coder:7b";
         this.pullOllamaModel(modelName);
         break;
@@ -2662,6 +2679,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           value: this._currentProfile,
         });
         this._postToWebview({ type: "config_updated", key: "profile", value: this._currentProfile });
+        recordFeatureUse("profile_" + this._currentProfile);
         SettingsPanel.currentPanel?.loadData();
         vscode.window.showInformationMessage(`Agent Profile: ${this._currentProfile.toUpperCase()}`);
         break;
@@ -2688,6 +2706,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           value: this._currentReasoning,
         });
         this._postToWebview({ type: "config_updated", key: "reasoningEffort", value: this._currentReasoning });
+        recordFeatureUse("reasoning_" + (this._currentReasoning.startsWith("budget") ? "budget" : this._currentReasoning));
         SettingsPanel.currentPanel?.loadData();
         vscode.window.showInformationMessage(`Reasoning Effort: ${this._currentReasoning.toUpperCase()}`);
         break;
@@ -2696,6 +2715,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "trust_workspace": {
         const workspaceFolder = await confirmAndromityTrust();
+        if (workspaceFolder) recordFeatureUse("trust_granted");
         if (!workspaceFolder) {
           this._postToWebview({ type: "trust_updated", isTrusted: false });
           break;
@@ -2711,6 +2731,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "revoke_trust": {
         const workspaceFolder = (message.path as string) || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (workspaceFolder) {
+          recordFeatureUse("trust_revoked");
           await this._rpcClient?.call("trust.revoke", { project_path: workspaceFolder });
           vscode.window.showInformationMessage("Workspace trust revoked. File editing and shell commands blocked.");
           this._postToWebview({ type: "trust_updated", isTrusted: false });
@@ -2797,6 +2818,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "pick_file_attachment": {
+        recordFeatureUse("file_attached", { sessionId: this._currentSessionId, oncePerSession: true });
         await this.pickAndAttachFile();
         break;
       }
@@ -2811,6 +2833,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "open_review_tab":
       case "open_changes_review": {
+        recordFeatureUse("changes_review_opened", { sessionId: this._currentSessionId, oncePerSession: true });
         this.openReviewWebview(message.filePath, message.turnFiles);
         break;
       }
@@ -2907,6 +2930,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "switch_session": {
+        recordFeatureUse("session_switched");
         this.setCurrentSessionId(message.sessionId, true);
         break;
       }
@@ -2961,11 +2985,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "open_plan_tab": {
+        recordFeatureUse("plan_tab_opened", { sessionId: this._currentSessionId, oncePerSession: true });
         vscode.commands.executeCommand("andromity.openPlanTab", this._currentPlan);
         break;
       }
 
       case "delete_session": {
+        recordFeatureUse("session_deleted", { sessionId: this._currentSessionId });
         if (this._rpcClient && message.sessionId) {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           try {
@@ -2996,6 +3022,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "request_rename_session": {
+        recordFeatureUse("session_renamed", { sessionId: this._currentSessionId });
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         const newName = await vscode.window.showInputBox({
           prompt: "Enter new session name",
@@ -3088,6 +3115,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (this._diffManager) {
           const undone = await this._diffManager.undoLastTurn(this._currentSessionId, turnIndex, turnsToUndo);
           if (undone) {
+            recordFeatureUse("turn_undone", { sessionId: this._currentSessionId });
             await this._loadSession(this._currentSessionId);
             this._postToWebview({ type: "turn_undone", turnsUndone: turnsToUndo, targetTurnIndex: turnIndex });
             try {
@@ -3104,6 +3132,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             turns_to_undo: turnsToUndo,
           });
           if (res?.success) {
+            recordFeatureUse("turn_undone", { sessionId: this._currentSessionId });
             try {
               vscode.commands.executeCommand("git.refresh");
               vscode.commands.executeCommand("andromity.refreshChanges");
@@ -3114,11 +3143,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this._postToWebview({ type: "turn_undone", turnsUndone: res.turns_undone, targetTurnIndex: res.target_turn_index });
           }
         }
-        void this._rpcClient?.call("telemetry.recordFeature", { feature: "turn_undone", session_id: this._currentSessionId }).catch(() => {});
         break;
       }
 
       case "compact_session": {
+        recordFeatureUse("compact_manual", { sessionId: this._currentSessionId });
         try {
           this._postToWebview({
             type: "session_compacting",
@@ -3147,9 +3176,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             await this._loadSession(this._currentSessionId);
             this._postToWebview({
               type: "session_compacted",
+              session_id: this._currentSessionId,
               old_count: res?.old_count,
               message_count: res?.message_count,
               context_tokens: res?.context_tokens,
+              context_estimated: res?.context_estimated === true,
             });
           }
         } catch (e: any) {
@@ -3249,14 +3280,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
-      case "telemetry_feature": {
-        const feature = message.feature;
+      case "get_context_breakdown": {
         const sid = message.sessionId || this._currentSessionId;
-        if (feature && this._rpcClient) {
-          void this._rpcClient.call("telemetry.recordFeature", {
-            feature,
+        if (!sid || !this._rpcClient) break;
+        try {
+          const data = await this._rpcClient.call<any>("session.context", {
             session_id: sid,
-          }).catch(() => {});
+            project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+          });
+          this._postToWebview({ type: "context_breakdown", session_id: sid, data });
+        } catch {
+          // Older daemons have no session.context; the popover keeps its simple view.
+        }
+        break;
+      }
+
+      case "telemetry_feature": {
+        if (message.feature) {
+          recordFeatureUse(String(message.feature), {
+            sessionId: message.sessionId || this._currentSessionId,
+            oncePerSession: message.once === true,
+          });
         }
         break;
       }
@@ -3267,6 +3311,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "toggle_pin": {
+        recordFeatureUse("model_pinned", { sessionId: this._currentSessionId });
         const { modelId, provider, name } = message;
         if (modelId) {
           const idx = this._pinnedModels.findIndex(

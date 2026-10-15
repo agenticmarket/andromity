@@ -420,6 +420,13 @@ export function getChatActivityScript(): string {
         return wrap;
       };
 
+      // shell_bg reports a command that ended within its first seconds as
+      // "...but it exited after 1.2s with code 1...". Returns 'done', 'error' or null.
+      window.bgStatusFromResult = function(toolResult) {
+        var m = /exited after [0-9.]+s with code (-?[0-9]+)/.exec(String(toolResult || ''));
+        return m ? (m[1] === '0' ? 'done' : 'error') : null;
+      };
+
       window.renderBackgroundProcessActivityRow = function(toolName, toolArgs, status, toolResult, processId) {
         var parsedArgs = {};
         if (typeof toolArgs === 'string') {
@@ -452,10 +459,12 @@ export function getChatActivityScript(): string {
             '<span class="codicon codicon-debug-stop"></span> Stop' +
           '</button>' : '';
 
+        var endedLabels = { error: 'FAILED', stopped: 'STOPPED', ended: 'ENDED', done: 'DONE' };
         var tagHtml = isRunning ?
           '<span class="bg-proc-badge running"><span class="activity-running-dot"></span> RUNNING (BG)</span>' :
-          ('<span class="bg-proc-badge ' + (status === 'error' ? 'stopped' : (status === 'stopped' ? 'stopped' : 'done')) + '">' +
-            (status === 'error' ? 'FAILED' : (status === 'stopped' ? 'STOPPED' : 'DONE')) +
+          ('<span class="bg-proc-badge ' + (status === 'error' || status === 'stopped' ? 'stopped' : 'done') + '"' +
+            (status === 'ended' ? ' title="This process is no longer running"' : '') + '>' +
+            (endedLabels[status] || 'DONE') +
           '</span>');
 
         row.innerHTML =
@@ -484,10 +493,11 @@ export function getChatActivityScript(): string {
 
       window.handleProcessExitedUI = function(msg) {
         var procId = msg.process_id;
-        var wraps = procId ? document.querySelectorAll('[data-process-id="' + procId + '"]') : [];
-        if (!wraps || wraps.length === 0) {
-          wraps = document.querySelectorAll('.bg-proc-wrap:has(.bg-proc-badge.running), .bg-proc-wrap.running');
-        }
+        // Without an id every running card is affected; with one, only that process's cards,
+        // so a process that exits before its card exists cannot mark other processes as stopped.
+        var wraps = procId
+          ? document.querySelectorAll('[data-process-id="' + procId + '"]')
+          : document.querySelectorAll('.bg-proc-wrap:has(.bg-proc-badge.running), .bg-proc-wrap.running');
         wraps.forEach(function(wrap) {
           var badge = wrap.querySelector('.bg-proc-badge');
           if (badge) {
@@ -508,10 +518,9 @@ export function getChatActivityScript(): string {
           }
         });
 
-        var toolCards = procId ? document.querySelectorAll('.tool-card[data-process-id="' + procId + '"]') : [];
-        if (!toolCards || toolCards.length === 0) {
-          toolCards = document.querySelectorAll('.tool-card[data-tool-name="shell_bg"]');
-        }
+        var toolCards = procId
+          ? document.querySelectorAll('.tool-card[data-process-id="' + procId + '"]')
+          : document.querySelectorAll('.tool-card[data-tool-name="shell_bg"]');
         toolCards.forEach(function(tc) {
           var tag = tc.querySelector('.tool-tag');
           if (tag) {

@@ -51,8 +51,9 @@ it("tab New creates and selects a new session, and question submit reaches the d
   await value._handleMessage({ type: "new_session" });
   assert.deepEqual(switched, ["new"]);
   await value._handleMessage({ type: "answer_question", questionId: "q", answers: "answer" });
-  assert.equal(calls.at(-1)?.method, "agent.answer_question");
-  assert.equal(calls.at(-1)?.params.session_id, "active");
+  const answer = calls.filter(c => c.method !== "telemetry.recordFeature").at(-1);
+  assert.equal(answer?.method, "agent.answer_question");
+  assert.equal(answer?.params.session_id, "active");
 });
 
 it("background command actions work from a pop-out with its own session", async () => {

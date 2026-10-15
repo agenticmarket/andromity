@@ -39,7 +39,6 @@ export function getReviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
     }
     /* Chevrons */
     .codicon-chevron-down::before    { content: "\\eab4"; }
-    .codicon-chevron-down.collapsed::before { content: "\\eab7"; }
     .codicon-chevron-right::before   { content: "\\eab6"; }
     .codicon-chevron-up::before      { content: "\\eab7"; }
     /* Folder */
@@ -85,8 +84,8 @@ export function getReviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
       </div>
 
       <div class="view-toggles">
-        <button id="btn-unified" class="view-btn active" title="Unified diff view" aria-label="Unified diff">Unified</button>
-        <button id="btn-split" class="view-btn" title="Side-by-side split view">Split</button>
+        <button id="btn-unified" class="view-btn active" title="Show changes in one column" aria-label="Unified diff" aria-pressed="true">Unified</button>
+        <button id="btn-split" class="view-btn" title="Compare original and changed code side by side" aria-pressed="false">Side by side</button>
       </div>
 
       <div class="metrics-summary">
@@ -107,8 +106,15 @@ export function getReviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
   <main class="review-body">
     <!-- Left Sidebar: Changed Files Tree -->
     <aside class="review-sidebar" id="review-sidebar">
+      <div class="sidebar-heading">
+        <span>Changed files</span>
+        <div class="tree-actions">
+          <button class="tree-action" id="expand-folders" title="Expand all folders">Expand all</button>
+          <button class="tree-action" id="collapse-folders" title="Collapse all folders">Collapse all</button>
+        </div>
+      </div>
       <div class="sidebar-search-box">
-        <input type="text" id="search-input" class="sidebar-search-input" placeholder="Filter files" aria-label="Filter changed files" />
+        <input type="search" id="search-input" class="sidebar-search-input" placeholder="Filter by file name or path…" aria-label="Filter changed files" />
       </div>
       <div class="tree-scroll-area" id="tree-scroll-area">
         <!-- Tree rendered dynamically by script -->

@@ -125,7 +125,8 @@ describe("Settings Panel Vertical Navigation & Responsive Low-Space Tests", () =
     const html: string = (SettingsPanel.prototype as any)._getHtmlForWebview.call(mockContext);
 
     // Tab switching
-    assert.ok(html.includes("switchTab(tab)"), "Script must contain switchTab function");
+    assert.ok(html.includes("function switchTab(tab"), "Script must contain switchTab function");
+    assert.ok(html.includes("switchTab(tab, true)"), "Only a click on a tab counts as a tab visit");
 
     // Sidebar collapse state
     assert.ok(html.includes("setSidebarCollapsed"), "Script must contain setSidebarCollapsed function");

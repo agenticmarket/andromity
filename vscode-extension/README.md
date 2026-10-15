@@ -5,7 +5,7 @@
 
   **Open-source AI coding agent for VS Code and the terminal. Bring your own API key or run local models with Ollama; folder trust and permission modes keep you in control.**
 
-  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.18-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.19-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![VS Code](https://img.shields.io/badge/VS_Code-%5E1.85.0-blue?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-informational)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
 
@@ -172,7 +172,7 @@ Customize Andromity in **Settings** (`Ctrl+,` → search `Andromity`):
 - `andromity.permissionMode`: Default permission mode (`safe`, `trust`, `full`, `yolo`).
 - `andromity.reasoningEffort`: Thinking effort for reasoning models (default `auto`; pick supported levels in the chat model picker, or `budget:<tokens>` for models with a thinking-token budget).
 - `andromity.soundNotifications`: Turn completion sound cues on or off.
-- `andromity.telemetry`: Anonymous launch and performance telemetry (on by default; also follows VS Code's telemetry setting).
+- `andromity.telemetry`: Anonymous usage and performance telemetry: launches, errors by category, and which features are used, by feature name only (on by default; also follows VS Code's telemetry setting).
 
 ---
 
@@ -180,7 +180,7 @@ Customize Andromity in **Settings** (`Ctrl+,` → search `Andromity`):
 
 - **Where your code goes:** to the model provider you choose. The built-in Andromity provider routes requests through the Andromity edge gateway, which forwards them without storing prompts, code, or completions.
 - **API keys:** stored on your machine in the Andromity config file (`~/.andromity/config.toml`, or `%APPDATA%\andromity\config.toml` on Windows); keep that file private. Sign-in tokens use VS Code Secret Storage.
-- **Telemetry:** anonymous launch and performance data only. Turn it off with `andromity.telemetry`, VS Code's telemetry setting, or `DO_NOT_TRACK=1`.
+- **Telemetry:** anonymous usage and performance data: launches, session length, error categories, and which features are used (feature names such as `fingerprint` or `cmd_openwaterfall`). Never prompts, code, file paths, or model output. Turn it off with `andromity.telemetry`, VS Code's telemetry setting, or `DO_NOT_TRACK=1`.
 - **Local models:** with Ollama, model inference runs on your machine. Web tools, remote MCP servers, and package installs can still use the network.
 
 ---

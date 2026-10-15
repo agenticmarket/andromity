@@ -75,6 +75,7 @@ function createMockDOM() {
         return _innerHTML;
       },
       set innerHTML(val: string) {
+        el.children = [];
         _innerHTML = String(val);
         _textContent = _innerHTML.replace(/<[^>]+>/g, "");
       },
@@ -115,6 +116,7 @@ function createMockDOM() {
         for (const cb of listeners[evt.type] || []) cb(evt);
       },
       click: () => el.dispatchEvent({ type: "click" }),
+      focus: () => { el.focused = true; },
     };
 
     if (id) elementsById.set(id, el);
@@ -140,6 +142,8 @@ function createMockDOM() {
   createEl("button", "btn-split");
   createEl("div", "review-sidebar");
   createEl("div", "sidebar-resizer");
+  createEl("button", "expand-folders");
+  createEl("button", "collapse-folders");
   createEl("button", "action-open-editor");
   createEl("button", "action-native-diff");
   createEl("button", "action-revert-file");
@@ -187,6 +191,65 @@ function createMockDOM() {
 }
 
 describe("Changes Review Webview Unit Tests", () => {
+  it("collapses right-facing folders, reveals filtered matches, and reopens selected ancestors", () => {
+    const dom = createMockDOM();
+    vm.runInNewContext(getReviewClientScript(), { document: dom.document, window: dom.window,
+      acquireVsCodeApi: dom.acquireVsCodeApi, console });
+    const files = [
+      { path: "src/api/products.ts", name: "products.ts", status: "M", additions: 2, deletions: 1 },
+      { path: "src/api/users.ts", name: "users.ts", status: "A", additions: 3, deletions: 0 },
+    ];
+    dom.dispatchMessage({ type: "set_changes", files });
+    const tree = dom.elementsById.get("tree-scroll-area");
+    const rows = () => tree.querySelectorAll('.tree-file-row');
+    const folders = () => tree.querySelectorAll('.tree-folder-row');
+    assert.equal(rows().length, 2);
+    assert.ok(folders()[0].innerHTML.includes('folder-opened'));
+    assert.ok(folders()[0].innerHTML.includes('>2</span>'));
+    assert.equal(rows()[0].getAttribute('aria-current'), 'true');
+
+    dom.elementsById.get('collapse-folders').click();
+    assert.equal(rows().length, 0);
+    assert.equal(folders()[0].getAttribute('aria-expanded'), 'false');
+    assert.ok(folders()[0].innerHTML.includes('folder-chevron collapsed'));
+    assert.ok(!folders()[0].innerHTML.includes('codicon-chevron'));
+
+    const search = dom.elementsById.get('search-input');
+    search.value = 'users';
+    search.dispatchEvent({ type: 'input' });
+    assert.equal(rows().length, 1);
+    assert.ok(rows()[0].innerHTML.includes('users.ts'));
+    search.value = '';
+    search.dispatchEvent({ type: 'input' });
+    assert.equal(rows().length, 0, 'Filtering must preserve collapsed state');
+
+    folders()[0].dispatchEvent({ type: 'keydown', key: 'ArrowRight' });
+    assert.equal(folders()[0].getAttribute('aria-expanded'), 'true');
+    assert.equal(folders()[0].focused, true, 'Folder must retain focus after rebuilding the tree');
+    folders()[0].dispatchEvent({ type: 'keydown', key: 'ArrowLeft' });
+    assert.equal(rows().length, 0);
+
+    dom.dispatchMessage({ type: 'set_changes', files, selectFile: 'src/api/users.ts' });
+    assert.equal(rows().length, 2, 'Selecting a hidden file must reveal its ancestors');
+    assert.equal(rows()[1].getAttribute('aria-current'), 'true');
+    dom.elementsById.get('collapse-folders').click();
+    dom.elementsById.get('expand-folders').click();
+    assert.equal(rows().length, 2);
+  });
+
+  it("distinguishes an empty turn from a filter with no matches", () => {
+    const dom = createMockDOM();
+    vm.runInNewContext(getReviewClientScript(), { document: dom.document, window: dom.window,
+      acquireVsCodeApi: dom.acquireVsCodeApi, console });
+    dom.dispatchMessage({ type: 'set_changes', files: [], turnFiles: [] });
+    const tree = dom.elementsById.get('tree-scroll-area');
+    assert.ok(tree.innerHTML.includes('No changes in this turn'));
+    const search = dom.elementsById.get('search-input');
+    search.value = 'missing';
+    search.dispatchEvent({ type: 'input' });
+    assert.ok(tree.innerHTML.includes('No files match your filter'));
+  });
+
   it("renders folders named like JavaScript object properties", () => {
     const dom = createMockDOM();
     vm.runInNewContext(getReviewClientScript(), { document: dom.document, window: dom.window,
@@ -352,6 +415,8 @@ describe("Changes Review Webview Unit Tests", () => {
 
     btnSplit.click();
     assert.ok(btnSplit.classList.contains("active"), "Split button should be active");
+    assert.equal(btnSplit.getAttribute('aria-pressed'), 'true');
+    assert.equal(btnUnified.getAttribute('aria-pressed'), 'false');
     assert.ok(!btnUnified.classList.contains("active"), "Unified button should not be active");
 
     btnUnified.click();

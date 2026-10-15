@@ -52,6 +52,26 @@ export function getReviewClientScript(): string {
     const sidebar = document.getElementById('review-sidebar');
     const resizer = document.getElementById('sidebar-resizer');
 
+    function setFoldersCollapsed(collapsed) {
+      getActiveFileList().forEach(function (file) {
+        const parts = file.path.split('/');
+        for (let i = 1; i < parts.length; i++) {
+          state.collapsedFolders[parts.slice(0, i).join('/')] = collapsed;
+        }
+      });
+      saveState();
+      renderTree();
+    }
+    document.getElementById('expand-folders')?.addEventListener('click', function () { setFoldersCollapsed(false); });
+    document.getElementById('collapse-folders')?.addEventListener('click', function () { setFoldersCollapsed(true); });
+
+    function updateViewButtons() {
+      btnUnified.classList.toggle('active', state.viewMode === 'unified');
+      btnSplit.classList.toggle('active', state.viewMode === 'split');
+      btnUnified.setAttribute('aria-pressed', String(state.viewMode === 'unified'));
+      btnSplit.setAttribute('aria-pressed', String(state.viewMode === 'split'));
+    }
+
     // ── Sidebar Resizer ────────────────────────────────────────
     let isResizing = false;
     resizer.addEventListener('mousedown', function (e) {
@@ -105,16 +125,14 @@ export function getReviewClientScript(): string {
     // ── View Mode Switching ────────────────────────────────────
     btnUnified.addEventListener('click', function () {
       state.viewMode = 'unified';
-      btnUnified.classList.add('active');
-      btnSplit.classList.remove('active');
+      updateViewButtons();
       saveState();
       renderActiveDiff();
     });
 
     btnSplit.addEventListener('click', function () {
       state.viewMode = 'split';
-      btnSplit.classList.add('active');
-      btnUnified.classList.remove('active');
+      updateViewButtons();
       saveState();
       renderActiveDiff();
     });
@@ -223,7 +241,7 @@ export function getReviewClientScript(): string {
 
     // ── Build Hierarchical Tree ────────────────────────────────
     function buildTree(files) {
-      const root = { name: '', isDir: true, children: Object.create(null), files: [] };
+      const root = { name: '', isDir: true, children: Object.create(null), files: [], count: 0 };
       files.forEach(function (f) {
         const parts = f.path.split('/');
         let curr = root;
@@ -236,9 +254,11 @@ export function getReviewClientScript(): string {
               isDir: true,
               children: Object.create(null),
               files: [],
+              count: 0,
             };
           }
           curr = curr.children[folder];
+          curr.count++;
         }
         curr.files.push(f);
       });
@@ -312,7 +332,7 @@ export function getReviewClientScript(): string {
       });
 
       if (filtered.length === 0) {
-        treeScrollArea.innerHTML = '<div style="padding: 16px; color: var(--vscode-descriptionForeground); font-size: 12px; text-align: center;">No changed files match filter</div>';
+        treeScrollArea.innerHTML = '<div class="tree-empty">' + (state.searchQuery ? 'No files match your filter.' : state.scope === 'turn' && state.turnFiles ? 'No changes in this turn. Choose All to review workspace changes.' : 'No uncommitted changes.') + '</div>';
         return;
       }
 
@@ -322,25 +342,34 @@ export function getReviewClientScript(): string {
         // Folders
         Object.keys(node.children).sort().forEach(function (folderName) {
           const childNode = node.children[folderName];
-          const isCollapsed = !!state.collapsedFolders[childNode.path];
+          const isCollapsed = !state.searchQuery && !!state.collapsedFolders[childNode.path];
 
           const folderRow = document.createElement('div');
           folderRow.className = 'tree-folder-row';
           folderRow.tabIndex = 0;
           folderRow.setAttribute('role', 'button');
           folderRow.setAttribute('aria-expanded', String(!isCollapsed));
-          folderRow.addEventListener('keydown', function (event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); folderRow.click(); } });
+          folderRow.title = childNode.path;
+          folderRow.dataset.folderPath = childNode.path;
+          folderRow.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter' || event.key === ' ' || (event.key === 'ArrowRight' && isCollapsed) || (event.key === 'ArrowLeft' && !isCollapsed)) {
+              event.preventDefault(); folderRow.click();
+            }
+          });
           folderRow.style.paddingLeft = (depth * 14 + 6) + 'px';
           folderRow.innerHTML =
-            '<span class="folder-chevron codicon codicon-chevron-down ' + (isCollapsed ? 'collapsed' : '') + '"></span>' +
-            '<span class="codicon codicon-folder" style="color: #64b5f6; font-size: 13px;"></span>' +
-            '<span class="folder-name">' + escapeHtml(folderName) + '</span>';
+            '<span aria-hidden="true" class="folder-chevron ' + (isCollapsed ? 'collapsed' : '') + '"></span>' +
+            '<span aria-hidden="true" class="codicon codicon-' + (isCollapsed ? 'folder' : 'folder-opened') + ' folder-icon"></span>' +
+            '<span class="folder-name">' + escapeHtml(folderName) + '</span>' +
+            '<span class="folder-count" title="Changed files in this folder">' + childNode.count + '</span>';
 
           folderRow.addEventListener('click', function (e) {
             e.stopPropagation();
             state.collapsedFolders[childNode.path] = !isCollapsed;
             saveState();
             renderTree();
+            const replacement = Array.from(treeScrollArea.querySelectorAll('.tree-folder-row')).find(function (row) { return row.dataset.folderPath === childNode.path; });
+            replacement?.focus();
           });
 
           treeScrollArea.appendChild(folderRow);
@@ -360,6 +389,7 @@ export function getReviewClientScript(): string {
           fileRow.tabIndex = 0;
           fileRow.setAttribute('role', 'button');
           fileRow.setAttribute('aria-label', file.path + ', ' + file.status);
+          fileRow.setAttribute('aria-current', isActive ? 'true' : 'false');
           fileRow.addEventListener('keydown', function (event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectFile(file.path); } });
           fileRow.style.paddingLeft = (depth * 14 + 18) + 'px';
 
@@ -369,7 +399,7 @@ export function getReviewClientScript(): string {
           const delStr = file.deletions > 0 ? '<span class="stat-del">-' + file.deletions + '</span>' : '';
 
           fileRow.innerHTML =
-            '<span class="file-status-badge ' + file.status + '" data-status="' + file.status + '">' + file.status + '</span>' +
+            '<span class="file-status-badge ' + file.status + '" title="' + statusLabel(file.status) + '" data-status="' + file.status + '">' + file.status + '</span>' +
             '<span class="codicon codicon-' + iconInfo.icon + '" style="font-size: 13px; color: ' + iconInfo.color + '; flex-shrink: 0;"></span>' +
             '<span class="file-name" title="' + escapeHtml(file.path) + '">' + escapeHtml(file.name) + '</span>' +
             '<span class="file-diff-pill">' + (fileNotice || addStr + ' ' + delStr) + '</span>';
@@ -388,6 +418,10 @@ export function getReviewClientScript(): string {
     // ── Select File ────────────────────────────────────────────
     function selectFile(filePath) {
       state.activeFilePath = filePath;
+      const parts = filePath.split('/');
+      for (let i = 1; i < parts.length; i++) {
+        delete state.collapsedFolders[parts.slice(0, i).join('/')];
+      }
       saveState();
       renderTree();
 
@@ -505,6 +539,10 @@ export function getReviewClientScript(): string {
     }
 
     // ── Render Active Diff View ────────────────────────────────
+    function statusLabel(status) {
+      return ({ A: 'Added', M: 'Modified', U: 'Untracked', D: 'Deleted', R: 'Renamed', '!': 'Conflict' })[status] || 'Changed';
+    }
+
     function renderActiveDiff() {
       if (!state.activeFilePath) {
         diffContainer.innerHTML =
@@ -525,18 +563,19 @@ export function getReviewClientScript(): string {
         '<div class="diff-file-header">' +
           '<div class="diff-file-title">' +
             '<span class="file-status-badge ' + (fileObj ? fileObj.status : 'M') + '">' + (fileObj ? fileObj.status : 'M') + '</span>' +
-            '<span>' + escapeHtml(state.activeFilePath) + '</span>' +
+            '<span title="' + escapeHtml(state.activeFilePath) + '">' + escapeHtml(state.activeFilePath) + '</span>' +
+            '<span class="change-kind">' + statusLabel(fileObj?.status) + '</span>' +
             (fileObj ? '<span class="file-diff-pill"><span class="stat-add">+' + fileObj.additions + '</span> <span class="stat-del">-' + fileObj.deletions + '</span></span>' : '') +
           '</div>' +
           '<div class="diff-file-actions">' +
-            '<button class="icon-btn" id="action-open-editor" title="Open file in editor" aria-label="Open file in editor">' +
-              '<span class="codicon codicon-go-to-file"></span>' +
+            '<button class="action-btn" id="action-open-editor" title="Open file in editor" aria-label="Open file in editor">' +
+              '<span class="codicon codicon-go-to-file"></span> Open file' +
             '</button>' +
-            '<button class="icon-btn" id="action-native-diff" title="Open native diff" aria-label="Open native diff">' +
-              '<span class="codicon codicon-diff-single"></span>' +
+            '<button class="action-btn" id="action-native-diff" title="Open native diff" aria-label="Open native diff">' +
+              '<span class="codicon codicon-diff-single"></span> Compare' +
             '</button>' +
-            '<button class="icon-btn" id="action-revert-file" title="Discard all changes in this file" aria-label="Discard file changes">' +
-              '<span class="codicon codicon-discard"></span>' +
+            '<button class="action-btn discard-btn" id="action-revert-file" title="Discard all changes in this file" aria-label="Discard file changes">' +
+              '<span class="codicon codicon-discard"></span> Discard' +
             '</button>' +
           '</div>' +
         '</div>';
@@ -830,8 +869,7 @@ export function getReviewClientScript(): string {
       }
     });
 
-    btnUnified.classList.toggle('active', state.viewMode === 'unified');
-    btnSplit.classList.toggle('active', state.viewMode === 'split');
+    updateViewButtons();
     searchInput.value = state.searchQuery;
 
     // Notify extension host that webview is ready

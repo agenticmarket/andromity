@@ -1,5 +1,6 @@
 import { RpcClient } from "./RpcClient.js";
 import { InteractionMessage, SessionWebviewEvent } from "./types.js";
+import { recordFeatureUse } from "../telemetry/featureUsage.js";
 
 export function reportDisconnectedAction(
   message: { type: string; requestId?: string }, sessionId: string,
@@ -35,6 +36,12 @@ export async function handleInteractionMessage(
       return true;
     }
     post({ type: "interaction_resolved", session_id: sessionId, interaction_id: identity });
+    if (result.success) {
+      const feature = question ? "questions_answered"
+        : message.type === "reject_tool" ? "tool_denied"
+          : message.scope && message.scope !== "once" ? "tool_approved_always" : "tool_approved";
+      recordFeatureUse(feature, { client: rpc, sessionId, oncePerSession: true });
+    }
     if (!result.success) post({ type: "interaction_failed", session_id: sessionId,
       error: "This request is no longer pending. Refresh the session if needed." });
   } catch {

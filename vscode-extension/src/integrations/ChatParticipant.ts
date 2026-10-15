@@ -4,6 +4,7 @@ import { RpcClient } from "../server/RpcClient.js";
 import { ClarifyingQuestionsEvent, ToolApprovalEvent } from "../server/types.js";
 import { EditorBridge } from "./EditorBridge.js";
 import { runAgentTurn } from "./agentTurn.js";
+import { recordFeatureUse } from "../telemetry/featureUsage.js";
 
 export const CHAT_PARTICIPANT_ID = "andromity.agent";
 export const DELEGATE_TOOL_NAME = "andromity_delegate";
@@ -155,6 +156,7 @@ export function registerChatIntegration(context: vscode.ExtensionContext, deps: 
       }
       const defaults = deps.getTurnDefaults();
       const prompt = buildPrompt(request);
+      recordFeatureUse(request.command ? "chat_participant_" + request.command : "chat_participant", { client: rpc });
       stream.progress("Andromity is working…");
       try {
         const result = await runAgentTurn(rpc, {
@@ -213,6 +215,7 @@ export function registerChatIntegration(context: vscode.ExtensionContext, deps: 
       },
       async invoke(options, token) {
         const rpc = await deps.waitForClient(5000);
+        if (rpc) recordFeatureUse("copilot_delegate", { client: rpc });
         if (!rpc) throw new Error("Andromity's engine is not running. Run 'Andromity: System Setup Check'.");
         const defaults = deps.getTurnDefaults();
         const result = await runAgentTurn(rpc, {

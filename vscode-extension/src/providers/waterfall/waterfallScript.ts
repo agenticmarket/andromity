@@ -554,6 +554,16 @@ export function getWaterfallScript(sessionId: string): string {
         }
       }
 
+      // History spans carry no per-call tokens, so the session total from history is kept as a
+      // base for what those spans used; spans streamed live add their own tokens on top.
+      function liveSpanTokens() {
+        let tokens = 0;
+        for (const s of state.spans.values()) {
+          if (!s.fromHistory) tokens += (s.totalTokens || 0);
+        }
+        return tokens;
+      }
+
       function recalcTotals() {
         let durMs = 0;
         let llmMs = 0;
@@ -570,6 +580,7 @@ export function getWaterfallScript(sessionId: string): string {
         state.totals.durationMs = durMs;
         state.totals.llmMs = llmMs;
         state.totals.toolMs = toolMs;
+        state.totals.totalTokens = (state.historyTokenBase || 0) + liveSpanTokens();
       }
 
       function updateSummaryStats() {
@@ -1688,6 +1699,7 @@ export function getWaterfallScript(sessionId: string): string {
                     durationMs: llmDurMs,
                     ttfbMs: Math.min(250, llmDurMs),
                     status: 'done',
+                    fromHistory: true,
                     promptTokens: 0,
                     completionTokens: 0,
                     totalTokens: 0,
@@ -1829,7 +1841,8 @@ export function getWaterfallScript(sessionId: string): string {
                 }
               }
 
-              state.totals.totalTokens = sData.token_total || 0;
+              state.historyTokenBase = Math.max(0, (sData.token_total || 0) - liveSpanTokens());
+              state.totals.totalTokens = state.historyTokenBase + liveSpanTokens();
               state.totals.promptTokens = sData.context_tokens || 0;
               state.isRunning = sData.status === 'running';
 
@@ -1962,6 +1975,7 @@ export function getWaterfallScript(sessionId: string): string {
           state.committedLlmTurnIds.clear();
           state.logs = [];
           state.totals = { durationMs: 0, llmMs: 0, toolMs: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+          state.historyTokenBase = 0;
           els.timelineContainer.innerHTML = '';
           els.logContainer.innerHTML = '';
           if (els.emptyState) els.emptyState.style.display = 'flex';
@@ -2003,6 +2017,9 @@ export function getWaterfallScript(sessionId: string): string {
           });
         });
       }
+
+      const btnDocs = document.getElementById('btn-docs');
+      if (btnDocs) btnDocs.addEventListener('click', () => vscode.postMessage({ type: 'open_docs' }));
 
       if (els.btnFingerprint) {
         els.btnFingerprint.addEventListener('click', () => {

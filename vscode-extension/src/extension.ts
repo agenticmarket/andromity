@@ -13,6 +13,7 @@ import { FingerprintPanel } from "./panels/FingerprintPanel.js";
 import { ChangesReviewPanel } from "./panels/ChangesReviewPanel.js";
 import { PythonBridge, formatTimestamp } from "./server/PythonBridge.js";
 import { RpcClient } from "./server/RpcClient.js";
+import { recordFeatureUse, setFeatureUsageClient, setFeatureUsageGate } from "./telemetry/featureUsage.js";
 
 let pythonBridge: PythonBridge | null = null;
 let statusBarItem: vscode.StatusBarItem;
@@ -41,6 +42,42 @@ function syncCoAuthorSetting(client: RpcClient | null | undefined) {
     : inspected?.workspaceFolderValue ?? inspected?.workspaceValue ?? inspected?.globalValue;
   if (value === undefined) return;
   void client.call("config.set", { section: "default", key: "include_co_author", value }).catch(() => {});
+}
+
+/** Mirror `andromity.ollamaHost` into config.toml's Ollama connection so the engine
+ *  uses the server the extension checks. Only the user-level value counts: a
+ *  repository's settings must not redirect Ollama traffic, which carries code. */
+function syncOllamaHostSetting(client: RpcClient | null | undefined) {
+  if (!client) return;
+  const url = vscode.workspace.getConfiguration("andromity").inspect<string>("ollamaHost")?.globalValue;
+  if (!url) return;
+  void client.call("config.set_ollama_host", { url }).catch((err: any) => {
+    void vscode.window.showWarningMessage(`Andromity: andromity.ollamaHost was not applied. ${err?.message || err}`);
+  });
+}
+
+let configWarningShown = false;
+
+/** A config.toml that fails to parse is replaced by defaults on the next save, so
+ *  say so once and point to the copy the engine kept. */
+async function warnIfConfigUnreadable(client: RpcClient) {
+  if (configWarningShown) return;
+  const status = await client
+    .call<{ path: string; load_error: string | null; unreadable_copy: string | null }>("config.status", {})
+    .catch(() => null);
+  if (!status?.load_error) return;
+  configWarningShown = true;
+  const copy = status.unreadable_copy;
+  const detail = copy
+    ? ` Your previous file, with your API keys, was kept as ${copy}. Fix its syntax, copy it over config.toml, and restart Andromity.`
+    : " Fix its syntax and restart Andromity.";
+  const actions = copy ? ["Open Saved Copy", "Open config.toml"] : ["Open config.toml"];
+  const choice = await vscode.window.showWarningMessage(
+    `Andromity couldn't read config.toml (${status.load_error}) and is using default settings.${detail}`,
+    ...actions
+  );
+  const target = choice === "Open Saved Copy" ? copy : choice === "Open config.toml" ? status.path : null;
+  if (target) await vscode.window.showTextDocument(vscode.Uri.file(target));
 }
 
 const activeRunningSessions = new Set<string>();
@@ -99,7 +136,23 @@ function bindStatusBarEvents(client: RpcClient) {
   client.on("agent/error", markFinished);
 }
 
+// Commands other code runs on the user's behalf; recording them would only echo the action that triggered them.
+const UNTRACKED_COMMANDS = new Set([
+  "andromity.switchSessionById", "andromity.sendPrompt", "andromity.refreshSessions",
+  "andromity.refreshCrons", "andromity.refreshChanges", "andromity.openFileDiff",
+]);
+
+/** Registers an andromity.* command and records which commands people actually use (the name only). */
+function registerTrackedCommand(id: string, handler: (...args: any[]) => any): vscode.Disposable {
+  return vscode.commands.registerCommand(id, (...args: any[]) => {
+    if (!UNTRACKED_COMMANDS.has(id)) recordFeatureUse("cmd_" + id.replace(/^andromity\./, ""));
+    return handler(...args);
+  });
+}
+
 export async function activate(context: vscode.ExtensionContext) {
+  setFeatureUsageGate(() =>
+    (vscode.env.isTelemetryEnabled ?? true) && vscode.workspace.getConfiguration("andromity").get<boolean>("telemetry", true) !== false);
   const outputChannel = vscode.window.createOutputChannel("Andromity");
   context.subscriptions.push(outputChannel);
   const log = (msg: string) => {
@@ -242,13 +295,14 @@ export async function activate(context: vscode.ExtensionContext) {
   // 5. Connect Python Daemon and wire to providers on every (re)connection
   let connectedPreviously = false;
   pythonBridge.onClientReady((rpcClient) => {
-    if (connectedPreviously) {
-      void rpcClient.call("telemetry.recordFeature", { feature: "reconnect_completed" }).catch(() => {});
-    }
+    setFeatureUsageClient(rpcClient);
+    if (connectedPreviously) recordFeatureUse("reconnect_completed");
     connectedPreviously = true;
     chatProvider.setRpcClient(rpcClient);
     planProvider.setRpcClient(rpcClient);
     syncCoAuthorSetting(rpcClient);
+    syncOllamaHostSetting(rpcClient);
+    void warnIfConfigUnreadable(rpcClient);
     SettingsPanel.schedulePrewarm(rpcClient);
     SettingsPanel.currentPanel?.setRpcClient(rpcClient);
     // Reconnect live MCP sessions on every daemon launch, independently of the Hub.
@@ -390,6 +444,10 @@ export async function activate(context: vscode.ExtensionContext) {
       if (e.affectsConfiguration("andromity.includeCoAuthor")) {
         syncCoAuthorSetting(pythonBridge?.getClient());
       }
+
+      if (e.affectsConfiguration("andromity.ollamaHost")) {
+        syncOllamaHostSetting(pythonBridge?.getClient());
+      }
     })
   );
 
@@ -412,7 +470,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // 6. Register Commands
   context.subscriptions.push(
-    vscode.commands.registerCommand("andromity.checkSetup", async () => {
+    registerTrackedCommand("andromity.checkSetup", async () => {
       outputChannel.show(true);
       outputChannel.appendLine("========================================");
       outputChannel.appendLine("  Andromity — System Setup Check");
@@ -499,14 +557,14 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand("andromity.openChat", async () => {
+    registerTrackedCommand("andromity.openChat", async () => {
       try {
         await vscode.commands.executeCommand("workbench.action.focusAuxiliaryBar");
       } catch {}
       await vscode.commands.executeCommand("andromity.chatView.focus");
     }),
 
-    vscode.commands.registerCommand("andromity.newSession", async () => {
+    registerTrackedCommand("andromity.newSession", async () => {
       const client = pythonBridge?.getClient();
       if (client) {
         try {
@@ -527,12 +585,12 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand("andromity.switchSessionById", (sessionId: string) => {
+    registerTrackedCommand("andromity.switchSessionById", (sessionId: string) => {
       chatProvider.setCurrentSessionId(sessionId);
       vscode.commands.executeCommand("andromity.chatView.focus");
     }),
 
-    vscode.commands.registerCommand("andromity.askAboutSelection", async () => {
+    registerTrackedCommand("andromity.askAboutSelection", async () => {
       const editorContext = EditorBridge.getActiveContext();
       if (!editorContext.selectedText) {
         vscode.window.showInformationMessage("Select some code first to ask Andromity.");
@@ -547,7 +605,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand("andromity.explainCode", async () => {
+    registerTrackedCommand("andromity.explainCode", async () => {
       const editorContext = EditorBridge.getActiveContext();
       if (!editorContext.selectedText && !editorContext.fileText) {
         vscode.window.showInformationMessage("Select some code or open a file first to explain.");
@@ -556,7 +614,7 @@ export async function activate(context: vscode.ExtensionContext) {
       await chatProvider.sendPromptFromExternal("Explain this code step-by-step in detail.", editorContext, { taskName: "Explain Code" });
     }),
 
-    vscode.commands.registerCommand("andromity.fixErrors", async (uri?: vscode.Uri, diagnostics?: vscode.Diagnostic[]) => {
+    registerTrackedCommand("andromity.fixErrors", async (uri?: vscode.Uri, diagnostics?: vscode.Diagnostic[]) => {
       const editorContext = EditorBridge.getActiveContext();
       let prompt = "Please analyze and fix the errors/diagnostics reported in this code.";
       if (diagnostics && diagnostics.length > 0) {
@@ -569,7 +627,7 @@ export async function activate(context: vscode.ExtensionContext) {
       await chatProvider.sendPromptFromExternal(prompt, editorContext, { taskName: "Fix Code Diagnostics" });
     }),
 
-    vscode.commands.registerCommand("andromity.generateTests", async () => {
+    registerTrackedCommand("andromity.generateTests", async () => {
       const editorContext = EditorBridge.getActiveContext();
       if (!editorContext.selectedText && !editorContext.fileText) {
         vscode.window.showInformationMessage("Open a file or select code first to generate unit tests.");
@@ -579,37 +637,37 @@ export async function activate(context: vscode.ExtensionContext) {
       await chatProvider.sendPromptFromExternal(prompt, editorContext, { taskName: "Generate Unit Tests" });
     }),
 
-    vscode.commands.registerCommand("andromity.undoTurn", async () => {
+    registerTrackedCommand("andromity.undoTurn", async () => {
       await vscode.commands.executeCommand("andromity.chatView.focus");
       await chatProvider.requestUndoTurn();
     }),
 
-    vscode.commands.registerCommand("andromity.undo", async () => {
+    registerTrackedCommand("andromity.undo", async () => {
       await vscode.commands.executeCommand("andromity.chatView.focus");
       await chatProvider.requestUndoTurn();
     }),
 
-    vscode.commands.registerCommand("andromity.sendPrompt", async (promptText: string) => {
+    registerTrackedCommand("andromity.sendPrompt", async (promptText: string) => {
       await vscode.commands.executeCommand("andromity.chatView.focus");
       if (promptText) {
         await chatProvider.sendPromptFromExternal(promptText, undefined, { taskName: "External Task" });
       }
     }),
 
-    vscode.commands.registerCommand("andromity.compactSession", async () => {
+    registerTrackedCommand("andromity.compactSession", async () => {
       await chatProvider.compactSession();
     }),
 
-    vscode.commands.registerCommand("andromity.viewGitDiff", async () => {
+    registerTrackedCommand("andromity.viewGitDiff", async () => {
       await chatProvider.pickAndShowFileDiff();
     }),
 
-    vscode.commands.registerCommand("andromity.showSessions", async () => {
+    registerTrackedCommand("andromity.showSessions", async () => {
       await vscode.commands.executeCommand("andromity.chatView.focus");
       chatProvider.toggleSessionsDrawer();
     }),
 
-    vscode.commands.registerCommand("andromity.openPlanTab", async (plan?: any, sessionId?: string) => {
+    registerTrackedCommand("andromity.openPlanTab", async (plan?: any, sessionId?: string) => {
       const activeSid = sessionId || chatProvider.getCurrentSessionId();
       const planToShow = plan || currentPlan || chatProvider.getCurrentPlan();
       PlanEditorPanel.createOrShow(
@@ -623,7 +681,7 @@ export async function activate(context: vscode.ExtensionContext) {
       );
     }),
 
-    vscode.commands.registerCommand("andromity.openCrons", () => {
+    registerTrackedCommand("andromity.openCrons", () => {
       SettingsPanel.createOrShow(
         context.extensionUri,
         pythonBridge?.getClient() || null,
@@ -632,7 +690,7 @@ export async function activate(context: vscode.ExtensionContext) {
       );
     }),
 
-    vscode.commands.registerCommand("andromity.openPersonalisation", () => {
+    registerTrackedCommand("andromity.openPersonalisation", () => {
       SettingsPanel.createOrShow(
         context.extensionUri,
         pythonBridge?.getClient() || null,
@@ -644,7 +702,7 @@ export async function activate(context: vscode.ExtensionContext) {
       );
     }),
 
-    vscode.commands.registerCommand("andromity.addToChat", (uri?: vscode.Uri, range?: vscode.Range) => {
+    registerTrackedCommand("andromity.addToChat", (uri?: vscode.Uri, range?: vscode.Range) => {
       const editor = vscode.window.activeTextEditor;
       const target = uri instanceof vscode.Uri ? uri : editor?.document.uri;
       if (!target) return;
@@ -657,7 +715,7 @@ export async function activate(context: vscode.ExtensionContext) {
       chatProvider.attachSelection(target.fsPath, start, endLine);
     }),
 
-    vscode.commands.registerCommand("andromity.attachFileToContext", async (uri?: vscode.Uri) => {
+    registerTrackedCommand("andromity.attachFileToContext", async (uri?: vscode.Uri) => {
       let targetPath = uri?.fsPath;
       if (!targetPath) {
         targetPath = vscode.window.activeTextEditor?.document?.fileName;
@@ -669,29 +727,29 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand("andromity.openFileDiff", async (filePath: string, isUntracked: boolean) => {
+    registerTrackedCommand("andromity.openFileDiff", async (filePath: string, isUntracked: boolean) => {
       await chatProvider.openFileDiff(filePath, isUntracked);
     }),
 
-    vscode.commands.registerCommand("andromity.openReview", (filePath?: string) => {
+    registerTrackedCommand("andromity.openReview", (filePath?: string) => {
       chatProvider.openReviewWebview(typeof filePath === "string" ? filePath : undefined);
     }),
 
-    vscode.commands.registerCommand("andromity.openChangesReview", (filePath?: string) => {
+    registerTrackedCommand("andromity.openChangesReview", (filePath?: string) => {
       chatProvider.openReviewWebview(typeof filePath === "string" ? filePath : undefined);
     }),
 
-    vscode.commands.registerCommand("andromity.refreshSessions", () => {
+    registerTrackedCommand("andromity.refreshSessions", () => {
       void chatProvider.fetchAndPostSessions();
     }),
 
-    vscode.commands.registerCommand("andromity.openSessionInTab", (item?: any) => {
+    registerTrackedCommand("andromity.openSessionInTab", (item?: any) => {
       const sessionId = item?.session?.id || item?.id;
       const sessionName = item?.session?.name || item?.name;
       chatProvider.openSessionInTab(sessionId, sessionName);
     }),
 
-    vscode.commands.registerCommand("andromity.openWaterfall", (item?: any) => {
+    registerTrackedCommand("andromity.openWaterfall", (item?: any) => {
       const sessionId = item?.session?.id || item?.id || chatProvider.getCurrentSessionId();
       const sessionName = item?.session?.name || item?.name || "Chat Session";
       if (sessionId) {
@@ -708,7 +766,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand("andromity.openFingerprint", (item?: any) => {
+    registerTrackedCommand("andromity.openFingerprint", (item?: any) => {
       const sessionId = item?.session?.id || item?.id || chatProvider.getCurrentSessionId();
       const sessionName = item?.session?.name || item?.name || "Chat Session";
       if (sessionId) {
@@ -725,7 +783,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand("andromity.fixNotebookCell", async (cell?: vscode.NotebookCell) => {
+    registerTrackedCommand("andromity.fixNotebookCell", async (cell?: vscode.NotebookCell) => {
       let code = "";
       let outputText = "";
       const targetCell = cell || (vscode.window.activeNotebookEditor?.selection ? vscode.window.activeNotebookEditor.notebook.cellAt(vscode.window.activeNotebookEditor.selection.start) : undefined);
@@ -751,7 +809,7 @@ export async function activate(context: vscode.ExtensionContext) {
       await chatProvider.sendPromptFromExternal(prompt, undefined, { taskName: "Notebook Cell Fix" });
     }),
 
-    vscode.commands.registerCommand("andromity.explainNotebookCell", async (cell?: vscode.NotebookCell) => {
+    registerTrackedCommand("andromity.explainNotebookCell", async (cell?: vscode.NotebookCell) => {
       let code = "";
       let outputText = "";
       const targetCell = cell || (vscode.window.activeNotebookEditor?.selection ? vscode.window.activeNotebookEditor.notebook.cellAt(vscode.window.activeNotebookEditor.selection.start) : undefined);
@@ -777,7 +835,7 @@ export async function activate(context: vscode.ExtensionContext) {
       await chatProvider.sendPromptFromExternal(prompt, undefined, { taskName: "Notebook Explanation" });
     }),
 
-    vscode.commands.registerCommand("andromity.fixTerminalError", async () => {
+    registerTrackedCommand("andromity.fixTerminalError", async () => {
       let terminalText = "";
       try {
         const prev = await vscode.env.clipboard.readText();
@@ -816,17 +874,17 @@ export async function activate(context: vscode.ExtensionContext) {
       await chatProvider.sendPromptFromExternal(prompt, undefined, { taskName: "Terminal Diagnostics" });
     }),
 
-    vscode.commands.registerCommand("andromity.refreshCrons", () => {
+    registerTrackedCommand("andromity.refreshCrons", () => {
       void chatProvider.fetchAndPostCrons();
     }),
 
-    vscode.commands.registerCommand("andromity.refreshChanges", () => {
+    registerTrackedCommand("andromity.refreshChanges", () => {
       if (ChangesReviewPanel.currentPanel) {
         void ChangesReviewPanel.currentPanel.loadChanges();
       }
     }),
 
-    vscode.commands.registerCommand("andromity.deleteSession", async (item: any) => {
+    registerTrackedCommand("andromity.deleteSession", async (item: any) => {
       const client = pythonBridge?.getClient();
       if (!client || !item?.session?.id) return;
       const confirm = await vscode.window.showWarningMessage(
@@ -848,7 +906,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand("andromity.openModelHub", () => {
+    registerTrackedCommand("andromity.openModelHub", () => {
       SettingsPanel.createOrShow(
         context.extensionUri,
         pythonBridge?.getClient() || null,
@@ -857,14 +915,14 @@ export async function activate(context: vscode.ExtensionContext) {
       );
     }),
 
-    vscode.commands.registerCommand("andromity.switchModel", async () => {
+    registerTrackedCommand("andromity.switchModel", async () => {
       const client = pythonBridge?.getClient();
       if (!client) return;
       try {
         const models = await client.call<any[]>("config.list_models", {});
         const items = [
           {
-            label: "$(search) Browse Full Model Hub (396+ OpenRouter models)...",
+            label: "$(search) Browse the full Model Hub...",
             description: "Open dedicated full-tab catalog browser",
             detail: "Filter by Free Tier, Coding, Reasoning, Vision, and Providers",
             modelId: "__open_hub__",
@@ -898,7 +956,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand("andromity.switchProfile", async () => {
+    registerTrackedCommand("andromity.switchProfile", async () => {
       const client = pythonBridge?.getClient();
       if (!client) return;
       const profiles = [
@@ -918,7 +976,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand("andromity.switchMode", async () => {
+    registerTrackedCommand("andromity.switchMode", async () => {
       const client = pythonBridge?.getClient();
       const modes = [
         { label: "SAFE", detail: "Requires approval for every file write and shell command.", mode: "safe" },
@@ -941,7 +999,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand("andromity.openSettings", (initialTab?: any) => {
+    registerTrackedCommand("andromity.openSettings", (initialTab?: any) => {
       SettingsPanel.createOrShow(
         context.extensionUri,
         pythonBridge?.getClient() || null,
@@ -950,7 +1008,7 @@ export async function activate(context: vscode.ExtensionContext) {
       );
     }),
 
-    vscode.commands.registerCommand("andromity.openAbout", () => {
+    registerTrackedCommand("andromity.openAbout", () => {
       SettingsPanel.createOrShow(
         context.extensionUri,
         pythonBridge?.getClient() || null,
@@ -959,7 +1017,7 @@ export async function activate(context: vscode.ExtensionContext) {
       );
     }),
 
-    vscode.commands.registerCommand("andromity.restartServer", async () => {
+    registerTrackedCommand("andromity.restartServer", async () => {
       if (pythonBridge) {
         try {
           await pythonBridge.restart();
@@ -971,7 +1029,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand("andromity.generateCommitMessage", async (...args: any[]) => {
+    registerTrackedCommand("andromity.generateCommitMessage", async (...args: any[]) => {
       let client = pythonBridge?.getClient() || null;
       if (!client && pythonBridge) {
         client = await pythonBridge.waitForClient(5000);
@@ -979,7 +1037,7 @@ export async function activate(context: vscode.ExtensionContext) {
       await generateCommitMessage(client, args[0]);
     }),
 
-    vscode.commands.registerCommand("andromity.explainTerminalSelection", async () => {
+    registerTrackedCommand("andromity.explainTerminalSelection", async () => {
       // Terminal has no direct selection API — guide user to use chat
       vscode.commands.executeCommand("andromity.chatView.focus");
       vscode.window.showInformationMessage(
@@ -992,7 +1050,7 @@ export async function activate(context: vscode.ExtensionContext) {
       );
     }),
 
-    vscode.commands.registerCommand("andromity.welcome", () => {
+    registerTrackedCommand("andromity.welcome", () => {
       vscode.commands.executeCommand(
         "workbench.action.openWalkthrough",
         "agenticmarket.andromity-agent#andromity.welcome",
@@ -1043,13 +1101,13 @@ export async function activate(context: vscode.ExtensionContext) {
 
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("andromity.login", async () => {
+    registerTrackedCommand("andromity.login", async () => {
       await chatProvider.openLogin();
     })
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("andromity.logout", async () => {
+    registerTrackedCommand("andromity.logout", async () => {
       await chatProvider.logout();
     })
   );

@@ -79,7 +79,7 @@ describe("permission mode policy", () => {
 describe("webview config writes", () => {
   it("maps known keys and validates their values", () => {
     assert.deepEqual(resolveWebviewConfigWrite("reasoningEffort", "budget:4096"), { section: "default", key: "reasoning_effort", value: "budget:4096" });
-    assert.deepEqual(resolveWebviewConfigWrite("maxSubagents", 4), { section: "subagents", key: "max_parallel", value: 4 });
+    assert.deepEqual(resolveWebviewConfigWrite("maxSubagents", 4), { section: "subagents", key: "max_concurrent", value: 4 });
     assert.equal(resolveWebviewConfigWrite("maxSubagents", "4; rm -rf"), null);
     assert.equal(resolveWebviewConfigWrite("provider", "../../etc"), null);
   });
@@ -276,6 +276,17 @@ describe("extension manifest and packaging", () => {
     const restricted: string[] = manifest.capabilities.untrustedWorkspaces.restrictedConfigurations;
     for (const key of ["andromity.pythonPath", "andromity.serverPort", "andromity.ollamaHost", "andromity.permissionMode"]) {
       assert.ok(restricted.includes(key), key + " must be a restricted configuration");
+    }
+  });
+
+  it("keeps the Ollama address out of workspace settings, since it is copied into config.toml", () => {
+    assert.equal(manifest.contributes.configuration.properties["andromity.ollamaHost"].scope, "machine");
+  });
+
+  it("marks settings the engine doesn't read as deprecated", () => {
+    const props = manifest.contributes.configuration.properties;
+    for (const key of ["andromity.defaultProvider", "andromity.defaultModel", "andromity.defaultProfile", "andromity.reasoningEffort"]) {
+      assert.match(props[key].markdownDeprecationMessage, /^Not used\./, key);
     }
   });
 

@@ -3,6 +3,10 @@ import { RpcClient } from "./RpcClient.js";
 import { InputBridgeMessage, InputQueueState, SessionInfo } from "./types.js";
 import { EditorBridge } from "../integrations/EditorBridge.js";
 import { clampPromptMode } from "./securityPolicy.js";
+import { recordFeatureUse } from "../telemetry/featureUsage.js";
+
+// A typed slash command at the start of a prompt, e.g. "/review"; paths like "/usr/bin" do not match.
+const SLASH_COMMAND = /^\/([a-z][a-z0-9-]{1,20})(?=\s|$)/i;
 
 /** Common queue transport for the sidebar and standalone session tabs.
  *  approvedMode is the permission mode the user confirmed on the host; a
@@ -30,6 +34,7 @@ export async function handleInputMessage(
         model: message.model, provider: message.provider, reasoning_effort: message.reasoningEffort,
       });
       post({ type: "retry_result", session_id: sid, success: true });
+      recordFeatureUse(message.stripImages === true ? "turn_retried_no_image" : "turn_retried", { client: rpc, sessionId: sid });
     } else if (message.type === "submit_input") {
       const prompt = EditorBridge.formatPromptWithEditorState(
         message.prompt || "", EditorBridge.getActiveContext(), message.attachContext !== false);
@@ -40,11 +45,17 @@ export async function handleInputMessage(
         mode: clampPromptMode(message.mode, approvedMode), reasoning_effort: message.reasoningEffort,
       });
       post({ type: "input_accepted", request_id: message.requestId, session_id: sid, input_id: result.input_id });
+      const usage = { client: rpc, sessionId: sid, oncePerSession: true };
+      if ((message.images || []).length) recordFeatureUse("image_attached", usage);
+      if (message.delivery === "steer") recordFeatureUse("prompt_steered", usage);
+      const slash = SLASH_COMMAND.exec((message.prompt || "").trim());
+      if (slash) recordFeatureUse("slash_" + slash[1], usage);
       post({ type: "queue_state", ...result.queue, supported: true });
     } else {
       const result = await rpc.call<InputQueueState>(methods[message.type], {
         session_id: sid, input_id: message.inputId,
       });
+      if (message.type !== "queue_snapshot") recordFeatureUse(message.type, { client: rpc, sessionId: sid, oncePerSession: true });
       post({ type: "queue_state", ...result, supported: true });
     }
   } catch (error: unknown) {

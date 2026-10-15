@@ -60,7 +60,7 @@ const WEBVIEW_CONFIG_KEYS: Record<string, { section: string; key: string; valid:
   reasoningEffort: { section: "default", key: "reasoning_effort", valid: matches(/^(?:[a-z]{1,16}|budget:\d{1,7})$/) },
   userName: { section: "user", key: "name", valid: isShortString(128) },
   userEmail: { section: "user", key: "email", valid: isShortString(254) },
-  maxSubagents: { section: "subagents", key: "max_parallel", valid: isIntInRange(1, 64) },
+  maxSubagents: { section: "subagents", key: "max_concurrent", valid: isIntInRange(1, 64) },
   autoCompact: { section: "advanced", key: "auto_compact", valid: isBoolean },
   maxFileSize: { section: "advanced", key: "max_file_size_kb", valid: isIntInRange(1, 1_048_576) },
   startupSession: { section: "default", key: "startupSession", valid: matches(/^(?:last|fresh)$/) },

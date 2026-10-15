@@ -35,10 +35,13 @@ it("scoped approvals and question answers use the same transport in both surface
   const posts: SessionWebviewEvent[] = [];
   await handleInteractionMessage(rpc, { type: "approve_tool", approvalId: "p", scope: "session" }, "tab", event => posts.push(event));
   await handleInteractionMessage(rpc, { type: "answer_question", questionId: "q", answers: "Python" }, "tab", event => posts.push(event));
-  assert.deepEqual(calls, [
+  assert.deepEqual(calls.filter(c => c.method !== "telemetry.recordFeature"), [
     { method: "agent.approve_tool", params: { session_id: "tab", approval_id: "p", approved: true, scope: "session" } },
     { method: "agent.answer_question", params: { session_id: "tab", question_id: "q", answers: "Python" } },
   ]);
+  // Usage events name the action only; the approval scope maps to "always".
+  assert.deepEqual(calls.filter(c => c.method === "telemetry.recordFeature").map(c => (c.params as any).feature),
+    ["tool_approved_always", "questions_answered"]);
   assert.deepEqual(posts.map(event => event.interaction_id), ["p", "q"]);
 });
 

@@ -5,8 +5,8 @@ export function getFingerprintStyles(): string {
       --fg: var(--vscode-foreground, #e4e4e7);
       --card-bg: var(--vscode-editor-background, #1e1e1e);
       --input-bg: var(--vscode-input-background, #252526);
-      --border: var(--vscode-widget-border, rgba(255, 255, 255, 0.08));
-      --border-hover: rgba(255, 255, 255, 0.16);
+      --border: var(--vscode-widget-border, color-mix(in srgb, var(--fg) 8%, transparent));
+      --border-hover: color-mix(in srgb, var(--fg) 16%, transparent);
       --accent: var(--vscode-focusBorder, #007fd4);
       --green: #3fb950;
       --red: #f85149;
@@ -15,6 +15,9 @@ export function getFingerprintStyles(): string {
       --cyan: #38bdf8;
       --blue: #58a6ff;
       --muted: var(--vscode-descriptionForeground, #888888);
+      --canvas-bg: color-mix(in srgb, var(--bg) 96%, var(--fg));
+      --code-bg: var(--vscode-textCodeBlock-background, color-mix(in srgb, var(--card-bg) 92%, var(--fg)));
+      --line-strong: color-mix(in srgb, var(--fg) 28%, transparent);
       --radius: 6px;
       --font-ui: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       --font-mono: 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
@@ -70,7 +73,7 @@ export function getFingerprintStyles(): string {
     }
 
     .wf-pill-btn {
-      background: rgba(255, 255, 255, 0.06);
+      background: color-mix(in srgb, var(--fg) 6%, transparent);
       border: 1px solid var(--border);
       color: var(--fg);
       border-radius: 4px;
@@ -82,7 +85,7 @@ export function getFingerprintStyles(): string {
     }
 
     .wf-pill-btn:hover {
-      background: rgba(255, 255, 255, 0.12);
+      background: color-mix(in srgb, var(--fg) 12%, transparent);
       border-color: var(--border-hover);
     }
 
@@ -123,7 +126,7 @@ export function getFingerprintStyles(): string {
     .wf-session-pill {
       font-size: 11px;
       font-family: var(--font-mono);
-      background: rgba(255, 255, 255, 0.05);
+      background: color-mix(in srgb, var(--fg) 5%, transparent);
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 2px 10px;
@@ -159,7 +162,7 @@ export function getFingerprintStyles(): string {
     }
 
     .wf-btn {
-      background: rgba(255, 255, 255, 0.04);
+      background: color-mix(in srgb, var(--fg) 4%, transparent);
       border: 1px solid var(--border);
       color: var(--fg);
       padding: 4px 10px;
@@ -174,7 +177,7 @@ export function getFingerprintStyles(): string {
     }
 
     .wf-btn:hover {
-      background: rgba(255, 255, 255, 0.08);
+      background: color-mix(in srgb, var(--fg) 8%, transparent);
       border-color: var(--border-hover);
     }
 
@@ -255,12 +258,12 @@ export function getFingerprintStyles(): string {
 
     .wf-tab:hover {
       color: var(--fg);
-      background: rgba(255, 255, 255, 0.04);
+      background: color-mix(in srgb, var(--fg) 4%, transparent);
     }
 
     .wf-tab.active {
       color: var(--fg);
-      background: rgba(255, 255, 255, 0.08);
+      background: color-mix(in srgb, var(--fg) 8%, transparent);
       border-color: var(--border);
     }
 
@@ -283,13 +286,13 @@ export function getFingerprintStyles(): string {
 
     .wf-filter-pill:hover {
       color: var(--fg);
-      background: rgba(255, 255, 255, 0.04);
+      background: color-mix(in srgb, var(--fg) 4%, transparent);
     }
 
     .wf-filter-pill.active {
-      background: rgba(255, 255, 255, 0.1);
+      background: color-mix(in srgb, var(--fg) 10%, transparent);
       color: var(--fg);
-      border-color: rgba(255, 255, 255, 0.2);
+      border-color: color-mix(in srgb, var(--fg) 20%, transparent);
     }
 
     .wf-search-input {
@@ -366,7 +369,7 @@ export function getFingerprintStyles(): string {
 
     .fp-sidebar-toggle-btn:hover {
       color: var(--fg);
-      background: rgba(255, 255, 255, 0.08);
+      background: color-mix(in srgb, var(--fg) 8%, transparent);
     }
 
     .fp-turn-item {
@@ -384,7 +387,7 @@ export function getFingerprintStyles(): string {
     }
 
     .fp-turn-item:hover {
-      background: rgba(255, 255, 255, 0.04);
+      background: color-mix(in srgb, var(--fg) 4%, transparent);
       color: var(--fg);
     }
 
@@ -399,7 +402,7 @@ export function getFingerprintStyles(): string {
       font-size: 10px;
       padding: 1px 6px;
       border-radius: 10px;
-      background: rgba(255, 255, 255, 0.06);
+      background: color-mix(in srgb, var(--fg) 6%, transparent);
       color: var(--muted);
     }
 
@@ -407,9 +410,9 @@ export function getFingerprintStyles(): string {
     .fp-canvas-container {
       flex: 1;
       position: relative;
-      background: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+      background: radial-gradient(color-mix(in srgb, var(--fg) 5%, transparent) 1px, transparent 1px);
       background-size: 20px 20px;
-      background-color: #121214;
+      background-color: var(--canvas-bg);
       overflow: hidden;
       cursor: grab;
       user-select: none;
@@ -438,7 +441,7 @@ export function getFingerprintStyles(): string {
       width: 48px;
       height: 48px;
       border-radius: 50%;
-      background: rgba(255, 255, 255, 0.04);
+      background: color-mix(in srgb, var(--fg) 4%, transparent);
       border: 1px solid var(--border);
       display: flex;
       align-items: center;
@@ -502,7 +505,7 @@ export function getFingerprintStyles(): string {
     }
 
     .fp-canvas-btn:hover {
-      background: rgba(255, 255, 255, 0.08);
+      background: color-mix(in srgb, var(--fg) 8%, transparent);
       color: var(--fg);
     }
 
@@ -566,14 +569,13 @@ export function getFingerprintStyles(): string {
     .fp-node-tag.write { color: var(--green); }
     .fp-node-tag.shell { color: var(--amber); }
     .fp-node-tag.subagent { color: #f97316; }
-    .fp-node-tag.security { color: var(--red); }
 
     .fp-node-badge {
       font-family: var(--font-mono);
       font-size: 10px;
       padding: 1px 5px;
       border-radius: 4px;
-      background: rgba(255, 255, 255, 0.05);
+      background: color-mix(in srgb, var(--fg) 5%, transparent);
       color: var(--muted);
     }
 
@@ -597,40 +599,6 @@ export function getFingerprintStyles(): string {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-    }
-
-    /* Direct File Action Row in Card */
-    .fp-node-file-link {
-      margin-top: 6px;
-      padding-top: 6px;
-      border-top: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-size: 11px;
-    }
-
-    .fp-file-path-text {
-      font-family: var(--font-mono);
-      color: var(--cyan);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 170px;
-      text-decoration: underline;
-      cursor: pointer;
-    }
-
-    .fp-file-path-text:hover {
-      color: #7dd3fc;
-    }
-
-    .fp-file-open-icon {
-      font-size: 10px;
-      color: var(--muted);
-      display: flex;
-      align-items: center;
-      gap: 3px;
     }
 
     /* Right Inspector Drawer */
@@ -742,47 +710,6 @@ export function getFingerprintStyles(): string {
       border-color: var(--cyan);
     }
 
-    /* Diff Lines Box */
-    .fp-diff-container {
-      background: #141416;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      font-family: var(--font-mono);
-      font-size: 11px;
-      overflow-x: auto;
-      margin-top: 6px;
-    }
-
-    .fp-diff-row {
-      display: flex;
-      padding: 1px 8px;
-      gap: 8px;
-      white-space: pre;
-    }
-
-    .fp-diff-row.add { background: rgba(63, 185, 80, 0.15); color: #4ade80; }
-    .fp-diff-row.del { background: rgba(248, 81, 73, 0.15); color: #f87171; }
-    .fp-diff-row.ctx { color: var(--muted); }
-
-    .fp-diff-num {
-      width: 22px;
-      text-align: right;
-      color: var(--muted);
-      opacity: 0.5;
-    }
-
-    /* Terminal Command Box */
-    .fp-term-box {
-      background: #141416;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 8px;
-      font-family: var(--font-mono);
-      font-size: 11px;
-      color: var(--amber);
-      line-height: 1.4;
-    }
-
     /* Subagent Drilldown Breadcrumb Bar */
     .fp-subagent-breadcrumb {
       display: flex;
@@ -829,7 +756,7 @@ export function getFingerprintStyles(): string {
     .fp-breadcrumb-back-btn:hover {
       background: rgba(188, 140, 255, 0.25);
       border-color: var(--purple);
-      color: #ffffff;
+      color: var(--fg);
       transform: translateX(-1px);
     }
 
@@ -865,7 +792,7 @@ export function getFingerprintStyles(): string {
       font-size: 10.5px;
       font-family: var(--font-mono);
       color: var(--muted);
-      background: rgba(255, 255, 255, 0.05);
+      background: color-mix(in srgb, var(--fg) 5%, transparent);
       padding: 1px 6px;
       border-radius: 4px;
       border: 1px solid var(--border);
@@ -909,7 +836,7 @@ export function getFingerprintStyles(): string {
     .fp-subagent-actions-badge {
       font-size: 10.5px;
       color: var(--muted);
-      background: rgba(255, 255, 255, 0.05);
+      background: color-mix(in srgb, var(--fg) 5%, transparent);
       padding: 2px 8px;
       border-radius: 10px;
       border: 1px solid var(--border);
@@ -918,7 +845,7 @@ export function getFingerprintStyles(): string {
     /* Subagent Card & Drilldown Button */
     .fp-node-card.subagent {
       border-color: rgba(188, 140, 255, 0.35);
-      background: linear-gradient(180deg, rgba(30, 30, 30, 0.95) 0%, rgba(188, 140, 255, 0.05) 100%);
+      background: linear-gradient(180deg, var(--card-bg) 0%, color-mix(in srgb, var(--card-bg) 92%, var(--purple)) 100%);
     }
 
     .fp-node-card.subagent:hover {
@@ -948,7 +875,7 @@ export function getFingerprintStyles(): string {
     .fp-card-drilldown-btn:hover {
       background: rgba(188, 140, 255, 0.22);
       border-color: var(--purple);
-      color: #ffffff;
+      color: var(--fg);
       box-shadow: 0 2px 8px rgba(188, 140, 255, 0.2);
     }
 
@@ -962,7 +889,7 @@ export function getFingerprintStyles(): string {
       padding: 8px 12px;
       background: linear-gradient(90deg, rgba(188, 140, 255, 0.25) 0%, rgba(56, 189, 248, 0.20) 100%);
       border: 1px solid rgba(188, 140, 255, 0.45);
-      color: #ffffff;
+      color: var(--fg);
       border-radius: var(--radius);
       font-size: 12px;
       font-weight: 600;
@@ -994,7 +921,7 @@ export function getFingerprintStyles(): string {
       justify-content: space-between;
       gap: 8px;
       padding: 5px 8px;
-      background: rgba(255, 255, 255, 0.03);
+      background: color-mix(in srgb, var(--fg) 3%, transparent);
       border: 1px solid var(--border);
       border-radius: 4px;
       font-size: 11px;
@@ -1003,7 +930,7 @@ export function getFingerprintStyles(): string {
     }
 
     .fp-subagent-tool-row:hover {
-      background: rgba(255, 255, 255, 0.07);
+      background: color-mix(in srgb, var(--fg) 7%, transparent);
       border-color: var(--border-hover);
     }
 
@@ -1019,14 +946,6 @@ export function getFingerprintStyles(): string {
       text-overflow: ellipsis;
       white-space: nowrap;
       flex: 1;
-    }
-
-    .fp-subagent-tool-tag {
-      font-size: 9.5px;
-      padding: 1px 5px;
-      border-radius: 3px;
-      font-weight: 600;
-      text-transform: uppercase;
     }
 
     /* Sidebar Subagents Section */
@@ -1063,12 +982,6 @@ export function getFingerprintStyles(): string {
       background: rgba(188, 140, 255, 0.12);
     }
 
-    .fp-subagent-item.active {
-      background: rgba(188, 140, 255, 0.22);
-      border-left: 2px solid var(--purple);
-      font-weight: 600;
-    }
-
     .fp-subagent-item-left {
       display: flex;
       align-items: center;
@@ -1076,6 +989,93 @@ export function getFingerprintStyles(): string {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+  
+    /* Status, metrics and node types for the turn-based layout */
+    .wf-live-dot { background: var(--muted); box-shadow: none; }
+    .wf-live-status.live { color: var(--green); }
+    .wf-live-status.live .wf-live-dot { background: var(--green); box-shadow: 0 0 8px rgba(63, 185, 80, 0.6); animation: fpPulse 1.6s ease-in-out infinite; }
+    @keyframes fpPulse { 50% { opacity: 0.4; } }
+    .wf-metric-value.red { color: var(--red); }
+    .wf-metric-value.muted { color: var(--muted); }
+    .fp-node-tag.explore, .fp-node-tag.web { color: var(--cyan); }
+    .fp-node-tag.plan, .fp-node-tag.coord, .fp-node-tag.other { color: var(--muted); }
+    .fp-node-badge.amber { color: var(--amber); background: rgba(210, 153, 34, 0.14); }
+    .fp-node-card.hub { border-color: color-mix(in srgb, var(--purple) 45%, var(--border)); }
+    .fp-node-card.sensitive { border-style: dashed; }
+    .fp-node-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .fp-node-sub.prompt { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: var(--fg); opacity: 0.85; }
+    .fp-node-meta { margin-top: 6px; font: 10.5px var(--font-mono); color: var(--muted); }
+    .fp-node-actions { display: flex; align-items: center; gap: 6px; margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--border); }
+    .fp-node-open {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--cyan);
+      font: inherit;
+      font-size: 10.5px;
+      padding: 1px 7px;
+      cursor: pointer;
+    }
+    .fp-node-open:hover { border-color: var(--cyan); }
+    .fp-node-flag { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--amber); }
+    .fp-node-card .fp-card-drilldown-btn { margin: 0; }
+
+    /* Turn list */
+    .fp-turn-item { flex-direction: column; align-items: stretch; gap: 3px; }
+    .fp-turn-item.fp-turn-all { flex-direction: row; align-items: center; }
+    .fp-turn-item:focus-visible, .fp-subagent-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .fp-turn-list { overflow-y: auto; flex: 1; min-height: 0; }
+    .fp-turn-main { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+    .fp-turn-num { font: 10.5px var(--font-mono); color: var(--muted); flex: none; }
+    .fp-turn-item.active .fp-turn-num { color: var(--accent); }
+    .fp-turn-prompt { color: var(--fg); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.35; }
+    .fp-turn-meta { display: flex; flex-wrap: wrap; gap: 0 8px; padding-left: 26px; font-size: 10.5px; color: var(--muted); }
+    .fp-turn-status { font-weight: 600; }
+    .fp-turn-status.error { color: var(--red); }
+    .fp-turn-status.running { color: var(--amber); }
+    .fp-subagent-item-right { display: flex; align-items: center; gap: 4px; }
+
+    /* Empty state and inspector */
+    .fp-empty-title { font-weight: 600; color: var(--fg); margin-bottom: 4px; }
+    .fp-empty-text { font-size: 11.5px; }
+    .fp-insp-placeholder { color: var(--muted); font-size: 12px; margin-top: 20px; text-align: center; }
+    .fp-box.amber { border-color: color-mix(in srgb, var(--amber) 45%, var(--border)); }
+    .fp-box.amber .fp-box-label { color: var(--amber); }
+    .fp-box.red { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+    .fp-box.red .fp-box-label { color: var(--red); }
+    .fp-box p { font-size: 11.5px; line-height: 1.45; }
+    .fp-box p + p { margin-top: 6px; }
+    .fp-muted { color: var(--muted); }
+    .fp-prewrap { white-space: pre-wrap; word-break: break-word; user-select: text; }
+    .fp-call + .fp-call { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+    .fp-call-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+    .fp-call-title { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fp-call-num { font: 10.5px var(--font-mono); color: var(--muted); margin-right: 6px; }
+    .fp-call-target { font: 11px var(--font-mono); color: var(--cyan); word-break: break-all; margin-bottom: 6px; user-select: text; }
+    .fp-term-line { font: 11px var(--font-mono); color: var(--cyan); background: var(--code-bg); border-radius: 4px; padding: 5px 7px; margin-bottom: 6px; word-break: break-all; user-select: text; }
+    .fp-call-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 6px 0 4px; }
+    .fp-output pre, .fp-call-args pre {
+      font: 11px/1.45 var(--font-mono);
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 7px 8px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow: auto;
+      max-height: 420px;
+      user-select: text;
+    }
+    .fp-output.collapsed pre { max-height: 132px; overflow: hidden; }
+    .fp-output-toggle { margin-top: 4px; background: none; border: 0; color: var(--accent); font: inherit; font-size: 11px; cursor: pointer; padding: 0; }
+    .fp-call-args { margin-top: 6px; font-size: 11px; color: var(--muted); }
+    .fp-call-args summary { cursor: pointer; }
+    .fp-call-args pre { margin-top: 4px; max-height: 220px; }
+    .fp-btn-open-file { margin-top: 8px; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
     }
   `;
 }
