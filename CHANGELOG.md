@@ -2,7 +2,7 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
-## [Unreleased]
+## [0.2.21] — 2026-10-18
 
 ### Added
 - **15 more app connectors**, for 65 in total: Context7, Tavily, Firecrawl, CircleCI, Heroku, Pulumi, PlanetScale, ClickHouse, Clerk, WorkOS, LaunchDarkly, Better Stack, Ahrefs, Make and Calendly. Each is the vendor's official remote MCP server and connects with one browser sign-in.

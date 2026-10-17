@@ -2,7 +2,7 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
-## [Unreleased]
+## [0.2.21] — 2026-10-18
 
 ### Added
 - **15 more apps in Discover**, for 65 in total: Context7, Tavily, Firecrawl, CircleCI, Heroku, Pulumi, PlanetScale, ClickHouse, Clerk, WorkOS, LaunchDarkly, Better Stack, Ahrefs, Make and Calendly. CircleCI, PlanetScale, ClickHouse, Pulumi, Clerk, Make, Calendly and Better Stack show their brand icons.
