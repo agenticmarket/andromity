@@ -2,6 +2,18 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [0.2.21] — 2026-10-18
+
+### Added
+- **15 more apps in Discover**, for 65 in total: Context7, Tavily, Firecrawl, CircleCI, Heroku, Pulumi, PlanetScale, ClickHouse, Clerk, WorkOS, LaunchDarkly, Better Stack, Ahrefs, Make and Calendly. CircleCI, PlanetScale, ClickHouse, Pulumi, Clerk, Make, Calendly and Better Stack show their brand icons.
+- **AI disclosure on posts.** Text the agent posts for you through app connectors or `gh` (comments, descriptions, messages, wiki pages) ends with "Written by Andromity, an AI agent, on behalf of the user who posted this."
+- **`andromity.includeAssistedBy`** (off by default) adds `Assisted-by: Andromity/<version> (<provider>/<model>)` to commits the agent makes.
+- **Rate and share.** **Andromity: Rate & Review Andromity** opens the review page (VS Code Marketplace, or Open VSX in Cursor, Windsurf and VSCodium). **Andromity: Share Andromity with Developers** copies a link or opens a post on X or LinkedIn. Regular users see one notification asking for a rating after a few days of use, and a later one about sharing. Each has **Don't Ask Again**, comes at most once a day and stops after a few dismissals.
+
+### Changed
+- The extension is now listed as "Andromity: Free AI Coding Agent for VS Code", with a description and search keywords that say it is free and open source and an alternative to Cline, Kilo Code, Claude Code and Cursor. It also names the models you can use with it: DeepSeek V4, GLM 5.3, Kimi K3, Qwen, Claude Opus 5.5, GPT-6, Gemini 4 and Grok.
+- The "Enjoying Andromity?" notification that appeared after your third finished turn is gone.
+
 ## [0.2.20] — 2026-10-15
 
 ### Added

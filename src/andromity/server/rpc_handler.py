@@ -2078,6 +2078,7 @@ class JsonRpcHandler:
             "sound_attention": config.get("default", "sound_attention", True),
             "telemetry": config.get("default", "telemetry", True),
             "include_co_author": config.get("default", "include_co_author", True),
+            "include_assisted_by": config.get("default", "include_assisted_by", False),
             "is_trusted": config.is_trusted(params.get("project_path") or str(Path.cwd())) if params else False,
             "pinned_models": config.get_pinned_models(),
         }

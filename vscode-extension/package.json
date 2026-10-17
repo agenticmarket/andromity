@@ -1,8 +1,8 @@
 {
   "name": "andromity-agent",
-  "displayName": "Andromity AI Coding Agent for VS Code",
-  "description": "Open-source AI coding agent with BYOK, local Ollama, MCP tools and subagents. Review plans and diffs, fix bugs, generate tests and undo changes in VS Code.",
-  "version": "0.2.20",
+  "displayName": "Andromity: Free AI Coding Agent for VS Code",
+  "description": "Free, open-source AI coding agent and an alternative to Cline, Kilo Code, Claude Code and Cursor that shows exactly what it did: live Waterfall, Fingerprint and Blast radius of every model call, file and command. Use DeepSeek V4, GLM 5.3, Kimi K3, Qwen, Claude Opus 5.5, GPT-6, Gemini 4 or Grok with your own keys, OpenRouter or free local Ollama. MCP, subagents, diffs and undo.",
+  "version": "0.2.21",
   "publisher": "agenticmarket",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -27,6 +27,7 @@
         "andromity.ollamaHost",
         "andromity.permissionMode",
         "andromity.includeCoAuthor",
+        "andromity.includeAssistedBy",
         "andromity.wallpaper.rippleIntensity"
       ]
     }
@@ -41,32 +42,34 @@
   ],
   "keywords": [
     "ai coding agent",
+    "free ai coding agent",
+    "free coding agent",
+    "free ai agent",
     "coding agent",
     "ai agent",
     "autonomous coding agent",
-    "ai assistant",
+    "open source",
+    "cline alternative",
+    "kilo code alternative",
+    "claude code alternative",
+    "cursor alternative",
+    "copilot alternative",
+    "roo code alternative",
+    "codex alternative",
     "byok",
     "ollama",
-    "local ai",
+    "ollama coding agent",
     "mcp",
-    "model context protocol",
-    "claude",
-    "openai",
-    "gemini",
-    "gpt",
-    "deepseek",
     "openrouter",
-    "subagents",
-    "multi agent",
-    "pair programming",
-    "code review",
-    "unit tests",
-    "refactoring",
-    "debugging",
-    "task planner",
-    "waterfall",
-    "jupyter",
-    "notebook"
+    "deepseek v4",
+    "glm 5.3",
+    "kimi k3",
+    "qwen coder",
+    "mimo",
+    "claude opus 5.5",
+    "gpt-6",
+    "gemini 4",
+    "grok 4.7"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -179,6 +182,18 @@
         "title": "About & System Diagnostics",
         "category": "Andromity",
         "icon": "$(info)"
+      },
+      {
+        "command": "andromity.rateExtension",
+        "title": "Rate & Review Andromity",
+        "category": "Andromity",
+        "icon": "$(star-empty)"
+      },
+      {
+        "command": "andromity.shareExtension",
+        "title": "Share Andromity with Developers",
+        "category": "Andromity",
+        "icon": "$(link-external)"
       },
       {
         "command": "andromity.openPersonalisation",
@@ -662,6 +677,11 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically append 'Co-authored-by: Andromity <333054755+andromity-bot@users.noreply.github.com>' to AI-generated commit messages and to commits the agent creates."
+        },
+        "andromity.includeAssistedBy": {
+          "type": "boolean",
+          "default": false,
+          "description": "Add an 'Assisted-by: Andromity/<version> (<provider>/<model>)' trailer to commits the agent creates, naming the model that wrote the change."
         },
         "andromity.autoOpenSidebar": {
           "type": "string",

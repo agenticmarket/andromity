@@ -2,6 +2,7 @@ import { ingestTelemetry } from './ingest.js';
 import { buildStatsScope, measurementQueries } from './statsScope.js';
 import { cachedStats } from './statsCache.js';
 import { sessionSummaries, featureSummaries } from './metricSummaries.js';
+import { handleBlogRequest } from './blog.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -38,6 +39,15 @@ export default {
     }
 
     const url = new URL(request.url);
+
+    const adminKey = request.headers.get('x-stats-key') ||
+                     request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
+    const blogResponse = await handleBlogRequest(request, env, {
+      url,
+      headers: securityHeaders,
+      isAdmin: Boolean(env.ADMIN_SECRET) && timingSafeMatch(adminKey, env.ADMIN_SECRET),
+    });
+    if (blogResponse) return blogResponse;
 
     if (request.method === 'GET') {
       if (url.pathname === '/api/stats' || url.pathname === '/stats') {

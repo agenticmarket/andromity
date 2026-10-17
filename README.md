@@ -3,9 +3,9 @@
 
   # Andromity — AI Coding Agent for VS Code & Terminal
 
-  **Trust-governed, BYOK, autonomous coding agent with subagents, live plans, native diffs & one-click rollback.**
+  **The open-source coding agent that shows you exactly what it did. Waterfall, Fingerprint and Blast radius trace every model call, file read, edit and command. Bring your own key.**
 
-  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.20-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.21-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white)](https://discord.gg/taPJSNy4)
   [![PyPI](https://img.shields.io/pypi/v/andromity)](https://pypi.org/project/andromity/)
   [![GitHub Stars](https://img.shields.io/github/stars/agenticmarket/andromity?style=social)](https://github.com/agenticmarket/andromity)
@@ -24,7 +24,7 @@
 
 ---
 
-**Andromity** is an open-source (MIT), BYOK (Bring Your Own Key) autonomous AI coding agent for VS Code and the terminal. Use it inside VS Code with the extension, or run it as a standalone terminal workspace. It plans complex tasks, manages parallel subagents, shows live step-by-step blueprints, lets you review diffs before applying, and gives you instant one-click rollback.
+**Andromity** is an open-source (MIT), BYOK (Bring Your Own Key) autonomous AI coding agent for VS Code and the terminal. Most coding agents edit dozens of files and run commands while you watch a spinner. Andromity records the whole run: a live **Waterfall** of every model call, tool call and subagent; a **Fingerprint** of what the agent read, changed, ran and delegated in each turn; and a **Blast radius** map of everything a turn touched, with sensitive files flagged. It also plans complex tasks, runs parallel subagents, lets you review diffs before applying, and rolls back a turn with one click.
 
 Connect your preferred AI provider (**Anthropic Claude, OpenAI, Google Gemini, DeepSeek, Groq, OpenRouter, NVIDIA NIM**, or any OpenAI-compatible endpoint) or run models **locally and free with Ollama**.
 
@@ -66,15 +66,24 @@ pipx install andromity
 
 ## ✨ Key Features
 
+### 🔎 See Exactly What Your Agent Did
+
+Three views in VS Code, built from the same session record:
+
+- **🌊 Waterfall.** A live timeline of reasoning turns, model calls, terminal commands, file operations, web queries and parallel subagents, with the timing and details of every span. Open it from the waterfall button in the chat toolbar or with **Andromity: Waterfall Trace**.
+- **🧬 Fingerprint.** What the agent read, changed, ran and delegated, turn by turn: agent time, files changed, files read, commands run, and sensitive files accessed or blocked. Filter by changed, read, shell, subagents or sensitive; open any file at the line the agent touched; drill into a subagent's own run; export the session as JSON.
+- **💥 Blast radius.** Each turn drawn as a hub with everything it touched around it, so a turn that edited 3 files looks different from one that edited 30 and ran a migration. Paths matching the agent's sensitive-path rules (`.env` files, SSH keys, cloud credentials, files named like secrets or tokens) are flagged.
+
+Open Fingerprint and Blast radius from the Waterfall panel or with **Andromity: Fingerprint Trace & Blast Radius**.
+
+---
+
 <div align="center">
   <img src="https://cdn.agenticmarket.dev/andromity/git/planning.webp" alt="Live Task Planner & Blueprints" width="100%" />
 </div>
 
 ### 📝 Live Task Planner & Blueprints
 Andromity analyzes your codebase and writes a step-by-step implementation plan. In SAFE and TRUST modes it waits for your approval before editing; review the plan, approve it, or send feedback. FULL and YOLO modes approve plans automatically.
-
-### 🌊 Live Execution Waterfall Profiler
-Inspect agent reasoning turns, tool execution latencies (bash commands, file operations, web queries), and parallel subagents in real time on an interactive timeline inside VS Code. Open it from the waterfall button in the chat toolbar or with the **Andromity: Waterfall Trace** command.
 
 ---
 
@@ -169,7 +178,7 @@ Switch between all sessions with `Ctrl+O`. Every session has its own context, hi
 - `reviewer` — read-only, produces findings
 - `planner` — plans only, touches nothing
 
-**App connectors.** Connect Notion, Linear, Jira & Confluence, Gmail, Google Calendar, Google Drive, Stripe, Sentry, Supabase, Neon and 40 more apps in one click. Each connector is the app's own official remote MCP server: you sign in once in your browser, and the app is available in every trusted project. GitHub, Airtable, Render and PagerDuty connect with an access token instead; Andromity checks the token before saving it and keeps it in the encrypted token store. Open `/settings` → **MCP** → **Connect an app** in the terminal, or **MCP Servers** → **Discover** in VS Code. Browse every app and its setup guide at [andromity.agenticmarket.dev/integrations](https://andromity.agenticmarket.dev/integrations). Gmail, Calendar and Drive are in Google's Workspace Developer Preview and need your own Google OAuth client, because Google doesn't let apps register themselves.
+**App connectors.** Connect Notion, Linear, Jira & Confluence, Gmail, Google Calendar, Google Drive, Stripe, Sentry, Supabase, Neon and 55 more apps in one click. Each connector is the app's own official remote MCP server: you sign in once in your browser, and the app is available in every trusted project. GitHub, Airtable, Render and PagerDuty connect with an access token instead; Andromity checks the token before saving it and keeps it in the encrypted token store. Open `/settings` → **MCP** → **Connect an app** in the terminal, or **MCP Servers** → **Discover** in VS Code. Browse every app and its setup guide at [andromity.agenticmarket.dev/integrations](https://andromity.agenticmarket.dev/integrations). Gmail, Calendar and Drive are in Google's Workspace Developer Preview and need your own Google OAuth client, because Google doesn't let apps register themselves.
 
 **MCP support.** Add any other server in `.andromity/mcp.json` or `.vscode/mcp.json` in your project, or `~/.andromity/mcp.json` for all projects. Tool schemas load on demand, which keeps token use down when many tools are connected.
 

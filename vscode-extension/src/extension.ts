@@ -14,6 +14,7 @@ import { ChangesReviewPanel } from "./panels/ChangesReviewPanel.js";
 import { PythonBridge, formatTimestamp } from "./server/PythonBridge.js";
 import { RpcClient } from "./server/RpcClient.js";
 import { recordFeatureUse, setFeatureUsageClient, setFeatureUsageGate } from "./telemetry/featureUsage.js";
+import { FeedbackNotifications } from "./engagement/feedbackNotifications.js";
 
 let pythonBridge: PythonBridge | null = null;
 let statusBarItem: vscode.StatusBarItem;
@@ -30,18 +31,25 @@ function markEngineStartFailed() {
   }
 }
 
-/** Mirror an explicitly configured `andromity.includeCoAuthor` into the daemon's
+const COMMIT_TRAILER_SETTINGS: Record<string, string> = {
+  includeCoAuthor: "include_co_author",
+  includeAssistedBy: "include_assisted_by",
+};
+
+/** Mirror explicitly configured commit-trailer settings into the daemon's
  *  config.toml so commits made by the agent itself honour the same choice.
  *  Unset values are left alone so a choice made in the TUI is not overwritten. */
-function syncCoAuthorSetting(client: RpcClient | null | undefined) {
+function syncCommitTrailerSettings(client: RpcClient | null | undefined) {
   if (!client) return;
-  const inspected = vscode.workspace.getConfiguration("andromity").inspect<boolean>("includeCoAuthor");
-  // This writes the global config.toml, so an untrusted repo's value must not reach it.
-  const value = vscode.workspace.isTrusted === false
-    ? inspected?.globalValue
-    : inspected?.workspaceFolderValue ?? inspected?.workspaceValue ?? inspected?.globalValue;
-  if (value === undefined) return;
-  void client.call("config.set", { section: "default", key: "include_co_author", value }).catch(() => {});
+  for (const [setting, key] of Object.entries(COMMIT_TRAILER_SETTINGS)) {
+    const inspected = vscode.workspace.getConfiguration("andromity").inspect<boolean>(setting);
+    // This writes the global config.toml, so an untrusted repo's value must not reach it.
+    const value = vscode.workspace.isTrusted === false
+      ? inspected?.globalValue
+      : inspected?.workspaceFolderValue ?? inspected?.workspaceValue ?? inspected?.globalValue;
+    if (value === undefined) continue;
+    void client.call("config.set", { section: "default", key, value }).catch(() => {});
+  }
 }
 
 /** Mirror `andromity.ollamaHost` into config.toml's Ollama connection so the engine
@@ -186,6 +194,7 @@ export async function activate(context: vscode.ExtensionContext) {
   SettingsPanel.chatProvider = chatProvider;
   const planProvider = new PlanViewProvider(context.extensionUri);
   chatProvider.setPlanViewProvider(planProvider);
+  const feedbackNotifications = new FeedbackNotifications(context);
 
   // Plan approve/reject flows through the chat session + queue (TUI parity).
   planProvider.setPlanActionHandler(async (approved, feedback, sessionId) => {
@@ -300,7 +309,7 @@ export async function activate(context: vscode.ExtensionContext) {
     connectedPreviously = true;
     chatProvider.setRpcClient(rpcClient);
     planProvider.setRpcClient(rpcClient);
-    syncCoAuthorSetting(rpcClient);
+    syncCommitTrailerSettings(rpcClient);
     syncOllamaHostSetting(rpcClient);
     void warnIfConfigUnreadable(rpcClient);
     SettingsPanel.schedulePrewarm(rpcClient);
@@ -360,23 +369,8 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     });
 
-    rpcClient.on("agent/done", async () => {
-      const feedbackKey = "andromity.feedbackPromptShown";
-      const counterKey = "andromity.completedTurnsCount";
-      if (context.globalState.get<boolean>(feedbackKey, false)) return;
-      const count = (context.globalState.get<number>(counterKey, 0) || 0) + 1;
-      await context.globalState.update(counterKey, count);
-      if (count >= 3) {
-        await context.globalState.update(feedbackKey, true);
-        const choice = await vscode.window.showInformationMessage(
-          "Enjoying Andromity? Share feedback or report issues on GitHub.",
-          "Open GitHub Issues",
-          "Dismiss"
-        );
-        if (choice === "Open GitHub Issues") {
-          vscode.env.openExternal(vscode.Uri.parse("https://github.com/agenticmarket/andromity/issues"));
-        }
-      }
+    rpcClient.on("agent/done", () => {
+      void feedbackNotifications.onTurnCompleted().catch(() => {});
     });
 
     log("[Andromity] Python daemon client wired successfully.");
@@ -441,8 +435,8 @@ export async function activate(context: vscode.ExtensionContext) {
         } catch {}
       }
 
-      if (e.affectsConfiguration("andromity.includeCoAuthor")) {
-        syncCoAuthorSetting(pythonBridge?.getClient());
+      if (e.affectsConfiguration("andromity.includeCoAuthor") || e.affectsConfiguration("andromity.includeAssistedBy")) {
+        syncCommitTrailerSettings(pythonBridge?.getClient());
       }
 
       if (e.affectsConfiguration("andromity.ollamaHost")) {
@@ -1016,6 +1010,10 @@ export async function activate(context: vscode.ExtensionContext) {
         () => chatProvider.refreshConfig()
       );
     }),
+
+    registerTrackedCommand("andromity.rateExtension", () => feedbackNotifications.rate()),
+
+    registerTrackedCommand("andromity.shareExtension", () => feedbackNotifications.share()),
 
     registerTrackedCommand("andromity.restartServer", async () => {
       if (pythonBridge) {
