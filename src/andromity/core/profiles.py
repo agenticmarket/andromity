@@ -10,15 +10,44 @@ _git_branch_cache: str | None = None
 
 CO_AUTHOR_EMAIL = "333054755+andromity-bot@users.noreply.github.com"
 CO_AUTHOR_TRAILER = f"Co-authored-by: Andromity <{CO_AUTHOR_EMAIL}>"
+# EU AI Act Art. 50(1): an agent acting for a user must tell other people they are reading AI output.
+AI_DISCLOSURE = "_Written by Andromity, an AI agent, on behalf of the user who posted this._"
 
 
-def _co_author_rule() -> str:
-    if not config.get("default", "include_co_author", True):
+def assisted_by_trailer(model_id: str = "") -> str:
+    from andromity import __version__
+    return f"Assisted-by: Andromity/{__version__} ({model_id})" if model_id else f"Assisted-by: Andromity/{__version__}"
+
+
+def _co_author_rule(model_id: str = "") -> str:
+    trailers = []
+    if config.get("default", "include_co_author", True):
+        trailers.append(CO_AUTHOR_TRAILER)
+    if config.get("default", "include_assisted_by", False):
+        trailers.append(assisted_by_trailer(model_id))
+    if not trailers:
         return ""
+    if len(trailers) == 1:
+        return (
+            f"- When you create a git commit, end its message with the trailer `{trailers[0]}` "
+            f"as its own final paragraph (e.g. pass it as a separate `-m` argument). "
+            f"Skip it only if the message already contains it or the user asks you not to add it.\n"
+        )
+    listed = " and ".join(f"`{t}`" for t in trailers)
     return (
-        f"- When you create a git commit, end its message with the trailer `{CO_AUTHOR_TRAILER}` "
-        f"as its own final paragraph (e.g. pass it as a separate `-m` argument). "
-        f"Skip it only if the message already contains it or the user asks you not to add it.\n"
+        f"- When you create a git commit, end its message with the trailers {listed}, one per line, "
+        f"as its own final paragraph (e.g. pass them as one separate `-m` argument). "
+        f"Skip a trailer only if the message already contains it or the user asks you not to add it.\n"
+    )
+
+
+def _ai_disclosure_rule() -> str:
+    return (
+        "- When you post text that other people will read on the user's behalf (issue, pull request or review "
+        "comments, issue or pull request descriptions, chat or support messages, emails, calendar invites, "
+        "wiki, Notion or Confluence pages) through an MCP tool or a CLI such as `gh`, end it with the line "
+        f"`{AI_DISCLOSURE}`. Skip it for repository files, code, commit messages, and drafts you hand back "
+        "to the user to send themselves.\n"
     )
 
 
@@ -89,7 +118,7 @@ PROFILES = {
 
 
 
-def get_system_prompt(profile: str, project_path: str | None = None) -> str:
+def get_system_prompt(profile: str, project_path: str | None = None, model_id: str = "") -> str:
     cwd = Path(project_path).resolve() if project_path else Path.cwd()
     os_name = platform.system()
     shell = get_shell()
@@ -135,8 +164,8 @@ def get_system_prompt(profile: str, project_path: str | None = None) -> str:
 - NEVER run destructive commands or overwrite files without verifying current content first via `read_file`.
 - NEVER guess or generate non-programming URLs. Use only user-provided or local URLs.
 - NEVER commit changes or push to git unless explicitly instructed by the user.
-{_co_author_rule()}- Never log, expose, or commit secrets, tokens, or credentials.
-- If a tool fails with an error, diagnose and explain it clearly; do not silently loop or retry failed actions repeatedly.
+{_co_author_rule(model_id)}- Never log, expose, or commit secrets, tokens, or credentials.
+{_ai_disclosure_rule()}- If a tool fails with an error, diagnose and explain it clearly; do not silently loop or retry failed actions repeatedly.
 
 # Code Quality & Conventions
 - Analyze user request carefully to understand the intent and scope of the task.

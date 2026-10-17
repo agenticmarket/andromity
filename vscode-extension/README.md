@@ -3,7 +3,7 @@
 
   # Andromity — AI Coding Agent for VS Code
 
-  **Open-source AI coding agent for VS Code and the terminal. Bring your own API key or run local models with Ollama; folder trust and permission modes keep you in control.**
+  **The open-source coding agent that shows you exactly what it did. Waterfall, Fingerprint and Blast radius trace every model call, file read, edit and command. Bring your own API key or run local models with Ollama.**
 
   [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.20-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![VS Code](https://img.shields.io/badge/VS_Code-%5E1.85.0-blue?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
@@ -24,6 +24,18 @@ Connect your preferred AI provider (**Anthropic Claude, OpenAI, Google Gemini, D
 <div align="center">
   <img src="https://cdn.agenticmarket.dev/andromity/git/with_waterfall.webp?v=0.2.8" alt="Andromity AI Coding Agent with Live Waterfall Trace in VS Code" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
 </div>
+
+---
+
+## 🔎 See Exactly What the Agent Did
+
+Agents edit dozens of files and run commands faster than you can follow. Andromity records the whole run and gives you three views of it:
+
+- **🌊 Waterfall.** A live timeline of reasoning turns, model calls, terminal commands, file edits, web searches and parallel subagents. Inspect each span's timing and details. Click the 🌊 **Waterfall** button in the chat header, or run **Andromity: Waterfall Trace**.
+- **🧬 Fingerprint.** What the agent read, changed, ran and delegated, turn by turn: agent time, files changed, files read, commands run, and sensitive files accessed or blocked. Filter by changed, read, shell, subagents or sensitive; open any file at the line the agent touched; drill into a subagent's run; export the session as JSON.
+- **💥 Blast radius.** Each turn drawn as a hub with everything it touched around it, so you can see at a glance how far a change reached. Paths matching the agent's sensitive-path rules (`.env` files, SSH keys, cloud credentials, files named like secrets or tokens) are flagged.
+
+Open Fingerprint and Blast radius from the Waterfall panel, or run **Andromity: Fingerprint Trace & Blast Radius**.
 
 ---
 
@@ -112,11 +124,8 @@ Mention **@andromity** in VS Code's Chat view to ask the Andromity agent to expl
 ### ✍️ 10. AI Git Commit Messages
 Click the **Andromity icon** in the Source Control panel title bar to generate a commit message from your changes.
 
-### 🌊 11. Live Execution Waterfall & Profiler
-See what the agent is doing in real time.
-- Click the 🌊 **Waterfall** button in the chat header, or run **Andromity: Waterfall Trace** from the Command Palette.
-- Follow reasoning turns, terminal commands, file edits, web searches, and parallel subagents on a timeline.
-- Inspect each span's timing and details.
+### 🌊 11. Waterfall, Fingerprint & Blast Radius
+Trace every model call, file read, edit and command the agent made. See [See Exactly What the Agent Did](#-see-exactly-what-the-agent-did).
 
 ---
 

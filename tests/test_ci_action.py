@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 from andromity.ci.github_client import GitHubClient, REVIEW_MARKER
 from andromity.ci.pr_reviewer import (
     DEFAULT_MODEL,
-    REVIEW_FOOTER,
+    review_footer,
     generate_pr_review,
 )
 from andromity.ci.task_runner import CO_AUTHOR_TRAILER, execute_agent_task
@@ -84,10 +84,11 @@ class TestCIAction(unittest.TestCase):
 
     def test_pr_reviewer_footer_attribution(self):
         """Verify review footer points to andromity.agenticmarket.dev and uses Andromity branding."""
-        self.assertIn("https://andromity.agenticmarket.dev", REVIEW_FOOTER)
-        self.assertIn("https://andromity.agenticmarket.dev/docs", REVIEW_FOOTER)
-        self.assertIn("Andromity", REVIEW_FOOTER)
-        self.assertNotIn("Andromity AI", REVIEW_FOOTER)
+        footer = review_footer(DEFAULT_MODEL)
+        self.assertIn("https://andromity.agenticmarket.dev", footer)
+        self.assertIn("https://andromity.agenticmarket.dev/docs", footer)
+        self.assertIn("Andromity", footer)
+        self.assertNotIn("Andromity AI", footer)
 
     def test_task_runner_blocks_unauthorized_actor(self):
         """Verify untrusted users cannot trigger arbitrary tasks."""

@@ -146,7 +146,17 @@ class Agent:
         except Exception:
             pass
 
-        sys_prompt = get_system_prompt(self.profile, project_path=self.session.project_path)
+        self._install_system_prompt()
+
+    def _model_id(self) -> str:
+        provider = self.provider or config.get("default", "provider", "")
+        model = self.model or config.get("default", "model", "")
+        return f"{provider}/{model}".strip("/")
+
+    def _install_system_prompt(self) -> None:
+        self._prompt_model_id = self._model_id()
+        sys_prompt = get_system_prompt(self.profile, project_path=self.session.project_path,
+                                       model_id=self._prompt_model_id)
 
         deferred_catalog = ToolRegistry.get_instance().get_deferred_prompt_catalog()
         if deferred_catalog:
@@ -165,6 +175,11 @@ class Agent:
         elif self.session.messages[0]["role"] == "system":
             self.session.messages[0]["content"] = sys_prompt
             self.session.save()
+
+    def _refresh_prompt_for_model_change(self) -> None:
+        """The Assisted-by trailer names the model, so a mid-session switch must rewrite the prompt."""
+        if config.get("default", "include_assisted_by", False) and self._model_id() != self._prompt_model_id:
+            self._install_system_prompt()
 
     def _messages_for_api(self) -> list:
         """Session messages to send to the provider this turn.
@@ -436,6 +451,7 @@ class Agent:
         or pre-encoded ``image_uris`` (data: URIs — used as-is).
         """
         register_session(self.session)
+        self._refresh_prompt_for_model_change()
         self._turn_image_parts = None
         _uris: list | None = None
         if image_uris:          # already-encoded URIs from the TUI paste path
@@ -655,6 +671,7 @@ class Agent:
                 thinking=assistant_thinking if assistant_thinking else None,
                 duration=turn_duration,
                 turn_id=turn_id,
+                model=self._model_id(),
             )
 
             if provider_outcome != "success":

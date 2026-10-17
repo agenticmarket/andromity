@@ -230,7 +230,8 @@ class Session:
                     thinking: Optional[str] = None,
                     images: Optional[List[str]] = None,
                     duration: Optional[float] = None,
-                    turn_id: Optional[str] = None, steering: bool = False):
+                    turn_id: Optional[str] = None, steering: bool = False,
+                    model: Optional[str] = None):
         msg: Dict[str, Any] = {"role": role, "ts": datetime.now(timezone.utc).isoformat()}
         if role == "tool":
             # Tool messages MUST always have a non-empty content string for LLM providers
@@ -255,6 +256,8 @@ class Session:
             msg["turn_id"] = turn_id
         if steering:
             msg["steering"] = True
+        if model:
+            msg["model"] = model
         with self._save_lock:
             self.messages.append(msg)
             need_save = not self._persisted

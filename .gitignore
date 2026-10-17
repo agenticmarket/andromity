@@ -88,3 +88,4 @@ docs/
 
 # Local-only material kept out of the public repo (the website is a separate private repo)
 /private/
+.claude/
