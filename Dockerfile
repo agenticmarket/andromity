@@ -8,7 +8,7 @@
 # ------------------------------------------------------------------------------
 # Stage 1: Build & Dependency Resolution (Fast compilation via Astral uv)
 # ------------------------------------------------------------------------------
-FROM python:3.11-slim-bookworm AS builder
+FROM python:3.14-slim-bookworm AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -38,7 +38,7 @@ RUN UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --locked --no-dev --no-editable --n
 # ------------------------------------------------------------------------------
 # Stage 2: Hardened Runtime Container
 # ------------------------------------------------------------------------------
-FROM python:3.11-slim-bookworm AS runtime
+FROM python:3.14-slim-bookworm AS runtime
 
 LABEL org.opencontainers.image.title="Andromity" \
       org.opencontainers.image.description="Autonomous AI Coding Agent with TUI, live execution waterfall, and trust governance." \
