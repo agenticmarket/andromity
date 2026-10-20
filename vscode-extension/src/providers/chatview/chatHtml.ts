@@ -176,6 +176,13 @@ ${styles}
         <span class="collab-inbox-badge-count" id="collab-inbox-badge" style="display:none;">0</span>
       </button>
 
+      <button class="top-bar-icon-btn" id="btn-top-copy-markdown" aria-label="Copy chat as Markdown" title="Copy chat as Markdown" data-action="copy-chat-markdown">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
+          <rect x="3" y="5" width="18" height="14" rx="2"></rect>
+          <path d="M7 15V9l2.5 3L12 9v6"></path>
+          <path d="M16 9v6M14 13l2 2 2-2"></path>
+        </svg>
+      </button>
       <button class="top-bar-icon-btn" id="btn-top-open-tab" aria-label="Open Session in Editor Tab" title="Open Session in Editor Tab (Pop Out)" data-action="open-current-tab">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <path d="M6 13v6a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-6"></path>

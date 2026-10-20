@@ -1,5 +1,8 @@
 import * as fs from "fs";
 import { airGapPillMessage, currentAirGap } from "../airgapState.js";
+import { AwayBadge, AwayEvent } from "../awayBadge.js";
+import { collectStarterContext, watchStarterContext } from "../smartStarters.js";
+import { copySessionAsMarkdown } from "../chatMarkdown.js";
 import { airGapOffMessage } from "../airgap.js";
 import * as path from "path";
 import * as vscode from "vscode";
@@ -114,6 +117,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _viewStateListeners: Array<() => void> = [];
+  private _awayBadge = new AwayBadge();
+
+  /** Badge the Andromity icon for replies and requests that arrive while the chat is hidden. */
+  private _noteWhileAway(event: AwayEvent, params?: any) {
+    if (!this._view || this._view.visible || params?.scheduled) return;
+    this._awayBadge.note(event);
+    this._view.badge = this._awayBadge.badge();
+  }
 
   /** Fires when the session in view or the chat's visibility changes. */
   public onDidChangeViewState(listener: () => void): vscode.Disposable {
@@ -128,6 +139,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Shows or hides the Air-gap pill in every chat view. */
   public broadcastAirGapState() {
     this.broadcastToWebviews(airGapPillMessage());
+  }
+
+  public async copyCurrentChatAsMarkdown(): Promise<void> {
+    await copySessionAsMarkdown(this._rpcClient, this._currentSessionId);
   }
 
   public getSessionName(sessionId: string): string | undefined {
@@ -1209,11 +1224,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
     const subscriptions = [
+      watchStarterContext((context) => this._postToWebview({ type: "starter_context", ...context })),
       webviewView.webview.onDidReceiveMessage(async (message) => {
         await this._handleWebviewMessage(message);
       }),
       webviewView.onDidChangeVisibility(() => {
-        if (webviewView.visible) this.broadcastActiveEditorContext();
+        if (webviewView.visible) {
+          this.broadcastActiveEditorContext();
+          this._awayBadge.clear();
+          webviewView.badge = undefined;
+        }
         this._fireViewStateChanged();
       }),
     ];
@@ -1304,6 +1324,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     bind("agent/toolApprovalRequired", (params: ToolApprovalEvent) => {
       this._postToWebview({ type: "tool_approval_required", ...params });
+      this._noteWhileAway("approval", params);
       if (this.isSoundEnabled("attention")) {
         this._postToWebview({ type: "play_sound", kind: "attention" });
       }
@@ -1311,6 +1332,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     bind("agent/askQuestions", (params: ClarifyingQuestionsEvent) => {
       this._postToWebview({ type: "ask_questions", ...params });
+      this._noteWhileAway("question", params);
       if (this.isSoundEnabled("attention")) {
         this._postToWebview({ type: "play_sound", kind: "attention" });
       }
@@ -1441,6 +1463,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     bind("agent/done", (params: any) => {
       const sid = params?.session_id || this._currentSessionId;
+      this._noteWhileAway("reply", params);
       if (sid) {
         this._runningSessions.delete(sid);
       }
@@ -2138,6 +2161,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (message.type === "ready" || message.type === "webview_ready") {
       this._markWebviewReady();
       this.broadcastAirGapState();
+      this._postToWebview({ type: "starter_context", ...collectStarterContext() });
       void this.getWorkspaceIndex().then((index) => {
         this._postToWebview({ type: "workspace_files_updated", files: index.files, dirs: index.dirs });
       });
@@ -2151,6 +2175,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this._postToWebview({ type: "backend_ready" });
         if (!this._isStartupStateDelivered()) await this._loadStartupState();
       }
+      return;
+    }
+
+    if (message.type === "copy_chat_markdown") {
+      await copySessionAsMarkdown(this._rpcClient, message.sessionId || this._currentSessionId);
       return;
     }
 

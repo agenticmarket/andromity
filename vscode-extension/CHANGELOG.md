@@ -5,6 +5,9 @@ All notable changes to the "andromity" extension will be documented in this file
 ## [Unreleased]
 
 ### Added
+- **Badge on the Andromity icon.** While the chat is hidden, finished replies and requests for your approval or an answer show as a count on the Andromity icon, wherever the view is placed. It clears when you open the chat.
+- **Smart starter buttons.** On an empty chat, **Fix a problem** becomes **Fix 3 errors in auth.ts** when the open file (or your workspace) has errors, and **Add tests** becomes **Review my changes** when you have uncommitted files.
+- **Copy chat as Markdown.** A button in the chat bar, and **Andromity: Copy Chat as Markdown**, copy your prompts and the replies, without tool output or attached editor context.
 - **Air-gap mode.** Settings → Andromity → **Air-gap Mode**, or **Andromity: Air-gap Mode: Turn On or Off**. Andromity can then reach only this machine and private hosts you list, for example a shared model server.
   - Cloud models, web search, remote MCP servers, sign-in and telemetry turn off.
   - Commands the agent runs, and the code-block **Run** terminal, are blocked from the internet where possible.

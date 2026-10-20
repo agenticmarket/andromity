@@ -176,6 +176,10 @@ export function getChatPolishStyles(): string {
       white-space: nowrap;
     }
     .prompt-airgap-pill[hidden] { display: none; }
+    .starter-chip.is-smart {
+      border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+    }
+    .starter-chip.is-smart .starter-description { color: var(--fg); opacity: 0.8; }
     .status-bar { border-top: none; padding-left: var(--chat-edge); padding-right: var(--chat-edge); }
 
     button:focus-visible, [role="button"]:focus-visible, a:focus-visible {

@@ -9,6 +9,7 @@ export const DOCS = {
   customProviders: `${DOCS_BASE}/guides/custom-providers`,
   modelHub: `${DOCS_BASE}/model-hub`,
   security: `${DOCS_BASE}/security`,
+  airGap: `${DOCS_BASE}/air-gap`,
   permissionModes: `${DOCS_BASE}/permission-modes`,
   profiles: `${DOCS_BASE}/profiles`,
   skills: `${DOCS_BASE}/skills`,

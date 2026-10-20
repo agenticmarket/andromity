@@ -938,6 +938,10 @@ export async function activate(context: vscode.ExtensionContext) {
       void chatProvider.fetchAndPostCrons();
     }),
 
+    registerTrackedCommand("andromity.copyChatMarkdown", async () => {
+      await chatProvider.copyCurrentChatAsMarkdown();
+    }),
+
     registerTrackedCommand("andromity.toggleAirGap", async () => {
       const airGap = currentAirGap();
       if (airGap.locked) {

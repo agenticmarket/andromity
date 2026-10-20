@@ -117,7 +117,7 @@ export function loadChat() {
     return e;
   };
   return {
-    byId, promptBox, observers, decisions, keydown, promptKey, posted, sandbox,
+    byId, promptBox, observers, decisions, keydown, promptKey, posted, sandbox, docListeners,
     /** Delivers a message from the extension host. */
     post: (data: any) => (windowListeners.message || []).forEach(fn => fn({ data })),
     eval: (code: string) => vm.runInContext(code, sandbox),

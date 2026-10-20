@@ -258,6 +258,20 @@ The path changes slightly by Python version (3.11, 3.12, 3.13). Check `%LOCALAPP
 
 ---
 
+## Air-gap mode
+
+Stops Andromity from using the internet: it can reach only this machine and private hosts you allow, such as a model server on your network. Cloud models, web search, remote MCP servers, sign-in, telemetry, update checks and downloads turn off, and commands the agent runs are blocked from the internet where possible.
+
+| Where | Setting |
+|---|---|
+| VS Code | Settings → Preferences → **Air-gap Mode** (`andromity.airGap.enabled`, `andromity.airGap.allowedHosts`) |
+| `config.toml` | `[default] airgap = true`, `airgap_allowed_hosts = ["10.0.0.5"]` |
+| Environment | `ANDROMITY_AIRGAP=1` (locks it on), `ANDROMITY_AIRGAP_ALLOW=10.0.0.5,gpu-box.lan` |
+
+It is a guard inside Andromity, not a network boundary; for complete isolation, also use your firewall. Full guide, including what it does not cover and how to verify it: https://andromity.agenticmarket.dev/docs/air-gap
+
+---
+
 ## Security notes
 
 - Session files are stored in plaintext. Don't run Andromity on a shared machine with a sensitive codebase.

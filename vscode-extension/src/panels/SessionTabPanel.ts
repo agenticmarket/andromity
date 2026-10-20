@@ -15,6 +15,7 @@ import { ModelInfo, ProviderInfo, SessionInfo } from "../server/types.js";
 import { EditorBridge } from "../integrations/EditorBridge.js";
 import { runCodeBlockInTerminal } from "../integrations/TerminalRunner.js";
 import { airGapPillMessage } from "../airgapState.js";
+import { copySessionAsMarkdown } from "../chatMarkdown.js";
 import { confirmRewindAndResend, resendPromptOf } from "../integrations/rewind.js";
 import { recordFeatureUse } from "../telemetry/featureUsage.js";
 import { SettingsPanel } from "./SettingsPanel.js";
@@ -406,6 +407,11 @@ export class SessionTabPanel {
         this._postMessage({ type: "workspace_files_updated", files: index.files, dirs: index.dirs });
       });
       await this._loadSession();
+      return;
+    }
+
+    if (message.type === "copy_chat_markdown") {
+      await copySessionAsMarkdown(this._rpcClient, this._sessionId);
       return;
     }
 

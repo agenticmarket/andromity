@@ -4878,6 +4878,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'fix-run':
           fixFailedRun(target);
           break;
+        case 'copy-chat-markdown':
+          vscode.postMessage({ type: 'copy_chat_markdown', sessionId: currentSessionId });
+          break;
         case 'copy-message':
           copyMessageText(target);
           break;
@@ -6763,6 +6766,46 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       });
     }
 
+    // Empty-chat starters: two generic buttons become specific when there is something to act on.
+    function applySmartStarter(chip, smart) {
+      if (!chip) return;
+      const titleEl = chip.querySelector('.starter-title');
+      const descEl = chip.querySelector('.starter-description');
+      if (!chip.hasAttribute('data-default-prompt')) {
+        chip.setAttribute('data-default-prompt', chip.getAttribute('data-prompt') || '');
+        chip.setAttribute('data-default-title', titleEl ? titleEl.textContent : '');
+        chip.setAttribute('data-default-description', descEl ? descEl.textContent : '');
+        chip.setAttribute('data-default-label', chip.getAttribute('aria-label') || '');
+      }
+      const next = smart || {
+        prompt: chip.getAttribute('data-default-prompt'), title: chip.getAttribute('data-default-title'),
+        description: chip.getAttribute('data-default-description'), label: chip.getAttribute('data-default-label'),
+      };
+      chip.setAttribute('data-prompt', next.prompt);
+      if (titleEl) titleEl.textContent = next.title;
+      if (descEl) descEl.textContent = next.description;
+      chip.setAttribute('aria-label', next.label || (next.title + ', ' + next.description));
+      chip.classList.toggle('is-smart', !!smart);
+    }
+
+    function renderSmartStarters(context) {
+      const row = document.querySelector('.minimal-starters-row');
+      if (!row) return;
+      const chips = row.querySelectorAll('.starter-chip[data-action="send-starter"]');
+      const errors = context && context.errors;
+      applySmartStarter(chips[1], errors && errors.count ? {
+        title: 'Fix ' + errors.count + ' error' + (errors.count === 1 ? '' : 's'),
+        description: 'in ' + errors.file,
+        prompt: 'Fix the ' + errors.count + ' error' + (errors.count === 1 ? '' : 's') + ' reported in ' + errors.path + '. Explain each fix briefly.',
+      } : null);
+      const changed = context && context.changedFiles;
+      applySmartStarter(chips[2], changed ? {
+        title: 'Review my changes',
+        description: changed + ' changed file' + (changed === 1 ? '' : 's'),
+        prompt: 'Review my uncommitted changes for bugs and risky edits, then suggest a commit message.',
+      } : null);
+    }
+
     function appendUserMessage(text, images, ts, opts) {
       const rawText = typeof text === 'string' ? text : extractMessageText(text);
       const parsed = parseUserPromptDisplay(rawText);
@@ -8162,6 +8205,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         case 'run_status':
           applyRunStatus(msg);
+          break;
+
+        case 'starter_context':
+          renderSmartStarters(msg);
           break;
 
         case 'session_switched':

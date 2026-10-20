@@ -377,6 +377,12 @@
         "title": "Air-gap Mode: Run Self-test",
         "category": "Andromity",
         "icon": "$(beaker)"
+      },
+      {
+        "command": "andromity.copyChatMarkdown",
+        "title": "Copy Chat as Markdown",
+        "category": "Andromity",
+        "icon": "$(markdown)"
       }
     ],
     "keybindings": [

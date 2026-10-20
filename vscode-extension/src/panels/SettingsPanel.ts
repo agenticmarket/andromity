@@ -3828,7 +3828,7 @@ export class SettingsPanel {
             <input type="checkbox" id="setting-airgap">
             <div>
               <div class="setting-label">Air-gap Mode</div>
-              <div class="setting-desc">Andromity makes no network connections except to this machine and the private hosts you list below. Cloud models, web search, remote MCP servers, sign-in and telemetry turn off, and commands the agent runs are blocked from the internet where possible. For complete isolation, also use your firewall.</div>
+              <div class="setting-desc">Andromity makes no network connections except to this machine and the private hosts you list below. Cloud models, web search, remote MCP servers, sign-in and telemetry turn off, and commands the agent runs are blocked from the internet where possible. For complete isolation, also use your firewall. <a href="#" class="docs-link" data-docs-url="${DOCS.airGap}">How air-gap mode works</a></div>
               <div class="setting-desc airgap-state" id="airgap-state" aria-live="polite"></div>
             </div>
           </label>
