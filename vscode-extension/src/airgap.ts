@@ -82,3 +82,28 @@ export function airGapStatusLine(state: AirGapState, blockedCount: number): stri
     : "";
   return `Air-gap mode is on${origin}: Andromity can reach only ${reach}.${blocked}`;
 }
+
+const CLOUD_PROVIDERS = new Set(["andromity", "anthropic", "openai", "openrouter", "google", "deepseek", "groq", "nvidia", "opencode"]);
+
+/** The confirmation shown before air-gap mode is turned on: what stops, for this user's setup. */
+export function airGapTurnOnWarning(current: { provider?: string; model?: string; running?: boolean }): { message: string; detail: string } {
+  const provider = String(current.provider || "").toLowerCase();
+  const model = String(current.model || "").split("/").pop() || "your current model";
+  const modelLine = provider === "ollama"
+    ? `• Your current model, ${model}, runs on this machine with Ollama and keeps working.`
+    : CLOUD_PROVIDERS.has(provider)
+      ? `• Your current model, ${model}, runs in the cloud and will stop working. Switch to a local model, such as one served by Ollama.`
+      : `• Your current model, ${model}, keeps working only if its server is on this machine or an allowed private host.`;
+  const lines = [
+    "While air-gap mode is on:",
+    modelLine,
+    "• Web search, remote MCP servers, sign-in, telemetry and updates turn off.",
+    "• Commands the agent runs can't reach the internet, where Andromity can block them.",
+    current.running
+      ? "• The Andromity engine restarts now, which stops the reply in progress."
+      : "• The Andromity engine restarts now.",
+    "",
+    "This stops Andromity from using the internet. For complete isolation, also use your firewall.",
+  ];
+  return { message: "Turn on air-gap mode?", detail: lines.join("\n") };
+}

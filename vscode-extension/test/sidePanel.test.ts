@@ -1,0 +1,294 @@
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { element, loadChat } from "./helpers/chatHarness.js";
+import { loadSidePanelData, mcpTooltip } from "../src/sidePanelData.js";
+
+function rpc(responses: Record<string, any>) {
+  const calls: string[] = [];
+  return {
+    calls,
+    call: async (method: string) => {
+      calls.push(method);
+      const value = responses[method];
+      if (value instanceof Error) throw value;
+      return value;
+    },
+  };
+}
+
+describe("side panel data", () => {
+  it("summarises MCP servers, marking disabled ones off", async () => {
+    const client = rpc({ "mcp.list": [
+      { name: "supabase", status: "running", tools_count: 29, remote: true },
+      { name: "notion", status: "needs_auth", tools_count: 0, remote: true },
+      { name: "local", status: "running", tools_count: 3, disabled: true },
+      { status: "running" },
+    ] });
+    const data = await loadSidePanelData(client, "/repo", ["mcp"]);
+    assert.deepEqual(data.mcp, [
+      { name: "supabase", status: "running", tools: 29, remote: true },
+      { name: "notion", status: "needs_auth", tools: 0, remote: true },
+      { name: "local", status: "disabled", tools: 3, remote: false },
+    ]);
+    assert.deepEqual(client.calls, ["mcp.list"], "only the requested part is loaded");
+    assert.equal(mcpTooltip(data.mcp), "MCP servers: 1 of 3 running, 1 needs attention. Open MCP settings");
+    assert.equal(mcpTooltip([]), "MCP servers: none set up. Open MCP settings");
+  });
+
+  it("lists uncommitted files with line counts, biggest first", async () => {
+    const data = await loadSidePanelData(rpc({
+      "git.status": { is_git: true, branch: "dev", files: [
+        { path: "src/a.ts", status: "M" }, { path: "src/big.ts", status: "M" }, { path: "new.txt", status: "??" }, { path: "logo.png", status: "M" }] },
+      "git.diff_numstat": { files: { "src/a.ts": { additions: 2, deletions: 1 }, "src/big.ts": { additions: 40, deletions: 10 }, "logo.png": { additions: 0, deletions: 0, binary: true } } },
+    }), "/repo", ["changes"]);
+    assert.equal(data.changes!.branch, "dev");
+    assert.equal(data.changes!.additions, 42);
+    assert.equal(data.changes!.deletions, 11);
+    assert.deepEqual(data.changes!.files.map((f) => f.path), ["src/big.ts", "src/a.ts", "new.txt", "logo.png"]);
+    assert.equal(data.changes!.files[2].additions, null, "untracked files have no line counts");
+    assert.equal(data.changes!.files[3].additions, null, "binary files have no line counts");
+  });
+
+  it("reports a folder that is not a git repository, and survives engine errors", async () => {
+    assert.equal((await loadSidePanelData(rpc({ "git.status": { is_git: false } }), "/repo", ["changes"])).changes, null);
+    const broken = await loadSidePanelData(rpc({ "mcp.list": new Error("down"), "git.status": new Error("down") }), "/repo", ["mcp", "changes"]);
+    assert.deepEqual(broken.mcp, []);
+    assert.equal(broken.changes, null);
+  });
+});
+
+describe("side panel in the chat", () => {
+  function setup() {
+    const h = loadChat();
+    for (const id of ["sp-context", "sp-changes", "sp-mcp", "sp-env", "btn-mcp-status", "airgap-pill"]) h.byId[id] = element();
+    h.byId["airgap-pill"].hidden = true;
+    return h;
+  }
+
+  it("renders changes, MCP servers and the environment from the extension's data", () => {
+    const h = setup();
+    h.post({
+      type: "side_panel_data", folder: "agent", mcpTooltip: "MCP servers: 1 of 2 running. Open MCP settings",
+      mcp: [{ name: "supabase", status: "running", tools: 29, remote: true }, { name: "notion", status: "needs_auth", tools: 0, remote: true }],
+      changes: { branch: "dev", additions: 42, deletions: 11, files: [
+        { path: "src/big.ts", status: "M", additions: 40, deletions: 10 }, { path: "new.txt", status: "??", additions: null, deletions: null }] },
+    });
+    const changes = h.byId["sp-changes"].innerHTML;
+    assert.match(changes, /data-action="sp-open-diff" data-path="src\/big\.ts"/);
+    assert.match(changes, /<span class="sp-file-name">big\.ts<\/span><span class="sp-file-dir">src<\/span>/);
+    assert.match(changes, /<span class="sp-file-name">new\.txt<\/span>.*class="sp-status new"[^>]*>U<\/span><span class="sp-meta">new file/s);
+    assert.match(changes, /class="sp-diffbar"/, "line counts come with a small diff bar");
+    assert.match(changes, /class="sp-head-summary"><span class="sp-add">\+42<\/span>&nbsp;<span class="sp-del">&minus;11/, "the header sums the change");
+    assert.match(changes, /2 files changed on <strong>dev<\/strong>/);
+    assert.match(changes, /data-action="sp-review-all">Review changes/);
+    const mcp = h.byId["sp-mcp"].innerHTML;
+    assert.match(mcp, /supabase.*29 tools/s);
+    assert.match(mcp, /notion.*Sign in/s);
+    assert.match(mcp, /data-action="open-mcp-settings"/);
+    const env = h.byId["sp-env"].innerHTML;
+    assert.match(env, /Folder.*agent/s);
+    assert.match(env, /Branch.*dev/s);
+    assert.equal(h.byId["btn-mcp-status"].title, "MCP servers: 1 of 2 running. Open MCP settings");
+  });
+
+  it("says when there is nothing to show", () => {
+    const h = setup();
+    h.post({ type: "side_panel_data", mcp: [], changes: { branch: "dev", additions: 0, deletions: 0, files: [] } });
+    assert.match(h.byId["sp-changes"].innerHTML, /No uncommitted changes/);
+    assert.match(h.byId["sp-mcp"].innerHTML, /No MCP servers yet/);
+    assert.match(h.byId["sp-mcp"].innerHTML, /Add a server/);
+    h.post({ type: "side_panel_data", changes: null });
+    assert.match(h.byId["sp-changes"].innerHTML, /not a git repository/);
+  });
+
+  it("the Context card shows the same breakdown as the Context window pop-up", () => {
+    const h = setup();
+    h.eval("currentSessionId = 's1';");
+    h.post({ type: "context_breakdown", session_id: "s1", data: {
+      limit: 1000000, used_tokens: 12620, auto_compact: true, compact_threshold: 0.8, message_count: 6, used_source: "provider",
+      categories: [{ key: "system_prompt", label: "System prompt", tokens: 2200 }, { key: "tool_definitions", label: "Tool definitions", tokens: 4400 }],
+    } });
+    const html = h.byId["sp-context"].innerHTML;
+    assert.match(html, /Context window/);
+    const n = (v: number) => v.toLocaleString();
+    assert.ok(html.includes(n(12620) + " / " + n(1000000)), "same number formatting as the pop-up");
+    assert.ok(new RegExp("Used tokens.*" + n(12620) + ".*Available.*" + n(987380), "s").test(html));
+    assert.match(html, /class="context-stack"/, "the coloured bar is always shown");
+    assert.match(html, /data-action="sp-toggle-breakdown" aria-expanded="false"/);
+    assert.ok(!html.includes("context-cat-label"), "the category list waits behind Breakdown, keeping the card short");
+    assert.match(html, /787K until auto-compact/);
+    assert.match(html, /data-action="compact-session">Compact now/);
+
+    const stored = withStorage(h);
+    const click = (action: string) => {
+      const target: any = element({ tagName: "BUTTON" });
+      target.attrs["data-action"] = action;
+      target.closest = (sel: string) => (sel.includes("[data-action]") ? target : null);
+      for (const fn of h.docListeners.click || []) fn({ target, preventDefault() {}, stopPropagation() {} });
+    };
+    click("sp-toggle-breakdown");
+    const open = h.byId["sp-context"].innerHTML;
+    assert.match(open, /aria-expanded="true"/);
+    assert.match(open, /context-cat-label">System prompt<.*context-cat-pct">0\.2%/s);
+    assert.match(open, /Free space/);
+    assert.match(open, /Auto-compact buffer/);
+    assert.equal(JSON.parse(stored["andromity.sidePanel"]).breakdown, true, "remembered");
+  });
+
+  it("fades the panel's edges only while there is more to scroll", () => {
+    const h = setup();
+    const body: any = element();
+    Object.assign(body, { scrollHeight: 1200, clientHeight: 600, scrollTop: 0 });
+    h.byId["side-panel-body"] = body;
+    h.eval("updateSidePanelScrollEdges()");
+    assert.ok(!body.classList.contains("can-scroll-up"));
+    assert.ok(body.classList.contains("can-scroll-down"));
+    body.scrollTop = 300;
+    h.eval("updateSidePanelScrollEdges()");
+    assert.ok(body.classList.contains("can-scroll-up") && body.classList.contains("can-scroll-down"));
+    body.scrollTop = 600;
+    h.eval("updateSidePanelScrollEdges()");
+    assert.ok(body.classList.contains("can-scroll-up") && !body.classList.contains("can-scroll-down"));
+    Object.assign(body, { scrollHeight: 500, scrollTop: 0 });
+    h.eval("updateSidePanelScrollEdges()");
+    assert.ok(!body.classList.contains("can-scroll-up") && !body.classList.contains("can-scroll-down"), "no fade when everything fits");
+  });
+
+  it("only the panel body scrolls, with no visible scrollbar", () => {
+    const css = readFileSync(join(__dirname, "..", "..", "src", "providers", "chatview", "chatPolishStyles.ts"), "utf8");
+    const rule = css.slice(css.indexOf("    .side-panel-body {"), css.indexOf("    .side-panel-body::-webkit-scrollbar"));
+    assert.match(rule, /overflow-y: auto;/);
+    assert.match(rule, /overscroll-behavior: contain;/);
+    assert.match(rule, /scrollbar-width: none;/);
+    assert.match(css, /\.side-panel-body::-webkit-scrollbar \{ display: none; \}/);
+    const html = readFileSync(join(__dirname, "..", "..", "src", "providers", "chatview", "chatHtml.ts"), "utf8");
+    const aside = html.slice(html.indexOf('<aside class="side-panel"'), html.indexOf("</aside>"));
+    assert.ok(aside.indexOf('class="side-panel-header"') < aside.indexOf('id="side-panel-body"'), "the header sits outside the scrolling area");
+  });
+
+  it("Environment rows open the matching control, and only safe commands", async () => {
+    const h = setup();
+    const clicked: string[] = [];
+    for (const id of ["btn-prompt-model", "btn-prompt-mode", "btn-prompt-profile", "btn-prompt-reasoning"]) {
+      const b: any = element({ tagName: "BUTTON" });
+      b.click = () => clicked.push(id);
+      h.byId[id] = b;
+    }
+    const timers: Function[] = [];
+    h.sandbox.setTimeout = (fn: Function) => { timers.push(fn); return 0; };
+    h.posted.length = 0;
+    for (const id of ["model", "mode", "profile", "reasoning", "branch", "folder", "network"]) h.eval(`openEnvironmentControl('${id}')`);
+    timers.forEach((fn) => fn());
+    assert.deepEqual(clicked, ["btn-prompt-model", "btn-prompt-mode", "btn-prompt-profile", "btn-prompt-reasoning"]);
+    assert.deepEqual(JSON.parse(JSON.stringify(h.posted.filter((m: any) => m.type === "side_panel_command"))), [
+      { type: "side_panel_command", command: "git.checkout" },
+      { type: "side_panel_command", command: "workbench.view.explorer" },
+      { type: "side_panel_command", command: "andromity.toggleAirGap" },
+    ]);
+  });
+
+  it("the Environment card follows a permission mode change", () => {
+    const h = setup();
+    const label: any = element();
+    label.textContent = "SAFE";
+    h.byId["prompt-mode-label"] = label;
+    const timers: Function[] = [];
+    h.sandbox.setTimeout = (fn: Function) => { timers.push(fn); return 0; };
+    h.post({ type: "side_panel_data", folder: "agent", changes: { branch: "feature/login", additions: 0, deletions: 0, files: [] } });
+    assert.match(h.byId["sp-env"].innerHTML, /Mode<\/span><span class="sp-env-value mode-safe">SAFE/);
+    assert.match(h.byId["sp-env"].innerHTML, /Branch<\/span><span class="sp-env-value">feature\/login/);
+    label.textContent = "FULL";
+    h.eval("currentMode = 'full'; updateModeBadge('full');");
+    timers.forEach((fn) => fn());
+    assert.match(h.byId["sp-env"].innerHTML, /Mode<\/span><span class="sp-env-value mode-full">FULL/);
+  });
+
+  it("the MCP icon and panel actions go to the right place", () => {
+    const h = setup();
+    const click = (action: string, attrs: Record<string, string> = {}) => {
+      const target: any = element({ tagName: "BUTTON" });
+      target.attrs["data-action"] = action;
+      Object.assign(target.attrs, attrs);
+      target.closest = (sel: string) => (sel.includes("[data-action]") ? target : null);
+      h.posted.length = 0;
+      for (const fn of h.docListeners.click || []) fn({ target, preventDefault() {}, stopPropagation() {} });
+      return JSON.parse(JSON.stringify(h.posted));
+    };
+    assert.deepEqual(click("open-mcp-settings").find((m: any) => m.type === "open_settings"), { type: "open_settings", tab: "mcp" });
+    assert.deepEqual(click("sp-open-diff", { "data-path": "src/a.ts" }).find((m: any) => m.type === "open_diff"), { type: "open_diff", filePath: "src/a.ts" });
+    assert.ok(click("sp-review-all").some((m: any) => m.type === "open_changes_review"));
+  });
+
+  function withStorage(h: ReturnType<typeof setup>) {
+    const stored: Record<string, string> = {};
+    h.sandbox.localStorage = { getItem: (k: string) => stored[k] ?? null, setItem: (k: string, v: string) => { stored[k] = v; } };
+    return stored;
+  }
+
+  it("cards collapse to a one-line summary, and that is remembered", () => {
+    const h = setup();
+    const stored = withStorage(h);
+    h.post({ type: "side_panel_data", mcp: [{ name: "a", status: "running", tools: 1, remote: false }, { name: "b", status: "needs_auth", tools: 0, remote: true }] });
+    const mcp = h.byId["sp-mcp"];
+    assert.match(mcp.innerHTML, /data-action="sp-toggle-card" data-card="mcp" aria-expanded="true"/);
+    assert.match(mcp.innerHTML, /1 needs you/, "the summary says what needs attention");
+    h.eval("setSidePanelCardCollapsed('mcp')");
+    assert.ok(mcp.classList.contains("collapsed"));
+    assert.match(mcp.innerHTML, /aria-expanded="false"/);
+    assert.match(mcp.innerHTML, /1 needs you/, "a collapsed card keeps its summary");
+    assert.deepEqual(JSON.parse(stored["andromity.sidePanel"]).collapsed, ["mcp"]);
+    h.eval("setSidePanelCardCollapsed('mcp')");
+    assert.ok(!mcp.classList.contains("collapsed"));
+  });
+
+  it("the right-click menu chooses which cards show", () => {
+    const h = setup();
+    const stored = withStorage(h);
+    const menu: any = element();
+    menu.hidden = true;
+    h.byId["sp-menu"] = menu;
+    const emptyAll: any = element();
+    emptyAll.hidden = true;
+    h.byId["sp-empty-all"] = emptyAll;
+    h.post({ type: "side_panel_data", folder: "agent", mcp: [], changes: { branch: "dev", additions: 0, deletions: 0, files: [] } });
+
+    h.eval("openSidePanelMenu(100, 100)");
+    assert.equal(menu.hidden, false);
+    assert.match(menu.innerHTML, /role="menuitemcheckbox" aria-checked="true" data-action="sp-toggle-hidden" data-card="changes"/);
+    assert.match(menu.innerHTML, /Collapse all/);
+
+    h.eval("closeSidePanelMenu(); setSidePanelCardHidden('changes')");
+    assert.equal(menu.hidden, true);
+    assert.equal(h.byId["sp-changes"].hidden, true);
+    assert.equal(h.byId["sp-changes"].innerHTML, "");
+    assert.deepEqual(JSON.parse(stored["andromity.sidePanel"]).hidden, ["changes"]);
+    h.eval("openSidePanelMenu(100, 100)");
+    assert.match(menu.innerHTML, /aria-checked="false" data-action="sp-toggle-hidden" data-card="changes"/);
+
+    h.eval("['context', 'mcp', 'env'].forEach(setSidePanelCardHidden)");
+    assert.equal(emptyAll.hidden, false, "with every card hidden, the panel says how to get them back");
+  });
+
+  it("hiding the panel is remembered", () => {
+    const h = setup();
+    const body = h.sandbox.document.body;
+    const stored: Record<string, string> = {};
+    h.sandbox.localStorage = { getItem: (k: string) => stored[k] ?? null, setItem: (k: string, v: string) => { stored[k] = v; } };
+    h.eval("setSidePanelOff(true)");
+    assert.ok(body.classList.contains("side-panel-off"));
+    assert.equal(stored["andromity.sidePanelOff"], "1");
+    h.eval("setSidePanelOff(false)");
+    assert.ok(!body.classList.contains("side-panel-off"));
+    assert.equal(stored["andromity.sidePanelOff"], "0");
+  });
+
+  it("only appears where there is room, and the MCP icon is always in the bottom bar", () => {
+    const html = readFileSync(join(__dirname, "..", "..", "src", "providers", "chatview", "chatHtml.ts"), "utf8");
+    assert.match(html, /id="btn-mcp-status" data-action="open-mcp-settings"/);
+    const css = readFileSync(join(__dirname, "..", "..", "src", "providers", "chatview", "chatPolishStyles.ts"), "utf8");
+    assert.match(css, /\.side-panel, #btn-top-side-panel \{ display: none; \}/);
+    assert.match(css, /@media \(min-width: 1500px\) \{\s*body:not\(\.side-panel-off\) \.side-panel \{/);
+  });
+});

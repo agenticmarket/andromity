@@ -10,6 +10,7 @@ const notices: string[] = [];
 let warningAnswer: string | undefined;
 const terminals: any[] = [];
 const fetchCalls: string[] = [];
+const executed: string[] = [];
 
 const vscodeMock: any = {
   ConfigurationTarget: { Global: 1, Workspace: 2 },
@@ -24,7 +25,7 @@ const vscodeMock: any = {
     withProgress: async () => { throw new Error("installer must not run"); },
   },
   workspace: {
-    workspaceFolders: [{ uri: { fsPath: "/repo" } }],
+    workspaceFolders: [{ uri: { fsPath: "/repo" }, name: "repo" }],
     getWorkspaceFolder: () => undefined,
     getConfiguration: (section?: string) => ({
       inspect: (key: string) => settings[`${section}.${key}`],
@@ -38,7 +39,7 @@ const vscodeMock: any = {
       },
     }),
   },
-  commands: { executeCommand: async () => {} },
+  commands: { executeCommand: async (command: string) => { executed.push(command); } },
 };
 
 const Module = require("module");
@@ -47,7 +48,9 @@ Module.prototype.require = function (name: string) {
   if (name === "vscode") return vscodeMock;
   return originalRequire.apply(this, arguments);
 };
-const { resolveAirGap, daemonAirGapEnv, terminalAirGapEnv, airGapStatusLine } = require("../src/airgap.js");
+const { resolveAirGap, daemonAirGapEnv, terminalAirGapEnv, airGapStatusLine, airGapTurnOnWarning } = require("../src/airgap.js");
+const { SidePanelFeed, runSidePanelCommand } = require("../src/sidePanelFeed.js");
+const { SessionTabPanel } = require("../src/panels/SessionTabPanel.js");
 const { currentAirGap, airGapPillMessage } = require("../src/airgapState.js");
 const { runCodeBlockInTerminal } = require("../src/integrations/TerminalRunner.js");
 const { PythonBridge } = require("../src/server/PythonBridge.js");
@@ -186,8 +189,15 @@ describe("air-gap card in Settings", () => {
     return { value, posted };
   }
 
-  it("turning it on needs no confirmation; turning it off does", async () => {
+  it("asks before turning it on, and before turning it off", async () => {
     const { value, posted } = panel();
+    warningAnswer = undefined;
+    await value._handleMessage({ type: "toggle_airgap", value: true });
+    assert.equal(updates.length, 0, "cancelled, so still off");
+    assert.equal(posted.at(-1).airGap.enabled, false, "the checkbox is put back");
+    assert.equal(notices.at(-1), "Turn on air-gap mode?");
+
+    warningAnswer = "Turn On Air-gap Mode";
     await value._handleMessage({ type: "toggle_airgap", value: true });
     assert.deepEqual(updates.at(-1), ["airGap.enabled", true, 1]);
     assert.equal(posted.at(-1).airGap.enabled, true);
@@ -243,5 +253,64 @@ describe("air-gap contributions", () => {
     const ids = pkg.contributes.commands.map((c: any) => c.command);
     assert.ok(ids.includes("andromity.toggleAirGap"));
     assert.ok(ids.includes("andromity.airGapSelfTest"));
+  });
+});
+
+describe("turning air-gap mode on", () => {
+  it("warns that a cloud model will stop, and that a running reply stops", () => {
+    const w = airGapTurnOnWarning({ provider: "anthropic", model: "anthropic/claude-sonnet-5", running: true });
+    assert.equal(w.message, "Turn on air-gap mode?");
+    assert.match(w.detail, /claude-sonnet-5, runs in the cloud and will stop working/);
+    assert.match(w.detail, /stops the reply in progress/);
+    assert.match(w.detail, /Web search, remote MCP servers, sign-in, telemetry and updates turn off/);
+    assert.match(w.detail, /also use your firewall/);
+  });
+
+  it("says a local or custom model's situation honestly", () => {
+    assert.match(airGapTurnOnWarning({ provider: "ollama", model: "qwen3:8b" }).detail, /qwen3:8b, runs on this machine with Ollama and keeps working/);
+    assert.match(airGapTurnOnWarning({ provider: "labvllm", model: "qwen" }).detail, /keeps working only if its server is on this machine or an allowed private host/);
+    assert.ok(!/reply in progress/.test(airGapTurnOnWarning({ provider: "ollama", running: false }).detail));
+  });
+});
+
+describe("session panel feed", () => {
+  const rpc = { call: async (method: string) => method === "mcp.list" ? [{ name: "supabase", status: "running", tools_count: 2 }]
+    : method === "git.status" ? { is_git: true, branch: "dev", files: [{ path: "a.ts", status: "M" }] }
+    : { files: { "a.ts": { additions: 3, deletions: 1 } } } };
+
+  it("sends MCP status, changes and the folder name", async () => {
+    const sent: any[] = [];
+    const feed = new SidePanelFeed(() => rpc, (m: any) => sent.push(m));
+    feed.refresh();
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].type, "side_panel_data");
+    assert.equal(sent[0].folder, "repo");
+    assert.equal(sent[0].changes.branch, "dev");
+    assert.equal(sent[0].mcp[0].name, "supabase");
+    assert.match(sent[0].mcpTooltip, /1 of 1 running/);
+    feed.dispose();
+  });
+
+  it("pop-out session tabs get the same panel data as the sidebar", async () => {
+    const sent: any[] = [];
+    const tab: any = Object.create(SessionTabPanel.prototype);
+    tab._rpcClient = rpc;
+    tab._postMessage = (m: any) => sent.push(m);
+    tab._sidePanelFeed = new SidePanelFeed(() => tab._rpcClient, (m: any) => tab._postMessage(m));
+    await tab._handleMessage({ type: "side_panel_refresh" });
+    await new Promise((r) => setTimeout(r, 400));
+    const data = sent.find((m) => m.type === "side_panel_data");
+    assert.ok(data, "the tab answered the refresh");
+    assert.equal(data.changes.files.length, 1);
+    assert.equal(data.mcp.length, 1);
+  });
+
+  it("runs only the commands the Environment card offers", () => {
+    executed.length = 0;
+    assert.equal(runSidePanelCommand("git.checkout"), true);
+    assert.equal(runSidePanelCommand("workbench.action.terminal.sendSequence"), false);
+    assert.equal(runSidePanelCommand({}), false);
+    assert.deepEqual(executed, ["git.checkout"]);
   });
 });

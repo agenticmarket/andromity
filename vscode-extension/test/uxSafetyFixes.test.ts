@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const warnings: Array<{ message: string; modal: boolean }> = [];
+const executedCommands: string[] = [];
 const errors: string[] = [];
 let warningAnswer: string | undefined;
 const vscodeMock: any = {
@@ -29,7 +30,7 @@ const vscodeMock: any = {
   },
   languages: { getDiagnostics: () => [] },
   DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
-  commands: { executeCommand: async () => {} },
+  commands: { executeCommand: async (command: string) => { executedCommands.push(command); } },
   env: { isTelemetryEnabled: false, shell: "" },
 };
 
@@ -243,5 +244,16 @@ describe("rewind and resend on the host", () => {
     assert.equal(warnings.length, 0);
     assert.ok((calls as string[]).includes("session.undo"));
     assert.equal(posted.find((m) => m.type === "turn_undone").resendPrompt, undefined);
+  });
+});
+
+describe("session panel commands", () => {
+  it("runs only the branch switcher, Explorer and air-gap toggle", async () => {
+    const provider: any = Object.create(ChatViewProvider.prototype);
+    executedCommands.length = 0;
+    for (const command of ["git.checkout", "workbench.view.explorer", "andromity.toggleAirGap", "workbench.action.terminal.sendSequence", "andromity.deleteSession", 42]) {
+      await provider._handleWebviewMessage({ type: "side_panel_command", command });
+    }
+    assert.deepEqual(executedCommands, ["git.checkout", "workbench.view.explorer", "andromity.toggleAirGap"]);
   });
 });

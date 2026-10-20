@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { currentAirGap } from "../airgapState.js";
+import { confirmTurnOnAirGap, currentAirGap } from "../airgapState.js";
 import { getNonce } from "../providers/webviewSecurity.js";
 import {
   confirmAndromityTrust,
@@ -397,7 +397,10 @@ export class SettingsPanel {
       } else if (!turnOn && airGap.source === "workspace") {
         void vscode.window.showInformationMessage("This project's settings turn air-gap mode on (andromity.airGap.enabled in .vscode/settings.json). Change it there to turn it off.");
       } else if (turnOn !== airGap.enabled) {
-        const confirmed = turnOn || (await vscode.window.showWarningMessage(
+        const chat = SettingsPanel.chatProvider;
+        const confirmed = turnOn
+          ? await confirmTurnOnAirGap({ provider: chat?.getCurrentProvider(), model: chat?.getCurrentModel(), running: chat?.hasRunningSessions() })
+          : (await vscode.window.showWarningMessage(
           "Turn off air-gap mode? Andromity will be able to use the internet again, including cloud models.",
           { modal: true }, "Turn Off")) === "Turn Off";
         if (confirmed) {

@@ -725,6 +725,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const widget = document.getElementById('token-capacity-widget');
       if (widget) widget.removeAttribute('title');
       renderContextBreakdown();
+      if (typeof renderSidePanel === 'function' && sidePanelVisible()) { renderSidePanelContext(); renderSidePanelEnv(); }
     }
 
     function scheduleContextBreakdown() {
@@ -733,6 +734,53 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       contextBreakdownTimer = setTimeout(() => {
         vscode.postMessage({ type: 'get_context_breakdown', sessionId: currentSessionId });
       }, 300);
+    }
+
+    /** Context window numbers shared by the pop-up and the side panel. */
+    function contextView(data) {
+      const limit = data.limit || modelContextCapacity();
+      const used = lastTokenState.contextTok || data.used_tokens || 0;
+      const rows = (data.categories || []).filter(c => c.tokens > 0).map(c => ({ key: c.key, label: c.label, tokens: c.tokens }));
+      const attributed = rows.reduce((sum, r) => sum + r.tokens, 0);
+      // The provider's count includes request overhead Andromity cannot attribute to a category.
+      if (used > attributed * 1.02 && used - attributed > 50) {
+        rows.push({ key: 'other', label: 'Other (provider overhead)', tokens: used - attributed });
+      }
+      const pctOf = (n) => limit > 0 ? (n / limit) * 100 : 0;
+      const threshold = typeof data.compact_threshold === 'number' ? data.compact_threshold : 0.8;
+      const compactAt = data.compact_at_tokens || Math.round(limit * threshold);
+      const free = Math.max(0, limit - Math.max(used, attributed));
+      const buffer = data.auto_compact ? Math.max(0, limit - compactAt) : 0;
+      const note = !data.auto_compact ? 'Auto-compact is off'
+        : used < compactAt ? formatTokCompact(compactAt - used) + ' until auto-compact'
+        : 'Compacts before the next turn';
+      const foot = data.used_source === 'estimate'
+        ? 'Estimated until the next model reply. Category sizes are always estimates.'
+        : 'Total is the size the provider reported for the last request; categories are estimates.';
+      return {
+        limit, used, rows, free, buffer, threshold, autoCompact: !!data.auto_compact, note, foot,
+        pctOf, fmtPct: (n) => { const p = pctOf(n); return p > 0 && p < 0.1 ? '<0.1%' : p.toFixed(1) + '%'; },
+        compactDisabled: isRunning || (data.message_count || 0) < 4,
+      };
+    }
+
+    function contextStackHtml(view) {
+      return view.rows.map(r =>
+        '<span class="context-stack-seg" style="width:' + Math.max(0.4, view.pctOf(r.tokens)).toFixed(2) + '%;background:' + (CONTEXT_COLORS[r.key] || CONTEXT_COLORS.other) + '"></span>'
+      ).join('') + (view.autoCompact ? '<span class="context-stack-mark" style="left:' + (view.threshold * 100).toFixed(1) + '%"></span>' : '');
+    }
+
+    function contextRowsHtml(view) {
+      const row = (color, label, tokens, extraClass) =>
+        '<div class="context-cat-row' + (extraClass ? ' ' + extraClass : '') + '">' +
+          '<span class="context-cat-swatch" style="background:' + color + '"></span>' +
+          '<span class="context-cat-label">' + escapeHtml(label) + '</span>' +
+          '<span class="context-cat-val">' + formatTokCompact(tokens) + '</span>' +
+          '<span class="context-cat-pct">' + view.fmtPct(tokens) + '</span>' +
+        '</div>';
+      return view.rows.map(r => row(CONTEXT_COLORS[r.key] || CONTEXT_COLORS.other, r.label, r.tokens)).join('') +
+        row('transparent', 'Free space', view.free, 'free') +
+        (view.buffer ? row('transparent', 'Auto-compact buffer', view.buffer, 'buffer') : '');
     }
 
     function renderContextBreakdown() {
@@ -750,54 +798,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       panel.hidden = !(data && contextBreakdownExpanded);
       if (!data || panel.hidden) return;
 
-      const limit = data.limit || modelContextCapacity();
-      const used = lastTokenState.contextTok || data.used_tokens || 0;
-      const rows = (data.categories || []).filter(c => c.tokens > 0).map(c => ({ key: c.key, label: c.label, tokens: c.tokens }));
-      const attributed = rows.reduce((sum, r) => sum + r.tokens, 0);
-      // The provider's count includes request overhead Andromity cannot attribute to a category.
-      if (used > attributed * 1.02 && used - attributed > 50) {
-        rows.push({ key: 'other', label: 'Other (provider overhead)', tokens: used - attributed });
-      }
-      const pctOf = (n) => limit > 0 ? (n / limit) * 100 : 0;
-      const fmtPct = (n) => { const p = pctOf(n); return p > 0 && p < 0.1 ? '<0.1%' : p.toFixed(1) + '%'; };
-      const threshold = typeof data.compact_threshold === 'number' ? data.compact_threshold : 0.8;
-      const compactAt = data.compact_at_tokens || Math.round(limit * threshold);
-      const free = Math.max(0, limit - Math.max(used, attributed));
-      const buffer = data.auto_compact ? Math.max(0, limit - compactAt) : 0;
-
+      const view = contextView(data);
       const stack = document.getElementById('context-stack');
-      if (stack) {
-        stack.innerHTML = rows.map(r =>
-          '<span class="context-stack-seg" style="width:' + Math.max(0.4, pctOf(r.tokens)).toFixed(2) + '%;background:' + (CONTEXT_COLORS[r.key] || CONTEXT_COLORS.other) + '"></span>'
-        ).join('') + (data.auto_compact ? '<span class="context-stack-mark" style="left:' + (threshold * 100).toFixed(1) + '%"></span>' : '');
-      }
+      if (stack) stack.innerHTML = contextStackHtml(view);
       const list = document.getElementById('context-cat-list');
-      if (list) {
-        const row = (color, label, tokens, extraClass) =>
-          '<div class="context-cat-row' + (extraClass ? ' ' + extraClass : '') + '">' +
-            '<span class="context-cat-swatch" style="background:' + color + '"></span>' +
-            '<span class="context-cat-label">' + escapeHtml(label) + '</span>' +
-            '<span class="context-cat-val">' + formatTokCompact(tokens) + '</span>' +
-            '<span class="context-cat-pct">' + fmtPct(tokens) + '</span>' +
-          '</div>';
-        list.innerHTML = rows.map(r => row(CONTEXT_COLORS[r.key] || CONTEXT_COLORS.other, r.label, r.tokens)).join('') +
-          row('transparent', 'Free space', free, 'free') +
-          (buffer ? row('transparent', 'Auto-compact buffer', buffer, 'buffer') : '');
-      }
+      if (list) list.innerHTML = contextRowsHtml(view);
       const note = document.getElementById('context-compact-note');
-      if (note) {
-        if (!data.auto_compact) note.textContent = 'Auto-compact is off';
-        else if (used < compactAt) note.textContent = formatTokCompact(compactAt - used) + ' until auto-compact';
-        else note.textContent = 'Compacts before the next turn';
-      }
+      if (note) note.textContent = view.note;
       const compactBtn = document.getElementById('context-compact-btn');
-      if (compactBtn) compactBtn.disabled = isRunning || (data.message_count || 0) < 4;
+      if (compactBtn) compactBtn.disabled = view.compactDisabled;
       const foot = document.getElementById('context-breakdown-note');
-      if (foot) {
-        foot.textContent = data.used_source === 'estimate'
-          ? 'Estimated until the next model reply. Category sizes are always estimates.'
-          : 'Total is the size the provider reported for the last request; categories are estimates.';
-      }
+      if (foot) foot.textContent = view.foot;
     }
 
     // Context Window Popover click toggle support
@@ -4878,6 +4889,60 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'fix-run':
           fixFailedRun(target);
           break;
+        case 'open-mcp-settings':
+          vscode.postMessage({ type: 'open_settings', tab: 'mcp' });
+          break;
+        case 'hide-side-panel':
+          closeSidePanelMenu();
+          setSidePanelOff(true);
+          break;
+        case 'sp-toggle-breakdown':
+          sidePanelPrefs.breakdown = !sidePanelPrefs.breakdown;
+          saveSidePanelPrefs();
+          renderSidePanel();
+          if (sidePanelPrefs.breakdown) revealSidePanelCard('context');
+          break;
+        case 'sp-toggle-card':
+          setSidePanelCardCollapsed(target.getAttribute('data-card') || '');
+          break;
+        case 'sp-toggle-hidden':
+          closeSidePanelMenu();
+          setSidePanelCardHidden(target.getAttribute('data-card') || '');
+          break;
+        case 'sp-expand-all':
+          closeSidePanelMenu();
+          sidePanelPrefs.collapsed = [];
+          saveSidePanelPrefs();
+          renderSidePanel();
+          break;
+        case 'sp-collapse-all':
+          closeSidePanelMenu();
+          sidePanelPrefs.collapsed = SIDE_PANEL_CARDS.map(c => c.id);
+          saveSidePanelPrefs();
+          renderSidePanel();
+          break;
+        case 'sp-open-menu': {
+          const rect = target.getBoundingClientRect();
+          openSidePanelMenu(rect.right - 180, rect.bottom + 4);
+          break;
+        }
+        case 'sp-show-all':
+          sidePanelPrefs.hidden = [];
+          saveSidePanelPrefs();
+          renderSidePanel();
+          break;
+        case 'show-side-panel':
+          setSidePanelOff(false);
+          break;
+        case 'sp-open-diff':
+          vscode.postMessage({ type: 'open_diff', filePath: target.getAttribute('data-path') || '' });
+          break;
+        case 'sp-env':
+          openEnvironmentControl(target.getAttribute('data-env') || '');
+          break;
+        case 'sp-review-all':
+          vscode.postMessage({ type: 'open_changes_review' });
+          break;
         case 'copy-chat-markdown':
           vscode.postMessage({ type: 'copy_chat_markdown', sessionId: currentSessionId });
           break;
@@ -5309,6 +5374,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     };
 
     function updateProfileBadge() {
+      if (typeof scheduleSidePanelEnv === 'function') scheduleSidePanelEnv();
       const lbl = document.getElementById('prompt-profile-label');
       const iconEl = document.getElementById('prompt-profile-icon');
       const p = (currentProfile || 'builder').toLowerCase();
@@ -5436,6 +5502,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function updateReasoningBadge() {
+      if (typeof scheduleSidePanelEnv === 'function') scheduleSidePanelEnv();
       updateReasoningUI();
     }
 
@@ -5748,6 +5815,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function updateModelBadge() {
+      if (typeof scheduleSidePanelEnv === 'function') scheduleSidePanelEnv();
       const found = allModels.find(m => m.id === currentModel);
       let name = found ? (found.name || found.id) : formatModelDisplayName(currentModel);
       if (!name || name === "Loading model...") {
@@ -6438,6 +6506,361 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       var code = decodeURIComponent(enc);
       vscode.postMessage({ type: 'apply_code', code: code });
     };
+
+    // ── Wide-mode session panel (Context, Changes, MCP, Environment) ────────
+    // var, not let/const: the token counter can render before this block runs.
+    var sidePanelData = { mcp: null, changes: undefined, folder: '' };
+    var sidePanelRequestedAt = 0;
+    var SIDE_PANEL_WIDE = typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 1500px)') : null;
+    var SIDE_PANEL_CARDS = [
+      { id: 'context', title: 'Context', icon: '<path d="M12 3a9 9 0 1 0 9 9"></path><path d="M12 3v9h9"></path>' },
+      { id: 'changes', title: 'Changes', icon: '<path d="M6 3v12"></path><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path>' },
+      { id: 'mcp', title: 'MCP servers', icon: '<path d="M9 2v6M15 2v6M7 8h10v4a5 5 0 0 1-10 0V8zM12 17v5"></path>' },
+      { id: 'env', title: 'Environment', icon: '<rect x="3" y="4" width="18" height="12" rx="2"></rect><path d="M8 20h8M12 16v4"></path>' },
+    ];
+    var sidePanelPrefs = { hidden: [], collapsed: [], breakdown: false };
+    try {
+      const saved = JSON.parse(localStorage.getItem('andromity.sidePanel') || '{}');
+      if (Array.isArray(saved.hidden)) sidePanelPrefs.hidden = saved.hidden;
+      if (Array.isArray(saved.collapsed)) sidePanelPrefs.collapsed = saved.collapsed;
+      if (typeof saved.breakdown === 'boolean') sidePanelPrefs.breakdown = saved.breakdown;
+    } catch (e) {}
+
+    /** Fades the panel's top or bottom edge only while there is more to scroll that way. */
+    function updateSidePanelScrollEdges() {
+      const panel = document.getElementById('side-panel-body');
+      if (!panel || !panel.classList) return;
+      const max = panel.scrollHeight - panel.clientHeight;
+      panel.classList.toggle('can-scroll-up', panel.scrollTop > 2);
+      panel.classList.toggle('can-scroll-down', max - panel.scrollTop > 2);
+    }
+
+    function saveSidePanelPrefs() {
+      try { localStorage.setItem('andromity.sidePanel', JSON.stringify(sidePanelPrefs)); } catch (e) {}
+    }
+
+    function sidePanelVisible() {
+      return !!(SIDE_PANEL_WIDE && SIDE_PANEL_WIDE.matches) && !document.body.classList.contains('side-panel-off');
+    }
+
+    function requestSidePanelData() {
+      if (!sidePanelVisible() || Date.now() - sidePanelRequestedAt < 5000) return;
+      sidePanelRequestedAt = Date.now();
+      vscode.postMessage({ type: 'side_panel_refresh' });
+    }
+
+    function setSidePanelOff(off) {
+      document.body.classList.toggle('side-panel-off', off);
+      try { localStorage.setItem('andromity.sidePanelOff', off ? '1' : '0'); } catch (e) {}
+      if (!off) { requestSidePanelData(); renderSidePanel(); }
+    }
+
+    function toggleListValue(list, value) {
+      const i = list.indexOf(value);
+      if (i === -1) list.push(value); else list.splice(i, 1);
+    }
+
+    function setSidePanelCardCollapsed(id) {
+      toggleListValue(sidePanelPrefs.collapsed, id);
+      saveSidePanelPrefs();
+      renderSidePanel();
+      if (sidePanelPrefs.collapsed.indexOf(id) === -1) revealSidePanelCard(id);
+    }
+
+    /** After a card opens, bring all of it into view inside the panel, without moving the chat. */
+    function revealSidePanelCard(id) {
+      const panel = document.getElementById('side-panel-body');
+      const card = document.getElementById('sp-' + id);
+      if (!panel || !card || typeof card.getBoundingClientRect !== 'function') return;
+      const top = panel.getBoundingClientRect().top;
+      const bottom = panel.getBoundingClientRect().bottom;
+      const rect = card.getBoundingClientRect();
+      let delta = 0;
+      if (rect.bottom > bottom - 12) delta = rect.bottom - bottom + 12;
+      if (rect.top - delta < top + 4) delta = rect.top - top - 4;
+      if (delta && typeof panel.scrollBy === 'function') panel.scrollBy({ top: delta, behavior: 'smooth' });
+    }
+
+    function setSidePanelCardHidden(id) {
+      toggleListValue(sidePanelPrefs.hidden, id);
+      saveSidePanelPrefs();
+      renderSidePanel();
+    }
+
+    function spRow(tag, attrs, inner) {
+      return '<' + tag + ' class="sp-row"' + (tag === 'button' ? ' type="button"' : '') + (attrs || '') + '>' + inner + '</' + tag + '>';
+    }
+
+    /** One card: a header that collapses it (with a one-line summary) and its body. */
+    function renderSidePanelCard(id, summaryHtml, bodyHtml) {
+      const el = document.getElementById('sp-' + id);
+      if (!el) return;
+      const card = SIDE_PANEL_CARDS.find(c => c.id === id);
+      if (!card || sidePanelPrefs.hidden.indexOf(id) !== -1 || bodyHtml === null) {
+        el.innerHTML = '';
+        el.hidden = true;
+        return;
+      }
+      const collapsed = sidePanelPrefs.collapsed.indexOf(id) !== -1;
+      el.hidden = false;
+      el.classList.toggle('collapsed', collapsed);
+      el.innerHTML =
+        '<button type="button" class="sp-head" data-action="sp-toggle-card" data-card="' + id + '" aria-expanded="' + !collapsed + '">' +
+          '<svg class="sp-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + card.icon + '</svg>' +
+          '<span class="sp-head-title">' + card.title + '</span>' +
+          '<span class="sp-head-summary">' + (summaryHtml || '') + '</span>' +
+          '<svg class="sp-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
+        '</button>' +
+        '<div class="sp-body">' + bodyHtml + '</div>';
+    }
+
+    function renderSidePanelContext() {
+      const data = currentBreakdown();
+      const fallbackLimit = modelContextCapacity();
+      if (!data && !fallbackLimit) { renderSidePanelCard('context', '', null); return; }
+      const view = data ? contextView(data) : {
+        limit: fallbackLimit, used: lastTokenState.contextTok || lastTokenState.estimate || 0,
+        rows: [], free: 0, buffer: 0, autoCompact: false, note: '', foot: '', compactDisabled: true,
+        pctOf: (n) => (n / fallbackLimit) * 100, fmtPct: () => '',
+      };
+      const pct = view.limit ? Math.min(100, Math.max(0, view.used / view.limit * 100)) : 0;
+      const ringColor = pct > 85 ? '#ef4444' : pct > 65 ? '#f59e0b' : 'var(--fg)';
+      const tone = pct > 85 ? ' full' : pct > 65 ? ' warn' : '';
+      renderSidePanelCard('context', '<span class="sp-pill' + tone + '">' + Math.round(pct) + '%</span>',
+        '<div class="context-popover-top">' +
+          '<div class="context-ring-wrap">' +
+            '<svg class="context-ring-svg" width="36" height="36" viewBox="0 0 36 36">' +
+              '<circle cx="18" cy="18" r="14" fill="none" style="stroke: rgba(var(--tint), 0.1)" stroke-width="3.5"></circle>' +
+              '<circle cx="18" cy="18" r="14" fill="none" stroke="' + ringColor + '" stroke-width="3.5" stroke-dasharray="87.96" stroke-dashoffset="' + (87.96 * (1 - pct / 100)).toFixed(2) + '" stroke-linecap="round" transform="rotate(-90 18 18)"></circle>' +
+            '</svg>' +
+            '<span class="context-ring-text">' + Math.round(pct) + '%</span>' +
+          '</div>' +
+          '<div class="context-popover-header-info">' +
+            '<div class="context-popover-title">Context window</div>' +
+            '<div class="context-popover-subtitle">' + Number(view.used).toLocaleString() + ' / ' + Number(view.limit).toLocaleString() + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="context-popover-rows">' +
+          '<div class="context-popover-row"><div class="context-row-label"><span class="context-dot dot-used"></span><span>Used tokens</span></div><span class="context-row-val">' + Number(view.used).toLocaleString() + '</span></div>' +
+          '<div class="context-popover-row"><div class="context-row-label"><span class="context-dot dot-avail"></span><span>Available</span></div><span class="context-row-val">' + Number(Math.max(0, view.limit - view.used)).toLocaleString() + '</span></div>' +
+        '</div>' +
+        (data ? '<button type="button" class="sp-breakdown-toggle" data-action="sp-toggle-breakdown" aria-expanded="' + sidePanelPrefs.breakdown + '">' +
+            '<span>Breakdown</span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg></button>' +
+          '<div class="context-stack" aria-hidden="true">' + contextStackHtml(view) + '</div>' +
+          (sidePanelPrefs.breakdown ? '<div class="context-cat-list">' + contextRowsHtml(view) + '</div>' : '') +
+          '<div class="context-breakdown-foot sp-context-foot"><span>' + escapeHtml(view.note) + '</span>' +
+            '<button class="context-compact-btn" type="button" data-action="compact-session"' + (view.compactDisabled ? ' disabled' : '') + '>Compact now</button></div>' +
+          '<div class="context-breakdown-note">' + escapeHtml(view.foot) + '</div>' : ''));
+    }
+
+    /** GitHub-style five-block bar showing the share of added and removed lines. */
+    function diffBlocks(additions, deletions) {
+      const total = additions + deletions;
+      if (!total) return '';
+      const filled = Math.min(5, Math.max(1, Math.round(Math.log10(total + 1) * 2)));
+      const green = Math.round(filled * additions / total);
+      let html = '';
+      for (let i = 0; i < 5; i++) html += '<i class="' + (i < green ? 'add' : i < filled ? 'del' : '') + '"></i>';
+      return '<span class="sp-diffbar" aria-hidden="true">' + html + '</span>';
+    }
+
+    function renderSidePanelChanges() {
+      const changes = sidePanelData.changes;
+      if (changes === undefined) { renderSidePanelCard('changes', '', null); return; }
+      if (changes === null) { renderSidePanelCard('changes', '', '<div class="sp-empty">This folder is not a git repository.</div>'); return; }
+      const files = changes.files || [];
+      if (!files.length) {
+        renderSidePanelCard('changes', '<span class="sp-muted">Clean</span>',
+          '<div class="sp-clean"><i class="codicon codicon-check" aria-hidden="true"></i> No uncommitted changes' + (changes.branch ? ' on <strong>' + escapeHtml(changes.branch) + '</strong>' : '') + '</div>');
+        return;
+      }
+      const rows = files.slice(0, 12).map(f => {
+        const name = f.path.split('/').pop() || f.path;
+        const dir = f.path.slice(0, f.path.length - name.length).replace(/\\/$/, '');
+        const isNew = f.status === 'U' || f.status === '??' || f.status === 'A';
+        const isDel = f.status === 'D';
+        const icon = typeof getFileIconBadge === 'function' ? getFileIconBadge(name) : null;
+        const counts = f.additions === null
+          ? '<span class="sp-meta">' + (isNew ? 'new file' : 'binary') + '</span>'
+          : '<span class="sp-counts"><span class="sp-add">+' + f.additions + '</span><span class="sp-del">&minus;' + f.deletions + '</span></span>' + diffBlocks(f.additions, f.deletions);
+        return '<button type="button" class="sp-file' + (isDel ? ' deleted' : '') + '" data-action="sp-open-diff" data-path="' + escapeHtml(f.path) + '" title="Open the diff for ' + escapeHtml(f.path) + '">' +
+          '<span class="sp-file-icon"' + (icon ? ' style="color:' + icon.color + '"' : '') + '>' + (icon ? icon.badge : '') + '</span>' +
+          '<span class="sp-file-text"><span class="sp-file-name">' + escapeHtml(name) + '</span>' +
+            (dir ? '<span class="sp-file-dir">' + escapeHtml(dir) + '</span>' : '') + '</span>' +
+          '<span class="sp-file-stats"><span class="sp-status ' + (isNew ? 'new' : isDel ? 'del' : 'mod') + '" title="' + (isNew ? 'New' : isDel ? 'Deleted' : 'Modified') + '">' + (isNew ? 'U' : isDel ? 'D' : 'M') + '</span>' + counts + '</span>' +
+        '</button>';
+      }).join('');
+      renderSidePanelCard('changes',
+        '<span class="sp-add">+' + changes.additions + '</span>&nbsp;<span class="sp-del">&minus;' + changes.deletions + '</span>',
+        '<div class="sp-changes-summary">' + files.length + ' file' + (files.length === 1 ? '' : 's') + ' changed' + (changes.branch ? ' on <strong>' + escapeHtml(changes.branch) + '</strong>' : '') + '</div>' +
+        '<div class="sp-files">' + rows + '</div>' +
+        (files.length > 12 ? '<div class="sp-muted sp-more">and ' + (files.length - 12) + ' more</div>' : '') +
+        '<div class="sp-buttons"><button type="button" class="context-compact-btn" data-action="sp-review-all">Review changes</button></div>');
+    }
+
+    function mcpStatusView(status) {
+      if (status === 'running') return { dot: 'running', label: null };
+      if (status === 'needs_auth') return { dot: 'attention', label: 'Sign in' };
+      if (status === 'needs_trust') return { dot: 'attention', label: 'Trust folder' };
+      if (status === 'initializing') return { dot: 'starting', label: 'Starting…' };
+      if (status === 'disabled') return { dot: '', label: 'Off' };
+      if (status === 'error') return { dot: 'error', label: 'Error' };
+      return { dot: '', label: status };
+    }
+
+    function renderSidePanelMcp() {
+      const servers = sidePanelData.mcp;
+      if (!servers) { renderSidePanelCard('mcp', '', null); return; }
+      const running = servers.filter(s => s.status === 'running').length;
+      const attention = servers.filter(s => s.status === 'needs_auth' || s.status === 'error' || s.status === 'needs_trust').length;
+      const tools = servers.reduce((sum, s) => sum + (s.status === 'running' ? s.tools : 0), 0);
+      const rows = servers.map(s => {
+        const view = mcpStatusView(s.status);
+        return '<button type="button" class="sp-server" data-action="open-mcp-settings" title="Open MCP settings">' +
+          '<span class="sp-dot ' + view.dot + '"></span>' +
+          '<span class="sp-server-name">' + escapeHtml(s.name) + '<span class="sp-server-kind">' + (s.remote ? 'remote' : 'local') + '</span></span>' +
+          (view.label ? '<span class="sp-pill ' + (view.dot === 'attention' || view.dot === 'error' ? 'warn' : '') + '">' + escapeHtml(view.label) + '</span>'
+            : '<span class="sp-meta">' + s.tools + ' tool' + (s.tools === 1 ? '' : 's') + '</span>') +
+        '</button>';
+      }).join('');
+      const summary = servers.length
+        ? (attention ? '<span class="sp-pill warn">' + attention + ' need' + (attention === 1 ? 's' : '') + ' you</span>' : '<span class="sp-muted">' + running + '/' + servers.length + ' running</span>')
+        : '';
+      renderSidePanelCard('mcp', summary,
+        (servers.length ? '<div class="sp-changes-summary">' + running + ' of ' + servers.length + ' running · ' + tools + ' tools available</div>' + rows
+          : '<div class="sp-empty">No MCP servers yet. They let the agent use tools like databases, issue trackers and docs.</div>') +
+        '<div class="sp-buttons"><button type="button" class="context-compact-btn" data-action="open-mcp-settings">' + (servers.length ? 'Manage servers' : 'Add a server') + '</button></div>');
+    }
+
+    var sidePanelEnvTimer = null;
+    function scheduleSidePanelEnv() {
+      if (sidePanelEnvTimer) clearTimeout(sidePanelEnvTimer);
+      sidePanelEnvTimer = setTimeout(() => { sidePanelEnvTimer = null; if (sidePanelVisible()) renderSidePanelEnv(); }, 0);
+    }
+
+    function envLabel(id) {
+      const el = document.getElementById(id);
+      return el ? String(el.textContent || '').trim() : '';
+    }
+
+    function renderSidePanelEnv() {
+      const pill = document.getElementById('airgap-pill');
+      const branch = sidePanelData.changes && sidePanelData.changes.branch;
+      const model = envLabel('prompt-model-label') || (currentModel ? String(currentModel).split('/').pop() : '');
+      const mode = envLabel('prompt-mode-label') || (currentMode ? String(currentMode).toUpperCase() : '');
+      const rows = [
+        { id: 'model', icon: 'sparkle', label: 'Model', value: model, hint: 'Change model' },
+        { id: 'mode', icon: 'shield', label: 'Mode', value: mode, hint: 'Change permission mode' },
+        { id: 'profile', icon: 'person', label: 'Style', value: envLabel('prompt-profile-label'), hint: 'Change working style' },
+        { id: 'reasoning', icon: 'lightbulb', label: 'Reasoning', value: envLabel('prompt-reasoning-label'), hint: 'Change reasoning effort' },
+        { id: 'branch', icon: 'git-branch', label: 'Branch', value: branch || '', hint: 'Switch branch' },
+        { id: 'folder', icon: 'folder', label: 'Folder', value: sidePanelData.folder || '', hint: 'Show in Explorer' },
+        { id: 'network', icon: pill && !pill.hidden ? 'lock' : 'globe', label: 'Network', value: pill && !pill.hidden ? 'Air-gap' : 'Online', hint: pill && !pill.hidden ? 'Air-gap mode settings' : 'Turn on air-gap mode' },
+      ].filter(r => r.value);
+      renderSidePanelCard('env', branch ? '<span class="sp-muted"><i class="codicon codicon-git-branch" aria-hidden="true"></i> ' + escapeHtml(branch) + '</span>' : '',
+        rows.length ? rows.map(r =>
+          '<button type="button" class="sp-env-row" data-action="sp-env" data-env="' + r.id + '" title="' + r.hint + '">' +
+            '<i class="codicon codicon-' + r.icon + ' sp-env-icon" aria-hidden="true"></i>' +
+            '<span class="sp-env-label">' + r.label + '</span>' +
+            '<span class="sp-env-value' + (r.id === 'mode' ? ' mode-' + escapeHtml(String(currentMode || '').toLowerCase()) : '') + (r.id === 'network' && r.value === 'Air-gap' ? ' airgap' : '') + '">' + escapeHtml(r.value) + '</span>' +
+            '<i class="codicon codicon-chevron-right sp-env-go" aria-hidden="true"></i>' +
+          '</button>').join('') : null);
+    }
+
+    /** Opens the control behind an Environment row: the prompt bar's pickers, or a VS Code command. */
+    function openEnvironmentControl(id) {
+      const pickers = { model: 'btn-prompt-model', mode: 'btn-prompt-mode', profile: 'btn-prompt-profile', reasoning: 'btn-prompt-reasoning' };
+      if (pickers[id]) {
+        // After this click finishes, so the picker's outside-click handler does not close it at once.
+        setTimeout(() => {
+          const button = document.getElementById(pickers[id]);
+          if (button) { button.click(); if (typeof button.focus === 'function') button.focus(); }
+        }, 0);
+        return;
+      }
+      const commands = { branch: 'git.checkout', folder: 'workbench.view.explorer', network: 'andromity.toggleAirGap' };
+      if (commands[id]) vscode.postMessage({ type: 'side_panel_command', command: commands[id] });
+    }
+
+    function renderSidePanel() {
+      const mcpBtn = document.getElementById('btn-mcp-status');
+      if (mcpBtn && sidePanelData.mcpTooltip) {
+        mcpBtn.title = sidePanelData.mcpTooltip;
+        mcpBtn.setAttribute('aria-label', sidePanelData.mcpTooltip);
+      }
+      if (!sidePanelVisible()) return;
+      renderSidePanelContext();
+      renderSidePanelChanges();
+      renderSidePanelMcp();
+      renderSidePanelEnv();
+      const empty = document.getElementById('sp-empty-all');
+      if (empty) empty.hidden = sidePanelPrefs.hidden.length < SIDE_PANEL_CARDS.length;
+      updateSidePanelScrollEdges();
+    }
+
+    // ── Choose which cards show: right-click the panel, or its ⋯ button ──
+    function closeSidePanelMenu() {
+      const menu = document.getElementById('sp-menu');
+      if (menu) menu.hidden = true;
+    }
+
+    function openSidePanelMenu(x, y) {
+      const menu = document.getElementById('sp-menu');
+      if (!menu) return;
+      menu.innerHTML = '<div class="sp-menu-label">Show in panel</div>' +
+        SIDE_PANEL_CARDS.map(c => {
+          const shown = sidePanelPrefs.hidden.indexOf(c.id) === -1;
+          return '<button type="button" class="sp-menu-item" role="menuitemcheckbox" aria-checked="' + shown + '" data-action="sp-toggle-hidden" data-card="' + c.id + '">' +
+            '<span class="sp-check">' + (shown ? '&#10003;' : '') + '</span>' + c.title + '</button>';
+        }).join('') +
+        '<div class="sp-menu-sep"></div>' +
+        '<button type="button" class="sp-menu-item" role="menuitem" data-action="sp-expand-all"><span class="sp-check"></span>Expand all</button>' +
+        '<button type="button" class="sp-menu-item" role="menuitem" data-action="sp-collapse-all"><span class="sp-check"></span>Collapse all</button>' +
+        '<button type="button" class="sp-menu-item" role="menuitem" data-action="hide-side-panel"><span class="sp-check"></span>Hide panel</button>';
+      menu.hidden = false;
+      const rect = menu.getBoundingClientRect();
+      menu.style.left = Math.max(8, Math.min(window.innerWidth - rect.width - 8, x)) + 'px';
+      menu.style.top = Math.max(8, Math.min(window.innerHeight - rect.height - 8, y)) + 'px';
+      const first = menu.querySelector('.sp-menu-item');
+      if (first && typeof first.focus === 'function') first.focus();
+    }
+
+    const sidePanelEl = document.getElementById('side-panel');
+    const sidePanelBodyEl = document.getElementById('side-panel-body');
+    if (sidePanelBodyEl && typeof sidePanelBodyEl.addEventListener === 'function') {
+      sidePanelBodyEl.addEventListener('scroll', updateSidePanelScrollEdges, { passive: true });
+      if (typeof ResizeObserver !== 'undefined') new ResizeObserver(updateSidePanelScrollEdges).observe(sidePanelBodyEl);
+    }
+    if (sidePanelEl && typeof sidePanelEl.addEventListener === 'function') {
+      sidePanelEl.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        openSidePanelMenu(e.clientX, e.clientY);
+      });
+    }
+    const sidePanelMenuEl = document.getElementById('sp-menu');
+    if (sidePanelMenuEl && typeof sidePanelMenuEl.addEventListener === 'function') {
+      sidePanelMenuEl.addEventListener('keydown', (e) => {
+        const items = Array.from(sidePanelMenuEl.querySelectorAll('.sp-menu-item'));
+        const index = items.indexOf(document.activeElement);
+        if (e.key === 'Escape') { e.preventDefault(); closeSidePanelMenu(); }
+        else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          const next = items[(index + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length];
+          if (next) next.focus();
+        }
+      });
+    }
+    document.addEventListener('click', (e) => {
+      const menu = document.getElementById('sp-menu');
+      if (menu && !menu.hidden && e.target && typeof e.target.closest === 'function' && !e.target.closest('#sp-menu') && !e.target.closest('[data-action="sp-open-menu"]')) {
+        closeSidePanelMenu();
+      }
+    });
+
+    try { if (localStorage.getItem('andromity.sidePanelOff') === '1') document.body.classList.add('side-panel-off'); } catch (e) {}
+    if (SIDE_PANEL_WIDE && typeof SIDE_PANEL_WIDE.addEventListener === 'function') {
+      SIDE_PANEL_WIDE.addEventListener('change', () => { closeSidePanelMenu(); requestSidePanelData(); renderSidePanel(); });
+    }
 
     // Run buttons waiting on a terminal result, keyed by run id. A failed run
     // keeps its output here (in the editor only) until the user asks for a fix.
@@ -7597,6 +8020,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     };
 
     function updateModeBadge(mode) {
+      if (typeof scheduleSidePanelEnv === 'function') scheduleSidePanelEnv();
       if (!mode) return;
       currentMode = mode.toLowerCase();
       if (activeModeLabel) activeModeLabel.textContent = currentMode.toUpperCase();
@@ -8209,6 +8633,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         case 'starter_context':
           renderSmartStarters(msg);
+          break;
+
+        case 'side_panel_data':
+          if (msg.mcp !== undefined) sidePanelData.mcp = msg.mcp;
+          if (msg.changes !== undefined) sidePanelData.changes = msg.changes;
+          if (msg.folder) sidePanelData.folder = msg.folder;
+          if (msg.mcpTooltip) sidePanelData.mcpTooltip = msg.mcpTooltip;
+          renderSidePanel();
           break;
 
         case 'session_switched':
@@ -10676,7 +11108,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function hasOpenOverlay() {
       const lightbox = document.getElementById('image-lightbox-overlay');
       if (lightbox && lightbox.classList.contains('open')) return true;
-      return ['reasoning-popover', 'collab-inbox-popover', 'mode-popover', 'profile-popover', 'slash-palette', 'mention-palette']
+      return ['reasoning-popover', 'collab-inbox-popover', 'mode-popover', 'profile-popover', 'slash-palette', 'mention-palette', 'sp-menu']
         .some(function(id) { return isShownElement(document.getElementById(id)); });
     }
 

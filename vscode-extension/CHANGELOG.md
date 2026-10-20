@@ -5,10 +5,17 @@ All notable changes to the "andromity" extension will be documented in this file
 ## [Unreleased]
 
 ### Added
+- **Session panel in wide windows.** When the chat is wide enough (a full editor tab), the empty space on the right shows **Context** usage with **Compact session**, uncommitted **Changes** with line counts and **Review all**, **MCP servers** with their status, and the **Environment** (folder, branch, model, mode, air-gap). Click a card header to collapse it to a one-line summary. Right-click the panel, or use its ⋯ button, to choose which cards show, or to expand or collapse them all. Hide the panel with the × and bring it back from the chat bar. All of this is remembered.
+  - **Context** matches the Context window pop-up, with its Breakdown behind a toggle so the card stays short.
+  - **Changes** shows file icons, folders, line counts and a small diff bar.
+  - **Environment** rows open their control: model, permission mode, working style and reasoning pickers, the branch switcher, the Explorer, and air-gap mode. They update as soon as you change any of them.
+  - Only the panel scrolls, with soft edges instead of a scrollbar, and its header stays in place.
+  - Works in pop-out session tabs too.
+- **MCP icon in the bottom bar.** One click opens MCP settings; hover it to see how many servers are running.
 - **Badge on the Andromity icon.** While the chat is hidden, finished replies and requests for your approval or an answer show as a count on the Andromity icon, wherever the view is placed. It clears when you open the chat.
 - **Smart starter buttons.** On an empty chat, **Fix a problem** becomes **Fix 3 errors in auth.ts** when the open file (or your workspace) has errors, and **Add tests** becomes **Review my changes** when you have uncommitted files.
 - **Copy chat as Markdown.** A button in the chat bar, and **Andromity: Copy Chat as Markdown**, copy your prompts and the replies, without tool output or attached editor context.
-- **Air-gap mode.** Settings → Andromity → **Air-gap Mode**, or **Andromity: Air-gap Mode: Turn On or Off**. Andromity can then reach only this machine and private hosts you list, for example a shared model server.
+- **Air-gap mode.** Turning it on first shows what will stop for you, such as a cloud model or a reply in progress. Settings → Andromity → **Air-gap Mode**, or **Andromity: Air-gap Mode: Turn On or Off**. Andromity can then reach only this machine and private hosts you list, for example a shared model server.
   - Cloud models, web search, remote MCP servers, sign-in and telemetry turn off.
   - Commands the agent runs, and the code-block **Run** terminal, are blocked from the internet where possible.
   - A project can turn it on but only your user settings can turn it off, and `ANDROMITY_AIRGAP=1` locks it on.

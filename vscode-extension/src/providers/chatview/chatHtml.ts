@@ -108,6 +108,23 @@ export function getChatViewHtml(webview: vscode.Webview, extensionUri: vscode.Ur
       user-select: none;
     }
     .codicon-file::before             { content: "\\ea7b"; }
+    /* Icons used by the Run button, the Air-gap badge and the session panel. */
+    .codicon-loading::before          { content: "\\eb19"; }
+    .codicon-check::before            { content: "\\eab2"; }
+    .codicon-error::before            { content: "\\ea87"; }
+    .codicon-wand::before             { content: "\\ebcf"; }
+    .codicon-shield::before           { content: "\\eb53"; }
+    .codicon-sparkle::before          { content: "\\ec10"; }
+    .codicon-person::before           { content: "\\ea67"; }
+    .codicon-lightbulb::before        { content: "\\ea61"; }
+    .codicon-git-branch::before       { content: "\\ec6f"; }
+    .codicon-folder::before           { content: "\\ea83"; }
+    .codicon-globe::before            { content: "\\eb01"; }
+    .codicon-lock::before             { content: "\\ea75"; }
+    .codicon-chevron-right::before    { content: "\\eab6"; }
+    @keyframes codicon-spin { 100% { transform: rotate(360deg); } }
+    .codicon-loading.codicon-modifier-spin { animation: codicon-spin 1.5s steps(30) infinite; }
+    @media (prefers-reduced-motion: reduce) { .codicon-loading.codicon-modifier-spin { animation: none; } }
     .codicon-file-code::before        { content: "\\eae9"; }
     .codicon-file-media::before       { content: "\\eaea"; }
     .codicon-file-zip::before         { content: "\\eaef"; }
@@ -176,6 +193,12 @@ ${styles}
         <span class="collab-inbox-badge-count" id="collab-inbox-badge" style="display:none;">0</span>
       </button>
 
+      <button class="top-bar-icon-btn" id="btn-top-side-panel" data-action="show-side-panel" title="Show session panel" aria-label="Show session panel">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
+          <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+          <line x1="15" y1="4" x2="15" y2="20"></line>
+        </svg>
+      </button>
       <button class="top-bar-icon-btn" id="btn-top-copy-markdown" aria-label="Copy chat as Markdown" title="Copy chat as Markdown" data-action="copy-chat-markdown">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <rect x="3" y="5" width="18" height="14" rx="2"></rect>
@@ -728,6 +751,28 @@ ${styles}
   </div>
   </div>
 
+  <aside class="side-panel" id="side-panel" aria-label="Session panel">
+    <div class="side-panel-header">
+      <span>Session</span>
+      <span class="side-panel-tools">
+        <button type="button" class="side-panel-tool" data-action="sp-open-menu" title="Choose what to show (or right-click the panel)" aria-label="Choose what to show" aria-haspopup="menu">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg>
+        </button>
+        <button type="button" class="side-panel-tool" data-action="hide-side-panel" title="Hide session panel" aria-label="Hide session panel">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+        </button>
+      </span>
+    </div>
+    <div class="side-panel-body" id="side-panel-body">
+      <div class="sp-empty-all" id="sp-empty-all" hidden>All cards are hidden. <button type="button" class="sp-link" data-action="sp-show-all">Show all</button></div>
+      <section class="sp-card" id="sp-context" aria-label="Context"></section>
+      <section class="sp-card" id="sp-changes" aria-label="Changes"></section>
+      <section class="sp-card" id="sp-mcp" aria-label="MCP servers"></section>
+      <section class="sp-card" id="sp-env" aria-label="Environment"></section>
+    </div>
+  </aside>
+  <div class="sp-menu" id="sp-menu" role="menu" aria-label="Session panel" hidden></div>
+
   <div id="interactive-slot"></div>
 
   <div class="queue-container" id="queue-container" style="display:none;"></div>
@@ -1156,6 +1201,11 @@ ${styles}
       </div>
     </div>
     <div class="status-bar-right">
+      <button type="button" class="status-mcp-btn" id="btn-mcp-status" data-action="open-mcp-settings" title="Open MCP settings" aria-label="Open MCP settings">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 2v6M15 2v6M7 8h10v4a5 5 0 0 1-10 0V8zM12 17v5"></path>
+        </svg>
+      </button>
       <span id="cost-label" class="skeleton skeleton-text" style="min-width:64px;" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
     </div>
   </div>

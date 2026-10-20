@@ -16,6 +16,7 @@ import { EditorBridge } from "../integrations/EditorBridge.js";
 import { runCodeBlockInTerminal } from "../integrations/TerminalRunner.js";
 import { airGapPillMessage } from "../airgapState.js";
 import { copySessionAsMarkdown } from "../chatMarkdown.js";
+import { runSidePanelCommand, SidePanelFeed } from "../sidePanelFeed.js";
 import { confirmRewindAndResend, resendPromptOf } from "../integrations/rewind.js";
 import { recordFeatureUse } from "../telemetry/featureUsage.js";
 import { SettingsPanel } from "./SettingsPanel.js";
@@ -46,6 +47,7 @@ export class SessionTabPanel {
   private _currentProfile: string = "builder";
   private _currentReasoning: string = "medium";
   private _disposables: vscode.Disposable[] = [];
+  private _sidePanelFeed = new SidePanelFeed(() => this._rpcClient, (message) => this._postMessage(message));
   private _rpcDisposables: Array<() => void> = [];
   private _hydration = new SessionHydration();
   private _creatingSession: Promise<void> | null = null;
@@ -330,7 +332,10 @@ export class SessionTabPanel {
     bind("subagent/failed", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "subagent_failed", ...params });
     });
+    bind("mcp/statusChanged", () => this._sidePanelFeed.refresh(["mcp"]));
+
     bind("agent/done", (params: any) => {
+      this._sidePanelFeed.refresh(["changes"]);
       if (isMatch(params)) {
         this._postMessage({ type: "agent_done", ...params });
         if (this._viewProvider.isSoundEnabled("done") && !this._viewProvider.isViewVisible()) {
@@ -403,10 +408,21 @@ export class SessionTabPanel {
     if (message.type === "ready" || message.type === "webview_ready") {
       this._postMessage({ type: "backend_ready" });
       this._postMessage(airGapPillMessage());
+      this._sidePanelFeed.refresh();
       void this._viewProvider.getWorkspaceIndex().then((index) => {
         this._postMessage({ type: "workspace_files_updated", files: index.files, dirs: index.dirs });
       });
       await this._loadSession();
+      return;
+    }
+
+    if (message.type === "side_panel_refresh") {
+      this._sidePanelFeed.refresh();
+      return;
+    }
+
+    if (message.type === "side_panel_command") {
+      runSidePanelCommand(message.command);
       return;
     }
 
@@ -1128,6 +1144,7 @@ export class SessionTabPanel {
 
   public dispose() {
     SessionTabPanel._panels.delete(this._sessionId);
+    this._sidePanelFeed?.dispose();
     this._disposeRpcEvents();
     while (this._disposables.length) {
       const x = this._disposables.pop();

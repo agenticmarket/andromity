@@ -17,7 +17,7 @@ import { RpcClient } from "./server/RpcClient.js";
 import { recordFeatureUse, setFeatureUsageClient, setFeatureUsageGate } from "./telemetry/featureUsage.js";
 import { FeedbackNotifications } from "./engagement/feedbackNotifications.js";
 import { AttentionKind, BackgroundSessions, describeToolActivity } from "./backgroundSessions.js";
-import { currentAirGap } from "./airgapState.js";
+import { confirmTurnOnAirGap, currentAirGap } from "./airgapState.js";
 import { airGapStatusLine } from "./airgap.js";
 
 let pythonBridge: PythonBridge | null = null;
@@ -958,6 +958,10 @@ export async function activate(context: vscode.ExtensionContext) {
           "Turn off air-gap mode? Andromity will be able to use the internet again, including cloud models.",
           { modal: true }, "Turn Off");
         if (choice !== "Turn Off") return;
+      } else if (!(await confirmTurnOnAirGap({
+        provider: chatProvider.getCurrentProvider(), model: chatProvider.getCurrentModel(), running: chatProvider.hasRunningSessions(),
+      }))) {
+        return;
       }
       await config.update("airGap.enabled", !airGap.enabled, vscode.ConfigurationTarget.Global);
     }),

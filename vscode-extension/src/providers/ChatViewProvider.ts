@@ -3,6 +3,8 @@ import { airGapPillMessage, currentAirGap } from "../airgapState.js";
 import { AwayBadge, AwayEvent } from "../awayBadge.js";
 import { collectStarterContext, watchStarterContext } from "../smartStarters.js";
 import { copySessionAsMarkdown } from "../chatMarkdown.js";
+import { SidePanelPart } from "../sidePanelData.js";
+import { runSidePanelCommand, SidePanelFeed } from "../sidePanelFeed.js";
 import { airGapOffMessage } from "../airgap.js";
 import * as path from "path";
 import * as vscode from "vscode";
@@ -117,6 +119,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _viewStateListeners: Array<() => void> = [];
+  private _sidePanelFeed = new SidePanelFeed(() => this._rpcClient, (message) => this._postToWebview(message));
+
+  /** Sends MCP status and uncommitted changes to the chat's side panel and MCP icon (debounced). */
+  private _refreshSidePanel(parts: SidePanelPart[] = ["mcp", "changes"]) {
+    this._sidePanelFeed?.refresh(parts);
+  }
   private _awayBadge = new AwayBadge();
 
   /** Badge the Andromity icon for replies and requests that arrive while the chat is hidden. */
@@ -177,6 +185,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public getCurrentProvider(): string | undefined {
     return this._currentProvider || undefined;
+  }
+
+  public hasRunningSessions(): boolean {
+    return (this._runningSessions?.size || 0) > 0;
   }
 
   constructor(
@@ -295,6 +307,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._disposeRpcEvents();
     this._rpcClient = client;
     this._boundClient = client;
+    this._refreshSidePanel();
     // Reuse the DiffManager across reconnects — constructing a new one for
     // every connection registers another TextDocumentContentProvider for the
     // same scheme and leaks the old one.
@@ -1224,7 +1237,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
     const subscriptions = [
-      watchStarterContext((context) => this._postToWebview({ type: "starter_context", ...context })),
+      watchStarterContext((context) => {
+        this._postToWebview({ type: "starter_context", ...context });
+        // Same signal covers commits, checkouts and edits, so the panel's branch and changes stay current.
+        this._refreshSidePanel(["changes"]);
+      }),
       webviewView.webview.onDidReceiveMessage(async (message) => {
         await this._handleWebviewMessage(message);
       }),
@@ -1461,9 +1478,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this._postToWebview({ type: "process_exited", ...params });
     });
 
+    bind("mcp/statusChanged", () => this._refreshSidePanel(["mcp"]));
+
     bind("agent/done", (params: any) => {
       const sid = params?.session_id || this._currentSessionId;
       this._noteWhileAway("reply", params);
+      this._refreshSidePanel(["changes"]);
       if (sid) {
         this._runningSessions.delete(sid);
       }
@@ -2162,6 +2182,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this._markWebviewReady();
       this.broadcastAirGapState();
       this._postToWebview({ type: "starter_context", ...collectStarterContext() });
+      this._refreshSidePanel();
       void this.getWorkspaceIndex().then((index) => {
         this._postToWebview({ type: "workspace_files_updated", files: index.files, dirs: index.dirs });
       });
@@ -2175,6 +2196,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this._postToWebview({ type: "backend_ready" });
         if (!this._isStartupStateDelivered()) await this._loadStartupState();
       }
+      return;
+    }
+
+    if (message.type === "side_panel_refresh") {
+      this._refreshSidePanel();
+      return;
+    }
+
+    if (message.type === "side_panel_command") {
+      runSidePanelCommand(message.command);
       return;
     }
 
