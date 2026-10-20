@@ -191,7 +191,7 @@ export class SessionTabPanel {
       "</head>",
       "<style>#btn-top-open-tab { display: none !important; }</style></head>"
     );
-    html = html.replace('<body class="loading">', '<body class="loading andromity-session-tab">');
+    html = html.replace('<body class="', '<body class="andromity-session-tab ');
     this._panel.webview.html = html;
   }
 
@@ -413,6 +413,16 @@ export class SessionTabPanel {
         this._postMessage({ type: "workspace_files_updated", files: index.files, dirs: index.dirs });
       });
       await this._loadSession();
+      return;
+    }
+
+    if (message.type === "side_panel_preferences") {
+      await this._viewProvider.saveSidePanelPreferences(message.preferences);
+      return;
+    }
+
+    if (message.type === "side_panel_visibility") {
+      await this._viewProvider.saveSidePanelVisibility(message.off);
       return;
     }
 

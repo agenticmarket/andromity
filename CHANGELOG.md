@@ -2,9 +2,10 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
-## [Unreleased]
+## [0.2.22] — 2026-10-20
 
 ### Added
+- **Customizable VS Code session panel.** Wide chat windows show context usage, uncommitted changes, MCP server status and environment controls. Drag a section's handle to reorder it, or use Up/Down, Home and End while the handle is focused. Sections start expanded; their order, collapsed state, visibility and the panel's hide preference are saved across chat tabs and reloads.
 - **Air-gap mode.** Turn it on with `[default] airgap = true` in `config.toml` or `ANDROMITY_AIRGAP=1`. Andromity then makes no network connections except to this machine and private hosts in `airgap_allowed_hosts` / `ANDROMITY_AIRGAP_ALLOW`.
   - A guard installed at startup refuses connections, UDP sends and DNS lookups, including on the Windows asyncio path the old guard missed.
   - Cloud providers, web tools, remote and unapproved local MCP servers, connectors, telemetry and background lookups turn off with clear messages.

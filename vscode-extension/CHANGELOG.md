@@ -2,12 +2,15 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
-## [Unreleased]
+## [0.2.22] — 2026-10-20
 
 ### Added
-- **Session panel in wide windows.** When the chat is wide enough (a full editor tab), the empty space on the right shows **Context** usage with **Compact session**, uncommitted **Changes** with line counts and **Review all**, **MCP servers** with their status, and the **Environment** (folder, branch, model, mode, air-gap). Click a card header to collapse it to a one-line summary. Right-click the panel, or use its ⋯ button, to choose which cards show, or to expand or collapse them all. Hide the panel with the × and bring it back from the chat bar. All of this is remembered.
+- **Session panel in wide windows.** When the chat is wide enough (a full editor tab), the empty space on the right shows **Context window** usage with **Compact now**, uncommitted **Changes** with line counts and **Review changes**, **MCP servers** with their status, and the **Environment** (folder, branch, model, mode, air-gap). Click a card header to collapse it to a one-line summary. Right-click the panel, or use its ⋯ button, to choose which cards show, or to expand or collapse them all. Hide the panel with the × and bring it back from the chat bar.
+  - Drag a section's six-dot handle to change its position. With the handle focused, Up/Down moves it one place and Home/End moves it to the top/bottom. **Reset section order** restores the original order.
+  - All sections start expanded. Their order, collapsed state, visibility and the panel's hide preference persist across chat tabs and VS Code reloads.
   - **Context** matches the Context window pop-up, with its Breakdown behind a toggle so the card stays short.
-  - **Changes** shows file icons, folders, line counts and a small diff bar.
+  - **Changes** shows file icons, folders, line counts and a small diff bar. A five-file preview links to the rest, and full paths remain available in tooltips and accessible labels.
+  - **MCP servers** shows explicit running, sign-in, trust, starting, off and error states, plus the number of tools available from running servers.
   - **Environment** rows open their control: model, permission mode, working style and reasoning pickers, the branch switcher, the Explorer, and air-gap mode. They update as soon as you change any of them.
   - Only the panel scrolls, with soft edges instead of a scrollbar, and its header stays in place.
   - Works in pop-out session tabs too.

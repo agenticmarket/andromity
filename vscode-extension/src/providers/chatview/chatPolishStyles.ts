@@ -200,10 +200,10 @@ export function getChatPolishStyles(): string {
         display: flex;
         flex-direction: column;
         position: fixed;
-        top: 96px;
+        top: 88px;
         bottom: 56px;
-        right: 16px;
-        width: 290px;
+        right: 20px;
+        width: clamp(290px, calc((100vw - 860px) / 2 - 32px), 336px);
         z-index: 5;
       }
       body.side-panel-off #btn-top-side-panel { display: inline-flex; }
@@ -213,8 +213,10 @@ export function getChatPolishStyles(): string {
       min-height: 0;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 12px;
       overflow-y: auto;
+      padding: 2px 2px 12px;
+      scroll-padding-block: 12px;
       /* Only the panel scrolls; reaching its end never scrolls the chat behind it. */
       overscroll-behavior: contain;
       scrollbar-width: none;
@@ -225,27 +227,25 @@ export function getChatPolishStyles(): string {
       mask-image: linear-gradient(to bottom, transparent 0, #000 var(--sp-fade-top), #000 calc(100% - var(--sp-fade-bottom)), transparent 100%);
     }
     .side-panel-body::-webkit-scrollbar { display: none; }
-    .side-panel-body.can-scroll-up { --sp-fade-top: 24px; }
-    .side-panel-body.can-scroll-down { --sp-fade-bottom: 32px; }
+    .side-panel-body.can-scroll-up { --sp-fade-top: 8px; }
+    .side-panel-body.can-scroll-down { --sp-fade-bottom: 12px; }
     .side-panel-header {
       flex-shrink: 0;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      font-size: 10.5px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: var(--muted);
-      padding: 0 2px 8px 6px;
+      padding: 0 2px 14px;
     }
+    .side-panel-heading { display: flex; flex-direction: column; gap: 4px; }
+    .side-panel-eyebrow { font-size: 10px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+    .side-panel-title { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; color: var(--fg); }
     .side-panel-tools { display: inline-flex; gap: 2px; }
     .side-panel-tool {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 22px;
-      height: 22px;
+      width: 28px;
+      height: 28px;
       border: none;
       border-radius: 5px;
       background: transparent;
@@ -259,21 +259,34 @@ export function getChatPolishStyles(): string {
 
     .sp-card {
       border: 1px solid var(--border);
-      border-radius: 10px;
-      background: color-mix(in srgb, var(--card-bg) 92%, transparent);
+      border-radius: 12px;
+      background: var(--vscode-sideBar-background, var(--card-bg));
       font-size: 12px;
+      line-height: 1.45;
       overflow: hidden;
       transition: border-color 0.15s ease;
       flex-shrink: 0;
     }
-    .sp-card:hover { border-color: rgba(var(--tint), 0.16); }
+    .sp-card:hover { border-color: color-mix(in srgb, var(--fg) 22%, var(--border)); }
     .sp-card[hidden], .sp-card:empty { display: none; }
+    .sp-card-header { display: flex; align-items: center; padding-left: 4px; }
+    .sp-drag-handle { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 20px; height: 30px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: grab; opacity: 0.55; }
+    .sp-drag-handle:hover, .sp-drag-handle:focus-visible { opacity: 1; background: var(--surface-hover); }
+    .sp-drag-handle:active { cursor: grabbing; }
+    .sp-drag-handle svg { pointer-events: none; }
+    .sp-card.sp-dragging { opacity: 0.45; }
+    .sp-card.sp-drop-before { box-shadow: inset 0 3px 0 var(--accent); }
+    .sp-card.sp-drop-after { box-shadow: inset 0 -3px 0 var(--accent); }
+    .sp-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
     .sp-head {
       display: flex;
       align-items: center;
       gap: 8px;
       width: 100%;
-      padding: 9px 12px;
+      flex: 1;
+      min-width: 0;
+      min-height: 44px;
+      padding: 12px 14px 12px 2px;
       border: none;
       background: transparent;
       color: var(--fg);
@@ -284,7 +297,7 @@ export function getChatPolishStyles(): string {
     }
     .sp-head:hover { background: rgba(var(--tint), 0.03); }
     .sp-icon { color: var(--muted); flex-shrink: 0; }
-    .sp-head-title { flex-shrink: 0; }
+    .sp-head-title { flex-shrink: 0; font-size: 12px; }
     .sp-head-summary {
       flex: 1;
       min-width: 0;
@@ -294,16 +307,20 @@ export function getChatPolishStyles(): string {
       font-size: 11px;
       white-space: nowrap;
       overflow: hidden;
+      font-variant-numeric: tabular-nums;
     }
+    .sp-head-summary > .sp-muted { overflow: hidden; text-overflow: ellipsis; }
     .sp-chevron { color: var(--muted); flex-shrink: 0; transition: transform 0.18s ease; }
     .sp-card.collapsed .sp-chevron { transform: rotate(-90deg); }
     .sp-body {
       display: flex;
       flex-direction: column;
       gap: 2px;
-      padding: 0 12px 10px;
+      padding: 0 14px 12px;
     }
-    .sp-card.collapsed .sp-body { display: none; }
+    .sp-card.collapsed .sp-body, .sp-body[hidden] { display: none; }
+    .sp-description { color: var(--muted); font-size: 11px; line-height: 1.5; padding-bottom: 10px; }
+    .side-panel button:focus-visible { outline-offset: -2px; }
 
     .sp-link {
       border: none;
@@ -317,8 +334,8 @@ export function getChatPolishStyles(): string {
     .sp-link:hover { text-decoration: underline; }
     .sp-actions { padding-top: 6px; }
     .sp-muted { color: var(--muted); }
-    .sp-empty { color: var(--muted); padding: 2px 0 4px; }
-    .sp-more { padding: 2px 0; font-size: 11px; }
+    .sp-empty { color: var(--muted); padding: 4px 0 10px; line-height: 1.6; }
+    .sp-more { padding: 8px 0 2px; font-size: 11px; text-align: left; }
     .sp-pill {
       display: inline-flex;
       align-items: center;
@@ -406,7 +423,13 @@ export function getChatPolishStyles(): string {
     .sp-kv dd { margin: 0; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     /* Context card reuses the Context window pop-up's look. */
-    .sp-card .context-popover-top { padding: 2px 0 8px; }
+    .sp-card .context-popover-top { padding: 0 0 8px; gap: 12px; }
+    .sp-card .context-ring-text, .sp-card .context-row-val { color: var(--fg); }
+    .sp-card .context-popover-title { font-size: 11px; font-weight: 400; color: var(--muted); }
+    .sp-card .context-popover-subtitle { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--fg); }
+    .sp-card .context-row-label { color: var(--muted); }
+    .sp-card .dot-used { background: var(--fg); }
+    .sp-card .dot-avail { background: color-mix(in srgb, var(--fg) 22%, transparent); }
     .sp-card .context-popover-rows { padding: 8px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
     .sp-section-label {
       padding: 8px 0 4px;
@@ -436,12 +459,12 @@ export function getChatPolishStyles(): string {
     .sp-card .context-stack { margin: 2px 0 8px; }
     .sp-context-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; margin-top: 6px; border-top: 1px solid var(--border); }
     .sp-card .context-breakdown-note { padding-top: 6px; }
-    .sp-buttons { display: flex; gap: 6px; padding-top: 8px; }
-    .sp-buttons .context-compact-btn { flex: 1; justify-content: center; }
+    .sp-buttons { display: flex; gap: 6px; padding-top: 10px; margin-top: 8px; border-top: 1px solid var(--border); }
+    .sp-buttons .context-compact-btn { flex: 1; justify-content: center; min-height: 30px; border-radius: 6px; font-size: 11px; font-weight: 500; }
 
     /* Changes */
-    .sp-changes-summary { color: var(--muted); font-size: 11px; padding: 0 0 6px; }
-    .sp-changes-summary strong { color: var(--fg); font-weight: 600; }
+    .sp-changes-summary { color: var(--muted); font-size: 11px; padding: 0 0 10px; overflow-wrap: anywhere; }
+    .sp-changes-summary strong { color: var(--fg); font-weight: 500; }
     .sp-clean { display: flex; align-items: center; gap: 6px; color: var(--muted); padding: 2px 0 4px; }
     .sp-clean .codicon { color: var(--vscode-testing-iconPassed, #3fb950); }
     .sp-clean strong { color: var(--fg); font-weight: 600; }
@@ -449,8 +472,9 @@ export function getChatPolishStyles(): string {
     .sp-file {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 5px 6px;
+      gap: 7px;
+      min-height: 46px;
+      padding: 7px 6px;
       border: none;
       border-radius: 6px;
       background: transparent;
@@ -463,13 +487,13 @@ export function getChatPolishStyles(): string {
     .sp-file:hover { background: var(--surface-hover); }
     .sp-file.deleted .sp-file-name { text-decoration: line-through; color: var(--muted); }
     .sp-file-icon { width: 16px; flex-shrink: 0; display: inline-flex; justify-content: center; font-size: 14px; }
-    .sp-file-text { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+    .sp-file-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; line-height: 1.35; }
     .sp-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-    .sp-file-dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10.5px; direction: rtl; text-align: left; }
-    .sp-file-stats { display: flex; align-items: center; gap: 6px; flex-shrink: 0; font-size: 11px; font-variant-numeric: tabular-nums; }
+    .sp-file-dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10px; }
+    .sp-file-stats { display: flex; align-items: center; justify-content: flex-end; gap: 5px; flex-shrink: 0; font-size: 11px; font-variant-numeric: tabular-nums; }
     .sp-counts { display: inline-flex; gap: 4px; }
     .sp-diffbar { display: inline-flex; gap: 1px; }
-    .sp-diffbar i { width: 6px; height: 6px; border-radius: 1px; background: rgba(var(--tint), 0.12); }
+    .sp-diffbar i { width: 4px; height: 5px; border-radius: 1px; background: rgba(var(--tint), 0.12); }
     .sp-diffbar i.add { background: var(--vscode-gitDecoration-addedResourceForeground, #3fb950); }
     .sp-diffbar i.del { background: var(--vscode-gitDecoration-deletedResourceForeground, #f85149); }
 
@@ -477,8 +501,11 @@ export function getChatPolishStyles(): string {
     .sp-server {
       display: flex;
       align-items: center;
-      gap: 9px;
-      padding: 6px;
+      justify-content: space-between;
+      gap: 12px;
+      min-width: 0;
+      min-height: 46px;
+      padding: 8px 6px;
       margin: 0 -6px;
       border: none;
       border-radius: 6px;
@@ -489,15 +516,22 @@ export function getChatPolishStyles(): string {
       cursor: pointer;
     }
     .sp-server:hover { background: var(--surface-hover); }
-    .sp-server-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-    .sp-server-kind { margin-left: 6px; font-size: 10px; font-weight: 400; color: var(--muted); }
+    .sp-server-list { display: flex; flex-direction: column; }
+    .sp-server-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .sp-server-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+    .sp-server-kind { font-size: 10px; font-weight: 400; color: var(--muted); }
+    .sp-server-status { display: inline-flex; align-items: center; gap: 7px; flex-shrink: 0; font-size: 10px; color: var(--muted); }
+    .sp-server-status.warn { color: var(--vscode-editorWarning-foreground, #d29922); }
+    .sp-server-status.error { color: var(--vscode-errorForeground, #f85149); }
+    .sp-server-total { padding-top: 6px; color: var(--muted); font-size: 10px; }
 
     /* Environment: each row opens its control */
     .sp-env-row {
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 5px 6px;
+      min-height: 32px;
+      padding: 6px;
       margin: 0 -6px;
       border: none;
       border-radius: 6px;
@@ -509,6 +543,7 @@ export function getChatPolishStyles(): string {
       min-width: 0;
     }
     .sp-env-row:hover { background: var(--surface-hover); }
+    .sp-env-divider { border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; margin-top: 6px; padding-top: 12px; }
     .sp-env-icon { color: var(--muted); font-size: 13px; width: 14px; flex-shrink: 0; }
     .sp-env-label { color: var(--muted); width: 66px; flex-shrink: 0; }
     .sp-env-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; font-weight: 500; }
@@ -521,7 +556,7 @@ export function getChatPolishStyles(): string {
     body.vscode-light .sp-env-value.mode-trust { color: #0a66c2; }
     body.vscode-light .sp-env-value.mode-full { color: #7c3aed; }
     body.vscode-light .sp-env-value.mode-yolo { color: #b45309; }
-    .sp-env-go { color: var(--muted); font-size: 11px; opacity: 0; transition: opacity 0.12s ease; }
+    .sp-env-go { color: var(--muted); font-size: 11px; opacity: 0.5; transition: opacity 0.12s ease; }
     .sp-env-row:hover .sp-env-go, .sp-env-row:focus-visible .sp-env-go { opacity: 1; }
 
     .sp-menu {
@@ -562,6 +597,7 @@ export function getChatPolishStyles(): string {
     .sp-menu-item:hover, .sp-menu-item:focus-visible { background: var(--vscode-list-hoverBackground, var(--surface-hover)); outline: none; }
     .sp-check { width: 14px; text-align: center; color: var(--accent); }
     .sp-menu-sep { height: 1px; margin: 4px 2px; background: var(--border); }
+    body.vscode-high-contrast .sp-card, body.vscode-high-contrast-light .sp-card { border-color: var(--vscode-contrastBorder, var(--fg)); }
 
     .starter-chip.is-smart {
       border-color: color-mix(in srgb, var(--accent) 55%, var(--border));

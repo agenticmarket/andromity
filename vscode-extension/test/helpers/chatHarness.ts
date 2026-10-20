@@ -2,6 +2,7 @@ import * as vm from "node:vm";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getChatClientScript } from "../../src/providers/chatview/chatClientScript.js";
+import type { ChatViewState } from "../../src/providers/chatview/chatHtml.js";
 
 /** A fake page for running the real chat webview script under node. */
 export function stub(): any {
@@ -55,7 +56,7 @@ export function element(base: Record<string, any> = {}): any {
   });
 }
 
-export function loadChat() {
+export function loadChat(options: { state?: Partial<ChatViewState>; storage?: Record<string, string> } = {}) {
   const docListeners: Record<string, Function[]> = {};
   const observers: Function[] = [];
   const byId: Record<string, any> = {
@@ -83,7 +84,11 @@ export function loadChat() {
   });
   const sandbox: any = {
     acquireVsCodeApi: () => ({ postMessage: (m: any) => posted.push(m), getState: () => ({}), setState: () => {} }),
-    document, window, navigator: { platform: "Win32", clipboard: stub() }, localStorage: stub(),
+    document, window, navigator: { platform: "Win32", clipboard: stub() },
+    localStorage: options.storage ? {
+      getItem: (key: string) => options.storage![key] ?? null,
+      setItem: (key: string, value: string) => { options.storage![key] = value; },
+    } : stub(),
     console: { log: () => {}, warn: () => {}, error: () => {}, info: () => {}, debug: () => {} },
     setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
     requestAnimationFrame: () => 0, cancelAnimationFrame: () => {},
@@ -99,6 +104,7 @@ export function loadChat() {
   vm.runInContext(getChatClientScript("icon.svg", {
     currentSessionId: "s", currentModel: "m", currentProvider: "p",
     currentMode: "safe", currentProfile: "builder", currentReasoning: "medium",
+    ...options.state,
   }), sandbox);
 
   const decisions: string[] = [];

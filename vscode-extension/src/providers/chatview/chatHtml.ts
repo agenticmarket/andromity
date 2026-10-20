@@ -6,6 +6,7 @@ import { getChatPolishStyles } from "./chatPolishStyles.js";
 import { getChatClientScript } from "./chatClientScript.js";
 import { getChatActivityScript } from "./chatActivityRow.js";
 import { getChatAmbientScript, WallpaperConfig } from "./chatAmbientScript.js";
+import type { SidePanelPreferences } from "../../sidePanelTypes.js";
 
 export interface ChatViewState {
   currentSessionId: string;
@@ -22,6 +23,8 @@ export interface ChatViewState {
   workspaceFiles?: string[];
   workspaceFolders?: string[];
   extensionVersion?: string;
+  sidePanelOff?: boolean;
+  sidePanelPreferences?: SidePanelPreferences;
 }
 
 export function formatModelDisplayName(id?: string, models?: { id: string; name: string }[]): string {
@@ -138,7 +141,7 @@ export function getChatViewHtml(webview: vscode.Webview, extensionUri: vscode.Ur
 ${styles}
   </style>
 </head>
-<body class="loading">
+<body class="loading${state.sidePanelOff ? ' side-panel-off' : ''}">
   <!-- Ambient Environmental Wallpaper & Particles Canvas -->
   <div id="andromity-ambient-container" class="andromity-ambient-container" aria-hidden="true">
     <canvas id="andromity-water-canvas"></canvas>
@@ -753,7 +756,7 @@ ${styles}
 
   <aside class="side-panel" id="side-panel" aria-label="Session panel">
     <div class="side-panel-header">
-      <span>Session</span>
+      <div class="side-panel-heading"><span class="side-panel-eyebrow">Workspace overview</span><span class="side-panel-title">Session</span></div>
       <span class="side-panel-tools">
         <button type="button" class="side-panel-tool" data-action="sp-open-menu" title="Choose what to show (or right-click the panel)" aria-label="Choose what to show" aria-haspopup="menu">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg>
@@ -763,6 +766,8 @@ ${styles}
         </button>
       </span>
     </div>
+    <span class="sp-sr-only" id="sp-reorder-help">Drag to reorder sections, or focus a handle and use Up or Down. Home moves to the top; End moves to the bottom.</span>
+    <span class="sp-sr-only" id="sp-reorder-status" role="status" aria-live="polite" aria-atomic="true"></span>
     <div class="side-panel-body" id="side-panel-body">
       <div class="sp-empty-all" id="sp-empty-all" hidden>All cards are hidden. <button type="button" class="sp-link" data-action="sp-show-all">Show all</button></div>
       <section class="sp-card" id="sp-context" aria-label="Context"></section>

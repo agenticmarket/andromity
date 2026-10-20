@@ -7,6 +7,7 @@ import { getStreamingRenderScript } from "./streamingRender.js";
 import { getTurnRailScript } from "./turnRail.js";
 import { DOCS } from "../../docsLinks.js";
 import { SHELL_LANGUAGES } from "../../integrations/shellLanguages.js";
+import { normalizeSidePanelPreferences } from "../../sidePanelPreferences.js";
 
 export function getChatClientScript(sidebarIconUri: string, state: ChatViewState): string {
   return `
@@ -4921,6 +4922,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           saveSidePanelPrefs();
           renderSidePanel();
           break;
+        case 'sp-reset-order':
+          closeSidePanelMenu();
+          sidePanelPrefs.order = SIDE_PANEL_CARDS.map(c => c.id);
+          saveSidePanelPrefs();
+          applySidePanelOrder();
+          break;
         case 'sp-open-menu': {
           const rect = target.getBoundingClientRect();
           openSidePanelMenu(rect.right - 180, rect.bottom + 4);
@@ -6513,17 +6520,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     var sidePanelRequestedAt = 0;
     var SIDE_PANEL_WIDE = typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 1500px)') : null;
     var SIDE_PANEL_CARDS = [
-      { id: 'context', title: 'Context', icon: '<path d="M12 3a9 9 0 1 0 9 9"></path><path d="M12 3v9h9"></path>' },
+      { id: 'context', title: 'Context window', icon: '<path d="M12 3a9 9 0 1 0 9 9"></path><path d="M12 3v9h9"></path>' },
       { id: 'changes', title: 'Changes', icon: '<path d="M6 3v12"></path><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path>' },
       { id: 'mcp', title: 'MCP servers', icon: '<path d="M9 2v6M15 2v6M7 8h10v4a5 5 0 0 1-10 0V8zM12 17v5"></path>' },
       { id: 'env', title: 'Environment', icon: '<rect x="3" y="4" width="18" height="12" rx="2"></rect><path d="M8 20h8M12 16v4"></path>' },
     ];
-    var sidePanelPrefs = { hidden: [], collapsed: [], breakdown: false };
+    var normalizeSidePanelPreferences = ${normalizeSidePanelPreferences.toString()};
+    var sidePanelDragId = null;
+    var sidePanelPrefs = normalizeSidePanelPreferences(${scriptJson(state.sidePanelPreferences ?? null)});
     try {
-      const saved = JSON.parse(localStorage.getItem('andromity.sidePanel') || '{}');
-      if (Array.isArray(saved.hidden)) sidePanelPrefs.hidden = saved.hidden;
-      if (Array.isArray(saved.collapsed)) sidePanelPrefs.collapsed = saved.collapsed;
-      if (typeof saved.breakdown === 'boolean') sidePanelPrefs.breakdown = saved.breakdown;
+      const saved = localStorage.getItem('andromity.sidePanel');
+      if (${state.sidePanelPreferences === undefined} && typeof saved === 'string' && saved) {
+        sidePanelPrefs = normalizeSidePanelPreferences(JSON.parse(saved));
+        vscode.postMessage({ type: 'side_panel_preferences', preferences: sidePanelPrefs });
+      }
     } catch (e) {}
 
     /** Fades the panel's top or bottom edge only while there is more to scroll that way. */
@@ -6537,6 +6547,46 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function saveSidePanelPrefs() {
       try { localStorage.setItem('andromity.sidePanel', JSON.stringify(sidePanelPrefs)); } catch (e) {}
+      vscode.postMessage({ type: 'side_panel_preferences', preferences: sidePanelPrefs });
+    }
+
+    function applySidePanelOrder() {
+      const panel = document.getElementById('side-panel-body');
+      if (!panel) return;
+      const current = Array.from(panel.children || []).filter(el => el.classList.contains('sp-card')).map(el => el.id.slice(3));
+      if (current.join(',') === sidePanelPrefs.order.join(',')) return;
+      sidePanelPrefs.order.forEach(id => {
+        const card = document.getElementById('sp-' + id);
+        if (card) panel.appendChild(card);
+      });
+    }
+
+    function focusSidePanelHandle(id) {
+      const card = document.getElementById('sp-' + id);
+      const handle = card && card.querySelector('.sp-drag-handle');
+      if (handle) handle.focus({ preventScroll: true });
+    }
+
+    function moveSidePanelCard(id, targetId, after) {
+      if (id === targetId || !sidePanelPrefs.order.includes(id) || !sidePanelPrefs.order.includes(targetId)) return;
+      const order = sidePanelPrefs.order.filter(item => item !== id);
+      order.splice(order.indexOf(targetId) + (after ? 1 : 0), 0, id);
+      if (order.join(',') === sidePanelPrefs.order.join(',')) return;
+      sidePanelPrefs.order = order;
+      applySidePanelOrder();
+      saveSidePanelPrefs();
+      const status = document.getElementById('sp-reorder-status');
+      const card = SIDE_PANEL_CARDS.find(c => c.id === id);
+      if (status) status.textContent = card.title + ' moved to position ' + (order.indexOf(id) + 1) + ' of ' + order.length + '.';
+      updateSidePanelScrollEdges();
+    }
+
+    function clearSidePanelDrag() {
+      sidePanelDragId = null;
+      SIDE_PANEL_CARDS.forEach(c => {
+        const el = document.getElementById('sp-' + c.id);
+        if (el) el.classList.remove('sp-dragging', 'sp-drop-before', 'sp-drop-after');
+      });
     }
 
     function sidePanelVisible() {
@@ -6549,9 +6599,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       vscode.postMessage({ type: 'side_panel_refresh' });
     }
 
-    function setSidePanelOff(off) {
+    function setSidePanelOff(off, persist = true) {
       document.body.classList.toggle('side-panel-off', off);
       try { localStorage.setItem('andromity.sidePanelOff', off ? '1' : '0'); } catch (e) {}
+      if (persist) vscode.postMessage({ type: 'side_panel_visibility', off: off });
       if (!off) { requestSidePanelData(); renderSidePanel(); }
     }
 
@@ -6593,6 +6644,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     /** One card: a header that collapses it (with a one-line summary) and its body. */
     function renderSidePanelCard(id, summaryHtml, bodyHtml) {
+      if (sidePanelDragId) return;
       const el = document.getElementById('sp-' + id);
       if (!el) return;
       const card = SIDE_PANEL_CARDS.find(c => c.id === id);
@@ -6605,13 +6657,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       el.hidden = false;
       el.classList.toggle('collapsed', collapsed);
       el.innerHTML =
-        '<button type="button" class="sp-head" data-action="sp-toggle-card" data-card="' + id + '" aria-expanded="' + !collapsed + '">' +
+        '<div class="sp-card-header">' +
+        '<button type="button" class="sp-drag-handle" draggable="true" data-card="' + id + '" aria-label="Reorder ' + card.title + '" aria-describedby="sp-reorder-help" title="Drag to reorder · Up/Down to move">' +
+          '<svg width="12" height="16" viewBox="0 0 12 16" fill="currentColor" aria-hidden="true"><circle cx="4" cy="4" r="1"></circle><circle cx="8" cy="4" r="1"></circle><circle cx="4" cy="8" r="1"></circle><circle cx="8" cy="8" r="1"></circle><circle cx="4" cy="12" r="1"></circle><circle cx="8" cy="12" r="1"></circle></svg></button>' +
+        '<button type="button" class="sp-head" data-action="sp-toggle-card" data-card="' + id + '" aria-expanded="' + !collapsed + '" aria-controls="sp-body-' + id + '">' +
           '<svg class="sp-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + card.icon + '</svg>' +
           '<span class="sp-head-title">' + card.title + '</span>' +
           '<span class="sp-head-summary">' + (summaryHtml || '') + '</span>' +
           '<svg class="sp-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
-        '</button>' +
-        '<div class="sp-body">' + bodyHtml + '</div>';
+        '</button></div>' +
+        '<div class="sp-body" id="sp-body-' + id + '"' + (collapsed ? ' hidden' : '') + '>' + bodyHtml + '</div>';
     }
 
     function renderSidePanelContext() {
@@ -6624,7 +6679,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         pctOf: (n) => (n / fallbackLimit) * 100, fmtPct: () => '',
       };
       const pct = view.limit ? Math.min(100, Math.max(0, view.used / view.limit * 100)) : 0;
-      const ringColor = pct > 85 ? '#ef4444' : pct > 65 ? '#f59e0b' : 'var(--fg)';
+      const ringColor = pct > 85 ? 'var(--vscode-errorForeground, #f85149)' : pct > 65 ? 'var(--vscode-editorWarning-foreground, #d29922)' : 'var(--vscode-textLink-foreground, #3794ff)';
       const tone = pct > 85 ? ' full' : pct > 65 ? ' warn' : '';
       renderSidePanelCard('context', '<span class="sp-pill' + tone + '">' + Math.round(pct) + '%</span>',
         '<div class="context-popover-top">' +
@@ -6636,10 +6691,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             '<span class="context-ring-text">' + Math.round(pct) + '%</span>' +
           '</div>' +
           '<div class="context-popover-header-info">' +
-            '<div class="context-popover-title">Context window</div>' +
+            '<div class="context-popover-title">Session tokens</div>' +
             '<div class="context-popover-subtitle">' + Number(view.used).toLocaleString() + ' / ' + Number(view.limit).toLocaleString() + '</div>' +
           '</div>' +
         '</div>' +
+        '<div class="sp-description">Token usage and space for the next steps.</div>' +
         '<div class="context-popover-rows">' +
           '<div class="context-popover-row"><div class="context-row-label"><span class="context-dot dot-used"></span><span>Used tokens</span></div><span class="context-row-val">' + Number(view.used).toLocaleString() + '</span></div>' +
           '<div class="context-popover-row"><div class="context-row-label"><span class="context-dot dot-avail"></span><span>Available</span></div><span class="context-row-val">' + Number(Math.max(0, view.limit - view.used)).toLocaleString() + '</span></div>' +
@@ -6674,7 +6730,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           '<div class="sp-clean"><i class="codicon codicon-check" aria-hidden="true"></i> No uncommitted changes' + (changes.branch ? ' on <strong>' + escapeHtml(changes.branch) + '</strong>' : '') + '</div>');
         return;
       }
-      const rows = files.slice(0, 12).map(f => {
+      const visibleFiles = files.slice(0, 5);
+      const remaining = files.length - visibleFiles.length;
+      const rows = visibleFiles.map(f => {
         const name = f.path.split('/').pop() || f.path;
         const dir = f.path.slice(0, f.path.length - name.length).replace(/\\/$/, '');
         const isNew = f.status === 'U' || f.status === '??' || f.status === 'A';
@@ -6683,10 +6741,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const counts = f.additions === null
           ? '<span class="sp-meta">' + (isNew ? 'new file' : 'binary') + '</span>'
           : '<span class="sp-counts"><span class="sp-add">+' + f.additions + '</span><span class="sp-del">&minus;' + f.deletions + '</span></span>' + diffBlocks(f.additions, f.deletions);
-        return '<button type="button" class="sp-file' + (isDel ? ' deleted' : '') + '" data-action="sp-open-diff" data-path="' + escapeHtml(f.path) + '" title="Open the diff for ' + escapeHtml(f.path) + '">' +
+        return '<button type="button" class="sp-file' + (isDel ? ' deleted' : '') + '" data-action="sp-open-diff" data-path="' + escapeHtml(f.path) + '" title="Open the diff for ' + escapeHtml(f.path) + '" aria-label="' + escapeHtml(f.path) + ', ' + (isNew ? 'new file' : isDel ? 'deleted' : 'modified') + ', open diff">' +
           '<span class="sp-file-icon"' + (icon ? ' style="color:' + icon.color + '"' : '') + '>' + (icon ? icon.badge : '') + '</span>' +
           '<span class="sp-file-text"><span class="sp-file-name">' + escapeHtml(name) + '</span>' +
-            (dir ? '<span class="sp-file-dir">' + escapeHtml(dir) + '</span>' : '') + '</span>' +
+            '<span class="sp-file-dir">' + escapeHtml(dir || 'Workspace root') + '</span></span>' +
           '<span class="sp-file-stats"><span class="sp-status ' + (isNew ? 'new' : isDel ? 'del' : 'mod') + '" title="' + (isNew ? 'New' : isDel ? 'Deleted' : 'Modified') + '">' + (isNew ? 'U' : isDel ? 'D' : 'M') + '</span>' + counts + '</span>' +
         '</button>';
       }).join('');
@@ -6694,7 +6752,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         '<span class="sp-add">+' + changes.additions + '</span>&nbsp;<span class="sp-del">&minus;' + changes.deletions + '</span>',
         '<div class="sp-changes-summary">' + files.length + ' file' + (files.length === 1 ? '' : 's') + ' changed' + (changes.branch ? ' on <strong>' + escapeHtml(changes.branch) + '</strong>' : '') + '</div>' +
         '<div class="sp-files">' + rows + '</div>' +
-        (files.length > 12 ? '<div class="sp-muted sp-more">and ' + (files.length - 12) + ' more</div>' : '') +
+        (remaining ? '<button type="button" class="sp-link sp-more" data-action="sp-review-all">View ' + remaining + ' more changed file' + (remaining === 1 ? '' : 's') + '</button>' : '') +
         '<div class="sp-buttons"><button type="button" class="context-compact-btn" data-action="sp-review-all">Review changes</button></div>');
     }
 
@@ -6716,18 +6774,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const tools = servers.reduce((sum, s) => sum + (s.status === 'running' ? s.tools : 0), 0);
       const rows = servers.map(s => {
         const view = mcpStatusView(s.status);
-        return '<button type="button" class="sp-server" data-action="open-mcp-settings" title="Open MCP settings">' +
-          '<span class="sp-dot ' + view.dot + '"></span>' +
-          '<span class="sp-server-name">' + escapeHtml(s.name) + '<span class="sp-server-kind">' + (s.remote ? 'remote' : 'local') + '</span></span>' +
-          (view.label ? '<span class="sp-pill ' + (view.dot === 'attention' || view.dot === 'error' ? 'warn' : '') + '">' + escapeHtml(view.label) + '</span>'
-            : '<span class="sp-meta">' + s.tools + ' tool' + (s.tools === 1 ? '' : 's') + '</span>') +
+        return '<button type="button" class="sp-server" data-action="open-mcp-settings" title="Manage ' + escapeHtml(s.name) + ' in MCP settings">' +
+          '<span class="sp-server-text"><span class="sp-server-name">' + escapeHtml(s.name) + '</span>' +
+            '<span class="sp-server-kind">' + (s.remote ? 'Remote' : 'Local') + (s.status === 'running' ? ' · ' + s.tools + ' tool' + (s.tools === 1 ? '' : 's') : '') + '</span></span>' +
+          '<span class="sp-server-status ' + (view.dot === 'attention' ? 'warn' : view.dot === 'error' ? 'error' : '') + '"><span class="sp-dot ' + view.dot + '" aria-hidden="true"></span>' + escapeHtml(view.label || 'Running') + '</span>' +
         '</button>';
       }).join('');
       const summary = servers.length
-        ? (attention ? '<span class="sp-pill warn">' + attention + ' need' + (attention === 1 ? 's' : '') + ' you</span>' : '<span class="sp-muted">' + running + '/' + servers.length + ' running</span>')
+        ? (attention ? '<span class="sp-pill warn">' + attention + ' need' + (attention === 1 ? 's' : '') + ' attention</span>' : '<span class="sp-muted">' + running + '/' + servers.length + ' running</span>')
         : '';
       renderSidePanelCard('mcp', summary,
-        (servers.length ? '<div class="sp-changes-summary">' + running + ' of ' + servers.length + ' running · ' + tools + ' tools available</div>' + rows
+        (servers.length ? '<div class="sp-description">Connected tools for this session.</div><div class="sp-server-list">' + rows + '</div><div class="sp-server-total">' + tools + ' tool' + (tools === 1 ? '' : 's') + ' available from running servers</div>'
           : '<div class="sp-empty">No MCP servers yet. They let the agent use tools like databases, issue trackers and docs.</div>') +
         '<div class="sp-buttons"><button type="button" class="context-compact-btn" data-action="open-mcp-settings">' + (servers.length ? 'Manage servers' : 'Add a server') + '</button></div>');
     }
@@ -6757,9 +6814,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         { id: 'folder', icon: 'folder', label: 'Folder', value: sidePanelData.folder || '', hint: 'Show in Explorer' },
         { id: 'network', icon: pill && !pill.hidden ? 'lock' : 'globe', label: 'Network', value: pill && !pill.hidden ? 'Air-gap' : 'Online', hint: pill && !pill.hidden ? 'Air-gap mode settings' : 'Turn on air-gap mode' },
       ].filter(r => r.value);
-      renderSidePanelCard('env', branch ? '<span class="sp-muted"><i class="codicon codicon-git-branch" aria-hidden="true"></i> ' + escapeHtml(branch) + '</span>' : '',
-        rows.length ? rows.map(r =>
-          '<button type="button" class="sp-env-row" data-action="sp-env" data-env="' + r.id + '" title="' + r.hint + '">' +
+      renderSidePanelCard('env', branch ? '<span class="sp-muted" title="Branch: ' + escapeHtml(branch) + '"><i class="codicon codicon-git-branch" aria-hidden="true"></i> ' + escapeHtml(branch) + '</span>' : '',
+        rows.length ? '<div class="sp-description">Select a setting to change it.</div>' + rows.map(r =>
+          '<button type="button" class="sp-env-row' + (r.id === 'branch' ? ' sp-env-divider' : '') + '" data-action="sp-env" data-env="' + r.id + '" title="' + r.hint + ': ' + escapeHtml(r.value) + '">' +
             '<i class="codicon codicon-' + r.icon + ' sp-env-icon" aria-hidden="true"></i>' +
             '<span class="sp-env-label">' + r.label + '</span>' +
             '<span class="sp-env-value' + (r.id === 'mode' ? ' mode-' + escapeHtml(String(currentMode || '').toLowerCase()) : '') + (r.id === 'network' && r.value === 'Air-gap' ? ' airgap' : '') + '">' + escapeHtml(r.value) + '</span>' +
@@ -6793,6 +6850,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       renderSidePanelChanges();
       renderSidePanelMcp();
       renderSidePanelEnv();
+      applySidePanelOrder();
       const empty = document.getElementById('sp-empty-all');
       if (empty) empty.hidden = sidePanelPrefs.hidden.length < SIDE_PANEL_CARDS.length;
       updateSidePanelScrollEdges();
@@ -6816,6 +6874,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         '<div class="sp-menu-sep"></div>' +
         '<button type="button" class="sp-menu-item" role="menuitem" data-action="sp-expand-all"><span class="sp-check"></span>Expand all</button>' +
         '<button type="button" class="sp-menu-item" role="menuitem" data-action="sp-collapse-all"><span class="sp-check"></span>Collapse all</button>' +
+        '<button type="button" class="sp-menu-item" role="menuitem" data-action="sp-reset-order"><span class="sp-check"></span>Reset section order</button>' +
         '<button type="button" class="sp-menu-item" role="menuitem" data-action="hide-side-panel"><span class="sp-check"></span>Hide panel</button>';
       menu.hidden = false;
       const rect = menu.getBoundingClientRect();
@@ -6828,6 +6887,66 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const sidePanelEl = document.getElementById('side-panel');
     const sidePanelBodyEl = document.getElementById('side-panel-body');
     if (sidePanelBodyEl && typeof sidePanelBodyEl.addEventListener === 'function') {
+      sidePanelBodyEl.addEventListener('dragstart', (e) => {
+        const handle = e.target.closest('.sp-drag-handle');
+        if (!handle || !e.dataTransfer) return;
+        sidePanelDragId = handle.getAttribute('data-card');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('application/x-andromity-section', sidePanelDragId);
+        document.getElementById('sp-' + sidePanelDragId).classList.add('sp-dragging');
+        closeSidePanelMenu();
+      });
+      sidePanelBodyEl.addEventListener('dragover', (e) => {
+        if (!sidePanelDragId) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'move';
+        SIDE_PANEL_CARDS.forEach(c => document.getElementById('sp-' + c.id)?.classList.remove('sp-drop-before', 'sp-drop-after'));
+        const card = e.target.closest('.sp-card');
+        if (card && card.id !== 'sp-' + sidePanelDragId) {
+          const rect = card.getBoundingClientRect();
+          card.classList.add(e.clientY < rect.top + rect.height / 2 ? 'sp-drop-before' : 'sp-drop-after');
+        }
+        const rect = sidePanelBodyEl.getBoundingClientRect();
+        if (e.clientY < rect.top + 36) sidePanelBodyEl.scrollBy({ top: -18, behavior: 'auto' });
+        else if (e.clientY > rect.bottom - 36) sidePanelBodyEl.scrollBy({ top: 18, behavior: 'auto' });
+      });
+      sidePanelBodyEl.addEventListener('dragleave', (e) => {
+        if (e.relatedTarget && sidePanelBodyEl.contains(e.relatedTarget)) return;
+        SIDE_PANEL_CARDS.forEach(c => document.getElementById('sp-' + c.id)?.classList.remove('sp-drop-before', 'sp-drop-after'));
+      });
+      sidePanelBodyEl.addEventListener('drop', (e) => {
+        if (!sidePanelDragId) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const id = sidePanelDragId;
+        const card = e.target.closest('.sp-card');
+        const rect = card && card.getBoundingClientRect();
+        clearSidePanelDrag();
+        if (card) moveSidePanelCard(id, card.id.slice(3), e.clientY >= rect.top + rect.height / 2);
+        renderSidePanel();
+        focusSidePanelHandle(id);
+      });
+      sidePanelBodyEl.addEventListener('dragend', () => {
+        if (!sidePanelDragId) return;
+        const id = sidePanelDragId;
+        clearSidePanelDrag();
+        renderSidePanel();
+        focusSidePanelHandle(id);
+      });
+      sidePanelBodyEl.addEventListener('keydown', (e) => {
+        const handle = e.target.closest('.sp-drag-handle');
+        if (!handle || !['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const id = handle.getAttribute('data-card');
+        const visible = sidePanelPrefs.order.filter(item => !document.getElementById('sp-' + item)?.hidden);
+        const index = visible.indexOf(id);
+        const target = e.key === 'Home' ? visible[0] : e.key === 'End' ? visible[visible.length - 1] : visible[index + (e.key === 'ArrowUp' ? -1 : 1)];
+        if (target) moveSidePanelCard(id, target, e.key === 'ArrowDown' || e.key === 'End');
+        focusSidePanelHandle(id);
+        revealSidePanelCard(id);
+      });
       sidePanelBodyEl.addEventListener('scroll', updateSidePanelScrollEdges, { passive: true });
       if (typeof ResizeObserver !== 'undefined') new ResizeObserver(updateSidePanelScrollEdges).observe(sidePanelBodyEl);
     }
@@ -6857,7 +6976,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     });
 
-    try { if (localStorage.getItem('andromity.sidePanelOff') === '1') document.body.classList.add('side-panel-off'); } catch (e) {}
+    const savedSidePanelOff = ${scriptJson(state.sidePanelOff ?? null)};
+    if (typeof savedSidePanelOff === 'boolean') {
+      document.body.classList.toggle('side-panel-off', savedSidePanelOff);
+    } else {
+      try {
+        const legacyOff = localStorage.getItem('andromity.sidePanelOff');
+        if (legacyOff === '1' || legacyOff === '0') {
+          document.body.classList.toggle('side-panel-off', legacyOff === '1');
+          vscode.postMessage({ type: 'side_panel_visibility', off: legacyOff === '1' });
+        }
+      } catch (e) {}
+    }
     if (SIDE_PANEL_WIDE && typeof SIDE_PANEL_WIDE.addEventListener === 'function') {
       SIDE_PANEL_WIDE.addEventListener('change', () => { closeSidePanelMenu(); requestSidePanelData(); renderSidePanel(); });
     }
@@ -8635,6 +8765,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           renderSmartStarters(msg);
           break;
 
+        case 'side_panel_preferences':
+          if (msg.preferences && typeof msg.preferences === 'object' && !Array.isArray(msg.preferences)) {
+            const next = normalizeSidePanelPreferences(msg.preferences);
+            if (JSON.stringify(next) === JSON.stringify(sidePanelPrefs)) break;
+            sidePanelPrefs = next;
+            clearSidePanelDrag();
+            try { localStorage.setItem('andromity.sidePanel', JSON.stringify(sidePanelPrefs)); } catch (e) {}
+            applySidePanelOrder();
+            renderSidePanel();
+          }
+          break;
+        case 'side_panel_visibility':
+          if (typeof msg.off === 'boolean') setSidePanelOff(msg.off, false);
+          break;
         case 'side_panel_data':
           if (msg.mcp !== undefined) sidePanelData.mcp = msg.mcp;
           if (msg.changes !== undefined) sidePanelData.changes = msg.changes;

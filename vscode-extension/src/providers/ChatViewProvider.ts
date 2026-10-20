@@ -4,6 +4,7 @@ import { AwayBadge, AwayEvent } from "../awayBadge.js";
 import { collectStarterContext, watchStarterContext } from "../smartStarters.js";
 import { copySessionAsMarkdown } from "../chatMarkdown.js";
 import { SidePanelPart } from "../sidePanelData.js";
+import { normalizeSidePanelPreferences } from "../sidePanelPreferences.js";
 import { runSidePanelCommand, SidePanelFeed } from "../sidePanelFeed.js";
 import { airGapOffMessage } from "../airgap.js";
 import * as path from "path";
@@ -120,6 +121,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private _viewStateListeners: Array<() => void> = [];
   private _sidePanelFeed = new SidePanelFeed(() => this._rpcClient, (message) => this._postToWebview(message));
+
+  public async saveSidePanelVisibility(off: unknown): Promise<void> {
+    if (typeof off !== "boolean") return;
+    await this._context?.globalState?.update("andromity.sidePanelOff", off);
+    this.broadcastToWebviews({ type: "side_panel_visibility", off });
+  }
+
+  public async saveSidePanelPreferences(value: unknown): Promise<void> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    const preferences = normalizeSidePanelPreferences(value);
+    await this._context?.globalState?.update("andromity.sidePanel", preferences);
+    this.broadcastToWebviews({ type: "side_panel_preferences", preferences });
+  }
 
   /** Sends MCP status and uncommitted changes to the chat's side panel and MCP icon (debounced). */
   private _refreshSidePanel(parts: SidePanelPart[] = ["mcp", "changes"]) {
@@ -2199,6 +2213,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    if (message.type === "side_panel_preferences") {
+      await this.saveSidePanelPreferences(message.preferences);
+      return;
+    }
+
+    if (message.type === "side_panel_visibility") {
+      await this.saveSidePanelVisibility(message.off);
+      return;
+    }
+
     if (message.type === "side_panel_refresh") {
       this._refreshSidePanel();
       return;
@@ -3508,6 +3532,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   public _getHtmlForWebview(webview: vscode.Webview, customState?: Partial<ChatViewState>): string {
+    const sidePanelPreferences = this._context?.globalState?.get<unknown>("andromity.sidePanel");
     // The workspace index arrives by postMessage after load instead of being
     // computed synchronously and inlined into every HTML build.
     return getChatViewHtml(webview, this._extensionUri, {
@@ -3524,6 +3549,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       workspaceFiles: customState?.workspaceFiles ?? [],
       workspaceFolders: customState?.workspaceFolders ?? [],
       extensionVersion: customState?.extensionVersion ?? (this._context?.extension?.packageJSON?.version || "0.2.15"),
+      sidePanelOff: this._context?.globalState?.get<boolean>("andromity.sidePanelOff"),
+      sidePanelPreferences: sidePanelPreferences === undefined ? undefined : normalizeSidePanelPreferences(sidePanelPreferences),
     });
   }
 }

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { element, loadChat } from "./helpers/chatHarness.js";
 import { loadSidePanelData, mcpTooltip } from "../src/sidePanelData.js";
+import { normalizeSidePanelPreferences } from "../src/sidePanelPreferences.js";
 
 function rpc(responses: Record<string, any>) {
   const calls: string[] = [];
@@ -60,8 +61,8 @@ describe("side panel data", () => {
 });
 
 describe("side panel in the chat", () => {
-  function setup() {
-    const h = loadChat();
+  function setup(options: Parameters<typeof loadChat>[0] = {}) {
+    const h = loadChat(options);
     for (const id of ["sp-context", "sp-changes", "sp-mcp", "sp-env", "btn-mcp-status", "airgap-pill"]) h.byId[id] = element();
     h.byId["airgap-pill"].hidden = true;
     return h;
@@ -233,11 +234,11 @@ describe("side panel in the chat", () => {
     h.post({ type: "side_panel_data", mcp: [{ name: "a", status: "running", tools: 1, remote: false }, { name: "b", status: "needs_auth", tools: 0, remote: true }] });
     const mcp = h.byId["sp-mcp"];
     assert.match(mcp.innerHTML, /data-action="sp-toggle-card" data-card="mcp" aria-expanded="true"/);
-    assert.match(mcp.innerHTML, /1 needs you/, "the summary says what needs attention");
+    assert.match(mcp.innerHTML, /1 needs attention/, "the summary says what needs attention");
     h.eval("setSidePanelCardCollapsed('mcp')");
     assert.ok(mcp.classList.contains("collapsed"));
     assert.match(mcp.innerHTML, /aria-expanded="false"/);
-    assert.match(mcp.innerHTML, /1 needs you/, "a collapsed card keeps its summary");
+    assert.match(mcp.innerHTML, /1 needs attention/, "a collapsed card keeps its summary");
     assert.deepEqual(JSON.parse(stored["andromity.sidePanel"]).collapsed, ["mcp"]);
     h.eval("setSidePanelCardCollapsed('mcp')");
     assert.ok(!mcp.classList.contains("collapsed"));
@@ -279,9 +280,61 @@ describe("side panel in the chat", () => {
     h.eval("setSidePanelOff(true)");
     assert.ok(body.classList.contains("side-panel-off"));
     assert.equal(stored["andromity.sidePanelOff"], "1");
+    assert.deepEqual(JSON.parse(JSON.stringify(h.posted.at(-1))), { type: "side_panel_visibility", off: true });
     h.eval("setSidePanelOff(false)");
     assert.ok(!body.classList.contains("side-panel-off"));
     assert.equal(stored["andromity.sidePanelOff"], "0");
+  });
+
+  it("restores the host's hide preference in a new webview, even without local storage", () => {
+    const hidden = loadChat({ state: { sidePanelOff: true } });
+    assert.ok(hidden.sandbox.document.body.classList.contains("side-panel-off"));
+    const shown = loadChat({ state: { sidePanelOff: false }, storage: { "andromity.sidePanelOff": "1" } });
+    assert.ok(!shown.sandbox.document.body.classList.contains("side-panel-off"), "the saved host preference wins over old webview storage");
+    const migrated = loadChat({ storage: { "andromity.sidePanelOff": "1" } });
+    assert.ok(migrated.sandbox.document.body.classList.contains("side-panel-off"));
+    assert.ok(migrated.posted.some((m: any) => m.type === "side_panel_visibility" && m.off === true));
+  });
+
+  it("syncs visibility across open chats without echoing or reopening on data updates", () => {
+    const h = setup();
+    const stored = withStorage(h);
+    h.posted.length = 0;
+    h.post({ type: "side_panel_visibility", off: true });
+    h.post({ type: "side_panel_data", mcp: [], folder: "agent" });
+    assert.ok(h.sandbox.document.body.classList.contains("side-panel-off"));
+    assert.equal(stored["andromity.sidePanelOff"], "1");
+    assert.ok(!h.posted.some((m: any) => m.type === "side_panel_visibility"));
+    h.post({ type: "side_panel_visibility", off: "false" });
+    assert.ok(h.sandbox.document.body.classList.contains("side-panel-off"));
+    h.post({ type: "side_panel_visibility", off: false });
+    assert.ok(!h.sandbox.document.body.classList.contains("side-panel-off"));
+  });
+
+  it("keeps full paths accessible, exposes all changes, and labels server states beyond color", () => {
+    const h = setup();
+    h.post({ type: "side_panel_data", mcp: [
+      { name: "connected", status: "running", tools: 1, remote: true },
+      { name: "broken", status: "error", tools: 3, remote: false },
+      { name: "disabled", status: "disabled", tools: 5, remote: false },
+    ], changes: { branch: "dev", additions: 0, deletions: 0, files: Array.from({ length: 13 }, (_, i) => ({
+      path: i === 0 ? 'src/a&b.ts' : 'file' + i + '.ts', status: "??", additions: null, deletions: null,
+    })) } });
+    const changes = h.byId["sp-changes"].innerHTML;
+    assert.match(changes, /aria-label="src\/a&amp;b.ts, new file, open diff"/);
+    assert.match(changes, /Workspace root/);
+    assert.match(changes, /data-action="sp-review-all">View 8 more changed files<\/button>/);
+    assert.equal((changes.match(/class="sp-file"/g) || []).length, 5, "large file lists leave room for other cards");
+    const mcp = h.byId["sp-mcp"].innerHTML;
+    assert.match(mcp, /Remote · 1 tool/);
+    assert.match(mcp, />Running<\/span>/);
+    assert.match(mcp, /sp-server-status error/);
+    assert.match(mcp, />Error<\/span>/);
+    assert.match(mcp, />Off<\/span>/);
+    assert.match(mcp, />1 tool available from running servers/);
+    h.eval("setSidePanelCardCollapsed('mcp')");
+    assert.match(h.byId["sp-mcp"].innerHTML, /aria-controls="sp-body-mcp"/);
+    assert.match(h.byId["sp-mcp"].innerHTML, /id="sp-body-mcp" hidden/);
   });
 
   it("only appears where there is room, and the MCP icon is always in the bottom bar", () => {
@@ -290,5 +343,66 @@ describe("side panel in the chat", () => {
     const css = readFileSync(join(__dirname, "..", "..", "src", "providers", "chatview", "chatPolishStyles.ts"), "utf8");
     assert.match(css, /\.side-panel, #btn-top-side-panel \{ display: none; \}/);
     assert.match(css, /@media \(min-width: 1500px\) \{\s*body:not\(\.side-panel-off\) \.side-panel \{/);
+  });
+
+  function orderedPanel(h: ReturnType<typeof setup>) {
+    const ids = ["context", "changes", "mcp", "env"];
+    const cards = ids.map(id => h.byId["sp-" + id]);
+    cards.forEach((card, i) => { card.id = "sp-" + ids[i]; card.classList.add("sp-card"); });
+    const panel = element({ children: cards, appendChild(card: any) {
+      this.children = this.children.filter((child: any) => child !== card);
+      this.children.push(card);
+    } });
+    h.byId["side-panel-body"] = panel;
+    return () => panel.children.map((card: any) => card.id.slice(3));
+  }
+
+  it("starts expanded and sanitizes old, incomplete, or invalid layout preferences", () => {
+    assert.deepEqual(normalizeSidePanelPreferences(null), {
+      order: ["context", "changes", "mcp", "env"], hidden: [], collapsed: [], breakdown: false,
+    });
+    assert.deepEqual(normalizeSidePanelPreferences({ order: ["env", "env", "unknown", 2], hidden: ["mcp", "mcp", "bad"], collapsed: ["context"], breakdown: "true" }), {
+      order: ["env", "context", "changes", "mcp"], hidden: ["mcp"], collapsed: ["context"], breakdown: false,
+    });
+    const h = setup();
+    h.post({ type: "side_panel_data", mcp: [], changes: null });
+    assert.match(h.byId["sp-mcp"].innerHTML, /aria-expanded="true"/);
+    assert.match(h.byId["sp-mcp"].innerHTML, /draggable="true" data-card="mcp" aria-label="Reorder MCP servers"/);
+  });
+
+  it("moves sections in either direction, saves the layout, and restores it in a new chat", () => {
+    const h = setup();
+    const order = orderedPanel(h);
+    const stored = withStorage(h);
+    h.eval("setSidePanelCardCollapsed('mcp'); setSidePanelCardHidden('changes'); moveSidePanelCard('env', 'context', false)");
+    assert.deepEqual(order(), ["env", "context", "changes", "mcp"]);
+    h.eval("moveSidePanelCard('context', 'mcp', true)");
+    assert.deepEqual(order(), ["env", "changes", "mcp", "context"]);
+    const prefs = JSON.parse(stored["andromity.sidePanel"]);
+    assert.deepEqual(prefs.collapsed, ["mcp"]);
+    assert.deepEqual(prefs.hidden, ["changes"]);
+    assert.ok(h.posted.some((m: any) => m.type === "side_panel_preferences"));
+
+    const restored = setup({ state: { sidePanelPreferences: prefs } });
+    const restoredOrder = orderedPanel(restored);
+    restored.post({ type: "side_panel_data", mcp: [], changes: null });
+    assert.deepEqual(restoredOrder(), ["env", "changes", "mcp", "context"]);
+    assert.ok(restored.byId["sp-mcp"].classList.contains("collapsed"));
+    assert.equal(restored.byId["sp-changes"].hidden, true);
+  });
+
+  it("syncs saved layouts without echoing or replacing focused controls on an acknowledgement", () => {
+    const h = setup();
+    const order = orderedPanel(h);
+    h.post({ type: "side_panel_data", mcp: [], changes: null });
+    h.posted.length = 0;
+    const prefs = { order: ["env", "context", "changes", "mcp"], collapsed: ["mcp"], hidden: [], breakdown: false };
+    h.post({ type: "side_panel_preferences", preferences: prefs });
+    assert.deepEqual(order(), prefs.order);
+    assert.ok(h.byId["sp-mcp"].classList.contains("collapsed"));
+    h.byId["sp-mcp"].innerHTML = "focused control";
+    h.post({ type: "side_panel_preferences", preferences: prefs });
+    assert.equal(h.byId["sp-mcp"].innerHTML, "focused control");
+    assert.equal(h.posted.length, 0);
   });
 });
