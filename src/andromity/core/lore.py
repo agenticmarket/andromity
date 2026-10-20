@@ -8,6 +8,8 @@ from typing import Any, Optional
 
 import httpx
 
+from andromity.core import network_policy
+
 logger = logging.getLogger(__name__)
 
 LORE_BASE_URL = "https://telemetry.agenticmarket.dev"
@@ -21,6 +23,8 @@ async def fetch_lore_directive(command: str) -> Optional[dict[str, Any]]:
     if cmd in _LORE_CACHE:
         return _LORE_CACHE[cmd]
 
+    if network_policy.enabled():
+        return None
     try:
         async with httpx.AsyncClient(timeout=3.5, headers={"User-Agent": "Andromity-CLI"}) as client:
             resp = await client.get(f"{LORE_BASE_URL}/cmd/{cmd}")
@@ -48,6 +52,8 @@ async def fetch_random_tip(tag: Optional[str] = None) -> Optional[dict[str, Any]
 
 async def fetch_latest_news() -> Optional[dict[str, Any]]:
     """Fetch latest release highlights and announcements from the edge."""
+    if network_policy.enabled():
+        return None
     try:
         async with httpx.AsyncClient(timeout=3.5, headers={"User-Agent": "Andromity-CLI"}) as client:
             resp = await client.get(f"{LORE_BASE_URL}/news")
@@ -60,6 +66,8 @@ async def fetch_latest_news() -> Optional[dict[str, Any]]:
 
 async def fetch_seasonal_event() -> Optional[dict[str, Any]]:
     """Fetch active seasonal festival or event modifier."""
+    if network_policy.enabled():
+        return None
     try:
         async with httpx.AsyncClient(timeout=3.5, headers={"User-Agent": "Andromity-CLI"}) as client:
             resp = await client.get(f"{LORE_BASE_URL}/season")

@@ -4,10 +4,19 @@ import assert from "node:assert/strict";
 const Module = require("module");
 const originalRequire = Module.prototype.require;
 const errors: string[] = [];
+const confirmations: string[] = [];
+let confirmAnswer: string | undefined = "Delete";
 Module.prototype.require = function (name: string) {
   if (name === "vscode") return {
     workspace: { workspaceFolders: [{ uri: { fsPath: "D:/repo" } }] },
-    window: { showErrorMessage: (message: string) => errors.push(message) },
+    window: {
+      showErrorMessage: (message: string) => errors.push(message),
+      showWarningMessage: async (message: string, options: any) => {
+        assert.equal(options?.modal, true);
+        confirmations.push(message);
+        return confirmAnswer;
+      },
+    },
     commands: { executeCommand: () => {} },
   };
   return originalRequire.apply(this, arguments as any);
@@ -72,5 +81,36 @@ it("pop-out stays open when deletion fails and closes only after successful dele
     });
     await panel._handleMessage({ type: "delete_session", sessionId: "active" });
     assert.equal(closed, outcome === "success");
+  }
+});
+
+it("asks before deleting and does nothing when the user cancels", async () => {
+  confirmAnswer = undefined;
+  try {
+    const provider: any = Object.create(ChatViewProvider.prototype);
+    const calls: string[] = [];
+    Object.assign(provider, {
+      _currentSessionId: "active", _waterfallAutoOpenedSessions: new Set(["active"]),
+      fetchAndPostSessions: async () => {},
+      _rpcClient: { call: async (method: string) => { calls.push(method); return { success: true }; } },
+    });
+    await provider._handleWebviewMessage({ type: "delete_session", sessionId: "active", sessionName: "Fix login bug" });
+    assert.deepEqual(calls, []);
+    assert.equal(provider._currentSessionId, "active");
+    assert.ok(confirmations.at(-1)?.includes('"Fix login bug"'));
+
+    const panel: any = Object.create(SessionTabPanel.prototype);
+    let closed = false;
+    const panelCalls: string[] = [];
+    Object.assign(panel, {
+      _sessionId: "active", dispose: () => { closed = true; },
+      _rpcClient: { call: async (method: string) => { panelCalls.push(method); return { success: true }; } },
+    });
+    await panel._handleMessage({ type: "delete_session", sessionId: "active" });
+    assert.deepEqual(panelCalls, []);
+    assert.equal(closed, false);
+    assert.ok(confirmations.at(-1)?.includes('"active"'));
+  } finally {
+    confirmAnswer = "Delete";
   }
 });

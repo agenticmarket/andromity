@@ -18,6 +18,9 @@ function makeElement(): any {
     insertAdjacentHTML(_position: string, html: string) {
       el._html += html;
     },
+    attrs: {} as Record<string, string>,
+    setAttribute(name: string, value: string) { el.attrs[name] = String(value); },
+    removeAttribute(name: string) { delete el.attrs[name]; },
   };
   const detachChildren = () => {
     for (const child of el.children) child.parentNode = null;
@@ -107,6 +110,16 @@ test("settling replaces incremental output with one full render", () => {
   assert.equal(el.innerHTML, "<md>A\n\nBC</md>");
   assert.equal(parsed.at(-1), "A\n\nBC");
   assert.equal(el._streamStable, null);
+  assert.equal(el.attrs["aria-busy"], undefined, "the finished reply is announced once");
+});
+
+test("a reply is marked busy for screen readers while it streams", () => {
+  const { context, runFrame } = sandbox();
+  const el = makeElement();
+  el._blockText = "Partial";
+  context.queueTextRender(el);
+  runFrame();
+  assert.equal(el.attrs["aria-busy"], "true");
 });
 
 test("stream text appends through one text node", () => {

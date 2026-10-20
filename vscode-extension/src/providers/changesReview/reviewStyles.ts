@@ -10,7 +10,11 @@ export function getReviewStyles(): string {
     .codicon-modifier-spin {
       animation: codicon-spin 1.5s steps(30) infinite;
     }
+    :root:has(> body.vscode-light), :root:has(> body.vscode-high-contrast-light) {
+      --tint: 0, 0, 0;
+    }
     :root {
+      --tint: 255, 255, 255;
       --review-font: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif);
       --review-code-font: var(--vscode-editor-font-family, Menlo, Monaco, "Courier New", monospace);
       --review-font-size: var(--vscode-editor-font-size, 13px);
@@ -21,8 +25,8 @@ export function getReviewStyles(): string {
       --diff-add-text: var(--vscode-gitDecoration-addedResourceForeground, #3fb950);
       --diff-del-text: var(--vscode-gitDecoration-deletedResourceForeground, #f85149);
       --border-color: var(--vscode-panel-border, rgba(128, 128, 128, 0.2));
-      --hover-bg: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.05));
-      --active-bg: var(--vscode-list-activeSelectionBackground, rgba(255, 255, 255, 0.1));
+      --hover-bg: var(--vscode-list-hoverBackground, rgba(var(--tint), 0.05));
+      --active-bg: var(--vscode-list-activeSelectionBackground, rgba(var(--tint), 0.1));
       --active-fg: var(--vscode-list-activeSelectionForeground, #ffffff);
       --header-bg: var(--vscode-editorGroupHeader-tabsBackground, #18181b);
       --card-bg: var(--vscode-sideBar-background, #121214);
@@ -646,7 +650,7 @@ export function getReviewStyles(): string {
     }
 
     .expand-btn:hover {
-      background: rgba(255, 255, 255, 0.1);
+      background: rgba(var(--tint), 0.1);
     }
 
     /* ── Empty & Loading States ──────────────────────────────────── */

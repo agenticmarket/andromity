@@ -130,8 +130,13 @@ async def test_cron_approval_rejects_chained_commands():
     handler = JsonRpcHandler()
     cron_approval = handler._make_cron_approval(job)
 
+    def blocked(result) -> bool:
+        return isinstance(result, tuple) and result[0] is False and bool(result[1])
+
     assert await cron_approval("shell_exec", {"command": "git status"}) is True
-    assert await cron_approval("shell_exec", {"command": "git status; rm -rf /"}) is False
-    assert await cron_approval("shell_exec", {"command": "git status\ncalc.exe"}) is False
-    assert await cron_approval("read_file", {"path": ".env"}) is False
+    chained = await cron_approval("shell_exec", {"command": "git status; rm -rf /"})
+    assert blocked(chained)
+    assert "Allowed commands: git status" in chained[1]
+    assert blocked(await cron_approval("shell_exec", {"command": "git status\ncalc.exe"}))
+    assert blocked(await cron_approval("read_file", {"path": ".env"}))
     assert await cron_approval("read_file", {"path": "src/tokenizer.py"}) is True

@@ -146,6 +146,36 @@ export function getChatPolishStyles(): string {
     .codex-send-btn { width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0; background: var(--surface-hover); color: var(--muted); }
     .codex-send-btn.has-text { background: var(--vscode-button-background, #007fd4); color: var(--vscode-button-foreground, #fff); }
     .codex-send-btn.has-text:hover { background: var(--vscode-button-hoverBackground, #026ec1); }
+    .prompt-box.is-generating .codex-send-btn.has-text { display: flex !important; align-items: center; justify-content: center; }
+    .prompt-box.is-generating .codex-cancel-btn + .codex-send-btn { margin-left: 4px; }
+    .action-tip {
+      position: fixed;
+      z-index: 1000;
+      pointer-events: none;
+      white-space: pre;
+      font-size: 11px;
+      line-height: 1.45;
+      padding: 4px 8px;
+      border-radius: 4px;
+      background: var(--vscode-editorHoverWidget-background, var(--popover-bg));
+      color: var(--vscode-editorHoverWidget-foreground, var(--fg));
+      border: 1px solid var(--vscode-editorHoverWidget-border, var(--popover-border));
+      box-shadow: 0 2px 8px var(--popover-shadow);
+    }
+    .action-tip[hidden] { display: none; }
+    .prompt-airgap-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 10.5px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 4px;
+      color: var(--vscode-testing-iconPassed, #1a7f37);
+      border: 1px solid color-mix(in srgb, var(--vscode-testing-iconPassed, #1a7f37) 45%, transparent);
+      white-space: nowrap;
+    }
+    .prompt-airgap-pill[hidden] { display: none; }
     .status-bar { border-top: none; padding-left: var(--chat-edge); padding-right: var(--chat-edge); }
 
     button:focus-visible, [role="button"]:focus-visible, a:focus-visible {
@@ -154,10 +184,10 @@ export function getChatPolishStyles(): string {
     }
     .message-wrap:focus-within .message-footer { opacity: 1; visibility: visible; }
     body.vscode-light .zero-gateway-pulse { background: var(--vscode-testing-iconPassed, #16825d); }
-    body.vscode-highContrast .starter-chip,
-    body.vscode-highContrastLight .starter-chip,
-    body.vscode-highContrast .prompt-box,
-    body.vscode-highContrastLight .prompt-box {
+    body.vscode-high-contrast .starter-chip,
+    body.vscode-high-contrast-light .starter-chip,
+    body.vscode-high-contrast .prompt-box,
+    body.vscode-high-contrast-light .prompt-box {
       border-color: var(--vscode-contrastBorder, var(--fg));
     }
 

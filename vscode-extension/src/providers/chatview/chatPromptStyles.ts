@@ -35,7 +35,7 @@ export function getPromptStyles(): string {
     }
 
     .prompt-undo-btn:hover {
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
       border-color: var(--border);
       color: var(--fg);
       opacity: 1;
@@ -44,6 +44,62 @@ export function getPromptStyles(): string {
     .prompt-undo-btn svg {
       flex-shrink: 0;
     }
+
+    .prompt-edit-box {
+      border: 1px solid var(--vscode-focusBorder, var(--accent));
+      border-radius: 10px;
+      background: var(--input-bg);
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .prompt-edit-input {
+      width: 100%;
+      box-sizing: border-box;
+      resize: vertical;
+      min-height: 54px;
+      max-height: 240px;
+      background: transparent;
+      color: var(--fg);
+      border: none;
+      outline: none;
+      font: inherit;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .prompt-edit-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .prompt-edit-note {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .prompt-edit-actions {
+      display: flex;
+      gap: 6px;
+      margin-left: auto;
+    }
+    .prompt-edit-cancel, .prompt-edit-send {
+      font: inherit;
+      font-size: 11.5px;
+      padding: 3px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--fg);
+    }
+    .prompt-edit-send {
+      background: var(--vscode-button-background, #007fd4);
+      color: var(--vscode-button-foreground, #fff);
+      border-color: transparent;
+    }
+    .prompt-edit-send:hover { background: var(--vscode-button-hoverBackground, #026ec1); }
 
     .message.user.prompt-card {
       background: var(--card-bg, #18181b);
@@ -62,14 +118,14 @@ export function getPromptStyles(): string {
     }
 
     .message.user.prompt-card:hover {
-      border-color: rgba(255, 255, 255, 0.14);
+      border-color: rgba(var(--tint), 0.14);
     }
 
     /* Editor tabs use the editor background for --card-bg, which can hide prompt text.
        Keep user prompts on the sidebar surface so they stay readable. */
     body.andromity-session-tab .message.user.prompt-card {
       background: var(--vscode-sideBar-background, #18181b);
-      border-color: var(--vscode-widget-border, rgba(255, 255, 255, 0.14));
+      border-color: var(--vscode-widget-border, rgba(var(--tint), 0.14));
     }
 
     /* Prompt Attached Image Gallery / Carousel */
@@ -104,7 +160,7 @@ export function getPromptStyles(): string {
       height: 24px;
       border-radius: 50%;
       background: rgba(24, 24, 27, 0.9);
-      border: 1px solid rgba(255, 255, 255, 0.2);
+      border: 1px solid rgba(var(--tint), 0.2);
       color: var(--fg);
       display: flex;
       align-items: center;
@@ -141,7 +197,7 @@ export function getPromptStyles(): string {
       max-height: 110px;
       object-fit: cover;
       border-radius: 6px;
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(var(--tint), 0.12);
       flex-shrink: 0;
       cursor: pointer;
       transition: transform 0.15s, border-color 0.15s;

@@ -157,7 +157,7 @@ ${styles}
           <polyline points="6 9 12 15 18 9"></polyline>
         </svg>
       </div>
-      <div class="session-collab-badge" id="session-collab-badge" style="display:none;" title="Co-Agent Collaboration"></div>
+      <div class="session-collab-badge" id="session-collab-badge" style="display:none;" title="Session collaboration"></div>
     </div>
     <div class="top-bar-right">
       <button class="top-bar-icon-btn top-account-btn" id="btn-top-account" aria-label="Cloud account" title="Cloud account — usage and daily allowance">
@@ -168,7 +168,7 @@ ${styles}
         <span class="account-pill-dot" id="account-pill-dot" style="display:none;"></span>
         <span class="account-pill-text sr-only" id="account-pill-text" style="display:none;">Guest</span>
       </button>
-      <button class="top-bar-icon-btn" id="btn-top-collab-inbox" style="display:none;" aria-label="Collaboration Inbox" title="Collaboration Inbox (Inter-Session Mailbox)" data-action="toggle-collab-inbox">
+      <button class="top-bar-icon-btn" id="btn-top-collab-inbox" style="display:none;" aria-label="Collaboration inbox" title="Messages, questions and handoffs from other sessions" data-action="toggle-collab-inbox">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
           <polyline points="22,6 12,13 2,6"></polyline>
@@ -270,7 +270,7 @@ ${styles}
       </div>
       <div class="collab-inbox-header-actions">
         <button class="collab-inbox-text-btn" id="btn-collab-clear-all" style="display:none;" title="Mark all as read">Mark Read</button>
-        <button class="collab-inbox-close-btn" id="btn-close-collab-inbox" aria-label="Close Inbox" title="Close (Esc)">&times;</button>
+        <button class="collab-inbox-close-btn" id="btn-close-collab-inbox" aria-label="Close inbox" title="Close (Esc)">&times;</button>
       </div>
     </div>
     <div class="collab-inbox-tabs" style="display:none;">
@@ -287,7 +287,7 @@ ${styles}
           <polyline points="22,6 12,13 2,6"></polyline>
         </svg>
         <div class="empty-title">No collaboration messages</div>
-        <div class="empty-sub">Messages exchanged with co-agents appear here.</div>
+        <div class="empty-sub">Messages from other sessions appear here.</div>
       </div>
     </div>
   </div>
@@ -893,7 +893,7 @@ ${styles}
         <div class="agent-working" role="status"><span class="agent-working-wave" aria-hidden="true"><i></i><i></i><i></i></span><span>Working</span></div>
         <div class="image-attachments-container" id="image-attachments-container" style="display:none;"></div>
         <div class="drag-dropped-files-bar" id="drag-dropped-files-bar" style="display:none;"></div>
-        <textarea id="prompt-input" autofocus placeholder="Ask Andromity…" rows="1" aria-label="Ask Andromity or type slash for commands, @ for skills" title="Enter to send · Shift+Enter for a new line · / commands · @ skills"></textarea>
+        <textarea id="prompt-input" autofocus placeholder="Ask Andromity…" rows="1" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-haspopup="listbox" aria-label="Ask Andromity or type slash for commands, @ for skills" title="Enter to send · Shift+Enter for a new line · / commands · @ skills"></textarea>
 
         <!-- Stepped Reasoning Effort Popover (Clean & Minimal) -->
         <div class="reasoning-popover" id="reasoning-popover" style="display:none;" role="dialog" aria-label="Thinking Effort">
@@ -978,6 +978,7 @@ ${styles}
               </svg>
             </button>
 
+            <span class="prompt-airgap-pill" id="airgap-pill" hidden role="status"><i class="codicon codicon-shield" aria-hidden="true"></i> Air-gap</span>
             <button class="prompt-btn mode-${(state.currentMode || 'safe').toLowerCase()}" id="btn-prompt-mode" title="Permission Governance Mode" aria-label="Permission mode" aria-haspopup="menu" aria-expanded="false">
               <span id="prompt-mode-icon" class="prompt-mode-icon">
                 ${getModeSvg(state.currentMode)}
@@ -1007,10 +1008,10 @@ ${styles}
                 <polyline points="6 9 12 15 18 9"></polyline>
               </svg>
             </button>
-            <button class="codex-cancel-btn" id="btn-cancel" title="Stop Generation" style="display:none;" aria-label="Cancel agent turn">
+            <button class="codex-cancel-btn" id="btn-cancel" data-tip="Stop this turn" style="display:none;" aria-label="Stop this turn">
               <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>
             </button>
-            <button class="codex-send-btn" id="btn-send" title="Send (Enter)" aria-label="Send message">
+            <button class="codex-send-btn" id="btn-send" data-tip="Send (Enter)" aria-label="Send message">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="12" y1="19" x2="12" y2="5"></line>
                 <polyline points="5 12 12 5 19 12"></polyline>
@@ -1101,7 +1102,7 @@ ${styles}
           <div class="context-popover-top">
             <div class="context-ring-wrap">
               <svg class="context-ring-svg" width="36" height="36" viewBox="0 0 36 36">
-                <circle class="context-ring-bg" cx="18" cy="18" r="14" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="3.5"></circle>
+                <circle class="context-ring-bg" cx="18" cy="18" r="14" fill="none" style="stroke: rgba(var(--tint), 0.1)" stroke-width="3.5"></circle>
                 <circle class="context-ring-fill" id="context-ring-fill" cx="18" cy="18" r="14" fill="none" stroke="#e4e4e7" stroke-width="3.5" stroke-dasharray="87.96" stroke-dashoffset="87.96" stroke-linecap="round" transform="rotate(-90 18 18)"></circle>
               </svg>
               <span class="context-ring-text" id="context-popover-pct">0%</span>

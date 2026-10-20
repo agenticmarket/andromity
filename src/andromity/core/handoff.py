@@ -21,9 +21,10 @@ class HandoffDoc:
     next_steps: List[str] = field(default_factory=list)
     notes: str = ""
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    to_session: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        doc = {
             "phase": self.phase,
             "from_session": self.from_session,
             "status": self.status,
@@ -33,6 +34,9 @@ class HandoffDoc:
             "notes": self.notes,
             "created_at": self.created_at,
         }
+        if self.to_session:
+            doc["to_session"] = self.to_session
+        return doc
 
 
 def get_handoff_dir(project_path: Optional[str] = None) -> Path:
@@ -53,8 +57,15 @@ def write_handoff(
     next_steps: Optional[List[str]] = None,
     notes: str = "",
     project_path: Optional[str] = None,
+    to_session: str = "",
+    to_session_id: str = "",
+    from_session_id: str = "",
 ) -> Dict[str, Any]:
-    """Write a structured handoff document and notify the session bus."""
+    """Write a structured handoff document and notify the session bus.
+
+    With ``to_session_id`` (already resolved within the author's project) the target
+    session is woken to pick the handoff up; without it the handoff is project-wide.
+    """
     clean_phase = phase.strip().lower().replace(" ", "_")
     doc = HandoffDoc(
         phase=clean_phase,
@@ -64,6 +75,7 @@ def write_handoff(
         blocked_on=blocked_on or [],
         next_steps=next_steps or [],
         notes=notes,
+        to_session=to_session,
     )
     doc_dict = doc.to_dict()
     handoff_dir = get_handoff_dir(project_path)
@@ -80,9 +92,12 @@ def write_handoff(
             status=status,
             summary=summary_line,
             timestamp=doc.created_at,
+            to_session=to_session,
+            to_session_id=to_session_id,
+            from_session_id=from_session_id,
         ))
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("Could not announce handoff %s: %s", clean_phase, e)
 
     return doc_dict
 

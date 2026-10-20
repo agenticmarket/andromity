@@ -2,6 +2,63 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
+## [Unreleased]
+
+### Added
+- **Air-gap mode.** Turn it on with `[default] airgap = true` in `config.toml` or `ANDROMITY_AIRGAP=1`. Andromity then makes no network connections except to this machine and private hosts in `airgap_allowed_hosts` / `ANDROMITY_AIRGAP_ALLOW`.
+  - A guard installed at startup refuses connections, UDP sends and DNS lookups, including on the Windows asyncio path the old guard missed.
+  - Cloud providers, web tools, remote and unapproved local MCP servers, connectors, telemetry and background lookups turn off with clear messages.
+  - Commands the agent runs get stricter network blocking that an MCP server's `env` can no longer loosen.
+  - New `airgap.status` and `airgap.self_test` RPC methods, and an `airgap/blocked` notification.
+  - See [docs/air-gap.md](docs/air-gap.md), including what the guard does not cover.
+- **Edit scheduled jobs in place.** New `cron.update` and `cron.duplicate` RPC methods keep a job's id and run history; changes apply from the next run.
+- **Schedule preview.** `cron.preview` validates a schedule and returns a readable description plus the next run times.
+- **More schedule formats:** `weekdays at 09:00`, `mondays and fridays at 5pm`, `every 1h30m`, `every 2 hours`, cron day and month names (`MON-FRI`, `JAN`), and `@hourly`/`@daily`/`@weekly`/`@monthly`.
+- **New job settings**, all optional:
+  - `catch_up`: run once after downtime (the default) or skip.
+  - `max_retries`: default 2.
+  - `notify`: `failures` (default), `always` or `never`.
+- **Missed runs.** A daily or cron-schedule job that Andromity was closed for runs once when it starts again, if the miss was within 24 hours. Otherwise the history records it as **Missed**.
+- **New run statuses:**
+  - **Needs attention:** a tool was blocked, or the agent ended with a question nobody could answer.
+  - **Skipped:** for example, the workspace is untrusted.
+  - **Missed:** Andromity was not running at the scheduled time.
+  - Runs also record their trigger (schedule, manual, catch-up or retry) and the tools that were blocked.
+- **Run history** keeps the last 100 runs per job.
+
+### Fixed
+- **A job's run history was wiped** from the database every time any job was saved. It survived only through the `.andromity/cron_runs` JSON copies.
+- **Duplicate runs.**
+  - The VS Code engine started a new copy of a running job every 10 seconds.
+  - A terminal and a VS Code window open on the same folder each ran the same jobs.
+  - Jobs are now claimed in the database before they start, so each scheduled run happens once. Run now on a running job says it is already running.
+- **Provider failures were recorded as successes.** Missing key, rate limit and quota failures now fail the run with a plain-language reason. Only temporary errors (rate limits, provider outages) are retried, with growing waits.
+- **Auto-pause.** A job pauses itself after 5 failed runs in a row and shows why.
+- **Unattended runs.**
+  - The agent is told it is unattended and which commands it may run.
+  - A blocked command now says "Blocked by this scheduled job's allowed commands" and lists them, instead of "rejected by user".
+- **Wrong folder.** Scheduled jobs no longer run in the editor's install folder when VS Code has no folder open. Cron requests without a real project folder are refused, and jobs whose folder disappeared are paused.
+- **Stale session view.** Opening a scheduled run's session while it ran could leave a stale copy showing only the prompt. It now shows the live run, and missing run sessions are never recreated empty.
+- **Live updates for open scheduled runs.**
+  - An open scheduled run streams like a normal chat: `agent/started`, text, thinking and tool events, then exactly one finish signal. That is `agent/done` for success or needs-attention, `agent/error` for a failure or timeout, or `agent/cancelled` when stopped.
+  - Chat turns and scheduled runs now share one event-forwarding helper.
+  - **Stop** in the chat cancels the run.
+  - These notifications carry `scheduled: true`.
+- **Wrong permission mode.** A scheduled run's session records the job's permission mode and profile instead of your default. `session.get` adds a `scheduled_run` field with the job, its mode and whether the run is still going.
+- **Messages during a run.** Sending a message into a scheduled run that is still going is refused with "This scheduled run is still in progress. You can continue the chat when it finishes." Before, it started a second agent on the same session. Once the run ends, the chat continues normally.
+- **Untrusted workspace.** A job no longer records a failed run every 10 seconds. It records one skipped run and pauses until you trust the workspace and resume it.
+- **Cron expressions** fired only if a check happened to land inside the matching minute. They now run on time, and their next-run time is correct.
+- **Schedule parsing.**
+  - Out-of-range fields such as `99 * * * *` were accepted and never ran.
+  - Day-of-month and day-of-week now follow standard cron (either can match).
+  - `every 1h30m` was read as one hour.
+- **Daily jobs** (`daily at HH:MM`) created after that time no longer run immediately.
+- A chat no longer shows as running forever when Andromity stopped mid-reply (VS Code closed, the engine crashed or was restarted). Each engine now records itself as the owner of a running chat, and any window can tell when that engine is gone; such chats show as `interrupted`. Chats left running by earlier versions count as interrupted after 30 minutes without activity. A run in another open window is never marked interrupted.
+
+### Changed
+- A new interval job waits one interval before its first run. Use **Run now** to start it right away.
+- A run stopped by shutdown is recorded as interrupted and does not count as a failure.
+
 ## [0.2.21] — 2026-10-18
 
 ### Added

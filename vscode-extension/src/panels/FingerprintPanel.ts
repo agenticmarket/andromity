@@ -303,18 +303,21 @@ export class FingerprintPanel {
     this._lastRefreshAt = Date.now();
     try {
       let sessionData: any = null;
+      let loadFailed = !this._rpcClient;
       if (this._rpcClient) {
         try {
           sessionData = await this._rpcClient.call<any>("session.get", {
             session_id: this._sessionId,
           });
         } catch (err) {
+          loadFailed = true;
           console.error("[FingerprintPanel] session.get failed:", err);
         }
       }
       this._panel.webview.postMessage({
         type: "fingerprint_init",
         data: this._extractTraceData(sessionData),
+        loadFailed,
       });
     } finally {
       this._refreshing = false;

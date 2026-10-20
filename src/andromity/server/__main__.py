@@ -18,6 +18,10 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["--check-runtime"]:
         check_runtime()
     else:
+        # Air-gap mode must guard the process before anything can open a connection.
+        from andromity.core.network_policy import activate
+
+        activate()
         from andromity.server.main import main
 
         main()

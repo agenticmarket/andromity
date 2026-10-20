@@ -456,7 +456,7 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
       removeEventListener: () => {},
       querySelectorAll: () => [],
       querySelector: () => null,
-      body: { classList: { add: () => {}, remove: () => {} } },
+      body: { classList: { add: () => {}, remove: () => {} }, appendChild: (child: any) => child },
     };
 
     const mockWindow: any = {
@@ -1697,7 +1697,7 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
       removeEventListener: () => {},
       querySelectorAll: () => [],
       querySelector: () => null,
-      body: { classList: { add: () => {}, remove: () => {} } },
+      body: { classList: { add: () => {}, remove: () => {} }, appendChild: (child: any) => child },
     };
 
     const mockWindow: any = {

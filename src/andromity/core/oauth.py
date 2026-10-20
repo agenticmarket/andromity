@@ -622,6 +622,10 @@ async def full_oauth_flow(
     Calls on_status(msg) with progress updates for UI display.
     Returns access_token string, or None on failure.
     """
+    from andromity.core import network_policy
+    if not network_policy.url_allowed(server_url):
+        on_status(network_policy.feature_off_message("signing in to this MCP server"))
+        return None
     on_status("🔍 Discovering OAuth endpoints…")
     meta = await discover_metadata(server_url)
     if not meta:

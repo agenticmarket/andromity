@@ -7,6 +7,8 @@ import { StringDecoder } from "string_decoder";
 import * as vscode from "vscode";
 import { RpcClient } from "./RpcClient.js";
 import { isUncPath } from "./securityPolicy.js";
+import { currentAirGap } from "../airgapState.js";
+import { airGapOffMessage, daemonAirGapEnv } from "../airgap.js";
 
 /** A daemon must stay up this long before a later crash restarts the backoff schedule. */
 export const STABLE_UPTIME_MS = 20_000;
@@ -369,6 +371,13 @@ export class PythonBridge {
 
   /** Install the andromity package into the given Python environment. */
   private async _installPackage(pythonPath: string, cwd: string, srcDir: string | null): Promise<boolean> {
+    if (currentAirGap().enabled) {
+      const message = airGapOffMessage("downloading the Andromity engine",
+        "Install the andromity package from your internal package mirror, or use an Andromity build with the engine bundled.");
+      this._log(`[Andromity] ${message}`);
+      void vscode.window.showErrorMessage(message);
+      return false;
+    }
     this._log(`[Andromity] Auto-installing 'andromity' package...`);
 
     return vscode.window.withProgress(
@@ -696,6 +705,12 @@ export class PythonBridge {
       }
     } catch {
       // In tests or environments where vscode config is mocked
+    }
+
+    const airGap = currentAirGap();
+    Object.assign(env, daemonAirGapEnv(airGap));
+    if (airGap.enabled) {
+      this._log(`[Andromity] Air-gap mode is on (${airGap.source}); the engine can reach only this machine${airGap.allowedHosts.length ? " and " + airGap.allowedHosts.join(", ") : ""}.`);
     }
 
     const rgPath = this._findVsCodeRipgrep();

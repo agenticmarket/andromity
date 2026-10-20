@@ -158,6 +158,11 @@ class SubAgent:
         if self.project_path and not _cfg.is_trusted(self.project_path):
             tool_names = {t for t in tool_names if t not in mutating_tools}
 
+        from andromity.core import network_policy
+        from andromity.core.profiles import AIRGAP_OFFLINE_TOOLS
+        if network_policy.enabled():
+            tool_names = {t for t in tool_names if t not in AIRGAP_OFFLINE_TOOLS}
+
         self.allowed_tools = [
             t for t in CORE_TOOLS
             if t["function"]["name"] in tool_names

@@ -6,6 +6,7 @@ import { getToolTargetsScript } from "./toolTargets.js";
 import { getStreamingRenderScript } from "./streamingRender.js";
 import { getTurnRailScript } from "./turnRail.js";
 import { DOCS } from "../../docsLinks.js";
+import { SHELL_LANGUAGES } from "../../integrations/shellLanguages.js";
 
 export function getChatClientScript(sidebarIconUri: string, state: ChatViewState): string {
   return `
@@ -317,6 +318,33 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let collabInboxItems = [];
     let collabInboxActiveTab = 'all';
     let sessionCollabActive = false;
+    let sessionCollabState = {};
+
+    const COLLAB_ICON_PATHS = {
+      question: '<circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line>',
+      answer: '<polyline points="20 6 9 17 4 12"></polyline>',
+      handoff: '<path d="M5 12h14"></path><path d="M12 5l7 7-7 7"></path>',
+      message: '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline>',
+    };
+
+    function collabTypeLabel(item) {
+      if (item.type === 'question') return 'Question';
+      if (item.type === 'answer') return 'Answer';
+      if (item.type === 'handoff') return 'Handoff';
+      if (item.messageType === 'broadcast') return 'Broadcast';
+      if (item.messageType === 'shared_state') return 'Shared state';
+      return 'Message';
+    }
+
+    // Shared-state writes and handoffs reach every open session; the session that made
+    // them already shows the tool call, so it gets no inbox entry.
+    function isOwnCollabEvent(authorName) {
+      if (!authorName || !currentSessionId) return false;
+      const current = (typeof allSessions !== 'undefined' ? allSessions : []).find(s => s.id === currentSessionId);
+      if (current) return current.name === authorName;
+      const shownName = document.getElementById('active-session-name');
+      return Boolean(shownName && shownName.textContent && shownName.textContent.trim() === authorName);
+    }
 
     function getSessionCollabInboxItems() {
       if (!currentSessionId) return collabInboxItems.slice();
@@ -392,7 +420,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         listEl.innerHTML = '<div class="collab-inbox-empty">' +
           '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>' +
           '<div class="empty-title">No collaboration messages</div>' +
-          '<div class="empty-sub">Messages exchanged with co-agents appear here.</div>' +
+          '<div class="empty-sub">Messages from other sessions appear here.</div>' +
           '</div>';
         return;
       }
@@ -404,32 +432,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         div.id = 'inbox-item-' + item.id;
 
         const shortFrom = formatSessionShort(item.fromSession, 18);
-        let iconSvg = '';
-        let typeBadge = '';
-        if (item.type === 'question') {
-          iconSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#d2a8ff" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
-          typeBadge = '<span class="session-card-badge" style="color:#d2a8ff;border:1px solid rgba(210,168,255,0.3)">Question</span>';
-        } else if (item.type === 'answer') {
-          iconSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#3fb950" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>';
-          typeBadge = '<span class="session-card-badge" style="color:#3fb950;border:1px solid rgba(63,185,80,0.3)">Answer</span>';
-        } else if (item.type === 'handoff') {
-          iconSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2"><path d="M5 12h14"></path><path d="M12 5l7 7-7 7"></path></svg>';
-          typeBadge = '<span class="session-card-badge" style="color:#38bdf8;border:1px solid rgba(56,189,248,0.3)">Handoff</span>';
-        } else {
-          iconSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>';
-          typeBadge = '<span class="session-card-badge">' + escapeHtml(item.messageType || 'Broadcast') + '</span>';
-        }
+        const kind = COLLAB_ICON_PATHS[item.type] ? item.type : 'message';
+        const iconSvg = '<span class="collab-type-icon ' + kind + '"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' + COLLAB_ICON_PATHS[kind] + '</svg></span>';
+        const typeBadge = '<span class="collab-type-badge ' + kind + '">' + escapeHtml(collabTypeLabel(item)) + '</span>';
 
         let actionsHtml = '';
         if (item.fromSessionId) {
-          actionsHtml += '<button class="session-card-btn session-card-jump-btn" data-action="switch-session" data-session-id="' + escapeHtml(item.fromSessionId) + '" title="Switch to [' + escapeHtml(item.fromSession) + ']">' +
-            '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg> ' +
-            'Open Session ↗</button>';
+          actionsHtml += '<button class="session-card-btn session-card-jump-btn" data-action="switch-session" data-session-id="' + escapeHtml(item.fromSessionId) + '" title="Open ' + escapeHtml(item.fromSession || 'this session') + '">' +
+            '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>' +
+            'Open session</button>';
         }
         if (item.type === 'question' && item.questionId) {
-          actionsHtml += '<button class="session-card-btn session-card-wake-btn" data-action="wake-agent-question" data-question-id="' + escapeHtml(item.questionId) + '" data-from-session="' + escapeHtml(item.fromSession || '') + '" title="Wake agent to answer this question">' +
-            '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> ' +
-            'Wake & Answer</button>';
+          actionsHtml += '<button class="session-card-btn session-card-wake-btn" data-action="wake-agent-question" data-question-id="' + escapeHtml(item.questionId) + '" title="Ask this session to answer now">' +
+            '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>' +
+            'Answer now</button>';
         }
 
         const timeStr = item.timestamp ? new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
@@ -437,7 +453,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         div.innerHTML = '<div class="collab-inbox-item-header">' +
           '<div class="collab-inbox-item-title">' +
             iconSvg +
-            '<span title="' + escapeHtml(item.fromSession || 'Agent') + '">[' + escapeHtml(shortFrom) + ']</span>' +
+            '<span class="collab-inbox-item-from" title="' + escapeHtml(item.fromSession || 'Another session') + '">' + escapeHtml(shortFrom) + '</span>' +
             typeBadge +
           '</div>' +
           (timeStr ? '<span class="collab-inbox-item-time">' + escapeHtml(timeStr) + '</span>' : '') +
@@ -500,7 +516,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     const sessionCollabBadgeEl = document.getElementById('session-collab-badge');
     sessionCollabBadgeEl?.addEventListener('click', (e) => {
-      if (e.target && e.target.classList && e.target.classList.contains('collab-resume-btn')) return;
+      if (e.target && e.target.closest && e.target.closest('[data-action="resume-auto-wake"]')) return;
       toggleCollabInbox(true);
     });
 
@@ -1252,6 +1268,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     }
 
+    // The prompt box is the combobox for both palettes: it points at the open
+    // list and the highlighted option so screen readers announce navigation.
+    function syncPaletteA11y(paletteId, open, activeOptionId) {
+      if (!promptInput) return;
+      if (open) {
+        promptInput.setAttribute('aria-expanded', 'true');
+        promptInput.setAttribute('aria-controls', paletteId);
+        if (activeOptionId) promptInput.setAttribute('aria-activedescendant', activeOptionId);
+        else promptInput.removeAttribute('aria-activedescendant');
+      } else if (promptInput.getAttribute('aria-controls') === paletteId) {
+        promptInput.setAttribute('aria-expanded', 'false');
+        promptInput.removeAttribute('aria-controls');
+        promptInput.removeAttribute('aria-activedescendant');
+      }
+    }
+
     function showSlashPalette(matches) {
       if (!slashPalette || !matches || matches.length === 0) {
         hideSlashPalette();
@@ -1268,17 +1300,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (slashPalette) slashPalette.style.display = 'none';
       currentSlashMatches = [];
       activeSlashIdx = 0;
+      syncPaletteA11y('slash-palette', false);
     }
 
     function renderSlashPalette() {
       if (!slashPaletteList) return;
       slashPaletteList.innerHTML = currentSlashMatches.map((c, idx) => {
         const isSel = idx === activeSlashIdx;
-        return '<div class="slash-item ' + (isSel ? 'active' : '') + '" data-action="select-slash-cmd" data-cmd="' + escapeHtml(c.cmd) + '" data-idx="' + idx + '" role="option" aria-selected="' + isSel + '">' +
+        return '<div class="slash-item ' + (isSel ? 'active' : '') + '" id="slash-opt-' + idx + '" data-action="select-slash-cmd" data-cmd="' + escapeHtml(c.cmd) + '" data-idx="' + idx + '" role="option" aria-selected="' + isSel + '">' +
           '<span class="slash-cmd">' + escapeHtml(c.cmd) + '</span>' +
           '<span class="slash-desc">' + escapeHtml(c.desc) + '</span>' +
         '</div>';
       }).join('');
+      syncPaletteA11y('slash-palette', true, currentSlashMatches.length ? 'slash-opt-' + activeSlashIdx : '');
     }
 
     function navigateSlashPalette(direction) {
@@ -1312,12 +1346,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         '<span class="slash-desc">No skills installed yet.</span>' +
         '<button class="btn-card-action" data-action="open-skills-settings">Browse skills</button>' +
       '</div>';
+      syncPaletteA11y('mention-palette', true, '');
     }
 
     function hideMentionPalette() {
       if (mentionPalette) mentionPalette.style.display = 'none';
       currentMentionMatches = [];
       activeMentionIdx = 0;
+      syncPaletteA11y('mention-palette', false);
     }
 
     function renderMentionPalette() {
@@ -1326,11 +1362,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const isSel = idx === activeMentionIdx;
         const name = s.name || s.id || 'skill';
         const desc = s.description || 'Agent skill';
-        return '<div class="slash-item ' + (isSel ? 'active' : '') + '" data-action="select-mention-skill" data-skill="' + escapeHtml(name) + '" data-idx="' + idx + '" role="option" aria-selected="' + isSel + '">' +
+        return '<div class="slash-item ' + (isSel ? 'active' : '') + '" id="mention-opt-' + idx + '" data-action="select-mention-skill" data-skill="' + escapeHtml(name) + '" data-idx="' + idx + '" role="option" aria-selected="' + isSel + '">' +
           '<span class="slash-cmd">@' + escapeHtml(name) + '</span>' +
           '<span class="slash-desc">' + escapeHtml(desc) + '</span>' +
         '</div>';
       }).join('');
+      syncPaletteA11y('mention-palette', true, currentMentionMatches.length ? 'mention-opt-' + activeMentionIdx : '');
     }
 
     function navigateMentionPalette(direction) {
@@ -1448,8 +1485,65 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     // Send on click or Enter
     if (sendBtn) {
-      sendBtn.addEventListener('click', sendCurrentPrompt);
+      sendBtn.addEventListener('click', () => sendCurrentPrompt());
     }
+
+    // Quick tooltip for composer actions marked data-tip (send, stop).
+    const actionTip = document.createElement('div');
+    actionTip.className = 'action-tip';
+    actionTip.setAttribute('role', 'tooltip');
+    actionTip.hidden = true;
+    if (document.body) document.body.appendChild(actionTip);
+    function showActionTip(el) {
+      const text = el && el.getAttribute('data-tip');
+      if (!text) return;
+      actionTip.textContent = text;
+      actionTip.hidden = false;
+      const r = el.getBoundingClientRect();
+      const tip = actionTip.getBoundingClientRect();
+      actionTip.style.left = Math.max(6, Math.min(window.innerWidth - tip.width - 6, r.right - tip.width)) + 'px';
+      actionTip.style.top = Math.max(6, r.top - tip.height - 6) + 'px';
+    }
+    function hideActionTip() { actionTip.hidden = true; }
+    [sendBtn, cancelBtn].forEach((btn) => {
+      if (!btn) return;
+      btn.addEventListener('mouseenter', () => showActionTip(btn));
+      btn.addEventListener('focus', () => showActionTip(btn));
+      btn.addEventListener('mouseleave', hideActionTip);
+      btn.addEventListener('blur', hideActionTip);
+      btn.addEventListener('click', hideActionTip);
+    });
+
+    // While a turn runs, the placeholder says how to queue or steer, and the
+    // send button stays next to Stop once there is text (CSS: .is-generating).
+    const promptBaseEl = document.querySelector('.prompt-box');
+    if (promptInput && promptBaseEl && typeof MutationObserver !== 'undefined') {
+      const isMacPlatform = /Mac|iPhone|iPad/.test(navigator.platform || '');
+      let runningHintShown = '';
+      let placeholderBeforeHint = '';
+      const syncRunningHint = () => {
+        const generating = promptBaseEl.classList.contains('is-generating');
+        if (generating && !runningHintShown) {
+          placeholderBeforeHint = promptInput.getAttribute('placeholder') || '';
+          runningHintShown = queueSupported
+            ? 'Queue a follow-up (Enter) · ' + (isMacPlatform ? '⌘Enter' : 'Ctrl+Enter') + ' to steer now'
+            : 'Queue a follow-up (Enter)';
+          promptInput.setAttribute('placeholder', runningHintShown);
+          if (sendBtn) {
+            sendBtn.setAttribute('data-tip', queueSupported
+              ? 'Queue follow-up (Enter)' + String.fromCharCode(10) + (isMacPlatform ? '⌘Enter' : 'Ctrl+Enter') + ' to steer now'
+              : 'Queue follow-up (Enter)');
+            sendBtn.setAttribute('aria-label', 'Queue follow-up message');
+          }
+        } else if (!generating && runningHintShown) {
+          if (promptInput.getAttribute('placeholder') === runningHintShown) promptInput.setAttribute('placeholder', placeholderBeforeHint);
+          runningHintShown = '';
+          if (sendBtn) { sendBtn.setAttribute('data-tip', 'Send (Enter)'); sendBtn.setAttribute('aria-label', 'Send message'); }
+        }
+      };
+      new MutationObserver(syncRunningHint).observe(promptBaseEl, { attributes: true, attributeFilter: ['class'] });
+    }
+
     if (promptInput) {
       promptInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
@@ -1511,6 +1605,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           return;
         }
 
+        // A suggested next step owns Tab and Esc only while the input is empty and its card is showing.
+        if ((e.key === 'Tab' || e.key === 'Escape') && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey &&
+            promptInput.value === '' && document.getElementById('next-step-card')) {
+          e.preventDefault();
+          if (e.key === 'Tab') acceptNextStepIntoInput();
+          else dismissNextStep('dismissed');
+          return;
+        }
+
         // Prompt history navigation (Jakob's Law)
         if (e.key === 'ArrowUp') {
           const isAtStart = promptInput.selectionStart === 0 && promptInput.selectionEnd === 0;
@@ -1532,7 +1635,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
 
         if (e.key === 'ArrowDown') {
-          if (promptHistoryIndex < sentPromptsHistory.length) {
+          const isAtEnd = promptInput.selectionStart === promptInput.value.length && promptInput.selectionEnd === promptInput.value.length;
+          if (isAtEnd && promptHistoryIndex < sentPromptsHistory.length) {
             e.preventDefault();
             promptHistoryIndex++;
             if (promptHistoryIndex === sentPromptsHistory.length) {
@@ -1625,7 +1729,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             console.warn('[Andromity] Cancel fallback: forcing endAssistantTurn after timeout');
             endAssistantTurn();
             interactiveSlot.innerHTML = '';
-            appendSystemNote('Cancel timed out — UI force-reset. If daemon still streaming, next message will queue.');
+            appendSystemNote('Stopping is taking longer than usual. Your next message will wait until the current step ends.');
           }
           cancelBtn.disabled = false;
           cancelBtn.style.opacity = '';
@@ -3614,6 +3718,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             '<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>' +
             '<span>Paused</span>' +
           '</span>';
+        } else if (rawStatus === 'interrupted') {
+          statusBadge = '<span class="session-badge-status session-status-interrupted" title="Andromity stopped before this reply finished, for example because VS Code was closed. Open the chat and send a message to continue.">' +
+            '<span>Interrupted</span>' +
+          '</span>';
         } else if (rawStatus === 'approval_required') {
           statusBadge = '<span class="session-badge-status session-status-approval_required" title="Action Approval Required">' +
             '<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>' +
@@ -3640,7 +3748,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const parentRef = (!isSubsession && parentName) ? ('<span>· Parent: ' + escapeHtml(parentName) + '</span>') : '';
       const itemClass = 'session-item ' + (isSubsession ? 'session-subsession-item ' : '') + (isCur ? 'active' : '');
 
-      return '<div class="' + itemClass + '" data-action="switch-session" data-session-id="' + escapeHtml(s.id) + '">' +
+      return '<div class="' + itemClass + '" data-action="switch-session" data-session-id="' + escapeHtml(s.id) + '" tabindex="0" role="button" aria-label="Open session ' + name + '"' + (isCur ? ' aria-current="true"' : '') + '>' +
         '<div class="session-item-info" data-session-id="' + escapeHtml(s.id) + '">' +
           '<div class="session-item-title">' +
             branchSymbol +
@@ -3665,7 +3773,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           '<button class="session-action-icon" data-action="rename-session" data-session-id="' + escapeHtml(s.id) + '" data-session-name="' + name + '" title="Rename">' +
             '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>' +
           '</button>' +
-          '<button class="session-action-icon session-action-delete" data-action="delete-session" data-session-id="' + escapeHtml(s.id) + '" title="Delete">' +
+          '<button class="session-action-icon session-action-delete" data-action="delete-session" data-session-id="' + escapeHtml(s.id) + '" data-session-name="' + name + '" title="Delete">' +
             '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>' +
           '</button>' +
         '</div>' +
@@ -4080,7 +4188,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           btnScrollBottom?.classList.add('visible');
           uWrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
           uWrap.style.transition = 'outline 0.15s ease';
-          uWrap.style.outline = '1px solid rgba(255, 255, 255, 0.25)';
+          uWrap.style.outline = '1px solid rgba(var(--tint), 0.25)';
           setTimeout(() => { uWrap.style.outline = 'none'; }, 1800);
         });
 
@@ -4261,6 +4369,38 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     });
 
+    // Collapsible card headers are focusable buttons; Enter/Space reaches them
+    // through the role="button" activation in the global keydown handler.
+    const TOGGLE_HEADERS = [
+      { header: '.thinking-header', card: '.thinking-card', open: (c) => c.classList.contains('expanded') },
+      { header: '.tool-header', card: '.tool-card', open: (c) => c.classList.contains('expanded') },
+      { header: '.tool-seq-header', card: '.tool-sequence', open: (c) => !c.classList.contains('collapsed') },
+    ];
+    function syncToggleHeader(header) {
+      for (const kind of TOGGLE_HEADERS) {
+        if (!header.matches(kind.header)) continue;
+        if (!header.hasAttribute('tabindex')) header.setAttribute('tabindex', '0');
+        if (!header.hasAttribute('role')) header.setAttribute('role', 'button');
+        const card = header.closest(kind.card);
+        if (card) header.setAttribute('aria-expanded', kind.open(card) ? 'true' : 'false');
+        return;
+      }
+    }
+    function decorateToggleHeaders(root) {
+      if (!root || root.nodeType !== 1) return;
+      if (root.matches(TOGGLE_HEADERS.map(k => k.header).join(','))) syncToggleHeader(root);
+      root.querySelectorAll(TOGGLE_HEADERS.map(k => k.header).join(',')).forEach(syncToggleHeader);
+    }
+    if (chatContainer && typeof MutationObserver !== 'undefined') {
+      const cardSelector = TOGGLE_HEADERS.map(k => k.card).join(',');
+      new MutationObserver((records) => {
+        for (const r of records) {
+          if (r.type === 'childList') r.addedNodes.forEach(decorateToggleHeaders);
+          else if (r.target.matches && r.target.matches(cardSelector)) decorateToggleHeaders(r.target);
+        }
+      }).observe(chatContainer, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+    }
+
     // Global event delegation for headers and actions (CSP compliant)
     document.addEventListener('click', (e) => {
       // 1. Thinking card toggle (works while streaming, after turn ends, and in session history)
@@ -4353,25 +4493,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           e.stopPropagation();
           const delId = target.getAttribute('data-session-id');
           if (delId) {
-            vscode.postMessage({ type: 'delete_session', sessionId: delId });
+            vscode.postMessage({ type: 'delete_session', sessionId: delId, sessionName: target.getAttribute('data-session-name') || '' });
           }
+          break;
+        case 'dismiss-questions':
+          e.stopPropagation();
+          window.dismissQuestions(target.getAttribute('data-question-id') || '');
           break;
         case 'wake-agent-question': {
           e.stopPropagation();
           if (collabInboxPopover) collabInboxPopover.style.display = 'none';
           const qId = target.getAttribute('data-question-id') || '';
-          const fromS = target.getAttribute('data-from-session') || 'Co-Agent';
-          const promptText = 'Please answer the pending question from [' + fromS + '] (ID: ' + qId + ') using session_answer_question tool or continue work.';
-          const inputEl = document.getElementById('chat-input');
-          if (inputEl) {
-            inputEl.value = promptText;
-            inputEl.focus();
+          if (qId && currentSessionId) {
+            vscode.postMessage({ type: 'wake_for_question', sessionId: currentSessionId, questionId: qId });
           }
-          vscode.postMessage({
-            type: 'agent_prompt',
-            prompt: promptText,
-            sessionId: currentSessionId,
-          });
           break;
         }
         case 'resume-auto-wake': {
@@ -4382,6 +4517,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           });
           break;
         }
+        case 'next-step-run':
+          runNextStep(target.getAttribute('data-opt-idx'));
+          break;
+        case 'next-step-new-session':
+          startNextStepInNewSession();
+          break;
+        case 'next-step-dismiss':
+          dismissNextStep('dismissed');
+          promptInput.focus();
+          break;
         case 'open-session-tab': {
           e.stopPropagation();
           const tabSid = target.getAttribute('data-session-id') || target.closest('[data-session-id]')?.getAttribute('data-session-id');
@@ -4512,6 +4657,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           break;
         }
+        case 'edit-prompt':
+          openPromptEditor(target.closest('.message-wrap.user'));
+          break;
+        case 'cancel-edit-prompt':
+          closePromptEditor(target.closest('.message-wrap.user'));
+          break;
+        case 'resend-prompt':
+          resendEditedPrompt(target.closest('.message-wrap.user'));
+          break;
         case 'undo-turn': {
           const userWrap = target.closest('.message-wrap.user');
           const allUserWraps = Array.from(chatContainer.querySelectorAll('.message-wrap.user'));
@@ -4718,6 +4872,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'apply-code':
           applyCode(target);
           break;
+        case 'run-code':
+          runCodeInTerminal(target);
+          break;
+        case 'fix-run':
+          fixFailedRun(target);
+          break;
         case 'copy-message':
           copyMessageText(target);
           break;
@@ -4765,9 +4925,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     });
 
+    // A single-choice question takes either a listed option or the typed answer, not both.
+    document.addEventListener('input', (e) => {
+      const other = e.target && e.target.closest ? e.target.closest('.question-other-input') : null;
+      if (!other || other.getAttribute('data-q-multi') || !other.value.trim()) return;
+      document.querySelectorAll('input[name="q_' + other.getAttribute('data-q-idx') + '"]:checked').forEach(r => { r.checked = false; });
+    });
+    document.addEventListener('change', (e) => {
+      const choice = e.target;
+      if (!choice || choice.type !== 'radio' || !String(choice.name || '').startsWith('q_') || !choice.checked) return;
+      const other = document.getElementById('q_other_' + choice.name.slice(2));
+      if (other) other.value = '';
+    });
+
     // CSP-safe Enter handling for free-text question inputs (replaces inline onkeydown)
     document.addEventListener('keydown', (e) => {
-      const ta = e.target.closest('.question-textarea');
+      const ta = e.target.closest('.question-textarea, .question-other-input');
       if (!ta) return;
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -5669,6 +5842,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function dispatchPrompt(text, attachContext, images, delivery, requestId) {
       try {
+        setNextStep(currentSessionId, null);
         if (queueSupported) {
           vscode.postMessage({
             type: 'submit_input', requestId: requestId || ('input-' + Date.now() + '-' + Math.random().toString(36).slice(2)),
@@ -5781,6 +5955,27 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       promptQueue.splice(idx, 1);
       renderQueue();
     };
+
+    const RUNNABLE_SHELL_LANGS = ${scriptJson(Object.keys(SHELL_LANGUAGES))};
+
+    function renderCodeBlockHeader(lang, code) {
+      var language = String(lang || 'code').trim() || 'code';
+      var enc = encodeURIComponent(code || '');
+      var runnable = RUNNABLE_SHELL_LANGS.indexOf(language.toLowerCase()) !== -1 && String(code || '').trim() !== '';
+      var runBtn = runnable
+        ? '<button class="code-btn code-run-btn" data-code="' + enc + '" data-lang="' + escapeHtml(language.toLowerCase()) + '" data-action="run-code" title="Run in a new terminal" aria-label="Run in a new terminal"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg> Run</button>'
+        : '';
+      return '<div class="code-block-header">' +
+        '<span class="code-lang-tag">' + escapeHtml(language.toUpperCase()) + '</span>' +
+        '<div class="code-block-toolbar">' +
+          '<div class="code-block-actions">' +
+            '<button class="code-btn" data-code="' + enc + '" data-action="copy-code"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button>' +
+            '<button class="code-btn" data-code="' + enc + '" data-action="apply-code"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg> Insert</button>' +
+          '</div>' +
+          runBtn +
+        '</div>' +
+      '</div>';
+    }
 
     function highlightCode(code, lang) {
       if (!code) return '';
@@ -5919,16 +6114,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             const text = token && typeof token === 'object' ? (token.text || '') : String(token || '');
             const lang = token && typeof token === 'object' ? (token.lang || 'code') : 'code';
             const language = (lang || 'code').trim();
-            const enc = encodeURIComponent(text);
             const highlighted = highlightCode(text, language);
             return '<div class="code-block-container">' +
-              '<div class="code-block-header">' +
-                '<span class="code-lang-tag">' + escapeHtml(language.toUpperCase()) + '</span>' +
-                '<div class="code-block-actions">' +
-                  '<button class="code-btn" data-code="' + enc + '" data-action="copy-code"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button>' +
-                  '<button class="code-btn" data-code="' + enc + '" data-action="apply-code"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg> Insert</button>' +
-                '</div>' +
-              '</div>' +
+              renderCodeBlockHeader(language, text) +
               '<pre class="code-block-pre"><code>' + highlighted + '</code></pre>' +
             '</div>';
           },
@@ -6092,15 +6280,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           var lines = codeParts[i].split('\\n');
           var lang = lines[0].trim() || 'code';
           var code = lines.slice(1).join('\\n');
-          var enc = encodeURIComponent(code);
           html += '<div class="code-block-container">' +
-            '<div class="code-block-header">' +
-              '<span class="code-lang-tag">' + escapeHtml(lang.toUpperCase()) + '</span>' +
-              '<div class="code-block-actions">' +
-                '<button class="code-btn" data-code="' + enc + '" data-action="copy-code"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy</button>' +
-                '<button class="code-btn" data-code="' + enc + '" data-action="apply-code"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg> Insert</button>' +
-              '</div>' +
-            '</div>' +
+            renderCodeBlockHeader(lang, code) +
             '<pre class="code-block-pre"><code>' + highlightCode(code.trim(), lang) + '</code></pre>' +
           '</div>';
         } else {
@@ -6253,6 +6434,85 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       var enc = btn.getAttribute('data-code') || '';
       var code = decodeURIComponent(enc);
       vscode.postMessage({ type: 'apply_code', code: code });
+    };
+
+    // Run buttons waiting on a terminal result, keyed by run id. A failed run
+    // keeps its output here (in the editor only) until the user asks for a fix.
+    var trackedRuns = new Map();
+    var runSeq = 0;
+
+    function removeFixButton(btn) {
+      var next = btn.nextElementSibling;
+      if (next && next.classList && next.classList.contains('code-fix-btn')) next.remove();
+    }
+
+    window.runCodeInTerminal = function(btn) {
+      if (btn.getAttribute('data-run-state') === 'running') return;
+      var code = decodeURIComponent(btn.getAttribute('data-code') || '');
+      var lang = btn.getAttribute('data-lang') || '';
+      if (!btn.hasAttribute('data-idle-html')) btn.setAttribute('data-idle-html', btn.innerHTML);
+      var previous = btn.getAttribute('data-run-id');
+      if (previous) trackedRuns.delete(previous);
+      removeFixButton(btn);
+      var runId = 'run-' + Date.now() + '-' + (++runSeq);
+      btn.setAttribute('data-run-id', runId);
+      trackedRuns.set(runId, { btn: btn, lang: lang });
+      vscode.postMessage({ type: 'run_in_terminal', code: code, lang: lang, runId: runId });
+    };
+
+    function applyRunStatus(msg) {
+      var entry = trackedRuns.get(msg.runId);
+      if (!entry) return;
+      var btn = entry.btn;
+      if (!btn.isConnected) { trackedRuns.delete(msg.runId); return; }
+      removeFixButton(btn);
+      btn.setAttribute('data-run-state', msg.state);
+      if (msg.state === 'running') {
+        btn.innerHTML = '<i class="codicon codicon-loading codicon-modifier-spin" aria-hidden="true"></i> Running…';
+        btn.title = 'Running in the terminal';
+        return;
+      }
+      trackedRuns.delete(msg.runId);
+      if (msg.state === 'succeeded') {
+        btn.innerHTML = '<i class="codicon codicon-check" aria-hidden="true"></i> Done';
+        btn.title = 'Finished with exit code 0. Click to run again.';
+      } else if (msg.state === 'failed') {
+        var exitCode = Number(msg.exitCode);
+        btn.innerHTML = '<i class="codicon codicon-error" aria-hidden="true"></i> Exit ' + escapeHtml(String(exitCode));
+        btn.title = 'Failed with exit code ' + exitCode + '. Click to run again.';
+        trackedRuns.set(msg.runId, { btn: btn, lang: entry.lang, failure: { command: String(msg.command || ''), exitCode: exitCode, outputTail: String(msg.outputTail || '') } });
+        btn.insertAdjacentHTML('afterend', '<button class="code-btn code-fix-btn" data-action="fix-run" data-run-id="' + escapeHtml(msg.runId) + '" title="Ask Andromity to fix this failure" aria-label="Ask Andromity to fix this failure"><i class="codicon codicon-wand" aria-hidden="true"></i> Fix</button>');
+      } else {
+        btn.innerHTML = btn.getAttribute('data-idle-html') || btn.innerHTML;
+        btn.title = 'Run in a new terminal';
+        btn.removeAttribute('data-run-state');
+      }
+    }
+
+    function buildFixPrompt(failure, lang) {
+      var NL = String.fromCharCode(10);
+      var fence = String.fromCharCode(96, 96, 96, 96);
+      var prompt = 'This command failed with exit code ' + failure.exitCode + '. Find the cause and fix it.' + NL + NL +
+        fence + (lang || 'bash') + NL + failure.command + NL + fence;
+      if (failure.outputTail) prompt += NL + NL + 'Last lines of output:' + NL + fence + 'text' + NL + failure.outputTail + NL + fence;
+      return prompt;
+    }
+
+    window.fixFailedRun = function(btn) {
+      var entry = trackedRuns.get(btn.getAttribute('data-run-id') || '');
+      if (!entry || !entry.failure) return;
+      var prompt = buildFixPrompt(entry.failure, entry.lang);
+      var NL = String.fromCharCode(10);
+      // Send straight away only when nothing else is in the composer; otherwise
+      // add it to the draft so nothing the user typed or attached is sent with it.
+      if (!promptInput.value.trim() && attachedImages.length === 0 && attachedFiles.length === 0) {
+        promptInput.value = prompt;
+        sendCurrentPrompt();
+      } else {
+        promptInput.value = promptInput.value.replace(/\\s+$/, '') + NL + NL + prompt;
+        promptInput.dispatchEvent(new Event('input', { bubbles: true }));
+        promptInput.focus();
+      }
     };
 
     function extractMessageText(content) {
@@ -6419,7 +6679,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
 
       // 1. Separate ambient context block if present:
-      const ambientSepMatch = text.match(/\\r?\\n\\s*---\\s*\\r?\\n(?=\\[(?:Active Document|Active Diagnostics|Selection in|Other Open Documents))/);
+      const ambientSepMatch = text.match(/\\r?\\n\\s*---\\s*\\r?\\n(?=\\[(?:Active Document|Active Diagnostics|Selection in|Other Open Documents|Started from session|Background sessions))/);
       let userPart = text;
       if (ambientSepMatch && typeof ambientSepMatch.index === 'number') {
         userPart = text.slice(0, ambientSepMatch.index);
@@ -6440,6 +6700,67 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       userPart = userPart.replace(/\\[(?:Other Open Documents|Active Diagnostics|Selection in)[^\\]]*\\]/gs, '').trim();
 
       return { userText: userPart, files };
+    }
+
+    // Edit and resend: an inline editor on a past prompt. Resending rewinds the
+    // session to that turn (the host confirms and rolls back file changes),
+    // then sends the edited text.
+    function openPromptEditor(wrap) {
+      if (!wrap || wrap.querySelector('.prompt-edit-box')) return;
+      if (isRunning) {
+        appendSystemNote('Stop the current turn before editing an earlier message.');
+        return;
+      }
+      const card = wrap.querySelector('.message.user');
+      if (card) card.style.display = 'none';
+      const box = document.createElement('div');
+      box.className = 'prompt-edit-box';
+      box.innerHTML = '<textarea class="prompt-edit-input" rows="3" aria-label="Edit this message"></textarea>' +
+        '<div class="prompt-edit-footer">' +
+          '<span class="prompt-edit-note">Resending undoes this turn and everything after it, including file changes.</span>' +
+          '<div class="prompt-edit-actions">' +
+            '<button type="button" class="prompt-edit-cancel" data-action="cancel-edit-prompt">Cancel</button>' +
+            '<button type="button" class="prompt-edit-send" data-action="resend-prompt">Undo &amp; resend</button>' +
+          '</div>' +
+        '</div>';
+      (card ? card.parentNode : wrap).insertBefore(box, card ? card.nextSibling : null);
+      const input = box.querySelector('.prompt-edit-input');
+      input.value = wrap._promptText || (card ? card.innerText : '');
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); closePromptEditor(wrap); }
+        else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); resendEditedPrompt(wrap); }
+      });
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+
+    function closePromptEditor(wrap) {
+      if (!wrap) return;
+      const box = wrap.querySelector('.prompt-edit-box');
+      if (box) box.remove();
+      const card = wrap.querySelector('.message.user');
+      if (card) card.style.display = '';
+    }
+
+    function resendEditedPrompt(wrap) {
+      if (!wrap) return;
+      const input = wrap.querySelector('.prompt-edit-input');
+      const text = input ? input.value.trim() : '';
+      if (!text) { if (input) input.focus(); return; }
+      if (isRunning) {
+        appendSystemNote('Stop the current turn before editing an earlier message.');
+        return;
+      }
+      const allUserWraps = Array.from(chatContainer.querySelectorAll('.message-wrap.user'));
+      const turnIndex = allUserWraps.indexOf(wrap);
+      if (turnIndex < 0) return;
+      vscode.postMessage({
+        type: 'undo_turn',
+        turnIndex: turnIndex,
+        totalTurns: allUserWraps.length,
+        turnsToUndo: allUserWraps.length - turnIndex,
+        resendPrompt: text,
+      });
     }
 
     function appendUserMessage(text, images, ts, opts) {
@@ -6479,8 +6800,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           '<path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path>' +
         '</svg>' +
         '<span>Undo to here</span>' +
+      '</button>' +
+      '<button class="prompt-undo-btn prompt-edit-btn" data-action="edit-prompt" title="Edit and resend from here">' +
+        '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">' +
+          '<path d="M12 20h9"></path>' +
+          '<path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path>' +
+        '</svg>' +
+        '<span>Edit</span>' +
       '</button>';
       wrap.appendChild(actionsDiv);
+      wrap._promptText = parsed.userText || rawText;
 
       const msgDiv = document.createElement('div');
       msgDiv.className = 'message user prompt-card';
@@ -6569,16 +6898,28 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         msgDiv.appendChild(chipsContainer);
       }
 
-      if (parsed.userText) {
+      // A turn started by another session's question or handoff shows who asked and what,
+      // not the instructions written for the model.
+      const collabWake = parseCollabWakePrompt(rawText);
+      const displayText = collabWake ? collabWake.body : parsed.userText;
+      if (collabWake) {
+        msgDiv.classList.add('collab-wake-prompt');
+        const wakeHead = document.createElement('div');
+        wakeHead.className = 'collab-wake-head';
+        wakeHead.textContent = (collabWake.kind === 'question' ? 'Question from ' : 'Handoff from ') + (collabWake.from || 'another session');
+        msgDiv.appendChild(wakeHead);
+      }
+
+      if (displayText) {
         const textWrapper = document.createElement('div');
         textWrapper.className = 'prompt-text-wrapper';
 
         const textContent = document.createElement('div');
         textContent.className = 'prompt-text-content';
-        textContent.textContent = parsed.userText;
+        textContent.textContent = displayText;
         textWrapper.appendChild(textContent);
 
-        const isLong = parsed.userText.length > 220 || parsed.userText.split(/\\r?\\n/).length > 3;
+        const isLong = displayText.length > 220 || displayText.split(/\\r?\\n/).length > 3;
         if (isLong) {
           textContent.classList.add('clamped');
           const expandBtn = document.createElement('button');
@@ -6653,112 +6994,277 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function formatSessionShort(name, maxLen) {
-      if (!name) return 'Agent';
+      if (!name) return 'Another session';
       maxLen = maxLen || 20;
       return name.length > maxLen ? name.slice(0, maxLen - 1) + '…' : name;
     }
 
-    function appendSessionMessageCard(fromSession, content, messageType) {
-      hideZeroState();
-      const card = document.createElement('div');
-      card.className = 'session-coagent-card';
-      const short = formatSessionShort(fromSession, 22);
-      card.innerHTML = '<div class="session-card-header">' +
-        '<div class="session-card-header-left">' +
-          '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg></span>' +
-          '<span class="session-card-sender" title="' + escapeHtml(fromSession || 'Agent') + '">Co-Agent [' + escapeHtml(short) + ']</span>' +
-        '</div>' +
-        '<span class="session-card-badge">' + escapeHtml(messageType || 'message') + '</span>' +
-        '</div>' +
-        '<div class="session-card-content">' + renderMarkdown(content || '') + '</div>';
-      chatContainer.appendChild(card);
-      scrollToBottomIfNeeded();
+    // ── Next-step suggestion ─────────────────────────────────────────────────
+    // One follow-up the agent offered at the end of a turn (suggest_next_step): a card
+    // under the reply, the input placeholder, and Tab to put its prompt in the input.
+    const nextStepBySession = {};
+    const nextStepDismissed = new Set();
+    let nextStepDefaultPlaceholder = null;
+
+    function normalizeNextStepOption(raw) {
+      if (!raw || typeof raw !== 'object') return null;
+      let title = String(raw.title || '').trim().split(/\\s+/).join(' ');
+      const prompt = String(raw.prompt || '').trim();
+      if (!title || !prompt) return null;
+      if (title.length > 60) title = title.slice(0, 59).trim() + '…';
+      return { title, prompt: prompt.slice(0, 2000), new_session: raw.new_session === true };
     }
 
-    function appendSessionQuestionCard(fromSession, question, questionId, fromSessionId) {
-      hideZeroState();
-      const card = document.createElement('div');
-      card.className = 'session-question-card';
-      card.id = 'session-q-' + (questionId || '');
-
-      const short = formatSessionShort(fromSession, 22);
-      let actionsHtml = '';
-      if (fromSessionId) {
-        actionsHtml += '<button class="session-card-btn session-card-jump-btn" data-action="switch-session" data-session-id="' + escapeHtml(fromSessionId) + '" title="Switch to [' + escapeHtml(fromSession) + ']">' +
-          '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg> ' +
-          'Open Session ↗</button>';
+    // One step, or a short question with 2-3 options; title/prompt/new_session are the first option.
+    function normalizeNextStep(raw) {
+      if (!raw || typeof raw !== 'object') return null;
+      let options = Array.isArray(raw.options) ? raw.options.map(normalizeNextStepOption).filter(Boolean).slice(0, 3) : [];
+      if (!options.length) {
+        const single = normalizeNextStepOption(raw);
+        options = single ? [single] : [];
       }
-      actionsHtml += '<button class="session-card-btn session-card-wake-btn" data-action="wake-agent-question" data-question-id="' + escapeHtml(questionId || '') + '" data-from-session="' + escapeHtml(fromSession || '') + '" title="Wake agent to answer this question">' +
-        '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> ' +
-        'Wake & Answer</button>';
-
-      card.innerHTML = '<div class="session-card-header question">' +
-        '<div class="session-card-header-left">' +
-          '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></span>' +
-          '<span class="session-card-sender" title="' + escapeHtml(fromSession || 'Agent') + '">Question from [' + escapeHtml(short) + ']</span>' +
-          (questionId ? '<span class="session-card-badge">ID: ' + escapeHtml(questionId) + '</span>' : '') +
-        '</div>' +
-        '<div class="session-card-header-actions">' + actionsHtml + '</div>' +
-        '</div>' +
-        '<div class="session-card-content">' + renderMarkdown(question || '') + '</div>';
-      chatContainer.appendChild(card);
-      scrollToBottomIfNeeded();
+      if (!options.length) return null;
+      const question = options.length > 1 ? String(raw.question || '').trim().split(/\\s+/).join(' ').slice(0, 120) : '';
+      return Object.assign({}, options[0], {
+        question, options,
+        key: question + '|' + options.map(o => o.title + '|' + o.prompt).join('|'),
+      });
     }
 
-    function appendSessionAnswerCard(fromSession, answer, questionId, fromSessionId) {
-      hideZeroState();
-      const card = document.createElement('div');
-      card.className = 'session-answer-card';
-
-      const short = formatSessionShort(fromSession, 22);
-      let jumpHtml = '';
-      if (fromSessionId) {
-        jumpHtml = '<button class="session-card-btn session-card-jump-btn" data-action="switch-session" data-session-id="' + escapeHtml(fromSessionId) + '" title="Switch to [' + escapeHtml(fromSession) + ']">' +
-          '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg> ' +
-          'Open Session ↗</button>';
+    // A suggestion made after the last user message is still open after a reload or session switch.
+    function nextStepFromHistory(messages) {
+      if (!Array.isArray(messages)) return null;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (!m) continue;
+        if (m.role === 'user') return null;
+        if (m.role !== 'assistant' || !Array.isArray(m.tool_calls)) continue;
+        let step = null;
+        for (const tc of m.tool_calls) {
+          const fn = tc && tc.function;
+          if (!fn || fn.name !== 'suggest_next_step') continue;
+          let args = fn.arguments;
+          if (typeof args === 'string') {
+            try { args = JSON.parse(args); } catch (_) { args = null; }
+          }
+          step = normalizeNextStep(args) || step;
+        }
+        if (step) return step;
       }
-
-      card.innerHTML = '<div class="session-card-header answer">' +
-        '<div class="session-card-header-left">' +
-          '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg></span>' +
-          '<span class="session-card-sender" title="' + escapeHtml(fromSession || 'Agent') + '">Answer from [' + escapeHtml(short) + ']</span>' +
-          (questionId ? '<span class="session-card-badge">for ' + escapeHtml(questionId) + '</span>' : '') +
-        '</div>' +
-        (jumpHtml ? '<div class="session-card-header-actions">' + jumpHtml + '</div>' : '') +
-        '</div>' +
-        '<div class="session-card-content">' + renderMarkdown(answer || '') + '</div>';
-      chatContainer.appendChild(card);
-      scrollToBottomIfNeeded();
+      return null;
     }
 
-    function appendSharedStateCard(authorSession, key, value) {
-      hideZeroState();
+    function isNextStepCall(tc) {
+      return Boolean(tc && tc.function && tc.function.name === 'suggest_next_step');
+    }
+
+    function withoutNextStepCalls(messages) {
+      const hiddenIds = new Set();
+      const out = [];
+      for (const m of messages) {
+        if (m && m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.some(isNextStepCall)) {
+          m.tool_calls.forEach(tc => { if (isNextStepCall(tc) && tc.id) hiddenIds.add(tc.id); });
+          const kept = m.tool_calls.filter(tc => !isNextStepCall(tc));
+          if (!kept.length && !extractMessageText(m.content).trim()) continue;
+          const copy = Object.assign({}, m);
+          if (kept.length) copy.tool_calls = kept;
+          else delete copy.tool_calls;
+          out.push(copy);
+          continue;
+        }
+        if (m && m.role === 'tool' && hiddenIds.has(m.tool_call_id)) continue;
+        out.push(m);
+      }
+      return out;
+    }
+
+    function currentNextStep() {
+      return currentSessionId ? nextStepBySession[currentSessionId] || null : null;
+    }
+
+    function setNextStep(sessionId, step) {
+      if (!sessionId) return;
+      if (step) nextStepBySession[sessionId] = step;
+      else delete nextStepBySession[sessionId];
+      if (sessionId === currentSessionId) renderNextStep();
+    }
+
+    // A new turn's suggestion always shows, even when it repeats one dismissed earlier;
+    // dismissals only keep an old suggestion from coming back out of history.
+    function receiveNextStep(sessionId, raw) {
+      const step = normalizeNextStep(raw);
+      if (!sessionId || !step) return;
+      nextStepDismissed.delete(step.key);
+      setNextStep(sessionId, step);
+    }
+
+    function dismissNextStep(event) {
+      const step = currentNextStep();
+      if (!step) return;
+      nextStepDismissed.add(step.key);
+      setNextStep(currentSessionId, null);
+      vscode.postMessage({ type: 'next_step_event', event: event || 'dismissed', sessionId: currentSessionId });
+    }
+
+    function renderNextStep() {
+      const existing = document.getElementById('next-step-card');
+      if (existing) existing.remove();
+      const input = document.getElementById('prompt-input');
+      if (input && nextStepDefaultPlaceholder === null) nextStepDefaultPlaceholder = input.getAttribute('placeholder') || '';
+      const step = currentNextStep();
+      const busy = Boolean(currentSessionId && sessionsState[currentSessionId] && sessionsState[currentSessionId].isRunning);
+      if (!step || busy) {
+        if (input) input.setAttribute('placeholder', nextStepDefaultPlaceholder || '');
+        return;
+      }
       const card = document.createElement('div');
-      card.className = 'session-state-card';
-      const valStr = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-      card.innerHTML = '<div class="session-card-header">' +
-        '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span>' +
-        '<span class="session-card-sender">Shared State [' + escapeHtml(authorSession || 'Agent') + ']</span>' +
-        '<span class="session-card-badge">' + escapeHtml(key || '') + '</span>' +
+      card.id = 'next-step-card';
+      card.className = 'next-step-card';
+      card.setAttribute('role', 'group');
+      card.setAttribute('aria-label', 'Suggested next step');
+      const choices = step.options.length > 1;
+      if (choices) card.classList.add('has-choices');
+      // One step reads "Do it"; a choice shows each option as its own button, the recommended one first.
+      const buttons = choices
+        ? step.options.map((o, i) => '<button class="next-step-btn' + (i === 0 ? ' primary' : '') + '" data-action="next-step-run" data-opt-idx="' + i + '"' +
+            ' title="' + escapeHtml(o.prompt) + (o.new_session ? ' (runs in a new session)' : '') + '">' + escapeHtml(o.title) +
+            (o.new_session ? '<span class="next-step-new-tag">new session</span>' : '') + '</button>').join('')
+        : '<button class="next-step-btn primary" data-action="next-step-run">Do it</button>' +
+          (step.new_session ? '<button class="next-step-btn" data-action="next-step-new-session" title="Start this in a new session">New session</button>' : '');
+      card.innerHTML = '<div class="next-step-text">' +
+          '<div class="next-step-label">Suggested next step</div>' +
+          '<div class="next-step-title" title="' + escapeHtml(choices ? step.question || step.title : step.prompt) + '">' +
+            escapeHtml(choices ? step.question || 'Choose what to do next' : step.title) + '</div>' +
         '</div>' +
-        '<div class="session-card-content"><code>' + escapeHtml(valStr) + '</code></div>';
+        '<div class="next-step-actions">' + buttons +
+          '<button class="next-step-dismiss" data-action="next-step-dismiss" aria-label="Dismiss suggestion" title="Dismiss (Esc)">&times;</button>' +
+        '</div>';
       chatContainer.appendChild(card);
+      if (input) input.setAttribute('placeholder', step.title + '  ·  Tab to use');
+      if (!step.reported) {
+        step.reported = true;
+        vscode.postMessage({ type: 'next_step_event', event: 'shown', sessionId: currentSessionId });
+      }
       scrollToBottomIfNeeded();
     }
 
-    function appendHandoffCard(fromSession, toSession, taskSummary, handoffId) {
-      hideZeroState();
-      const card = document.createElement('div');
-      card.className = 'session-coagent-card';
-      card.innerHTML = '<div class="session-card-header">' +
-        '<span class="session-card-icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg></span>' +
-        '<span class="session-card-sender">Handoff: ' + escapeHtml(fromSession || 'Agent') + ' → ' + escapeHtml(toSession || 'Agent') + '</span>' +
-        (handoffId ? '<span class="session-card-badge">ID: ' + escapeHtml(handoffId) + '</span>' : '') +
-        '</div>' +
-        '<div class="session-card-content">' + renderMarkdown(taskSummary || '') + '</div>';
-      chatContainer.appendChild(card);
-      scrollToBottomIfNeeded();
+    function runNextStep(index) {
+      const step = currentNextStep();
+      if (!step) return;
+      const option = step.options[Number(index) || 0] || step.options[0];
+      if (step.options.length > 1 && option.new_session) {
+        startNextStepInNewSession(index);
+        return;
+      }
+      vscode.postMessage({ type: 'next_step_event', event: 'run', sessionId: currentSessionId });
+      setNextStep(currentSessionId, null);
+      // Same delivery as the send button, without touching whatever is typed in the input.
+      if (queueSupported) {
+        dispatchPrompt(option.prompt, true, [], 'queue');
+      } else if (isRunning) {
+        promptQueue.push({ text: option.prompt, images: [], sessionId: currentSessionId });
+        renderQueue();
+      } else {
+        dispatchPrompt(option.prompt, true, []);
+      }
     }
+
+    function startNextStepInNewSession(index) {
+      const step = currentNextStep();
+      if (!step) return;
+      const option = step.options[Number(index) || 0] || step.options[0];
+      nextStepDismissed.add(step.key);
+      setNextStep(currentSessionId, null);
+      vscode.postMessage({ type: 'start_next_step_session', title: option.title, prompt: option.prompt, sessionId: currentSessionId });
+    }
+
+    function acceptNextStepIntoInput() {
+      const step = currentNextStep();
+      if (!step) return false;
+      promptInput.value = step.prompt;
+      promptInput.style.height = 'auto';
+      promptInput.style.height = Math.min(promptInput.scrollHeight, 160) + 'px';
+      promptInput.selectionStart = promptInput.selectionEnd = promptInput.value.length;
+      if (sendBtn) sendBtn.classList.add('has-text');
+      sessionsState[currentSessionId] = sessionsState[currentSessionId] || {};
+      sessionsState[currentSessionId].draftInput = promptInput.value;
+      dismissNextStep('tab');
+      return true;
+    }
+    // ── Background sessions ──────────────────────────────────────────────────
+    // "New session" on a suggestion runs it in a session of its own while this one stays
+    // open. The session it came from shows one line that follows the run to its end.
+    const backgroundRuns = {};
+
+    const BACKGROUND_LABELS = {
+      running: 'Running in background',
+      waiting: 'Needs your input',
+      finished: 'Background session finished',
+      cancelled: 'Background session was cancelled',
+      error: "Background session couldn't finish",
+    };
+
+    function backgroundRunHtml(run) {
+      const status = BACKGROUND_LABELS[run.status] ? run.status : 'running';
+      return '<span class="bg-run-dot" aria-hidden="true"></span>' +
+        '<span class="bg-run-text"><span class="bg-run-label">' + BACKGROUND_LABELS[status] + '</span> ' +
+          '<span class="bg-run-title">' + escapeHtml(run.title || 'New session') + '</span>' +
+          (run.summary && status !== 'running' && status !== 'waiting' ? '<span class="bg-run-summary">' + escapeHtml(run.summary) + '</span>' : '') +
+        '</span>' +
+        '<button class="bg-run-open" data-action="switch-session" data-session-id="' + escapeHtml(run.session_id) + '" title="Open this session">Open</button>';
+    }
+
+    function renderBackgroundRun(run, beforeEl) {
+      if (!run || run.parent_session_id !== currentSessionId) return;
+      let row = document.getElementById('bg-run-' + run.session_id);
+      if (!row) {
+        row = document.createElement('div');
+        row.id = 'bg-run-' + run.session_id;
+        if (beforeEl && beforeEl.parentNode === chatContainer) chatContainer.insertBefore(row, beforeEl);
+        else chatContainer.appendChild(row);
+      }
+      row.className = 'bg-run-row status-' + (BACKGROUND_LABELS[run.status] ? run.status : 'running');
+      row.setAttribute('role', 'status');
+      row.innerHTML = backgroundRunHtml(run);
+    }
+
+    function trackBackgroundRun(parentId, run) {
+      if (!parentId || !run || !run.session_id) return;
+      const known = backgroundRuns[run.session_id] || {};
+      backgroundRuns[run.session_id] = Object.assign({}, known, run, { parent_session_id: parentId });
+      renderBackgroundRun(backgroundRuns[run.session_id]);
+    }
+
+    function setBackgroundRunWaiting(sessionId, waiting) {
+      const run = backgroundRuns[sessionId];
+      if (!run || (run.status !== 'running' && run.status !== 'waiting')) return;
+      run.status = waiting ? 'waiting' : 'running';
+      renderBackgroundRun(run);
+    }
+
+    // Rows from a saved session go back where they were started: after the turn that offered them.
+    function restoreBackgroundRuns(session) {
+      const runs = Array.isArray(session && session.background_runs) ? session.background_runs : [];
+      const userTurns = chatContainer.querySelectorAll('.message-wrap.user:not([data-steering])');
+      for (const saved of runs) {
+        const live = backgroundRuns[saved.session_id];
+        const run = Object.assign({}, saved, live && live.status === 'waiting' && saved.status === 'running' ? { status: 'waiting' } : {}, { parent_session_id: session.id });
+        backgroundRuns[saved.session_id] = run;
+        const nextTurn = userTurns[Number(saved.turn_index) || 0];
+        renderBackgroundRun(run, nextTurn || null);
+      }
+    }
+
+    function renderBackgroundOrigin(session) {
+      const origin = session && session.started_from;
+      if (!origin || !origin.session_id) return;
+      const line = document.createElement('div');
+      line.className = 'bg-origin-row';
+      line.innerHTML = 'Started from <button class="bg-run-open" data-action="switch-session" data-session-id="' +
+        escapeHtml(origin.session_id) + '" title="Open the session this was started from">' + escapeHtml(origin.name || 'another session') + '</button>';
+      chatContainer.insertBefore(line, chatContainer.firstChild);
+    }
+    // ── End next-step suggestion ─────────────────────────────────────────────
 
     function updateSessionActivityIndicator() {
       const dot = document.getElementById('session-activity-dot');
@@ -6772,10 +7278,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function updateSessionCollabBadge(data) {
       const badge = document.getElementById('session-collab-badge');
 
-      const status = data?.status;
-      const collabs = data?.collaborators || [];
-      const watchingFor = data?.watching_for;
-      sessionCollabActive = status === 'watching' || status === 'paused_limit_reached' || (Array.isArray(collabs) && collabs.length > 0);
+      // Most session updates carry only some fields (a rename, a token count), so keep the
+      // last known collaboration state instead of hiding the badge on every partial update.
+      const status = data && data.status !== undefined ? data.status : sessionCollabState.status;
+      const collabs = data && Array.isArray(data.collaborators) ? data.collaborators : (sessionCollabState.collaborators || []);
+      const watchingFor = data && data.watching_for !== undefined ? data.watching_for : sessionCollabState.watching_for;
+      sessionCollabState = { status, collaborators: collabs, watching_for: watchingFor };
+      sessionCollabActive = status === 'watching' || status === 'paused_limit_reached' || collabs.length > 0;
 
       if (!badge) {
         updateCollabInboxBadge();
@@ -6783,22 +7292,24 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
 
       if (status === 'watching') {
+        const target = watchingFor && watchingFor.target_session ? String(watchingFor.target_session) : '';
         badge.style.display = 'inline-flex';
         badge.className = 'session-collab-badge watching';
-        const targetStr = watchingFor?.target_session ? ' for [' + escapeHtml(watchingFor.target_session) + ']' : '';
-        badge.innerHTML = '<span class="status-pulse-dot" style="width:6px;height:6px;border-radius:50%;background:#38bdf8;box-shadow:0 0 6px #38bdf8;display:inline-block;"></span>' +
-          '<span>Watching' + targetStr + '</span>';
+        badge.title = 'This session wakes up when ' + (target || 'another session') + ' sends it a question or handoff';
+        badge.innerHTML = '<span class="collab-badge-dot"></span>' +
+          '<span>' + (target ? 'Waiting on ' + escapeHtml(target) : 'Waiting for other sessions') + '</span>';
       } else if (status === 'paused_limit_reached') {
         badge.style.display = 'inline-flex';
         badge.className = 'session-collab-badge paused';
-        badge.innerHTML = '<span>⚠️ Limit (Paused)</span>' +
-          '<button class="session-card-btn session-card-wake-btn" data-action="resume-auto-wake" style="margin-left:4px;padding:1px 5px;" title="Resume auto-wake">Resume</button>';
-      } else if (Array.isArray(collabs) && collabs.length > 0) {
+        badge.title = 'This session replied to other sessions several times in a row without you, so it paused to avoid a loop';
+        badge.innerHTML = '<span>Auto-replies paused</span>' +
+          '<button class="session-card-btn collab-resume-btn" data-action="resume-auto-wake" title="Let other sessions wake this one again">Resume</button>';
+      } else if (collabs.length > 0) {
         badge.style.display = 'inline-flex';
         badge.className = 'session-collab-badge';
-        const firstName = collabs[0];
+        badge.title = 'Working with ' + collabs.join(', ');
         badge.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>' +
-          '<span>Linked: ' + escapeHtml(firstName) + '</span>';
+          '<span>' + escapeHtml(collabs[0]) + (collabs.length > 1 ? ' +' + (collabs.length - 1) : '') + '</span>';
       } else {
         badge.style.display = 'none';
       }
@@ -7121,7 +7632,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
       document.querySelector('.prompt-box')?.classList.add('is-generating');
       if (promptInput) { promptInput.setAttribute('aria-busy','true'); }
-      if (sendBtn) sendBtn.setAttribute('disabled','true');
       if (currentSessionId) {
         sessionsState[currentSessionId] = sessionsState[currentSessionId] || {};
         sessionsState[currentSessionId].isRunning = true;
@@ -7367,6 +7877,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         interactiveSlot.dataset.interactionId = id;
         delete interactiveSlot.dataset.submitting;
       }
+      setBackgroundRunWaiting(sid, true);
     }
 
     function handleBackendMessage(msg) {
@@ -7603,7 +8114,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
 
         case 'config_updated':
-          if (msg.key === 'mode') {
+          if (msg.key === 'airgap') {
+            const pill = document.getElementById('airgap-pill');
+            if (pill) {
+              pill.hidden = !msg.value;
+              pill.title = msg.title || '';
+              pill.setAttribute('aria-label', msg.title || 'Air-gap mode is on');
+            }
+          } else if (msg.key === 'mode') {
             updateModeBadge(msg.value);
             if (msg.appliesNextTurn && msg.notice) {
               appendSystemNote(msg.notice);
@@ -7642,6 +8160,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           break;
 
+        case 'run_status':
+          applyRunStatus(msg);
+          break;
+
         case 'session_switched':
           userScrolledUp = false;
           _isUserActivelyScrolling = false;
@@ -7676,6 +8198,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           removeTurnLoader();
           finishCurrentThinking();
           sessionCollabActive = false;
+          sessionCollabState = {};
           const collabBadgeOnSwitch = document.getElementById('session-collab-badge');
           if (collabBadgeOnSwitch) collabBadgeOnSwitch.style.display = 'none';
           if (collabInboxPopover) collabInboxPopover.style.display = 'none';
@@ -7771,6 +8294,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             sendBtn.style.display = 'flex';
             document.querySelector('.prompt-box')?.classList.remove('is-generating');
           }
+          sessionsState[currentSessionId].scheduledRun = (msg.session && msg.session.scheduled_run) || null;
+          updateScheduledRunNotice(sessionsState[currentSessionId].scheduledRun, sessionIsRunning);
           if (promptInput && !msg.draft) {
             promptInput.value = (sessionsState[currentSessionId] && sessionsState[currentSessionId].draftInput) || '';
             promptInput.style.height = 'auto';
@@ -7796,6 +8321,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (!transcriptHasUserPrompt(allMessages) && Array.isArray(msg.seedMessages) && msg.seedMessages.length > 0) {
             allMessages = msg.seedMessages;
           }
+          // A suggestion shows as the next-step card, not as a tool call in the transcript.
+          const historyNextStep = nextStepFromHistory(allMessages);
+          allMessages = withoutNextStepCalls(allMessages);
 
           lastAppendedUserText = '';
           lastAppendedUserTime = 0;
@@ -8158,6 +8686,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             startAssistantTurn();
           }
           if (runtime) handleBackendMessage({ type: 'session_runtime', session_id: currentSessionId, runtime });
+          if (currentSessionId && !nextStepBySession[currentSessionId] && !sessionIsRunning &&
+              historyNextStep && !nextStepDismissed.has(historyNextStep.key)) {
+            nextStepBySession[currentSessionId] = historyNextStep;
+          }
+          if (msg.session) {
+            renderBackgroundOrigin(msg.session);
+            restoreBackgroundRuns(msg.session);
+          }
+          renderNextStep();
           renderConversationTimeline();
           userScrolledUp = false;
           scrollToBottom(false);
@@ -8200,6 +8737,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           const sid = msg.session_id || currentSessionId;
           const state = sessionsState[sid];
           if (state?.interactions) delete state.interactions[msg.interaction_id];
+          if (!state?.interactions || !Object.keys(state.interactions).length) setBackgroundRunWaiting(sid, false);
           if (sid !== currentSessionId || interactiveSlot.dataset.interactionId !== msg.interaction_id) break;
           interactiveSlot.innerHTML = '';
           delete interactiveSlot.dataset.interactionId;
@@ -8296,6 +8834,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break; }
 
         case 'tool_start': {
+          // Shown as the next-step card when the turn ends, not as a tool call.
+          if (msg.tool_name === 'suggest_next_step') break;
           if (!msg.session_id || !currentSessionId || msg.session_id === currentSessionId) setTurnOrb(null);
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
@@ -8664,6 +9204,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   (numBadge ? '<div class="option-row-badge">' + numBadge + '</div>' : '') +
                 '</label>';
               });
+              // Never force the user into the listed choices.
+              optionsHtml += '<input type="text" class="question-other-input" id="q_other_' + idx + '" data-q-idx="' + idx + '"' +
+                ' data-q-multi="' + (isMulti ? '1' : '') + '" placeholder="Something else…" aria-label="Answer in your own words" autocomplete="off">';
               optionsHtml += '</div>';
             } else {
               optionsHtml = '<div class="question-input-wrapper">' +
@@ -8689,7 +9232,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   '</span>' +
                   '<span class="permission-title">Clarifying Questions</span>' +
                 '</div>' +
-                (totalQ > 1 ? '<div class="questions-step-badge" id="q-step-badge">1 of ' + totalQ + '</div>' : '') +
+                '<div class="questions-header-right">' +
+                  (totalQ > 1 ? '<div class="questions-step-badge" id="q-step-badge">1 of ' + totalQ + '</div>' : '') +
+                  '<button class="questions-close-btn" data-action="dismiss-questions" data-question-id="' + escapeHtml(msg.question_id) + '" aria-label="Close without answering" title="Close without answering (Esc)">&times;</button>' +
+                '</div>' +
               '</div>' +
             '</div>' +
             '<div class="carousel-slides">' + slidesHtml + '</div>' +
@@ -8791,33 +9337,57 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           });
           break;
 
-        case 'session_shared_state_changed':
+        case 'session_shared_state_changed': {
+          if (isOwnCollabEvent(msg.author_session)) break;
+          const stateTs = msg.timestamp || new Date().toISOString();
+          let stateValue = typeof msg.value === 'string' ? msg.value : JSON.stringify(msg.value);
+          if (stateValue && stateValue.length > 200) stateValue = stateValue.slice(0, 199) + '…';
+          const tick = String.fromCharCode(96);
           addCollabInboxItem({
-            id: 'state_' + Date.now(),
+            id: 'state_' + (msg.key || '') + '_' + stateTs,
             type: 'message',
             fromSession: msg.author_session,
-            toSession: 'all',
-            content: '**Shared State**: ' + escapeHtml(msg.key || '') + ' = ' + (typeof msg.value === 'string' ? msg.value : JSON.stringify(msg.value)),
-            messageType: 'Shared State',
-            timestamp: new Date().toISOString(),
+            content: 'Updated ' + tick + (msg.key || '') + tick + ': ' + (stateValue || ''),
+            messageType: 'shared_state',
+            timestamp: stateTs,
             unread: true
           });
           break;
+        }
 
-        case 'session_handoff_written':
-          if (msg.to_session === currentSessionId || msg.from_session === currentSessionId || msg.to_session === 'all' || !currentSessionId) {
-            addCollabInboxItem({
-              id: 'handoff_' + (msg.handoff_id || Date.now()),
-              type: 'handoff',
-              fromSession: msg.from_session,
-              toSession: msg.to_session,
-              content: '**Phase**: ' + (msg.phase || '') + ' (' + (msg.status || '') + ')\\n\\n' + (msg.task_summary || msg.summary || ''),
-              handoffId: msg.handoff_id,
-              timestamp: msg.timestamp || new Date().toISOString(),
-              unread: true
-            });
-          }
+        case 'next_step_suggested': {
+          receiveNextStep(msg.session_id, msg);
           break;
+        }
+
+        case 'background_session_started':
+          trackBackgroundRun(msg.parent_session_id, { session_id: msg.child_session_id, title: msg.title, status: 'running' });
+          break;
+
+        case 'background_session_finished':
+          trackBackgroundRun(msg.parent_session_id, {
+            session_id: msg.child_session_id, title: msg.title, status: msg.status || 'finished', summary: msg.summary || '',
+          });
+          break;
+
+        case 'session_handoff_written': {
+          // A handoff sent to one session goes to that session's inbox; a project-wide one
+          // goes to the open session unless that session wrote it.
+          if (!msg.to_session_id && isOwnCollabEvent(msg.from_session)) break;
+          const handoffTs = msg.timestamp || new Date().toISOString();
+          const phaseLine = msg.phase ? 'Phase ' + msg.phase + (msg.status ? ' marked ' + msg.status : '') : '';
+          addCollabInboxItem({
+            sessionId: msg.to_session_id || undefined,
+            id: 'handoff_' + (msg.phase || msg.handoff_id || '') + '_' + handoffTs,
+            type: 'handoff',
+            fromSession: msg.from_session,
+            fromSessionId: msg.from_session_id || undefined,
+            content: msg.task_summary || msg.summary || phaseLine,
+            timestamp: handoffTs,
+            unread: true
+          });
+          break;
+        }
 
         case 'process_started': {
           if (msg.session_id && msg.session_id !== currentSessionId) break;
@@ -8942,6 +9512,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'agent_started':
           turnEditedFiles.clear();
           if (msg.session_id) {
+            setNextStep(msg.session_id, null);
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
             sessionsState[msg.session_id].isRunning = true;
             if (msg.session_id !== currentSessionId) {
@@ -9024,6 +9595,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           appendSystemNote(undoneCount > 1
             ? (undoneCount + ' turns undone: file changes rolled back.')
             : 'Last turn undone: file changes rolled back.');
+          if (typeof msg.resendPrompt === 'string' && msg.resendPrompt.trim()) {
+            const resend = msg.resendPrompt.trim();
+            if (sentPromptsHistory[sentPromptsHistory.length - 1] !== resend) sentPromptsHistory.push(resend);
+            promptHistoryIndex = sentPromptsHistory.length;
+            dispatchPrompt(resend, true, [], 'queue');
+          }
           break;
         }
 
@@ -9062,6 +9639,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           activePendingApprovalId = null;
           activePendingToolName = '';
           activePendingPlan = false;
+          updateScheduledRunNotice(sessionsState[currentSessionId]?.scheduledRun, false);
           updateTokenDisplay({
             token_total: msg.token_total,
             context_tokens: msg.context_tokens,
@@ -9070,6 +9648,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           const pendingPlan = sessionsState[currentSessionId]?.interactions?.plan;
           if (pendingPlan) handleBackendMessage(pendingPlan);
           flushQueue();
+          renderNextStep();
           break; }
 
         case 'agent_cancelled': {
@@ -9087,7 +9666,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           activePendingApprovalId = null;
           activePendingToolName = '';
           activePendingPlan = false;
-          appendSystemNote('Turn cancelled by user.');
+          updateScheduledRunNotice(sessionsState[currentSessionId]?.scheduledRun, false);
+          appendSystemNote(sessionsState[currentSessionId]?.scheduledRun ? 'Scheduled run stopped.' : 'Turn cancelled by user.');
           if (msg.token_total !== undefined || msg.context_tokens !== undefined) {
             updateTokenDisplay({
               token_total: msg.token_total,
@@ -9104,6 +9684,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             sessionsState[msg.session_id].isRunning = false;
             break;
           }
+          if (msg.scheduled_busy) { appendSystemNote(msg.error); break; }
           if (cancelFallbackTimer) { clearTimeout(cancelFallbackTimer); cancelFallbackTimer = null; }
           cancelBtn.disabled = false;
           cancelBtn.style.opacity = '';
@@ -9117,6 +9698,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           endAssistantTurn();
           interactiveSlot.innerHTML = '';
           appendErrorCard(msg.error || 'Unknown agent error.');
+          updateScheduledRunNotice(sessionsState[currentSessionId]?.scheduledRun, false);
           break;
         }
 
@@ -9588,6 +10170,31 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       scrollToBottomIfNeeded();
     }
 
+    // A scheduled (cron) run's chat says which job ran it and in which mode, and that it
+    // cannot take messages until the run ends.
+    function updateScheduledRunNotice(info, running) {
+      let el = document.getElementById('scheduled-run-notice');
+      if (!info) {
+        if (el) el.remove();
+        return;
+      }
+      if (!el) {
+        const box = document.querySelector('.prompt-box');
+        if (!box || !box.parentNode) return;
+        el = document.createElement('div');
+        el.id = 'scheduled-run-notice';
+        el.className = 'scheduled-run-notice';
+        el.setAttribute('role', 'status');
+        box.parentNode.insertBefore(el, box);
+      }
+      const mode = String(info.mode || 'safe').toUpperCase();
+      const name = info.job_name || 'scheduled job';
+      el.textContent = running
+        ? 'Scheduled run of ' + name + ' in ' + mode + ' mode. It is still in progress; you can continue the chat when it finishes.'
+        : 'Scheduled run of ' + name + ', which ran in ' + mode + ' mode. Messages you send now use your own permission mode.';
+      el.classList.toggle('running', !!running);
+    }
+
     function appendSystemNote(text) {
       const note = document.createElement('div');
       note.className = 'system-note';
@@ -10015,7 +10622,36 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       '</div>';
     }
 
+    function isShownElement(el) {
+      return !!el && !el.hidden && window.getComputedStyle(el).display !== 'none';
+    }
+
+    function hasOpenOverlay() {
+      const lightbox = document.getElementById('image-lightbox-overlay');
+      if (lightbox && lightbox.classList.contains('open')) return true;
+      return ['reasoning-popover', 'collab-inbox-popover', 'mode-popover', 'profile-popover', 'slash-palette', 'mention-palette']
+        .some(function(id) { return isShownElement(document.getElementById(id)); });
+    }
+
+    // A focused control owns Enter/Space; the card-level shortcuts must not
+    // override it (Enter on a focused "Deny" row denies, it does not approve).
+    function focusedControl(e) {
+      const t = e.target;
+      if (!t || t === document.body || typeof t.closest !== 'function') return null;
+      return t.closest('button, a[href], select, summary, [role="button"], [role="option"], [role="menuitem"], [role="checkbox"], [role="radio"]');
+    }
+
     document.addEventListener('keydown', (e) => {
+      if (e.defaultPrevented) return;
+      if (e.key === 'Escape' && hasOpenOverlay()) return;
+      const control = (e.key === 'Enter' || e.key === ' ') ? focusedControl(e) : null;
+      if (control) {
+        if (control.tagName !== 'BUTTON' && control.tagName !== 'A' && control.tagName !== 'SELECT' && control.tagName !== 'SUMMARY' && control.getAttribute('role') === 'button') {
+          e.preventDefault();
+          control.click();
+        }
+        return;
+      }
       const isInput = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
 
       // ── Plan Approval Keyboard Handling ──
@@ -10048,6 +10684,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       // ── Questions Card Keyboard Handling ──
       const questionsCard = document.getElementById('questions-carousel-card');
       if (questionsCard) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          const closeBtn = questionsCard.querySelector('[data-action="dismiss-questions"]');
+          window.dismissQuestions(closeBtn ? closeBtn.getAttribute('data-question-id') || '' : '');
+          return;
+        }
         if (!isInput && e.key >= '1' && e.key <= '9') {
           const optIdx = parseInt(e.key, 10) - 1;
           const currSlide = document.getElementById('q-slide-' + (window.currentQuestionSlide || 0));
@@ -10189,19 +10831,35 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     window.submitQuestions = function(questionId, totalQ) {
       if (interactiveSlot.dataset.submitting) return;
       interactiveSlot.dataset.submitting = 'true';
-      const answers = [];
+      const lines = [];
       for (let i = 0; i < totalQ; i++) {
-        const checked = document.querySelectorAll('input[name="q_' + i + '"]:checked');
-        if (checked.length > 0) {
-          const vals = Array.from(checked).map(c => c.value);
-          answers.push(vals.join(', '));
-        } else {
-          const textIn = document.getElementById('q_input_' + i);
-          answers.push(textIn ? textIn.value.trim() : '');
+        const vals = Array.from(document.querySelectorAll('input[name="q_' + i + '"]:checked')).map(c => c.value);
+        const other = document.getElementById('q_other_' + i);
+        const otherText = other ? other.value.trim() : '';
+        // Typed text replaces a single choice and joins a multiple choice.
+        if (otherText) {
+          if (other.getAttribute('data-q-multi')) vals.push(otherText);
+          else vals.splice(0, vals.length, otherText);
         }
+        const textIn = document.getElementById('q_input_' + i);
+        const answer = vals.length ? vals.join(', ') : (textIn ? textIn.value.trim() : '');
+        if (!answer) continue;
+        const promptEl = document.querySelector('#q-slide-' + i + ' .question-prompt-text');
+        lines.push((i + 1) + '. ' + (promptEl ? promptEl.textContent.trim() : 'Question ' + (i + 1)) + ': ' + answer);
       }
       interactiveSlot.querySelectorAll('button, input, textarea').forEach(control => { control.disabled = true; });
-      vscode.postMessage({ type: 'answer_question', questionId, answers: answers.join(', ') });
+      vscode.postMessage({
+        type: 'answer_question', questionId,
+        answers: lines.length ? 'User answers:' + String.fromCharCode(10) + lines.join(String.fromCharCode(10)) : '',
+        dismissed: lines.length === 0,
+      });
+    };
+
+    window.dismissQuestions = function(questionId) {
+      if (interactiveSlot.dataset.submitting) return;
+      interactiveSlot.dataset.submitting = 'true';
+      interactiveSlot.querySelectorAll('button, input, textarea').forEach(control => { control.disabled = true; });
+      vscode.postMessage({ type: 'answer_question', questionId, answers: '', dismissed: true });
     };
 
     function escapeHtml(str) {

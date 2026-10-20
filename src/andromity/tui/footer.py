@@ -770,6 +770,13 @@ class ChatInput(TextArea):
                 event.prevent_default()
                 event.stop()
                 return
+        # A suggested next step owns Tab (fill the input) and Esc (dismiss) while the input is empty.
+        if event.key in ("tab", "escape") and not self.text and getattr(self.app, "_next_step", None) is not None:
+            handled = self.app.accept_next_step_into_input() if event.key == "tab" else self.app.dismiss_next_step()
+            if handled:
+                event.prevent_default()
+                event.stop()
+                return
         if event.key == "up":
             lines = self.text.split("\n")
             # Navigate history only when empty or cursor is on the first line

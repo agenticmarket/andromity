@@ -166,6 +166,9 @@ async def authenticate(name: str, conf: dict, on_status: Callable[[str], None]) 
 async def verify_token(connector: Connector, token: str) -> Optional[str]:
     """Return None when the server accepts the token, else a message for the user."""
     import httpx
+    from andromity.core import network_policy
+    if not network_policy.url_allowed(connector.verify_url or connector.url):
+        return network_policy.feature_off_message(f"connecting to {connector.name}")
     body = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
         "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "andromity", "version": "1"}}}
     headers = {"Authorization": f"{connector.token_prefix}{token}", "Accept": "application/json, text/event-stream"}
@@ -197,6 +200,9 @@ async def connect(connector_id: str, project_path: str, on_status: Callable[[str
     connector = get_connector(connector_id)
     if connector is None:
         return False, "Unknown connector. Refresh the connector list and retry."
+    from andromity.core import network_policy
+    if not network_policy.url_allowed(connector.url):
+        return False, network_policy.feature_off_message(f"connecting to {connector.name}")
     if connector.id in configured_servers(project_path):
         return False, f"{connector.name} is already connected. Remove it from MCP servers to reconnect."
     client_id, client_secret = (client_id or "").strip(), (client_secret or "").strip()

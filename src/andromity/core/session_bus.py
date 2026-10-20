@@ -27,6 +27,26 @@ def _norm_project(path: Optional[str]) -> Optional[str]:
         return os.path.normcase(str(path))
 
 
+# Clients recognise these prompts by their first line and show them as a compact
+# "Question from …" / "Handoff from …" turn instead of the raw instructions, so keep
+# the headers stable (saved histories use them too).
+def question_wake_prompt(from_session: str, question_id: str, question: str) -> str:
+    return (
+        f"[Incoming Question from co-agent '{from_session}' (ID: {question_id})]:\n"
+        f"\"{question}\"\n\n"
+        f"Please address this question, perform any required actions or tools, and provide an answer using "
+        f"session_message(reply_to='{question_id}', content='...')."
+    )
+
+
+def handoff_wake_prompt(from_session: str, phase: str, summary: str) -> str:
+    return (
+        f"[Incoming Task Handoff from co-agent '{from_session}' (Phase: {phase})]:\n"
+        f"Summary: {summary}\n\n"
+        f"Please review the handoff details with handoff(phase='{phase}'), take any necessary actions, and report progress."
+    )
+
+
 @dataclass
 class BusMessage:
     id: str
@@ -455,6 +475,21 @@ class SessionBus:
                 except asyncio.QueueEmpty:
                     break
             return messages
+
+    def has_active_peers(self, session_id: str, project_path: Optional[str], within_seconds: float) -> bool:
+        """Whether another session in the same project started a turn in the last `within_seconds`."""
+        project = _norm_project(project_path)
+        cutoff = datetime.now(timezone.utc).timestamp() - within_seconds
+        with self._lock:
+            for sid, reg in self._registrations.items():
+                if sid == session_id or _norm_project(reg.project_path) != project:
+                    continue
+                try:
+                    if datetime.fromisoformat(reg.last_active_at).timestamp() >= cutoff:
+                        return True
+                except (TypeError, ValueError):
+                    continue
+        return False
 
     def get_unread_count(self, session_id: str) -> int:
         resolved_id = self.resolve_session_id(session_id) or session_id

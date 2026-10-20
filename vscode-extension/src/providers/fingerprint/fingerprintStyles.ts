@@ -1039,6 +1039,18 @@ export function getFingerprintStyles(): string {
     /* Empty state and inspector */
     .fp-empty-title { font-weight: 600; color: var(--fg); margin-bottom: 4px; }
     .fp-empty-text { font-size: 11.5px; }
+    .fp-empty-retry {
+      margin-top: 10px;
+      pointer-events: auto;
+      padding: 4px 12px;
+      border-radius: 4px;
+      border: 1px solid var(--vscode-button-border, transparent);
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      cursor: pointer;
+      font: inherit;
+    }
+    .fp-empty-retry:hover { background: var(--vscode-button-hoverBackground); }
     .fp-insp-placeholder { color: var(--muted); font-size: 12px; margin-top: 20px; text-align: center; }
     .fp-box.amber { border-color: color-mix(in srgb, var(--amber) 45%, var(--border)); }
     .fp-box.amber .fp-box-label { color: var(--amber); }

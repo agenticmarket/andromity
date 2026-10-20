@@ -10,10 +10,13 @@ import traceback
 import uuid
 from copy import deepcopy
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Set
 
 from andromity import __version__
+from andromity.core.session_context import background_context as _background_context, message_text as _message_text, shorten as _shorten
+from andromity.core.tools import collab_action
 from andromity.config import config, get_config_dir
 from andromity.core.agent import Agent
 
@@ -25,9 +28,9 @@ READ_ONLY_TOOLS = {
     # Tool discovery
     "list_tools",
     # Planning & interactive tools (safe non-code-mutating)
-    "write_plan", "update_plan_step", "ask_questions", "ask_question",
+    "write_plan", "update_plan_step", "ask_questions", "ask_question", "suggest_next_step",
     # Session & multi-agent coordination read-only tools
-    "session_list", "session_read_messages", "shared_state_get", "read_handoff",
+    "session_list", "session_read_messages", "session_inbox", "shared_state_get", "read_handoff",
 }
 SESSION_DRIVING_TOOLS = {
     "session_send_message", "session_ask_question", "session_broadcast",
@@ -35,12 +38,14 @@ SESSION_DRIVING_TOOLS = {
 }
 _MODE_RANK = {"safe": 0, "trust": 1, "full": 2, "yolo": 3}
 CRON_SEED_PRESET_NAMES = {"Run Tests & Verify Build", "Daily Code Health & TODO Scanner"}
+CRON_RUN_BUSY_MESSAGE = "This scheduled run is still in progress. You can continue the chat when it finishes."
 from andromity.core.events import (
     Done,
     InputApplied,
     HandoffWritten,
     LLMCallEnd,
     LLMCallStart,
+    NextStepSuggested,
     PlanApprovalRequired,
     PlanUpdated,
     SessionAnswerReceived,
@@ -97,10 +102,13 @@ class JsonRpcHandler:
         self._active_sessions: Dict[str, Session] = {}
         self._running_tasks: Dict[str, asyncio.Task] = {}
         self._runtime = SessionRuntime()
+        self._watch_airgap_blocks()
         self._pending_approvals: Dict[str, Any] = {}
         self._pending_questions: Dict[str, Any] = {}
         self._pending_plan_approvals: Dict[str, asyncio.Future] = {}
         self._cron_schedulers: Dict[str, Any] = {}
+        self._cron_live_sessions: Dict[str, Session] = {}
+        self._cron_tasks: set = set()
         self._active_agents: Dict[str, Any] = {}
         self._pending_process_notices: Dict[str, List[str]] = {}
         self._input_queues: Dict[str, Any] = {}
@@ -143,12 +151,8 @@ class JsonRpcHandler:
             })
             to_sid = getattr(event, "to_session_id", "")
             if to_sid:
-                auto_prompt = (
-                    f"[Incoming Question from co-agent '{event.from_session}' (ID: {event.question_id})]:\n"
-                    f"\"{event.question}\"\n\n"
-                    f"Please address this question, perform any required actions or tools, and provide an answer using "
-                    f"session_answer_question(question_id='{event.question_id}', answer='...')."
-                )
+                from andromity.core.session_bus import question_wake_prompt
+                auto_prompt = question_wake_prompt(event.from_session, event.question_id, event.question)
                 asyncio.create_task(self._handle_auto_awake(
                     target_session_id=to_sid,
                     from_session=event.from_session,
@@ -175,32 +179,34 @@ class JsonRpcHandler:
                 "timestamp": event.timestamp,
             })
         elif isinstance(event, HandoffWritten):
+            from andromity.core.session_bus import SessionBus, handoff_wake_prompt
             h_id = getattr(event, "handoff_id", getattr(event, "phase", ""))
             to_sess = getattr(event, "to_session", "")
+            from_sid = getattr(event, "from_session_id", "")
+            to_sid = getattr(event, "to_session_id", "") or (
+                SessionBus.get_instance().resolve_session_id(to_sess, from_sid or None) if to_sess else None
+            )
             summary = getattr(event, "task_summary", getattr(event, "summary", ""))
             self.notify("session/handoffWritten", {
                 "handoff_id": h_id,
+                "phase": getattr(event, "phase", ""),
+                "status": getattr(event, "status", ""),
                 "from_session": event.from_session,
+                "from_session_id": from_sid,
                 "to_session": to_sess,
+                "to_session_id": to_sid or "",
                 "task_summary": summary,
                 "timestamp": event.timestamp,
             })
-            if to_sess:
-                from andromity.core.session_bus import SessionBus
-                to_sid = SessionBus.get_instance().resolve_session_id(to_sess)
-                if to_sid:
-                    auto_prompt = (
-                        f"[Incoming Task Handoff from co-agent '{event.from_session}' (Phase: {getattr(event, 'phase', h_id)})]:\n"
-                        f"Summary: {summary}\n\n"
-                        f"Please review the handoff details with read_handoff(phase='{getattr(event, 'phase', '')}'), take any necessary actions, and report progress."
-                    )
-                    asyncio.create_task(self._handle_auto_awake(
-                        target_session_id=to_sid,
-                        from_session=event.from_session,
-                        from_session_id="",
-                        prompt_content=auto_prompt,
-                        trigger_type="handoff",
-                    ))
+            if to_sid:
+                auto_prompt = handoff_wake_prompt(event.from_session, getattr(event, "phase", h_id), summary)
+                asyncio.create_task(self._handle_auto_awake(
+                    target_session_id=to_sid,
+                    from_session=event.from_session,
+                    from_session_id=from_sid,
+                    prompt_content=auto_prompt,
+                    trigger_type="handoff",
+                ))
 
     def _on_process_started(self, info: dict):
         if self._loop and self._loop.is_running():
@@ -331,7 +337,7 @@ class JsonRpcHandler:
 
         # 2. Check watching / auto-wake eligibility
         status = getattr(session, "status", "idle")
-        if status not in ("watching", "idle", "cancelled", "error"):
+        if status not in ("watching", "idle", "cancelled", "error", "interrupted"):
             log.info("Auto-wake: session %s status is '%s'; skipping wake.", session.id, status)
             return
 
@@ -392,20 +398,21 @@ class JsonRpcHandler:
             "collaborators": session.collaborators,
         })
 
-        # 5. Dispatch turn with the target's own settings. Without them the turn would fall back to
-        # global defaults, so a SAFE/planner session could be woken as a FULL/YOLO builder by another
-        # session's content. Woken turns are also capped at TRUST because nobody asked for them.
-        own_mode = (getattr(session, "permission_mode", "") or "safe").lower()
-        wake_params = self._wake_params(session, prompt_content)
-        wake_mode = wake_params["mode"]
         try:
-            await self.rpc_agent_prompt(wake_params)
+            await self._start_wake_turn(session, prompt_content)
         except Exception as e:
             log.exception("Auto-wake execution failed for session %s: %s", session.id, e)
             session.set_status("idle")
             self.notify("session/updated", {"session_id": session.id, "status": "idle"})
-            return
-        if wake_mode != own_mode:
+
+    async def _start_wake_turn(self, session: Any, prompt_content: str) -> None:
+        # Dispatch the turn with the target's own settings. Without them the turn would fall back to
+        # global defaults, so a SAFE/planner session could be woken as a FULL/YOLO builder by another
+        # session's content. Woken turns are also capped at TRUST because the content is not the user's.
+        own_mode = (getattr(session, "permission_mode", "") or "safe").lower()
+        wake_params = self._wake_params(session, prompt_content)
+        await self.rpc_agent_prompt(wake_params)
+        if wake_params["mode"] != own_mode:
             # rpc_agent_prompt stores the mode it ran with; keep the user's own choice for their next prompt.
             session.permission_mode = own_mode
             session.save()
@@ -612,10 +619,21 @@ class JsonRpcHandler:
         if session_id in self._active_sessions:
             return self._active_sessions[session_id]
 
+        # A scheduled run in progress: serve the live object without caching it, so opening
+        # it mid-run cannot pin a stale copy that later hides or overwrites the run.
+        live_cron = self._cron_live_sessions.get(session_id)
+        if live_cron is not None:
+            return live_cron
+        is_cron = session_id.startswith("cron-")
+
         loaded = Session.load_by_id(session_id, project_path)
+        if loaded is None and is_cron:
+            loaded = Session.load_by_id(session_id)
         if loaded:
             self._active_sessions[session_id] = loaded
             return loaded
+        if is_cron:
+            raise ValueError("This scheduled run's session was not found. It may have been deleted.")
 
         # 3. If not found on disk, create new session with this exact session_id
         short_id = session_id[:8] if session_id else "main"
@@ -788,7 +806,7 @@ class JsonRpcHandler:
         processes = await self.rpc_process_list({"project_path": session.project_path})
         runtime["processes"] = [p for p in processes["processes"] if p["session_id"] == session.id and p["status"] == "running"]
         task = self._running_tasks.get(session.id)
-        runtime["is_running"] = task is not None and not task.done()
+        runtime["is_running"] = (task is not None and not task.done()) or session.id in self._cron_live_sessions
         plan = getattr(session, "plan", None)
         if isinstance(plan, dict) and plan.get("status") == "pending" and not any(i["type"] == "plan_approval" for i in runtime["interactions"]):
             runtime["interactions"].append({"type": "plan_approval", "session_id": session.id, "plan": plan})
@@ -812,6 +830,33 @@ class JsonRpcHandler:
             "provider": getattr(session, "provider", None) or getattr(getattr(self, "agent", None), "provider_name", None) or getattr(getattr(self, "config", None), "provider", None),
             "collaborators": list(getattr(session, "collaborators", None) or []),
             "watching_for": getattr(session, "watching_for", None),
+            "scheduled_run": self._scheduled_run_info(session),
+            "started_from": deepcopy(getattr(session, "started_from", None)),
+            "background_runs": deepcopy(getattr(session, "background_runs", None) or []),
+        }
+
+    def _scheduled_run_info(self, session) -> Optional[Dict[str, Any]]:
+        """Describe a scheduled (cron) run's session for the chat view; None for normal chats."""
+        import re
+        match = re.match(r"^cron-([A-Za-z0-9_\-]+)-\d+$", session.id or "")
+        if not match:
+            return None
+        job_id = match.group(1)
+        name = session.name[len("Cron: "):] if (session.name or "").startswith("Cron: ") else session.name
+        mode = getattr(session, "permission_mode", None)
+        if session.id not in self._cron_live_sessions:
+            try:
+                from andromity.core.cron import CronStore
+                job = CronStore(session.project_path).get(job_id)
+                if job is not None:
+                    name, mode = job.name, job.mode
+            except Exception:
+                pass
+        return {
+            "job_id": job_id,
+            "job_name": name,
+            "mode": (mode or "safe").lower(),
+            "running": session.id in self._cron_live_sessions,
         }
 
     async def rpc_session_delete(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1147,6 +1192,121 @@ class JsonRpcHandler:
         })
         return {"success": True, "consecutive_auto_wakes": 0}
 
+    async def rpc_session_startBackground(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Run a suggested next step in a new session without leaving the current one."""
+        parent_id = params.get("parent_session_id")
+        prompt = (params.get("prompt") or "").strip()
+        if not parent_id or not prompt:
+            raise ValueError("parent_session_id and prompt are required")
+        parent = self._get_or_load_session(parent_id, params.get("project_path"))
+        title = " ".join(str(params.get("title") or "").split())[:60] or Session.auto_name_from_message(prompt)
+        child = Session(name=title, project_path=parent.project_path)
+        child.started_from = {"session_id": parent.id, "name": parent.name, "pending": True}
+        child.save()
+        self._active_sessions[child.id] = child
+
+        run = {
+            "session_id": child.id, "title": title, "status": "running", "summary": "",
+            "turn_index": len(parent.get_user_turn_indices()),
+            "started_at": datetime.now(timezone.utc).isoformat(), "reported": False,
+        }
+        parent.background_runs = [*(getattr(parent, "background_runs", None) or []), run]
+        parent.save()
+        self.notify("session/backgroundStarted", {
+            "parent_session_id": parent.id, "child_session_id": child.id, "title": title,
+        })
+        try:
+            await self.rpc_agent_prompt({
+                "session_id": child.id,
+                "prompt": prompt + _background_context(parent),
+                "project_path": parent.project_path,
+                "profile": params.get("profile") or getattr(parent, "profile", "") or "builder",
+                "model": params.get("model"),
+                "provider": params.get("provider"),
+                "mode": params.get("mode") or getattr(parent, "permission_mode", "safe"),
+                "reasoning_effort": params.get("reasoning_effort"),
+            })
+        except Exception as e:
+            log.warning("Background session %s could not start: %s", child.id, e)
+            child.started_from["pending"] = False
+            child.save()
+            self._finish_background_run(parent, child.id, "error", "It could not start. Open it and send the prompt again.")
+            return {"success": False, "session_id": child.id}
+        return {"success": True, "session_id": child.id}
+
+    def _report_background_run(self, session: Any) -> None:
+        """When a background session's first run ends, tell the session that started it."""
+        origin = getattr(session, "started_from", None)
+        if not isinstance(origin, dict) or not origin.get("pending"):
+            return
+        origin["pending"] = False
+        session.save()
+        status = {"cancelled": "cancelled", "error": "error"}.get(getattr(session, "status", ""), "finished")
+        summary = _message_text(next(
+            (m for m in reversed(session.messages) if m.get("role") == "assistant" and _message_text(m)), {}
+        ))
+        try:
+            parent = self._get_or_load_session(origin.get("session_id"))
+        except Exception as e:
+            log.info("Background session %s finished but its parent is gone: %s", session.id, e)
+            return
+        self._finish_background_run(parent, session.id, status, _shorten(summary, 300))
+
+    def _finish_background_run(self, parent: Any, child_id: str, status: str, summary: str) -> None:
+        runs = getattr(parent, "background_runs", None) or []
+        run = next((r for r in runs if r.get("session_id") == child_id), None)
+        if run is None:
+            return
+        run.update(status=status, summary=summary, finished_at=datetime.now(timezone.utc).isoformat())
+        parent.save()
+        self.notify("session/backgroundFinished", {
+            "parent_session_id": parent.id, "child_session_id": child_id,
+            "title": run.get("title", ""), "status": status, "summary": summary,
+        })
+
+    @staticmethod
+    def _with_background_results(session: Any, prompt: str) -> str:
+        """Let the parent agent know what its background sessions finished since its last turn."""
+        done = [r for r in (getattr(session, "background_runs", None) or [])
+                if r.get("status") != "running" and not r.get("reported")]
+        if not done:
+            return prompt
+        lines = []
+        for run in done:
+            run["reported"] = True
+            outcome = {"finished": "finished", "cancelled": "was cancelled", "error": "failed"}.get(run.get("status"), "ended")
+            lines.append(f'- "{run.get("title", "")}" {outcome}' + (f": {run['summary']}" if run.get("summary") else ""))
+        session.save()
+        return f"{prompt}\n\n---\n[Background sessions]\n" + "\n".join(lines)
+
+    async def rpc_session_wakeForQuestion(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """The user asked this session to answer a pending question from another session now."""
+        session_id = params.get("session_id")
+        question_id = params.get("question_id")
+        if not session_id or not question_id:
+            raise ValueError("session_id and question_id are required")
+        from andromity.core.session_bus import SessionBus, question_wake_prompt
+        pending = next(
+            (q for q in SessionBus.get_instance().get_pending_questions_for(session_id) if q["question_id"] == question_id),
+            None,
+        )
+        if not pending:
+            return {"success": False, "reason": "not_pending"}
+        session = self._get_or_load_session(session_id)
+        prompt = question_wake_prompt(pending["from_session"], question_id, pending["question"])
+        # A click is the user's own go-ahead, so it clears the automatic-reply limit.
+        session.consecutive_auto_wakes = 0
+        task = self._running_tasks.get(session.id)
+        if task and not task.done():
+            session.save()
+            await self.rpc_agent_submit({**self._wake_params(session, prompt), "delivery": "steer"})
+            return {"success": True, "delivery": "steer"}
+        if session.status == "paused_limit_reached":
+            session.set_status("idle")
+        session.save()
+        await self._start_wake_turn(session, prompt)
+        return {"success": True, "delivery": "started"}
+
     # ── Agent Execution & Streaming Methods ─────────────────────────────────────
 
     def _inputs(self, session_id: str):
@@ -1163,6 +1323,8 @@ class JsonRpcHandler:
     async def rpc_agent_submit(self, params: Dict[str, Any]) -> Dict[str, Any]:
         session = self._get_or_load_session(params.get("session_id"), params.get("project_path"))
         sid = session.id
+        if sid in self._cron_live_sessions:
+            raise ValueError(CRON_RUN_BUSY_MESSAGE)
         async with self._input_locks.setdefault(sid, asyncio.Lock()):
             queue = self._inputs(sid)
             payload = {**params, "session_id": sid}
@@ -1242,6 +1404,205 @@ class JsonRpcHandler:
             # Retry never restores files or resumes messages paused after an error.
             return await self.rpc_agent_prompt(payload)
 
+    def _forward_agent_event(self, session_id: str, session, agent, event) -> None:
+        """Send the agent/* notifications for one streamed event. Shared by chat turns and
+        scheduled runs, so an open chat renders both the same way."""
+        if isinstance(event, TextDelta):
+            if "[Context compacting" in event.text:
+                self.notify("session/compacting", {
+                    "session_id": session_id,
+                    "reason": "Auto-compacting: context limit reached",
+                })
+            elif "*Context compacted successfully" in event.text:
+                self.notify("session/compacted", {
+                    "session_id": session_id,
+                    "message_count": len(session.messages),
+                    "compacted_history": getattr(session, "compacted_history", []),
+                    "context_tokens": self._context_estimate(session, agent),
+                    "context_estimated": True,
+                })
+            self.notify("agent/textDelta", {"session_id": session_id, "text": event.text})
+            self.notify("session/update", {
+                "sessionId": session_id,
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": event.text},
+                },
+            })
+        elif isinstance(event, ThinkingDelta):
+            self.notify("agent/thinkingDelta", {"session_id": session_id, "text": event.text})
+            self.notify("session/update", {
+                "sessionId": session_id,
+                "update": {
+                    "sessionUpdate": "agent_thought_chunk",
+                    "content": {"type": "text", "text": event.text},
+                },
+            })
+        elif isinstance(event, LLMCallStart):
+            self.notify("waterfall/llmStart", {
+                "session_id": session_id,
+                "turn_id": event.turn_id,
+                "model": event.model,
+                "provider": event.provider,
+                "prompt_tokens_est": event.prompt_tokens_est,
+                "ts": getattr(event, "ts", 0.0) or time.time(),
+            })
+        elif isinstance(event, LLMCallEnd):
+            self.notify("waterfall/llmEnd", {
+                "session_id": session_id,
+                "turn_id": event.turn_id,
+                "ttfb_ms": event.ttfb_ms,
+                "duration_ms": event.duration_ms,
+                "prompt_tokens": event.prompt_tokens,
+                "completion_tokens": event.completion_tokens,
+                "total_tokens": event.total_tokens,
+                "model": event.model,
+                "ts": getattr(event, "ts", 0.0) or time.time(),
+                "response": getattr(event, "response", "") or "",
+                "thinking": getattr(event, "thinking", "") or "",
+                "tool_calls": getattr(event, "tool_calls", []) or [],
+            })
+        elif isinstance(event, ToolCallStart):
+            self.notify("agent/toolStart", {
+                "session_id": session_id,
+                "tool_id": event.tool_id,
+                "tool_name": event.tool_name,
+                "ts": time.time(),
+            })
+        elif isinstance(event, ToolCallDelta):
+            self.notify("agent/toolDelta", {
+                "session_id": session_id,
+                "tool_id": event.tool_id,
+                "chunk": event.args_json_chunk,
+                "ts": time.time(),
+            })
+        elif isinstance(event, ToolCallEnd):
+            self.notify("agent/toolEnd", {
+                "session_id": session_id,
+                "tool_id": event.tool_id,
+                "ts": time.time(),
+            })
+        elif isinstance(event, ToolResult):
+            self.notify("agent/toolResult", {
+                "session_id": session_id,
+                "tool_id": event.tool_id,
+                "result": event.result,
+                "duration_ms": getattr(event, "duration_ms", 0.0),
+                "success": getattr(event, "success", True),
+                "ts": getattr(event, "ts", 0.0) or time.time(),
+            })
+            try:
+                plan_obj = session.load_plan_obj() if session else None
+                if plan_obj:
+                    self.notify("agent/planUpdated", {
+                        "session_id": session_id,
+                        "plan": getattr(plan_obj, "to_enriched_dict", plan_obj.to_dict)(),
+                    })
+            except Exception:
+                pass
+        elif isinstance(event, PlanApprovalRequired):
+            plan_payload = event.plan
+            if hasattr(plan_payload, "to_enriched_dict"):
+                plan_payload = plan_payload.to_enriched_dict()
+            elif hasattr(plan_payload, "to_dict"):
+                plan_payload = plan_payload.to_dict()
+            self.notify("agent/planApproval", {
+                "session_id": session_id,
+                "plan": plan_payload,
+            })
+        elif isinstance(event, PlanUpdated):
+            plan_payload = event.plan
+            if hasattr(plan_payload, "to_enriched_dict"):
+                plan_payload = plan_payload.to_enriched_dict()
+            elif hasattr(plan_payload, "to_dict"):
+                plan_payload = plan_payload.to_dict()
+            self.notify("agent/planUpdated", {
+                "session_id": session_id,
+                "plan": plan_payload,
+            })
+        elif isinstance(event, NextStepSuggested):
+            self.notify("agent/nextStepSuggested", {
+                "session_id": session_id,
+                "question": event.question,
+                "options": event.options,
+                # The first option, as earlier clients read it.
+                "title": event.title,
+                "prompt": event.prompt,
+                "new_session": event.new_session,
+            })
+        elif isinstance(event, SubAgentSpawned):
+            self.notify("subagent/spawned", {
+                "session_id": session_id,
+                "agent_id": event.agent_id,
+                "role": event.role,
+                "model": event.model,
+                "provider": event.provider,
+                "task": event.task,
+            })
+        elif isinstance(event, SubAgentProgress):
+            if event.event_type == "spawned":
+                # Tool-path spawns only emit SubAgentProgress(type="spawned")
+                # (run_stream, which emits SubAgentSpawned, is never used by
+                # orchestrator.spawn). Surface it through the spawned channel
+                # too so webview card creation gets model/provider/task.
+                self.notify("subagent/spawned", {
+                    "session_id": session_id,
+                    "agent_id": event.agent_id,
+                    "role": event.role,
+                    "model": event.model,
+                    "provider": event.provider,
+                    "task": event.task,
+                })
+            elif event.event_type in ("completed", "done"):
+                self.notify("subagent/done", {
+                    "session_id": session_id,
+                    "agent_id": event.agent_id,
+                    "role": event.role,
+                    "result": event.detail or "",
+                    "duration_ms": getattr(event, "duration_ms", 0.0),
+                })
+            elif event.event_type in ("failed", "error", "killed", "timeout"):
+                self.notify("subagent/failed", {
+                    "session_id": session_id,
+                    "agent_id": event.agent_id,
+                    "role": event.role,
+                    "error": event.detail or "Subagent execution failed",
+                    "duration_ms": getattr(event, "duration_ms", 0.0),
+                })
+            self.notify("subagent/progress", {
+                "session_id": session_id,
+                "agent_id": event.agent_id,
+                "role": event.role,
+                "status": event.status,
+                "event_type": event.event_type,
+                "tool_id": event.tool_id,
+                "delta_text": event.delta_text,
+                "tool_name": event.tool_name,
+                "tool_args": event.tool_args,
+                "tool_result": event.tool_result,
+                "detail": event.detail,
+                "model": event.model,
+                "provider": event.provider,
+                "task": event.task,
+                "duration_ms": getattr(event, "duration_ms", 0.0),
+            })
+        elif isinstance(event, SubAgentDone):
+            self.notify("subagent/done", {
+                "session_id": session_id,
+                "agent_id": event.agent_id,
+                "role": event.role,
+                "result": event.result,
+                "token_usage": event.token_usage,
+                "duration_ms": event.duration_ms,
+            })
+        elif isinstance(event, SubAgentFailed):
+            self.notify("subagent/failed", {
+                "session_id": session_id,
+                "agent_id": event.agent_id,
+                "role": event.role,
+                "error": event.error,
+            })
+
     async def rpc_agent_prompt(self, params: Dict[str, Any]) -> Dict[str, Any]:
         prompt = params.get("prompt", "")
         if not prompt and not (params.get("images") or params.get("image_uris")):
@@ -1252,11 +1613,15 @@ class JsonRpcHandler:
         session = self._get_or_load_session(session_id, project_path)
         session_id = session.id
 
+        if session_id in self._cron_live_sessions:
+            raise ValueError(CRON_RUN_BUSY_MESSAGE)
         if session_id in self._running_tasks and not self._running_tasks[session_id].done():
             raise RuntimeError(f"Session {session_id} is already running a turn.")
         prompt_repo = get_repo(Path(session.project_path))
         if prompt_repo and str(Path(prompt_repo.working_tree_dir).resolve()) in self._git_mutating_roots:
             raise ValueError("Wait for file restoration to finish before starting another turn.")
+        if prompt:
+            prompt = self._with_background_results(session, prompt)
 
         if not params.get("is_auto_wake"):
             from copy import deepcopy
@@ -1280,7 +1645,8 @@ class JsonRpcHandler:
 
         # Create callbacks for interactive approval and clarifying questions
         async def _on_tool_approval(tool_name: str, args: Dict[str, Any]) -> bool:
-            t_lower = (tool_name or "").strip().lower()
+            # Collaboration calls are judged by what they do (read the inbox, send, ask, write state).
+            t_lower = collab_action((tool_name or "").strip().lower(), args)
             prof_lower = (profile or "").strip().lower()
 
             # 1. Profile confinement check (hard gate: planner/reviewer cannot mutate files or execute shell)
@@ -1306,7 +1672,7 @@ class JsonRpcHandler:
             # 3. Read-only tools bypass approval UNLESS accessing sensitive credentials/keys
             if is_sensitive:
                 needs_approval = True
-            elif tool_name in READ_ONLY_TOOLS:
+            elif t_lower in READ_ONLY_TOOLS:
                 return True
             else:
                 needs_approval = False
@@ -1322,7 +1688,7 @@ class JsonRpcHandler:
                     else:
                         return True
 
-            elif tool_name in SESSION_DRIVING_TOOLS:
+            elif t_lower in SESSION_DRIVING_TOOLS:
                 # These reach other sessions, which may auto-wake and act on the content.
                 if mode == "safe":
                     needs_approval = True
@@ -1448,6 +1814,7 @@ class JsonRpcHandler:
             reasoning_effort=reasoning_effort,
             provider=provider,
             model=model,
+            next_step_suggestions=bool(config.get("default", "next_step_suggestions", True)),
         )
         self._active_agents[session_id] = agent
         agent.input_queue = self._inputs(session_id)
@@ -1493,191 +1860,6 @@ class JsonRpcHandler:
                             "prompt": event.prompt, "image_uris": event.image_uris or [],
                             "turn_index": event.turn_index,
                         })
-                    elif isinstance(event, TextDelta):
-                        if "[Context compacting" in event.text:
-                            self.notify("session/compacting", {
-                                "session_id": session_id,
-                                "reason": "Auto-compacting: context limit reached",
-                            })
-                        elif "*Context compacted successfully" in event.text:
-                            self.notify("session/compacted", {
-                                "session_id": session_id,
-                                "message_count": len(session.messages),
-                                "compacted_history": getattr(session, "compacted_history", []),
-                                "context_tokens": self._context_estimate(session, agent),
-                                "context_estimated": True,
-                            })
-                        self.notify("agent/textDelta", {"session_id": session_id, "text": event.text})
-                        self.notify("session/update", {
-                            "sessionId": session_id,
-                            "update": {
-                                "sessionUpdate": "agent_message_chunk",
-                                "content": {"type": "text", "text": event.text},
-                            },
-                        })
-                    elif isinstance(event, ThinkingDelta):
-                        self.notify("agent/thinkingDelta", {"session_id": session_id, "text": event.text})
-                        self.notify("session/update", {
-                            "sessionId": session_id,
-                            "update": {
-                                "sessionUpdate": "agent_thought_chunk",
-                                "content": {"type": "text", "text": event.text},
-                            },
-                        })
-                    elif isinstance(event, LLMCallStart):
-                        self.notify("waterfall/llmStart", {
-                            "session_id": session_id,
-                            "turn_id": event.turn_id,
-                            "model": event.model,
-                            "provider": event.provider,
-                            "prompt_tokens_est": event.prompt_tokens_est,
-                            "ts": getattr(event, "ts", 0.0) or time.time(),
-                        })
-                    elif isinstance(event, LLMCallEnd):
-                        self.notify("waterfall/llmEnd", {
-                            "session_id": session_id,
-                            "turn_id": event.turn_id,
-                            "ttfb_ms": event.ttfb_ms,
-                            "duration_ms": event.duration_ms,
-                            "prompt_tokens": event.prompt_tokens,
-                            "completion_tokens": event.completion_tokens,
-                            "total_tokens": event.total_tokens,
-                            "model": event.model,
-                            "ts": getattr(event, "ts", 0.0) or time.time(),
-                            "response": getattr(event, "response", "") or "",
-                            "thinking": getattr(event, "thinking", "") or "",
-                            "tool_calls": getattr(event, "tool_calls", []) or [],
-                        })
-                    elif isinstance(event, ToolCallStart):
-                        self.notify("agent/toolStart", {
-                            "session_id": session_id,
-                            "tool_id": event.tool_id,
-                            "tool_name": event.tool_name,
-                            "ts": time.time(),
-                        })
-                    elif isinstance(event, ToolCallDelta):
-                        self.notify("agent/toolDelta", {
-                            "session_id": session_id,
-                            "tool_id": event.tool_id,
-                            "chunk": event.args_json_chunk,
-                            "ts": time.time(),
-                        })
-                    elif isinstance(event, ToolCallEnd):
-                        self.notify("agent/toolEnd", {
-                            "session_id": session_id,
-                            "tool_id": event.tool_id,
-                            "ts": time.time(),
-                        })
-                    elif isinstance(event, ToolResult):
-                        self.notify("agent/toolResult", {
-                            "session_id": session_id,
-                            "tool_id": event.tool_id,
-                            "result": event.result,
-                            "duration_ms": getattr(event, "duration_ms", 0.0),
-                            "success": getattr(event, "success", True),
-                            "ts": getattr(event, "ts", 0.0) or time.time(),
-                        })
-                        try:
-                            plan_obj = session.load_plan_obj() if session else None
-                            if plan_obj:
-                                self.notify("agent/planUpdated", {
-                                    "session_id": session_id,
-                                    "plan": getattr(plan_obj, "to_enriched_dict", plan_obj.to_dict)(),
-                                })
-                        except Exception:
-                            pass
-                    elif isinstance(event, PlanApprovalRequired):
-                        plan_payload = event.plan
-                        if hasattr(plan_payload, "to_enriched_dict"):
-                            plan_payload = plan_payload.to_enriched_dict()
-                        elif hasattr(plan_payload, "to_dict"):
-                            plan_payload = plan_payload.to_dict()
-                        self.notify("agent/planApproval", {
-                            "session_id": session_id,
-                            "plan": plan_payload,
-                        })
-                    elif isinstance(event, PlanUpdated):
-                        plan_payload = event.plan
-                        if hasattr(plan_payload, "to_enriched_dict"):
-                            plan_payload = plan_payload.to_enriched_dict()
-                        elif hasattr(plan_payload, "to_dict"):
-                            plan_payload = plan_payload.to_dict()
-                        self.notify("agent/planUpdated", {
-                            "session_id": session_id,
-                            "plan": plan_payload,
-                        })
-                    elif isinstance(event, SubAgentSpawned):
-                        self.notify("subagent/spawned", {
-                            "session_id": session_id,
-                            "agent_id": event.agent_id,
-                            "role": event.role,
-                            "model": event.model,
-                            "provider": event.provider,
-                            "task": event.task,
-                        })
-                    elif isinstance(event, SubAgentProgress):
-                        if event.event_type == "spawned":
-                            # Tool-path spawns only emit SubAgentProgress(type="spawned")
-                            # (run_stream, which emits SubAgentSpawned, is never used by
-                            # orchestrator.spawn). Surface it through the spawned channel
-                            # too so webview card creation gets model/provider/task.
-                            self.notify("subagent/spawned", {
-                                "session_id": session_id,
-                                "agent_id": event.agent_id,
-                                "role": event.role,
-                                "model": event.model,
-                                "provider": event.provider,
-                                "task": event.task,
-                            })
-                        elif event.event_type in ("completed", "done"):
-                            self.notify("subagent/done", {
-                                "session_id": session_id,
-                                "agent_id": event.agent_id,
-                                "role": event.role,
-                                "result": event.detail or "",
-                                "duration_ms": getattr(event, "duration_ms", 0.0),
-                            })
-                        elif event.event_type in ("failed", "error", "killed", "timeout"):
-                            self.notify("subagent/failed", {
-                                "session_id": session_id,
-                                "agent_id": event.agent_id,
-                                "role": event.role,
-                                "error": event.detail or "Subagent execution failed",
-                                "duration_ms": getattr(event, "duration_ms", 0.0),
-                            })
-                        self.notify("subagent/progress", {
-                            "session_id": session_id,
-                            "agent_id": event.agent_id,
-                            "role": event.role,
-                            "status": event.status,
-                            "event_type": event.event_type,
-                            "tool_id": event.tool_id,
-                            "delta_text": event.delta_text,
-                            "tool_name": event.tool_name,
-                            "tool_args": event.tool_args,
-                            "tool_result": event.tool_result,
-                            "detail": event.detail,
-                            "model": event.model,
-                            "provider": event.provider,
-                            "task": event.task,
-                            "duration_ms": getattr(event, "duration_ms", 0.0),
-                        })
-                    elif isinstance(event, SubAgentDone):
-                        self.notify("subagent/done", {
-                            "session_id": session_id,
-                            "agent_id": event.agent_id,
-                            "role": event.role,
-                            "result": event.result,
-                            "token_usage": event.token_usage,
-                            "duration_ms": event.duration_ms,
-                        })
-                    elif isinstance(event, SubAgentFailed):
-                        self.notify("subagent/failed", {
-                            "session_id": session_id,
-                            "agent_id": event.agent_id,
-                            "role": event.role,
-                            "error": event.error,
-                        })
                     elif isinstance(event, Done):
                         if event.outcome != "success":
                             agent.input_queue.pause()
@@ -1697,6 +1879,8 @@ class JsonRpcHandler:
                             "cost_usd": getattr(session, "cost_usd", 0.0),
                             "turn_files": turn_files,
                         })
+                    else:
+                        self._forward_agent_event(session_id, session, agent, event)
 
                 if len(session.messages) <= 3 and (session.name in ("new-session", "Main Session") or session.name.startswith("Session ") or session.name.startswith("session-")):
                     try:
@@ -1782,6 +1966,7 @@ class JsonRpcHandler:
                         turn_checkpoint["after_hash"] = await asyncio.to_thread(create_pre_edit_snapshot, Path(session.project_path))
                     session.save()
                 self._active_agents.pop(session_id, None)
+                self._report_background_run(session)
 
         task = asyncio.create_task(_run_stream())
         self._running_tasks[session_id] = task
@@ -1816,6 +2001,12 @@ class JsonRpcHandler:
             for p in ["openrouter", "anthropic", "openai", "google", "deepseek", "groq", "nvidia", "ollama"]:
                 if p not in candidates:
                     candidates.append(p)
+            from andromity.core import network_policy
+            from andromity.core.connections import _effective_base_url
+            if network_policy.enabled():
+                # Never fall back to a cloud provider; keep only connections air-gap mode allows.
+                candidates = [p for p in candidates
+                              if network_policy.url_allowed(_effective_base_url(p, config.get_provider_config(p) or {}))]
             for p in candidates:
                 if config.get_provider_config(p) and p in (preferred_prov, default_prov):
                     return p, config.get_api_key(p)
@@ -1992,7 +2183,10 @@ class JsonRpcHandler:
         question_id = params.get("question_id")
         session_id = params.get("session_id")
         answers = params.get("answers") or params.get("answer") or ""
-        if isinstance(answers, (dict, list)):
+        if params.get("dismissed"):
+            from andromity.tui.overlays.questions import QUESTIONS_DISMISSED
+            answer_str = QUESTIONS_DISMISSED
+        elif isinstance(answers, (dict, list)):
             answer_str = json.dumps(answers)
         else:
             answer_str = str(answers)
@@ -2017,6 +2211,10 @@ class JsonRpcHandler:
         if not session_id:
             raise ValueError("session_id is required")
         self._inputs(session_id).pause()
+
+        # A running command would otherwise keep the turn waiting until it finished on its own.
+        from andromity.core.tools import stop_session_commands
+        await asyncio.to_thread(stop_session_commands, session_id)
 
         cancelled = False
         if session_id in self._active_agents:
@@ -2076,12 +2274,49 @@ class JsonRpcHandler:
             "max_file_size_kb": config.get("advanced", "max_file_size_kb", 500),
             "sound_done": config.get("default", "sound_done", True),
             "sound_attention": config.get("default", "sound_attention", True),
+            "next_step_suggestions": config.get("default", "next_step_suggestions", True),
             "telemetry": config.get("default", "telemetry", True),
+            "airgap": self._airgap_summary(),
             "include_co_author": config.get("default", "include_co_author", True),
             "include_assisted_by": config.get("default", "include_assisted_by", False),
             "is_trusted": config.is_trusted(params.get("project_path") or str(Path.cwd())) if params else False,
             "pinned_models": config.get_pinned_models(),
         }
+
+    def _airgap_summary(self) -> Dict[str, Any]:
+        from andromity.core import network_policy
+        info = network_policy.status()
+        return {"enabled": info["enabled"], "sources": info["sources"],
+                "allowed_hosts": info["allowed_hosts"], "ignored_hosts": info["ignored_hosts"],
+                "blocked_count": len(info["blocked"])}
+
+    def _watch_airgap_blocks(self) -> None:
+        """Forward blocked attempts to the client, at most once per target every 10 seconds."""
+        from andromity.core import airgap_guard
+        last_sent: Dict[str, float] = {}
+
+        def on_block(entry: Dict[str, Any]) -> None:
+            now = time.time()
+            if now - last_sent.get(entry["target"], 0) < 10:
+                return
+            last_sent[entry["target"]] = now
+            self.notify("airgap/blocked", dict(entry))
+
+        airgap_guard.add_listener(on_block)
+
+    async def rpc_airgap_status(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        from andromity.core import network_policy
+        return network_policy.status()
+
+    async def rpc_airgap_self_test(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Try each kind of outbound access and report what stopped it. Runs only while air-gap
+        mode is on, so it can never make a real connection."""
+        from andromity.core import network_policy
+        from andromity.core.airgap_selftest import run_self_test
+        if not network_policy.enabled():
+            return {"enabled": False, "checks": []}
+        checks = await run_self_test()
+        return {"enabled": True, "checks": checks, "passed": all(c["ok"] for c in checks)}
 
     async def rpc_profiles_list(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         from andromity.core.profiles import PROFILES
@@ -2145,7 +2380,7 @@ class JsonRpcHandler:
                     elif tool_name.startswith("mcp__"):
                         if mcp_tool_may_change(tool_name):
                             continue
-                    elif tool_name not in READ_ONLY_TOOLS | SESSION_DRIVING_TOOLS | {"shell_kill", "spawn_subagent", "web_search"}:
+                    elif collab_action(tool_name, args) not in READ_ONLY_TOOLS | SESSION_DRIVING_TOOLS | {"shell_kill", "spawn_subagent", "web_search"}:
                         continue
                 if not fut.done():
                     fut.set_result(True)
@@ -2762,66 +2997,67 @@ class JsonRpcHandler:
         if not full.resolve().is_relative_to(project):
             raise ValueError("Choose a file inside the trusted workspace.")
 
+    def _cron_project_path(self, params: Dict[str, Any], required: bool = True) -> Optional[str]:
+        """The workspace folder a cron call targets. Never falls back to the daemon's cwd,
+        which is the editor's install folder when VS Code has no folder open."""
+        from andromity.core.cron import project_folder_problem
+        raw = params.get("project_path")
+        problem = project_folder_problem(raw)
+        if problem:
+            if required:
+                raise ValueError(problem)
+            return None
+        return str(Path(raw).resolve())
+
     def _get_or_create_cron_scheduler(self, project_path: str):
         if project_path not in self._cron_schedulers:
             from andromity.core.cron import CronScheduler
-            scheduler = CronScheduler(
-                project_path,
-                on_trigger=lambda job: asyncio.create_task(self._execute_cron_job(project_path, job, is_manual=False))
-            )
+
+            def _on_trigger(job):
+                self._spawn_cron_task(project_path, job, is_manual=False)
+
+            scheduler = CronScheduler(project_path, on_trigger=_on_trigger)
             scheduler.start()
             self._cron_schedulers[project_path] = scheduler
         return self._cron_schedulers[project_path]
 
-    def _make_cron_approval(self, cron_job):
-        async def _approval(tool_name: str, args: dict) -> bool:
+    def _spawn_cron_task(self, project_path: str, job, is_manual: bool):
+        task = asyncio.create_task(self._execute_cron_job(project_path, job, is_manual=is_manual))
+        self._cron_tasks.add(task)
+        task.add_done_callback(self._cron_tasks.discard)
+
+    def _make_cron_approval(self, cron_job, collector=None):
+        async def _approval(tool_name: str, args: dict):
+            from andromity.core.cron import cron_tool_decision
             cron_proj = getattr(cron_job, "project_path", None)
-            if cron_proj and not config.is_trusted(cron_proj):
-                if tool_name in ("write_file", "edit_file", "edit_file_multi", "shell_exec", "shell_bg", "shell_kill", "spawn_subagent"):
-                    return False
-            if cron_job.mode == "yolo":
+            trusted = not cron_proj or config.is_trusted(cron_proj)
+            approved, reason = cron_tool_decision(
+                cron_job, tool_name, args, trusted, config.get("default", "allowed_commands", [])
+            )
+            if approved:
                 return True
-            from andromity.core.security import is_sensitive_path
-            target_path = str(args.get("path", "") or args.get("target_path", "") or args.get("target_file", "") or args.get("file_path", ""))
-            if target_path and is_sensitive_path(target_path):
-                return False
-            if tool_name in ("shell_exec", "shell_bg"):
-                from andromity.core.security import is_command_allowlisted
-                command = str(args.get("command", "")).strip()
-                allowed = cron_job.allowed_commands or config.get("default", "allowed_commands", [])
-                return is_command_allowlisted(command, allowed)
-            if tool_name in ("write_file", "edit_file", "edit_file_multi", "shell_kill", "spawn_subagent") and cron_job.mode == "safe":
-                return False
-            return True
+            if collector is not None:
+                collector.note_blocked(tool_name, args)
+            return (False, reason)
         return _approval
 
     async def _execute_cron_job(self, project_path: str, job, is_manual: bool = False) -> Dict[str, Any]:
-        from andromity.core.cron import CronStore, CronRunStore, CronRun
-        from andromity.core.events import TextDelta, ToolCallStart, ToolResult
+        from andromity.core.cron import (
+            CronRun, CronRunCollector, build_unattended_prompt, friendly_error, project_folder_problem,
+        )
         from datetime import datetime, timezone
         import time
 
-        run_store = CronRunStore(project_path)
-        store = CronStore(project_path)
-
-        cron_session = Session(
-            session_id=f"cron-{job.id}-{int(time.time())}",
-            name=f"Cron: {job.name}",
-            project_path=project_path,
-        )
-
-        run = CronRun(
-            id=str(uuid.uuid4())[:12],
-            job_id=job.id,
-            job_name=job.name,
-            started_at=datetime.now(timezone.utc).isoformat(),
-            prompt=job.prompt,
-            model=job.model,
-            provider=job.provider,
-            session_id=cron_session.id,
-            status="running",
-        )
-        run_store.save_run(run)
+        scheduler = self._get_or_create_cron_scheduler(project_path)
+        session_id = f"cron-{job.id}-{int(time.time())}"
+        run = scheduler.start_run(job.id, job.prompt, job.model, job.provider, session_id=session_id)
+        if run is None:
+            run = CronRun(
+                id=str(uuid.uuid4())[:12], job_id=job.id, job_name=job.name,
+                started_at=datetime.now(timezone.utc).isoformat(), prompt=job.prompt,
+                model=job.model, provider=job.provider, session_id=session_id,
+                trigger="manual" if is_manual else "schedule",
+            )
         self.notify("cron/run_started", {"job_id": job.id, "run": run.to_dict()})
 
         # Telemetry: track real scheduled execution vs seed preset execution
@@ -2835,102 +3071,150 @@ class JsonRpcHandler:
         except Exception:
             pass
 
-        # ── Trust Governance Gate ──────────────────────────────────────────────
-        if project_path and not config.is_trusted(project_path):
-            error_msg = f"Workspace folder is untrusted. Trust this workspace in Andromity to allow autonomous cron runs."
-            run.status = "failed"
-            run.error = error_msg
-            run.finished_at = datetime.now(timezone.utc).isoformat()
-            run_store.save_run(run)
-            self.notify("cron/run_completed", {"job_id": job.id, "run": run.to_dict(), "job": job.to_dict()})
+        def _finish(status: str, error: Optional[str], error_type: Optional[str]) -> Dict[str, Any]:
+            updated = scheduler.finish_run(job.id, run, status, error, error_type)
+            self.notify("cron/run_completed", {
+                "job_id": job.id,
+                "run": run.to_dict(),
+                "job": (updated or job).summary(),
+            })
             return run.to_dict()
 
+        # ── Trust Governance Gate ──────────────────────────────────────────────
+        problem = project_folder_problem(project_path)
+        if problem:
+            run.session_id = None
+            return _finish("skipped", problem, "folder")
+        if not config.is_trusted(project_path):
+            run.session_id = None
+            return _finish("skipped", friendly_error("untrusted", "Trust this workspace in Andromity, then resume the job."), "untrusted")
+
+        cron_session = Session(
+            session_id=session_id,
+            name=f"Cron: {job.name}",
+            project_path=project_path,
+        )
+        # The chat view shows the mode and profile the run really uses, not the user's defaults.
+        cron_session.permission_mode = (job.mode or "safe").lower()
+        cron_session.profile = "builder"
+        # Opening the run's session while it runs must show this live object, not a stale DB snapshot.
+        self._cron_live_sessions[cron_session.id] = cron_session
+        current = asyncio.current_task()
+        if current is not None:
+            # Lets Stop in an open chat cancel the run like a normal turn.
+            self._running_tasks[cron_session.id] = current
+        collector = CronRunCollector()
         agent = Agent(
             session=cron_session,
             profile="builder",
             auto_approve=False,
-            on_tool_approval=self._make_cron_approval(job),
+            on_tool_approval=self._make_cron_approval(job, collector),
             reasoning_effort="medium",
             provider=job.provider,
             model=job.model,
         )
-
-        accumulated_text = []
-        tools_used = []
-        tool_executions = []
-        active_tool_calls: dict = {}  # tool_id -> tool_name
-        start_time = time.time()
-        error_msg = None
-
+        prompt = build_unattended_prompt(job, config.get("default", "allowed_commands", []))
+        timeout = job.timeout_seconds if (getattr(job, "timeout_seconds", 0) or 0) > 0 else 600
+        exc: Optional[BaseException] = None
+        timed_out = False
         try:
-            timeout = job.timeout_seconds if (hasattr(job, "timeout_seconds") and job.timeout_seconds > 0) else 600
+            cron_session.set_status("running")
+        except Exception:
+            pass
+        self.notify("agent/started", {
+            "session_id": session_id,
+            "prompt": prompt,
+            "turn_index": 0,
+            "input_id": None,
+            "image_uris": [],
+            "scheduled": True,
+            "cron_job_id": job.id,
+        })
+        try:
             async with asyncio.timeout(timeout):
-                async for event in agent.run(job.prompt):
-                    if isinstance(event, TextDelta):
-                        accumulated_text.append(event.text)
-                    elif isinstance(event, ToolCallStart):
-                        tools_used.append(event.tool_name)
-                        active_tool_calls[event.tool_id] = event.tool_name
-                    elif isinstance(event, ToolResult):
-                        tool_name = active_tool_calls.pop(event.tool_id, "tool")
-                        res_str = str(event.result)[:1000] if event.result is not None else ""
-                        tool_executions.append({
-                            "tool_name": tool_name,
-                            "result": res_str,
-                            "success": "[Rejected by User]" not in res_str,
-                        })
-        except asyncio.TimeoutError:
-            error_msg = f"Execution timed out after {job.timeout_seconds}s"
+                async for event in agent.run(prompt):
+                    collector.feed(event)
+                    self._forward_agent_event(session_id, cron_session, agent, event)
+        except TimeoutError:
+            timed_out = True
+        except asyncio.CancelledError:
+            self._finish_cron_session(cron_session, "cancelled")
+            try:
+                self.notify("agent/cancelled", self._cron_turn_totals(cron_session))
+                _finish("interrupted", "The run was stopped before it finished.", None)
+            except Exception:
+                pass
+            raise
         except Exception as e:
-            error_msg = str(e)
+            exc = e
             log.exception("Cron run error for '%s': %s", job.name, e)
 
-        finished_at = datetime.now(timezone.utc).isoformat()
-        duration_ms = int((time.time() - start_time) * 1000)
-        full_output = "".join(accumulated_text).strip()
+        status, error, error_type = collector.outcome(exc, timed_out, timeout, job.provider, job.model)
+        ended_with_error = exc is not None or timed_out
+        self._finish_cron_session(cron_session, "error" if ended_with_error else "idle")
+        if ended_with_error:
+            self.notify("agent/error", {"session_id": session_id, "error": error, "scheduled": True})
+        else:
+            self.notify("agent/done", {
+                **self._cron_turn_totals(cron_session),
+                "usage": None,
+                "outcome": "error" if status == "failed" else "success",
+                "scheduled": True,
+                "cron_status": status,
+            })
 
+        full_output = collector.output
+        run.output = full_output
+        run.output_preview = (full_output[:300] + "…") if len(full_output) > 300 else (full_output or (error or "Job completed with no text output."))
+        run.tools_used = list(dict.fromkeys(collector.tools_used))
+        run.tool_executions = collector.tool_executions
+        run.files_modified = collector.files_modified
+        run.blocked_tools = collector.blocked
+        run.cost_usd = getattr(cron_session, "cost_usd", 0.0) or 0.0
+        run.session_id = cron_session.id
+        return _finish(status, error, error_type)
+
+    @staticmethod
+    def _cron_turn_totals(cron_session) -> Dict[str, Any]:
+        return {
+            "session_id": cron_session.id,
+            "token_total": getattr(cron_session, "token_total", 0),
+            "context_tokens": getattr(cron_session, "context_tokens", 0),
+            "cost_usd": getattr(cron_session, "cost_usd", 0.0),
+        }
+
+    def _finish_cron_session(self, cron_session, status: str = "idle"):
+        """End a scheduled run's live state before its finish signal goes out, so a chat
+        that reloads on that signal sees the run as finished and can continue it."""
+        self._cron_live_sessions.pop(cron_session.id, None)
+        task = self._running_tasks.get(cron_session.id)
+        if task is asyncio.current_task():
+            self._running_tasks.pop(cron_session.id, None)
+        try:
+            cron_session.set_status(status)
+        except Exception:
+            pass
         try:
             cron_session.flush()
         except Exception:
             pass
+        self.notify("session/updated", {"session_id": cron_session.id, "status": status})
 
-        run.finished_at = finished_at
-        run.duration_ms = duration_ms
-        run.output = full_output
-        run.output_preview = (full_output[:300] + "…") if len(full_output) > 300 else (full_output or ("Job completed successfully with no text output." if not error_msg else f"Failed: {error_msg}"))
-        run.tools_used = list(dict.fromkeys(tools_used))
-        run.tool_executions = tool_executions
-        run.status = "success" if not error_msg else ("timeout" if "timed out" in str(error_msg).lower() else "failed")
-        run.error = error_msg
-        run.cost_usd = cron_session.cost_usd if hasattr(cron_session, "cost_usd") else 0.0
-        run.session_id = cron_session.id
-
-        run_store.save_run(run)
-
-        # Update and persist cron status
-        crons = store.load()
-        for c in crons:
-            if c.id == job.id:
-                c.mark_run(success=(error_msg is None), error=error_msg)
-                job = c
-                break
-        store.save(crons)
-
-        # Also update in-memory scheduler crons
-        if project_path in self._cron_schedulers:
-            self._cron_schedulers[project_path]._crons = crons
-
-        self.notify("cron/run_completed", {
-            "job_id": job.id,
-            "run": run.to_dict(),
-            "job": job.to_dict(),
-        })
-
-        return run.to_dict()
+    def _cron_job_payload(self, scheduler, job) -> Dict[str, Any]:
+        jd = job.summary()
+        try:
+            latest_runs = scheduler.list_runs(job.id, limit=1)
+            if latest_runs and latest_runs[0].session_id:
+                jd["latest_session_id"] = latest_runs[0].session_id
+        except Exception:
+            pass
+        return jd
 
     async def rpc_cron_list(self, params: Dict[str, Any]) -> List[Dict[str, Any]]:
         """List all scheduled cron jobs for the project, seeding smart default presets if empty."""
-        project_path = params.get("project_path") or os.getcwd()
+        project_path = self._cron_project_path(params, required=False)
+        if project_path is None:
+            return []
         scheduler = self._get_or_create_cron_scheduler(project_path)
         jobs = scheduler.list()
 
@@ -2952,7 +3236,8 @@ class JsonRpcHandler:
                 },
             ]
             for preset in default_presets:
-                created = scheduler.add(
+                # Seeded presets stay paused so the user reviews and enables them explicitly
+                scheduler.add(
                     name=preset["name"],
                     prompt=preset["prompt"],
                     schedule=preset["schedule"],
@@ -2960,59 +3245,33 @@ class JsonRpcHandler:
                     model=config.get("default", "model", "claude-sonnet-4-6"),
                     mode=preset["mode"],
                     allowed_commands=preset.get("allowed_commands", []),
+                    enabled=False,
                 )
-                # Keep newly seeded presets paused by default so user can review and enable explicitly
-                created.enabled = False
-            scheduler._store.save(scheduler._crons)
             jobs = scheduler.list()
 
-        results = []
-        for j in jobs:
-            jd = j.to_dict()
-            jd["next_run_in"] = j.next_run_in()
-            try:
-                latest_runs = scheduler.list_runs(j.id, limit=1)
-                if latest_runs and latest_runs[0].session_id:
-                    jd["latest_session_id"] = latest_runs[0].session_id
-            except Exception:
-                pass
-            results.append(jd)
-        return results
+        return [self._cron_job_payload(scheduler, j) for j in jobs]
 
     async def rpc_cron_create(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new scheduled cron job."""
-        project_path = params.get("project_path") or os.getcwd()
+        from andromity.core.cron import DEFAULT_MAX_RETRIES, normalize_job_fields
+        project_path = self._cron_project_path(params)
         scheduler = self._get_or_create_cron_scheduler(project_path)
 
-        name = params.get("name") or "Scheduled Job"
-        prompt = params.get("prompt") or ""
-        schedule = params.get("schedule") or "every 1h"
-        provider = params.get("provider") or config.get("default", "provider", "anthropic")
-        model = params.get("model") or config.get("default", "model", "claude-sonnet-4-6")
-        mode = params.get("mode") or "trust"
-        allowed_raw = params.get("allowed_commands", "")
-        if isinstance(allowed_raw, str):
-            allowed_cmds = [c.strip() for c in allowed_raw.split(",") if c.strip()]
-        elif isinstance(allowed_raw, list):
-            allowed_cmds = allowed_raw
-        else:
-            allowed_cmds = []
-        on_failure = params.get("on_failure", "notify")
-        timeout_seconds = int(params.get("timeout_seconds", 600))
-
-        job = scheduler.add(
-            name=name,
-            prompt=prompt,
-            schedule=schedule,
-            provider=provider,
-            model=model,
-            mode=mode,
-            allowed_commands=allowed_cmds,
-            on_failure=on_failure,
-            timeout_seconds=timeout_seconds,
-        )
-        jd = job.to_dict()
-        jd["next_run_in"] = job.next_run_in()
+        fields = normalize_job_fields({
+            "name": params.get("name") or "Scheduled Job",
+            "prompt": params.get("prompt") or "",
+            "schedule": params.get("schedule") or "every 1h",
+            "provider": params.get("provider") or config.get("default", "provider", "anthropic"),
+            "model": params.get("model") or config.get("default", "model", "claude-sonnet-4-6"),
+            "mode": params.get("mode") or "trust",
+            "allowed_commands": params.get("allowed_commands", ""),
+            "on_failure": params.get("on_failure") or "notify",
+            "timeout_seconds": params.get("timeout_seconds", 600),
+            "catch_up": params.get("catch_up") or "once",
+            "max_retries": params.get("max_retries", DEFAULT_MAX_RETRIES),
+            "notify": params.get("notify") or "failures",
+        })
+        job = scheduler.add(enabled=params.get("enabled", True) is not False, **fields)
 
         # Telemetry: real custom cron created by user
         try:
@@ -3021,18 +3280,54 @@ class JsonRpcHandler:
         except Exception:
             pass
 
-        return jd
+        if params.get("run_now"):
+            claimed = scheduler.claim(job.id, trigger="manual")
+            if claimed is not None:
+                self._spawn_cron_task(project_path, claimed, is_manual=True)
 
-    async def rpc_cron_toggle(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Toggle active/paused state of a scheduled cron job."""
-        project_path = params.get("project_path") or os.getcwd()
+        return self._cron_job_payload(scheduler, scheduler.get(job.id) or job)
+
+    async def rpc_cron_update(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Edit a scheduled job in place, keeping its id and run history."""
+        project_path = self._cron_project_path(params)
         scheduler = self._get_or_create_cron_scheduler(project_path)
         job_id = params.get("id")
         if not job_id:
             raise ValueError("Missing cron job id")
-        
-        job = next((c for c in scheduler.list() if c.id == job_id), None)
-        enabled = scheduler.toggle(job_id)
+        changes = params.get("changes") if isinstance(params.get("changes"), dict) else params
+        job = scheduler.update(job_id, changes)
+        if changes.get("enabled") is not None and bool(changes["enabled"]) != job.enabled:
+            scheduler.set_enabled(job_id, bool(changes["enabled"]))
+        return self._cron_job_payload(scheduler, scheduler.get(job_id) or job)
+
+    async def rpc_cron_preview(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate a schedule and return its description and next run times."""
+        from andromity.core.cron import preview_schedule
+        count = int(params.get("count", 5) or 5)
+        return preview_schedule(str(params.get("schedule") or ""), count=count)
+
+    async def rpc_cron_duplicate(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Copy a job (paused) so it can be edited into a new one."""
+        project_path = self._cron_project_path(params)
+        scheduler = self._get_or_create_cron_scheduler(project_path)
+        job_id = params.get("id")
+        if not job_id:
+            raise ValueError("Missing cron job id")
+        return self._cron_job_payload(scheduler, scheduler.duplicate(job_id))
+
+    async def rpc_cron_toggle(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Toggle active/paused state of a scheduled cron job."""
+        project_path = self._cron_project_path(params)
+        scheduler = self._get_or_create_cron_scheduler(project_path)
+        job_id = params.get("id")
+        if not job_id:
+            raise ValueError("Missing cron job id")
+
+        job = scheduler.get(job_id)
+        if params.get("enabled") is not None:
+            enabled = scheduler.set_enabled(job_id, bool(params["enabled"]))
+        else:
+            enabled = scheduler.toggle(job_id)
 
         # Telemetry: differentiate seed vs custom cron toggle
         try:
@@ -3046,7 +3341,7 @@ class JsonRpcHandler:
 
     async def rpc_cron_delete(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Delete a scheduled cron job."""
-        project_path = params.get("project_path") or os.getcwd()
+        project_path = self._cron_project_path(params)
         scheduler = self._get_or_create_cron_scheduler(project_path)
         job_id = params.get("id")
         if not job_id:
@@ -3056,21 +3351,22 @@ class JsonRpcHandler:
 
     async def rpc_cron_run_now(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Trigger immediate execution of a scheduled cron job."""
-        project_path = params.get("project_path") or os.getcwd()
+        project_path = self._cron_project_path(params)
         scheduler = self._get_or_create_cron_scheduler(project_path)
         job_id = params.get("id")
         if not job_id:
             raise ValueError("Missing cron job id")
-        job = next((c for c in scheduler.list() if c.id == job_id), None)
-        if not job:
+        if scheduler.get(job_id) is None:
             raise ValueError(f"Cron job {job_id} not found")
-
-        asyncio.create_task(self._execute_cron_job(project_path, job, is_manual=True))
+        job = scheduler.claim(job_id, trigger="manual")
+        if job is None:
+            raise ValueError("This job is already running. Wait for the current run to finish.")
+        self._spawn_cron_task(project_path, job, is_manual=True)
         return {"id": job_id, "triggered": True}
 
     async def rpc_cron_runs(self, params: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Fetch execution run history for a cron job."""
-        project_path = params.get("project_path") or os.getcwd()
+        project_path = self._cron_project_path(params)
         scheduler = self._get_or_create_cron_scheduler(project_path)
         job_id = params.get("id")
         limit = int(params.get("limit", 50))

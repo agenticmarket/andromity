@@ -305,6 +305,10 @@ def discover_model_reasoning_capability(provider: str, model: str) -> ReasoningC
     cap = get_model_reasoning_capability(provider, model)
     if cap.mode != ReasoningMode.UNKNOWN and provider != "anthropic":
         return cap
+    from andromity.core import network_policy
+    if network_policy.enabled():
+        # Discovery reads provider docs and APIs on the internet; use what is known locally.
+        return cap
     with _LOCK:
         cached = _DISCOVERED.get((provider, model))
         if cached and time.monotonic() - cached[0] < (60 if cached[1].mode == ReasoningMode.UNKNOWN else _TTL):

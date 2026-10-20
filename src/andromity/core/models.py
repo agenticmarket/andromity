@@ -387,6 +387,9 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
     import urllib.error
 
     def _get(url: str, headers: dict, timeout: float = 4.0) -> dict | None:
+        from andromity.core import network_policy
+        if not network_policy.url_allowed(url):
+            return None
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Andromity/1.0", **headers})
             with urllib.request.urlopen(req, timeout=timeout) as resp:

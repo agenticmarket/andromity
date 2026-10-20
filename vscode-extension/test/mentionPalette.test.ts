@@ -18,10 +18,11 @@ describe("@ mention palette", () => {
     const palette = { style: { display: "none" } };
     const list = { innerHTML: "" };
     const context = vm.createContext({
-      mentionPalette: palette, mentionPaletteList: list, hideSlashPalette() {},
+      mentionPalette: palette, mentionPaletteList: list, hideSlashPalette() {}, promptInput: null,
       currentMentionMatches: ["stale"], activeMentionIdx: 3,
     });
-    vm.runInContext(between("    function showMentionEmptyState()", "    function hideMentionPalette()") +
+    vm.runInContext(between("    function syncPaletteA11y(", "    function showSlashPalette(") +
+      between("    function showMentionEmptyState()", "    function hideMentionPalette()") +
       "\nshowMentionEmptyState(); this.matches = currentMentionMatches;", context);
     assert.equal(palette.style.display, "flex");
     assert.match(list.innerHTML, /No skills installed yet/);

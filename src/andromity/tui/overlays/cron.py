@@ -27,7 +27,9 @@ from textual.screen import ModalScreen
 from textual.widgets import Static, Button, Input, Collapsible
 from textual import events, on
 
-from andromity.core.cron import CronJob, CronRun, CronScheduler, parse_interval_seconds
+from andromity.core.cron import (
+    CronJob, CronRun, CronScheduler, describe_schedule, normalize_job_fields, parse_interval_seconds, preview_schedule,
+)
 from andromity.tui.markup_utils import escape_textual as escape
 
 
@@ -47,6 +49,12 @@ def parse_quick_add(text: str) -> tuple[str, str]:
     parse_interval_seconds(schedule)
     return schedule, prompt
 
+
+STATUS_ICONS = {
+    "never": ("○", "dim"), "running": ("⟳", "cyan"), "success": ("✓", "green"),
+    "needs_attention": ("!", "yellow"), "failed": ("✗", "red"), "timeout": ("⏱", "yellow"),
+    "interrupted": ("⚡", "dim red"), "skipped": ("↷", "dim"), "missed": ("↷", "dim"),
+}
 
 TEMPLATES = {
     "tpl-tests":   {"name": "Run Tests",     "prompt": "Run the project test suite and report any failures or regressions.", "schedule": "every 30m", "mode": "trust"},
@@ -450,9 +458,15 @@ CronManagerOverlay {
 
     def _running_ids(self) -> set:
         try:
-            return set(getattr(self.app, "_cron_running_jobs", set()))
+            ids = set(getattr(self.app, "_cron_running_jobs", set()))
         except Exception:
-            return set()
+            ids = set()
+        try:
+            # Jobs claimed by another Andromity window (VS Code or a second terminal) also count.
+            ids |= {c.id for c in self._scheduler.list() if c.is_running()}
+        except Exception:
+            pass
+        return ids
 
     def _update_title(self):
         try:
@@ -562,34 +576,36 @@ CronManagerOverlay {
     def _render_row(self, cron: CronJob, running_ids: set) -> Static:
         running = cron.id in running_ids
         name_color = "green" if cron.enabled else "dim"
-        status_icon = {"never": "○", "success": "✓", "failed": "✗", "timeout": "⏱", "interrupted": "⚡"}.get(cron.last_status, "○")
-        status_color = {"never": "dim", "success": "green", "failed": "red", "timeout": "yellow", "interrupted": "dim red"}.get(cron.last_status, "dim")
+        status_icon, status_color = STATUS_ICONS.get(cron.last_status, ("○", "dim"))
 
+        schedule_text = describe_schedule(cron.schedule)
         if running:
             head = (f"[cyan]⟳[/] [{name_color} bold]{escape(cron.name)}[/]  "
-                    f"[dim]{escape(cron.schedule)}[/]  [cyan]running…[/]")
+                    f"[dim]{escape(schedule_text)}[/]  [cyan]running…[/]")
         else:
-            next_run = cron.next_run_in() if cron.enabled else "disabled"
+            next_run = cron.next_run_in() if cron.enabled else "paused"
             head = (f"[{status_color}]{status_icon}[/] [{name_color} bold]{escape(cron.name)}[/]  "
-                    f"[dim]{escape(cron.schedule)}[/]  [dim]next: {next_run}[/]")
+                    f"[dim]{escape(schedule_text)}[/]  [dim]next: {next_run}[/]")
 
         prompt_line = f"[dim]{escape(cron.prompt[:45])}{'…' if len(cron.prompt) > 45 else ''}[/]"
 
         meta = f"[dim]{cron.run_count} runs · {cron.fail_count} fails · {escape(cron.mode)} mode[/]"
         recent = self._scheduler.list_runs(cron.id, limit=6)
         if recent:
-            dot_map = {"running": ("⟳", "cyan"), "success": ("✓", "green"), "failed": ("✗", "red"), "timeout": ("⏱", "yellow"), "interrupted": ("⚡", "dim")}
-            dots = " ".join(f"[{c}]{s}[/{c}]" for s, c in (dot_map.get(r.status, ("○", "dim")) for r in recent))
+            dots = " ".join(f"[{c}]{s}[/{c}]" for s, c in (STATUS_ICONS.get(r.status, ("○", "dim")) for r in recent))
             meta += f" · {dots}"
-        if cron.last_error and not running:
-            meta += f"\n[red]last error:[/] {escape(cron.last_error[:60])}"
+        if cron.paused_reason and not cron.enabled:
+            meta += f"\n[yellow]paused:[/] {escape(cron.paused_reason[:80])}"
+        elif cron.last_error and not running:
+            label = "needs attention" if cron.last_status == "needs_attention" else "last error"
+            meta += f"\n[red]{label}:[/] {escape(cron.last_error[:80])}"
 
         classes = ["cron-row"]
         if cron.id == self._selected_id:
             classes.append("selected")
         if running:
             classes.append("running")
-        elif cron.last_status in ("failed", "timeout", "interrupted"):
+        elif cron.last_status in ("failed", "timeout", "interrupted", "needs_attention"):
             classes.append("failed")
 
         return Static(f"{head}\n{prompt_line}\n{meta}", classes=" ".join(classes), name=cron.id)
@@ -683,35 +699,21 @@ CronManagerOverlay {
 
     @on(Input.Changed, "#cf-schedule")
     def on_schedule_changed(self, event: Input.Changed):
-        value = event.value.strip().lower()
+        value = event.value.strip()
         hint = self.query_one("#cf-schedule-hint", Static)
         if not value:
             hint.update("")
             return
-        from andromity.core.cron import parse_daily_time, parse_exact_datetime, is_cron_expression
-        daily = parse_daily_time(value)
-        if daily:
-            h, m = daily
-            hint.update(f"[green]✓ runs daily at {h:02d}:{m:02d}[/]")
+        preview = preview_schedule(value, count=1)
+        if not preview["valid"]:
+            hint.update(f"[red]⚠ {escape(preview['error'])}[/]")
             return
-        exact = parse_exact_datetime(value)
-        if exact:
-            hint.update(f"[green]✓ runs once at {exact.strftime('%Y-%m-%d %H:%M UTC')}[/]")
-            return
-        if is_cron_expression(value):
-            hint.update(f"[green]✓ cron expression '{value}'[/]")
-            return
-        try:
-            secs = parse_interval_seconds(value)
-            if secs < 3600:
-                human = f"{secs // 60}m"
-            elif secs < 86400:
-                human = f"{secs // 3600}h"
-            else:
-                human = f"{secs // 86400}d"
-            hint.update(f"[green]✓ runs every ~{human}[/]")
-        except ValueError as e:
-            hint.update(f"[red]⚠ {escape(str(e))}[/]")
+        nxt = ""
+        if preview["next_runs"]:
+            from datetime import datetime
+            first = datetime.fromisoformat(preview["next_runs"][0]).astimezone()
+            nxt = f" · next {first.strftime('%a %d %b %H:%M')}"
+        hint.update(f"[green]✓ {escape(preview['description'])}{nxt}[/]")
 
     # ── History tab ────────────────────────────────────────────────────────
 
@@ -1036,7 +1038,7 @@ CronManagerOverlay {
         if ok:
             self.notify(f"⏱ Triggered '{cron.name}' manually.", timeout=3)
         else:
-            self.notify(f"Could not trigger '{cron.name}'.", severity="error", timeout=4)
+            self.notify(f"'{cron.name}' is already running in another Andromity window.", severity="warning", timeout=4)
         if self._active_tab == "history":
             self._refresh_history()
         else:
@@ -1115,33 +1117,27 @@ CronManagerOverlay {
         mode = self.query_one("#cf-mode", Input).value.strip().lower() or "trust"
         allowed_raw = self.query_one("#cf-allowed", Input).value.strip()
         on_failure = self.query_one("#cf-onfail", Input).value.strip().lower() or "notify"
-        try:
-            timeout_seconds = int(self.query_one("#cf-timeout", Input).value.strip() or "600")
-            timeout_seconds = max(0, timeout_seconds)
-        except ValueError:
-            timeout_seconds = 600
+        timeout_raw = self.query_one("#cf-timeout", Input).value.strip() or "600"
 
         if not name or not prompt or not schedule:
             self._form_error("Name, prompt, and schedule are required.")
             return
-        try:
-            parse_interval_seconds(schedule)
-        except ValueError as e:
-            self._form_error(str(e))
-            return
         if mode not in ("safe", "trust", "yolo"):
             self._form_error("Mode must be safe, trust, or yolo.")
             return
-
-        allowed = [c.strip() for c in allowed_raw.split(",") if c.strip()]
-        provider = config.get("default", "provider", "")
-        model = config.get("default", "model", "")
+        try:
+            fields = normalize_job_fields({
+                "name": name, "prompt": prompt, "schedule": schedule, "mode": mode,
+                "allowed_commands": allowed_raw, "on_failure": on_failure, "timeout_seconds": timeout_raw,
+            })
+        except ValueError as e:
+            self._form_error(str(e))
+            return
 
         job = self._scheduler.add(
-            name=name, prompt=prompt, schedule=schedule,
-            provider=provider, model=model,
-            mode=mode, allowed_commands=allowed, on_failure=on_failure,
-            timeout_seconds=timeout_seconds,
+            provider=config.get("default", "provider", ""),
+            model=config.get("default", "model", ""),
+            **fields,
         )
 
         for field_id in ("#cf-name", "#cf-prompt", "#cf-schedule", "#cf-allowed"):

@@ -32,6 +32,10 @@ _mcp_manager = None  # global MCPClientManager instance
 # Maps (project_key, process_id) → {"proc": Popen, "buf": deque, "cmd": str, "started": float, "session_id": str, "notified_exit": bool}
 _bg_processes: Dict[tuple, Any] = {}
 _bg_lock = threading.Lock()
+# shell_exec commands still running, by session id, so cancelling a turn can stop them.
+_fg_processes: Dict[str, set] = {}
+_fg_cancelled: set = set()
+_fg_lock = threading.Lock()
 _PROCESS_STARTED_CALLBACKS: List[Callable] = []  # callables(dict) to notify when a bg process starts
 _PROCESS_EXITED_CALLBACKS: List[Callable] = []   # callables(dict) to notify when a bg process exits
 # shell_bg watches a new process this long so a command that dies at once (wrong syntax for the
@@ -258,10 +262,10 @@ _assert_safe_path = _assert_safe_write_path
 
 def requires_workspace_trust(name: str) -> bool:
     return name not in {
-        "ask_questions", "ask_question", "list_tools", "web_search", "fetch_url",
+        "ask_questions", "ask_question", "list_tools", "web_search", "fetch_url", "suggest_next_step",
         # Reading and answering stay open; sending, asking, watching and shared-state writes can
         # wake or steer a trusted session, so they need trust like any other workspace action.
-        "session_list", "session_read_messages", "session_answer_question", "shared_state_get",
+        "session_list", "session_read_messages", "session_inbox", "session_answer_question", "shared_state_get",
     }
 
 
@@ -658,20 +662,47 @@ def get_clean_subprocess_env(extra_env: Optional[Dict[str, str]] = None) -> Dict
     ):
         env.pop(key, None)
 
-    if os.environ.get("ANDROMITY_AIRGAP") == "1":
-        env["HTTP_PROXY"] = "http://127.0.0.1:9"
-        env["HTTPS_PROXY"] = "http://127.0.0.1:9"
-        env["ALL_PROXY"] = "http://127.0.0.1:9"
-        env["NO_PROXY"] = ""
-        guard_path = str(Path(__file__).parent.resolve() / "airgap_guard.py")
-        site_dir = str(Path(__file__).parent.resolve() / "airgap_sitecustomize")
-        env["PYTHONSTARTUP"] = guard_path
-        # Prepend sitecustomize directory to PYTHONPATH
-        orig_pp = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = f"{site_dir}{os.pathsep}{orig_pp}" if orig_pp else site_dir
-
     if extra_env:
         env.update(extra_env)
+    # Applied after extra_env so an MCP server's or caller's env cannot loosen air-gap mode.
+    if os.environ.get("ANDROMITY_AIRGAP") == "1":
+        env.update(airgap_subprocess_env(env.get("PYTHONPATH", "")))
+    return env
+
+
+# A closed local port: tools that honour proxy settings fail fast instead of going out.
+_DEAD_PROXY = "http://127.0.0.1:9"
+
+
+def airgap_subprocess_env(pythonpath: str = "") -> Dict[str, str]:
+    """Environment that keeps child processes off the network in air-gap mode.
+
+    Proxy variables are a convention, not a control: curl, git (HTTPS), npm, pip, Go
+    and reqwest honour them, Node's fetch only with NODE_USE_ENV_PROXY, and programs
+    that open sockets directly ignore them. Python children also load the socket guard.
+    """
+    allowed = os.environ.get("ANDROMITY_AIRGAP_ALLOW", "")
+    no_proxy = ",".join(["localhost", "127.0.0.1", "::1", *[h.strip() for h in allowed.split(",") if h.strip()]])
+    guard_path = str(Path(__file__).parent.resolve() / "airgap_guard.py")
+    site_dir = str(Path(__file__).parent.resolve() / "airgap_sitecustomize")
+    env = {
+        "ANDROMITY_AIRGAP": "1",
+        "ANDROMITY_AIRGAP_ALLOW": allowed,
+        "PYTHONSTARTUP": guard_path,
+        "PYTHONPATH": f"{site_dir}{os.pathsep}{pythonpath}" if pythonpath else site_dir,
+        # Node 22.21+/24.5+ only honours proxy variables when asked to.
+        "NODE_USE_ENV_PROXY": "1",
+        # git over SSH ignores proxy variables; refuse it outright.
+        "GIT_SSH_COMMAND": "false",
+        "GIT_TERMINAL_PROMPT": "0",
+        "DO_NOT_TRACK": "1",
+    }
+    # curl reads lowercase http_proxy only; set both cases for every tool.
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "FTP_PROXY"):
+        env[name] = _DEAD_PROXY
+        env[name.lower()] = _DEAD_PROXY
+    env["NO_PROXY"] = no_proxy
+    env["no_proxy"] = no_proxy
     return env
 
 
@@ -750,31 +781,83 @@ def shell_exec(command: str, timeout: int = 300) -> str:
             cwd = os.getcwd()
         clean_env = get_clean_subprocess_env()
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,  # Prevent inheriting daemon stdio stream
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             errors="replace",
-            timeout=timeout,
             cwd=cwd,
             env=clean_env,             # Prevent PYTHONHOME/PYTHONPATH poisoning
             close_fds=True,            # Prevent handle inheritance
             creationflags=flags,
+            start_new_session=sys.platform != "win32",  # own process group, so the whole tree can be stopped
         )
-        output = result.stdout
-        if result.stderr:
-            output += f"\nSTDERR:\n{result.stderr}"
-        return output.strip() if output.strip() else "Command executed successfully with no output."
+    except Exception as e:
+        return f"Error executing command: {e}"
+
+    owner = getattr(get_current_session(), "id", "") or ""
+    with _fg_lock:
+        _fg_processes.setdefault(owner, set()).add(proc)
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        _kill_process_tree(proc)
+        proc.communicate()
         return (
             f"Error: Command timed out after {timeout} seconds. "
             "If you need to run a long-running process (e.g. a dev server), use "
             "shell_bg instead — it starts the process in the background and lets "
             "you read its output any time with shell_read."
         )
+    finally:
+        with _fg_lock:
+            running = _fg_processes.get(owner)
+            if running is not None:
+                running.discard(proc)
+                if not running:
+                    _fg_processes.pop(owner, None)
+            was_cancelled = proc.pid in _fg_cancelled
+            _fg_cancelled.discard(proc.pid)
+    if was_cancelled:
+        return "Stopped: the user cancelled this command before it finished."
+    output = stdout or ""
+    if stderr:
+        output += f"\nSTDERR:\n{stderr}"
+    return output.strip() if output.strip() else "Command executed successfully with no output."
+
+
+def _kill_process_tree(proc: subprocess.Popen) -> None:
+    """Stop a command and everything it started (go test, npm and friends spawn children)."""
+    if proc.poll() is not None:
+        return
+    try:
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        else:
+            import signal
+            os.killpg(proc.pid, signal.SIGKILL)
     except Exception as e:
-        return f"Error executing command: {e}"
+        log.debug("Could not stop process tree %s: %s", proc.pid, e)
+    if proc.poll() is None:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+
+def stop_session_commands(session_id: str) -> int:
+    """Stop the shell_exec commands a session is waiting on. Returns how many were stopped."""
+    with _fg_lock:
+        procs = list(_fg_processes.get(session_id or "", ()))
+        _fg_cancelled.update(p.pid for p in procs)
+    for proc in procs:
+        _kill_process_tree(proc)
+    return len(procs)
 
 
 def shell_bg(command: str, process_id: str = "") -> str:
@@ -1493,7 +1576,7 @@ def session_read_messages(max_count: int = 5) -> str:
             lines.append(
                 f"- **From {q['from_session']}** (ID: `{q['question_id']}`):\n"
                 f"  \"{q['question']}\"\n"
-                f"  *(Use session_answer_question(question_id='{q['question_id']}', answer='...') to respond)*"
+                f"  *(Answer with session_message(reply_to='{q['question_id']}', content='...'))*"
             )
 
     if messages:
@@ -1557,11 +1640,16 @@ def write_handoff_tool(
     blocked_on: Optional[List[str]] = None,
     next_steps: Optional[List[str]] = None,
     notes: str = "",
+    to_session: str = "",
 ) -> str:
     from andromity.core.handoff import write_handoff
+    from andromity.core.session_bus import SessionBus
     cur_sess = _current_session_var.get()
     proj = getattr(cur_sess, "project_path", None) if cur_sess else None
     author = cur_sess.name if cur_sess else "anonymous"
+    author_id = cur_sess.id if cur_sess else ""
+    target = (to_session or "").strip()
+    target_id = SessionBus.get_instance().resolve_session_id(target, author_id or None) if target else None
     res = write_handoff(
         phase=phase,
         from_session=author,
@@ -1571,8 +1659,17 @@ def write_handoff_tool(
         next_steps=next_steps,
         notes=notes,
         project_path=proj,
+        to_session=target if target_id else "",
+        to_session_id=target_id or "",
+        from_session_id=author_id,
     )
-    return f"Handoff document for phase '{phase}' ({status}) saved successfully:\n```json\n{json.dumps(res, indent=2)}\n```"
+    saved = f"Handoff document for phase '{phase}' ({status}) saved successfully"
+    if target and not target_id:
+        saved += (f", but no open session named '{target}' was found in this project, so none was woken. "
+                  "Other sessions can still read it with handoff(phase=...)")
+    elif target_id:
+        saved += f" and sent to '{target}'"
+    return f"{saved}:\n```json\n{json.dumps(res, indent=2)}\n```"
 
 
 def read_handoff_tool(phase: str = "") -> str:
@@ -1588,6 +1685,133 @@ def read_handoff_tool(phase: str = "") -> str:
     if not doc:
         return f"No handoff document found for phase '{phase}'."
     return json.dumps(doc, indent=2)
+
+
+def session_inbox(max_count: int = 5) -> str:
+    """The other open sessions and this session's unread messages and questions, in one call."""
+    return session_list() + "\n\n" + session_read_messages(max_count=max_count)
+
+
+# The model sees five collaboration tools. Each call stands for one single-purpose action under the
+# older tool names, which approval, trust and profile rules are written against; those names still run
+# when called directly, so saved sessions and older prompts keep working.
+COLLAB_TOOLS = {"session_message", "session_inbox", "session_watch", "shared_state", "handoff"}
+COLLAB_ACTIONS = {
+    "session_message": ("session_send_message", "session_ask_question", "session_broadcast", "session_answer_question"),
+    "session_inbox": ("session_list", "session_read_messages"),
+    "session_watch": ("session_watch",),
+    "shared_state": ("shared_state_get", "shared_state_set"),
+    "handoff": ("read_handoff", "write_handoff"),
+}
+COLLAB_ACTION_NAMES = {action for actions in COLLAB_ACTIONS.values() for action in actions}
+# How long another session counts as open after its last turn started.
+COLLAB_PEER_WINDOW_SECONDS = 30 * 60
+
+
+def collab_action(name: str, args: Optional[Dict[str, Any]] = None) -> str:
+    """The single-purpose action a collaboration call performs (other tools come back unchanged)."""
+    args = args if isinstance(args, dict) else {}
+    if name == "session_message":
+        if str(args.get("reply_to") or "").strip():
+            return "session_answer_question"
+        if str(args.get("to") or "").strip().lower() in ("all", "*"):
+            return "session_broadcast"
+        return "session_ask_question" if args.get("wait_for_answer") else "session_send_message"
+    if name == "session_inbox":
+        return "session_read_messages"
+    if name == "shared_state":
+        return "shared_state_set" if args.get("value") is not None else "shared_state_get"
+    if name == "handoff":
+        return "write_handoff" if str(args.get("status") or "").strip() else "read_handoff"
+    return name
+
+
+def expand_collab_call(name: str, args: Dict[str, Any]) -> tuple:
+    """Turn a collaboration call into the single-purpose call that runs it."""
+    action = collab_action(name, args)
+    if action == name:
+        return name, args
+    if name == "session_message":
+        content = args.get("content", "")
+        if action == "session_answer_question":
+            return action, {"question_id": str(args.get("reply_to")).strip(), "answer": content}
+        if action == "session_broadcast":
+            return action, {"content": content}
+        if action == "session_ask_question":
+            ask = {"to_session": args.get("to", ""), "question": content}
+            if args.get("timeout") is not None:
+                ask["timeout"] = args["timeout"]
+            return action, ask
+        return action, {"to_session": args.get("to", ""), "content": content}
+    if name == "session_inbox":
+        return "session_inbox", {k: v for k, v in args.items() if k == "max_count"}
+    if name == "shared_state":
+        return action, ({"key": args.get("key", ""), "value": args["value"]} if action == "shared_state_set" else {"key": args.get("key", "")})
+    if name == "handoff":
+        if action == "write_handoff":
+            keep = ("phase", "status", "produced", "blocked_on", "next_steps", "notes", "to_session")
+            return action, {k: v for k, v in args.items() if k in keep}
+        return action, {"phase": args.get("phase", "")}
+    return action, args
+
+
+def collaboration_available(session: Any) -> bool:
+    """Collaboration tools are offered only when there is someone to collaborate with."""
+    if session is None:
+        return False
+    if getattr(session, "watching_for", None):
+        return True
+    from andromity.core.session_bus import SessionBus
+    bus = SessionBus.get_instance()
+    session_id = getattr(session, "id", "")
+    if bus.get_unread_count(session_id) or bus.get_pending_questions_for(session_id):
+        return True
+    return bus.has_active_peers(session_id, getattr(session, "project_path", None), COLLAB_PEER_WINDOW_SECONDS)
+
+
+NEXT_STEP_TITLE_MAX = 60
+NEXT_STEP_PROMPT_MAX = 2000
+
+
+NEXT_STEP_MAX_OPTIONS = 3
+NEXT_STEP_QUESTION_MAX = 120
+
+
+def _parse_next_step_option(raw: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    title = " ".join(str(raw.get("title") or "").split())
+    prompt = str(raw.get("prompt") or "").strip()
+    if not title or not prompt:
+        return None
+    if len(title) > NEXT_STEP_TITLE_MAX:
+        title = title[:NEXT_STEP_TITLE_MAX - 1].rstrip() + "…"
+    return {"title": title, "prompt": prompt[:NEXT_STEP_PROMPT_MAX], "new_session": bool(raw.get("new_session", False))}
+
+
+def parse_next_step(args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The suggestion as clients show it: a question (only with several choices) and 1-3 options.
+    None when nothing in the arguments can be shown."""
+    raw_options = args.get("options")
+    options = []
+    if isinstance(raw_options, list):
+        options = [o for o in map(_parse_next_step_option, raw_options) if o][:NEXT_STEP_MAX_OPTIONS]
+    if not options:
+        single = _parse_next_step_option(args)
+        options = [single] if single else []
+    if not options:
+        return None
+    question = " ".join(str(args.get("question") or "").split())[:NEXT_STEP_QUESTION_MAX] if len(options) > 1 else ""
+    return {"question": question, "options": options}
+
+
+def suggest_next_step(title: str = "", prompt: str = "", new_session: bool = False,
+                      question: str = "", options: Optional[List[Dict[str, Any]]] = None) -> str:
+    step = parse_next_step({"title": title, "prompt": prompt, "new_session": new_session, "question": question, "options": options})
+    if not step:
+        return "Error: suggest_next_step needs a short title and the prompt to send, or 2-3 options that each have them."
+    shown = "a button" if len(step["options"]) == 1 else f"{len(step['options'])} buttons"
+    return f"Shown to the user as {shown}. Do not mention it in your reply; end your turn."
 
 
 # ── Core Tool Schemas & Tool Registry ─────────────────────────────────────────
@@ -1862,6 +2086,42 @@ CORE_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "suggest_next_step",
+            "description": (
+                "Offer the user a follow-up they can start with a click, as the last call of a turn. "
+                "Use it when your work points to an obvious next step the user would likely want (fix the bug you found, "
+                "run or add the missing tests, apply the change you proposed). Give one step with title and prompt; when the "
+                "user has a real choice to make (which fix first, approach A or B), give a short question and 2-3 options instead. "
+                "Skip it for pure questions and for work you are about to do anyway. At most once per turn. "
+                "The user sees buttons; never mention them in your reply. If you cannot continue without an answer, use ask_questions instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Imperative label, 2-6 words, e.g. 'Fix the null check in parser.py'"},
+                    "prompt": {"type": "string", "description": "The exact prompt to send if the user accepts, written as the user would ask it"},
+                    "new_session": {"type": "boolean", "description": "True only for independent work that needs none of this conversation. The prompt must then be self-contained: name the files, the problem and what done looks like."},
+                    "question": {"type": "string", "description": "With options: the choice, in one short sentence, e.g. 'Which fix first?'"},
+                    "options": {
+                        "type": "array",
+                        "description": "2-3 choices instead of title/prompt, the one you recommend first",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string", "description": "Button label, 1-4 words"},
+                                "prompt": {"type": "string", "description": "The prompt to send if chosen"},
+                                "new_session": {"type": "boolean", "description": "Run this choice in a new session (independent work only)"},
+                            },
+                            "required": ["title", "prompt"],
+                        },
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_tools",
             "description": "List available deferred tools (e.g. MCP servers) with optional search, pagination, and descriptions.",
             "parameters": {
@@ -1933,43 +2193,19 @@ CORE_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "session_send_message",
-            "description": "Send an asynchronous message to another active session in the workspace.",
+            "name": "session_message",
+            "description": (
+                "Talk to another open session in this project. Sends a message; with wait_for_answer, asks a question and "
+                "waits for the reply; with reply_to, answers a question another session asked you; to='all' tells every session."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "to_session": {"type": "string", "description": "Target session name or session ID"},
-                    "content": {"type": "string", "description": "Message content to send"},
-                },
-                "required": ["to_session", "content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "session_ask_question",
-            "description": "Ask another active session a question and wait for its answer. Use when one session needs decisions or clarifications from another.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "to_session": {"type": "string", "description": "Target session name or ID"},
-                    "question": {"type": "string", "description": "Question to ask"},
-                    "timeout": {"type": "number", "description": "Timeout in seconds (default 60s)"},
-                },
-                "required": ["to_session", "question"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "session_broadcast",
-            "description": "Broadcast an update or status change to all other active sessions on the project.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "content": {"type": "string", "description": "Announcement or update message"},
+                    "to": {"type": "string", "description": "Session name or ID, or 'all'. Not needed with reply_to."},
+                    "content": {"type": "string", "description": "The message, question or answer"},
+                    "wait_for_answer": {"type": "boolean", "description": "Ask and wait for the other session's answer"},
+                    "reply_to": {"type": "string", "description": "question_id of a question from session_inbox you are answering"},
+                    "timeout": {"type": "number", "description": "Seconds to wait for an answer (default 60)"},
                 },
                 "required": ["content"],
             },
@@ -1978,40 +2214,13 @@ CORE_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "session_list",
-            "description": "List all active agent sessions in the workspace, their registered names, IDs, and paths.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "session_read_messages",
-            "description": "Read and drain unread messages and pending questions sent to this session by other co-agents.",
+            "name": "session_inbox",
+            "description": "List the other open sessions in this project and read the messages and questions sent to this one.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "max_count": {"type": "integer", "description": "Maximum number of messages to retrieve (default 5)"},
+                    "max_count": {"type": "integer", "description": "Most messages to read (default 5)"},
                 },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "session_answer_question",
-            "description": "Answer a pending question asked by another co-agent (using the question_id from session_read_messages).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "question_id": {"type": "string", "description": "The question_id to answer"},
-                    "answer": {"type": "string", "description": "The answer payload to return to the asking session"},
-                },
-                "required": ["question_id", "answer"],
             },
         },
     },
@@ -2032,27 +2241,13 @@ CORE_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "shared_state_set",
-            "description": "Set a namespaced key-value fact on the shared state board (e.g. 'auth.endpoints', 'ui.theme', 'db.schema').",
+            "name": "shared_state",
+            "description": "Read or write a fact on the board every session in this project shares (e.g. 'auth.endpoints', 'db.schema'). Give value to write; leave it out to read a key or key prefix.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "key": {"type": "string", "description": "Namespaced key name (e.g. 'auth.jwt_secret', 'db.tables')"},
-                    "value": {"description": "Value to store (string, boolean, number, list, or dictionary)"},
-                },
-                "required": ["key", "value"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "shared_state_get",
-            "description": "Get a value or prefix snapshot from the shared state board.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "key": {"type": "string", "description": "Key or key prefix to lookup"},
+                    "key": {"type": "string", "description": "Namespaced key or key prefix"},
+                    "value": {"description": "Value to store (string, number, boolean, list or object). Omit to read."},
                 },
                 "required": ["key"],
             },
@@ -2061,31 +2256,21 @@ CORE_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "write_handoff",
-            "description": "Write a structured phase handoff document (e.g. 'authentication', 'database', 'frontend') for other sessions to consume without context bloat.",
+            "name": "handoff",
+            "description": (
+                "Share or read a structured phase handoff between sessions. Give status (and the details) to write one, "
+                "optionally to_session to wake the session that should pick it up; give only phase to read one, or phase='list'."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "phase": {"type": "string", "description": "Phase name (e.g. 'authentication', 'database_migration')"},
-                    "status": {"type": "string", "description": "Status: 'complete', 'in_progress', or 'blocked'"},
-                    "produced": {"type": "object", "description": "Dictionary of produced artifacts, endpoints, files, env vars"},
-                    "blocked_on": {"type": "array", "items": {"type": "string"}, "description": "List of blockers"},
+                    "phase": {"type": "string", "description": "Phase name (e.g. 'authentication'), or 'list' to see all"},
+                    "status": {"type": "string", "description": "To write: 'complete', 'in_progress' or 'blocked'"},
+                    "produced": {"type": "object", "description": "Produced artifacts, endpoints, files, env vars"},
+                    "blocked_on": {"type": "array", "items": {"type": "string"}, "description": "Blockers"},
                     "next_steps": {"type": "array", "items": {"type": "string"}, "description": "Suggested next steps for other sessions"},
-                    "notes": {"type": "string", "description": "Key architectural constraints or notes"},
-                },
-                "required": ["phase", "status"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_handoff",
-            "description": "Read a structured handoff document produced by another session, or list all handoffs.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "phase": {"type": "string", "description": "Phase name to read (or 'list' to see all)"},
+                    "notes": {"type": "string", "description": "Key constraints or notes"},
+                    "to_session": {"type": "string", "description": "Session name or ID to wake for this handoff"},
                 },
                 "required": ["phase"],
             },
@@ -2195,6 +2380,8 @@ def _run_coro_sync(coro):
 
 def execute_tool(name: str, args: Dict[str, Any]) -> str:
     """Execute any tool (Core, Web, Coordination, or MCP) with logging and error handling."""
+    if name in COLLAB_TOOLS:
+        name, args = expand_collab_call(name, args or {})
     if requires_workspace_trust(name) and not _is_trusted():
         return "Error: Workspace is untrusted. Use /trust to allow workspace tools."
     log.debug("TOOL CALL: %s(%s)", name, {k: (str(v)[:80] + '...' if isinstance(v, str) and len(v) > 80 else v) for k, v in args.items()})
@@ -2230,6 +2417,8 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
             res = write_plan(**args)
         elif name == "update_plan_step":
             res = update_plan_step(**args)
+        elif name == "suggest_next_step":
+            res = suggest_next_step(**{k: v for k, v in args.items() if k in ("title", "prompt", "new_session", "question", "options")})
         elif name == "list_tools":
             res = list_tools(**args)
         elif name in ("ask_questions", "ask_question"):
@@ -2248,6 +2437,8 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
             res = session_list()
         elif name == "session_read_messages":
             res = session_read_messages(**args)
+        elif name == "session_inbox":
+            res = session_inbox(**args)
         elif name == "session_answer_question":
             res = session_answer_question(**args)
         elif name == "session_watch":
@@ -2299,6 +2490,8 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
 
 async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[str] = None, timeout: Optional[float] = None) -> str:
     """Asynchronous tool execution (natively awaits MCP tools and async coordination tools, dispatches core tools)."""
+    if name in COLLAB_TOOLS:
+        name, args = expand_collab_call(name, args or {})
     if requires_workspace_trust(name) and not _is_trusted():
         return "Error: Workspace is untrusted. Use /trust to allow workspace tools."
     # Dynamically resolve effective timeout if not explicitly passed
@@ -2359,6 +2552,8 @@ async def execute_tool_async(name: str, args: Dict[str, Any], tool_id: Optional[
                 res = session_list()
             elif name == "session_read_messages":
                 res = session_read_messages(**args)
+            elif name == "session_inbox":
+                res = session_inbox(**args)
             elif name == "session_answer_question":
                 res = session_answer_question(**args)
             elif name == "session_watch":

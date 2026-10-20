@@ -4,6 +4,7 @@ import { InputBridgeMessage, InputQueueState, SessionInfo } from "./types.js";
 import { EditorBridge } from "../integrations/EditorBridge.js";
 import { clampPromptMode } from "./securityPolicy.js";
 import { recordFeatureUse } from "../telemetry/featureUsage.js";
+import { SCHEDULED_RUN_BUSY, SCHEDULED_RUN_BUSY_TEXT } from "../cronNotifications.js";
 
 // A typed slash command at the start of a prompt, e.g. "/review"; paths like "/usr/bin" do not match.
 const SLASH_COMMAND = /^\/([a-z][a-z0-9-]{1,20})(?=\s|$)/i;
@@ -70,6 +71,7 @@ export async function handleInputMessage(
     } else {
       post({ type: "input_rejected", session_id: sid, request_id: message.requestId,
         error: text.includes("Queue is full") ? "Queue is full (max 10). Remove a message or wait for delivery."
+          : text.includes(SCHEDULED_RUN_BUSY) ? SCHEDULED_RUN_BUSY_TEXT
           : "Message was not confirmed. Your draft is preserved; reconnect and retry." });
     }
   }

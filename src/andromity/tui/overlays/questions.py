@@ -189,8 +189,16 @@ def normalize_questions(raw: Any) -> List[Dict[str, Any]]:
     return normalized
 
 
+QUESTIONS_DISMISSED = (
+    "The user closed the questions without answering. Do not assume an answer: "
+    "ask in one short sentence what they would like, or stop and wait for them."
+)
+
+
 def format_question_answers(questions: Any, answers: Optional[dict]) -> str:
-    """Turn the panel's answers into the tool result text the model sees."""
+    """Turn the panel's answers into the tool result text the model sees. None means the user closed them."""
+    if answers is None:
+        return QUESTIONS_DISMISSED
     if not answers:
         return "The user did not answer the questions. Proceed with reasonable assumptions."
     if not isinstance(questions, list):
@@ -331,6 +339,8 @@ QuestionPanel.visible { display: block; }
             elif options:  # single with choices → RadioSet
                 rbs = [RadioButton(escape(opt), compact=True) for opt in options]
                 widgets_to_mount.append(RadioSet(*rbs, id=f"qp-q-{i}"))
+            if options:  # never force the user into the listed choices
+                widgets_to_mount.append(Input(placeholder="Something else…", id=f"qp-q-{i}-other", classes="qp-other"))
             else:  # text or single without options → free-text Input
                 placeholder = "Type your answer… (Ctrl+Enter to submit)"
                 widgets_to_mount.append(Input(placeholder=placeholder, id=f"qp-q-{i}"))
@@ -362,6 +372,11 @@ QuestionPanel.visible { display: block; }
         answers: Dict[str, Any] = {}
         for i in range(len(self._questions)):
             wid = f"qp-q-{i}"
+            other = ""
+            try:
+                other = self.query_one(f"#{wid}-other", Input).value.strip()
+            except Exception:
+                pass
             # Detect the actual rendered widget — don't trust qtype alone since
             # single+no-options renders as Input, not RadioSet.
             try:
@@ -375,7 +390,9 @@ QuestionPanel.visible { display: block; }
                         btn = buttons[sel]
                     elif buttons:
                         btn = buttons[0]
-                if btn is not None:
+                if other:
+                    answers[i] = other
+                elif btn is not None:
                     val = getattr(btn.label, "plain", None) or str(btn.label or "")
                     if val:
                         answers[i] = val
@@ -392,6 +409,8 @@ QuestionPanel.visible { display: block; }
                     (getattr(cb.label, "plain", None) or str(cb.label or ""))
                     for cb in all_checkboxes if cb.value
                 ]
+                if other:
+                    checked.append(other)
                 if checked:
                     answers[i] = checked
                 continue  # Checkbox container found → done with this question

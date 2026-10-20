@@ -99,6 +99,7 @@ function createMockDOM() {
         check(el);
         return res;
       },
+      querySelector: (sel: string) => el.querySelectorAll(sel)[0] || null,
       getAttribute: (attr: string) => el.dataset[attr] || el[attr] || null,
       setAttribute: (attr: string, v: string) => {
         if (attr.startsWith("data-")) el.dataset[attr.slice(5)] = v;
@@ -271,6 +272,29 @@ describe("Changes Review Webview Unit Tests", () => {
     const before = dom.postedMessages.filter(m => m.type === "get_file_diff").length;
     dom.dispatchMessage(changes);
     assert.equal(dom.postedMessages.filter(m => m.type === "get_file_diff").length, before + 1);
+  });
+
+  it("a background refresh reloads the open diff in place and says when its file has no changes anymore", () => {
+    const dom = createMockDOM();
+    vm.runInNewContext(getReviewClientScript(), { document: dom.document, window: dom.window,
+      acquireVsCodeApi: dom.acquireVsCodeApi, console });
+    const fileA = { path: "a.txt", name: "a.txt", status: "M", additions: 1, deletions: 1 };
+    const fileB = { path: "b.txt", name: "b.txt", status: "M", additions: 1, deletions: 0 };
+    dom.dispatchMessage({ type: "set_changes", branch: "main", turnFiles: null, files: [fileA, fileB] });
+    dom.dispatchMessage({ type: "set_file_diff", filePath: "a.txt", diff: "@@ -1 +1 @@\n-old\n+new\n" });
+    const container = dom.elementsById.get("diff-container");
+
+    dom.dispatchMessage({ type: "set_changes", branch: "main", turnFiles: null, files: [fileA, fileB], auto: true });
+    assert.ok(!container.innerHTML.includes("Loading diff"), "no loading flash on a background refresh");
+    assert.equal(dom.postedMessages.at(-1).type, "get_file_diff");
+    assert.equal(dom.postedMessages.at(-1).filePath, "a.txt");
+
+    dom.dispatchMessage({ type: "set_changes", branch: "main", turnFiles: null, files: [fileB], auto: true });
+    assert.ok(container.innerHTML.includes("a.txt has no changes anymore"));
+    assert.ok(!container.innerHTML.includes("b.txt"), "it does not jump to another file");
+
+    dom.dispatchMessage({ type: "set_changes", branch: "main", turnFiles: null, files: [fileB] });
+    assert.ok(!container.innerHTML.includes("no changes anymore"), "a manual refresh picks the next file as before");
   });
 
   it("shows omitted binary files as notices rather than fabricated additions", () => {

@@ -1,8 +1,12 @@
 import * as fs from "fs";
+import { airGapPillMessage, currentAirGap } from "../airgapState.js";
+import { airGapOffMessage } from "../airgap.js";
 import * as path from "path";
 import * as vscode from "vscode";
 import { DiffManager } from "../integrations/DiffManager.js";
 import { EditorBridge } from "../integrations/EditorBridge.js";
+import { runCodeBlockInTerminal } from "../integrations/TerminalRunner.js";
+import { confirmRewindAndResend, resendPromptOf } from "../integrations/rewind.js";
 import { SettingsPanel } from "../panels/SettingsPanel.js";
 import { SessionTabPanel } from "../panels/SessionTabPanel.js";
 import { WaterfallPanel } from "../panels/WaterfallPanel.js";
@@ -34,6 +38,9 @@ import { getChatViewHtml, ChatViewState } from "./chatview/chatHtml.js";
 import { PlanViewProvider } from "./PlanViewProvider.js";
 import { accountUrl } from "./accountEndpoints.js";
 import { recordFeatureUse } from "../telemetry/featureUsage.js";
+import { cronRunToast, SCHEDULED_RUN_BUSY, SCHEDULED_RUN_BUSY_TEXT } from "../cronNotifications.js";
+import { wakeSessionForQuestion } from "../collabActions.js";
+import { recordNextStepEvent } from "../nextSteps.js";
 
 export interface OllamaStatus {
   running: boolean;
@@ -104,6 +111,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public isViewVisible(): boolean {
     return !!(this._view && this._view.visible);
+  }
+
+  private _viewStateListeners: Array<() => void> = [];
+
+  /** Fires when the session in view or the chat's visibility changes. */
+  public onDidChangeViewState(listener: () => void): vscode.Disposable {
+    this._viewStateListeners.push(listener);
+    return { dispose: () => { this._viewStateListeners = this._viewStateListeners.filter((l) => l !== listener); } };
+  }
+
+  private _fireViewStateChanged() {
+    for (const listener of this._viewStateListeners || []) listener();
+  }
+
+  /** Shows or hides the Air-gap pill in every chat view. */
+  public broadcastAirGapState() {
+    this.broadcastToWebviews(airGapPillMessage());
+  }
+
+  public getSessionName(sessionId: string): string | undefined {
+    return this._sessionNames?.get(sessionId);
   }
 
   public isSoundEnabled(kind: "done" | "attention" = "done"): boolean {
@@ -450,6 +478,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     this._currentSessionId = sessionId;
+    this._fireViewStateChanged();
     if (sessionId !== this._freshSessionId) {
       this._freshSessionId = undefined;
     }
@@ -457,6 +486,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (this._view) {
       this._view.webview.postMessage({ type: "session_switched", sessionId });
       this._loadSession(sessionId);
+    }
+  }
+
+  /** "New session" on a suggested next step: runs it in a background session linked to the
+   *  one it came from, which stays open and is told when the background session finishes. */
+  public async startNextStepSession(prompt: string, title?: string, parentSessionId?: string): Promise<void> {
+    const parentId = parentSessionId || this._currentSessionId;
+    if (!this._rpcClient || !parentId) {
+      vscode.window.showWarningMessage("Andromity is still starting. Try again in a moment.");
+      return;
+    }
+    recordNextStepEvent("new_session", parentId);
+    try {
+      await this._rpcClient.call("session.startBackground", {
+        parent_session_id: parentId,
+        prompt,
+        title: title || "",
+        project_path: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+        profile: this._currentProfile,
+        model: (this._currentModel || "").replace(/^~+/, ""),
+        provider: this._currentProvider,
+        mode: this._currentMode,
+        reasoning_effort: this._currentReasoning,
+      });
+      await this.fetchAndPostSessions();
+    } catch (err) {
+      console.error("[ChatView] Could not start background session:", err);
+      vscode.window.showWarningMessage("Andromity couldn't start the new session. Try again, or use Do it to run it here.");
     }
   }
 
@@ -808,6 +865,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public async handleAuthToken(token: string, username?: string, email?: string) {
     if (!token) return;
+    if (currentAirGap().enabled) {
+      void vscode.window.showWarningMessage(airGapOffMessage("signing in to AgenticMarket"));
+      return;
+    }
     try {
       const validation = await fetch(`${this._getGatewayBaseUrl()}/v1/user/usage`, {
         headers: { Authorization: `Bearer ${token}`, "User-Agent": "Andromity" },
@@ -889,6 +950,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   public async openLogin() {
+    if (currentAirGap().enabled) {
+      void vscode.window.showWarningMessage(airGapOffMessage("signing in to AgenticMarket", "Local models work without an account."));
+      return;
+    }
     let state = "";
     try {
       const crypto = await import("crypto");
@@ -933,43 +998,46 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const gatewayUrl = this._getGatewayBaseUrl();
       let rejectedToken = false;
 
-      try {
-        const headers: Record<string, string> = {
-          "User-Agent": "Andromity",
-          "x-andromity-client-id": clientId,
-        };
-        if (token) {
-          headers["Authorization"] = `Bearer ${token}`;
-        }
-        const res = await fetch(`${gatewayUrl}/v1/user/usage`, {
-          headers,
-          signal: AbortSignal.timeout(3500),
-        });
-        if (res.status === 401 && token) {
-          rejectedToken = true;
-          await this._context?.secrets.delete("andromity.authToken");
-          await this._context?.secrets.delete("andromity.userName");
-          await this._context?.secrets.delete("andromity.userEmail");
-          this.broadcastToWebviews({
-            type: "auth_state_changed", isAuthenticated: false,
-            plan: "anonymous", username: "Anonymous",
+      // Air-gap mode: no usage lookup; the fallback below reports usage as unavailable.
+      if (!currentAirGap().enabled) {
+        try {
+          const headers: Record<string, string> = {
+            "User-Agent": "Andromity",
+            "x-andromity-client-id": clientId,
+          };
+          if (token) {
+            headers["Authorization"] = `Bearer ${token}`;
+          }
+          const res = await fetch(`${gatewayUrl}/v1/user/usage`, {
+            headers,
+            signal: AbortSignal.timeout(3500),
           });
-          await this._rpcClient?.call("auth.logout", {}).catch(() => undefined);
-          vscode.window.showWarningMessage("Your AgenticMarket session was rejected. Please sign in again.");
-        }
-        if (res.ok) {
-          const data = await res.json();
-          const effectiveUser = storedUsername || data.username || "Anonymous";
-          this._lastUsageData = data;
-          this._lastUsageFetchedAt = Date.now();
-          this.broadcastToWebviews({
-            type: "usage_updated",
-            ...data,
-            username: effectiveUser,
-          });
-          return data;
-        }
-      } catch {}
+          if (res.status === 401 && token) {
+            rejectedToken = true;
+            await this._context?.secrets.delete("andromity.authToken");
+            await this._context?.secrets.delete("andromity.userName");
+            await this._context?.secrets.delete("andromity.userEmail");
+            this.broadcastToWebviews({
+              type: "auth_state_changed", isAuthenticated: false,
+              plan: "anonymous", username: "Anonymous",
+            });
+            await this._rpcClient?.call("auth.logout", {}).catch(() => undefined);
+            vscode.window.showWarningMessage("Your AgenticMarket session was rejected. Please sign in again.");
+          }
+          if (res.ok) {
+            const data = await res.json();
+            const effectiveUser = storedUsername || data.username || "Anonymous";
+            this._lastUsageData = data;
+            this._lastUsageFetchedAt = Date.now();
+            this.broadcastToWebviews({
+              type: "usage_updated",
+              ...data,
+              username: effectiveUser,
+            });
+            return data;
+          }
+        } catch {}
+      }
 
       const isAuthed = Boolean(token) && !rejectedToken;
       const fallback = {
@@ -1146,6 +1214,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }),
       webviewView.onDidChangeVisibility(() => {
         if (webviewView.visible) this.broadcastActiveEditorContext();
+        this._fireViewStateChanged();
       }),
     ];
     webviewView.onDidDispose(() => {
@@ -1192,7 +1261,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           ? params.turn_index === 0
           : !this._waterfallAutoOpenedSessions.has(sid);
 
-        if (shouldAutoOpen && isFirstPrompt && !this._waterfallAutoOpenedSessions.has(sid)) {
+        // Scheduled runs start in the background; never pop a panel open for them.
+        if (shouldAutoOpen && isFirstPrompt && !params?.scheduled && !this._waterfallAutoOpenedSessions.has(sid)) {
           this._waterfallAutoOpenedSessions.add(sid);
           WaterfallPanel.createOrShow(
             this._extensionUri,
@@ -1275,6 +1345,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     });
 
+    bind("agent/nextStepSuggested", (params: any) => {
+      this._postToWebview({ type: "next_step_suggested", ...params });
+    });
+    bind("session/backgroundStarted", (params: any) => {
+      this._postToWebview({ type: "background_session_started", ...params });
+    });
+    bind("session/backgroundFinished", (params: any) => {
+      this._postToWebview({ type: "background_session_finished", ...params });
+      void this.fetchAndPostSessions();
+    });
+
     bind("session/updated", (params: any) => {
       if (params.session_id && params.name) {
         this._sessionNames.set(params.session_id, params.name);
@@ -1317,30 +1398,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     bind("cron/run_completed", (params: any) => {
       this.fetchAndPostCrons();
-      const jobName = params.job?.name || "Scheduled Job";
-      const status = params.run?.status || "completed";
-      const durSec = params.run?.duration_ms ? (params.run.duration_ms / 1000).toFixed(1) : "0";
+      const toast = cronRunToast(params);
+      if (!toast) return;
       const sessionId = params.run?.session_id;
-
-      if (status === "success") {
-        const msgPromise = sessionId
-          ? vscode.window.showInformationMessage(`Cron "${jobName}" completed in ${durSec}s.`, "Open Session")
-          : vscode.window.showInformationMessage(`Cron "${jobName}" completed in ${durSec}s.`);
-        msgPromise.then((choice) => {
-          if (choice === "Open Session" && sessionId) {
-            vscode.commands.executeCommand("andromity.switchSessionById", sessionId);
-          }
-        });
-      } else if (status === "failed") {
-        const msgPromise = sessionId
-          ? vscode.window.showWarningMessage(`Cron "${jobName}" failed: ${params.run?.error || "Error during execution"}`, "Open Session")
-          : vscode.window.showWarningMessage(`Cron "${jobName}" failed: ${params.run?.error || "Error during execution"}`);
-        msgPromise.then((choice) => {
-          if (choice === "Open Session" && sessionId) {
-            vscode.commands.executeCommand("andromity.switchSessionById", sessionId);
-          }
-        });
-      }
+      const show = toast.level === "info" ? vscode.window.showInformationMessage
+        : toast.level === "warning" ? vscode.window.showWarningMessage : vscode.window.showErrorMessage;
+      show(toast.text, ...toast.actions).then((choice) => {
+        if (choice === "Open Session" && sessionId) {
+          vscode.commands.executeCommand("andromity.switchSessionById", sessionId);
+        } else if (choice === "Open Cron Jobs") {
+          vscode.commands.executeCommand("andromity.openSettings", "crons");
+        }
+      });
     });
 
     bind("subagent/spawned", (params: SubAgentEvent) => {
@@ -1391,12 +1460,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       this._postToWebview({ type: "agent_done", ...params, turn_files: turnFiles });
-      if (this.isSoundEnabled("done")) {
+      // Scheduled runs report through their own cron notification instead.
+      if (this.isSoundEnabled("done") && !params?.scheduled) {
         this._postToWebview({ type: "play_sound", kind: "done" });
       }
       vscode.commands.executeCommand("andromity.refreshChanges");
 
-      if (sid && sid !== this._currentSessionId) {
+      if (sid && sid !== this._currentSessionId && !params?.scheduled) {
         const name = this._sessionNames.get(sid) || "Parallel Task";
         vscode.window.showInformationMessage(
           `Parallel task completed in session "${name}".`,
@@ -1739,6 +1809,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   public async pullOllamaModel(modelName: string) {
+    if (currentAirGap().enabled) {
+      void vscode.window.showWarningMessage(airGapOffMessage("downloading Ollama models",
+        "Copy model files in from your internal source, or run ollama pull on a connected machine."));
+      return;
+    }
     const installed = await this._checkOllamaCliInstalled();
     if (!installed) {
       vscode.window.showErrorMessage("Ollama CLI is not installed on this machine. Please install Ollama first.");
@@ -2062,6 +2137,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async _handleWebviewMessage(message: any) {
     if (message.type === "ready" || message.type === "webview_ready") {
       this._markWebviewReady();
+      this.broadcastAirGapState();
       void this.getWorkspaceIndex().then((index) => {
         this._postToWebview({ type: "workspace_files_updated", files: index.files, dirs: index.dirs });
       });
@@ -2087,6 +2163,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     if (message.type === "apply_code") {
       await EditorBridge.applySnippetToEditor(message.code, message.mode || "insert_at_cursor");
+      return;
+    }
+
+    if (message.type === "run_in_terminal") {
+      const runId = typeof message.runId === "string" ? message.runId : "";
+      await runCodeBlockInTerminal(message.code, message.lang,
+        runId ? (status) => this._postToWebview({ type: "run_status", runId, ...status }) : undefined);
       return;
     }
 
@@ -2278,7 +2361,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             session_id: activeSid,
           }).catch(() => {});
 
-          if (msg.includes("already running a turn") || msg.includes("-32603") || msg.includes("AGENT_BUSY")) {
+          if (msg.includes(SCHEDULED_RUN_BUSY)) {
+            this._postToWebview({ type: "agent_error", error: SCHEDULED_RUN_BUSY_TEXT, session_id: activeSid, scheduled_busy: true });
+          } else if (msg.includes("already running a turn") || msg.includes("-32603") || msg.includes("AGENT_BUSY")) {
             vscode.window.showInformationMessage("Agent is still working on the previous turn. Your message was queued and will send automatically when it finishes.");
             this._postToWebview({ type: "agent_busy", error: msg, queuedPrompt: promptText });
           } else if (msg.includes("RPC timeout")) {
@@ -2294,7 +2379,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
               }
             }
-            vscode.window.showErrorMessage(`Failed to send prompt: ${msg}`);
             this._postToWebview({ type: "agent_error", error: msg });
           }
         }
@@ -2944,6 +3028,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "start_next_step_session": {
+        if (message.prompt) await this.startNextStepSession(message.prompt, message.title);
+        break;
+      }
+
+      case "next_step_event": {
+        recordNextStepEvent(message.event, message.sessionId || this._currentSessionId);
+        break;
+      }
+
+      case "wake_for_question": {
+        if (message.sessionId && message.questionId) {
+          const notice = await wakeSessionForQuestion(this._rpcClient, message.sessionId, message.questionId);
+          if (notice) vscode.window.showWarningMessage(notice);
+        }
+        break;
+      }
+
       case "fetch_sessions": {
         await this.fetchAndPostSessions();
         break;
@@ -2991,8 +3093,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "delete_session": {
-        recordFeatureUse("session_deleted", { sessionId: this._currentSessionId });
         if (this._rpcClient && message.sessionId) {
+          const confirmDelete = await vscode.window.showWarningMessage(
+            `Delete session "${message.sessionName || message.sessionId}"?`,
+            { modal: true },
+            "Delete"
+          );
+          if (confirmDelete !== "Delete") break;
+          recordFeatureUse("session_deleted", { sessionId: this._currentSessionId });
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           try {
             const result = await this._rpcClient.call<{ success: boolean; error?: string }>("session.delete", {
@@ -3112,12 +3220,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "undo_turn": {
         const turnIndex = message.turnIndex;
         const turnsToUndo = message.turnsToUndo ?? (turnIndex !== undefined && message.totalTurns ? message.totalTurns - turnIndex : 1);
+        const resendPrompt = resendPromptOf(message);
+        if (resendPrompt && !(await confirmRewindAndResend(turnsToUndo))) break;
         if (this._diffManager) {
           const undone = await this._diffManager.undoLastTurn(this._currentSessionId, turnIndex, turnsToUndo);
           if (undone) {
             recordFeatureUse("turn_undone", { sessionId: this._currentSessionId });
             await this._loadSession(this._currentSessionId);
-            this._postToWebview({ type: "turn_undone", turnsUndone: turnsToUndo, targetTurnIndex: turnIndex });
+            this._postToWebview({ type: "turn_undone", turnsUndone: turnsToUndo, targetTurnIndex: turnIndex, resendPrompt });
             try {
               vscode.commands.executeCommand("git.refresh");
               vscode.commands.executeCommand("andromity.refreshChanges");
@@ -3140,7 +3250,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             const countMsg = (res.turns_undone && res.turns_undone > 1) ? `${res.turns_undone} turns undone` : "Turn undone";
             vscode.window.showInformationMessage(`${countMsg} successfully. (${res.popped_messages || 0} messages removed.)`);
             await this._loadSession(this._currentSessionId);
-            this._postToWebview({ type: "turn_undone", turnsUndone: res.turns_undone, targetTurnIndex: res.target_turn_index });
+            this._postToWebview({ type: "turn_undone", turnsUndone: res.turns_undone, targetTurnIndex: res.target_turn_index, resendPrompt });
           }
         }
         break;

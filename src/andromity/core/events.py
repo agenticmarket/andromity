@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -90,6 +90,25 @@ class PlanApprovalRequired(StreamEvent):
 @dataclass
 class PlanUpdated(StreamEvent):
     plan: Any
+
+
+@dataclass
+class NextStepSuggested(StreamEvent):
+    """1-3 follow-ups the user can start with a click; `question` only accompanies several."""
+    options: List[Dict[str, Any]] = field(default_factory=list)
+    question: str = ""
+
+    @property
+    def title(self) -> str:
+        return self.options[0]["title"] if self.options else ""
+
+    @property
+    def prompt(self) -> str:
+        return self.options[0]["prompt"] if self.options else ""
+
+    @property
+    def new_session(self) -> bool:
+        return bool(self.options and self.options[0].get("new_session"))
 
 
 
@@ -210,3 +229,6 @@ class HandoffWritten(StreamEvent):
     status: str
     summary: str
     timestamp: str = ""
+    to_session: str = ""
+    to_session_id: str = ""
+    from_session_id: str = ""

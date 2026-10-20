@@ -1,10 +1,12 @@
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll, Vertical, Horizontal
 from textual.widget import Widget
+from textual.message import Message
 from textual.widgets import Static, Markdown, Collapsible, Button
 
 from andromity.config import config
 from andromity.tui.markup_utils import safe_markup, safe_update, escape_textual as escape
+import json
 import re
 import time
 from typing import Any
@@ -16,24 +18,23 @@ class ChatMessage(Widget):
     DEFAULT_CSS = """\
 ChatMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
 .assistant-header, #assistant-header { width: 1fr; content-align: left middle; }
-.session-msg { border-left: tall #58a6ff; background: #58a6ff 10%; margin: 1 0; padding: 0 1; }
-.session-question { border-left: tall #d2a8ff; background: #d2a8ff 10%; margin: 1 0; padding: 0 1; }
-.session-answer { border-left: tall #3fb950; background: #3fb950 10%; margin: 1 0; padding: 0 1; }
-.session-state { border-left: tall #79c0ff; background: #79c0ff 10%; margin: 1 0; padding: 0 1; }
-.session-handoff { border-left: tall #f0883e; background: #f0883e 10%; margin: 1 0; padding: 0 1; }
+ChatMessage.session-message { border-left: tall $primary; background: $primary 8%; margin: 1 0; padding: 0 1; }
+ChatMessage.session-question { border-left: tall $accent; background: $accent 8%; margin: 1 0; padding: 0 1; }
+ChatMessage.session-answer { border-left: tall $success; background: $success 8%; margin: 1 0; padding: 0 1; }
+ChatMessage.session-state { border-left: tall $secondary; background: $secondary 6%; margin: 1 0; padding: 0 1; }
+ChatMessage.session-handoff { border-left: tall $warning; background: $warning 8%; margin: 1 0; padding: 0 1; }
 .session-error-card { border-left: tall #ef4444; background: #ef4444 12%; margin: 1 0; padding: 0 1; }
 """
     def __init__(self, role: str, content: str = "", show_header: bool = True,
-                 show_footer: bool = True, sender: str = "", question_id: str = "", **kwargs):
+                 show_footer: bool = True, heading: str = "", **kwargs):
         super().__init__(**kwargs)
         self.role = role
         self._content = content
         self._show_header = show_header
         self._show_footer = show_footer
-        self._sender = sender or "Co-Agent"
-        self._question_id = question_id
+        self._heading = heading
         if role.startswith("session-"):
-            self.add_class(role.replace("session-", "session-"))
+            self.add_class(role)
 
     def _compose_error_card(self, content: str) -> ComposeResult:
         """Render error cards natively in Textual without leaking HTML tags into the terminal."""
@@ -98,17 +99,8 @@ ChatMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
             yield Static(safe_markup(self._content))
         elif self.role == "tool":
             yield Static(f"[dim][tool: {escape(self._content)}][/dim]")
-        elif self.role == "session-message":
-            yield Static(f"[bold #58a6ff]✉ Co-Agent [{escape(self._sender)}]:[/bold #58a6ff]\n{escape(self._content)}")
-        elif self.role == "session-question":
-            qid_str = f" [dim](ID: {escape(self._question_id)})[/dim]" if self._question_id else ""
-            yield Static(f"[bold #d2a8ff]❓ Question from [{escape(self._sender)}]{qid_str}:[/bold #d2a8ff]\n{escape(self._content)}")
-        elif self.role == "session-answer":
-            yield Static(f"[bold #3fb950]✔ Answer from [{escape(self._sender)}]:[/bold #3fb950]\n{escape(self._content)}")
-        elif self.role == "session-state":
-            yield Static(f"[dim cyan]⚡ Shared State [{escape(self._sender)}]: {escape(self._content)}[/dim cyan]")
-        elif self.role == "session-handoff":
-            yield Static(f"[bold #f0883e]🤝 Handoff from [{escape(self._sender)}]:[/bold #f0883e] {escape(self._content)}")
+        elif self.role.startswith("session-") and self._heading:
+            yield Static(f"[b]{escape(self._heading)}[/b]\n{escape(self._content)}")
 
     def on_button_pressed(self, event: Button.Pressed):
         """Copy the raw message content when the ⧉ button is pressed."""
@@ -848,6 +840,61 @@ def _deserialize_widget(d: dict) -> Widget | None:
     return None
 
 
+class NextStepCard(Horizontal):
+    """One follow-up the agent offered at the end of a turn."""
+    DEFAULT_CSS = """\
+NextStepCard { height: auto; margin: 1 0 0 0; padding: 0 1; border: round $panel-lighten-2; align: left middle; }
+NextStepCard > Vertical { width: 1fr; height: auto; }
+NextStepCard .next-step-label { color: $text-muted; }
+NextStepCard Button {
+    height: 1 !important; width: auto !important; min-width: 0 !important;
+    border: none !important; padding: 0 1 !important; margin: 0 0 0 1 !important;
+    background: $surface-lighten-1 !important; color: $text !important;
+}
+NextStepCard #next-step-run, NextStepCard Button.primary { background: $primary !important; color: $text !important; text-style: bold; }
+NextStepCard #next-step-dismiss { background: transparent !important; color: $text-muted !important; }
+NextStepCard #next-step-dismiss:hover { color: $text !important; }
+"""
+
+    class Chosen(Message):
+        def __init__(self, action: str, index: int = 0):
+            super().__init__()
+            self.action = action  # "run" | "new_session" | "dismiss"
+            self.index = index    # which option
+
+    def __init__(self, options: list, question: str = "", **kwargs):
+        super().__init__(**kwargs)
+        self._options = options
+        self._question = question
+
+    def compose(self) -> ComposeResult:
+        first = self._options[0]
+        with Vertical():
+            yield Static("Suggested next step  ·  Tab to put it in the input", classes="next-step-label")
+            yield Static(f"[b]{escape(self._question or first['title'])}[/b]")
+        if len(self._options) == 1:
+            yield Button("Do it", id="next-step-run")
+            if first.get("new_session"):
+                yield Button("New session", id="next-step-new-session")
+        else:
+            for i, option in enumerate(self._options):
+                label = option["title"] + (" ↗" if option.get("new_session") else "")
+                tip = "Runs in a new session" if option.get("new_session") else "Runs here"
+                yield Button(label, id=f"next-step-opt-{i}", classes="primary" if i == 0 else "", tooltip=tip)
+        yield Button("✕", id="next-step-dismiss", tooltip="Dismiss (Esc)")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        bid = event.button.id or ""
+        if bid.startswith("next-step-opt-"):
+            index = int(bid.rsplit("-", 1)[1])
+            action = "new_session" if self._options[index].get("new_session") else "run"
+            self.post_message(self.Chosen(action, index))
+            return
+        action = {"next-step-run": "run", "next-step-new-session": "new_session"}.get(bid, "dismiss")
+        self.post_message(self.Chosen(action))
+
+
 class ChatPanel(VerticalScroll):
     DEFAULT_CSS = """\
 ChatPanel { width: 1fr; height: 1fr; overflow-y: auto; background: $surface; }
@@ -940,6 +987,8 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
     def add_user_message(self, text: str, image_count: int = 0):
         self._header_shown = False
         self._tool_seq = None
+        from andromity.core.session_context import without_session_context
+        text = without_session_context(text)
         display = text
         if image_count:
             marker = "🖼 Image attached" if image_count == 1 else f"🖼 {image_count} images attached"
@@ -976,32 +1025,38 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
         if not self._user_scrolled_up:
             self.scroll_end()
 
-    def add_session_message(self, sender: str, content: str, message_type: str = "chat"):
-        msg = ChatMessage("session-message", content=content, sender=sender)
-        self._append_widget(msg)
+    def show_next_step(self, options: list, question: str = "") -> None:
+        self.clear_next_step()
+        self.mount(NextStepCard(options, question))
+        if not self._user_scrolled_up:
+            self.scroll_end()
+
+    def clear_next_step(self) -> None:
+        for card in self.query(NextStepCard):
+            card.remove()
+
+    def _add_collab_card(self, role: str, heading: str, content: str) -> None:
+        self._append_widget(ChatMessage(role, content=content, heading=heading))
         self._prune_dom()
 
-    def add_session_question(self, sender: str, question: str, question_id: str):
-        msg = ChatMessage("session-question", content=question, sender=sender, question_id=question_id)
-        self._append_widget(msg)
-        self._prune_dom()
+    def add_session_message(self, sender: str, content: str, message_type: str = "message"):
+        kind = "Broadcast" if message_type == "broadcast" else "Message"
+        self._add_collab_card("session-message", f"{kind} from {sender or 'another session'}", content)
 
-    def add_session_answer(self, sender: str, answer: str, question_id: str = ""):
-        msg = ChatMessage("session-answer", content=answer, sender=sender, question_id=question_id)
-        self._append_widget(msg)
-        self._prune_dom()
+    def add_session_question(self, sender: str, question: str):
+        self._add_collab_card("session-question", f"Question from {sender or 'another session'}", question)
+
+    def add_session_answer(self, sender: str, answer: str):
+        self._add_collab_card("session-answer", f"Answer from {sender or 'another session'}", answer)
 
     def add_shared_state_notification(self, author: str, key: str, value: Any):
-        content = f"{key} = {value}"
-        msg = ChatMessage("session-state", content=content, sender=author)
-        self._append_widget(msg)
-        self._prune_dom()
+        shown = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+        if len(shown) > 200:
+            shown = shown[:199] + "…"
+        self._add_collab_card("session-state", f"{author or 'Another session'} updated {key}", shown)
 
-    def add_handoff_notification(self, sender: str, task_summary: str, handoff_id: str):
-        content = f"{task_summary} (id: {handoff_id})"
-        msg = ChatMessage("session-handoff", content=content, sender=sender)
-        self._append_widget(msg)
-        self._prune_dom()
+    def add_handoff_notification(self, sender: str, summary: str):
+        self._add_collab_card("session-handoff", f"Handoff from {sender or 'another session'}", summary)
 
     def clear_ephemeral(self):
         """Remove any system messages marked as ephemeral from the UI."""

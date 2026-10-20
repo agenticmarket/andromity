@@ -214,12 +214,16 @@ export class BackgroundTaskPanel {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Task: ${safePid}</title>
   <style>
+    :root:has(> body.vscode-light), :root:has(> body.vscode-high-contrast-light) {
+      --tint: 0, 0, 0;
+    }
     :root {
+      --tint: 255, 255, 255;
       --bg: var(--vscode-editor-background, #18181b);
-      --card-bg: var(--vscode-sideBar-background, rgba(255, 255, 255, 0.03));
+      --card-bg: var(--vscode-sideBar-background, rgba(var(--tint), 0.03));
       --header-bg: var(--vscode-editorWidget-background, #141416);
-      --border: var(--vscode-widget-border, rgba(255, 255, 255, 0.08));
-      --border-subtle: rgba(255, 255, 255, 0.03);
+      --border: var(--vscode-widget-border, rgba(var(--tint), 0.08));
+      --border-subtle: rgba(var(--tint), 0.03);
       --fg: var(--vscode-editor-foreground, #e4e4e7);
       --fg-muted: var(--vscode-descriptionForeground, #71717a);
       --cyan: #38bdf8;
@@ -355,7 +359,7 @@ export class BackgroundTaskPanel {
       flex-shrink: 0;
     }
     button {
-      background: rgba(255, 255, 255, 0.03);
+      background: rgba(var(--tint), 0.03);
       color: var(--fg);
       border: 1px solid var(--border);
       border-radius: 4px;
@@ -369,8 +373,8 @@ export class BackgroundTaskPanel {
       transition: all 0.12s ease;
     }
     button:hover {
-      background: rgba(255, 255, 255, 0.07);
-      border-color: rgba(255, 255, 255, 0.18);
+      background: rgba(var(--tint), 0.07);
+      border-color: rgba(var(--tint), 0.18);
     }
     button.btn-autoscroll.active {
       background: rgba(56, 189, 248, 0.08);
@@ -409,11 +413,11 @@ export class BackgroundTaskPanel {
       height: 7px;
     }
     .terminal-container::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.1);
+      background: rgba(var(--tint), 0.1);
       border-radius: 4px;
     }
     .terminal-container::-webkit-scrollbar-thumb:hover {
-      background: rgba(255, 255, 255, 0.18);
+      background: rgba(var(--tint), 0.18);
     }
     .notice-line {
       color: var(--cyan);
