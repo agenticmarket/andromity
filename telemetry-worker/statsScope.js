@@ -95,11 +95,13 @@ export function measurementQueries(scope, db) {
       ) WHERE rank=CAST((total*95+99)/100 AS INTEGER)) AS p95_active_seconds
       FROM scoped_tasks`),
     prepare(`SELECT COUNT(*) AS observed,
-      SUM(EXISTS(SELECT 1 FROM sessions s WHERE s.user_id=u.user_id)
-        OR EXISTS(SELECT 1 FROM scoped_tasks t WHERE t.user_id=u.user_id)) AS prompted,
-      SUM(EXISTS(SELECT 1 FROM scoped_tasks t WHERE t.user_id=u.user_id AND t.outcome='completed')) AS completed,
-      SUM((SELECT COUNT(*) FROM scoped_tasks t WHERE t.user_id=u.user_id AND t.outcome='completed')>=2) AS repeat_completed
-      FROM users u`),
+      SUM(s.user_id IS NOT NULL OR t.user_id IS NOT NULL) AS prompted,
+      SUM(COALESCE(t.completed,0)>0) AS completed,
+      SUM(COALESCE(t.completed,0)>=2) AS repeat_completed
+      FROM users u
+      LEFT JOIN (SELECT DISTINCT user_id FROM sessions) s ON s.user_id=u.user_id
+      LEFT JOIN (SELECT user_id,SUM(outcome='completed') AS completed FROM scoped_tasks GROUP BY user_id) t
+        ON t.user_id=u.user_id`),
     prepare(`SELECT SUM(is_new) AS new_users, SUM(days>=2) AS regular_users FROM (
       SELECT a.user_id,date(u.first_seen)>=date('now','-29 days') AS is_new,COUNT(DISTINCT a.date) AS days
       FROM scoped_activity a JOIN users u ON u.user_id=a.user_id
