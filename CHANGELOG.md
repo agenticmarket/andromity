@@ -9,6 +9,8 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 - [TELEMETRY.md](TELEMETRY.md) lists every telemetry event and field, how to turn telemetry off, and how to have your data deleted.
 
 ### Changed
+- The Andromity provider's model list shows each model's name, description, pricing and context window. Picking a model that is not available to you right now shows a clear message with a **Sign In** or **Switch Model** action instead of retrying.
+- Messages between sessions: a plain message now waits in the receiving session's inbox until its next turn, while a question or a handoff wakes it right away. The sender is told which happened.
 - The OpenCode connection now needs your own OpenCode API key. It no longer reads OpenCode's credential file and identifies itself as Andromity.
 - Tips, news and command content are no longer fetched when telemetry is off or air-gap mode is on.
 - The VS Code extension sends no feature events if it cannot read your telemetry setting.
