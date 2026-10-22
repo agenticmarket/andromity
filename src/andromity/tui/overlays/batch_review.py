@@ -8,6 +8,8 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Static, Button, OptionList
+
+from andromity.tui.overlays.dialog import dialog_styles
 from textual.widgets.option_list import Option
 
 from andromity.core.git_ops import get_repo, restore_file_snapshot
@@ -101,7 +103,11 @@ BatchReviewOverlay {
 }
 #btn-reject-all:hover { color: $error-lighten-1 !important; }
 #btn-accept-all:hover { color: $success-lighten-1 !important; }
-"""
+""" + dialog_styles(
+        "batch-dialog", "batch-header", "batch-footer",
+        primary=("btn-accept-all",),
+        danger=("btn-reject-all",),
+    )
 
 
     def __init__(

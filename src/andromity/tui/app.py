@@ -6,7 +6,7 @@ from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual import on
-from textual.widgets import Input, Static, Tree, TextArea, Header , Footer, Button
+from textual.widgets import Input, Static, Tree, TextArea, Footer, Button
 from textual.containers import Horizontal, Vertical
 
 from typing import Any
@@ -80,8 +80,8 @@ CSS = """\
 Screen { background: $surface; }
 #main-layout { height: 1fr; }
 #left-panel {
-    width: 34; min-width: 16; max-width: 35;
-    border-right: solid $panel-lighten-2; overflow-y: auto;
+    width: 30; min-width: 16; max-width: 35;
+    border-right: solid $foreground 12%; overflow-y: auto;
 }
 .hide-context #right-sidebar { display: none; }
 .hide-files #left-panel { display: none; }
@@ -94,12 +94,12 @@ Screen { background: $surface; }
     display: none;
     width: 1fr;
     height: 1fr;
-    border-left: solid $panel-lighten-2;
+    border-left: solid $foreground 12%;
 }
 #diff-panel.visible { display: block; }
 #right-sidebar {
-    width: 45; height: 1fr;
-    border-left: solid $panel-lighten-2;
+    width: 38; height: 1fr;
+    border-left: solid $foreground 12%;
 }
 #context-panel {
     height: auto;
@@ -115,9 +115,9 @@ ChatPanel MarkdownBulletList { margin: 0 0 1 1; padding: 0; }
 ChatPanel MarkdownOrderedList { margin: 0 0 1 1; padding: 0; }
 ChatPanel MarkdownHeader { margin: 1 0 0 0; }
 ChatPanel MarkdownH1, ChatPanel MarkdownH2, ChatPanel MarkdownH3, ChatPanel MarkdownH4, ChatPanel MarkdownH5, ChatPanel MarkdownH6 { margin: 0; padding: 0; }
-ChatPanel MarkdownHorizontalRule { margin: 0; padding: 0; border: none; border-top: solid $panel-lighten-2; }
+ChatPanel MarkdownHorizontalRule { margin: 0; padding: 0; border: none; border-top: solid $foreground 12%; }
 FileTreePanel { height: 1fr; overflow-y: auto; padding: 1; }
-PlanPanel { height: 1fr; border-top: solid $panel-lighten-2; }
+PlanPanel { height: 1fr; border-top: solid $foreground 12%; }
 #model-overlay { display: none; }
 #model-overlay.visible { display: block; }
 
@@ -133,7 +133,7 @@ PlanPanel { height: 1fr; border-top: solid $panel-lighten-2; }
     width: 35;
     height: 100%;
     background: $surface;
-    border-right: solid $panel-lighten-2;
+    border-right: solid $foreground 12%;
 }
 .narrow #right-sidebar { width: 0; min-width: 0; border-left: none; }
 
@@ -222,7 +222,6 @@ class AndromityApp(App):
         return get_context_limit_for_model(provider, model) if (provider and model) else 0
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True, name="Andromity")
         yield Horizontal(
             FileTreePanel(id="left-panel"),
             Vertical(
@@ -297,9 +296,9 @@ class AndromityApp(App):
             if crons:
                 chat = self.query_one(ChatPanel)
                 chat.add_system_message(
-                    f"[yellow]⚠ {len(crons)} scheduled cron job(s) found.[/] "
+                    f"[$warning]{len(crons)} scheduled cron job(s) found.[/] "
                     "These will run automatically at their configured intervals. "
-                    "Type [bold cyan]/cron[/] to review or disable them.",
+                    "Type [bold]/cron[/] to review or disable them.",
                     ephemeral=True
                 )
             self._cron_scheduler.start()
@@ -427,7 +426,7 @@ class AndromityApp(App):
                 if was_created:
                     self.call_from_thread(
                         self.query_one(ChatPanel).add_system_message,
-                        "[green]📸 Git initialized[/] for this folder. "
+                        "[$success]Git initialized[/] for this folder. "
                         "[dim]/undo will now work across all turns, even for newly created files.[/dim]",
                         ephemeral=True,
                     )
@@ -477,7 +476,7 @@ class AndromityApp(App):
                         try:
                             self.query_one(AppFooter).set_update_available(latest)
                             self.query_one(ChatPanel).add_system_message(
-                                f"🚀 [bold $warning]Update available: v{latest}[/] — run [bold cyan]/update[/] or click the footer badge to upgrade.",
+                                f"[$warning]Update available: v{latest}[/] — run [bold]/update[/] or click the footer badge to upgrade.",
                                 ephemeral=True
                             )
                         except Exception:
@@ -491,7 +490,7 @@ class AndromityApp(App):
     def action_run_update(self):
         """Perform an in-app upgrade of Andromity in the background."""
         chat = self.query_one(ChatPanel)
-        chat.add_system_message("[cyan]⟳ Checking for updates and upgrading Andromity...[/]")
+        chat.add_system_message("[dim]Checking for updates and upgrading Andromity…[/]")
 
         def _do_upgrade():
             from andromity.core.updater import perform_update
@@ -517,19 +516,14 @@ class AndromityApp(App):
 
         # Always show a welcome banner first
         chat.add_system_message(
-            "[bold $success]✦ Welcome to Andromity![/]  "
-            "Your AI coding assistant is ready.\n"
-            "  [dim]Type a message and press [bold]Enter[/] to chat  ·  "
-            "[bold]/help[/] for commands  ·  "
-            "[bold]Ctrl+L[/] to switch model  ·  "
-            "[bold]Alt+N[/] for new line[/dim]",
+            "[bold]Andromity[/]  [dim]/help commands · Ctrl+L model · Alt+N new line[/dim]",
             ephemeral=True
         )
 
         # No-model warning banner
         if not model:
             chat.add_system_message(
-                "[yellow]⚠  No model selected.[/] Press [bold]Ctrl+L[/] to pick a provider — "
+                "[$warning]No model selected.[/] Press [bold]Ctrl+L[/] to pick a provider — "
                 "you can paste your API key right inside the picker.",
                 ephemeral=True
             )
@@ -539,7 +533,7 @@ class AndromityApp(App):
                 not config.get_api_key("google") and not config.get_api_key("openrouter"):
             if model and provider not in ("ollama",):
                 chat.add_system_message(
-                    "[yellow]⚠ No cloud API key configured.[/] Press [bold]Ctrl+L[/], choose your provider, "
+                    "[$warning]No cloud API key configured.[/] Press [bold]Ctrl+L[/], choose your provider, "
                     "and paste the key there — it's saved automatically.",
                     ephemeral=True
                 )
@@ -2223,7 +2217,7 @@ Your output must be:
         else:
             chat.add_system_message(
                 "💡 [bold cyan]Developer Tip[/]\n\n"
-                "Keep functions small, test boundaries, and use [bold cyan]/cron[/] for autonomous scheduled maintenance."
+                "Keep functions small, test boundaries, and use [bold]/cron[/] for autonomous scheduled maintenance."
             )
 
     async def _handle_news_command(self):

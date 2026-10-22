@@ -2,21 +2,27 @@
 import asyncio
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Collapsible, Input, Label, Static
 
+from andromity.tui.overlays.dialog import dialog_styles
 from andromity.config import config
 
 
 class ProviderConnectionScreen(ModalScreen):
     DEFAULT_CSS = """
 ProviderConnectionScreen { align: center middle; }
-#connection-dialog { width: 64; max-width: 95%; height: auto; max-height: 90%; padding: 1 2; border: solid $accent; background: $surface; }
+#connection-dialog { width: 90%; max-width: 80; height: 90%; padding: 0; border: solid $surface-lighten-2; background: $surface; }
+#connection-title { height: 1; padding: 0 1; }
+#connection-body { height: 1fr; padding: 1 2; }
 #connection-dialog Input { margin-bottom: 1; }
 #connection-actions { height: 3; align-horizontal: right; }
 #connection-status { height: auto; margin-top: 1; }
-"""
+""" + dialog_styles(
+        "connection-dialog", "connection-title", "connection-actions",
+        primary=("connection-save",),
+    )
 
     def __init__(self, provider: str = ""):
         super().__init__()
@@ -24,26 +30,27 @@ ProviderConnectionScreen { align: center middle; }
         self.saved = config.get_provider_config(provider) or {}
 
     def compose(self) -> ComposeResult:
-        with VerticalScroll(id="connection-dialog"):
-            yield Label("Edit connection" if self.provider else "Add custom provider")
-            yield Label("Connection ID")
-            yield Input(value=self.provider, placeholder="local-models", id="connection-id", disabled=bool(self.provider))
-            yield Label("Display name")
-            yield Input(value=self.saved.get("display_name", ""), placeholder="Local models", id="connection-name")
-            yield Label("Base URL")
-            yield Input(value=self.saved.get("base_url", ""), placeholder="http://localhost:1234/v1", id="connection-url")
-            yield Static("Use the API root, for example https://your-provider/v1. Pasted /chat/completions endpoints are converted automatically.")
-            yield Label("API key (optional; blank keeps the saved key)")
-            yield Input(password=True, id="connection-key")
-            yield Label("Model ID")
-            yield Input(value=self.saved.get("model", ""), placeholder="provider/model-name", id="connection-model")
-            with Collapsible(title="Advanced", collapsed=True):
-                yield Label("LiteLLM provider type")
-                yield Input(value=self.saved.get("type", "openai"), id="connection-type")
-                yield Label("API version (optional)")
-                yield Input(value=self.saved.get("api_version", ""), id="connection-version")
-                yield Static("OpenAI-compatible is the default. Other adapters can use the runtime's standard environment credentials.")
-            yield Static("", id="connection-status")
+        with Vertical(id="connection-dialog"):
+            yield Static("Edit connection" if self.provider else "Add custom provider", id="connection-title")
+            with VerticalScroll(id="connection-body"):
+                yield Label("Connection ID")
+                yield Input(value=self.provider, placeholder="local-models", id="connection-id", disabled=bool(self.provider))
+                yield Label("Display name")
+                yield Input(value=self.saved.get("display_name", ""), placeholder="Local models", id="connection-name")
+                yield Label("Base URL")
+                yield Input(value=self.saved.get("base_url", ""), placeholder="http://localhost:1234/v1", id="connection-url")
+                yield Static("Use the API root, for example https://your-provider/v1. Pasted /chat/completions endpoints are converted automatically.")
+                yield Label("API key (optional; blank keeps the saved key)")
+                yield Input(password=True, id="connection-key")
+                yield Label("Model ID")
+                yield Input(value=self.saved.get("model", ""), placeholder="provider/model-name", id="connection-model")
+                with Collapsible(title="Advanced", collapsed=True):
+                    yield Label("LiteLLM provider type")
+                    yield Input(value=self.saved.get("type", "openai"), id="connection-type")
+                    yield Label("API version (optional)")
+                    yield Input(value=self.saved.get("api_version", ""), id="connection-version")
+                    yield Static("OpenAI-compatible is the default. Other adapters can use the runtime's standard environment credentials.")
+                yield Static("", id="connection-status")
             with Horizontal(id="connection-actions"):
                 yield Button("Cancel", id="connection-cancel")
                 yield Button("Save & test", id="connection-test")

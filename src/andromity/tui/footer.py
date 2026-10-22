@@ -1,5 +1,6 @@
 import re
 
+from textual.content import Content
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widget import Widget
@@ -17,14 +18,16 @@ log = get_logger("footer")
 
 _SPINNER_FRAMES = "⣾⣽⣻⢿⡿⣟⣯⣷"
 
-_TAG_RE = re.compile(r"\[/?[a-zA-Z#][^\]]*\]")
+_TAG_RE = re.compile(r"\[/?[a-zA-Z#$][^\]]*\]|\[/\]")
 
 
 def _plain_len(s: str) -> int:
-    """Rough display width of a Textual markup string (tags stripped)."""
-    s2 = _TAG_RE.sub("", s)
-    s2 = s2.replace("\\[", "[").replace("\\]", "]")
-    return len(s2)
+    """Display width of a Textual markup string, measured the way Textual renders it."""
+    try:
+        return Content.from_markup(s).cell_length
+    except Exception:
+        s2 = _TAG_RE.sub("", s)
+        return len(s2.replace("\\[", "[").replace("\\]", "]"))
 
 
 def _format_tok_compact(n: int) -> str:
@@ -123,7 +126,7 @@ ContextPanel {
                 bar_width = 14
                 filled = int(bar_width * pct / 100)
                 bar = "█" * filled + "░" * (bar_width - filled)
-                color = "green" if pct < 70 else ("yellow" if pct < 90 else "red")
+                color = "$text-muted" if pct < 70 else ("$warning" if pct < 90 else "$error")
                 # Visual fill only — exact numbers live in the status bar's tok segment.
                 safe_update(self.query_one("#ctx-lsp"),
                     f"[{color}]{bar}[/{color}] [{color}]{pct:.0f}%[/{color}]"
@@ -137,16 +140,16 @@ ContextPanel {
 class AppFooter(Widget):
     DEFAULT_CSS = """\
 AppFooter {
-    height: 1; background: $surface-darken-1; padding: 0 1;
+    height: 1; background: transparent; padding: 0 1;
     layout: horizontal;
 }
 #footer-left { width: auto; content-align: left middle; }
 #footer-profile {
     width: auto; height: 1;
-    color: $text;
+    color: $text-muted;
     padding: 0 1;
 }
-#footer-profile:hover { color: $accent !important; text-style: bold; }
+#footer-profile:hover { color: $text !important; }
 #footer-spacer { width: 1fr; }
 #footer-version {
     width: auto; height: 1;
@@ -154,14 +157,14 @@ AppFooter {
     padding: 0 1;
     content-align: right middle;
 }
-#footer-version:hover { color: $accent !important; }
+#footer-version:hover { color: $text !important; }
 #footer-settings {
-    width: auto; min-width: 12; height: 1;
+    width: auto; min-width: 0; height: 1;
     border: none !important; background: transparent !important;
     color: $text-muted !important;
     padding: 0 1 !important;
 }
-#footer-settings:hover { color: $accent !important; }
+#footer-settings:hover { color: $text !important; }
 """
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -177,7 +180,7 @@ AppFooter {
         yield Static("", id="footer-profile", classes="clickable")
         yield Static("", id="footer-spacer")
         yield Static("", id="footer-version", classes="clickable")
-        yield Button("⚙  Settings", id="footer-settings")
+        yield Button("settings", id="footer-settings")
 
     def on_mount(self):
         self._refresh_text()
@@ -190,14 +193,14 @@ AppFooter {
             parts = []
             if self.cwd:
                 display_path = _format_smart_path(self.cwd, max_len=35)
-                parts.append(f"[bold]⌂ {escape(display_path)}[/]")
+                parts.append(escape(display_path))
 
             if self._git_branch:
-                parts.append(f"[bold cyan]⎇ {escape(self._git_branch)}[/]")
+                parts.append(f"[$primary]{escape(self._git_branch)}[/]")
 
-            left_text = "  ".join(parts)
+            left_text = " [dim]·[/] ".join(parts)
             if left_text:
-                left_text = f" {left_text}  [dim]│[/] "
+                left_text = f" {left_text} "
             else:
                 left_text = " "
             footer_left = self.query_one("#footer-left")
@@ -211,12 +214,12 @@ AppFooter {
             elif self.cwd:
                 footer_left.tooltip = f"Working directory: {self.cwd}"
 
-            profile_text = f"[bold $info]» {escape(self._profile)}[/]" if self._profile else ""
+            profile_text = escape(self._profile) if self._profile else ""
             safe_update(self.query_one("#footer-profile"), profile_text)
 
-            version_text = f"[dim]Andromity {version}[/dim]"
+            version_text = f"[dim]{version}[/dim]"
             if self._update_available and self._latest_version:
-                version_text += f" [bold $warning]▲ v{escape(self._latest_version)}[/]"
+                version_text += f" [$warning]update v{escape(self._latest_version)}[/]"
             safe_update(self.query_one("#footer-version"), version_text)
         except Exception:
             pass
@@ -302,11 +305,11 @@ AppFooter {
 class StatusBar(Widget):
     DEFAULT_CSS = """\
 StatusBar {
-    height: 1; background: $surface-darken-1; padding: 0 1;
+    height: 1; background: transparent; padding: 0 1;
     layout: horizontal;
 }
-.status-seg { height: 1; padding: 0; width: auto; }
-.status-seg.clickable:hover { color: $accent !important; text-style: bold; }
+.status-seg { height: 1; padding: 0; width: auto; color: $text-muted; }
+.status-seg.clickable:hover { color: $text !important; }
 #seg-hint { width: auto; }
 """
     tokens: reactive[int] = reactive(0)
@@ -342,18 +345,18 @@ StatusBar {
         if not self._streaming:
             return ""
         frame = _SPINNER_FRAMES[self._spinner_idx % len(_SPINNER_FRAMES)]
-        return f"[green]{frame} streaming…[/] [dim]·[/dim] "
+        return f"[$primary]{frame}[/] [dim]·[/dim] "
 
     def _seg_model(self) -> str:
         if not self._model:
-            return "[red]no model[/] [dim]·[/dim] "
+            return "[$error]no model[/] [dim]·[/dim] "
         budget = self._model_budget()
         model = self._model
         if len(model) > budget:
             model = model[: max(budget - 1, 4)] + "…"
         if self._provider:
-            return f"[bold cyan]{escape(self._provider)}[/] [white]{escape(model)}[/] [dim]·[/dim] "
-        return f"[white]{escape(model)}[/] [dim]·[/dim] "
+            return f"[dim]{escape(self._provider)}[/] [$text]{escape(model)}[/] [dim]·[/dim] "
+        return f"[$text]{escape(model)}[/] [dim]·[/dim] "
 
     def _model_budget(self) -> int:
         """Columns available for the model name so the whole bar fits the center
@@ -377,14 +380,14 @@ StatusBar {
 
     def _seg_effort(self) -> str:
         if self._effort == "off":
-            return "[dim]reason:off[/] [dim]·[/dim] "
-        return f"[bold cyan]reason:{escape(self._effort)}[/] [dim]·[/dim] "
+            return "[dim]reason:off ·[/dim] "
+        return f"reason:{escape(self._effort)} [dim]·[/dim] "
 
     def _seg_perm(self) -> str:
         perm_mode = getattr(self, "permission_mode", "safe")
-        perm_colors = {"safe": "green", "trust": "yellow", "yolo": "red"}
-        pcolor = perm_colors.get(perm_mode, "white")
-        return f"[{pcolor}]\\[{perm_mode.upper()}][/][{pcolor}] [dim]·[/dim] "
+        perm_colors = {"safe": "$success", "trust": "$warning", "full": "$warning", "yolo": "$error"}
+        pcolor = perm_colors.get(perm_mode, "$text-muted")
+        return f"[{pcolor}]{perm_mode}[/] [dim]·[/dim] "
 
     def _seg_ctx(self) -> str:
         tok = self.tokens
@@ -392,15 +395,15 @@ StatusBar {
         if self._ctx_limit > 0:
             pct = min(tok / self._ctx_limit * 100, 100.0)
             ctx_k = _format_tok_compact(self._ctx_limit)
-            color = "green" if pct < 70 else ("yellow" if pct < 90 else "red")
-            warn_icon = "⚠" if pct >= 90 else ""
-            return f"[{color}]{tok_str}/{ctx_k}{warn_icon} tok[/{color}] [dim]·[/dim] "
-        return f"{tok_str} tok [dim]·[/dim] "
+            color = "$text-muted" if pct < 70 else ("$warning" if pct < 90 else "$error")
+            warn_icon = "!" if pct >= 90 else ""
+            return f"[{color}]{tok_str}/{ctx_k}{warn_icon}[/{color}] [dim]·[/dim] "
+        return f"{tok_str} [dim]·[/dim] "
 
     def _seg_todo(self) -> str:
         if self._todo_total <= 0:
             return ""
-        color = "green" if self._todo_done == self._todo_total else "yellow"
+        color = "$success" if self._todo_done == self._todo_total else "$warning"
         return f"[{color}]{self._todo_done}/{self._todo_total} todos[/{color}] [dim]·[/dim] "
 
     def _seg_cost(self) -> str:
@@ -1021,7 +1024,7 @@ class InputBar(Widget):
     """Input bar that lives inside the center panel."""
     DEFAULT_CSS = """\
 InputBar {
-    height: auto; min-height: 4; max-height: 15; dock: bottom;
+    height: auto; min-height: 3; max-height: 15; dock: bottom;
     padding: 0 1;
 }
 #input-field {
@@ -1029,11 +1032,12 @@ InputBar {
     height: auto;
     min-height: 3;
     max-height: 14;
-    border: none;
-    background: $surface;
+    border: round $foreground 20%;
+    background: transparent;
 }
+#input-field:focus { border: round $primary; background: transparent; }
 """
-    _PLACEHOLDER = "Ask Andromity… (Enter to send, / for commands, @ for skills)"
+    _PLACEHOLDER = "Message · / commands · @ skills"
  
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

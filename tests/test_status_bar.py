@@ -164,16 +164,17 @@ def test_click_perm_segment_cycles_mode():
 
 
 def test_perm_segment_has_no_stray_backslash():
-    """Regression: '\\[FULL\\]' rendered a literal backslash — Textual only
-    needs the opening bracket escaped; '\\]' shows as backslash + bracket."""
+    """Regression: the mode label must render as plain text — no literal
+    backslash or bracket characters leaking into the status bar."""
     async def _run():
         async with HostApp().run_test(size=(120, 30)) as pilot:
             await _settle(pilot)
             sb = pilot.app.query_one(StatusBar)
             for mode in ("safe", "trust", "full"):
+                sb.permission_mode = mode
                 seg = sb._seg_perm()
-                assert "\\]" not in seg, (mode, seg)
-                assert "\\[" in seg, (mode, seg)
+                assert "\\" not in seg, (mode, seg)
+                assert mode in seg, (mode, seg)
 
     asyncio.run(_run())
 
@@ -223,3 +224,18 @@ if __name__ == "__main__":
         pytest.main([__file__, "-v"])
     finally:
         os.chdir(old)
+
+
+def test_status_bar_shows_full_model_name_when_it_fits():
+    """Theme-colour markup must not count toward the width reserved for the model name."""
+    async def _run():
+        async with HostApp().run_test(size=(120, 30)) as pilot:
+            await _settle(pilot)
+            sb = pilot.app.query_one(StatusBar)
+            sb.update_status(tokens=500, cost=0.0, profile="builder",
+                             model="anthropic/claude-sonnet-4.5", ctx_limit=200000, permission_mode="safe")
+            await _settle(pilot)
+            shown = str(sb.query_one("#seg-model").render())
+            assert "claude-sonnet-4.5" in shown and "…" not in shown, shown
+
+    asyncio.run(_run())

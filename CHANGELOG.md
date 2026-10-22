@@ -12,6 +12,13 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 - The OpenCode connection now needs your own OpenCode API key. It no longer reads OpenCode's credential file and identifies itself as Andromity.
 - Tips, news and command content are no longer fetched when telemetry is off or air-gap mode is on.
 - The VS Code extension sends no feature events if it cannot read your telemetry setting.
+- **A calmer terminal UI.**
+  - Colours follow your theme, emoji icons are gone, and the header bar is removed, leaving more room for the chat.
+  - The status bar and footer blend into the background. The permission mode shows as a coloured word (`safe`, `trust`, `full`, `yolo`), and long model names are no longer cut short when there is room.
+  - Your messages start with `›`, tool and thinking rows are shorter (`✓ read_file 3s`), and messages from other sessions use a simple coloured edge.
+  - The message box has a rounded border that lights up when focused.
+- **Dialogs share one look.** Every dialog (model, connection, profile, trust, undo, sessions, skills, scheduled jobs, batch review, settings and help) uses the same title bar, spacing and buttons, and longer dialogs scroll on small terminals.
+- **Model picker.** Enter or Space picks a provider or model, your current model stays selected when the list refreshes, a custom model ID takes priority over the list, and the lists fit small terminals.
 
 ## [0.2.22] — 2026-10-20
 

@@ -3,6 +3,8 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Static, Button
+
+from andromity.tui.overlays.dialog import dialog_styles
 from andromity.tui.markup_utils import escape_textual as escape
 
 
@@ -75,7 +77,10 @@ UndoConfirmOverlay {
     background: $warning-lighten-1;
     color: $background;
 }
-"""
+""" + dialog_styles(
+        "undo-dialog", "undo-title", "undo-footer",
+        warning=("undo-confirm",),
+    )
 
     def __init__(self, prompt: str = "", **kwargs):
         super().__init__(**kwargs)
@@ -90,9 +95,9 @@ UndoConfirmOverlay {
                 with Vertical(id="undo-prompt-box"):
                     yield Static("", id="undo-prompt-text")
                 yield Static(
-                    "• [green]Files reverted[/]: All edits/creations from this turn restored.\n"
-                    "• [green]Context rolled back[/]: Chat & LLM context restored cleanly.\n"
-                    "• [green]Prompt restored[/]: The prompt will be loaded back into your input box.",
+                    "• [$text-success]Files reverted[/]: All edits/creations from this turn restored.\n"
+                    "• [$text-success]Context rolled back[/]: Chat & LLM context restored cleanly.\n"
+                    "• [$text-success]Prompt restored[/]: The prompt will be loaded back into your input box.",
                     id="undo-info"
                 )
             with Horizontal(id="undo-footer"):
@@ -104,7 +109,7 @@ UndoConfirmOverlay {
             short = self._prompt.strip()
             try:
                 self.query_one("#undo-prompt-text", Static).update(
-                    f"[bold cyan]Prompt:[/] {escape(short)}"
+                    f"[bold $text-info]Prompt:[/] {escape(short)}"
                 )
             except Exception:
                 pass

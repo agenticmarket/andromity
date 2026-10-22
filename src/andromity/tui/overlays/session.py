@@ -4,6 +4,9 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Static, Button, DataTable
+
+from andromity.tui.overlays.dialog import dialog_styles
+
 from andromity.core.session import Session
 from andromity.tui.markup_utils import escape_textual
 
@@ -94,7 +97,11 @@ SessionBrowserOverlay {
 #sb-footer #sb-new:hover { color: $success !important; }
 #sb-footer #sb-load-more:hover { color: $warning !important; }
 #sb-footer #sb-delete:hover { color: $error !important; }
-"""
+""" + dialog_styles(
+        "sb-dialog", "sb-title", "sb-footer",
+        primary=("sb-open",),
+        danger=("sb-delete",),
+    )
 
     def __init__(self, current_session_id: str, project_path: str, **kwargs):
         super().__init__(**kwargs)

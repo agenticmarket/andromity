@@ -169,5 +169,5 @@ async def test_tui_card_keeps_single_word_session_names_and_uses_theme_colours()
         text = str(card.query_one("Static").render())
         assert "Question from builder" in text, text
         assert "Who owns [the] schema?" in text
-        assert card.styles.border_left[0] == "tall", "card styles must apply to the message itself"
+        assert card.styles.border_left[0] == "solid", "card styles must apply to the message itself"
         assert card.styles.border_left[1].hex == Color.parse(app.get_css_variables()["accent"]).hex

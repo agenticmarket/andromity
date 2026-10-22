@@ -1,11 +1,19 @@
 from textual import work
 from textual.app import ComposeResult
-from textual.containers import Horizontal, VerticalScroll, Vertical, Container
+from textual.binding import Binding
+from textual.content import Content
+from textual.containers import Horizontal, Vertical, Container
 from textual.screen import ModalScreen
-from textual.widgets import Static, Button, RadioButton, RadioSet, Input
+from textual.widgets import Static, Button, OptionList, Input
+from textual.widgets.option_list import Option
 from textual.reactive import reactive
+from andromity.tui.overlays.dialog import dialog_styles
 from andromity.config import config
-from andromity.core.models import MODEL_CATALOG, provider_catalog, fetch_live_models_sync, get_cached_live_models
+from andromity.core.models import provider_catalog, fetch_live_models_sync, get_cached_live_models
+
+
+class ModelList(OptionList):
+    BINDINGS = [Binding("space", "select", "Select", show=False)]
 
 
 class ModelPickerScreen(ModalScreen):
@@ -16,24 +24,41 @@ ModelPickerScreen {
     background: $background 30%;
 }
 #mp-dialog {
-    width: 90%; max-width: 72;
-    height: 85%; max-height: 32; min-height: 20;
-    border: solid $accent-darken-2;
+    width: 90%; max-width: 80;
+    height: auto; max-height: 90%; min-height: 14;
+    border: solid $surface-lighten-2;
     background: $surface;
     padding: 0;
 }
 #mp-title {
     padding: 0 1;
     height: 1;
-    background: $accent-darken-3;
+    background: $surface-lighten-1;
     color: $text;
     text-style: bold;
 }
-#mp-step1 { height: 1fr; padding: 1 2 0 2; }
-#mp-step2 { height: 1fr; padding: 1 2 0 2; display: none; }
+#mp-step1 { height: auto; padding: 1 2 0 2; }
+#mp-step2 { height: auto; padding: 1 2 0 2; display: none; }
 #mp-step2.visible { display: block; }
-#mp-providers { height: 1fr; overflow-y: auto; padding: 0 1; }
-#mp-models { height: 1fr; overflow-y: auto; padding: 0 1; }
+#mp-providers-header, #mp-models-header { height: auto; margin-bottom: 1; }
+#mp-providers, #mp-models {
+    height: auto; max-height: 14; min-height: 1;
+    border: none;
+    padding: 0;
+    background: transparent;
+    color: $text;
+    overflow-x: hidden;
+}
+#mp-providers:focus, #mp-models:focus { border: none; background-tint: transparent; }
+#mp-providers > .option-list--option, #mp-models > .option-list--option { padding: 0 1; }
+#mp-providers > .option-list--option-highlighted,
+#mp-models > .option-list--option-highlighted { background: $surface-lighten-1; color: $text; }
+#mp-providers:focus > .option-list--option-highlighted,
+#mp-models:focus > .option-list--option-highlighted {
+    background: $primary 25%;
+    color: $text;
+    text-style: bold;
+}
 #mp-key-row {
     height: 3;
     padding: 0;
@@ -57,28 +82,29 @@ ModelPickerScreen {
     background: $accent-lighten-1;
     color: $background;
 }
-#mp-key-hint { height: 1; padding: 0 1; color: $warning; display: none; }
+#mp-key-hint { height: auto; max-height: 2; padding: 0 1; color: $text-warning; display: none; }
 #mp-key-hint.visible { display: block; }
-#mp-custom-row { height: 3; padding: 0; }
+#mp-custom-row { height: 3; padding: 0; margin-top: 1; }
+#mp-custom-model { width: 1fr; height: 3; }
+#mp-custom-model > .input--placeholder { color: $text-muted; }
 #mp-model-desc { height: 2; padding: 0 1; color: $text-muted; }
 #mp-footer {
-    dock: bottom;
-    height: 3;
-    padding: 0 1;
-    background: $surface-darken-2;
+    height: 4;
+    padding: 1;
+    background: $surface;
     border-top: solid $surface-lighten-1;
     align: right middle;
 }
 #mp-footer Button {
     height: 1;
-    min-width: 14;
-    margin: 0 1;
+    width: auto; min-width: 10;
+    margin: 0 0 0 1;
     padding: 0 2;
     border: none;
 }
 #mp-back, #mp-cancel {
     background: $surface-lighten-1;
-    color: $text-muted;
+    color: $text;
 }
 #mp-back:hover, #mp-back:focus,
 #mp-cancel:hover, #mp-cancel:focus {
@@ -94,16 +120,25 @@ ModelPickerScreen {
     background: $accent-lighten-1;
     color: $background;
 }
-"""
+ModelPickerScreen.compact #mp-step1, ModelPickerScreen.compact #mp-step2 { padding: 0 1; }
+ModelPickerScreen.compact #mp-providers-header,
+ModelPickerScreen.compact #mp-models-header { margin-bottom: 0; }
+ModelPickerScreen.compact #mp-custom-row { margin-top: 0; }
+ModelPickerScreen.compact #mp-model-desc { height: 1; }
+ModelPickerScreen.compact #mp-footer { height: 3; padding: 0 1; }
+""" + dialog_styles(
+        "mp-dialog", "mp-title", "mp-footer",
+        primary=("mp-apply",),
+    )
 
     _step: reactive[int] = reactive(1)
     _selected_provider: reactive[str] = reactive("")
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._provider_keys: list[str] = []
         self._current_models: list[dict] = []
         self._selected_model_idx: int = -1   # -1 = nothing chosen yet
-        self._gen: int = 0                    # generation counter for unique IDs
         self._ready: bool = False             # guards auto-jump on mount
         self._key_just_connected: bool = False  # key saved this session — enables rejection hint
 
@@ -112,26 +147,24 @@ ModelPickerScreen {
             yield Static(" Step 1: Select Provider ", id="mp-title")
             with Vertical(id="mp-step1"):
                 yield Static("[bold]Choose a provider:[/]", id="mp-providers-header")
-                with VerticalScroll(id="mp-providers"):
-                    with RadioSet(id="mp-providers-radioset"):
-                        for key, info in provider_catalog().items():
-                            env = info.get("requires_env", "")
-                            label = f" {info['name']}"
-                            if env:
-                                label += f"  [dim]({env})[/]"
-                            else:
-                                label += "  [dim](local / free)[/]"
-                            yield RadioButton(label, id=f"provider-{key}")
+                providers = provider_catalog()
+                self._provider_keys = list(providers)
+                yield ModelList(*(
+                    Option(Content.assemble(
+                        (info["name"], "bold"), "  ",
+                        (info.get("requires_env") or "local / free", "dim"),
+                    ), id=f"provider-{key}")
+                    for key, info in providers.items()
+                ), id="mp-providers")
             with Vertical(id="mp-step2"):
                 yield Static("", id="mp-models-header")
                 with Horizontal(id="mp-key-row"):
                     yield Input(placeholder="Paste API key…", password=True, id="mp-key-input")
                     yield Button("Connect", id="mp-connect")
                 yield Static("", id="mp-key-hint")
-                with VerticalScroll(id="mp-models"):
-                    yield RadioSet(id="mp-models-radioset")
+                yield ModelList(id="mp-models")
                 with Horizontal(id="mp-custom-row"):
-                    yield Input(placeholder="Or type custom model name (e.g. meta/llama3-70b-instruct)", id="mp-custom-model")
+                    yield Input(placeholder="Or enter a custom model ID", id="mp-custom-model")
                 yield Static("", id="mp-model-desc", classes="mp-desc-panel")
             with Horizontal(id="mp-footer"):
                 yield Button("Back", id="mp-back")
@@ -141,23 +174,17 @@ ModelPickerScreen {
     def on_mount(self):
         self._show_step1()
         current_provider = ""
-        # Highlight current provider button BUT don't trigger Changed event yet.
-        # We set _ready=True only after call_after_refresh so the RadioSet.Changed
-        # fired by setting .value=True below doesn't jump to Step 2.
         try:
             current_provider = config.get("default", "provider", "")
-            if current_provider:
-                btn = self.query_one(f"#provider-{current_provider}", RadioButton)
-                btn.value = True  # This WILL fire RadioSet.Changed ...
+            if current_provider in self._provider_keys:
+                self.query_one("#mp-providers", OptionList).highlighted = self._provider_keys.index(current_provider)
         except Exception:
             pass
-        # ... but _ready is still False here, so on_radio_set_changed ignores it.
         self.call_after_refresh(self._set_ready)
         if current_provider:
             self.call_after_refresh(lambda: self._show_step2(current_provider))
 
-    def _set_ready(self):
-        """Allow RadioSet.Changed to respond AFTER initial mount is complete."""
+    def _set_ready(self) -> None:
         self._ready = True
 
     def _show_step1(self):
@@ -170,6 +197,8 @@ ModelPickerScreen {
             self.query_one("#mp-back").display = False
         except Exception:
             pass
+        self._resize_lists()
+        self.query_one("#mp-providers", OptionList).focus()
 
     def _show_step2(self, provider_key: str):
         self._step = 2
@@ -184,14 +213,17 @@ ModelPickerScreen {
         self.query_one("#mp-step2").display = True
         self.query_one("#mp-step2").add_class("visible")
         self.query_one("#mp-back").display = True
+        self.query_one("#mp-key-row").remove_class("visible")
+        self.query_one("#mp-key-hint").remove_class("visible")
+        self._resize_lists()
 
         # For Ollama: don't show fake catalog — wait for live fetch
         if provider_key == "ollama":
             self._populate_models([], provider_key)  # empty = show placeholder
             self.query_one("#mp-models-header").update(
-                f"[bold]{provider.get('name', provider_key)} — Select a model:[/] "
-                "[dim](checking Ollama...)[/]"
+                "[bold]Choose a model[/] · Checking local connection…"
             )
+            self.query_one("#mp-models", OptionList).focus()
             self._fetch_live_models_worker(provider_key)
             return
 
@@ -199,24 +231,26 @@ ModelPickerScreen {
         models = get_cached_live_models(provider_key) or provider.get("models", [])
         self._populate_models(models, provider_key)
 
-        header_text = f"[bold]{provider.get('name', provider_key)} — Select a model:[/]"
+        header_text = "[bold]Choose a model[/]"
         has_key = bool(config.get_api_key(provider_key))
         req_env = provider.get("requires_env")
         key_row = self.query_one("#mp-key-row", Horizontal)
         if req_env and not has_key:
             key_row.add_class("visible")
-            header_text += " [yellow](API key required)[/]"
         else:
             key_row.remove_class("visible")
+        self._resize_lists()
         self.query_one("#mp-key-hint", Static).remove_class("visible")
         if req_env and has_key:
             header_text += " [dim](fetching live models...)[/]"
         elif req_env and not has_key:
-            header_text = f"[bold]{provider.get('name', provider_key)} — Select a model:[/] [yellow](API key required)[/]"
+            header_text = "[bold]Choose a model[/] [$text-warning]· API key required[/]"
             self.query_one("#mp-models-header").update(header_text)
             self.call_after_refresh(self._focus_key_input)
             return
         self.query_one("#mp-models-header").update(header_text)
+        self._resize_lists()
+        self.query_one("#mp-models", OptionList).focus()
 
         if has_key or provider.get("base_url"):
             self._fetch_live_models_worker(provider_key)
@@ -232,60 +266,98 @@ ModelPickerScreen {
         try:
             key = self.query_one("#mp-key-input", Input).value.strip()
             if not key:
-                self._show_key_hint("[yellow]Paste a key first — then press Connect.[/]")
+                self._show_key_hint("[$text-warning]Paste a key first — then press Connect.[/]")
                 return
             provider_key = self._selected_provider
             config.set_api_key(provider_key, key)
             self._key_just_connected = True
             self.query_one("#mp-key-row", Horizontal).remove_class("visible")
             self.query_one("#mp-key-hint", Static).remove_class("visible")
+            self._resize_lists()
             provider = provider_catalog().get(provider_key, {})
             self.query_one("#mp-models-header").update(
-                f"[bold]{provider.get('name', provider_key)} — Select a model:[/] [dim](fetching live models...)[/]"
+                "[bold]Choose a model[/] · Loading live models…"
             )
             self._populate_models(provider.get("models", []), provider_key)
+            self.query_one("#mp-models", OptionList).focus()
             self._fetch_live_models_worker(provider_key)
         except Exception:
-            self._show_key_hint("[red]Could not save key — check permissions and retry.[/]")
+            self._show_key_hint("[$text-error]Could not save key — check permissions and retry.[/]")
 
     def _show_key_hint(self, text: str):
         hint = self.query_one("#mp-key-hint", Static)
         hint.update(text)
         hint.add_class("visible")
+        self._resize_lists()
 
     # ─── Model list population ────────────────────────────────────────────────
 
     def _populate_models(self, models: list[dict], provider_key: str):
-        """Render model RadioButtons. Uses generation counter to avoid DuplicateId."""
+        """Replace the model list while keeping an explicit selection by ID."""
+        selected_id = (
+            self._current_models[self._selected_model_idx]["id"]
+            if 0 <= self._selected_model_idx < len(self._current_models) else None
+        )
         self._current_models = list(models)
-        self._gen += 1
-        gen = self._gen
-
-        rset = self.query_one("#mp-models-radioset", RadioSet)
-        rset.remove_children()
+        self._selected_model_idx = next((
+            i for i, model in enumerate(models) if model["id"] == selected_id
+        ), -1)
+        model_list = self.query_one("#mp-models", OptionList)
+        model_list.clear_options()
         try:
             self.query_one("#mp-model-desc").update("")
         except Exception:
             pass
 
         if not models:
-            # Placeholder — will be replaced when live fetch completes
-            rset.mount(Static(
-                "[dim]  Searching for available models…[/]",
-                id=f"m-{gen}-placeholder"
-            ))
+            model_list.add_option(Option("Searching for available models…", disabled=True))
+            self._resize_lists()
             return
 
         current_model = config.get("default", "model", "")
+        model_list.add_options(Option("", id=f"model-{idx}") for idx in range(len(models)))
+        self._format_model_rows()
+        model_list.highlighted = (
+            self._selected_model_idx if self._selected_model_idx >= 0 else
+            next((i for i, model in enumerate(models) if model["id"] == current_model), 0)
+        )
+        self._resize_lists()
+        self.call_after_refresh(self._format_model_rows)
 
-        for idx, m in enumerate(models):
-            label = f" {m['name']}  [dim]{m['id']}[/]"
-            if m["id"] == current_model:
-                label = f"[green]✓[/] {m['name']}  [dim]{m['id']}[/] [green](current)[/]"
-            if m.get("is_free") or m["id"].lower().endswith(":free"):
-                label += "  [green]Free[/]"
-            # NO set_timer auto-select — user must click
-            rset.mount(RadioButton(label, id=f"m-{gen}-{idx}"))
+    def _format_model_rows(self) -> None:
+        model_list = self.query_one("#mp-models", OptionList)
+        width = max(12, model_list.scrollable_content_region.width - 2)
+        name_width = min(24, max(8, width // 2 - 2))
+        current_model = config.get("default", "model", "")
+        for idx, model in enumerate(self._current_models):
+            marker = "✓ " if model["id"] == current_model else ("› " if idx == self._selected_model_idx else "  ")
+            free_label = "  Free" if model.get("is_free") or model["id"].lower().endswith(":free") else ""
+            name = Content(str(model["name"])).truncate(name_width, ellipsis=True, pad=True)
+            model_id = Content(str(model["id"])).truncate(max(1, width - name_width - 4 - len(free_label)), ellipsis=True)
+            model_list.replace_option_prompt_at_index(idx, Content.assemble(
+                (marker, "bold"), name, "  ", (model_id.plain, "dim"),
+                (free_label, "$text-success"),
+            ))
+
+    def _resize_lists(self) -> None:
+        if not self.is_mounted:
+            return
+        compact = self.size.height < 26
+        self.set_class(compact, "compact")
+        height = int(self.size.height * 0.9)
+        self.query_one("#mp-providers").styles.max_height = max(1, min(14, height - (7 if compact else 10)))
+        key_rows = 4 if self.query_one("#mp-key-row").has_class("visible") else 0
+        hint_rows = 2 if self.query_one("#mp-key-hint").has_class("visible") else 0
+        width = max(1, min(80, int(self.size.width * 0.9)) - 6)
+        header = self.query_one("#mp-models-header", Static)
+        header_rows = max(1, header.get_content_height(self.size, self.size, width))
+        overhead = 10 if compact else 15
+        self.query_one("#mp-models").styles.max_height = max(1, min(14, height - overhead - header_rows - key_rows - hint_rows))
+
+    def on_resize(self) -> None:
+        self._resize_lists()
+        if self._current_models:
+            self.call_after_refresh(self._format_model_rows)
 
     @work(thread=True)
     def _fetch_live_models_worker(self, provider_key: str):
@@ -305,10 +377,9 @@ ModelPickerScreen {
         if not live_models:
             # Ollama offline OR API failed — show clear error
             if provider_key == "ollama":
-                rset = self.query_one("#mp-models-radioset", RadioSet)
-                rset.remove_children()
+                self.query_one("#mp-models", OptionList).clear_options()
                 self.query_one("#mp-models-header").update(
-                    "[bold]Ollama (Local)[/] [red] ⚠  Ollama is not running[/]"
+                    "[bold]Ollama (Local)[/] [$text-error]Ollama is not running[/]"
                 )
                 self.query_one("#mp-model-desc").update(
                     "  Start Ollama with: [bold]ollama serve[/]  then reopen this picker."
@@ -318,53 +389,50 @@ ModelPickerScreen {
                 self._key_just_connected = False
                 header = f"[bold]{provider.get('name', provider_key)}[/] "
                 if just_added:
-                    header += "[red]— key rejected or network error. Verify the key:[/]"
+                    header += "[$text-error]— key rejected or network error. Verify the key:[/]"
                     self.query_one("#mp-key-row", Horizontal).add_class("visible")
+                    self._resize_lists()
                     inp = self.query_one("#mp-key-input", Input)
                     inp.value = ""
                     self.call_after_refresh(self._focus_key_input)
                 else:
-                    header += "[yellow]— live fetch failed, showing catalog[/]"
+                    header += "[$text-warning]— live fetch failed, showing catalog[/]"
                 self.query_one("#mp-models-header").update(header)
             return
 
         self.query_one("#mp-models-header").update(
-            f"[bold]{provider.get('name', provider_key)} — Select a model:[/] "
-            f"[green](Live: {len(live_models)} available)[/]"
+            "[bold]Choose a model[/] "
+            f"[$text-success]· {len(live_models)} live models[/]"
         )
         self._populate_models(live_models, provider_key)
 
     # ─── Event handlers ───────────────────────────────────────────────────────
 
-    def on_radio_set_changed(self, event: RadioSet.Changed):
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if not self._ready:
-            return  # ignore events fired during mount
+            return
+        event.stop()
+        if event.option_list.id == "mp-providers":
+            self._show_step2(self._provider_keys[event.option_index])
+        elif event.option_list.id == "mp-models" and event.option_index < len(self._current_models):
+            self._selected_model_idx = event.option_index
+            self._format_model_rows()
+            self._update_model_description(event.option_index)
 
-        if event.radio_set.id == "mp-providers-radioset":
-            try:
-                provider_key = event.pressed.id.replace("provider-", "")
-                self._show_step2(provider_key)
-            except AttributeError:
-                pass
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if event.option_list.id == "mp-models" and event.option_index < len(self._current_models):
+            self._update_model_description(event.option_index)
 
-        elif event.radio_set.id == "mp-models-radioset":
-            try:
-                btn_id = event.pressed.id  # "m-{gen}-{idx}"
-                parts = btn_id.split("-")
-                idx = int(parts[-1])
-                self._selected_model_idx = idx
-                if idx < len(self._current_models):
-                    m = self._current_models[idx]
-                    desc_parts = [m.get("desc", "")]
-                    if m.get("context"):
-                        desc_parts.append(f"Context: {m['context']}")
-                    if m.get("pricing"):
-                        desc_parts.append(m["pricing"])
-                    self.query_one("#mp-model-desc").update(
-                        "  " + " | ".join(filter(None, desc_parts))
-                    )
-            except Exception:
-                pass
+    def _update_model_description(self, idx: int) -> None:
+        model = self._current_models[idx]
+        parts = [str(model["id"])]
+        if model.get("desc"):
+            parts.append(str(model["desc"]))
+        if model.get("context"):
+            parts.append(f"Context: {model['context']}")
+        if model.get("pricing"):
+            parts.append(str(model["pricing"]))
+        self.query_one("#mp-model-desc", Static).update(Content(" · ".join(parts)))
 
     def _apply_selection(self):
         # Save provider
@@ -394,7 +462,7 @@ ModelPickerScreen {
                     chat = self.app.query_one("ChatPanel")
                     chat.add_system_message(
                         f"\u26a0 Missing API Key: Provider [bold]{provider_info['name']}[/] has no key configured.\n"
-                        f"Set it via [bold cyan]/keys set {self._selected_provider} <your_key>[/] "
+                        f"Set it via [bold]/keys set {self._selected_provider} <your_key>[/] "
                         f"or define [dim]{req_env}[/]."
                     )
                 except Exception:

@@ -8,6 +8,9 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Static
 
+from andromity.tui.overlays.dialog import dialog_styles
+
+
 from andromity.tui.command_palette import COMMAND_DESCRIPTIONS
 
 SHORTCUTS = [
@@ -47,7 +50,10 @@ HelpScreen {
 #help-hint { height: 1; padding: 0 1; color: $text-muted; }
 #help-footer { dock: bottom; height: 3; padding: 0 1; }
 #help-footer Button { margin: 0 1; }
-"""
+""" + dialog_styles(
+        "help-dialog", "help-title", "help-footer",
+        primary=("help-close",),
+    )
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -61,13 +67,13 @@ HelpScreen {
                 yield Static("Commands  [dim](click to run)[/dim]", id="help-section")
                 for i, (cmd, desc) in enumerate(self._commands):
                     yield Static(
-                        f"  [bold cyan]{cmd}[/]  [dim]{desc}[/]",
+                        f"  [bold $text-info]{cmd}[/]  [dim]{desc}[/]",
                         id=f"help-cmd-{i}",
                         classes="help-cmd-row",
                     )
                 yield Static("Shortcuts", id="help-section-keys")
                 for key, desc in SHORTCUTS:
-                    yield Static(f"  [bold yellow]{key}[/]  [dim]{desc}[/]", classes="help-shortcut")
+                    yield Static(f"  [bold $text-warning]{key}[/]  [dim]{desc}[/]", classes="help-shortcut")
                 yield Static("\n[dim]✦  Not all commands are listed here. Discovery is part of the experience.[/dim]", id="help-lore-hint")
             yield Static("[dim]↑↓ navigate · Enter run · click a command to run it · Esc close[/dim]", id="help-hint")
             with Horizontal(id="help-footer"):
