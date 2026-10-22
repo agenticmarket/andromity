@@ -148,8 +148,9 @@ def test_format_question_answers():
 
 def test_format_question_answers_empty_or_none():
     questions = [{"question": "Q1"}]
-    res = format_question_answers(questions, None)
-    assert res == "The user did not answer the questions. Proceed with reasonable assumptions."
+    # None means the user closed the questions: the agent must not guess an answer.
+    from andromity.tui.overlays.questions import QUESTIONS_DISMISSED
+    assert format_question_answers(questions, None) == QUESTIONS_DISMISSED
     res2 = format_question_answers(questions, {})
     assert res2 == "The user did not answer the questions. Proceed with reasonable assumptions."
 

@@ -39,6 +39,7 @@ export function getFingerprintScript(sessionId: string): string {
       let manualPositions = saved.positions && typeof saved.positions === 'object' ? saved.positions : {};
       let renderedNodes = new Map();
       let lastFitMinScale = MIN_ZOOM;
+      let loadFailed = false;
 
       let traceData = {
         session_id: ${scriptJson(sessionId)},
@@ -426,8 +427,11 @@ export function getFingerprintScript(sessionId: string): string {
           const filtered = (ds.nodes || []).length > 0;
           const title = document.getElementById('empty-title');
           const text = document.getElementById('empty-text');
-          if (title) title.textContent = filtered ? 'Nothing matches' : 'No activity yet';
-          if (text) text.textContent = filtered ? 'Try another filter or search.' : 'Send a prompt to the agent. The files it reads, changes and runs appear here.';
+          const failed = loadFailed && !filtered;
+          const retry = document.getElementById('empty-retry');
+          if (title) title.textContent = failed ? "Couldn't load this session" : filtered ? 'Nothing matches' : 'No activity yet';
+          if (text) text.textContent = failed ? 'The Andromity engine did not respond. Check that it is running, then retry.' : filtered ? 'Try another filter or search.' : 'Send a prompt to the agent. The files it reads, changes and runs appear here.';
+          if (retry) retry.style.display = failed ? '' : 'none';
         }
         if (activeView === 'blast') layoutBlast(nodes);
 
@@ -823,6 +827,9 @@ export function getFingerprintScript(sessionId: string): string {
       window.addEventListener('message', event => {
         const msg = event.data;
         if (!msg || msg.type !== 'fingerprint_init' || !msg.data) return;
+        // A failed refresh keeps the trace already on screen.
+        if (msg.loadFailed && traceData && (traceData.nodes || []).length) return;
+        loadFailed = !!msg.loadFailed;
         traceData = msg.data;
         if (activeSubagentId && (!traceData.subagents || !traceData.subagents[activeSubagentId])) {
           activeSubagentId = null;
@@ -851,6 +858,12 @@ export function getFingerprintScript(sessionId: string): string {
         if (canvas && typeof ResizeObserver !== 'undefined') {
           new ResizeObserver(() => { if (!cameraTouched) fitToContent(lastFitMinScale); }).observe(canvas);
         }
+        const retryBtn = document.getElementById('empty-retry');
+        if (retryBtn) retryBtn.addEventListener('click', () => {
+          const text = document.getElementById('empty-text');
+          if (text) text.textContent = 'Retrying…';
+          vscode.postMessage({ type: 'fingerprint_ready' });
+        });
         vscode.postMessage({ type: 'fingerprint_ready' });
       }
 

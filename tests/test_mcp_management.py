@@ -166,35 +166,167 @@ async def test_refresh_preserves_nonrotated_token(monkeypatch):
     assert saved[0][1]["refresh_token"] == "refresh"
 
 
+def use_mcp2_streamable_http(monkeypatch, connection):
+    """Route the "http" transport through the mcp 2.x client, even when mcp 1.x is installed."""
+    pytest.importorskip("httpx2")
+    import mcp.client.streamable_http
+    monkeypatch.delattr(mcp.client.streamable_http, "streamablehttp_client", raising=False)
+    monkeypatch.setattr(mcp.client.streamable_http, "streamable_http_client", connection, raising=False)
+
+
+def fake_client_session(monkeypatch, tool):
+    """Answer fake ("read", "write") streams; real transport streams still reach the SDK session."""
+    import mcp.client.session
+    real = mcp.client.session.ClientSession
+    def session(read, write):
+        if (read, write) != ("read", "write"):
+            return real(read, write)
+        return fake(read, write)
+    @asynccontextmanager
+    async def fake(read, write):
+        yield SimpleNamespace(initialize=AsyncMock(), list_tools=AsyncMock(return_value=SimpleNamespace(tools=[tool])))
+    monkeypatch.setattr(mcp.client.session, "ClientSession", session)
+
+
 @pytest.mark.parametrize("transport", ["http", "sse"])
 async def test_remote_session_sdk_transport_and_lifecycle(monkeypatch, transport):
     import mcp.client.sse
-    import mcp.client.streamable_http
-    import mcp.client.session
     called = []
     closed = []
     @asynccontextmanager
-    async def connection(url, headers):
-        called.append((url, headers))
+    async def connection(url, headers=None, http_client=None):
+        called.append((url, dict(http_client.headers) if http_client else headers))
         try:
-            yield ("read", "write", lambda: "session") if transport == "http" else ("read", "write")
+            yield ("read", "write")
         finally:
             closed.append(True)
-    @asynccontextmanager
-    async def session(read, write):
-        assert (read, write) == ("read", "write")
-        yield SimpleNamespace(initialize=AsyncMock(), list_tools=AsyncMock(return_value=SimpleNamespace(tools=[SimpleNamespace(name="query", description="Query", inputSchema={})])))
-    monkeypatch.setattr(mcp.client.streamable_http, "streamablehttp_client", connection)
-    monkeypatch.setattr(mcp.client.sse, "sse_client", connection)
-    monkeypatch.setattr(mcp.client.session, "ClientSession", session)
+    if transport == "http":
+        use_mcp2_streamable_http(monkeypatch, connection)
+    else:
+        monkeypatch.setattr(mcp.client.sse, "sse_client", connection)
+    fake_client_session(monkeypatch, SimpleNamespace(name="query", description="Query", input_schema={"type": "object"}))
     remote = MCPSseSession("test", "https://mcp.example/mcp", {"X-Key": "key"}, transport=transport)
     assert await remote.start()
     assert remote.tools[0].full_name == "mcp__test__query"
+    assert remote.tools[0].input_schema == {"type": "object"}
     assert remote.is_alive()
     await remote.stop()
     assert not remote.is_alive()
     assert closed == [True]
-    assert called[0][1] == {"X-Key": "key"}
+    assert called[0][0] == "https://mcp.example/mcp"
+    assert {k.lower(): v for k, v in called[0][1].items()}["x-key"] == "key"
+
+
+async def test_http_transport_closes_its_httpx2_client(monkeypatch):
+    clients = []
+    @asynccontextmanager
+    async def connection(url, http_client):
+        clients.append(http_client)
+        yield ("read", "write")
+    use_mcp2_streamable_http(monkeypatch, connection)
+    fake_client_session(monkeypatch, SimpleNamespace(name="query", description="", input_schema={}))
+    remote = MCPSseSession("test", "https://mcp.example/mcp", {"Authorization": "Bearer t"}, transport="http")
+    assert await remote.start()
+    assert clients[0].headers["authorization"] == "Bearer t"
+    assert not clients[0].is_closed
+    await remote.stop()
+    assert clients[0].is_closed
+
+
+async def test_http_transport_keeps_mcp1_client_when_available(monkeypatch):
+    import mcp.client.streamable_http
+    called = []
+    @asynccontextmanager
+    async def legacy(url, headers):
+        called.append(("legacy", headers))
+        yield ("read", "write", lambda: "session-id")
+    @asynccontextmanager
+    async def modern(url, http_client):
+        called.append(("modern", None))
+        yield ("read", "write")
+    monkeypatch.setattr(mcp.client.streamable_http, "streamablehttp_client", legacy, raising=False)
+    monkeypatch.setattr(mcp.client.streamable_http, "streamable_http_client", modern, raising=False)
+    fake_client_session(monkeypatch, SimpleNamespace(name="query", description="", inputSchema={"type": "object"}))
+    remote = MCPSseSession("test", "https://mcp.example/mcp", {"X-Key": "key"}, transport="http")
+    assert await remote.start()
+    assert called == [("legacy", {"X-Key": "key"})]
+    assert remote.tools[0].input_schema == {"type": "object"}
+    await remote.stop()
+
+
+async def test_sse_transport_never_touches_streamable_http(monkeypatch):
+    import mcp.client.sse
+    import mcp.client.streamable_http
+    called = []
+    @asynccontextmanager
+    async def sse(url, headers):
+        called.append(("sse", url, headers))
+        yield ("read", "write")
+    def unexpected(*args, **kwargs):
+        raise AssertionError("streamable HTTP client used for an SSE server")
+    monkeypatch.setattr(mcp.client.sse, "sse_client", sse)
+    monkeypatch.setattr(mcp.client.streamable_http, "streamablehttp_client", unexpected, raising=False)
+    monkeypatch.setattr(mcp.client.streamable_http, "streamable_http_client", unexpected, raising=False)
+    fake_client_session(monkeypatch, SimpleNamespace(name="query", description="", input_schema={}))
+    remote = MCPSseSession("test", "https://mcp.example/sse", {"X-Key": "key"}, transport="sse")
+    assert await remote.start()
+    assert called == [("sse", "https://mcp.example/sse", {"X-Key": "key"})]
+    await remote.stop()
+
+
+@pytest.mark.parametrize("status,needs_auth,legacy", [(401, True, False), (404, False, True), (405, False, True), (500, False, False)])
+async def test_mcp2_http_status_reaches_auth_and_legacy_detection(monkeypatch, status, needs_auth, legacy):
+    httpx2 = pytest.importorskip("httpx2")
+    import mcp.client.streamable_http
+    if hasattr(mcp.client.streamable_http, "streamablehttp_client"):
+        pytest.skip("mcp 1.x raises HTTPStatusError itself")
+    client = httpx2.AsyncClient
+    respond = lambda request: httpx2.Response(status, text="internal secret detail")
+    monkeypatch.setattr(httpx2, "AsyncClient", lambda **kw: client(transport=httpx2.MockTransport(respond), **kw))
+    remote = MCPSseSession("test", "https://mcp.example/mcp", {"Authorization": "Bearer t"}, transport="http")
+    assert not await remote.start()
+    assert (remote.needs_auth, remote.legacy_endpoint) == (needs_auth, legacy)
+    assert "secret" not in remote.error
+
+
+async def test_auto_transport_falls_back_to_sse_on_real_mcp2_405(tmp_path, monkeypatch):
+    httpx2 = pytest.importorskip("httpx2")
+    import mcp.client.sse
+    import mcp.client.streamable_http
+    if hasattr(mcp.client.streamable_http, "streamablehttp_client"):
+        pytest.skip("mcp 1.x raises HTTPStatusError itself")
+    config.set_trusted(str(tmp_path))
+    monkeypatch.setattr(oauth, "ensure_fresh_token", AsyncMock(return_value=None))
+    client = httpx2.AsyncClient
+    monkeypatch.setattr(httpx2, "AsyncClient", lambda **kw: client(transport=httpx2.MockTransport(lambda r: httpx2.Response(405)), **kw))
+    @asynccontextmanager
+    async def sse(url, headers):
+        yield ("read", "write")
+    monkeypatch.setattr(mcp.client.sse, "sse_client", sse)
+    fake_client_session(monkeypatch, SimpleNamespace(name="query", description="", input_schema={}))
+    manager = MCPClientManager(str(tmp_path))
+    await manager.start_server("legacy", {"url": "https://mcp.example/events"})
+    assert manager.server_status["legacy"]["status"] == "running"
+    assert manager.sessions["legacy"].transport == "sse"
+    await manager.stop_all()
+
+
+@pytest.mark.parametrize("tool", [
+    SimpleNamespace(name="q", description="d", input_schema={"type": "object", "required": ["x"]}),
+    SimpleNamespace(name="q", description="d", inputSchema={"type": "object", "required": ["x"]}),
+])
+def test_sdk_tool_schema_survives_mcp2_field_rename(tool):
+    from andromity.core.mcp import sdk_tool_info
+    info = sdk_tool_info("srv", tool)
+    assert info.input_schema == {"type": "object", "required": ["x"]}
+    assert info.to_openai_schema()["function"]["parameters"]["required"] == ["x"]
+
+
+def test_sdk_tool_schema_from_real_mcp_tool_type():
+    from mcp.types import Tool
+    from andromity.core.mcp import sdk_tool_info
+    tool = Tool.model_validate({"name": "q", "inputSchema": {"type": "object", "properties": {"x": {"type": "string"}}}})
+    assert sdk_tool_info("srv", tool).input_schema["properties"] == {"x": {"type": "string"}}
 
 
 async def test_remote_manager_preserves_headers_and_allows_public_servers(tmp_path, monkeypatch):
@@ -270,14 +402,13 @@ async def test_auto_transport_falls_back_to_legacy_sse(tmp_path, monkeypatch):
 
 
 async def test_http_auth_failure_is_actionable_and_sanitized(monkeypatch):
-    import mcp.client.streamable_http
     @asynccontextmanager
     async def connection(*args, **kwargs):
         request = httpx.Request("POST", "https://mcp.example/mcp")
         response = httpx.Response(401, request=request)
         raise ExceptionGroup("internal secret", [httpx.HTTPStatusError("sensitive detail", request=request, response=response)])
         yield
-    monkeypatch.setattr(mcp.client.streamable_http, "streamablehttp_client", connection)
+    use_mcp2_streamable_http(monkeypatch, connection)
     remote = MCPSseSession("test", "https://mcp.example/mcp", transport="http")
     assert not await remote.start()
     assert remote.needs_auth

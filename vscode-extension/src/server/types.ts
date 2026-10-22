@@ -124,6 +124,7 @@ export interface InteractionMessage {
   questionId?: string;
   scope?: string;
   answers?: string;
+  dismissed?: boolean;
 }
 
 export interface ClarifyingQuestionsEvent {

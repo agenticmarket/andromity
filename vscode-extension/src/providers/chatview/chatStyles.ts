@@ -4,13 +4,20 @@ import { getTurnRailStyles } from "./turnRail.js";
 export function getChatStyles(): string {
   return `
 
+    :root:has(> body.vscode-light), :root:has(> body.vscode-high-contrast-light) {
+      --tint: 0, 0, 0;
+      --green: var(--vscode-testing-iconPassed, #1a7f37);
+      --red: var(--vscode-errorForeground, #cf222e);
+      --purple: #8250df;
+    }
     :root {
+      --tint: 255, 255, 255;
       --bg: var(--vscode-sideBar-background, #18181b);
       --fg: var(--vscode-foreground, #e4e4e7);
       --card-bg: var(--vscode-editor-background, #1e1e1e);
       --input-bg: var(--vscode-input-background, #252526);
       --input-border: var(--vscode-input-border, #3c3c3c);
-      --border: var(--vscode-widget-border, rgba(255,255,255,0.08));
+      --border: var(--vscode-widget-border, rgba(var(--tint), 0.08));
       --accent: var(--vscode-focusBorder, #007fd4);
       --accent-glow: rgba(0, 127, 212, 0.25);
       --green: #3fb950;
@@ -18,11 +25,11 @@ export function getChatStyles(): string {
       --purple: #bc8cff;
       --muted: var(--vscode-descriptionForeground, #888888);
       /* Theme-aware surfaces (resolve per VS Code color theme, incl. light) */
-      --surface-hover: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
-      --surface-active: var(--vscode-list-activeSelectionBackground, rgba(255, 255, 255, 0.1));
+      --surface-hover: var(--vscode-list-hoverBackground, rgba(var(--tint), 0.06));
+      --surface-active: var(--vscode-list-activeSelectionBackground, rgba(var(--tint), 0.1));
       --surface-header: var(--vscode-sideBar-background, rgba(24, 24, 27, 0.78));
       --popover-bg: var(--vscode-editorWidget-background, rgba(24, 24, 27, 0.98));
-      --popover-border: var(--vscode-widget-border, rgba(255, 255, 255, 0.1));
+      --popover-border: var(--vscode-widget-border, rgba(var(--tint), 0.1));
       --popover-shadow: var(--vscode-widget-shadow, rgba(0, 0, 0, 0.65));
       --radius: 5px;
       --chat-max-width: 900px;
@@ -254,7 +261,7 @@ export function getChatStyles(): string {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      background: rgba(255, 255, 255, 0.05);
+      background: rgba(var(--tint), 0.05);
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 3px 8px;
@@ -270,7 +277,7 @@ export function getChatStyles(): string {
     }
 
     .model-badge-btn:hover {
-      background: rgba(255, 255, 255, 0.1);
+      background: rgba(var(--tint), 0.1);
       border-color: var(--accent);
     }
 
@@ -520,7 +527,7 @@ export function getChatStyles(): string {
       color: var(--vscode-list-activeSelectionForeground, var(--fg));
       font-weight: 600;
     }
-    body.vscode-highContrast .session-item.active {
+    body.vscode-high-contrast .session-item.active {
       background: var(--vscode-list-activeSelectionBackground, Highlight);
       color: var(--vscode-list-activeSelectionForeground, HighlightText);
       border-color: var(--vscode-focusBorder, Highlight);
@@ -618,7 +625,8 @@ export function getChatStyles(): string {
       font-weight: 600;
     }
     .session-badge-status.session-status-paused,
-    .session-badge-status.session-status-paused_limit_reached {
+    .session-badge-status.session-status-paused_limit_reached,
+    .session-badge-status.session-status-interrupted {
       color: #fbbf24;
       background: rgba(251, 191, 36, 0.1);
       border: 1px solid rgba(251, 191, 36, 0.28);
@@ -672,7 +680,8 @@ export function getChatStyles(): string {
       flex-shrink: 0;
     }
     .session-item:hover .session-item-actions,
-    .session-subsession-item:hover .session-item-actions {
+    .session-subsession-item:hover .session-item-actions,
+    .session-item:focus-within .session-item-actions {
       opacity: 1;
     }
     .session-action-icon {
@@ -698,8 +707,8 @@ export function getChatStyles(): string {
     }
     .session-action-icon:hover {
       color: var(--fg);
-      background: rgba(255, 255, 255, 0.1);
-      border-color: rgba(255, 255, 255, 0.12);
+      background: rgba(var(--tint), 0.1);
+      border-color: rgba(var(--tint), 0.12);
     }
     .session-action-delete:hover {
       color: var(--red);
@@ -716,7 +725,7 @@ export function getChatStyles(): string {
     .session-subsessions-list {
       margin-left: 14px;
       padding-left: 10px;
-      border-left: 1.5px solid rgba(255, 255, 255, 0.12);
+      border-left: 1.5px solid rgba(var(--tint), 0.12);
       display: flex;
       flex-direction: column;
       gap: 3px;
@@ -807,7 +816,7 @@ export function getChatStyles(): string {
       align-items: center;
       gap: 5px;
       padding: 4px 10px;
-      background: rgba(255, 255, 255, 0.05);
+      background: rgba(var(--tint), 0.05);
       border: 1px solid var(--border);
       color: var(--fg);
       font-size: 11px;
@@ -816,7 +825,7 @@ export function getChatStyles(): string {
       transition: all 0.15s ease;
     }
     .btn-load-more-sessions:hover {
-      background: rgba(255, 255, 255, 0.1);
+      background: rgba(var(--tint), 0.1);
       border-color: var(--accent);
     }
 
@@ -846,7 +855,7 @@ export function getChatStyles(): string {
       justify-content: space-between;
       padding: 8px 10px;
       border-bottom: 1px solid var(--border);
-      background: rgba(255, 255, 255, 0.02);
+      background: rgba(var(--tint), 0.02);
     }
     .crons-header-title {
       display: flex;
@@ -857,7 +866,7 @@ export function getChatStyles(): string {
       color: var(--fg);
     }
     .crons-action-hdr-btn {
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
       border: 1px solid var(--border);
       color: var(--muted);
       cursor: pointer;
@@ -871,8 +880,8 @@ export function getChatStyles(): string {
     }
     .crons-action-hdr-btn:hover {
       color: var(--fg);
-      background: rgba(255, 255, 255, 0.1);
-      border-color: rgba(255, 255, 255, 0.2);
+      background: rgba(var(--tint), 0.1);
+      border-color: rgba(var(--tint), 0.2);
     }
     .crons-close-btn {
       background: transparent;
@@ -898,7 +907,7 @@ export function getChatStyles(): string {
     .cron-card {
       padding: 9px 11px;
       border-radius: 6px;
-      background: rgba(255, 255, 255, 0.02);
+      background: rgba(var(--tint), 0.02);
       border: 1px solid var(--border);
       display: flex;
       flex-direction: column;
@@ -906,7 +915,7 @@ export function getChatStyles(): string {
       transition: border-color 0.15s ease;
     }
     .cron-card:hover {
-      border-color: rgba(255, 255, 255, 0.15);
+      border-color: rgba(var(--tint), 0.15);
     }
     .cron-card-top {
       display: flex;
@@ -966,7 +975,7 @@ export function getChatStyles(): string {
       color: var(--muted);
       margin-top: 2px;
       padding-top: 4px;
-      border-top: 1px dashed rgba(255, 255, 255, 0.06);
+      border-top: 1px dashed rgba(var(--tint), 0.06);
     }
     .cron-card-actions {
       display: flex;
@@ -974,7 +983,7 @@ export function getChatStyles(): string {
       gap: 5px;
     }
     .cron-btn-action {
-      background: rgba(255, 255, 255, 0.05);
+      background: rgba(var(--tint), 0.05);
       border: 1px solid var(--border);
       border-radius: 4px;
       color: var(--fg);
@@ -987,8 +996,8 @@ export function getChatStyles(): string {
       transition: all 0.15s ease;
     }
     .cron-btn-action:hover {
-      background: rgba(255, 255, 255, 0.12);
-      border-color: rgba(255, 255, 255, 0.25);
+      background: rgba(var(--tint), 0.12);
+      border-color: rgba(var(--tint), 0.25);
     }
     .cron-btn-action.run-btn {
       color: var(--green);
@@ -1005,7 +1014,7 @@ export function getChatStyles(): string {
       padding: 10px 12px;
       border-radius: 8px;
       background: rgba(18, 18, 24, 0.85);
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(var(--tint), 0.1);
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
       display: flex;
       flex-direction: column;
@@ -1036,8 +1045,8 @@ export function getChatStyles(): string {
       margin: 0;
       padding: 7px 12px 6px 12px;
       background: var(--vscode-editorWidget-background, rgba(24, 24, 27, 0.95));
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(var(--tint), 0.08);
+      border-bottom: 1px solid rgba(var(--tint), 0.05);
       border-top-left-radius: 12px;
       border-top-right-radius: 12px;
       border-bottom-left-radius: 0;
@@ -1062,8 +1071,8 @@ export function getChatStyles(): string {
     }
     .composer-container.has-plan-tracker:focus-within .plan-tracker-strip,
     .composer-container:has(.prompt-box:focus-within) .plan-tracker-strip {
-      border-color: rgba(255, 255, 255, 0.18);
-      border-bottom-color: rgba(255, 255, 255, 0.07);
+      border-color: rgba(var(--tint), 0.18);
+      border-bottom-color: rgba(var(--tint), 0.07);
     }
     .composer-container.has-plan-tracker:has(.prompt-box.is-generating) .plan-tracker-strip,
     .composer-container:has(.prompt-box.is-generating) .plan-tracker-strip {
@@ -1071,7 +1080,7 @@ export function getChatStyles(): string {
       border-bottom-color: rgba(9, 249, 148, 0.2);
     }
     .plan-tracker-strip:hover {
-      border-color: var(--vscode-focusBorder, rgba(255, 255, 255, 0.15));
+      border-color: var(--vscode-focusBorder, rgba(var(--tint), 0.15));
     }
     .tracker-row {
       display: flex;
@@ -1124,8 +1133,8 @@ export function getChatStyles(): string {
       color: var(--vscode-descriptionForeground, #a1a1aa);
       font-size: 11px;
       font-family: var(--font-mono);
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.04);
+      border: 1px solid rgba(var(--tint), 0.06);
       padding: 1px 6px;
       border-radius: 4px;
       white-space: nowrap;
@@ -1147,7 +1156,7 @@ export function getChatStyles(): string {
       align-items: center;
       gap: 4px;
       background: transparent;
-      border: 1px solid var(--vscode-button-secondaryBorder, rgba(255, 255, 255, 0.1));
+      border: 1px solid var(--vscode-button-secondaryBorder, rgba(var(--tint), 0.1));
       color: var(--vscode-descriptionForeground, #a1a1aa);
       font-size: 11px;
       font-weight: 500;
@@ -1157,8 +1166,8 @@ export function getChatStyles(): string {
       transition: all 0.12s ease;
     }
     .btn-tracker-open:hover {
-      background: rgba(255, 255, 255, 0.06);
-      border-color: rgba(255, 255, 255, 0.2);
+      background: rgba(var(--tint), 0.06);
+      border-color: rgba(var(--tint), 0.2);
       color: var(--vscode-foreground, #ffffff);
     }
     .btn-tracker-close {
@@ -1176,13 +1185,13 @@ export function getChatStyles(): string {
     }
     .btn-tracker-close:hover {
       color: var(--vscode-foreground, #f4f4f5);
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
       opacity: 1;
     }
     .tracker-progress-track {
       width: 100%;
       height: 2px;
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
       border-radius: 1px;
       overflow: hidden;
       margin-top: 1px;
@@ -1215,7 +1224,7 @@ export function getChatStyles(): string {
       font-size: 11.5px;
       line-height: 1.4;
       color: var(--vscode-foreground, #e4e4e7);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      border-bottom: 1px solid rgba(var(--tint), 0.03);
       border-radius: 4px;
       transition: background 0.12s ease;
     }
@@ -1223,7 +1232,7 @@ export function getChatStyles(): string {
       border-bottom: none;
     }
     .tracker-todo-item:hover {
-      background: rgba(255, 255, 255, 0.03);
+      background: rgba(var(--tint), 0.03);
     }
     .tracker-todo-item.is-done {
       color: var(--vscode-descriptionForeground, #71717a);
@@ -1262,8 +1271,8 @@ export function getChatStyles(): string {
       margin: 0;
       padding: 7px 12px 6px 12px;
       background: var(--vscode-editorWidget-background, rgba(24, 24, 27, 0.95));
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(var(--tint), 0.08);
+      border-bottom: 1px solid rgba(var(--tint), 0.05);
       border-top-left-radius: 12px;
       border-top-right-radius: 12px;
       border-bottom-left-radius: 0;
@@ -1299,11 +1308,11 @@ export function getChatStyles(): string {
     }
     .composer-container.has-bg-process:focus-within .bg-process-strip,
     .composer-container:has(.prompt-box:focus-within) .bg-process-strip {
-      border-color: rgba(255, 255, 255, 0.18);
-      border-bottom-color: rgba(255, 255, 255, 0.07);
+      border-color: rgba(var(--tint), 0.18);
+      border-bottom-color: rgba(var(--tint), 0.07);
     }
     .bg-process-strip:hover {
-      border-color: var(--vscode-focusBorder, rgba(255, 255, 255, 0.15));
+      border-color: var(--vscode-focusBorder, rgba(var(--tint), 0.15));
     }
     .bg-strip-icon {
       color: var(--accent, #58a6ff);
@@ -1353,7 +1362,7 @@ export function getChatStyles(): string {
       font-size: 11.5px;
       line-height: 1.4;
       color: var(--vscode-foreground, #e4e4e7);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      border-bottom: 1px solid rgba(var(--tint), 0.03);
       border-radius: 4px;
       transition: background 0.12s ease;
       cursor: pointer;
@@ -1362,7 +1371,7 @@ export function getChatStyles(): string {
       border-bottom: none;
     }
     .bg-process-item:hover {
-      background: rgba(255, 255, 255, 0.04);
+      background: rgba(var(--tint), 0.04);
     }
     .bg-item-left {
       display: flex;
@@ -1528,7 +1537,7 @@ export function getChatStyles(): string {
     .compaction-progress-track {
       width: 100%;
       height: 3px;
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
       border-radius: 2px;
       margin-top: 8px;
       overflow: hidden;
@@ -1658,8 +1667,8 @@ export function getChatStyles(): string {
       gap: 6px;
       padding: 5px 12px;
       margin: 8px auto 12px auto;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.04);
+      border: 1px solid rgba(var(--tint), 0.08);
       border-radius: 20px;
       font-size: 11px;
       color: var(--muted);
@@ -1679,9 +1688,9 @@ export function getChatStyles(): string {
       max-width: var(--chat-max-width, 860px);
       box-sizing: border-box;
       background: var(--card-bg, #18181b);
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(var(--tint), 0.1);
       border-radius: 10px;
-      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.05);
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(var(--tint), 0.05);
       z-index: 120;
       display: flex;
       flex-direction: column;
@@ -1695,14 +1704,14 @@ export function getChatStyles(): string {
       align-items: center;
       gap: 8px;
       padding: 10px 12px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-      background: rgba(255, 255, 255, 0.02);
+      border-bottom: 1px solid rgba(var(--tint), 0.06);
+      background: rgba(var(--tint), 0.02);
     }
 
     .flyout-search {
       flex: 1;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.04);
+      border: 1px solid rgba(var(--tint), 0.08);
       color: var(--fg);
       padding: 7px 11px;
       border-radius: 6px;
@@ -1714,7 +1723,7 @@ export function getChatStyles(): string {
 
     .flyout-search:focus {
       border-color: rgba(56, 189, 248, 0.5);
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
       box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.12);
     }
 
@@ -1769,8 +1778,8 @@ export function getChatStyles(): string {
     }
 
     .flyout-item:hover {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.05);
+      border-color: rgba(var(--tint), 0.06);
     }
 
     .flyout-item.active {
@@ -1816,10 +1825,10 @@ export function getChatStyles(): string {
       font-size: 11px;
       color: var(--muted, #71717a);
       white-space: nowrap;
-      background: rgba(255, 255, 255, 0.04);
+      background: rgba(var(--tint), 0.04);
       padding: 2px 6px;
       border-radius: 4px;
-      border: 1px solid rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(var(--tint), 0.06);
       flex-shrink: 0;
     }
 
@@ -1847,7 +1856,7 @@ export function getChatStyles(): string {
       font-size: 9.5px;
       padding: 1px 6px;
       border-radius: 999px;
-      background: rgba(255, 255, 255, 0.07);
+      background: rgba(var(--tint), 0.07);
       color: var(--fg, #e4e4e7);
       font-weight: 600;
     }
@@ -1875,7 +1884,7 @@ export function getChatStyles(): string {
 
     .flyout-pin-btn:hover {
       opacity: 1 !important;
-      background: rgba(255, 255, 255, 0.1);
+      background: rgba(var(--tint), 0.1);
       color: #f59e0b;
       transform: scale(1.1);
     }
@@ -1977,7 +1986,7 @@ export function getChatStyles(): string {
     }
     .onboarding-close-btn:hover {
       color: var(--fg, #ffffff);
-      background: var(--hover, rgba(255, 255, 255, 0.08));
+      background: var(--hover, rgba(var(--tint), 0.08));
     }
     /* ─── Zero State Gateway Quick Banner ─── */
     .zero-gateway-banner {
@@ -2053,7 +2062,7 @@ export function getChatStyles(): string {
       transition: all 0.15s ease;
     }
     .btn-zero-action:hover {
-      background: var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.12));
+      background: var(--vscode-button-secondaryHoverBackground, rgba(var(--tint), 0.12));
     }
     .btn-zero-action.highlight {
       background: var(--vscode-button-background, #2563eb);
@@ -2093,8 +2102,8 @@ export function getChatStyles(): string {
       line-height: 1.45;
     }
     .onboarding-card {
-      background: var(--vscode-editorWidget-background, rgba(255, 255, 255, 0.02));
-      border: 1px solid var(--vscode-widget-border, var(--border, rgba(255, 255, 255, 0.08)));
+      background: var(--vscode-editorWidget-background, rgba(var(--tint), 0.02));
+      border: 1px solid var(--vscode-widget-border, var(--border, rgba(var(--tint), 0.08)));
       border-radius: var(--radius, 6px);
       padding: 12px;
       display: flex;
@@ -2198,19 +2207,19 @@ export function getChatStyles(): string {
       gap: 7px;
       width: 100%;
       padding: 8px 14px;
-      background: rgba(255, 255, 255, 0.05);
+      background: rgba(var(--tint), 0.05);
       color: var(--fg, #e2e8f0);
       font-size: 11.5px;
       font-weight: 500;
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(var(--tint), 0.12);
       border-radius: 5px;
       cursor: pointer;
       transition: all 0.15s ease;
       font-family: inherit;
     }
     .btn-onboarding-github-login:hover {
-      background: rgba(255, 255, 255, 0.1);
-      border-color: rgba(255, 255, 255, 0.22);
+      background: rgba(var(--tint), 0.1);
+      border-color: rgba(var(--tint), 0.22);
       color: #ffffff;
       transform: translateY(-1px);
     }
@@ -2227,7 +2236,7 @@ export function getChatStyles(): string {
     .onboarding-or-line {
       flex: 1;
       height: 1px;
-      background: var(--border, rgba(255, 255, 255, 0.08));
+      background: var(--border, rgba(var(--tint), 0.08));
     }
     .onboarding-or-text {
       font-size: 9.5px;
@@ -2307,7 +2316,7 @@ export function getChatStyles(): string {
       right: 12px;
       width: 290px;
       background: var(--vscode-editorWidget-background, #1e1e1e);
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+      border: 1px solid var(--border, rgba(var(--tint), 0.12));
       border-radius: 8px;
       box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
       padding: 14px;
@@ -2374,7 +2383,7 @@ export function getChatStyles(): string {
     }
     .account-popover-close:hover {
       color: var(--fg, #ffffff);
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
     }
     .account-popover-body {
       display: flex;
@@ -2382,7 +2391,7 @@ export function getChatStyles(): string {
       gap: 7px;
       padding: 10px 12px;
       background: rgba(0, 0, 0, 0.2);
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+      border: 1px solid var(--border, rgba(var(--tint), 0.06));
       border-radius: 6px;
     }
     .account-quota-row {
@@ -2402,7 +2411,7 @@ export function getChatStyles(): string {
     .account-quota-track {
       width: 100%;
       height: 4px;
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
       border-radius: 9999px;
       overflow: hidden;
     }
@@ -2446,7 +2455,7 @@ export function getChatStyles(): string {
       filter: brightness(1.1);
     }
     .btn-account-action.secondary {
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
       color: #ef4444;
       border: 1px solid rgba(239, 68, 68, 0.3);
     }
@@ -2454,8 +2463,8 @@ export function getChatStyles(): string {
       background: rgba(239, 68, 68, 0.12);
     }
     .btn-account-refresh {
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+      background: rgba(var(--tint), 0.05);
+      border: 1px solid var(--border, rgba(var(--tint), 0.1));
       color: var(--muted, #888888);
       border-radius: 4px;
       padding: 6px 8px;
@@ -2466,7 +2475,7 @@ export function getChatStyles(): string {
     }
     .btn-account-refresh:hover {
       color: var(--fg, #ffffff);
-      background: rgba(255, 255, 255, 0.1);
+      background: rgba(var(--tint), 0.1);
     }
     .onboarding-card-header {
       display: flex;
@@ -2495,8 +2504,8 @@ export function getChatStyles(): string {
       gap: 2px;
       padding: 7px 9px;
       border-radius: var(--radius, 4px);
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
-      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border, rgba(var(--tint), 0.08));
+      background: rgba(var(--tint), 0.02);
       color: var(--fg, #e4e4e7);
       cursor: pointer;
       text-align: left;
@@ -2505,11 +2514,11 @@ export function getChatStyles(): string {
       font-family: inherit;
     }
     .onboarding-provider-chip:hover {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: rgba(255, 255, 255, 0.15);
+      background: rgba(var(--tint), 0.05);
+      border-color: rgba(var(--tint), 0.15);
     }
     .onboarding-provider-chip.active {
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
       border-color: var(--vscode-focusBorder, var(--accent, #007fd4));
       color: var(--fg, #ffffff);
     }
@@ -2530,7 +2539,7 @@ export function getChatStyles(): string {
       flex-direction: column;
       gap: 8px;
       padding-top: 8px;
-      border-top: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+      border-top: 1px solid var(--border, rgba(var(--tint), 0.06));
     }
     .onboarding-input-header {
       display: flex;
@@ -2560,7 +2569,7 @@ export function getChatStyles(): string {
     .onboarding-key-input {
       width: 100%;
       background: var(--vscode-input-background, #1e1e1e);
-      border: 1px solid var(--vscode-input-border, rgba(255, 255, 255, 0.1));
+      border: 1px solid var(--vscode-input-border, rgba(var(--tint), 0.1));
       border-radius: var(--radius, 4px);
       padding: 7px 28px 7px 9px;
       color: var(--vscode-input-foreground, #ffffff);
@@ -2617,8 +2626,8 @@ export function getChatStyles(): string {
       gap: 8px;
       padding: 8px 10px;
       border-radius: 5px;
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+      background: rgba(var(--tint), 0.02);
+      border: 1px solid var(--border, rgba(var(--tint), 0.08));
     }
     .ollama-info-icon {
       font-size: 15px;
@@ -2634,13 +2643,13 @@ export function getChatStyles(): string {
       color: var(--fg, #e4e4e7);
     }
     .btn-onboarding-save.secondary {
-      background: var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.08));
+      background: var(--vscode-button-secondaryBackground, rgba(var(--tint), 0.08));
       color: var(--vscode-button-secondaryForeground, var(--fg, #ffffff));
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+      border: 1px solid var(--border, rgba(var(--tint), 0.12));
     }
     .btn-onboarding-save.secondary:hover {
-      background: var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.14));
-      border-color: rgba(255, 255, 255, 0.2);
+      background: var(--vscode-button-secondaryHoverBackground, rgba(var(--tint), 0.14));
+      border-color: rgba(var(--tint), 0.2);
     }
     .ollama-status-chip {
       display: inline-flex;
@@ -2648,8 +2657,8 @@ export function getChatStyles(): string {
       gap: 7px;
       padding: 6px 10px;
       border-radius: var(--radius, 4px);
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+      background: rgba(var(--tint), 0.03);
+      border: 1px solid var(--border, rgba(var(--tint), 0.08));
       font-size: 11px;
       color: var(--fg, #e4e4e7);
       margin-top: 2px;
@@ -2761,7 +2770,7 @@ export function getChatStyles(): string {
     }
     .onboarding-step2-back:hover {
       color: var(--fg, #ffffff);
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
     }
     .onboarding-search-wrap {
       display: flex;
@@ -2770,7 +2779,7 @@ export function getChatStyles(): string {
       padding: 5px 8px;
       border-radius: var(--radius, 4px);
       background: var(--vscode-input-background, #18181b);
-      border: 1px solid var(--vscode-input-border, rgba(255, 255, 255, 0.08));
+      border: 1px solid var(--vscode-input-border, rgba(var(--tint), 0.08));
     }
     .onboarding-search-wrap:focus-within {
       border-color: var(--vscode-focusBorder, var(--accent, #007fd4));
@@ -2805,18 +2814,18 @@ export function getChatStyles(): string {
       justify-content: space-between;
       padding: 6px 8px;
       border-radius: var(--radius, 4px);
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.04));
-      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border, rgba(var(--tint), 0.04));
+      background: rgba(var(--tint), 0.02);
       cursor: pointer;
       transition: all 0.1s ease;
       gap: 8px;
     }
     .onboarding-model-item:hover {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: rgba(255, 255, 255, 0.1);
+      background: rgba(var(--tint), 0.05);
+      border-color: rgba(var(--tint), 0.1);
     }
     .onboarding-model-item.active {
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
       border-color: var(--vscode-focusBorder, var(--accent, #007fd4));
     }
     .onboarding-model-item-info {
@@ -2888,11 +2897,11 @@ export function getChatStyles(): string {
       gap: 8px;
       margin-top: 4px;
       padding-top: 8px;
-      border-top: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+      border-top: 1px solid var(--border, rgba(var(--tint), 0.06));
     }
     .btn-step2-skip {
-      background: var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.05));
-      border: 1px solid var(--vscode-button-secondaryBorder, var(--border, rgba(255, 255, 255, 0.1)));
+      background: var(--vscode-button-secondaryBackground, rgba(var(--tint), 0.05));
+      border: 1px solid var(--vscode-button-secondaryBorder, var(--border, rgba(var(--tint), 0.1)));
       color: var(--vscode-button-secondaryForeground, var(--fg, #e4e4e7));
       font-size: 11px;
       font-weight: 500;
@@ -2903,7 +2912,7 @@ export function getChatStyles(): string {
       font-family: inherit;
     }
     .btn-step2-skip:hover {
-      background: var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.09));
+      background: var(--vscode-button-secondaryHoverBackground, rgba(var(--tint), 0.09));
       color: var(--fg, #ffffff);
     }
     .ready-hero-section {
@@ -2966,8 +2975,8 @@ export function getChatStyles(): string {
       margin: 0;
       letter-spacing: -0.1px;
     }
-    body.vscode-highContrast .zero-statement-main,
-    body.vscode-highContrast .zero-statement-sub {
+    body.vscode-high-contrast .zero-statement-main,
+    body.vscode-high-contrast .zero-statement-sub {
       opacity: 1;
     }
 
@@ -3139,9 +3148,9 @@ export function getChatStyles(): string {
       color: var(--vscode-textLink-foreground, var(--accent));
       opacity: 1;
     }
-    body.vscode-highContrast .starter-chip,
-    body.vscode-highContrast .zero-gateway-banner,
-    body.vscode-highContrast .recent-session-card {
+    body.vscode-high-contrast .starter-chip,
+    body.vscode-high-contrast .zero-gateway-banner,
+    body.vscode-high-contrast .recent-session-card {
       background: transparent;
       border-width: 1px;
     }
@@ -3200,7 +3209,7 @@ export function getChatStyles(): string {
     }
 
     .token-capacity-widget:hover {
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
       color: var(--fg);
     }
 
@@ -3213,7 +3222,7 @@ export function getChatStyles(): string {
     .token-mini-track {
       width: 44px;
       height: 4px;
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
       border-radius: 2px;
       overflow: hidden;
       display: inline-flex;
@@ -3233,7 +3242,7 @@ export function getChatStyles(): string {
       left: 0;
       width: 250px;
       background: #151518;
-      border: 1px solid rgba(255, 255, 255, 0.14);
+      border: 1px solid rgba(var(--tint), 0.14);
       border-radius: 12px;
       padding: 13px 15px;
       box-shadow: 0 18px 44px rgba(0, 0, 0, 0.85), 0 4px 12px rgba(0, 0, 0, 0.5);
@@ -3311,7 +3320,7 @@ export function getChatStyles(): string {
 
     .context-popover-divider {
       height: 1px;
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
       margin: 11px 0 9px;
     }
 
@@ -3522,7 +3531,7 @@ export function getChatStyles(): string {
       width: 20px;
       height: 20px;
       border-radius: 4px;
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
       border: 1px solid var(--border);
       display: flex;
       align-items: center;
@@ -3558,7 +3567,7 @@ export function getChatStyles(): string {
       display: inline-block;
       width: 11px;
       height: 11px;
-      border: 1.5px solid rgba(255, 255, 255, 0.16);
+      border: 1.5px solid rgba(var(--tint), 0.16);
       border-top-color: var(--accent, #388bfd);
       border-radius: 50%;
       animation: thinkingSpin 0.75s linear infinite;
@@ -3668,7 +3677,7 @@ export function getChatStyles(): string {
     .msg-copy-btn:hover {
       opacity: 1;
       color: var(--fg);
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
     }
     .msg-copy-btn:focus-visible {
       opacity: 1;
@@ -3721,7 +3730,7 @@ export function getChatStyles(): string {
     }
     .thinking-header:hover {
       color: var(--fg);
-      background: rgba(255, 255, 255, 0.04);
+      background: rgba(var(--tint), 0.04);
     }
     .thinking-pulse {
       width: 6px;
@@ -3802,11 +3811,11 @@ export function getChatStyles(): string {
       font-size: 12px;
       font-feature-settings: "calt", "zero";
       letter-spacing: 0;
-      background: var(--vscode-textCodeBlock-background, rgba(255, 255, 255, 0.025));
+      background: var(--vscode-textCodeBlock-background, rgba(var(--tint), 0.025));
       color: var(--fg, #e6edf3);
       padding: 1px 4px;
       border-radius: 3px;
-      border: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.03));
+      border: 1px solid var(--vscode-widget-border, rgba(var(--tint), 0.03));
       word-break: break-word;
     }
     /* Clickable file & folder links in assistant responses — clean inline styling with icons */
@@ -3814,8 +3823,8 @@ export function getChatStyles(): string {
       display: inline-flex;
       align-items: center;
       gap: 4px;
-      background: var(--vscode-textCodeBlock-background, rgba(255, 255, 255, 0.015));
-      border: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.035));
+      background: var(--vscode-textCodeBlock-background, rgba(var(--tint), 0.015));
+      border: 1px solid var(--vscode-widget-border, rgba(var(--tint), 0.035));
       border-radius: 4px;
       padding: 0 5px;
       font-family: var(--vscode-editor-font-family, monospace);
@@ -3832,8 +3841,8 @@ export function getChatStyles(): string {
       overflow: hidden;
     }
     .md-file-pill:hover {
-      background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.05));
-      border-color: var(--vscode-focusBorder, rgba(255, 255, 255, 0.14));
+      background: var(--vscode-list-hoverBackground, rgba(var(--tint), 0.05));
+      border-color: var(--vscode-focusBorder, rgba(var(--tint), 0.14));
       text-decoration: none;
     }
     .md-file-pill:active {
@@ -3919,14 +3928,14 @@ export function getChatStyles(): string {
       border-left: 2px solid var(--vscode-textBlockQuote-border, #888);
       padding: 10px 14px;
       margin: 16px 0;
-      background: var(--vscode-textBlockQuote-background, rgba(255, 255, 255, 0.012));
+      background: var(--vscode-textBlockQuote-background, rgba(var(--tint), 0.012));
       color: var(--fg);
       font-style: normal;
     }
     .assistant-text blockquote p { margin: 0; }
     .assistant-text hr {
       border: none;
-      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      border-top: 1px solid rgba(var(--tint), 0.08);
       margin: 20px 0;
     }
     .assistant-text ul,
@@ -3997,7 +4006,7 @@ export function getChatStyles(): string {
       flex: 1;
     }
     .md-quote {
-      border-left: 2px solid rgba(255, 255, 255, 0.2);
+      border-left: 2px solid rgba(var(--tint), 0.2);
       padding: 4px 12px;
       margin: 8px 0;
       background: transparent;
@@ -4011,7 +4020,7 @@ export function getChatStyles(): string {
       overflow-x: auto;
       margin: 10px 0 18px;
       border-radius: 5px;
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(var(--tint), 0.08);
       background: transparent;
     }
     .assistant-text table,
@@ -4027,7 +4036,7 @@ export function getChatStyles(): string {
     .assistant-text thead,
     .md-table thead,
     thead {
-      background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.012));
+      background: var(--vscode-list-hoverBackground, rgba(var(--tint), 0.012));
     }
     .assistant-text th,
     .md-table th,
@@ -4044,7 +4053,7 @@ export function getChatStyles(): string {
     .md-table td,
     td {
       padding: 9px 12px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      border-bottom: 1px solid rgba(var(--tint), 0.05);
       color: var(--fg);
       line-height: 1.6;
       vertical-align: top;
@@ -4055,7 +4064,7 @@ export function getChatStyles(): string {
     }
     .assistant-text tr:hover td,
     .md-table tr:hover td {
-      background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.012));
+      background: var(--vscode-list-hoverBackground, rgba(var(--tint), 0.012));
     }
     .assistant-text tr:last-child td,
     .md-table tr:last-child td {
@@ -4068,7 +4077,7 @@ export function getChatStyles(): string {
     /* Markdown Horizontal Rules & Task Lists */
     .md-hr {
       border: none;
-      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      border-top: 1px solid rgba(var(--tint), 0.08);
       margin: 12px 0;
     }
     .assistant-text ul:has(.md-task-item),
@@ -4095,8 +4104,8 @@ export function getChatStyles(): string {
       width: 14px;
       height: 14px;
       border-radius: 3.5px;
-      border: 1.2px solid rgba(255, 255, 255, 0.28);
-      background: rgba(255, 255, 255, 0.04);
+      border: 1.2px solid rgba(var(--tint), 0.28);
+      background: rgba(var(--tint), 0.04);
       margin: 2.5px 0 0 0;
       cursor: default;
       flex-shrink: 0;
@@ -4143,7 +4152,7 @@ export function getChatStyles(): string {
       display: block;
     }
     details {
-      background: rgba(255, 255, 255, 0.03);
+      background: rgba(var(--tint), 0.03);
       border: 1px solid var(--border);
       border-radius: 4px;
       padding: 6px 10px;
@@ -4175,7 +4184,7 @@ export function getChatStyles(): string {
       justify-content: space-between;
       align-items: center;
       padding: 5px 10px;
-      background: rgba(255, 255, 255, 0.05);
+      background: rgba(var(--tint), 0.05);
       border-bottom: 1px solid var(--border);
       font-size: 10.5px;
       color: var(--muted);
@@ -4193,7 +4202,32 @@ export function getChatStyles(): string {
       opacity: 0;
       transition: opacity 0.15s;
     }
-    .code-block-container:hover .code-block-actions { opacity: 1; }
+    .code-block-container:hover .code-block-actions,
+    .code-block-container:focus-within .code-block-actions { opacity: 1; }
+    .code-block-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .code-btn.code-run-btn {
+      color: var(--green);
+      border-color: var(--border);
+    }
+    .code-btn.code-run-btn:hover {
+      color: var(--green);
+      background: rgba(var(--tint), 0.08);
+    }
+    .code-btn.code-run-btn[data-run-state="failed"] { color: var(--red); }
+    .code-btn.code-run-btn[data-run-state="running"] { color: var(--muted); }
+    .code-btn.code-fix-btn {
+      color: var(--vscode-button-foreground, #fff);
+      background: var(--vscode-button-background, #007fd4);
+      border-color: transparent;
+    }
+    .code-btn.code-fix-btn:hover {
+      color: var(--vscode-button-foreground, #fff);
+      background: var(--vscode-button-hoverBackground, #026ec1);
+    }
     .code-btn {
       padding: 2px 7px;
       font-size: 10.5px;
@@ -4208,7 +4242,7 @@ export function getChatStyles(): string {
       transition: all 0.15s;
     }
     .code-btn:hover {
-      background: rgba(255,255,255,0.08);
+      background: rgba(var(--tint), 0.08);
       color: var(--fg);
       border-color: var(--border);
     }
@@ -4267,7 +4301,7 @@ export function getChatStyles(): string {
       margin: 8px 0 4px;
       padding: 7px 11px;
       background: var(--vscode-editorWidget-background, var(--card-bg, #18181b));
-      border: 1px solid var(--vscode-widget-border, var(--card-border, rgba(255, 255, 255, 0.08)));
+      border: 1px solid var(--vscode-widget-border, var(--card-border, rgba(var(--tint), 0.08)));
       border-radius: 6px;
       font-size: 12px;
       color: var(--vscode-foreground, #f4f4f5);
@@ -4277,8 +4311,8 @@ export function getChatStyles(): string {
       transition: all 0.15s ease;
     }
     .plan-ready-pill:hover {
-      background: rgba(255, 255, 255, 0.04);
-      border-color: rgba(255, 255, 255, 0.16);
+      background: rgba(var(--tint), 0.04);
+      border-color: rgba(var(--tint), 0.16);
     }
     .plan-ready-pill .pill-icon {
       display: flex;
@@ -4311,7 +4345,7 @@ export function getChatStyles(): string {
     .plan-ready-pill .pill-btn {
       background: transparent;
       color: var(--vscode-descriptionForeground, #a1a1aa);
-      border: 1px solid var(--vscode-button-secondaryBorder, rgba(255, 255, 255, 0.1));
+      border: 1px solid var(--vscode-button-secondaryBorder, rgba(var(--tint), 0.1));
       border-radius: 4px;
       padding: 3px 8px;
       font-size: 11px;
@@ -4324,8 +4358,8 @@ export function getChatStyles(): string {
       font-family: var(--font-ui);
     }
     .plan-ready-pill .pill-btn:hover {
-      background: rgba(255, 255, 255, 0.06);
-      border-color: rgba(255, 255, 255, 0.2);
+      background: rgba(var(--tint), 0.06);
+      border-color: rgba(var(--tint), 0.2);
       color: var(--vscode-foreground, #ffffff);
     }
 
@@ -4398,7 +4432,7 @@ export function getChatStyles(): string {
       line-height: 1.45;
       margin-top: 6px;
       padding-top: 6px;
-      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      border-top: 1px solid rgba(var(--tint), 0.05);
       white-space: pre-wrap;
       max-height: 160px;
       overflow-y: auto;
@@ -4436,13 +4470,13 @@ export function getChatStyles(): string {
       color: var(--muted);
       cursor: pointer;
       user-select: none;
-      background: rgba(255,255,255,0.02);
+      background: rgba(var(--tint), 0.02);
       width: 100%;
       max-width: 100%;
       box-sizing: border-box;
       min-width: 0;
     }
-    .tool-seq-header:hover { background: rgba(255,255,255,0.05); color: var(--fg); }
+    .tool-seq-header:hover { background: rgba(var(--tint), 0.05); color: var(--fg); }
     .tool-seq-icon { font-size: 12px; }
     .tool-seq-title { flex: 1; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .tool-seq-chevron { width: 12px; height: 12px; color: var(--muted); transition: transform 0.15s; }
@@ -4458,13 +4492,13 @@ export function getChatStyles(): string {
       border-radius: 4px;
       cursor: pointer;
     }
-    .tool-seq-copy:hover { color: var(--fg); background: rgba(255,255,255,0.06); }
+    .tool-seq-copy:hover { color: var(--fg); background: rgba(var(--tint), 0.06); }
     .tool-sequence .tool-card { margin: 0; border-radius: 4px; }
     .tool-sequence .thinking-card { margin: 0; }
 
     /* Subagent Card -- Clean, Elegant, Live In-place Status */
     .subagent-card {
-      background: rgba(255, 255, 255, 0.03);
+      background: rgba(var(--tint), 0.03);
       border: 1px solid var(--border);
       border-radius: 6px;
       padding: 8px 10px;
@@ -4537,10 +4571,10 @@ export function getChatStyles(): string {
       color: var(--fg);
       font-size: 11.5px;
       line-height: 1.4;
-      background: rgba(255, 255, 255, 0.02);
+      background: rgba(var(--tint), 0.02);
       padding: 4px 6px;
       border-radius: 4px;
-      border: 1px solid rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(var(--tint), 0.04);
     }
     .subagent-task-label {
       font-weight: 600;
@@ -4589,8 +4623,8 @@ export function getChatStyles(): string {
       margin-top: 4px;
     }
     .subagent-tool-item {
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid rgba(255, 255, 255, 0.05);
+      background: rgba(var(--tint), 0.02);
+      border: 1px solid rgba(var(--tint), 0.05);
       border-radius: 4px;
       overflow: hidden;
       font-size: 11px;
@@ -4605,7 +4639,7 @@ export function getChatStyles(): string {
       font-family: var(--vscode-editor-font-family, monospace);
     }
     .subagent-tool-item-header:hover {
-      background: rgba(255, 255, 255, 0.04);
+      background: rgba(var(--tint), 0.04);
     }
     .subagent-tool-name {
       color: var(--accent);
@@ -4626,7 +4660,7 @@ export function getChatStyles(): string {
       display: none;
       padding: 4px 6px;
       background: rgba(0, 0, 0, 0.2);
-      border-top: 1px solid rgba(255, 255, 255, 0.04);
+      border-top: 1px solid rgba(var(--tint), 0.04);
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 10.5px;
       max-height: 120px;
@@ -4642,7 +4676,7 @@ export function getChatStyles(): string {
     /* Interactive Cards -- approval / questions */
     .approval-card {
       background: var(--card-bg, #1e1e1e);
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+      border: 1px solid var(--border, rgba(var(--tint), 0.12));
       border-radius: 4px;
       padding: 12px;
       margin: 8px 0;
@@ -4666,9 +4700,52 @@ export function getChatStyles(): string {
       font-weight: 600;
       padding: 2px 8px;
       border-radius: 12px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.05);
+      border: 1px solid rgba(var(--tint), 0.08);
       letter-spacing: 0.2px;
+    }
+
+    .questions-header-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .questions-close-btn {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1;
+      padding: 2px 6px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .questions-close-btn:hover {
+      color: var(--fg);
+      background: var(--surface-hover);
+    }
+    .questions-close-btn:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder, var(--accent));
+      outline-offset: 1px;
+    }
+    .question-other-input {
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 4px;
+      padding: 7px 10px;
+      font-size: 12px;
+      font-family: inherit;
+      color: var(--fg);
+      background: var(--input-bg);
+      border: 1px solid var(--input-border);
+      border-radius: 6px;
+      outline: none;
+    }
+    .question-other-input:focus {
+      border-color: var(--vscode-focusBorder, var(--accent));
+    }
+    .question-other-input::placeholder {
+      color: var(--muted);
     }
 
     .carousel-slides {
@@ -4711,7 +4788,7 @@ export function getChatStyles(): string {
       padding: 10px 14px;
       cursor: pointer;
       transition: background 0.12s ease, border-color 0.12s ease;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      border-bottom: 1px solid rgba(var(--tint), 0.04);
       user-select: none;
       margin: 0;
     }
@@ -4722,7 +4799,7 @@ export function getChatStyles(): string {
 
     .question-option-row:hover,
     .question-option-row:focus-visible {
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
       outline: none;
     }
 
@@ -4756,8 +4833,8 @@ export function getChatStyles(): string {
       width: 15px;
       height: 15px;
       border-radius: 50%;
-      border: 1.5px solid rgba(255, 255, 255, 0.28);
-      background: rgba(255, 255, 255, 0.03);
+      border: 1.5px solid rgba(var(--tint), 0.28);
+      background: rgba(var(--tint), 0.03);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -4765,7 +4842,7 @@ export function getChatStyles(): string {
     }
 
     .question-option-row:hover .custom-radio-indicator {
-      border-color: rgba(255, 255, 255, 0.5);
+      border-color: rgba(var(--tint), 0.5);
     }
 
     .question-radio-custom input:checked + .custom-radio-indicator {
@@ -4809,7 +4886,7 @@ export function getChatStyles(): string {
       font-family: inherit;
       color: var(--fg, #f4f4f5);
       background: rgba(0, 0, 0, 0.4);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(var(--tint), 0.08);
       border-radius: 6px;
       outline: none;
       resize: vertical;
@@ -4828,7 +4905,7 @@ export function getChatStyles(): string {
       justify-content: space-between;
       gap: 8px;
       padding-top: 10px;
-      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      border-top: 1px solid rgba(var(--tint), 0.06);
     }
 
     .btn-carousel-prev,
@@ -4848,15 +4925,15 @@ export function getChatStyles(): string {
     }
 
     .btn-carousel-prev {
-      background: var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.06));
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+      background: var(--vscode-button-secondaryBackground, rgba(var(--tint), 0.06));
+      border: 1px solid var(--border, rgba(var(--tint), 0.12));
       color: var(--fg, #e4e4e7);
     }
 
     .btn-carousel-prev:hover {
-      background: var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.12));
+      background: var(--vscode-button-secondaryHoverBackground, rgba(var(--tint), 0.12));
       color: #ffffff;
-      border-color: rgba(255, 255, 255, 0.25);
+      border-color: rgba(var(--tint), 0.25);
     }
 
     .btn-carousel-next,
@@ -4902,7 +4979,7 @@ export function getChatStyles(): string {
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 11px; font-weight: 500;
       padding: 3px 8px; border-radius: 4px;
-      background: rgba(255,255,255,0.06); border: 1px solid var(--border);
+      background: rgba(var(--tint), 0.06); border: 1px solid var(--border);
       color: var(--fg);
     }
     .approval-tool-pill.status-pill {
@@ -4981,7 +5058,7 @@ export function getChatStyles(): string {
       box-shadow: 0 2px 10px rgba(0, 127, 212, 0.4);
     }
     .btn-reject {
-      background: var(--vscode-button-secondaryBackground, rgba(255,255,255,0.06));
+      background: var(--vscode-button-secondaryBackground, rgba(var(--tint), 0.06));
       color: var(--vscode-button-secondaryForeground, var(--fg));
       border-color: var(--border);
     }
@@ -4995,7 +5072,7 @@ export function getChatStyles(): string {
       background: transparent; border: 1px solid var(--border);
       color: var(--muted); border-radius: 6px; cursor: pointer;
     }
-    .btn-ghost:hover { color: var(--fg); background: rgba(255,255,255,0.05); }
+    .btn-ghost:hover { color: var(--fg); background: rgba(var(--tint), 0.05); }
 
     /* ─── Image Lightbox Modal Overlay ─────────────────────────────────────── */
     .image-lightbox-overlay {
@@ -5039,13 +5116,13 @@ export function getChatStyles(): string {
       background: rgba(20, 20, 24, 0.85);
       padding: 5px 12px;
       border-radius: 6px;
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(var(--tint), 0.12);
       letter-spacing: -0.1px;
     }
 
     .image-lightbox-close {
       background: rgba(20, 20, 24, 0.85);
-      border: 1px solid rgba(255, 255, 255, 0.18);
+      border: 1px solid rgba(var(--tint), 0.18);
       color: #f4f4f5;
       border-radius: 50%;
       width: 32px;
@@ -5087,7 +5164,7 @@ export function getChatStyles(): string {
       max-height: 85vh;
       object-fit: contain;
       border-radius: 10px;
-      border: 1px solid rgba(255, 255, 255, 0.14);
+      border: 1px solid rgba(var(--tint), 0.14);
       box-shadow: 0 24px 60px rgba(0, 0, 0, 0.9), 0 4px 16px rgba(0, 0, 0, 0.5);
     }
 
@@ -5693,7 +5770,7 @@ export function getChatStyles(): string {
       font-weight: 600;
       color: var(--vscode-descriptionForeground, var(--muted));
       border-bottom: 1px solid var(--vscode-widget-border, var(--border));
-      background: var(--vscode-editorWidget-headerBackground, rgba(255, 255, 255, 0.02));
+      background: var(--vscode-editorWidget-headerBackground, rgba(var(--tint), 0.02));
     }
     .palette-close-btn {
       background: transparent;
@@ -5711,7 +5788,7 @@ export function getChatStyles(): string {
     }
     .palette-close-btn:hover {
       color: var(--vscode-foreground, var(--fg));
-      background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
+      background: var(--vscode-toolbar-hoverBackground, rgba(var(--tint), 0.08));
     }
     .skills-card-close-btn {
       background: transparent;
@@ -5721,7 +5798,7 @@ export function getChatStyles(): string {
     }
     .skills-card-close-btn:hover {
       color: var(--vscode-foreground, var(--fg));
-      background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
+      background: var(--vscode-toolbar-hoverBackground, rgba(var(--tint), 0.08));
     }
     .slash-palette-list {
       display: flex;
@@ -5742,7 +5819,7 @@ export function getChatStyles(): string {
       transition: background 0.1s ease;
     }
     .slash-item:hover {
-      background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+      background: var(--vscode-list-hoverBackground, rgba(var(--tint), 0.06));
     }
     .slash-item.mention-empty {
       justify-content: space-between;
@@ -5752,7 +5829,7 @@ export function getChatStyles(): string {
       background: transparent;
     }
     .slash-item.active {
-      background: var(--vscode-list-activeSelectionBackground, rgba(255, 255, 255, 0.12));
+      background: var(--vscode-list-activeSelectionBackground, rgba(var(--tint), 0.12));
       color: var(--vscode-list-activeSelectionForeground, var(--fg));
     }
     .slash-cmd {
@@ -5825,15 +5902,15 @@ export function getChatStyles(): string {
     }
     .skill-item-row:hover,
     .help-item-row:hover {
-      background: rgba(255, 255, 255, 0.05);
+      background: rgba(var(--tint), 0.05);
     }
     .skill-item-tag {
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 11px;
       font-weight: 600;
       color: var(--vscode-symbolIcon-functionForeground, var(--accent, #007fd4));
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+      background: rgba(var(--tint), 0.04);
+      border: 1px solid var(--border, rgba(var(--tint), 0.08));
       border-radius: 3px;
       padding: 1px 5px;
     }
@@ -5842,15 +5919,15 @@ export function getChatStyles(): string {
       font-size: 11px;
       font-weight: 600;
       color: var(--accent, #007fd4);
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+      background: rgba(var(--tint), 0.04);
+      border: 1px solid var(--border, rgba(var(--tint), 0.08));
       border-radius: 3px;
       padding: 1px 5px;
     }
     .btn-card-action {
-      background: var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.05));
+      background: var(--vscode-button-secondaryBackground, rgba(var(--tint), 0.05));
       color: var(--vscode-button-secondaryForeground, var(--fg, #e4e4e7));
-      border: 1px solid var(--vscode-button-secondaryBorder, var(--border, rgba(255, 255, 255, 0.1)));
+      border: 1px solid var(--vscode-button-secondaryBorder, var(--border, rgba(var(--tint), 0.1)));
       border-radius: var(--radius, 4px);
       padding: 2px 8px;
       font-size: 11px;
@@ -5860,7 +5937,7 @@ export function getChatStyles(): string {
       font-family: inherit;
     }
     .btn-card-action:hover {
-      background: var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.09));
+      background: var(--vscode-button-secondaryHoverBackground, rgba(var(--tint), 0.09));
       color: var(--fg, #ffffff);
     }
 
@@ -5875,12 +5952,25 @@ export function getChatStyles(): string {
       flex-shrink: 0;
     }
 
+    .scheduled-run-notice {
+      margin: 0 0 6px 0;
+      padding: 6px 10px;
+      font-size: 11.5px;
+      line-height: 1.4;
+      color: var(--vscode-descriptionForeground);
+      border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+      border-radius: 6px;
+    }
+    .scheduled-run-notice.running {
+      color: var(--vscode-foreground);
+      border-color: var(--vscode-focusBorder);
+    }
     .prompt-box {
       position: relative;
-      background: rgba(255, 255, 255, 0.035);
+      background: rgba(var(--tint), 0.035);
       backdrop-filter: blur(14px);
       -webkit-backdrop-filter: blur(14px);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(var(--tint), 0.08);
       border-radius: 12px;
       padding: 8px 10px 8px 10px;
       display: flex;
@@ -5892,8 +5982,8 @@ export function getChatStyles(): string {
     }
 
     .prompt-box:focus-within {
-      border-color: rgba(255, 255, 255, 0.18);
-      box-shadow: 0 -3px 12px rgba(0, 0, 0, 0.22), 0 0 0 1px rgba(255, 255, 255, 0.05);
+      border-color: rgba(var(--tint), 0.18);
+      box-shadow: 0 -3px 12px rgba(0, 0, 0, 0.22), 0 0 0 1px rgba(var(--tint), 0.05);
     }
 
     /* Ambient Generation Aura */
@@ -5926,8 +6016,8 @@ export function getChatStyles(): string {
       position: relative;
       display: inline-flex;
       align-items: center;
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(var(--tint), 0.06);
+      border: 1px solid rgba(var(--tint), 0.12);
       border-radius: 8px;
       overflow: hidden;
       cursor: zoom-in;
@@ -5958,7 +6048,7 @@ export function getChatStyles(): string {
       right: 3px;
       background: rgba(0, 0, 0, 0.85);
       color: #ffffff;
-      border: 1px solid rgba(255, 255, 255, 0.2);
+      border: 1px solid rgba(var(--tint), 0.2);
       border-radius: 50%;
       width: 17px;
       height: 17px;
@@ -5995,7 +6085,7 @@ export function getChatStyles(): string {
       padding: 2px 2px 6px 2px;
     }
     #prompt-input::placeholder {
-      color: rgba(255, 255, 255, 0.35);
+      color: rgba(var(--tint), 0.35);
     }
 
     .prompt-box-footer {
@@ -6041,7 +6131,7 @@ export function getChatStyles(): string {
     }
     .prompt-icon-btn:hover {
       color: var(--fg);
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
     }
 
     /* Clean Minimal Inline Controls (Cursor & Codex Aesthetics) */
@@ -6124,10 +6214,10 @@ export function getChatStyles(): string {
       width: 340px;
       max-width: calc(100vw - 28px);
       background: var(--vscode-editorWidget-background, rgba(24, 24, 27, 0.96));
-      border: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.12));
+      border: 1px solid var(--vscode-widget-border, rgba(var(--tint), 0.12));
       border-radius: 10px;
       padding: 8px 10px 6px 10px;
-      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.05);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(var(--tint), 0.05);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
       z-index: 300;
@@ -6166,7 +6256,7 @@ export function getChatStyles(): string {
       left: 7px;
       right: 7px;
       height: 4.5px;
-      background: rgba(255, 255, 255, 0.09);
+      background: rgba(var(--tint), 0.09);
       border-radius: 9999px;
       overflow: hidden;
       pointer-events: none;
@@ -6179,7 +6269,7 @@ export function getChatStyles(): string {
       transition: width 0.16s cubic-bezier(0.16, 1, 0.3, 1), background 0.15s ease;
     }
     .reasoning-slider-fill.fill-off {
-      background: rgba(255, 255, 255, 0.12);
+      background: rgba(var(--tint), 0.12);
     }
     .reasoning-slider-fill.fill-low {
       background: linear-gradient(90deg, #22c55e, #38bdf8);
@@ -6206,7 +6296,7 @@ export function getChatStyles(): string {
       width: 6.5px;
       height: 6.5px;
       border-radius: 50%;
-      background: rgba(255, 255, 255, 0.22);
+      background: rgba(var(--tint), 0.22);
       cursor: pointer;
       pointer-events: auto;
       transition: background 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
@@ -6329,9 +6419,9 @@ export function getChatStyles(): string {
       cursor: not-allowed;
     }
     .reasoning-popover-badge.badge-unsupported {
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
       color: var(--muted, #a1a1aa);
-      border-color: rgba(255, 255, 255, 0.12);
+      border-color: rgba(var(--tint), 0.12);
     }
     .reasoning-popover-badge.badge-mandatory {
       background: rgba(234, 179, 8, 0.12);
@@ -6642,7 +6732,7 @@ export function getChatStyles(): string {
       opacity: 0.75;
     }
     body.vscode-light .menu-popover-title,
-    body.vscode-highContrast .menu-popover-title {
+    body.vscode-high-contrast .menu-popover-title {
       font-weight: 600;
     }
     body.vscode-light .menu-popover-desc {
@@ -6654,7 +6744,7 @@ export function getChatStyles(): string {
     body.vscode-light .menu-popover {
       box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 0 0 1px var(--popover-border);
     }
-    body.vscode-highContrast .menu-popover {
+    body.vscode-high-contrast .menu-popover {
       border-width: 2px;
       box-shadow: none;
     }
@@ -6672,7 +6762,7 @@ export function getChatStyles(): string {
     body.vscode-light .top-bar {
       background: var(--vscode-sideBar-background, #f3f3f3);
     }
-    body.vscode-highContrast .top-bar {
+    body.vscode-high-contrast .top-bar {
       background: var(--vscode-sideBar-background, transparent);
     }
 
@@ -6686,9 +6776,9 @@ export function getChatStyles(): string {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.09);
-      border-left: 2px solid var(--chip-color, rgba(255,255,255,0.2));
+      background: rgba(var(--tint), 0.05);
+      border: 1px solid rgba(var(--tint), 0.09);
+      border-left: 2px solid var(--chip-color, rgba(var(--tint), 0.2));
       color: var(--vscode-foreground, #cdd6f4);
       font-size: 11px;
       font-weight: 500;
@@ -6699,9 +6789,9 @@ export function getChatStyles(): string {
       transition: background 0.12s ease, border-color 0.12s ease, transform 0.1s ease;
     }
     .user-file-chip:hover {
-      background: rgba(255, 255, 255, 0.09);
-      border-color: rgba(255, 255, 255, 0.18);
-      border-left-color: var(--chip-color, rgba(255,255,255,0.4));
+      background: rgba(var(--tint), 0.09);
+      border-color: rgba(var(--tint), 0.18);
+      border-left-color: var(--chip-color, rgba(var(--tint), 0.4));
       transform: translateY(-1px);
     }
     .user-file-chip .chip-icon {
@@ -6734,7 +6824,7 @@ export function getChatStyles(): string {
       padding: 4px 8px;
       max-height: 80px;
       overflow-y: auto;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      border-bottom: 1px solid rgba(var(--tint), 0.05);
       margin-bottom: 2px;
     }
     .attached-files-list {
@@ -6749,8 +6839,8 @@ export function getChatStyles(): string {
       display: inline-flex;
       align-items: center;
       gap: 4px;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.04);
+      border: 1px solid rgba(var(--tint), 0.08);
       color: var(--vscode-foreground, #cdd6f4);
       font-size: 11px;
       padding: 2px 4px 2px 6px;
@@ -6761,8 +6851,8 @@ export function getChatStyles(): string {
       max-width: 200px;
     }
     .dropped-file-chip:hover {
-      background: rgba(255, 255, 255, 0.08);
-      border-color: rgba(255, 255, 255, 0.18);
+      background: rgba(var(--tint), 0.08);
+      border-color: rgba(var(--tint), 0.18);
       transform: translateY(-1px);
     }
     .dropped-file-chip .chip-icon {
@@ -6786,7 +6876,7 @@ export function getChatStyles(): string {
     .dropped-file-chip .chip-remove-btn {
       background: transparent;
       border: none;
-      color: rgba(255, 255, 255, 0.3);
+      color: rgba(var(--tint), 0.3);
       cursor: pointer;
       padding: 1px 3px;
       margin-left: 1px;
@@ -6806,7 +6896,7 @@ export function getChatStyles(): string {
     .attached-files-clear-btn {
       background: transparent;
       border: none;
-      color: rgba(255, 255, 255, 0.3);
+      color: rgba(var(--tint), 0.3);
       font-size: 10.5px;
       cursor: pointer;
       padding: 2px 6px;
@@ -6855,8 +6945,8 @@ export function getChatStyles(): string {
       height: 24px;
       border-radius: 50%;
       border: none;
-      background: rgba(255, 255, 255, 0.1);
-      color: rgba(255, 255, 255, 0.35);
+      background: rgba(var(--tint), 0.1);
+      color: rgba(var(--tint), 0.35);
       cursor: pointer;
       display: inline-flex;
       align-items: center;
@@ -7015,7 +7105,7 @@ export function getChatStyles(): string {
       color: var(--fg);
       cursor: pointer;
     }
-    .trust-btn-sec:hover { background: rgba(255,255,255,0.06); }
+    .trust-btn-sec:hover { background: rgba(var(--tint), 0.06); }
 
     /* AI Engine Setup Guide Card */
     .setup-guide-card {
@@ -7078,17 +7168,17 @@ export function getChatStyles(): string {
       background: var(--vscode-button-hoverBackground, #1177bb);
     }
     .btn-setup-action.secondary {
-      background: var(--vscode-button-secondaryBackground, rgba(255,255,255,0.06));
+      background: var(--vscode-button-secondaryBackground, rgba(var(--tint), 0.06));
       color: var(--vscode-button-secondaryForeground, var(--fg));
       border-color: var(--border);
     }
     .btn-setup-action.secondary:hover {
-      background: rgba(255,255,255,0.12);
+      background: rgba(var(--tint), 0.12);
     }
 
     /* Skeleton loading — shown until init_state arrives (no flash of wrong model/mode) */
     .skeleton {
-      background: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.08) 37%, rgba(255,255,255,0.04) 63%);
+      background: linear-gradient(90deg, rgba(var(--tint), 0.04) 25%, rgba(var(--tint), 0.08) 37%, rgba(var(--tint), 0.04) 63%);
       background-size: 400% 100%;
       animation: skeleton-shimmer 1.4s ease infinite;
       border-radius: 4px;
@@ -7114,7 +7204,7 @@ export function getChatStyles(): string {
 
     .permission-card {
       background: var(--card-bg, #18181b);
-      border: 1px solid var(--card-border, rgba(255, 255, 255, 0.08));
+      border: 1px solid var(--card-border, rgba(var(--tint), 0.08));
       border-radius: 10px;
       margin: 8px 0;
       padding: 12px 14px;
@@ -7158,7 +7248,7 @@ export function getChatStyles(): string {
       width: 22px;
       height: 22px;
       border-radius: 5px;
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
       color: var(--fg);
       flex-shrink: 0;
     }
@@ -7208,12 +7298,12 @@ export function getChatStyles(): string {
 
     .permission-close-btn:hover {
       color: var(--fg, #f4f4f5);
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
     }
 
     .permission-code-box {
       background: rgba(0, 0, 0, 0.4);
-      border: 1px solid rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(var(--tint), 0.06);
       border-radius: 6px;
       padding: 8px 10px;
       font-family: var(--font-mono);
@@ -7228,7 +7318,7 @@ export function getChatStyles(): string {
 
     .permission-diff-box {
       background: rgba(0, 0, 0, 0.4);
-      border: 1px solid rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(var(--tint), 0.06);
       border-radius: 6px;
       padding: 4px 0;
       font-family: var(--font-mono);
@@ -7288,7 +7378,7 @@ export function getChatStyles(): string {
 
     .permission-params-body {
       background: rgba(0, 0, 0, 0.3);
-      border: 1px solid rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(var(--tint), 0.05);
       border-radius: 4px;
       padding: 6px 8px;
       font-family: var(--font-mono);
@@ -7299,8 +7389,8 @@ export function getChatStyles(): string {
     }
 
     .permission-options-group {
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.02);
+      border: 1px solid rgba(var(--tint), 0.06);
       border-radius: 8px;
       overflow: hidden;
       display: flex;
@@ -7315,7 +7405,7 @@ export function getChatStyles(): string {
       padding: 9px 12px;
       cursor: pointer;
       transition: background 0.12s ease, border-color 0.12s ease;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      border-bottom: 1px solid rgba(var(--tint), 0.04);
       user-select: none;
     }
 
@@ -7325,7 +7415,7 @@ export function getChatStyles(): string {
 
     .permission-option-row:hover,
     .permission-option-row:focus-visible {
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
       outline: none;
     }
 
@@ -7371,8 +7461,8 @@ export function getChatStyles(): string {
     }
 
     .perm-kbd {
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(var(--tint), 0.06);
+      border: 1px solid rgba(var(--tint), 0.12);
       border-radius: 4px;
       padding: 2px 5px;
       font-size: 10px;
@@ -7399,7 +7489,7 @@ export function getChatStyles(): string {
       display: flex;
       flex-direction: column;
       margin: 4px 0;
-      border: 1px solid rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(var(--tint), 0.05);
       border-radius: 6px;
       background: rgba(0, 0, 0, 0.15);
       overflow: hidden;
@@ -7413,7 +7503,7 @@ export function getChatStyles(): string {
       font-size: 12px;
       line-height: 1.4;
       color: var(--fg, #e4e4e7);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      border-bottom: 1px solid rgba(var(--tint), 0.04);
       transition: background 0.12s ease;
     }
 
@@ -7422,7 +7512,7 @@ export function getChatStyles(): string {
     }
 
     .plan-step-item:hover {
-      background: rgba(255, 255, 255, 0.02);
+      background: rgba(var(--tint), 0.02);
     }
 
     .plan-step-item.is-done {
@@ -7469,7 +7559,7 @@ export function getChatStyles(): string {
       width: 100%;
       box-sizing: border-box;
       background: rgba(0, 0, 0, 0.35);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(var(--tint), 0.08);
       border-radius: 6px;
       padding: 7px 10px;
       font-size: 11.5px;
@@ -7500,7 +7590,7 @@ export function getChatStyles(): string {
       background: rgba(30, 30, 32, 0.92);
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
-      border: 1px solid rgba(255, 255, 255, 0.15);
+      border: 1px solid rgba(var(--tint), 0.15);
       color: var(--fg);
       display: flex;
       align-items: center;
@@ -7563,8 +7653,8 @@ export function getChatStyles(): string {
       align-items: center;
       gap: 6px;
       padding: 3px 8px;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(var(--tint), 0.04);
+      border: 1px solid rgba(var(--tint), 0.1);
       border-radius: 6px;
       font-size: 11.5px;
       color: var(--fg);
@@ -7573,7 +7663,7 @@ export function getChatStyles(): string {
       user-select: none;
     }
     .file-edited-chip:hover {
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
       border-color: var(--vscode-focusBorder, #38bdf8);
       transform: translateY(-1px);
     }
@@ -7602,8 +7692,8 @@ export function getChatStyles(): string {
     /* ─── Files Changed Review Card ────────────────────────────────────── */
     .files-changed-card {
       width: 100%;
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid rgba(255, 255, 255, 0.07);
+      background: rgba(var(--tint), 0.02);
+      border: 1px solid rgba(var(--tint), 0.07);
       border-radius: 8px;
       padding: 9px 12px;
       margin: 8px 0 4px 0;
@@ -7612,7 +7702,7 @@ export function getChatStyles(): string {
       transition: border-color 0.15s ease, box-shadow 0.15s ease;
     }
     .files-changed-card:hover {
-      border-color: rgba(255, 255, 255, 0.11);
+      border-color: rgba(var(--tint), 0.11);
       box-shadow: 0 3px 12px rgba(0, 0, 0, 0.28);
     }
 
@@ -7644,7 +7734,7 @@ export function getChatStyles(): string {
     }
     .files-changed-review-btn:hover {
       color: #ffffff;
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
     }
 
     .files-changed-list {
@@ -7666,7 +7756,7 @@ export function getChatStyles(): string {
       user-select: none;
     }
     .files-changed-row:hover {
-      background: rgba(255, 255, 255, 0.045);
+      background: rgba(var(--tint), 0.045);
     }
 
     .files-changed-row-left {
@@ -7802,7 +7892,7 @@ export function getChatStyles(): string {
       width: 340px;
       max-height: 500px;
       background: var(--card-bg, #18181b);
-      border: 1px solid var(--card-border, rgba(255, 255, 255, 0.08));
+      border: 1px solid var(--card-border, rgba(var(--tint), 0.08));
       border-radius: 8px;
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
       z-index: 100;
@@ -7816,8 +7906,8 @@ export function getChatStyles(): string {
       align-items: center;
       justify-content: space-between;
       padding: 9px 12px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-      background: rgba(255, 255, 255, 0.02);
+      border-bottom: 1px solid rgba(var(--tint), 0.08);
+      background: rgba(var(--tint), 0.02);
     }
     .timeline-header-left {
       display: flex;
@@ -7835,8 +7925,8 @@ export function getChatStyles(): string {
       font-weight: 500;
       padding: 1px 6px;
       border-radius: 4px;
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.06);
+      border: 1px solid rgba(var(--tint), 0.08);
       color: var(--muted);
     }
     .timeline-header-actions {
@@ -7858,7 +7948,7 @@ export function getChatStyles(): string {
     }
     .timeline-action-btn:hover {
       color: var(--fg, #f4f4f5);
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
     }
     .timeline-header-close {
       background: transparent;
@@ -7878,26 +7968,26 @@ export function getChatStyles(): string {
     }
     .timeline-header-close:hover {
       color: var(--fg, #f4f4f5);
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
     }
     .timeline-toolbar {
       padding: 7px 10px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      border-bottom: 1px solid rgba(var(--tint), 0.08);
       background: transparent;
     }
     .timeline-search-wrap {
       display: flex;
       align-items: center;
       gap: 6px;
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.03);
+      border: 1px solid rgba(var(--tint), 0.08);
       border-radius: 5px;
       padding: 4px 8px;
       color: var(--muted);
       transition: border-color 0.12s ease;
     }
     .timeline-search-wrap:focus-within {
-      border-color: rgba(255, 255, 255, 0.2);
+      border-color: rgba(var(--tint), 0.2);
       color: var(--fg, #f4f4f5);
     }
     .timeline-search-input {
@@ -7935,7 +8025,7 @@ export function getChatStyles(): string {
       top: 19px;
       bottom: -8px;
       width: 1px;
-      background: rgba(255, 255, 255, 0.12);
+      background: rgba(var(--tint), 0.12);
       z-index: 1;
     }
     .timeline-dot {
@@ -7946,7 +8036,7 @@ export function getChatStyles(): string {
       height: 9px;
       border-radius: 50%;
       background: var(--card-bg, #18181b);
-      border: 1.5px solid rgba(255, 255, 255, 0.25);
+      border: 1.5px solid rgba(var(--tint), 0.25);
       z-index: 2;
       transition: border-color 0.12s ease, background 0.12s ease;
     }
@@ -7959,8 +8049,8 @@ export function getChatStyles(): string {
       background: #38bdf8;
     }
     .timeline-node-card {
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.02);
+      border: 1px solid rgba(var(--tint), 0.06);
       border-radius: 6px;
       padding: 8px 10px;
       display: flex;
@@ -7969,12 +8059,12 @@ export function getChatStyles(): string {
       transition: background 0.12s ease, border-color 0.12s ease;
     }
     .timeline-node:hover .timeline-node-card {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: rgba(255, 255, 255, 0.14);
+      background: rgba(var(--tint), 0.05);
+      border-color: rgba(var(--tint), 0.14);
     }
     .timeline-node.active .timeline-node-card {
-      border-color: rgba(255, 255, 255, 0.18);
-      background: rgba(255, 255, 255, 0.04);
+      border-color: rgba(var(--tint), 0.18);
+      background: rgba(var(--tint), 0.04);
     }
     .timeline-node-top {
       display: flex;
@@ -8012,7 +8102,7 @@ export function getChatStyles(): string {
       text-overflow: ellipsis;
       white-space: nowrap;
       padding-left: 6px;
-      border-left: 2px solid rgba(255, 255, 255, 0.08);
+      border-left: 2px solid rgba(var(--tint), 0.08);
     }
     .timeline-node-badges {
       display: flex;
@@ -8026,104 +8116,37 @@ export function getChatStyles(): string {
       font-weight: 500;
       padding: 1px 5px;
       border-radius: 4px;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.07);
+      background: rgba(var(--tint), 0.04);
+      border: 1px solid rgba(var(--tint), 0.07);
       color: var(--muted);
       display: inline-flex;
       align-items: center;
       gap: 3px;
     }
     .timeline-mini-badge.tools {
-      background: rgba(255, 255, 255, 0.06);
-      border-color: rgba(255, 255, 255, 0.1);
+      background: rgba(var(--tint), 0.06);
+      border-color: rgba(var(--tint), 0.1);
       color: var(--fg, #f4f4f5);
     }
     .timeline-mini-badge.files {
-      background: rgba(255, 255, 255, 0.06);
-      border-color: rgba(255, 255, 255, 0.1);
+      background: rgba(var(--tint), 0.06);
+      border-color: rgba(var(--tint), 0.1);
       color: var(--fg, #f4f4f5);
     }
     .timeline-mini-badge.tool-tag {
-      background: rgba(255, 255, 255, 0.03);
-      border-color: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.03);
+      border-color: rgba(var(--tint), 0.06);
       color: var(--muted);
       font-family: var(--font-mono);
       font-size: 9px;
     }
     .session-ghost-empty { font-size: 10px; color: var(--muted); font-style: italic; margin-left: 6px; }
 
-    .session-coagent-card,
-    .session-question-card,
-    .session-answer-card,
-    .session-state-card {
-      margin: 8px 0;
-      border-radius: 8px;
-      padding: 10px 14px;
-      font-size: 12.5px;
-      line-height: 1.5;
-    }
-    .session-coagent-card {
-      border: 1px solid rgba(88, 166, 255, 0.3);
-      background: rgba(88, 166, 255, 0.08);
-      border-left: 3px solid #58a6ff;
-    }
-    .session-question-card {
-      border: 1px solid rgba(210, 168, 255, 0.35);
-      background: rgba(210, 168, 255, 0.08);
-      border-left: 3px solid #d2a8ff;
-    }
-    .session-answer-card {
-      border: 1px solid rgba(63, 185, 80, 0.35);
-      background: rgba(63, 185, 80, 0.08);
-      border-left: 3px solid #3fb950;
-    }
-    .session-state-card {
-      border: 1px solid rgba(56, 189, 248, 0.3);
-      background: rgba(56, 189, 248, 0.08);
-      border-left: 3px solid #38bdf8;
-    }
-    .session-card-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      font-weight: 600;
-      font-size: 11.5px;
-      margin-bottom: 8px;
-      flex-wrap: wrap;
-    }
-    .session-card-header.question { color: #d2a8ff; }
-    .session-card-header.answer { color: #3fb950; }
-    .session-card-header-left {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      min-width: 0;
-      flex: 1;
-      overflow: hidden;
-    }
-    .session-card-sender {
-      color: var(--fg, #e4e4e7);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .session-card-header-actions {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      flex-shrink: 0;
-      margin-left: auto;
-    }
-    .session-card-badge {
-      font-size: 10px;
-      padding: 1px 6px;
-      border-radius: 10px;
-      background: rgba(255, 255, 255, 0.08);
-      color: var(--muted, #888);
-      font-family: var(--font-mono);
-      white-space: nowrap;
-      flex-shrink: 0;
+    :root {
+      --collab-violet: var(--vscode-charts-purple, var(--purple, #bc8cff));
+      --collab-green: var(--vscode-charts-green, var(--green, #3fb950));
+      --collab-blue: var(--vscode-charts-blue, #38bdf8);
+      --collab-amber: var(--vscode-charts-yellow, #d29922);
     }
     .session-card-btn {
       display: inline-flex;
@@ -8134,47 +8157,211 @@ export function getChatStyles(): string {
       font-weight: 500;
       border-radius: 4px;
       cursor: pointer;
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
-      background: var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.06));
-      color: var(--vscode-button-secondaryForeground, var(--fg, #e4e4e7));
-      transition: all 0.12s ease;
+      border: 1px solid var(--border);
+      background: var(--vscode-button-secondaryBackground, var(--surface-hover));
+      color: var(--vscode-button-secondaryForeground, var(--fg));
+      transition: background 0.12s ease, border-color 0.12s ease;
       white-space: nowrap;
       line-height: 1.3;
       user-select: none;
       font-family: inherit;
     }
     .session-card-btn:hover {
-      background: var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.12));
-      border-color: rgba(255, 255, 255, 0.25);
-      color: #ffffff;
+      background: var(--vscode-button-secondaryHoverBackground, var(--surface-active));
     }
     .session-card-btn svg {
       flex-shrink: 0;
       opacity: 0.85;
     }
-    .session-card-jump-btn {
-      background: rgba(88, 166, 255, 0.08);
-      border-color: rgba(88, 166, 255, 0.28);
-      color: #79b8ff;
-    }
-    .session-card-jump-btn:hover {
-      background: rgba(88, 166, 255, 0.18);
-      border-color: rgba(88, 166, 255, 0.5);
-      color: #a5d6ff;
-    }
     .session-card-wake-btn {
-      background: rgba(210, 168, 255, 0.12);
-      border-color: rgba(210, 168, 255, 0.35);
-      color: #d2a8ff;
+      color: var(--collab-violet);
+      background: color-mix(in srgb, var(--collab-violet) 10%, transparent);
+      border-color: color-mix(in srgb, var(--collab-violet) 35%, transparent);
     }
     .session-card-wake-btn:hover {
-      background: rgba(210, 168, 255, 0.22);
-      border-color: rgba(210, 168, 255, 0.6);
-      color: #f0e6ff;
+      background: color-mix(in srgb, var(--collab-violet) 18%, transparent);
+      border-color: color-mix(in srgb, var(--collab-violet) 55%, transparent);
     }
-    .session-card-content {
-      color: var(--fg, #e4e4e7);
-      word-break: break-word;
+    .collab-type-icon {
+      display: inline-flex;
+      flex-shrink: 0;
+      color: var(--muted);
+    }
+    .collab-type-badge {
+      font-size: 10px;
+      font-weight: 500;
+      line-height: 16px;
+      padding: 0 6px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .collab-type-icon.question, .collab-type-badge.question { color: var(--collab-violet); }
+    .collab-type-icon.answer, .collab-type-badge.answer { color: var(--collab-green); }
+    .collab-type-icon.handoff, .collab-type-badge.handoff { color: var(--collab-blue); }
+    .collab-type-badge.question, .collab-type-badge.answer, .collab-type-badge.handoff {
+      border-color: color-mix(in srgb, currentColor 35%, transparent);
+    }
+    .collab-inbox-item-from {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .message.user.prompt-card.collab-wake-prompt,
+    body.andromity-session-tab .message.user.prompt-card.collab-wake-prompt {
+      border-left: 2px solid var(--collab-violet);
+    }
+    .collab-wake-head {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--collab-violet);
+      margin-bottom: 4px;
+    }
+
+    /* Suggested next step (shown under the reply when a turn ends) */
+    .next-step-card {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      margin: 8px 0 4px;
+      padding: 8px 8px 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--chat-surface, var(--card-bg));
+    }
+    .next-step-text {
+      flex: 1 1 160px;
+      min-width: 0;
+    }
+    .next-step-label {
+      font-size: 10.5px;
+      color: var(--muted);
+      margin-bottom: 1px;
+    }
+    .next-step-title {
+      font-size: 12.5px;
+      font-weight: 500;
+      color: var(--fg);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .next-step-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+    }
+    .next-step-btn {
+      font-family: inherit;
+      font-size: 11.5px;
+      font-weight: 500;
+      line-height: 1.4;
+      padding: 3px 10px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: var(--vscode-button-secondaryBackground, var(--surface-hover));
+      color: var(--vscode-button-secondaryForeground, var(--fg));
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .next-step-btn:hover {
+      background: var(--vscode-button-secondaryHoverBackground, var(--surface-active));
+    }
+    .next-step-btn.primary {
+      background: var(--vscode-button-background, var(--accent));
+      color: var(--vscode-button-foreground, #ffffff);
+      border-color: transparent;
+    }
+    .next-step-btn.primary:hover {
+      background: var(--vscode-button-hoverBackground, var(--accent));
+    }
+    .next-step-card.has-choices .next-step-actions {
+      flex-wrap: wrap;
+    }
+    .next-step-new-tag {
+      margin-left: 6px;
+      font-size: 10px;
+      font-weight: 400;
+      opacity: 0.75;
+    }
+    .next-step-btn:focus-visible,
+    .next-step-dismiss:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder, var(--accent));
+      outline-offset: 1px;
+    }
+    .next-step-dismiss {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1;
+      padding: 2px 5px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .next-step-dismiss:hover {
+      color: var(--fg);
+      background: var(--surface-hover);
+    }
+
+    /* A suggestion running in its own session, shown in the session it came from */
+    .bg-run-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 6px 0;
+      padding: 6px 8px 6px 10px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      font-size: 12px;
+      color: var(--fg);
+    }
+    .bg-run-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--vscode-charts-blue, #38bdf8);
+    }
+    .bg-run-row.status-waiting .bg-run-dot { background: var(--vscode-charts-yellow, #d29922); }
+    .bg-run-row.status-finished .bg-run-dot { background: var(--vscode-charts-green, var(--green, #3fb950)); }
+    .bg-run-row.status-cancelled .bg-run-dot { background: var(--muted); }
+    .bg-run-row.status-error .bg-run-dot { background: var(--vscode-charts-red, var(--red, #f85149)); }
+    .bg-run-text {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .bg-run-label { color: var(--muted); }
+    .bg-run-title { font-weight: 500; }
+    .bg-run-summary { color: var(--muted); }
+    .bg-run-summary::before { content: " · "; }
+    .bg-run-open {
+      font-family: inherit;
+      font-size: 11.5px;
+      padding: 1px 8px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--vscode-textLink-foreground, var(--accent));
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .bg-run-open:hover { background: var(--surface-hover); }
+    .bg-origin-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 4px 0 10px;
+      font-size: 11.5px;
+      color: var(--muted);
     }
 
     /* Waterfall First-Session Onboarding Popover */
@@ -8210,7 +8397,7 @@ export function getChatStyles(): string {
       transform: rotate(45deg);
     }
 
-    /* Co-Agent Collaboration Badge (inline with the session name) */
+    /* Session collaboration badge (inline with the session name) */
     .session-collab-badge {
       display: inline-flex;
       align-items: center;
@@ -8218,9 +8405,9 @@ export function getChatStyles(): string {
       max-width: 160px;
       padding: 2px 8px;
       border-radius: 999px;
-      background: rgba(188, 140, 255, 0.1);
-      border: 1px solid rgba(188, 140, 255, 0.25);
-      color: var(--purple, #bc8cff);
+      background: color-mix(in srgb, var(--collab-violet) 10%, transparent);
+      border: 1px solid color-mix(in srgb, var(--collab-violet) 28%, transparent);
+      color: var(--collab-violet);
       font-size: 10.5px;
       font-weight: 500;
       letter-spacing: 0.1px;
@@ -8236,27 +8423,38 @@ export function getChatStyles(): string {
       white-space: nowrap;
     }
     .session-collab-badge:hover {
-      background: rgba(188, 140, 255, 0.16);
-      border-color: rgba(188, 140, 255, 0.4);
+      background: color-mix(in srgb, var(--collab-violet) 16%, transparent);
+      border-color: color-mix(in srgb, var(--collab-violet) 45%, transparent);
     }
     .session-collab-badge.watching {
-      color: #38bdf8;
-      background: rgba(56, 189, 248, 0.1);
-      border-color: rgba(56, 189, 248, 0.25);
+      color: var(--collab-blue);
+      background: color-mix(in srgb, var(--collab-blue) 10%, transparent);
+      border-color: color-mix(in srgb, var(--collab-blue) 28%, transparent);
     }
     .session-collab-badge.watching:hover {
-      background: rgba(56, 189, 248, 0.16);
-      border-color: rgba(56, 189, 248, 0.4);
+      background: color-mix(in srgb, var(--collab-blue) 16%, transparent);
+      border-color: color-mix(in srgb, var(--collab-blue) 45%, transparent);
     }
     .session-collab-badge.paused {
-      color: #d29922;
-      background: rgba(210, 153, 34, 0.1);
-      border-color: rgba(210, 153, 34, 0.3);
+      color: var(--collab-amber);
+      background: color-mix(in srgb, var(--collab-amber) 10%, transparent);
+      border-color: color-mix(in srgb, var(--collab-amber) 32%, transparent);
+      max-width: 240px;
     }
-    .session-collab-badge .session-card-btn {
+    .session-collab-badge .collab-badge-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      flex-shrink: 0;
+    }
+    .session-collab-badge .collab-resume-btn {
       padding: 0 6px;
       margin-left: 2px;
       font-size: 10px;
+      color: inherit;
+      background: transparent;
+      border-color: currentColor;
     }
 
     /* Floating Collaboration Inbox Drawer / Popover */
@@ -8268,8 +8466,8 @@ export function getChatStyles(): string {
       height: 14px;
       padding: 0 3px;
       border-radius: 999px;
-      background: var(--purple, #bc8cff);
-      color: #1c1630;
+      background: var(--collab-violet);
+      color: var(--bg);
       font-size: 9px;
       font-weight: 600;
       font-family: var(--font-mono, monospace);
@@ -8287,12 +8485,9 @@ export function getChatStyles(): string {
       width: 340px;
       max-width: calc(100vw - 16px);
       max-height: 440px;
-      background: var(--card-bg, #18181b);
-      background: rgba(24, 24, 27, 0.97);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.6);
+      background: var(--popover-bg);
+      border: 1px solid var(--popover-border);
+      box-shadow: 0 14px 36px var(--popover-shadow);
       border-radius: 10px;
       display: flex;
       flex-direction: column;
@@ -8305,7 +8500,7 @@ export function getChatStyles(): string {
       align-items: center;
       justify-content: space-between;
       padding: 8px 12px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      border-bottom: 1px solid var(--border);
     }
     .collab-inbox-header-title {
       display: flex;
@@ -8317,7 +8512,7 @@ export function getChatStyles(): string {
       color: var(--fg, #e4e4e7);
     }
     .collab-inbox-header-title svg {
-      color: var(--purple, #bc8cff);
+      color: var(--collab-violet);
       flex-shrink: 0;
     }
     .collab-inbox-header-pill {
@@ -8325,9 +8520,9 @@ export function getChatStyles(): string {
       font-weight: 500;
       padding: 1px 6px;
       border-radius: 999px;
-      background: rgba(188, 140, 255, 0.12);
-      color: var(--purple, #bc8cff);
-      border: 1px solid rgba(188, 140, 255, 0.22);
+      background: color-mix(in srgb, var(--collab-violet) 12%, transparent);
+      color: var(--collab-violet);
+      border: 1px solid color-mix(in srgb, var(--collab-violet) 25%, transparent);
       font-family: var(--font-mono, monospace);
     }
     .collab-inbox-header-actions {
@@ -8348,7 +8543,7 @@ export function getChatStyles(): string {
     }
     .collab-inbox-text-btn:hover {
       color: var(--fg, #e4e4e7);
-      background: rgba(255, 255, 255, 0.06);
+      background: var(--surface-hover);
     }
     .collab-inbox-close-btn {
       background: transparent;
@@ -8363,13 +8558,13 @@ export function getChatStyles(): string {
     }
     .collab-inbox-close-btn:hover {
       color: var(--fg, #e4e4e7);
-      background: rgba(255, 255, 255, 0.06);
+      background: var(--surface-hover);
     }
     .collab-inbox-tabs {
       display: flex;
       gap: 2px;
       padding: 6px 10px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      border-bottom: 1px solid var(--border);
       overflow-x: auto;
       scrollbar-width: none;
     }
@@ -8391,12 +8586,12 @@ export function getChatStyles(): string {
     }
     .collab-inbox-tab:hover {
       color: var(--fg, #e4e4e7);
-      background: rgba(255, 255, 255, 0.04);
+      background: var(--surface-hover);
     }
     .collab-inbox-tab.active {
-      background: rgba(255, 255, 255, 0.06);
+      background: var(--surface-hover);
       color: var(--fg, #e4e4e7);
-      border-color: rgba(255, 255, 255, 0.1);
+      border-color: var(--border);
       font-weight: 600;
     }
     .collab-inbox-list {
@@ -8439,8 +8634,8 @@ export function getChatStyles(): string {
     .collab-inbox-item {
       border-radius: 7px;
       padding: 8px 10px;
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: transparent;
+      border: 1px solid var(--border);
       font-size: 12px;
       transition: border-color 0.15s ease, background 0.15s ease;
       display: flex;
@@ -8448,12 +8643,12 @@ export function getChatStyles(): string {
       gap: 5px;
     }
     .collab-inbox-item:hover {
-      background: rgba(255, 255, 255, 0.04);
-      border-color: rgba(255, 255, 255, 0.12);
+      background: var(--surface-hover);
+      border-color: var(--popover-border);
     }
     .collab-inbox-item.unread {
-      border-left: 2px solid var(--purple, #bc8cff);
-      background: rgba(188, 140, 255, 0.05);
+      border-left: 2px solid var(--collab-violet);
+      background: color-mix(in srgb, var(--collab-violet) 6%, transparent);
     }
     .collab-inbox-item-header {
       display: flex;
@@ -8495,7 +8690,7 @@ export function getChatStyles(): string {
       gap: 6px;
       margin-top: 2px;
       padding-top: 5px;
-      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      border-top: 1px solid var(--border);
     }
 
     .waterfall-callout-popover .popover-header {
@@ -8568,8 +8763,8 @@ export function getChatStyles(): string {
     .andromity-error-card,
     .error-card {
       width: 100%;
-      background: var(--vscode-editorWidget-background, rgba(255, 255, 255, 0.02));
-      border: 1px solid var(--vscode-widget-border, var(--border, rgba(255, 255, 255, 0.08)));
+      background: var(--vscode-editorWidget-background, rgba(var(--tint), 0.02));
+      border: 1px solid var(--vscode-widget-border, var(--border, rgba(var(--tint), 0.08)));
       border-radius: var(--radius, 6px);
       padding: 10px 12px;
       margin: 8px 0;
@@ -8621,9 +8816,9 @@ export function getChatStyles(): string {
       border-radius: 3px;
       letter-spacing: 0.3px;
       text-transform: uppercase;
-      background: rgba(255, 255, 255, 0.04);
+      background: rgba(var(--tint), 0.04);
       color: var(--muted, #888888);
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+      border: 1px solid var(--border, rgba(var(--tint), 0.08));
     }
 
     .error-card-body {
@@ -8641,7 +8836,7 @@ export function getChatStyles(): string {
     .error-details {
       margin: 5px 0 8px 0;
       background: rgba(0, 0, 0, 0.2);
-      border: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+      border: 1px solid var(--border, rgba(var(--tint), 0.06));
       border-radius: 4px;
       padding: 5px 8px;
       font-size: 11px;
@@ -8714,9 +8909,9 @@ export function getChatStyles(): string {
       align-items: center;
       justify-content: center;
       gap: 5px;
-      background: var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.05));
+      background: var(--vscode-button-secondaryBackground, rgba(var(--tint), 0.05));
       color: var(--vscode-button-secondaryForeground, var(--fg, #e4e4e7));
-      border: 1px solid var(--vscode-button-secondaryBorder, var(--border, rgba(255, 255, 255, 0.1)));
+      border: 1px solid var(--vscode-button-secondaryBorder, var(--border, rgba(var(--tint), 0.1)));
       border-radius: var(--radius, 4px);
       font-size: 11px;
       font-weight: 500;
@@ -8727,8 +8922,8 @@ export function getChatStyles(): string {
     }
 
     .btn-error-secondary:hover {
-      background: var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.09));
-      border-color: rgba(255, 255, 255, 0.18);
+      background: var(--vscode-button-secondaryHoverBackground, rgba(var(--tint), 0.09));
+      border-color: rgba(var(--tint), 0.18);
       color: var(--fg, #ffffff);
     }
 

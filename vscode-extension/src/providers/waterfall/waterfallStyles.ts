@@ -1,11 +1,21 @@
 export function getWaterfallStyles(): string {
   return `
+    :root:has(> body.vscode-light), :root:has(> body.vscode-high-contrast-light) {
+      --tint: 0, 0, 0;
+      --green: var(--vscode-testing-iconPassed, #1a7f37);
+      --red: var(--vscode-errorForeground, #cf222e);
+      --purple: #8250df;
+      --amber: #9a6700;
+      --cyan: #0969da;
+      --blue: #0969da;
+    }
     :root {
+      --tint: 255, 255, 255;
       --bg: var(--vscode-sideBar-background, #18181b);
       --fg: var(--vscode-foreground, #e4e4e7);
       --card-bg: var(--vscode-editor-background, #1e1e1e);
       --input-bg: var(--vscode-input-background, #252526);
-      --border: var(--vscode-widget-border, rgba(255,255,255,0.08));
+      --border: var(--vscode-widget-border, rgba(var(--tint), 0.08));
       --accent: var(--vscode-focusBorder, #007fd4);
       --green: #3fb950;
       --red: #f85149;
@@ -74,7 +84,7 @@ export function getWaterfallStyles(): string {
       gap: 6px;
     }
     .wf-pill-btn {
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
       border: 1px solid var(--border);
       color: var(--fg);
       border-radius: 4px;
@@ -85,8 +95,8 @@ export function getWaterfallStyles(): string {
       transition: background 0.15s, border-color 0.15s;
     }
     .wf-pill-btn:hover {
-      background: rgba(255, 255, 255, 0.12);
-      border-color: rgba(255, 255, 255, 0.2);
+      background: rgba(var(--tint), 0.12);
+      border-color: rgba(var(--tint), 0.2);
     }
     .wf-pill-dismiss {
       color: var(--muted);
@@ -95,7 +105,7 @@ export function getWaterfallStyles(): string {
     }
     .wf-pill-dismiss:hover {
       color: var(--fg);
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
     }
 
     /* Top Navigation Bar */
@@ -137,7 +147,7 @@ export function getWaterfallStyles(): string {
     .wf-session-pill {
       font-size: 11px;
       font-family: var(--font-mono);
-      background: rgba(255, 255, 255, 0.05);
+      background: rgba(var(--tint), 0.05);
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 2px 10px;
@@ -184,7 +194,7 @@ export function getWaterfallStyles(): string {
     }
 
     .wf-btn {
-      background: rgba(255, 255, 255, 0.04);
+      background: rgba(var(--tint), 0.04);
       border: 1px solid var(--border);
       color: var(--fg);
       padding: 4px 10px;
@@ -199,8 +209,8 @@ export function getWaterfallStyles(): string {
     }
 
     .wf-btn:hover {
-      background: rgba(255, 255, 255, 0.08);
-      border-color: rgba(255, 255, 255, 0.16);
+      background: rgba(var(--tint), 0.08);
+      border-color: rgba(var(--tint), 0.16);
     }
 
     .wf-btn:active {
@@ -287,12 +297,12 @@ export function getWaterfallStyles(): string {
 
     .wf-tab:hover {
       color: var(--fg);
-      background: rgba(255, 255, 255, 0.04);
+      background: rgba(var(--tint), 0.04);
     }
 
     .wf-tab.active {
       color: var(--fg);
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
       border-color: var(--border);
     }
 
@@ -332,8 +342,8 @@ export function getWaterfallStyles(): string {
     .wf-filter-pill:hover,
     .wf-filter-pill.active {
       color: var(--fg);
-      border-color: rgba(255, 255, 255, 0.2);
-      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(var(--tint), 0.2);
+      background: rgba(var(--tint), 0.06);
     }
 
     /* Main Container Views */
@@ -376,7 +386,7 @@ export function getWaterfallStyles(): string {
     }
 
     .wf-turn-header {
-      background: rgba(255, 255, 255, 0.02);
+      background: rgba(var(--tint), 0.02);
       border-bottom: 1px solid var(--border);
       padding: 8px 14px;
       display: flex;
@@ -388,7 +398,7 @@ export function getWaterfallStyles(): string {
     }
 
     .wf-turn-header:hover {
-      background: rgba(255, 255, 255, 0.04);
+      background: rgba(var(--tint), 0.04);
     }
 
     .wf-turn-title-wrap {
@@ -402,7 +412,7 @@ export function getWaterfallStyles(): string {
       font-size: 11px;
       font-weight: 600;
       font-family: var(--font-mono);
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
       padding: 2px 6px;
       border-radius: 4px;
       color: var(--fg);
@@ -469,7 +479,7 @@ export function getWaterfallStyles(): string {
 
     /* Span Row */
     .wf-span-row {
-      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      border-bottom: 1px solid rgba(var(--tint), 0.04);
       transition: background 0.15s ease;
     }
 
@@ -478,7 +488,7 @@ export function getWaterfallStyles(): string {
     }
 
     .wf-span-row:hover {
-      background: rgba(255, 255, 255, 0.03);
+      background: rgba(var(--tint), 0.03);
     }
 
     .wf-span-main {
@@ -561,7 +571,7 @@ export function getWaterfallStyles(): string {
       flex: 1;
       height: 24px;
       position: relative;
-      background: rgba(255, 255, 255, 0.02);
+      background: rgba(var(--tint), 0.02);
       border-radius: 4px;
       display: flex;
       align-items: center;
@@ -656,7 +666,7 @@ export function getWaterfallStyles(): string {
       top: 0;
       bottom: 0;
       background: rgba(0, 0, 0, 0.25);
-      border-right: 1px dashed rgba(255, 255, 255, 0.6);
+      border-right: 1px dashed rgba(var(--tint), 0.6);
       pointer-events: none;
     }
 
@@ -680,7 +690,7 @@ export function getWaterfallStyles(): string {
       display: none;
       padding: 12px 14px 14px 44px;
       background: rgba(0, 0, 0, 0.2);
-      border-top: 1px solid rgba(255, 255, 255, 0.04);
+      border-top: 1px solid rgba(var(--tint), 0.04);
       gap: 10px;
       flex-direction: column;
     }
@@ -697,7 +707,7 @@ export function getWaterfallStyles(): string {
     }
 
     .wf-detail-item {
-      background: rgba(255, 255, 255, 0.03);
+      background: rgba(var(--tint), 0.03);
       border: 1px solid var(--border);
       border-radius: 4px;
       padding: 6px 10px;
@@ -817,7 +827,7 @@ export function getWaterfallStyles(): string {
       position: absolute;
       top: 6px;
       right: 6px;
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
       border: 1px solid var(--border);
       color: var(--muted);
       border-radius: 4px;
@@ -828,7 +838,7 @@ export function getWaterfallStyles(): string {
 
     .wf-copy-btn:hover {
       color: var(--fg);
-      background: rgba(255, 255, 255, 0.15);
+      background: rgba(var(--tint), 0.15);
     }
 
     .wf-copy-btn.copied {
@@ -867,7 +877,7 @@ export function getWaterfallStyles(): string {
     .wf-rendered-markdown code {
       font-family: var(--font-mono);
       font-size: 11px;
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
       padding: 1px 4px;
       border-radius: 3px;
     }
@@ -913,7 +923,7 @@ export function getWaterfallStyles(): string {
     }
 
     .wf-log-line:hover {
-      background: rgba(255, 255, 255, 0.04);
+      background: rgba(var(--tint), 0.04);
     }
 
     .wf-log-time {
@@ -986,7 +996,7 @@ export function getWaterfallStyles(): string {
 
     .wf-stats-table td {
       padding: 8px 10px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      border-bottom: 1px solid rgba(var(--tint), 0.04);
     }
 
     .wf-stats-table tr:last-child td {
@@ -1034,7 +1044,7 @@ export function getWaterfallStyles(): string {
       justify-content: space-between;
       padding: 12px 18px;
       border-bottom: 1px solid var(--border);
-      background: rgba(255, 255, 255, 0.02);
+      background: rgba(var(--tint), 0.02);
     }
 
     .wf-modal-title {
@@ -1055,7 +1065,7 @@ export function getWaterfallStyles(): string {
 
     .wf-modal-close:hover {
       color: var(--fg);
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
     }
 
     .wf-modal-body {
@@ -1085,7 +1095,7 @@ export function getWaterfallStyles(): string {
     }
 
     .wf-guide-item {
-      background: rgba(255, 255, 255, 0.02);
+      background: rgba(var(--tint), 0.02);
       border: 1px solid var(--border);
       border-radius: 4px;
       padding: 8px 12px;

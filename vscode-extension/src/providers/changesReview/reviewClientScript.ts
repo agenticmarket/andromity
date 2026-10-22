@@ -543,7 +543,24 @@ export function getReviewClientScript(): string {
       return ({ A: 'Added', M: 'Modified', U: 'Untracked', D: 'Deleted', R: 'Renamed', '!': 'Conflict' })[status] || 'Changed';
     }
 
+    let pendingScroll = null;
+    function restorePendingScroll(filePath) {
+      if (!pendingScroll || pendingScroll.path !== filePath) return;
+      const el = diffContainer.querySelector('.diff-scroll-area');
+      if (el) { el.scrollTop = pendingScroll.top; el.scrollLeft = pendingScroll.left; }
+      pendingScroll = null;
+    }
+
     function renderActiveDiff() {
+      if (!state.activeFilePath && state.droppedFilePath) {
+        diffContainer.innerHTML =
+          '<div class="empty-state">' +
+            '<div class="codicon codicon-check empty-state-icon"></div>' +
+            '<h3>' + escapeHtml(state.droppedFilePath) + ' has no changes anymore</h3>' +
+            '<p>It was reverted, committed or changed back. Pick another file on the left.</p>' +
+          '</div>';
+        return;
+      }
       if (!state.activeFilePath) {
         diffContainer.innerHTML =
           '<div class="empty-state">' +
@@ -801,10 +818,19 @@ export function getReviewClientScript(): string {
     window.addEventListener('message', function (event) {
       const msg = event.data;
       switch (msg.type) {
-        case 'set_changes':
+        case 'set_changes': {
           refreshBtn.disabled = false;
           refreshBtn.innerHTML = '<span class="codicon codicon-refresh"></span> Refresh';
 
+          // A background refresh keeps the open diff on screen (no loading flash),
+          // reloads it in place and restores the scroll positions.
+          const previousActive = state.activeFilePath;
+          const treeScroll = treeScrollArea.scrollTop;
+          const diffScrollEl = diffContainer.querySelector('.diff-scroll-area');
+          if (msg.auto && previousActive) {
+            pendingScroll = { path: previousActive, top: diffScrollEl ? diffScrollEl.scrollTop : 0, left: diffScrollEl ? diffScrollEl.scrollLeft : 0 };
+          }
+          state.droppedFilePath = null;
           state.fileDiffs = Object.create(null);
           state.fileNotices = Object.create(null);
           state.branch = msg.branch || 'HEAD';
@@ -834,6 +860,11 @@ export function getReviewClientScript(): string {
             } else if (!state.activeFilePath && currentVisible.length > 0) {
               state.activeFilePath = currentVisible[0].path;
             }
+          } else if (msg.auto && previousActive && !currentVisible.some(function (f) { return f.path === previousActive; })) {
+            // The file you were reading no longer has changes: say so instead of jumping to another file.
+            state.activeFilePath = null;
+            state.droppedFilePath = previousActive;
+            pendingScroll = null;
           } else if ((!state.activeFilePath || !currentVisible.some(function (f) { return f.path === state.activeFilePath; })) && currentVisible.length > 0) {
             state.activeFilePath = currentVisible[0].path;
           } else if (currentVisible.length === 0) {
@@ -842,13 +873,17 @@ export function getReviewClientScript(): string {
 
           saveState();
           renderTree();
+          if (msg.auto) treeScrollArea.scrollTop = treeScroll;
 
-          if (state.activeFilePath) {
+          if (state.activeFilePath && msg.auto && state.activeFilePath === previousActive) {
+            vscode.postMessage({ type: 'get_file_diff', filePath: state.activeFilePath });
+          } else if (state.activeFilePath) {
             selectFile(state.activeFilePath);
           } else {
             renderActiveDiff();
           }
           break;
+        }
 
         case 'set_file_diff':
           state.fileDiffs[msg.filePath] = msg.diff || '';
@@ -856,6 +891,7 @@ export function getReviewClientScript(): string {
           saveState();
           if (state.activeFilePath === msg.filePath) {
             renderActiveDiff();
+            restorePendingScroll(msg.filePath);
           }
           break;
 

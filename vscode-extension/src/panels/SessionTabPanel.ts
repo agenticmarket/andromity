@@ -13,11 +13,18 @@ import { SessionHydration } from "../server/sessionHydration.js";
 import { ChatViewProvider } from "../providers/ChatViewProvider.js";
 import { ModelInfo, ProviderInfo, SessionInfo } from "../server/types.js";
 import { EditorBridge } from "../integrations/EditorBridge.js";
+import { runCodeBlockInTerminal } from "../integrations/TerminalRunner.js";
+import { airGapPillMessage } from "../airgapState.js";
+import { copySessionAsMarkdown } from "../chatMarkdown.js";
+import { runSidePanelCommand, SidePanelFeed } from "../sidePanelFeed.js";
+import { confirmRewindAndResend, resendPromptOf } from "../integrations/rewind.js";
 import { recordFeatureUse } from "../telemetry/featureUsage.js";
 import { SettingsPanel } from "./SettingsPanel.js";
 import { PlanEditorPanel } from "./PlanEditorPanel.js";
 import { WaterfallPanel } from "./WaterfallPanel.js";
 import { BackgroundTaskPanel } from "./BackgroundTaskPanel.js";
+import { wakeSessionForQuestion } from "../collabActions.js";
+import { recordNextStepEvent } from "../nextSteps.js";
 
 /**
  * SessionTabPanel allows opening any Andromity session in a dedicated editor tab
@@ -40,6 +47,7 @@ export class SessionTabPanel {
   private _currentProfile: string = "builder";
   private _currentReasoning: string = "medium";
   private _disposables: vscode.Disposable[] = [];
+  private _sidePanelFeed = new SidePanelFeed(() => this._rpcClient, (message) => this._postMessage(message));
   private _rpcDisposables: Array<() => void> = [];
   private _hydration = new SessionHydration();
   private _creatingSession: Promise<void> | null = null;
@@ -183,7 +191,7 @@ export class SessionTabPanel {
       "</head>",
       "<style>#btn-top-open-tab { display: none !important; }</style></head>"
     );
-    html = html.replace('<body class="loading">', '<body class="loading andromity-session-tab">');
+    html = html.replace('<body class="', '<body class="andromity-session-tab ');
     this._panel.webview.html = html;
   }
 
@@ -208,6 +216,10 @@ export class SessionTabPanel {
 
   public get visible(): boolean {
     return this._panel.visible;
+  }
+
+  public get sessionId(): string {
+    return this._sessionId;
   }
 
   public postMessage(msg: any) {
@@ -299,6 +311,15 @@ export class SessionTabPanel {
     bind("agent/planUpdated", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "plan_updated", ...params });
     });
+    bind("agent/nextStepSuggested", (params: any) => {
+      if (isMatch(params)) this._postMessage({ type: "next_step_suggested", ...params });
+    });
+    bind("session/backgroundStarted", (params: any) => {
+      if (params.parent_session_id === this._sessionId) this._postMessage({ type: "background_session_started", ...params });
+    });
+    bind("session/backgroundFinished", (params: any) => {
+      if (params.parent_session_id === this._sessionId) this._postMessage({ type: "background_session_finished", ...params });
+    });
     bind("subagent/spawned", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "subagent_spawned", ...params });
     });
@@ -311,7 +332,10 @@ export class SessionTabPanel {
     bind("subagent/failed", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "subagent_failed", ...params });
     });
+    bind("mcp/statusChanged", () => this._sidePanelFeed.refresh(["mcp"]));
+
     bind("agent/done", (params: any) => {
+      this._sidePanelFeed.refresh(["changes"]);
       if (isMatch(params)) {
         this._postMessage({ type: "agent_done", ...params });
         if (this._viewProvider.isSoundEnabled("done") && !this._viewProvider.isViewVisible()) {
@@ -383,10 +407,37 @@ export class SessionTabPanel {
 
     if (message.type === "ready" || message.type === "webview_ready") {
       this._postMessage({ type: "backend_ready" });
+      this._postMessage(airGapPillMessage());
+      this._sidePanelFeed.refresh();
       void this._viewProvider.getWorkspaceIndex().then((index) => {
         this._postMessage({ type: "workspace_files_updated", files: index.files, dirs: index.dirs });
       });
       await this._loadSession();
+      return;
+    }
+
+    if (message.type === "side_panel_preferences") {
+      await this._viewProvider.saveSidePanelPreferences(message.preferences);
+      return;
+    }
+
+    if (message.type === "side_panel_visibility") {
+      await this._viewProvider.saveSidePanelVisibility(message.off);
+      return;
+    }
+
+    if (message.type === "side_panel_refresh") {
+      this._sidePanelFeed.refresh();
+      return;
+    }
+
+    if (message.type === "side_panel_command") {
+      runSidePanelCommand(message.command);
+      return;
+    }
+
+    if (message.type === "copy_chat_markdown") {
+      await copySessionAsMarkdown(this._rpcClient, this._sessionId);
       return;
     }
 
@@ -397,6 +448,13 @@ export class SessionTabPanel {
 
     if (message.type === "apply_code") {
       await EditorBridge.applySnippetToEditor(message.code, message.mode || "insert_at_cursor");
+      return;
+    }
+
+    if (message.type === "run_in_terminal") {
+      const runId = typeof message.runId === "string" ? message.runId : "";
+      await runCodeBlockInTerminal(message.code, message.lang,
+        runId ? (status) => this._postMessage({ type: "run_status", runId, ...status }) : undefined);
       return;
     }
 
@@ -837,7 +895,27 @@ export class SessionTabPanel {
         break;
       }
 
+      case "start_next_step_session": {
+        if (message.prompt) await this._viewProvider.startNextStepSession(message.prompt, message.title, this._sessionId);
+        break;
+      }
+
+      case "next_step_event": {
+        recordNextStepEvent(message.event, this._sessionId);
+        break;
+      }
+
+      case "wake_for_question": {
+        if (message.questionId) {
+          const notice = await wakeSessionForQuestion(this._rpcClient, this._sessionId, message.questionId);
+          if (notice) vscode.window.showWarningMessage(notice);
+        }
+        break;
+      }
+
       case "undo_turn": {
+        const resendPrompt = resendPromptOf(message);
+        if (resendPrompt && !(await confirmRewindAndResend(message.turnsToUndo))) break;
         const undone = await this._viewProvider.undoSession(this._sessionId, message.turnIndex, message.turnsToUndo);
         if (undone) {
           recordFeatureUse("turn_undone", { sessionId: this._sessionId });
@@ -850,6 +928,7 @@ export class SessionTabPanel {
             type: "turn_undone",
             turnsUndone: message.turnsToUndo || 1,
             targetTurnIndex: message.turnIndex,
+            resendPrompt,
           });
         }
         break;
@@ -883,6 +962,12 @@ export class SessionTabPanel {
 
       case "delete_session": {
         if (message.sessionId) {
+          const confirmDelete = await vscode.window.showWarningMessage(
+            `Delete session "${message.sessionName || message.sessionId}"?`,
+            { modal: true },
+            "Delete"
+          );
+          if (confirmDelete !== "Delete") break;
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           try {
             const result = await this._rpcClient.call<{ success: boolean; error?: string }>("session.delete", {
@@ -1069,6 +1154,7 @@ export class SessionTabPanel {
 
   public dispose() {
     SessionTabPanel._panels.delete(this._sessionId);
+    this._sidePanelFeed?.dispose();
     this._disposeRpcEvents();
     while (this._disposables.length) {
       const x = this._disposables.pop();

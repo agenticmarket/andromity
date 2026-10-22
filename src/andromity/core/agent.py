@@ -1,21 +1,35 @@
 import json
 import sys
 import time
+from pathlib import Path
 from typing import AsyncGenerator, Dict, Any, Optional, Callable
 
 from andromity.core.provider import stream_completion, sanitize_messages_for_api
 from andromity.core.session import Session
-from andromity.core.profiles import get_system_prompt, filter_tools_for_profile
-from andromity.core.tools import CORE_TOOLS, ToolRegistry, execute_tool, register_session, requires_workspace_trust
+from andromity.core.profiles import (
+    filter_tools_for_profile, get_allowed_tools, get_system_prompt, load_project_instructions,
+)
+from andromity.core.tools import (
+    COLLAB_ACTION_NAMES, COLLAB_TOOLS, CORE_TOOLS, ToolRegistry, collab_action, collaboration_available,
+    execute_tool, parse_next_step, register_session, requires_workspace_trust,
+)
 from andromity.core.context_breakdown import AUTO_COMPACT_THRESHOLD
 from andromity.core.events import (
     StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired, PlanUpdated,
-    LLMCallStart, LLMCallEnd, InputApplied
+    LLMCallStart, LLMCallEnd, InputApplied, NextStepSuggested
 )
 from andromity.core.debug_log import get_logger
 from andromity.config import config
 
 log = get_logger("agent")
+
+_COLLAB_ACTION_VERBS = {
+    "session_send_message": "send messages to other sessions", "session_ask_question": "ask other sessions questions",
+    "session_broadcast": "message every session", "session_answer_question": "answer other sessions",
+    "session_list": "list sessions", "session_read_messages": "read its inbox", "session_watch": "wait for other sessions",
+    "shared_state_get": "read shared state", "shared_state_set": "write shared state",
+    "read_handoff": "read handoffs", "write_handoff": "write handoffs",
+}
 
 
 def _estimate_tokens(messages: list) -> int:
@@ -83,7 +97,8 @@ class Agent:
                  auto_approve: bool = False, on_tool_approval: Optional[Callable] = None,
                  on_questions: Optional[Callable] = None, ctx_limit: int = 0,
                  reasoning_effort: Optional[str] = None,
-                 provider: Optional[str] = None, model: Optional[str] = None):
+                 provider: Optional[str] = None, model: Optional[str] = None,
+                 next_step_suggestions: bool = False):
         self.session = session
         self.profile = profile or config.get("default", "profile", "builder")
         if self.session:
@@ -105,6 +120,10 @@ class Agent:
         self.provider = provider
         self.model = model
         self.allowed_tools = filter_tools_for_profile(CORE_TOOLS, self.profile)
+        # Only chats with someone to click a suggestion get the tool (not cron runs or one-shot CLI runs).
+        self.next_step_suggestions = next_step_suggestions
+        if not next_step_suggestions:
+            self.allowed_tools = [t for t in self.allowed_tools if t["function"]["name"] != "suggest_next_step"]
         self._empty_retried = False
         # Set when the current turn carries pasted images (see run()).
         self._turn_image_parts = None
@@ -155,8 +174,12 @@ class Agent:
 
     def _install_system_prompt(self) -> None:
         self._prompt_model_id = self._model_id()
+        self._prompt_trusted = self._workspace_trusted()
+        self._prompt_instructions = load_project_instructions(self.session.project_path)
         sys_prompt = get_system_prompt(self.profile, project_path=self.session.project_path,
                                        model_id=self._prompt_model_id)
+        if self._prompt_instructions:
+            sys_prompt += "\n" + self._prompt_instructions
 
         deferred_catalog = ToolRegistry.get_instance().get_deferred_prompt_catalog()
         if deferred_catalog:
@@ -176,9 +199,19 @@ class Agent:
             self.session.messages[0]["content"] = sys_prompt
             self.session.save()
 
-    def _refresh_prompt_for_model_change(self) -> None:
-        """The Assisted-by trailer names the model, so a mid-session switch must rewrite the prompt."""
-        if config.get("default", "include_assisted_by", False) and self._model_id() != self._prompt_model_id:
+    def _workspace_trusted(self) -> bool:
+        return config.is_trusted(str(Path(self.session.project_path or Path.cwd()).resolve()))
+
+    def _refresh_prompt_if_stale(self) -> None:
+        """Rewrite the prompt when something it states has changed mid-session.
+
+        The Assisted-by trailer names the model, trust decides the restricted-mode warning and
+        whether project instructions load, and the agent or user may edit AGENTS.md between turns.
+        """
+        model_changed = (config.get("default", "include_assisted_by", False)
+                         and self._model_id() != self._prompt_model_id)
+        if (model_changed or self._workspace_trusted() != self._prompt_trusted
+                or load_project_instructions(self.session.project_path) != self._prompt_instructions):
             self._install_system_prompt()
 
     def _messages_for_api(self) -> list:
@@ -451,7 +484,7 @@ class Agent:
         or pre-encoded ``image_uris`` (data: URIs — used as-is).
         """
         register_session(self.session)
-        self._refresh_prompt_for_model_change()
+        self._refresh_prompt_if_stale()
         self._turn_image_parts = None
         _uris: list | None = None
         if image_uris:          # already-encoded URIs from the TUI paste path
@@ -495,9 +528,9 @@ class Agent:
                 notices = []
                 if pending_q:
                     q_list = "; ".join([f"'{q['question']}' (id: {q['question_id']}) from {q['from_session']}" for q in pending_q])
-                    notices.append(f"Pending questions: {q_list}. (Use session_answer_question to answer)")
+                    notices.append(f"Pending questions: {q_list}. (Answer with session_message(reply_to=<id>, content=...))")
                 if unread_cnt > 0:
-                    notices.append(f"{unread_cnt} unread message(s) in mailbox. (Use session_read_messages to read)")
+                    notices.append(f"{unread_cnt} unread message(s). (Read them with session_inbox)")
                 effective_input += f"\n\n[Co-Agent Mailbox: {'; '.join(notices)}]"
         self.session.add_message("user", content=effective_input, images=thumb_uris)
         if self._turn_image_parts:
@@ -545,7 +578,7 @@ class Agent:
             provider_outcome = "success"
             provider_error_type = None
 
-            stream_kwargs: Dict[str, Any] = {"tools": self.allowed_tools, "turn_id": user_turn_id}
+            stream_kwargs: Dict[str, Any] = {"tools": self._tools_for_this_call(), "turn_id": user_turn_id}
             if self.provider:
                 stream_kwargs["provider_name"] = self.provider
             if self.model:
@@ -821,6 +854,16 @@ class Agent:
                     yield ToolResult(tool_id=tool_call["id"], result=dry_msg, duration_ms=0.0, success=True, ts=time.time())
                     continue
 
+                # Hard Gate: a collaboration call may only do what the profile allows (a reviewer reads, never sends)
+                action = collab_action(t_lower, args)
+                if action in COLLAB_ACTION_NAMES and action not in get_allowed_tools(self.profile):
+                    final_results[tool_call["id"]] = (
+                        f"TOOL BLOCKED: The '{self.profile}' profile can't use {tool_name} to {_COLLAB_ACTION_VERBS.get(action, action)}. "
+                        "Do not retry; continue with what this profile can do."
+                    )
+                    yield ToolResult(tool_id=tool_call["id"], result=f"[Blocked: {self.profile} profile]", duration_ms=0.0, success=False, ts=time.time())
+                    continue
+
                 # Hard Gate: Profile confinement (planner and reviewer cannot execute mutating tools)
                 prof = (self.profile or "").strip().lower()
                 if prof in ("planner", "reviewer") and t_lower in _MUTATING_TOOLS:
@@ -835,7 +878,7 @@ class Agent:
 
                 # Hard Gate: Folder trust boundary (untrusted folder unconditionally blocks mutations)
                 project_dir = getattr(self.session, "project_path", "") if self.session else ""
-                if project_dir and not config.is_trusted(project_dir) and requires_workspace_trust(t_lower):
+                if project_dir and not config.is_trusted(project_dir) and requires_workspace_trust(collab_action(t_lower, args)):
                     rejection = (
                         f"TOOL BLOCKED: Workspace folder ({project_dir}) is untrusted.\n"
                         f"Workspace reads, writes, and commands are blocked across all permission modes until trust is granted via /trust."
@@ -996,7 +1039,7 @@ class Agent:
                             notes.append(f"{len(pending_q)} pending question(s) from other agents")
                         if unread_cnt > 0:
                             notes.append(f"{unread_cnt} new incoming message(s)")
-                        final_results[last_id] += f"\n\n[Co-Agent Mailbox: {', '.join(notes)}. Use session_read_messages or session_answer_question if relevant.]"
+                        final_results[last_id] += f"\n\n[Co-Agent Mailbox: {', '.join(notes)}. Use session_inbox or session_message(reply_to=...) if relevant.]"
 
             for tool_call in other_calls:
                 res = final_results.get(tool_call["id"], "[Error: Tool execution did not return a result]")
@@ -1009,12 +1052,22 @@ class Agent:
 
             # ── Phase 4: plan updates and approvals
             for tool_call, tool_name, args in prepared:
+                if tool_name == "suggest_next_step" and self.next_step_suggestions:
+                    step = parse_next_step(args if isinstance(args, dict) else {})
+                    if step:
+                        yield NextStepSuggested(**step)
                 if tool_name in ("write_plan", "update_plan_step"):
                     plan = self.session.load_plan_obj()
                     if plan:
                         yield PlanUpdated(plan=plan)
                         if tool_name == "write_plan" and plan.status == "pending":
                             yield PlanApprovalRequired(plan=plan)
+
+    def _tools_for_this_call(self) -> list:
+        """Collaboration tools only when another session is around or something is waiting for this one."""
+        if collaboration_available(self.session):
+            return self.allowed_tools
+        return [t for t in self.allowed_tools if t["function"]["name"] not in COLLAB_TOOLS]
 
     def _get_turn_count(self) -> int:
         if not self.session or not self.session.messages:

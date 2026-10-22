@@ -27,7 +27,7 @@ export async function handleInteractionMessage(
   const identity = question ? message.questionId : message.approvalId;
   try {
     const result = await rpc.call<{ success: boolean; error?: string }>(question ? "agent.answer_question" : "agent.approve_tool", {
-      session_id: sessionId, ...(question ? { question_id: identity, answers: message.answers }
+      session_id: sessionId, ...(question ? { question_id: identity, answers: message.answers, ...(message.dismissed ? { dismissed: true } : {}) }
         : { approval_id: identity, approved: message.type === "approve_tool", scope: message.scope || "once" }),
     });
     if (!result.success && result.error === "Workspace is untrusted") {
@@ -37,7 +37,7 @@ export async function handleInteractionMessage(
     }
     post({ type: "interaction_resolved", session_id: sessionId, interaction_id: identity });
     if (result.success) {
-      const feature = question ? "questions_answered"
+      const feature = question ? (message.dismissed ? "questions_dismissed" : "questions_answered")
         : message.type === "reject_tool" ? "tool_denied"
           : message.scope && message.scope !== "once" ? "tool_approved_always" : "tool_approved";
       recordFeatureUse(feature, { client: rpc, sessionId, oncePerSession: true });

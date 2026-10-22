@@ -11,10 +11,14 @@ import { PlanEditorPanel } from "./panels/PlanEditorPanel.js";
 import { WaterfallPanel, WaterfallTraceStore } from "./panels/WaterfallPanel.js";
 import { FingerprintPanel } from "./panels/FingerprintPanel.js";
 import { ChangesReviewPanel } from "./panels/ChangesReviewPanel.js";
+import { SessionTabPanel } from "./panels/SessionTabPanel.js";
 import { PythonBridge, formatTimestamp } from "./server/PythonBridge.js";
 import { RpcClient } from "./server/RpcClient.js";
 import { recordFeatureUse, setFeatureUsageClient, setFeatureUsageGate } from "./telemetry/featureUsage.js";
 import { FeedbackNotifications } from "./engagement/feedbackNotifications.js";
+import { AttentionKind, BackgroundSessions, describeToolActivity } from "./backgroundSessions.js";
+import { confirmTurnOnAirGap, currentAirGap } from "./airgapState.js";
+import { airGapStatusLine } from "./airgap.js";
 
 let pythonBridge: PythonBridge | null = null;
 let statusBarItem: vscode.StatusBarItem;
@@ -25,6 +29,7 @@ let lastBoundStatusBarClient: RpcClient | null = null;
 /** Status bar state for a failed start/restart — must be set from every
  *  failure path, otherwise the warm-up spinner spins forever. */
 function markEngineStartFailed() {
+  engineReady = false;
   if (statusBarItem) {
     statusBarItem.text = "$(alert) Andromity";
     statusBarItem.tooltip = "Andromity engine failed to start — run 'Andromity: System Setup Check'";
@@ -95,24 +100,14 @@ function bindStatusBarEvents(client: RpcClient) {
   if (lastBoundStatusBarClient === client) return;
   lastBoundStatusBarClient = client;
 
-  const updateStatusBar = () => {
-    if (activeRunningSessions.size > 1) {
-      statusBarItem.text = `$(sync~spin) Andromity (${activeRunningSessions.size} running)`;
-    } else if (activeRunningSessions.size === 1) {
-      statusBarItem.text = "$(sync~spin) Andromity";
-    } else {
-      statusBarItem.text = "$(andromity-logo) Andromity";
-    }
-  };
-
   // Called for every streamed token: only touch the status bar and context key
-  // when a session actually transitions to running.
-  const markRunning = (params?: any) => {
+  // when something visible changes.
+  const markRunning = (activity: (params: any) => string) => (params?: any) => {
     const sid = params?.session_id || "main";
+    if (backgroundSessions?.markActivity(sid, activity(params))) renderStatusBar();
     if (activeRunningSessions.has(sid)) return;
     const wasIdle = activeRunningSessions.size === 0;
     activeRunningSessions.add(sid);
-    updateStatusBar();
     if (wasIdle) {
       void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", true);
     }
@@ -124,24 +119,61 @@ function bindStatusBarEvents(client: RpcClient) {
     } else {
       activeRunningSessions.clear();
     }
-    updateStatusBar();
+    backgroundSessions?.markFinished(params?.session_id);
+    renderStatusBar();
     if (activeRunningSessions.size === 0) {
       void vscode.commands.executeCommand("setContext", "andromity.isAgentRunning", false);
     }
   };
 
-  client.on("agent/started", markRunning);
-  client.on("agent/textDelta", markRunning);
-  client.on("agent/toolStart", markRunning);
-  client.on("agent/toolApprovalRequired", () => {
-    statusBarItem.text = "$(alert) Andromity";
-  });
-  client.on("agent/askQuestions", () => {
-    statusBarItem.text = "$(question) Andromity";
-  });
+  const markAttention = (kind: AttentionKind) => (params?: any) => {
+    const sid = params?.session_id || "main";
+    if (!backgroundSessions) return;
+    const alreadyWaiting = backgroundSessions.hasAttention(sid);
+    backgroundSessions.markAttention(sid, kind);
+    renderStatusBar();
+    if (!alreadyWaiting && !params?.scheduled && backgroundSessions.needsNotification(sid)) {
+      notifySessionNeedsYou(backgroundSessions, sid, kind);
+    }
+  };
+
+  client.on("agent/started", markRunning(() => "Working"));
+  client.on("agent/textDelta", markRunning(() => "Writing a reply"));
+  client.on("agent/toolStart", markRunning((params) => describeToolActivity(params?.tool_name)));
+  client.on("agent/toolApprovalRequired", markAttention("approval"));
+  client.on("agent/askQuestions", markAttention("question"));
   client.on("agent/done", markFinished);
   client.on("agent/cancelled", markFinished);
   client.on("agent/error", markFinished);
+}
+
+let backgroundSessions: BackgroundSessions | null = null;
+/** Starting, reconnecting and failed engine states own the status bar until the engine is ready. */
+let engineReady = false;
+
+/** Connection attempts the engine refused in air-gap mode since it started. */
+let airGapBlockedCount = 0;
+
+function renderStatusBar() {
+  if (!statusBarItem || !backgroundSessions || !engineReady) return;
+  const view = backgroundSessions.render();
+  const airGap = currentAirGap();
+  statusBarItem.text = airGap.enabled ? view.text.replace("$(andromity-logo)", "$(shield)") : view.text;
+  statusBarItem.tooltip = airGap.enabled ? airGapStatusLine(airGap, airGapBlockedCount) + "\n\n" + view.tooltip : view.tooltip;
+  statusBarItem.command = view.openSessionId
+    ? { command: "andromity.switchSessionById", title: "Open session", arguments: [view.openSessionId] }
+    : "andromity.openChat";
+}
+
+/** One quiet notice per waiting request; it opens the session and offers no approve/deny shortcut. */
+function notifySessionNeedsYou(sessions: BackgroundSessions, sessionId: string, kind: AttentionKind) {
+  const name = sessions.label(sessionId);
+  const message = kind === "approval"
+    ? `Andromity: "${name}" needs your approval.`
+    : `Andromity: "${name}" has a question for you.`;
+  void vscode.window.showInformationMessage(message, "Open").then((choice) => {
+    if (choice === "Open") void vscode.commands.executeCommand("andromity.switchSessionById", sessionId);
+  });
 }
 
 // Commands other code runs on the user's behalf; recording them would only echo the action that triggered them.
@@ -189,6 +221,17 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // 3. Register Providers
   const chatProvider = new ChatViewProvider(context.extensionUri, context);
+  backgroundSessions = new BackgroundSessions({
+    currentSessionId: () => chatProvider.getCurrentSessionId(),
+    isChatVisible: () => chatProvider.isViewVisible(),
+    isShownInTab: (sid) => SessionTabPanel.getAllPanels().some((panel) => panel.sessionId === sid && panel.visible),
+    isWindowFocused: () => vscode.window.state.focused,
+    sessionName: (sid) => chatProvider.getSessionName(sid),
+  });
+  context.subscriptions.push(
+    chatProvider.onDidChangeViewState(renderStatusBar),
+    vscode.window.onDidChangeWindowState(renderStatusBar),
+  );
   chatProvider.setPythonBridge(pythonBridge);
   SettingsPanel.extensionContext = context;
   SettingsPanel.chatProvider = chatProvider;
@@ -337,11 +380,16 @@ export async function activate(context: vscode.ExtensionContext) {
     WaterfallTraceStore.init(rpcClient);
     bindStatusBarEvents(rpcClient);
 
-    // Engine is warm — show the idle logo. (If a turn is already streaming
-    // after a reconnect, the agent/textDelta|toolStart listeners in
-    // bindStatusBarEvents flip it back to the spinner on the next event.)
-    statusBarItem.text = "$(andromity-logo) Andromity";
-    statusBarItem.tooltip = "Andromity Coding Agent";
+    // Engine is warm: show the idle logo, plus any background sessions.
+    engineReady = true;
+    renderStatusBar();
+
+    airGapBlockedCount = 0;
+    rpcClient.on("airgap/blocked", (params: any) => {
+      airGapBlockedCount++;
+      log(`[Andromity] Air-gap mode blocked a ${params?.kind || "connection"} to ${params?.target || "an outside host"}.`);
+      renderStatusBar();
+    });
 
     rpcClient.on("agent/planApproval", (params: any) => {
       if (params?.plan) {
@@ -405,6 +453,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // Daemon dropped (crash / restart / TCP close) — show warm-up spinner again
   // until the reconnecting daemon signals onClientReady.
   pythonBridge.onClientDisconnected(() => {
+    engineReady = false;
     statusBarItem.text = "$(sync~spin) Andromity";
     statusBarItem.tooltip = "Andromity Coding Agent — reconnecting engine...";
   });
@@ -421,6 +470,23 @@ export async function activate(context: vscode.ExtensionContext) {
           markEngineStartFailed();
           promptSetupGuide(err.message);
         }
+      }
+
+      if (e.affectsConfiguration("andromity.airGap")) {
+        const airGap = currentAirGap();
+        log(`[Andromity] Air-gap setting changed (now ${airGap.enabled ? "on, " + airGap.source : "off"}). Restarting the engine...`);
+        chatProvider.broadcastAirGapState();
+        try {
+          engineReady = false;
+          await pythonBridge?.restart();
+          void vscode.window.showInformationMessage(airGap.enabled
+            ? "Air-gap mode is on. Andromity can now reach only this machine" + (airGap.allowedHosts.length ? " and your allowed hosts." : ".")
+            : "Air-gap mode is off. Andromity can use the internet again.");
+        } catch (err: any) {
+          markEngineStartFailed();
+          promptSetupGuide(err.message);
+        }
+        renderStatusBar();
       }
 
       if (e.affectsConfiguration("andromity.telemetry")) {
@@ -870,6 +936,60 @@ export async function activate(context: vscode.ExtensionContext) {
 
     registerTrackedCommand("andromity.refreshCrons", () => {
       void chatProvider.fetchAndPostCrons();
+    }),
+
+    registerTrackedCommand("andromity.copyChatMarkdown", async () => {
+      await chatProvider.copyCurrentChatAsMarkdown();
+    }),
+
+    registerTrackedCommand("andromity.toggleAirGap", async () => {
+      const airGap = currentAirGap();
+      if (airGap.locked) {
+        void vscode.window.showInformationMessage("Air-gap mode was turned on by your organization (ANDROMITY_AIRGAP) and can't be turned off here.");
+        return;
+      }
+      const config = vscode.workspace.getConfiguration("andromity");
+      if (airGap.enabled && airGap.source === "workspace") {
+        void vscode.window.showInformationMessage("This project's settings turn air-gap mode on (andromity.airGap.enabled in .vscode/settings.json). Change it there to turn it off.");
+        return;
+      }
+      if (airGap.enabled) {
+        const choice = await vscode.window.showWarningMessage(
+          "Turn off air-gap mode? Andromity will be able to use the internet again, including cloud models.",
+          { modal: true }, "Turn Off");
+        if (choice !== "Turn Off") return;
+      } else if (!(await confirmTurnOnAirGap({
+        provider: chatProvider.getCurrentProvider(), model: chatProvider.getCurrentModel(), running: chatProvider.hasRunningSessions(),
+      }))) {
+        return;
+      }
+      await config.update("airGap.enabled", !airGap.enabled, vscode.ConfigurationTarget.Global);
+    }),
+
+    registerTrackedCommand("andromity.airGapSelfTest", async () => {
+      if (!currentAirGap().enabled) {
+        void vscode.window.showInformationMessage("Turn on air-gap mode first. The self-test only runs while it is on, so it never makes a real connection.", "Turn On")
+          .then((choice) => { if (choice === "Turn On") void vscode.commands.executeCommand("andromity.toggleAirGap"); });
+        return;
+      }
+      const client = pythonBridge?.getClient();
+      if (!client) {
+        void vscode.window.showErrorMessage("The Andromity engine is not running. Start it, then run the self-test again.");
+        return;
+      }
+      const result = await client.call<{ checks: Array<{ check: string; ok: boolean; detail: string; skipped?: boolean }>; passed: boolean }>("airgap.self_test", {}, 60000)
+        .catch(() => null);
+      if (!result) {
+        void vscode.window.showErrorMessage("The air-gap self-test could not run. Restart the engine and try again.");
+        return;
+      }
+      log("[Andromity] Air-gap self-test:");
+      for (const check of result.checks) log(`  ${check.ok ? "PASS" : "FAIL"}  ${check.check}: ${check.detail}`);
+      const failed = result.checks.filter((check) => !check.ok).length;
+      const choice = await (failed
+        ? vscode.window.showWarningMessage(`Air-gap self-test: ${failed} of ${result.checks.length} checks were not stopped by Andromity. Use your firewall for those.`, "Show Details")
+        : vscode.window.showInformationMessage(`Air-gap self-test passed: all ${result.checks.length} checks were blocked or behaved as expected.`, "Show Details"));
+      if (choice === "Show Details") outputChannel.show(true);
     }),
 
     registerTrackedCommand("andromity.refreshChanges", () => {

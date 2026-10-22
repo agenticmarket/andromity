@@ -148,7 +148,7 @@ export function getWaterfallScript(sessionId: string): string {
         group.id = 'wf-turn-' + turn.id;
 
         group.innerHTML = \`
-          <div class="wf-turn-header" data-turn-id="\${turn.id}">
+          <div class="wf-turn-header" data-turn-id="\${turn.id}" tabindex="0" role="button" aria-expanded="true">
             <div class="wf-turn-title-wrap">
               <span class="wf-turn-badge">Turn #\${turn.number}</span>
               <span class="wf-turn-query" title="\${escapeHtml(turn.query)}">\${escapeHtml(turn.query)}</span>
@@ -174,16 +174,27 @@ export function getWaterfallScript(sessionId: string): string {
           </div>
         \`;
 
-        group.querySelector('.wf-turn-header').addEventListener('click', () => {
+        const turnHeader = group.querySelector('.wf-turn-header');
+        turnHeader.addEventListener('click', () => {
           const list = group.querySelector('.wf-timeline-table');
           const isCollapsed = list.style.display === 'none';
           list.style.display = isCollapsed ? 'flex' : 'none';
+          turnHeader.setAttribute('aria-expanded', isCollapsed ? 'true' : 'false');
         });
+        activateOnEnterOrSpace(turnHeader);
 
         turn.element = group;
         els.timelineContainer.appendChild(group);
 
         scrollToBottomIfNeeded();
+      }
+
+      function activateOnEnterOrSpace(el) {
+        el.addEventListener('keydown', (e) => {
+          if (e.target !== el || (e.key !== 'Enter' && e.key !== ' ')) return;
+          e.preventDefault();
+          el.click();
+        });
       }
 
       function renderSpanRow(span) {
@@ -203,7 +214,7 @@ export function getWaterfallScript(sessionId: string): string {
         const badgeLabel = span.type === 'llm' ? 'LLM' : span.type === 'subagent' ? 'AGENT' : span.type === 'coordination' ? 'COORD' : 'TOOL';
 
         row.innerHTML = \`
-          <div class="wf-span-main">
+          <div class="wf-span-main" tabindex="0" role="button" aria-expanded="false">
             <div class="wf-span-left">
               <div class="wf-span-chevron">▶</div>
               <span class="wf-span-badge \${badgeClass}">\${badgeLabel}</span>
@@ -222,10 +233,13 @@ export function getWaterfallScript(sessionId: string): string {
           </div>
         \`;
 
-        row.querySelector('.wf-span-main').addEventListener('click', () => {
-          row.classList.toggle('expanded');
+        const spanMain = row.querySelector('.wf-span-main');
+        spanMain.addEventListener('click', () => {
+          const expanded = row.classList.toggle('expanded');
+          spanMain.setAttribute('aria-expanded', expanded ? 'true' : 'false');
           updateSpanDetailsContent(span);
         });
+        activateOnEnterOrSpace(spanMain);
 
         span.element = row;
         container.appendChild(row);
@@ -340,7 +354,7 @@ export function getWaterfallScript(sessionId: string): string {
               const hasContent = !!(step.args || step.result);
               stepsRows += \`
                 <div style="border-bottom: 1px solid var(--border);">
-                  <div onclick="window.toggleStepDetail('\${stepDomId}')" style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; font-size: 11px; background: rgba(255,255,255,0.01); cursor: \${hasContent ? 'pointer' : 'default'};">
+                  <div onclick="window.toggleStepDetail('\${stepDomId}')" style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; font-size: 11px; background: rgba(var(--tint), 0.01); cursor: \${hasContent ? 'pointer' : 'default'};">
                     <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 75%;">
                       \${hasContent ? \`<span id="wf-step-arrow-\${stepDomId}" style="font-size: 8px; color: var(--muted); transition: transform 0.15s ease; display: inline-block;">▶</span>\` : ''}
                       <span class="wf-span-badge tool" style="font-size: 9px; padding: 1px 6px;">#\${idx + 1} \${escapeHtml(step.name)}</span>
@@ -1008,7 +1022,7 @@ export function getWaterfallScript(sessionId: string): string {
             state.isRunning = true;
             const turn = ensureTurn(state.currentTurnId, undefined, msg.ts ? msg.ts * 1000 : undefined);
             const spanId = msg.tool_id || ('tool_' + Date.now());
-            const isCoord = (msg.tool_name || '').startsWith('session_') || (msg.tool_name || '').startsWith('shared_state_');
+            const isCoord = /^(session_|shared_state|handoff$|read_handoff$|write_handoff$)/.test(msg.tool_name || '');
             let span = state.spans.get(spanId);
             if (!span) {
               if (msg.tool_id && state.committedToolCallIds.has(msg.tool_id)) {

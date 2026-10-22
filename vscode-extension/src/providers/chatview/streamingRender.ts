@@ -54,6 +54,9 @@ export function getStreamingRenderScript(): string {
         el._stableLen = boundary;
       }
       el._streamTail.innerHTML = renderMarkdown(text.slice(el._stableLen));
+      // Screen readers hold announcements for a busy subtree and read the
+      // reply once when the full render clears the flag.
+      el.setAttribute('aria-busy', 'true');
       _incrementalTextBlocks.add(el);
     }
 
@@ -61,6 +64,7 @@ export function getStreamingRenderScript(): string {
       _incrementalTextBlocks.delete(el);
       el._streamStable = null;
       el._streamTail = null;
+      el.removeAttribute('aria-busy');
       if (el.isConnected) el.innerHTML = renderMarkdown(el._blockText || '');
     }
 

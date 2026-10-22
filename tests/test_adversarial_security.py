@@ -313,8 +313,10 @@ async def test_adversarial_cron_empty_trusted_projects_blocked(tmp_path):
     handler = JsonRpcHandler()
     res = await handler._execute_cron_job(str(untrusted_dir), job, is_manual=True)
 
-    assert res["status"] == "failed"
-    assert "Workspace folder is untrusted" in res["error"]
+    assert res["status"] == "skipped"
+    assert res["error_type"] == "untrusted"
+    assert "not trusted" in res["error"]
+    assert res["session_id"] is None
 
 
 # ── Adversarial Edge Cases & Failure Harness ─────────────────────────────────

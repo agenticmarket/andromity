@@ -101,6 +101,8 @@ def _get_icon_path(custom_icon: Optional[str] = None) -> Optional[str]:
         return str(config_dir_icon)
 
     # Fallback: if running standalone without asset files, attempt to fetch icon from GitHub
+    if os.environ.get("ANDROMITY_AIRGAP") == "1":
+        return str(home_icon) if home_icon.exists() else None
     try:
         import urllib.request
         home_dir.mkdir(parents=True, exist_ok=True)

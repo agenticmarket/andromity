@@ -4,7 +4,7 @@ import os
 import uuid
 import hashlib
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import sqlite3
@@ -12,8 +12,31 @@ import re
 
 from andromity.config import get_config_dir
 from andromity.core.debug_log import get_logger
+from andromity.core.run_owner import current_owner_id, is_owner_alive
 
 log = get_logger("session")
+
+# Statuses that only hold while an engine is working on the session.
+LIVE_STATUSES = frozenset({"running", "compacting", "approval_required"})
+# Rows saved before run owners were recorded carry no owner; an older engine in
+# another window may still be on such a run, so only a long-silent one counts.
+LEGACY_LIVE_GRACE = timedelta(minutes=30)
+
+
+def resolve_live_status(status: str, run_owner: Optional[str], updated_at: Optional[str],
+                        now: Optional[datetime] = None) -> str:
+    """The status to show: "interrupted" when a live status outlived the engine that set it."""
+    if status not in LIVE_STATUSES:
+        return status
+    if run_owner:
+        return status if is_owner_alive(run_owner) else "interrupted"
+    try:
+        stamp = datetime.fromisoformat(str(updated_at))
+    except (TypeError, ValueError):
+        return status
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return "interrupted" if (now or datetime.now(timezone.utc)) - stamp > LEGACY_LIVE_GRACE else status
 
 
 class SessionPersistenceError(RuntimeError):
@@ -51,10 +74,15 @@ class Session:
         actual_id = session_id or id
         self.id = _validate_session_id(actual_id) if actual_id else str(uuid.uuid4())
         self.name = name
-        self.status = "idle"  # 'idle' | 'running' | 'approval_required' | 'compacting' | 'error' | 'cancelled' | 'watching' | 'paused_limit_reached'
+        self.status = "idle"  # 'idle' | 'running' | 'approval_required' | 'compacting' | 'error' | 'cancelled' | 'interrupted' | 'watching' | 'paused_limit_reached'
+        self.run_owner: Optional[str] = None
         self.consecutive_auto_wakes: int = 0
         self.collaborators: List[str] = []
         self.watching_for: Optional[Dict[str, Any]] = None
+        # A session started in the background from another one: {"session_id", "name", "pending"}.
+        self.started_from: Optional[Dict[str, Any]] = None
+        # Sessions this one started in the background, newest last.
+        self.background_runs: List[Dict[str, Any]] = []
         self.project_path = normalize_project_path(project_path)
         self.project_hash = hashlib.sha256(self.project_path.encode()).hexdigest()[:16]
         self.parent_session = None
@@ -155,6 +183,7 @@ class Session:
         """Persist live lifecycle status and watch state atomically."""
         with self._save_lock:
             self.status = status
+            self.run_owner = current_owner_id() if status in LIVE_STATUSES else None
             if watching_for is not None:
                 self.watching_for = watching_for
             elif status != "watching":
@@ -310,6 +339,8 @@ class Session:
             "consecutive_auto_wakes": getattr(self, "consecutive_auto_wakes", 0),
             "collaborators": list(getattr(self, "collaborators", [])),
             "watching_for": getattr(self, "watching_for", None),
+            "started_from": copy.deepcopy(getattr(self, "started_from", None)),
+            "background_runs": copy.deepcopy(getattr(self, "background_runs", [])),
         }
 
     def compact_messages(self, new_summary: str, keep_last_n: int = 10) -> int:
@@ -421,6 +452,9 @@ class Session:
             "consecutive_auto_wakes": getattr(self, "consecutive_auto_wakes", 0),
             "collaborators": list(getattr(self, "collaborators", [])),
             "watching_for": getattr(self, "watching_for", None),
+            "run_owner": getattr(self, "run_owner", None),
+            "started_from": getattr(self, "started_from", None),
+            "background_runs": list(getattr(self, "background_runs", [])),
         }
 
     def _save_to_db(self):
@@ -596,6 +630,12 @@ class Session:
         session.consecutive_auto_wakes = metadata.get("consecutive_auto_wakes", 0)
         session.collaborators = metadata.get("collaborators", [])
         session.watching_for = metadata.get("watching_for")
+        session.run_owner = metadata.get("run_owner")
+        session.started_from = metadata.get("started_from")
+        session.background_runs = metadata.get("background_runs") or []
+        session.status = resolve_live_status(session.status, session.run_owner, row["updated_at"] if "updated_at" in keys else None)
+        if session.status not in LIVE_STATUSES:
+            session.run_owner = None
         session.allowed_external_files = set()
         session.storage_dir = get_config_dir() / "sessions" / session.project_hash
         session.file_path = session.storage_dir / f"{session.id}.json"
@@ -654,7 +694,8 @@ class Session:
         session = cls.__new__(cls)
         session.id = _validate_session_id(data["id"])
         session.name = data["name"]
-        session.status = data.get("status", "idle")
+        session.run_owner = None
+        session.status = resolve_live_status(data.get("status", "idle"), None, data.get("updated_at"))
         session.project_hash = data.get("project") or fp.parent.name
         session.project_path = data.get("project_path", "")
         session.parent_session = data.get("parent_session")
@@ -689,6 +730,8 @@ class Session:
         session.consecutive_auto_wakes = data.get("consecutive_auto_wakes", 0)
         session.collaborators = data.get("collaborators", [])
         session.watching_for = data.get("watching_for")
+        session.started_from = data.get("started_from")
+        session.background_runs = data.get("background_runs") or []
         from andromity.config import config
         session.permission_mode = data.get("permission_mode", config.get("default", "permission_mode", "safe"))
         session.profile = data.get("profile", "builder")

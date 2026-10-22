@@ -6,6 +6,20 @@ import { getReviewHtml } from "../providers/changesReview/reviewHtml.js";
 
 import { GitStatusResult, DiffNumstatResult, ReviewFile } from "../providers/changesReview/types.js";
 
+/** Waits for a burst of file events (an agent writing many files, an install) to settle. */
+export const AUTO_REFRESH_DELAY_MS = 500;
+
+/** File events that can change what git reports. node_modules is noise; inside
+ *  .git only the branch, index and branch refs matter (commits, checkouts, staging). */
+export function isReviewRelevantChange(fsPath: string): boolean {
+  const p = fsPath.replace(/\\/g, "/");
+  if (p.includes("/node_modules/")) return false;
+  const git = p.indexOf("/.git/");
+  if (git < 0) return !p.endsWith("/.git");
+  const inner = p.slice(git + "/.git/".length);
+  return inner === "HEAD" || inner === "index" || inner.startsWith("refs/heads/");
+}
+
 export class ChangesReviewPanel {
   public static currentPanel: ChangesReviewPanel | undefined;
   public static readonly viewType = "andromity.changesReviewPanel";
@@ -22,6 +36,9 @@ export class ChangesReviewPanel {
   private _diffVersion = 0;
   private _knownFiles = new Set<string>();
   private _deletedFiles = new Set<string>();
+  private _autoRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Files changed while the panel was hidden; refresh once it is shown again. */
+  private _stale = false;
 
   public setTurnFiles(files?: string[]) {
     this._turnFiles = files;
@@ -134,6 +151,35 @@ export class ChangesReviewPanel {
     );
 
     this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
+
+    const watcher = vscode.workspace.createFileSystemWatcher("**/*");
+    const onFileEvent = (uri: vscode.Uri) => {
+      if (isReviewRelevantChange(uri.fsPath)) this._scheduleAutoRefresh();
+    };
+    watcher.onDidChange(onFileEvent, null, this._disposables);
+    watcher.onDidCreate(onFileEvent, null, this._disposables);
+    watcher.onDidDelete(onFileEvent, null, this._disposables);
+    this._disposables.push(watcher);
+    this._panel.onDidChangeViewState(() => {
+      if (this._panel.visible && this._stale) {
+        this._stale = false;
+        void this.loadChanges(undefined, true);
+      }
+    }, null, this._disposables);
+  }
+
+  private _scheduleAutoRefresh() {
+    if (this._isDisposed) return;
+    if (this._autoRefreshTimer) clearTimeout(this._autoRefreshTimer);
+    this._autoRefreshTimer = setTimeout(() => {
+      this._autoRefreshTimer = undefined;
+      if (this._isDisposed) return;
+      if (!this._panel.visible) {
+        this._stale = true;
+        return;
+      }
+      void this.loadChanges(undefined, true);
+    }, AUTO_REFRESH_DELAY_MS);
   }
 
   public setRpcClient(client: RpcClient | null) {
@@ -148,7 +194,8 @@ export class ChangesReviewPanel {
 
   private _isDisposed = false;
 
-  public async loadChanges(selectFilePath?: string) {
+  /** auto: a background refresh, so the view keeps its place instead of jumping. */
+  public async loadChanges(selectFilePath?: string, auto = false) {
     if (this._isDisposed) return;
     const version = ++this._refreshVersion;
     ++this._diffVersion;
@@ -252,6 +299,7 @@ export class ChangesReviewPanel {
         totalAdditions,
         totalDeletions,
         selectFile: selectFilePath,
+        auto,
         turnFiles: this._turnFiles?.map(file => path.relative(this._repositoryRoot || ws,
           path.isAbsolute(file) ? file : path.join(ws, file)).replace(/\\/g, "/")) || null,
       });
@@ -360,6 +408,7 @@ export class ChangesReviewPanel {
 
   public dispose() {
     this._isDisposed = true;
+    if (this._autoRefreshTimer) clearTimeout(this._autoRefreshTimer);
     ChangesReviewPanel.currentPanel = undefined;
     this._panel.dispose();
     while (this._disposables.length) {

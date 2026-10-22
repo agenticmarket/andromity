@@ -197,7 +197,15 @@ def test_schedule_preview_validates_live():
 
             modal.query_one("#cf-schedule").value = "every 30m"
             await pilot.pause()
-            assert "✓" in hint.content and "30m" in hint.content
+            assert "✓" in hint.content and "Every 30 minutes" in hint.content and "next" in hint.content
+
+            modal.query_one("#cf-schedule").value = "weekdays at 9am"
+            await pilot.pause()
+            assert "Weekdays at 09:00" in hint.content
+
+            modal.query_one("#cf-schedule").value = "99 * * * *"
+            await pilot.pause()
+            assert "⚠" in hint.content and "out of range" in hint.content
 
             modal.query_one("#cf-schedule").value = ""
             await pilot.pause()

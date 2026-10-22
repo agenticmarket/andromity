@@ -181,6 +181,8 @@ def parse_frontmatter(md: str) -> Dict[str, str]:
 
 
 def _default_fetch(url: str, timeout: int = 20) -> str:
+    from andromity.core import network_policy
+    network_policy.require_url(url, "the online skills catalog", "Installed skills keep working.")
     req = urllib.request.Request(
         url,
         headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"},

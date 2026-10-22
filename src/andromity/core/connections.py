@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from andromity.config import config
+from andromity.core import network_policy
 
 
 PRESETS = {
@@ -72,8 +73,20 @@ def provider_info() -> list[dict[str, Any]]:
             "api_version": saved.get("api_version", ""), "custom": name not in PRESETS,
             "has_key": bool(config.get_api_key(name)) or name in ("andromity", "ollama"),
             "portal": portal,
+            "airgap_blocked": not network_policy.url_allowed(_effective_base_url(name, saved)),
         })
     return result
+
+
+_DEFAULT_BASE_URLS = {
+    "ollama": "http://localhost:11434", "andromity": "https://gateway.agenticmarket.dev/v1",
+    "opencode": "https://opencode.ai/inference/openai/v1",
+}
+
+
+def _effective_base_url(provider: str, saved: dict) -> str:
+    """The endpoint a connection talks to; empty means the provider's own cloud API."""
+    return saved.get("base_url") or _DEFAULT_BASE_URLS.get(provider, "")
 
 
 def provider_request(provider: str, model: str) -> dict[str, Any]:
@@ -87,10 +100,10 @@ def provider_request(provider: str, model: str) -> dict[str, Any]:
         raise ValueError("Choose a model for this connection.")
     prefix = adapter + "/"
     routed_model = model if model.startswith(prefix) or (adapter == "ollama_chat" and model.startswith("ollama/")) else prefix + model
-    base_url = saved.get("base_url") or {
-        "ollama": "http://localhost:11434", "andromity": "https://gateway.agenticmarket.dev/v1",
-        "opencode": "https://opencode.ai/inference/openai/v1",
-    }.get(provider)
+    base_url = _effective_base_url(provider, saved)
+    network_policy.require_url(
+        base_url, f"the {provider} connection",
+        "Choose a local model (for example Ollama), or add your model server to the air-gap allowed hosts.")
     key = config.get_api_key(provider)
     if provider == "andromity" and not key:
         key = "anonymous_trial"

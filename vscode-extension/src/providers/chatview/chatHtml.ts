@@ -6,6 +6,7 @@ import { getChatPolishStyles } from "./chatPolishStyles.js";
 import { getChatClientScript } from "./chatClientScript.js";
 import { getChatActivityScript } from "./chatActivityRow.js";
 import { getChatAmbientScript, WallpaperConfig } from "./chatAmbientScript.js";
+import type { SidePanelPreferences } from "../../sidePanelTypes.js";
 
 export interface ChatViewState {
   currentSessionId: string;
@@ -22,6 +23,8 @@ export interface ChatViewState {
   workspaceFiles?: string[];
   workspaceFolders?: string[];
   extensionVersion?: string;
+  sidePanelOff?: boolean;
+  sidePanelPreferences?: SidePanelPreferences;
 }
 
 export function formatModelDisplayName(id?: string, models?: { id: string; name: string }[]): string {
@@ -108,6 +111,23 @@ export function getChatViewHtml(webview: vscode.Webview, extensionUri: vscode.Ur
       user-select: none;
     }
     .codicon-file::before             { content: "\\ea7b"; }
+    /* Icons used by the Run button, the Air-gap badge and the session panel. */
+    .codicon-loading::before          { content: "\\eb19"; }
+    .codicon-check::before            { content: "\\eab2"; }
+    .codicon-error::before            { content: "\\ea87"; }
+    .codicon-wand::before             { content: "\\ebcf"; }
+    .codicon-shield::before           { content: "\\eb53"; }
+    .codicon-sparkle::before          { content: "\\ec10"; }
+    .codicon-person::before           { content: "\\ea67"; }
+    .codicon-lightbulb::before        { content: "\\ea61"; }
+    .codicon-git-branch::before       { content: "\\ec6f"; }
+    .codicon-folder::before           { content: "\\ea83"; }
+    .codicon-globe::before            { content: "\\eb01"; }
+    .codicon-lock::before             { content: "\\ea75"; }
+    .codicon-chevron-right::before    { content: "\\eab6"; }
+    @keyframes codicon-spin { 100% { transform: rotate(360deg); } }
+    .codicon-loading.codicon-modifier-spin { animation: codicon-spin 1.5s steps(30) infinite; }
+    @media (prefers-reduced-motion: reduce) { .codicon-loading.codicon-modifier-spin { animation: none; } }
     .codicon-file-code::before        { content: "\\eae9"; }
     .codicon-file-media::before       { content: "\\eaea"; }
     .codicon-file-zip::before         { content: "\\eaef"; }
@@ -121,7 +141,7 @@ export function getChatViewHtml(webview: vscode.Webview, extensionUri: vscode.Ur
 ${styles}
   </style>
 </head>
-<body class="loading">
+<body class="loading${state.sidePanelOff ? ' side-panel-off' : ''}">
   <!-- Ambient Environmental Wallpaper & Particles Canvas -->
   <div id="andromity-ambient-container" class="andromity-ambient-container" aria-hidden="true">
     <canvas id="andromity-water-canvas"></canvas>
@@ -157,7 +177,7 @@ ${styles}
           <polyline points="6 9 12 15 18 9"></polyline>
         </svg>
       </div>
-      <div class="session-collab-badge" id="session-collab-badge" style="display:none;" title="Co-Agent Collaboration"></div>
+      <div class="session-collab-badge" id="session-collab-badge" style="display:none;" title="Session collaboration"></div>
     </div>
     <div class="top-bar-right">
       <button class="top-bar-icon-btn top-account-btn" id="btn-top-account" aria-label="Cloud account" title="Cloud account — usage and daily allowance">
@@ -168,7 +188,7 @@ ${styles}
         <span class="account-pill-dot" id="account-pill-dot" style="display:none;"></span>
         <span class="account-pill-text sr-only" id="account-pill-text" style="display:none;">Guest</span>
       </button>
-      <button class="top-bar-icon-btn" id="btn-top-collab-inbox" style="display:none;" aria-label="Collaboration Inbox" title="Collaboration Inbox (Inter-Session Mailbox)" data-action="toggle-collab-inbox">
+      <button class="top-bar-icon-btn" id="btn-top-collab-inbox" style="display:none;" aria-label="Collaboration inbox" title="Messages, questions and handoffs from other sessions" data-action="toggle-collab-inbox">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
           <polyline points="22,6 12,13 2,6"></polyline>
@@ -176,6 +196,19 @@ ${styles}
         <span class="collab-inbox-badge-count" id="collab-inbox-badge" style="display:none;">0</span>
       </button>
 
+      <button class="top-bar-icon-btn" id="btn-top-side-panel" data-action="show-side-panel" title="Show session panel" aria-label="Show session panel">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
+          <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+          <line x1="15" y1="4" x2="15" y2="20"></line>
+        </svg>
+      </button>
+      <button class="top-bar-icon-btn" id="btn-top-copy-markdown" aria-label="Copy chat as Markdown" title="Copy chat as Markdown" data-action="copy-chat-markdown">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
+          <rect x="3" y="5" width="18" height="14" rx="2"></rect>
+          <path d="M7 15V9l2.5 3L12 9v6"></path>
+          <path d="M16 9v6M14 13l2 2 2-2"></path>
+        </svg>
+      </button>
       <button class="top-bar-icon-btn" id="btn-top-open-tab" aria-label="Open Session in Editor Tab" title="Open Session in Editor Tab (Pop Out)" data-action="open-current-tab">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85">
           <path d="M6 13v6a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-6"></path>
@@ -270,7 +303,7 @@ ${styles}
       </div>
       <div class="collab-inbox-header-actions">
         <button class="collab-inbox-text-btn" id="btn-collab-clear-all" style="display:none;" title="Mark all as read">Mark Read</button>
-        <button class="collab-inbox-close-btn" id="btn-close-collab-inbox" aria-label="Close Inbox" title="Close (Esc)">&times;</button>
+        <button class="collab-inbox-close-btn" id="btn-close-collab-inbox" aria-label="Close inbox" title="Close (Esc)">&times;</button>
       </div>
     </div>
     <div class="collab-inbox-tabs" style="display:none;">
@@ -287,7 +320,7 @@ ${styles}
           <polyline points="22,6 12,13 2,6"></polyline>
         </svg>
         <div class="empty-title">No collaboration messages</div>
-        <div class="empty-sub">Messages exchanged with co-agents appear here.</div>
+        <div class="empty-sub">Messages from other sessions appear here.</div>
       </div>
     </div>
   </div>
@@ -721,6 +754,30 @@ ${styles}
   </div>
   </div>
 
+  <aside class="side-panel" id="side-panel" aria-label="Session panel">
+    <div class="side-panel-header">
+      <div class="side-panel-heading"><span class="side-panel-eyebrow">Workspace overview</span><span class="side-panel-title">Session</span></div>
+      <span class="side-panel-tools">
+        <button type="button" class="side-panel-tool" data-action="sp-open-menu" title="Choose what to show (or right-click the panel)" aria-label="Choose what to show" aria-haspopup="menu">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg>
+        </button>
+        <button type="button" class="side-panel-tool" data-action="hide-side-panel" title="Hide session panel" aria-label="Hide session panel">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+        </button>
+      </span>
+    </div>
+    <span class="sp-sr-only" id="sp-reorder-help">Drag to reorder sections, or focus a handle and use Up or Down. Home moves to the top; End moves to the bottom.</span>
+    <span class="sp-sr-only" id="sp-reorder-status" role="status" aria-live="polite" aria-atomic="true"></span>
+    <div class="side-panel-body" id="side-panel-body">
+      <div class="sp-empty-all" id="sp-empty-all" hidden>All cards are hidden. <button type="button" class="sp-link" data-action="sp-show-all">Show all</button></div>
+      <section class="sp-card" id="sp-context" aria-label="Context"></section>
+      <section class="sp-card" id="sp-changes" aria-label="Changes"></section>
+      <section class="sp-card" id="sp-mcp" aria-label="MCP servers"></section>
+      <section class="sp-card" id="sp-env" aria-label="Environment"></section>
+    </div>
+  </aside>
+  <div class="sp-menu" id="sp-menu" role="menu" aria-label="Session panel" hidden></div>
+
   <div id="interactive-slot"></div>
 
   <div class="queue-container" id="queue-container" style="display:none;"></div>
@@ -893,7 +950,7 @@ ${styles}
         <div class="agent-working" role="status"><span class="agent-working-wave" aria-hidden="true"><i></i><i></i><i></i></span><span>Working</span></div>
         <div class="image-attachments-container" id="image-attachments-container" style="display:none;"></div>
         <div class="drag-dropped-files-bar" id="drag-dropped-files-bar" style="display:none;"></div>
-        <textarea id="prompt-input" autofocus placeholder="Ask Andromity…" rows="1" aria-label="Ask Andromity or type slash for commands, @ for skills" title="Enter to send · Shift+Enter for a new line · / commands · @ skills"></textarea>
+        <textarea id="prompt-input" autofocus placeholder="Ask Andromity…" rows="1" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-haspopup="listbox" aria-label="Ask Andromity or type slash for commands, @ for skills" title="Enter to send · Shift+Enter for a new line · / commands · @ skills"></textarea>
 
         <!-- Stepped Reasoning Effort Popover (Clean & Minimal) -->
         <div class="reasoning-popover" id="reasoning-popover" style="display:none;" role="dialog" aria-label="Thinking Effort">
@@ -978,6 +1035,7 @@ ${styles}
               </svg>
             </button>
 
+            <span class="prompt-airgap-pill" id="airgap-pill" hidden role="status"><i class="codicon codicon-shield" aria-hidden="true"></i> Air-gap</span>
             <button class="prompt-btn mode-${(state.currentMode || 'safe').toLowerCase()}" id="btn-prompt-mode" title="Permission Governance Mode" aria-label="Permission mode" aria-haspopup="menu" aria-expanded="false">
               <span id="prompt-mode-icon" class="prompt-mode-icon">
                 ${getModeSvg(state.currentMode)}
@@ -1007,10 +1065,10 @@ ${styles}
                 <polyline points="6 9 12 15 18 9"></polyline>
               </svg>
             </button>
-            <button class="codex-cancel-btn" id="btn-cancel" title="Stop Generation" style="display:none;" aria-label="Cancel agent turn">
+            <button class="codex-cancel-btn" id="btn-cancel" data-tip="Stop this turn" style="display:none;" aria-label="Stop this turn">
               <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>
             </button>
-            <button class="codex-send-btn" id="btn-send" title="Send (Enter)" aria-label="Send message">
+            <button class="codex-send-btn" id="btn-send" data-tip="Send (Enter)" aria-label="Send message">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="12" y1="19" x2="12" y2="5"></line>
                 <polyline points="5 12 12 5 19 12"></polyline>
@@ -1101,7 +1159,7 @@ ${styles}
           <div class="context-popover-top">
             <div class="context-ring-wrap">
               <svg class="context-ring-svg" width="36" height="36" viewBox="0 0 36 36">
-                <circle class="context-ring-bg" cx="18" cy="18" r="14" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="3.5"></circle>
+                <circle class="context-ring-bg" cx="18" cy="18" r="14" fill="none" style="stroke: rgba(var(--tint), 0.1)" stroke-width="3.5"></circle>
                 <circle class="context-ring-fill" id="context-ring-fill" cx="18" cy="18" r="14" fill="none" stroke="#e4e4e7" stroke-width="3.5" stroke-dasharray="87.96" stroke-dashoffset="87.96" stroke-linecap="round" transform="rotate(-90 18 18)"></circle>
               </svg>
               <span class="context-ring-text" id="context-popover-pct">0%</span>
@@ -1148,6 +1206,11 @@ ${styles}
       </div>
     </div>
     <div class="status-bar-right">
+      <button type="button" class="status-mcp-btn" id="btn-mcp-status" data-action="open-mcp-settings" title="Open MCP settings" aria-label="Open MCP settings">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 2v6M15 2v6M7 8h10v4a5 5 0 0 1-10 0V8zM12 17v5"></path>
+        </svg>
+      </button>
       <span id="cost-label" class="skeleton skeleton-text" style="min-width:64px;" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
     </div>
   </div>

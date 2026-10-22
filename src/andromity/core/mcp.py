@@ -5,10 +5,11 @@ import logging
 import os
 import sys
 import warnings
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncContextManager, AsyncIterator, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +43,55 @@ class MCPToolInfo:
                 "parameters": self.input_schema or {"type": "object", "properties": {}},
             },
         }
+
+
+def sdk_tool_info(server_name: str, tool: Any) -> MCPToolInfo:
+    """Normalize an SDK Tool object; mcp 2.x renamed `inputSchema` to `input_schema`."""
+    schema = getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None)
+    return MCPToolInfo(
+        server_name=server_name,
+        name=getattr(tool, "name", "") or "",
+        description=getattr(tool, "description", "") or "",
+        input_schema=schema or {},
+    )
+
+
+def open_remote_transport(transport: str, url: str, headers: Dict[str, str]) -> AsyncContextManager[Any]:
+    """Open the SDK client transport for a remote server; yields (read_stream, write_stream, ...)."""
+    if transport != "http":
+        from mcp.client.sse import sse_client
+        return sse_client(url, headers=headers)
+    from mcp.client import streamable_http
+    legacy_client = getattr(streamable_http, "streamablehttp_client", None)
+    if legacy_client is not None:  # mcp 1.x
+        return legacy_client(url, headers=headers)
+    return _streamable_http_with_headers(url, headers)
+
+
+@asynccontextmanager
+async def _streamable_http_with_headers(url: str, headers: Dict[str, str]) -> AsyncIterator[Any]:
+    # mcp 2.x only takes headers through a caller-owned httpx2 client, which the transport never closes.
+    # It also turns a failed POST into a JSON-RPC error without the HTTP status, so the status is recorded
+    # here and re-raised: callers rely on 401 (needs auth) and 404/405 (legacy SSE endpoint).
+    import httpx2
+    from mcp.client.streamable_http import streamable_http_client
+    failed: List[Any] = []
+
+    async def record_failure(response: Any) -> None:
+        if response.request.method == "POST" and response.status_code >= 400:
+            failed.append(response)
+
+    async with httpx2.AsyncClient(headers=headers, timeout=httpx2.Timeout(30.0, read=300.0),
+                                  event_hooks={"response": [record_failure]}) as client:
+        try:
+            async with streamable_http_client(url, http_client=client) as streams:
+                yield streams
+        except Exception as exc:
+            if not failed:
+                raise
+            response = failed[-1]
+            raise httpx2.HTTPStatusError(f"HTTP {response.status_code}", request=response.request,
+                                         response=response) from exc
 
 
 class MCPStdioSession:
@@ -387,15 +437,10 @@ class MCPSseSession:
         return self._session is not None
 
     async def _run(self):
-        from mcp.client.sse import sse_client
         from mcp.client.session import ClientSession
-        
+
         try:
-            if self.transport == "http":
-                from mcp.client.streamable_http import streamablehttp_client
-            connection = (streamablehttp_client(self.url, headers=self.headers)
-                          if self.transport == "http" else sse_client(self.url, headers=self.headers))
-            async with connection as streams:
+            async with open_remote_transport(self.transport, self.url, self.headers) as streams:
                 read_stream, write_stream = streams[:2]
                 async with ClientSession(read_stream, write_stream) as session:
                     self._session = session
@@ -403,15 +448,7 @@ class MCPSseSession:
                     
                     # Fetch tools — normalize raw SDK Tool objects → MCPToolInfo
                     tools_response = await session.list_tools()
-                    self.tools = [
-                        MCPToolInfo(
-                            server_name=self.name,
-                            name=getattr(t, 'name', '') or '',
-                            description=getattr(t, 'description', '') or '',
-                            input_schema=getattr(t, 'inputSchema', None) or {},
-                        )
-                        for t in (tools_response.tools or [])
-                    ]
+                    self.tools = [sdk_tool_info(self.name, t) for t in (tools_response.tools or [])]
                     log.info("MCP SSE Server '%s' started with %d tools.", self.name, len(self.tools))
                     
                     self._init_event.set()
@@ -454,15 +491,7 @@ class MCPSseSession:
             try:
                 resp = await self._session.list_tools()
                 # Normalize to MCPToolInfo so callers always get a uniform type
-                self.tools = [
-                    MCPToolInfo(
-                        server_name=self.name,
-                        name=getattr(t, 'name', '') or '',
-                        description=getattr(t, 'description', '') or '',
-                        input_schema=getattr(t, 'inputSchema', None) or {},
-                    )
-                    for t in (resp.tools or [])
-                ]
+                self.tools = [sdk_tool_info(self.name, t) for t in (resp.tools or [])]
             except Exception as e:
                 log.error("Failed to list tools: %s", e)
         return self.tools
@@ -684,8 +713,18 @@ class MCPClientManager:
                     legacy_headers[key.strip()] = val.strip()
             command = "" # Nullify command to force remote mode
 
+        from andromity.core import network_policy
         # ── Remote HTTP / SSE server ──────────────────────────────────────
         if server_url and not command:
+            if not network_policy.url_allowed(server_url):
+                self._set_status(
+                    name, status="error", tools=0, command=server_url,
+                    error="Paused: air-gap mode is on",
+                    error_detail=network_policy.feature_off_message(
+                        "this remote MCP server",
+                        "Add its host to the air-gap allowed hosts if it runs on your private network."),
+                )
+                return
             # Check for cached OAuth token
             token = await ensure_fresh_token(name, server_url=server_url)
             headers = {**legacy_headers, **dict(srv_conf.get("headers", {}))}
@@ -718,6 +757,17 @@ class MCPClientManager:
 
         # ── Stdio server ──────────────────────────────────────
         if not command:
+            return
+        if network_policy.enabled() and srv_conf.get("allowInAirgap") is not True:
+            # Local servers often reach the internet themselves (npx/uvx downloads, cloud APIs).
+            self._set_status(
+                name, status="error", tools=0,
+                command=f"{command} {' '.join(str(a) for a in args)}".strip(),
+                error="Paused: air-gap mode is on",
+                error_detail=(
+                    "Air-gap mode pauses local MCP servers because many reach the internet themselves. "
+                    'To run this one with network access blocked, set "allowInAirgap": true for it in mcp.json.'),
+            )
             return
 
         session = MCPStdioSession(
@@ -811,12 +861,7 @@ class MCPClientManager:
                 else:
                     # Defensive: wrap raw SDK Tool objects into MCPToolInfo
                     try:
-                        all_tools.append(MCPToolInfo(
-                            server_name=session.name,
-                            name=getattr(t, 'name', '') or '',
-                            description=getattr(t, 'description', '') or '',
-                            input_schema=getattr(t, 'inputSchema', None) or {},
-                        ))
+                        all_tools.append(sdk_tool_info(session.name, t))
                     except Exception:
                         pass
         return all_tools

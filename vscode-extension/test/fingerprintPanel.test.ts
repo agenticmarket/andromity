@@ -100,3 +100,27 @@ it("re-reads the session at most once per interval during a burst of live events
     mock.timers.reset();
   }
 });
+
+it("tells the webview when the session could not be loaded instead of posting an empty trace as no activity", async () => {
+  const context: any = { globalState: { get: () => false, update: async () => {} } };
+  const failing = { ...fakeRpc(), async call() { throw new Error("daemon gone"); } };
+  FingerprintPanel.createOrShow({ fsPath: "/ext" }, "fp-fail", "Session", failing, context);
+  const failedPanel = panels[panels.length - 1];
+  await failedPanel.receive({ type: "fingerprint_ready" });
+  assert.equal(failedPanel.posted.at(-1).type, "fingerprint_init");
+  assert.equal(failedPanel.posted.at(-1).loadFailed, true);
+
+  FingerprintPanel.createOrShow({ fsPath: "/ext" }, "fp-ok", "Session", fakeRpc(), context);
+  const okPanel = panels[panels.length - 1];
+  await okPanel.receive({ type: "fingerprint_ready" });
+  assert.equal(okPanel.posted.at(-1).loadFailed, false);
+});
+
+it("renders a Retry button for a failed load and keeps an already loaded trace on a failed refresh", () => {
+  const { getFingerprintScript } = require("../src/providers/fingerprint/fingerprintScript.js");
+  assert.equal(typeof getFingerprintScript, "function");
+  const script: string = getFingerprintScript("fp-sess");
+  assert.ok(script.includes("Couldn't load this session"));
+  assert.ok(script.includes("if (msg.loadFailed && traceData && (traceData.nodes || []).length) return;"));
+  assert.ok(script.includes("vscode.postMessage({ type: 'fingerprint_ready' })"));
+});

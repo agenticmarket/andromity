@@ -17,8 +17,8 @@ export function getChatActivityStyles(): string {
       padding: 4px 8px;
       margin: 2px 0;
       border-radius: 5px;
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.02);
+      border: 1px solid rgba(var(--tint), 0.06);
       font-size: 11.5px;
       line-height: 1.4;
       color: var(--fg, #e4e4e7);
@@ -31,8 +31,8 @@ export function getChatActivityStyles(): string {
     }
 
     .activity-row:hover {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: rgba(255, 255, 255, 0.12);
+      background: rgba(var(--tint), 0.05);
+      border-color: rgba(var(--tint), 0.12);
     }
 
     .activity-row-clickable {
@@ -120,9 +120,9 @@ export function getChatActivityStyles(): string {
     }
 
     .activity-row:hover .activity-filename {
-      color: #ffffff;
+      color: var(--vscode-textLink-activeForeground, var(--fg));
       text-decoration: underline;
-      text-decoration-color: rgba(255, 255, 255, 0.35);
+      text-decoration-color: rgba(var(--tint), 0.35);
     }
 
     /* Diff Stats (+71 -0) */
@@ -141,7 +141,7 @@ export function getChatActivityStyles(): string {
     }
 
     .activity-stats:hover {
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
     }
 
     .activity-stat-add {
@@ -175,8 +175,8 @@ export function getChatActivityStyles(): string {
     }
 
     .activity-diff-btn:hover {
-      background: rgba(255, 255, 255, 0.08);
-      border-color: rgba(255, 255, 255, 0.14);
+      background: rgba(var(--tint), 0.08);
+      border-color: rgba(var(--tint), 0.14);
       color: #38bdf8;
       opacity: 1;
     }
@@ -300,7 +300,7 @@ export function getChatActivityStyles(): string {
       margin: 0;
       padding: 7px 10px;
       background: rgba(0, 0, 0, 0.4);
-      border: 1px solid rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(var(--tint), 0.06);
       border-top: none;
       border-radius: 0 0 5px 5px;
       font-family: var(--font-mono, 'JetBrains Mono', Consolas, monospace);

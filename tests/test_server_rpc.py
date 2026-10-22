@@ -332,10 +332,11 @@ async def test_extract_turn_files_isolation(tmp_path):
 
 def test_read_only_tools_integrity():
     from andromity.server.rpc_handler import READ_ONLY_TOOLS
-    from andromity.core.tools import CORE_TOOLS
+    from andromity.core.tools import COLLAB_ACTION_NAMES, CORE_TOOLS
 
     core_names = {t["function"]["name"] for t in CORE_TOOLS}
-    known_aliases = {"view_file", "ask_question"}
+    # Collaboration actions run through the combined session_* / shared_state / handoff tools.
+    known_aliases = {"view_file", "ask_question"} | COLLAB_ACTION_NAMES
     for t in READ_ONLY_TOOLS:
         assert t in core_names or t in known_aliases, f"Unknown tool in READ_ONLY_TOOLS: {t}"
 

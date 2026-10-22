@@ -9,6 +9,9 @@ def main(ctx):
 
     Run without arguments to launch the interactive TUI.
     """
+    from andromity.core.network_policy import activate
+
+    activate()
     if ctx.invoked_subcommand is None:
         # No subcommand given — launch TUI directly
         _launch_tui()

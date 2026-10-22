@@ -2,7 +2,7 @@
   "name": "andromity-agent",
   "displayName": "Andromity: Free AI Coding Agent for VS Code",
   "description": "Free, open-source AI coding agent and an alternative to Cline, Kilo Code, Claude Code and Cursor that shows exactly what it did: live Waterfall, Fingerprint and Blast radius of every model call, file and command. Use DeepSeek V4, GLM 5.3, Kimi K3, Qwen, Claude Opus 5.5, GPT-6, Gemini 4 or Grok with your own keys, OpenRouter or free local Ollama. MCP, subagents, diffs and undo.",
-  "version": "0.2.21",
+  "version": "0.2.22",
   "publisher": "agenticmarket",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -53,19 +53,19 @@
     "kilo code alternative",
     "claude code alternative",
     "cursor alternative",
-    "copilot alternative",
     "roo code alternative",
     "codex alternative",
     "byok",
     "ollama",
     "ollama coding agent",
+    "local ai agent",
     "mcp",
     "openrouter",
-    "deepseek v4",
+    "deepseek",
+    "gemini",
+    "claude",
     "glm 5.3",
     "kimi k3",
-    "qwen coder",
-    "mimo",
     "claude opus 5.5",
     "gpt-6",
     "gemini 4",
@@ -176,6 +176,48 @@
         "title": "Settings & API Keys",
         "category": "Andromity",
         "icon": "$(gear)"
+      },
+      {
+        "command": "andromity.switchModel",
+        "title": "Switch Model…",
+        "category": "Andromity",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "andromity.switchMode",
+        "title": "Switch Permission Mode…",
+        "category": "Andromity",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "andromity.switchProfile",
+        "title": "Switch Agent Profile…",
+        "category": "Andromity",
+        "icon": "$(person)"
+      },
+      {
+        "command": "andromity.openModelHub",
+        "title": "Open Model Hub",
+        "category": "Andromity",
+        "icon": "$(library)"
+      },
+      {
+        "command": "andromity.openCrons",
+        "title": "Open Cron Jobs",
+        "category": "Andromity",
+        "icon": "$(clock)"
+      },
+      {
+        "command": "andromity.login",
+        "title": "Sign In",
+        "category": "Andromity",
+        "icon": "$(sign-in)"
+      },
+      {
+        "command": "andromity.logout",
+        "title": "Sign Out",
+        "category": "Andromity",
+        "icon": "$(sign-out)"
       },
       {
         "command": "andromity.openAbout",
@@ -323,6 +365,24 @@
         "title": "Add to Andromity",
         "category": "Andromity",
         "icon": "$(add)"
+      },
+      {
+        "command": "andromity.toggleAirGap",
+        "title": "Air-gap Mode: Turn On or Off",
+        "category": "Andromity",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "andromity.airGapSelfTest",
+        "title": "Air-gap Mode: Run Self-test",
+        "category": "Andromity",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "andromity.copyChatMarkdown",
+        "title": "Copy Chat as Markdown",
+        "category": "Andromity",
+        "icon": "$(markdown)"
       }
     ],
     "keybindings": [
@@ -385,18 +445,6 @@
         },
         {
           "command": "andromity.openSessionInTab",
-          "when": "false"
-        },
-        {
-          "command": "andromity.showSessions",
-          "when": "false"
-        },
-        {
-          "command": "andromity.compactSession",
-          "when": "false"
-        },
-        {
-          "command": "andromity.undoTurn",
           "when": "false"
         },
         {
@@ -660,7 +708,14 @@
             "full",
             "yolo"
           ],
-          "description": "Trust Permission Mode: SAFE (review all), TRUST (auto file/shell in trusted dirs), FULL (auto-run with logs), YOLO (silent autonomous)."
+          "description": "Trust Permission Mode: SAFE (review all), TRUST (auto file/shell in trusted dirs), FULL (auto-run with logs), YOLO (silent autonomous).",
+          "enumDescriptions": [
+            "Asks before every file write and shell command.",
+            "Auto-approves file edits inside the workspace and allowlisted shell commands. Asks before anything else.",
+            "Auto-approves all actions and logs each one in the chat.",
+            "Warning: edits files and runs shell commands without asking and without review prompts."
+          ],
+          "markdownDescription": "Default permission mode for new turns. **YOLO** runs shell commands and edits files without asking."
         },
         "andromity.reasoningEffort": {
           "type": "string",
@@ -756,6 +811,20 @@
           "default": "http://127.0.0.1:11434",
           "scope": "machine",
           "markdownDescription": "Base URL of your Ollama server, for example `http://192.168.1.20:11434`. When you set it, Andromity saves it as the Ollama address in `config.toml`, so the terminal app uses it too. Leave it unset to keep the address in `config.toml` (`http://localhost:11434` by default)."
+        },
+        "andromity.airGap.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Air-gap mode: Andromity makes no network connections except to this machine and the hosts in `#andromity.airGap.allowedHosts#`. Cloud models, web search, remote MCP servers, sign-in and telemetry are turned off, and commands the agent runs are blocked from the internet where possible. A project can turn this on; only your user settings can turn it off. For complete isolation, also use your firewall. Changing it restarts the Andromity engine."
+        },
+        "andromity.airGap.allowedHosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "machine",
+          "markdownDescription": "Private-network hosts Andromity may reach in air-gap mode, for example a shared model server: `10.0.0.5`, `10.0.0.0/8` or `gpu-box.lan`. Public addresses are ignored. User settings only, so a repository cannot widen this list."
         }
       }
     },

@@ -2,6 +2,75 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [0.2.22] — 2026-10-20
+
+### Added
+- **Session panel in wide windows.** When the chat is wide enough (a full editor tab), the empty space on the right shows **Context window** usage with **Compact now**, uncommitted **Changes** with line counts and **Review changes**, **MCP servers** with their status, and the **Environment** (folder, branch, model, mode, air-gap). Click a card header to collapse it to a one-line summary. Right-click the panel, or use its ⋯ button, to choose which cards show, or to expand or collapse them all. Hide the panel with the × and bring it back from the chat bar.
+  - Drag a section's six-dot handle to change its position. With the handle focused, Up/Down moves it one place and Home/End moves it to the top/bottom. **Reset section order** restores the original order.
+  - All sections start expanded. Their order, collapsed state, visibility and the panel's hide preference persist across chat tabs and VS Code reloads.
+  - **Context** matches the Context window pop-up, with its Breakdown behind a toggle so the card stays short.
+  - **Changes** shows file icons, folders, line counts and a small diff bar. A five-file preview links to the rest, and full paths remain available in tooltips and accessible labels.
+  - **MCP servers** shows explicit running, sign-in, trust, starting, off and error states, plus the number of tools available from running servers.
+  - **Environment** rows open their control: model, permission mode, working style and reasoning pickers, the branch switcher, the Explorer, and air-gap mode. They update as soon as you change any of them.
+  - Only the panel scrolls, with soft edges instead of a scrollbar, and its header stays in place.
+  - Works in pop-out session tabs too.
+- **MCP icon in the bottom bar.** One click opens MCP settings; hover it to see how many servers are running.
+- **Badge on the Andromity icon.** While the chat is hidden, finished replies and requests for your approval or an answer show as a count on the Andromity icon, wherever the view is placed. It clears when you open the chat.
+- **Smart starter buttons.** On an empty chat, **Fix a problem** becomes **Fix 3 errors in auth.ts** when the open file (or your workspace) has errors, and **Add tests** becomes **Review my changes** when you have uncommitted files.
+- **Copy chat as Markdown.** A button in the chat bar, and **Andromity: Copy Chat as Markdown**, copy your prompts and the replies, without tool output or attached editor context.
+- **Air-gap mode.** Turning it on first shows what will stop for you, such as a cloud model or a reply in progress. Settings → Andromity → **Air-gap Mode**, or **Andromity: Air-gap Mode: Turn On or Off**. Andromity can then reach only this machine and private hosts you list, for example a shared model server.
+  - Cloud models, web search, remote MCP servers, sign-in and telemetry turn off.
+  - Commands the agent runs, and the code-block **Run** terminal, are blocked from the internet where possible.
+  - A project can turn it on but only your user settings can turn it off, and `ANDROMITY_AIRGAP=1` locks it on.
+  - A shield in the status bar and an **Air-gap** badge show it is on.
+  - **Run self-test** checks each kind of outbound access without making a real connection.
+  - For complete isolation, also use your firewall.
+- **Edit and Duplicate on the Cron Jobs page.** Editing keeps the job's run history. Duplicating makes a paused copy.
+- **Live schedule preview.** As you type, the form shows the schedule in words with the next five run times, and flags invalid schedules before you save.
+- **Fuller job form.**
+  - Permission mode (defaults to SAFE for new jobs), time limit, what happens when a run fails, when to notify you, and whether to catch up on missed runs.
+  - Presets for weekdays and weekly schedules.
+  - **Save and run now.**
+  - Save errors stay in the form instead of clearing it.
+- **More detail on job cards.**
+  - The schedule in words.
+  - The next run as a date and time.
+  - The job's folder, time limit, failure and notify settings.
+  - A count of jobs that need attention.
+- **Fix buttons.** When a run fails or a job pauses itself, the card says why and offers a fix: **Open API keys**, **Trust this workspace** or **Edit job**.
+- **Run history** shows **Needs attention**, **Skipped** and **Missed** runs, labels catch-up, manual and retry runs, and lists blocked tools.
+- **Fix with Andromity.** When a command started from a code block's **Run** button fails, the button shows the exit code and a **Fix** button sends the command and its last output lines to the chat. Needs VS Code 1.93+ and a shell with shell integration; otherwise **Run** works as before.
+- **Edit and resend.** Every message has an **Edit** button. Resending undoes that turn and everything after it, including file changes (you confirm first), then sends the edited message.
+- **Background sessions in the status bar.** A session you are not looking at shows as a quiet count, `Andromity · 1`. Hover for what it is doing; click to open it. The session in view no longer changes the status bar.
+- **"Needs you" notifications.** When a background session, or the current one while the chat is hidden or VS Code is in the background, needs approval or asks a question, a notification with **Open** appears.
+- **Queue and steer hints.** While the agent works, the prompt box says Enter queues a follow-up and Ctrl+Enter steers. The send button stays next to Stop once you type.
+- **More commands in the Command Palette.** Switch Model, Switch Permission Mode, Switch Agent Profile, Open Model Hub, Open Cron Jobs, Sign In, Sign Out, Undo Last Turn, Show Sessions History and Compact Session Context.
+- **Permission mode descriptions** in Settings, with a warning on YOLO.
+- **Run button on shell code blocks.** Bash, sh, zsh, PowerShell and CMD blocks in chat have a **Run** button. It opens a new terminal in your workspace and runs the command. PowerShell blocks open in PowerShell and CMD blocks in `cmd.exe` when your default terminal is a different shell. Leading `$ ` and `PS>` prompts are removed.
+
+### Changed
+- **Notifications.** Scheduled runs notify you only when a run fails, times out, is skipped or needs attention. Choose **After every run** or **Never** per job.
+- **Notification buttons.** Each notification offers **Open Session** and **Open Cron Jobs**.
+
+### Fixed
+- A run that hit a provider error, or ended with the agent asking a question, no longer shows as **Succeeded**.
+- A job no longer runs twice at once, or in the VS Code install folder when no folder is open.
+- **Open session** on a run shows the whole run, not just the prompt.
+- **Live progress.** A scheduled run opened while it is running now updates live and leaves the Working state when it ends, whatever the outcome. **Stop** cancels it.
+- **Scheduled run notice.** A note above the message box names the job and the permission mode it ran in. While the run is going, the note says you can continue the chat when it finishes, and a message sent meanwhile gets that explanation instead of a generic failure.
+- **Quiet background runs.** Scheduled runs no longer open the Waterfall panel, play the done sound or show a "Parallel task completed" message. Their cron notification covers that.
+- Chats that stopped mid-reply because VS Code was closed or the engine restarted no longer spin forever in the sessions list. They show an **Interrupted** badge; hover it for what happened, and send a message to continue.
+- **Approval keyboard.** Enter or Space on a focused option (such as **Deny**) now picks that option instead of approving. Esc closes an open menu or palette without denying the pending tool.
+- **Saving an empty API key** no longer deletes the stored key.
+- **Deleting a session** from the trash icon and **removing a custom provider** now ask first.
+- **Prompt history.** ArrowDown inside a recalled multi-line prompt moves the cursor instead of replacing your edits.
+- **Failed sends** show the error once in the chat, without a raw error toast.
+- **Fingerprint** says when it couldn't load a session and offers **Retry**, instead of showing "No activity yet".
+- **Changes Review refreshes itself.** Edits you save, the agent's edits during a turn, commits, checkouts and other tools now update the panel within about half a second. It waits while hidden and catches up when shown, keeps the open diff and scroll position, and says when the file you were reading no longer has changes.
+- **Light themes.** Borders, dividers and hover backgrounds in the chat, Settings, Waterfall, Plan, Changes Review and background task views no longer disappear on light themes, and status colors are readable on white. High-contrast rules now apply.
+- **Keyboard.** Tool, thinking and tool-group cards, session rows, Settings chips, skill cards and tags, and Waterfall rows can be reached with Tab and opened with Enter or Space. Copy, Insert and session buttons appear when focused, not only on hover.
+- **Screen readers.** A streaming reply is read once when it finishes, and the `/` and `@` menus announce the highlighted option.
+
 ## [0.2.21] — 2026-10-18
 
 ### Added

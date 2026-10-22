@@ -197,6 +197,7 @@ export function getFingerprintHtml(
         <div>
           <div class="fp-empty-title" id="empty-title">No activity yet</div>
           <div class="fp-empty-text" id="empty-text">Send a prompt to the agent. The files it reads, changes and runs appear here.</div>
+          <button class="fp-empty-retry" id="empty-retry" type="button" style="display:none;">Retry</button>
         </div>
       </div>
 

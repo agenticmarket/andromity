@@ -11,7 +11,7 @@ from textual.containers import Horizontal, Vertical
 
 from typing import Any
 
-from andromity.tui.panels.chat import ChatPanel
+from andromity.tui.panels.chat import ChatPanel, NextStepCard
 from andromity.tui.panels.filetree import FileTreePanel
 from andromity.tui.panels.diff import DiffPanel
 from andromity.tui.panels.plan import PlanPanel
@@ -173,9 +173,10 @@ class AndromityApp(App):
         self.session = Session(name="new-session", project_path=self._project_path)
         self._ollama_num_ctx = 0
         init_effort = config.get("default", "reasoning_effort", "auto")
-        self.agent = Agent(self.session, on_tool_approval=self._on_tool_approval,
+        self.agent = Agent(self.session, next_step_suggestions=self._next_steps_enabled(), on_tool_approval=self._on_tool_approval,
                            on_questions=self._on_ask_questions, ctx_limit=self._get_ctx_limit(),
                            reasoning_effort=init_effort)
+        self._next_step = None
         self._esc_count = 0
         self._esc_time = 0.0
         self._esc_timer = None
@@ -395,27 +396,26 @@ class AndromityApp(App):
                 to_target = getattr(evt, "to_session", "")
                 return to_id == cur_id or to_target in (cur_id, cur_name, "all", "*")
 
+            # Traffic between other sessions is theirs to show; this session's own writes are
+            # already visible as its tool calls.
             if isinstance(event, SessionMessageReceived):
                 if _is_for_us(event):
                     chat.add_session_message(event.from_session, event.content, event.message_type)
-                else:
-                    self.notify(f"✉ {event.from_session} → {event.to_session}: {event.content[:40]}")
             elif isinstance(event, SessionQuestionReceived):
                 if _is_for_us(event):
-                    chat.add_session_question(event.from_session, event.question, event.question_id)
-                else:
-                    self.notify(f"❓ {event.from_session} asked {event.to_session}")
+                    chat.add_session_question(event.from_session, event.question)
             elif isinstance(event, SessionAnswerReceived):
                 if _is_for_us(event):
-                    chat.add_session_answer(event.from_session, event.answer, event.question_id)
-                else:
-                    self.notify(f"✔ {event.from_session} answered {event.to_session}")
+                    chat.add_session_answer(event.from_session, event.answer)
             elif isinstance(event, SharedStateChanged):
-                chat.add_shared_state_notification(event.author_session, event.key, event.new_value)
+                if event.author_session != cur_name:
+                    chat.add_shared_state_notification(event.author_session, event.key, event.new_value)
             elif isinstance(event, HandoffWritten):
-                chat.add_handoff_notification(event.from_session, event.summary, event.phase)
+                targeted = event.to_session or event.to_session_id
+                if (_is_for_us(event) if targeted else event.from_session != cur_name):
+                    chat.add_handoff_notification(event.from_session, event.summary)
         except Exception:
-            pass
+            log.debug("Session collaboration event could not be shown", exc_info=True)
 
     def _ensure_git_tracking(self):
         """Initialize git repo in the project folder if one doesn't exist.
@@ -735,7 +735,7 @@ class AndromityApp(App):
         except Exception as e:
             log.warning("QuestionPanel error in ask: %s", e)
             if not fut.done():
-                fut.set_result(None)
+                fut.set_result({})
 
         try:
             answers = await fut
@@ -833,12 +833,13 @@ class AndromityApp(App):
     # ── Cron callbacks ────────────────────────────────────────────────────────
 
     def _on_cron_trigger(self, cron: CronJob):
-        """Called from scheduler loop (async task)."""
+        """Called by the scheduler after it claimed the job for one run."""
         if cron.id in getattr(self, "_cron_running_jobs", set()):
             log.debug("Skipping cron trigger for '%s': already running", cron.name)
+            self._cron_scheduler.release(cron.id)
             return
-        
-        # Mark as running immediately so the next scheduler tick (in 10s) 
+
+        # Mark as running immediately so the next scheduler tick (in 10s)
         # doesn't re-trigger it before the UI thread actually starts the worker.
         self._cron_running_jobs.add(cron.id)
         log.info("Cron trigger fired for '%s'", cron.name)
@@ -846,178 +847,133 @@ class AndromityApp(App):
 
     def _run_cron_job(self, cron: CronJob):
         """Schedule cron agent run on the UI thread."""
+        from andromity.core.cron import CronRunCollector, build_unattended_prompt, friendly_error, project_folder_problem
+
         cron_panel = self.query_one(CronStatusPanel)
+        scheduler = self._cron_scheduler
+        model_display = f"{cron.provider}/{cron.model}" if cron.provider else cron.model
+
+        problem = project_folder_problem(self._project_path)
+        skip_type = "folder" if problem else None
+        if not problem and not config.is_trusted(self._project_path):
+            problem = friendly_error("untrusted", "Run /trust, then resume the job.")
+            skip_type = "untrusted"
+        if problem:
+            run = scheduler.start_run(cron.id, cron.prompt, model_display, provider=cron.provider)
+            scheduler.finish_run(cron.id, run, "skipped", problem, skip_type)
+            self._cron_running_jobs.discard(cron.id)
+            cron_panel.push_notification(f"[yellow]⏱ Cron '{escape(cron.name)}' skipped:[/] {escape(problem)}")
+            self.refresh_cron_status()
+            return
+
         cron_panel.push_notification(
             f"⏱ [yellow bold]Cron:[/] [bold]{escape(cron.name)}[/] is firing…"
         )
 
         # Create an isolated session for this cron run
         cron_session = Session(name=f"cron: {cron.name}", project_path=self._project_path)
+        cron_session.permission_mode = (cron.mode or "safe").lower()
+        collector = CronRunCollector()
         cron_agent = Agent(
             cron_session,
             profile=self.agent.profile,
-            on_tool_approval=self._make_cron_approval(cron),
+            on_tool_approval=self._make_cron_approval(cron, collector),
             ctx_limit=self._get_ctx_limit(),
             provider=cron.provider,
             model=cron.model,
         )
-
-        # Start a run record for history tracking
-        model_display = f"{cron.provider}/{cron.model}" if cron.provider else cron.model
-        run = self._cron_scheduler.start_run(
+        run = scheduler.start_run(
             cron.id,
             cron.prompt,
             model_display,
             provider=cron.provider,
             session_id=cron_session.id,
         )
+        prompt = build_unattended_prompt(cron, config.get("default", "allowed_commands", []))
 
         async def _run():
-            import json
-            import time
-            tools_used = set()
-            files_modified = set()
-            tool_executions = []
-            active_tool_calls = {}  # tool_id -> {tool_name, args, start_time}
-            output_text = ""
-
             async def _execute():
-                nonlocal output_text
-                async for event in cron_agent.run(cron.prompt):
-                    if isinstance(event, TextDelta):
-                        output_text += event.text
-                    elif isinstance(event, ToolCallStart):
-                        tools_used.add(event.tool_name)
-                        active_tool_calls[event.tool_id] = {
-                            "tool_name": event.tool_name,
-                            "args": "",
-                            "start_time": time.time(),
-                        }
-                    elif isinstance(event, ToolCallDelta):
-                        if event.tool_id in active_tool_calls:
-                            active_tool_calls[event.tool_id]["args"] += event.args_json_chunk
-                    elif isinstance(event, ToolResult):
-                        rec = active_tool_calls.pop(event.tool_id, None)
-                        dur = int((time.time() - rec["start_time"]) * 1000) if rec else 0
-                        tool_name = rec["tool_name"] if rec else "tool"
-                        raw_args = rec["args"] if rec else ""
-                        try:
-                            parsed_args = json.loads(raw_args) if raw_args else {}
-                        except Exception:
-                            parsed_args = {"raw": raw_args}
+                async for event in cron_agent.run(prompt):
+                    collector.feed(event)
 
-                        # Track modified files
-                        if tool_name in ("write_file", "edit_file", "write_to_file", "replace_file_content"):
-                            fpath = parsed_args.get("path") or parsed_args.get("target_file") or parsed_args.get("file_path") or parsed_args.get("TargetFile")
-                            if fpath:
-                                files_modified.add(str(fpath))
-                        elif tool_name == "multi_replace_file_content":
-                            fpath = parsed_args.get("TargetFile")
-                            if fpath:
-                                files_modified.add(str(fpath))
-
-                        res_str = str(event.result) if event.result is not None else ""
-                        tool_executions.append({
-                            "tool_name": tool_name,
-                            "args": parsed_args,
-                            "result": res_str[:3000],
-                            "duration_ms": dur,
-                            "status": "rejected" if "[Rejected by User]" in res_str else "ok",
-                        })
-
+            exc = None
+            timed_out = False
             try:
                 timeout = cron.timeout_seconds if cron.timeout_seconds > 0 else None
                 if timeout:
                     await asyncio.wait_for(_execute(), timeout=timeout)
                 else:
                     await _execute()
-
-                cron_session.flush()
-                run_messages = cron_session.messages
-                if run:
-                    run.messages = run_messages
-                    run.tools_used = sorted(tools_used)
-                    run.files_modified = sorted(files_modified)
-                    run.tool_executions = tool_executions
-                    run.output = output_text
-                    run.output_preview = output_text[:500] if output_text else ""
-                    run.cost_usd = getattr(cron_session, "cost_usd", 0.0)
-
-                self._cron_scheduler.mark_result(cron.id, success=True, run=run)
-                dur_s = f"{run.duration_ms / 1000:.1f}s" if (run and run.duration_ms) else "done"
-                cron_panel.push_notification(f"[green]✓ Cron '{escape(cron.name)}' completed ({dur_s}).[/]")
-                self.refresh_cron_status()
-                self.notify(f"⏱ Cron '{cron.name}' completed ({dur_s}).", timeout=4)
-
             except asyncio.TimeoutError:
-                timeout_msg = f"Timed out after {cron.timeout_seconds}s"
+                timed_out = True
                 log.warning("Cron '%s' timed out after %ds", cron.name, cron.timeout_seconds)
+            except asyncio.CancelledError:
                 cron_session.flush()
-                if run:
-                    run.error = timeout_msg
-                    run.messages = cron_session.messages
-                    run.tools_used = sorted(tools_used)
-                    run.files_modified = sorted(files_modified)
-                    run.tool_executions = tool_executions
-                    run.output = output_text
-                    run.output_preview = output_text[:500] if output_text else ""
-                self._cron_scheduler.mark_result(cron.id, success=False, error=timeout_msg, run=run)
-                cron_panel.push_notification(
-                    f"[yellow]⏱ Cron '{escape(cron.name)}' timed out[/] after {cron.timeout_seconds}s."
-                )
-                self.refresh_cron_status()
-                self.notify(f"⏱ Cron '{cron.name}' timed out.", severity="warning", timeout=5)
-
+                scheduler.finish_run(cron.id, run, "interrupted", "The run stopped because Andromity shut down.")
+                self._cron_running_jobs.discard(cron.id)
+                raise
             except Exception as e:
+                exc = e
+                log.exception("Cron run error for '%s': %s", cron.name, e)
+
+            try:
                 cron_session.flush()
+                status, error, error_type = collector.outcome(exc, timed_out, cron.timeout_seconds, cron.provider, cron.model)
                 if run:
-                    run.error = str(e)
                     run.messages = cron_session.messages
-                    run.tools_used = sorted(tools_used)
-                    run.files_modified = sorted(files_modified)
-                    run.tool_executions = tool_executions
-                    run.output = output_text
-                    run.output_preview = output_text[:500] if output_text else ""
-                self._cron_scheduler.mark_result(cron.id, success=False, error=str(e), run=run)
-                cron_panel.push_notification(f"[red]✗ Cron '{escape(cron.name)}' failed:[/] {escape(str(e))}")
+                    run.tools_used = sorted(set(collector.tools_used))
+                    run.files_modified = collector.files_modified
+                    run.tool_executions = collector.tool_executions
+                    run.blocked_tools = collector.blocked
+                    run.output = collector.output
+                    run.output_preview = collector.output[:500] if collector.output else (error or "")
+                    run.cost_usd = getattr(cron_session, "cost_usd", 0.0)
+                scheduler.finish_run(cron.id, run, status, error, error_type)
+                dur_s = f"{run.duration_ms / 1000:.1f}s" if (run and run.duration_ms) else "done"
+                if status == "success":
+                    cron_panel.push_notification(f"[green]✓ Cron '{escape(cron.name)}' completed ({dur_s}).[/]")
+                    if cron.notify == "always":
+                        self.notify(f"⏱ Cron '{cron.name}' completed ({dur_s}).", timeout=4)
+                elif status == "needs_attention":
+                    cron_panel.push_notification(f"[yellow]⚠ Cron '{escape(cron.name)}' needs attention:[/] {escape(error or '')}")
+                    if cron.notify != "never":
+                        self.notify(f"⚠ Cron '{cron.name}' needs attention.", severity="warning", timeout=5)
+                elif status == "timeout":
+                    cron_panel.push_notification(
+                        f"[yellow]⏱ Cron '{escape(cron.name)}' timed out[/] after {cron.timeout_seconds}s."
+                    )
+                    if cron.notify != "never":
+                        self.notify(f"⏱ Cron '{cron.name}' timed out.", severity="warning", timeout=5)
+                else:
+                    cron_panel.push_notification(f"[red]✗ Cron '{escape(cron.name)}' failed:[/] {escape(error or '')}")
+                    if cron.notify != "never":
+                        self.notify(f"✗ Cron '{cron.name}' failed: {(error or '')[:80]}", severity="error", timeout=5)
                 self.refresh_cron_status()
-                self.notify(f"✗ Cron '{cron.name}' failed: {str(e)[:50]}", severity="error", timeout=5)
             finally:
                 self._cron_running_jobs.discard(cron.id)
 
         self.run_worker(_run(), exclusive=False)
 
-    def _make_cron_approval(self, cron: CronJob):
+    def _make_cron_approval(self, cron: CronJob, collector=None):
         """Return an approval callback respecting the cron's own mode and allowlist."""
-        async def _approval(tool_name: str, args: dict) -> bool:
-            if cron.mode == "yolo":
+        async def _approval(tool_name: str, args: dict):
+            from andromity.core.cron import cron_tool_decision
+            approved, reason = cron_tool_decision(
+                cron, tool_name, args, config.is_trusted(self._project_path),
+                config.get("default", "allowed_commands", []),
+            )
+            if approved:
                 return True
-            from andromity.core.security import is_sensitive_path
-            target_path = str(args.get("path", "") or args.get("target_path", "") or args.get("target_file", "") or args.get("file_path", ""))
-            if target_path and is_sensitive_path(target_path):
+            if collector is not None:
+                collector.note_blocked(tool_name, args)
+            try:
                 cron_panel = self.query_one(CronStatusPanel)
                 cron_panel.push_notification(
-                    f"[yellow]⏱ Cron '{escape(cron.name)}':[/] blocked '{escape(tool_name)}' (sensitive path access)"
+                    f"[yellow]⏱ Cron '{escape(cron.name)}':[/] blocked '{escape(tool_name)}'"
                 )
-                return False
-            if tool_name in ("shell_exec", "shell_bg"):
-                from andromity.core.security import is_command_allowlisted
-                command = str(args.get("command", "")).strip()
-                allowed = cron.allowed_commands or config.get("default", "allowed_commands", [])
-                if is_command_allowlisted(command, allowed):
-                    return True
-                cron_panel = self.query_one(CronStatusPanel)
-                cron_panel.push_notification(
-                    f"[yellow]⏱ Cron '{escape(cron.name)}':[/] blocked '{escape(tool_name)}' (not in allowlist)"
-                )
-                return False
-            if tool_name in ("write_file", "edit_file", "edit_file_multi", "shell_kill", "spawn_subagent") and cron.mode == "safe":
-                cron_panel = self.query_one(CronStatusPanel)
-                cron_panel.push_notification(
-                    f"[yellow]⏱ Cron '{escape(cron.name)}':[/] blocked '{escape(tool_name)}' (safe mode)"
-                )
-                return False
-            return True
+            except Exception:
+                pass
+            return (False, reason)
         return _approval
 
     def _refresh_agent(self):
@@ -1039,7 +995,7 @@ class AndromityApp(App):
         else:
             self._ollama_num_ctx = 0
         current_effort = getattr(self.agent, "reasoning_effort", None) or config.get("default", "reasoning_effort", "auto")
-        self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval,
+        self.agent = Agent(self.session, next_step_suggestions=self._next_steps_enabled(), profile=self.agent.profile, on_tool_approval=self._on_tool_approval,
                            on_questions=self._on_ask_questions, ctx_limit=self._get_ctx_limit(),
                            reasoning_effort=current_effort)
         self._update_status()
@@ -1051,7 +1007,7 @@ class AndromityApp(App):
         from andromity.config import config
         config.set("default", "profile", profile)
         current_effort = getattr(self.agent, "reasoning_effort", None) or config.get("default", "reasoning_effort", "auto")
-        self.agent = Agent(self.session, profile=profile, on_tool_approval=self._on_tool_approval,
+        self.agent = Agent(self.session, next_step_suggestions=self._next_steps_enabled(), profile=profile, on_tool_approval=self._on_tool_approval,
                            on_questions=self._on_ask_questions, ctx_limit=self._get_ctx_limit(),
                            reasoning_effort=current_effort)
         self._update_status()
@@ -1171,10 +1127,11 @@ class AndromityApp(App):
             except Exception:
                 pass
         self.session = Session(name="new-session", project_path=self._project_path)
-        self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval,
+        self.agent = Agent(self.session, next_step_suggestions=self._next_steps_enabled(), profile=self.agent.profile, on_tool_approval=self._on_tool_approval,
                            on_questions=self._on_ask_questions, ctx_limit=self._get_ctx_limit())
         self._session_named = False
         chat = self.query_one(ChatPanel)
+        self._clear_next_step()
         await chat.clear()
         # Plan & todos are session-scoped — new session starts with no plan or leftover todos
         try:
@@ -1254,10 +1211,11 @@ class AndromityApp(App):
             except Exception:
                 pass
         self.session = session
-        self.agent = Agent(self.session, profile=self.agent.profile, on_tool_approval=self._on_tool_approval,
+        self.agent = Agent(self.session, next_step_suggestions=self._next_steps_enabled(), profile=self.agent.profile, on_tool_approval=self._on_tool_approval,
                            on_questions=self._on_ask_questions, ctx_limit=self._get_ctx_limit())
         self._session_named = True  # already named
         chat = self.query_one(ChatPanel)
+        self._clear_next_step()
         await chat.load_history(session.messages, getattr(session, "compacted_history", None))
         self._update_status()
         # Load plan from session (if any)
@@ -1315,6 +1273,8 @@ class AndromityApp(App):
         if self._esc_count >= 2:
             self._esc_count = 0
             if self._current_task and not self._current_task.done():
+                from andromity.core.tools import stop_session_commands
+                stop_session_commands(getattr(self.session, "id", ""))
                 self._current_task.cancel()
                 self.query_one(ChatPanel).add_system_message("[Cancelled]")
                 self.query_one(InputBar).clear_input()
@@ -1373,9 +1333,13 @@ class AndromityApp(App):
         self._process_message(prompt, images)
 
     async def _stream_agent(self, prompt: str, images: list | None = None):
-        from andromity.core.events import InputApplied
+        from andromity.core.events import InputApplied, NextStepSuggested
         self.agent.input_queue = self._inputs()
         chat = self.query_one(ChatPanel)
+        self._clear_next_step()
+        # The suggestion shows once the turn ends, as a card rather than a tool call.
+        next_step = None
+        next_step_tool_ids: set = set()
         status_bar = self.query_one(StatusBar)
         status_bar.set_streaming(True)
         self._is_streaming = True
@@ -1442,6 +1406,12 @@ class AndromityApp(App):
                         chat.stop_thinking_message()
                     chat.append_text(event.text)
                     estimated_tokens += len(event.text) // 4
+                elif isinstance(event, NextStepSuggested):
+                    next_step = event
+                elif isinstance(event, ToolCallStart) and event.tool_name == "suggest_next_step":
+                    next_step_tool_ids.add(event.tool_id)
+                elif getattr(event, "tool_id", None) in next_step_tool_ids:
+                    pass
                 elif isinstance(event, ToolCallStart):
                     tools_used.add(event.tool_name)
                     tool_calls_count += 1
@@ -1502,6 +1472,7 @@ class AndromityApp(App):
                 # No mid-stream status rebuilds needed.
 
         except asyncio.CancelledError:
+            next_step = None
             self._inputs().pause()
             log.info("Stream cancelled by user")
             try:
@@ -1517,6 +1488,7 @@ class AndromityApp(App):
                 pass
 
         except Exception as e:
+            next_step = None
             self._inputs().pause()
             log.error("Unhandled exception in _stream_agent: %s", e, exc_info=True)
             _err_msg = str(e)
@@ -1541,7 +1513,9 @@ class AndromityApp(App):
                 chat.add_response_time(elapsed, tool_calls_count)
             except Exception:
                 pass
-            
+            if next_step is not None:
+                self._show_next_step(next_step)
+
             # Play done sound if enabled
             from andromity.config import config as _cfg
             try:
@@ -1634,6 +1608,15 @@ class AndromityApp(App):
             self._process_message(prompt)
             return
 
+        if not self._submit_prompt(prompt, images, steer=event.steer):
+            return
+        self.query_one("#input-field").text = ""
+        bar = self.query_one(InputBar)
+        bar._attachments.clear()
+        bar._update_attachment_bar()
+
+    def _submit_prompt(self, prompt: str, images: list | None = None, steer: bool = False) -> bool:
+        """Queue a chat prompt for the agent. Returns False when it could not be sent."""
         # Guard: no model configured for natural language chatting
         model = config.get("default", "model", "")
         if not model:
@@ -1642,24 +1625,81 @@ class AndromityApp(App):
                 "[red]No model selected.[/] Please choose a provider and model first:\n"
                 "  [bold cyan]/model[/] or [bold]Ctrl+L[/]"
             )
-            return
+            return False
 
         try:
             self._inputs().submit({
-                "prompt": prompt, "images": images,
+                "prompt": prompt, "images": images or [],
                 "provider": self.agent.provider or config.get("default", "provider", ""),
                 "model": self.agent.model or model,
                 "reasoning_effort": self.agent.reasoning_effort,
-            }, "steer" if event.steer else "queue")
+            }, "steer" if steer else "queue")
         except ValueError as exc:
             self.notify(str(exc), severity="warning")
-            return
-        self.query_one("#input-field").text = ""
-        bar = self.query_one(InputBar)
-        bar._attachments.clear()
-        bar._update_attachment_bar()
+            return False
+        self._clear_next_step()
         self.agent.input_queue = self._inputs()
         self._drain_inputs()
+        return True
+
+    # ── Suggested next step ─────────────────────────────────────────────────
+
+    def _next_steps_enabled(self) -> bool:
+        return bool(config.get("default", "next_step_suggestions", True))
+
+    def _show_next_step(self, step) -> None:
+        self._next_step = step
+        try:
+            self.query_one(ChatPanel).show_next_step(step.options, step.question)
+            field = self.query_one("#input-field", TextArea)
+            field.placeholder = f"{step.title}  ·  Tab to use"
+        except Exception:
+            log.debug("Suggested next step could not be shown", exc_info=True)
+
+    def _clear_next_step(self) -> None:
+        self._next_step = None
+        try:
+            self.query_one(ChatPanel).clear_next_step()
+            self.query_one("#input-field", TextArea).placeholder = InputBar._PLACEHOLDER
+        except Exception:
+            log.debug("Suggested next step could not be cleared", exc_info=True)
+
+    def accept_next_step_into_input(self) -> bool:
+        """Tab on an empty input: put the suggestion's prompt there to edit or send."""
+        step = getattr(self, "_next_step", None)
+        if step is None:
+            return False
+        field = self.query_one("#input-field", TextArea)
+        field.text = step.prompt
+        field.move_cursor(field.document.end)
+        self._clear_next_step()
+        return True
+
+    def dismiss_next_step(self) -> bool:
+        if getattr(self, "_next_step", None) is None:
+            return False
+        self._clear_next_step()
+        return True
+
+    @on(NextStepCard.Chosen)
+    async def on_next_step_chosen(self, event: "NextStepCard.Chosen") -> None:
+        step = getattr(self, "_next_step", None)
+        if step is None:
+            return
+        option = step.options[event.index] if 0 <= event.index < len(step.options) else step.options[0]
+        if event.action == "dismiss":
+            self._clear_next_step()
+        elif event.action == "new_session":
+            # The terminal app runs one session at a time, so this one switches over,
+            # carrying what it needs from the session it came from.
+            from andromity.core.session_context import background_context
+            context = background_context(self.session)
+            self._clear_next_step()
+            await self._new_session()
+            self._submit_prompt(option["prompt"] + context)
+        else:
+            self._submit_prompt(option["prompt"])
+        self.focus_input()
 
     def _process_message(self, prompt: str, images: list | None = None):
         chat = self.query_one(ChatPanel)

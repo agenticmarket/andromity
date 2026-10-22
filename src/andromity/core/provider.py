@@ -622,7 +622,21 @@ def classify_error_info(
     timer_text = ""
     timer_html = ""
 
-    if is_html and is_not_found:
+    from andromity.core.network_policy import AirgapBlockedError, AirgapFeatureOff
+    is_airgap = isinstance(e, (AirgapFeatureOff, AirgapBlockedError)) or "air-gap mode" in low
+
+    if is_airgap:
+        err_type = "airgap"
+        badge = "AIR-GAP MODE"
+        title = "Blocked by Air-gap Mode"
+        desc_text = clean_msg if "air-gap mode" in clean_msg.lower() else msg
+        desc_html = html.escape(desc_text)
+        actions_html = (
+            f'<button class="btn-error-retry" data-action="open-model-hub" title="Pick a model that runs on this machine">'
+            f'{icon_settings}Choose a local model</button>'
+        )
+        actions_tui = ["Press Ctrl+L and choose a local model, such as one served by Ollama"]
+    elif is_html and is_not_found:
         err_type = "endpoint_not_found"
         badge = "INVALID ENDPOINT"
         title = "API Endpoint Not Found"

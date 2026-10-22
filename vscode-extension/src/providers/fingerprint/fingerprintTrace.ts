@@ -30,6 +30,8 @@ const TOOL_KINDS: Record<string, ToolKind> = {
   list_tools: "plan",
   read_handoff: "coord",
   write_handoff: "coord",
+  handoff: "coord",
+  shared_state: "coord",
 };
 
 export function toolKind(name: string): ToolKind {

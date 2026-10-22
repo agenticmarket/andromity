@@ -52,6 +52,8 @@ _delivery_lock = threading.Lock()
 # ─────────────────────────────────────────────────────────────────────
 
 def _should_send_telemetry() -> bool:
+    if os.environ.get("ANDROMITY_AIRGAP") == "1":
+        return False
     if os.environ.get("DO_NOT_TRACK") in ("1", "true", "True", "TRUE"):
         return False
     if os.environ.get("ANDROMITY_NO_TELEMETRY") in ("1", "true", "True", "TRUE"):

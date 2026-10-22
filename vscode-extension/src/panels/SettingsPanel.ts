@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { confirmTurnOnAirGap, currentAirGap } from "../airgapState.js";
 import { getNonce } from "../providers/webviewSecurity.js";
 import {
   confirmAndromityTrust,
@@ -25,7 +26,7 @@ const HUB_FEATURES: Record<string, string> = {
   set_api_key: "api_key_saved",
   install_skill: "skill_installed", skill_read: "skill_viewed", remove_skill: "skill_removed",
   trust_folder: "trust_granted", revoke_trust: "trust_revoked",
-  toggle_sound: "sound_toggled", toggle_coauthor: "coauthor_toggled", configure_python_path: "python_path_set",
+  toggle_sound: "sound_toggled", toggle_next_steps: "next_steps_toggled", toggle_coauthor: "coauthor_toggled", configure_python_path: "python_path_set",
   cron_delete: "cron_deleted", fetch_cron_runs: "cron_history_viewed", open_cron_session: "cron_session_opened",
   mcp_add: "mcp_added", mcp_remove: "mcp_removed", mcp_restart: "mcp_restarted",
   mcp_toggle: "mcp_toggled", mcp_enable: "mcp_toggled", mcp_disable: "mcp_toggled",
@@ -126,7 +127,9 @@ export class SettingsPanel {
           startupSession: vscodeConfig.get<string>("startupSession", "last"),
           waterfallAutoOpen: vscodeConfig.get<boolean>("waterfallAutoOpen", true),
           soundNotifications: vscodeConfig.get<boolean>("soundNotifications", true) && configData?.sound_done !== false,
+          nextStepSuggestions: configData?.next_step_suggestions !== false,
           telemetry: (vscode.env.isTelemetryEnabled ?? true) && vscodeConfig.get<boolean>("telemetry", true) && configData?.telemetry !== false,
+          airGap: { ...currentAirGap(), engine: configData?.airgap || null },
           includeCoAuthor: vscodeConfig.get<boolean>("includeCoAuthor", true),
           wallpaper: {
             enabled: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("enabled", false),
@@ -298,7 +301,9 @@ export class SettingsPanel {
             startupSession: vscodeConfig.get<string>("startupSession", "last"),
             waterfallAutoOpen: vscodeConfig.get<boolean>("waterfallAutoOpen", true),
             soundNotifications: vscodeConfig.get<boolean>("soundNotifications", true) && configData?.sound_done !== false,
+            nextStepSuggestions: configData?.next_step_suggestions !== false,
             telemetry: (vscode.env.isTelemetryEnabled ?? true) && vscodeConfig.get<boolean>("telemetry", true) && configData?.telemetry !== false,
+          airGap: { ...currentAirGap(), engine: configData?.airgap || null },
             includeCoAuthor: vscodeConfig.get<boolean>("includeCoAuthor", true),
             wallpaper: {
               enabled: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("enabled", false),
@@ -342,7 +347,9 @@ export class SettingsPanel {
           startupSession: fastRes.vscodeConfig.get<string>("startupSession", "last"),
           waterfallAutoOpen: fastRes.vscodeConfig.get<boolean>("waterfallAutoOpen", true),
           soundNotifications: fastRes.vscodeConfig.get<boolean>("soundNotifications", true) && fastRes.configData?.sound_done !== false,
+          nextStepSuggestions: fastRes.configData?.next_step_suggestions !== false,
           telemetry: (vscode.env.isTelemetryEnabled ?? true) && fastRes.vscodeConfig.get<boolean>("telemetry", true) && fastRes.configData?.telemetry !== false,
+          airGap: { ...currentAirGap(), engine: fastRes.configData?.airgap || null },
           includeCoAuthor: fastRes.vscodeConfig.get<boolean>("includeCoAuthor", true),
           wallpaper: {
             enabled: vscode.workspace.getConfiguration("andromity.wallpaper").get<boolean>("enabled", false),
@@ -378,6 +385,46 @@ export class SettingsPanel {
     })();
 
     return this._loadingPromise;
+  }
+
+  /** Air-gap controls work without the engine, so the mode can be turned off even if it stops the engine from starting. */
+  private async _handleAirGapMessage(message: any): Promise<void> {
+    if (message.type === "toggle_airgap") {
+      const airGap = currentAirGap();
+      const turnOn = message.value === true;
+      if (!turnOn && airGap.locked) {
+        void vscode.window.showInformationMessage("Air-gap mode was turned on by your organization (ANDROMITY_AIRGAP) and can't be turned off here.");
+      } else if (!turnOn && airGap.source === "workspace") {
+        void vscode.window.showInformationMessage("This project's settings turn air-gap mode on (andromity.airGap.enabled in .vscode/settings.json). Change it there to turn it off.");
+      } else if (turnOn !== airGap.enabled) {
+        const chat = SettingsPanel.chatProvider;
+        const confirmed = turnOn
+          ? await confirmTurnOnAirGap({ provider: chat?.getCurrentProvider(), model: chat?.getCurrentModel(), running: chat?.hasRunningSessions() })
+          : (await vscode.window.showWarningMessage(
+          "Turn off air-gap mode? Andromity will be able to use the internet again, including cloud models.",
+          { modal: true }, "Turn Off")) === "Turn Off";
+        if (confirmed) {
+          await vscode.workspace.getConfiguration("andromity").update("airGap.enabled", turnOn, vscode.ConfigurationTarget.Global);
+        }
+      }
+      this._panel.webview.postMessage({ type: "airgap_state", airGap: { ...currentAirGap(), engine: null } });
+      return;
+    }
+
+    if (message.type === "save_airgap_hosts") {
+      const hosts = String(message.hosts || "").split(/[\s,;]+/).map((host) => host.trim()).filter(Boolean);
+      await vscode.workspace.getConfiguration("andromity").update("airGap.allowedHosts", [...new Set(hosts)], vscode.ConfigurationTarget.Global);
+      this._panel.webview.postMessage({ type: "airgap_state", airGap: { ...currentAirGap(), engine: null } });
+      return;
+    }
+
+    if (message.type === "airgap_self_test") {
+      const result = this._rpcClient
+        ? await this._rpcClient.call<any>("airgap.self_test", {}, 60000).catch(() => null)
+        : null;
+      this._panel.webview.postMessage({ type: "airgap_self_test_result", result });
+      return;
+    }
   }
 
   private async _handleMessage(message: any) {
@@ -466,6 +513,11 @@ export class SettingsPanel {
 
     if (message.type === "refresh_auth") {
       await this.loadData(true);
+      return;
+    }
+
+    if (message.type === "toggle_airgap" || message.type === "save_airgap_hosts" || message.type === "airgap_self_test") {
+      await this._handleAirGapMessage(message);
       return;
     }
 
@@ -594,6 +646,11 @@ export class SettingsPanel {
             }, 35000);
             this._panel.webview.postMessage({ type: "provider_result", ...result });
           } else {
+            if (message.type === "delete_provider") {
+              const choice = await vscode.window.showWarningMessage(
+                `Remove provider '${message.provider}'? Its base URL, model and API key will be deleted.`, { modal: true }, "Remove");
+              if (choice !== "Remove") break;
+            }
             const result = await this._rpcClient.call<{ provider: string; providers: ProviderInfo[] }>(
               message.type === "save_provider" ? "config.save_provider" : "config.delete_provider",
               message.type === "save_provider" ? message.connection : { provider: message.provider });
@@ -617,10 +674,14 @@ export class SettingsPanel {
       }
 
       case "set_api_key": {
+        if (typeof message.apiKey !== "string" || !message.apiKey.trim()) {
+          vscode.window.showWarningMessage("Paste an API key before saving. The current key was not changed.");
+          break;
+        }
         try {
           await this._rpcClient.call("config.set_api_key", {
             provider: message.provider,
-            api_key: message.apiKey || "",
+            api_key: message.apiKey.trim(),
           });
           const providers = await this._rpcClient.call<ProviderInfo[]>("config.list_providers", {});
           this._panel.webview.postMessage({
@@ -804,6 +865,24 @@ export class SettingsPanel {
         break;
       }
 
+      case "toggle_next_steps": {
+        try {
+          await this._rpcClient?.call("config.set", {
+            section: "default",
+            key: "next_step_suggestions",
+            value: message.value === true,
+          });
+        } catch (err: any) {
+          vscode.window.showWarningMessage("Andromity couldn't save this setting. Try again in a moment.");
+        }
+        this._panel.webview.postMessage({
+          type: "setting_updated",
+          key: "nextStepSuggestions",
+          value: message.value === true,
+        });
+        break;
+      }
+
       case "toggle_coauthor": {
         const config = vscode.workspace.getConfiguration("andromity");
         await config.update("includeCoAuthor", message.value, vscode.ConfigurationTarget.Global);
@@ -930,17 +1009,46 @@ export class SettingsPanel {
         break;
       }
 
-      case "cron_create": {
+      case "cron_create":
+      case "cron_update": {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         try {
-          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-          await this._rpcClient.call("cron.create", {
-            ...message.payload,
-            project_path: workspaceFolder,
-          });
-          vscode.window.showInformationMessage("Scheduled cron job created.");
+          if (message.type === "cron_create") {
+            await this._rpcClient.call("cron.create", { ...message.payload, project_path: workspaceFolder });
+          } else {
+            await this._rpcClient.call("cron.update", { ...message.payload, id: message.id, project_path: workspaceFolder });
+            if (message.runNow) {
+              await this._rpcClient.call("cron.run_now", { id: message.id, project_path: workspaceFolder });
+            }
+          }
+          this._panel.webview.postMessage({ type: "cron_saved", id: message.id || null });
+          vscode.window.showInformationMessage(message.type === "cron_create" ? "Scheduled job created." : "Scheduled job saved.");
           await this._refreshCronList();
         } catch (e: any) {
-          vscode.window.showErrorMessage(`Failed to create cron job: ${e.message}`);
+          this._panel.webview.postMessage({ type: "cron_save_failed", error: e?.message || "The job could not be saved." });
+        }
+        break;
+      }
+
+      case "cron_duplicate": {
+        try {
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          await this._rpcClient.call("cron.duplicate", { id: message.id, project_path: workspaceFolder });
+          vscode.window.showInformationMessage("Job duplicated. The copy is paused until you resume it.");
+          await this._refreshCronList();
+        } catch (e: any) {
+          vscode.window.showErrorMessage(`Failed to duplicate the job: ${e.message}`);
+        }
+        break;
+      }
+
+      case "cron_preview": {
+        try {
+          const result = await this._rpcClient.call<any>("cron.preview", { schedule: message.schedule, count: 5 }, 5000);
+          this._panel.webview.postMessage({ type: "cron_preview_result", requestId: message.requestId, ...result });
+        } catch {
+          // Older engines have no preview; the form then validates on save.
+          this._panel.webview.postMessage({ type: "cron_preview_result", requestId: message.requestId, unavailable: true });
         }
         break;
       }
@@ -962,7 +1070,7 @@ export class SettingsPanel {
       case "cron_delete": {
         try {
           const confirm = await vscode.window.showWarningMessage(
-            "Are you sure you want to delete this scheduled cron job?",
+            "Delete this scheduled job and its run history?",
             { modal: true },
             "Delete"
           );
@@ -1339,10 +1447,14 @@ export class SettingsPanel {
   <title>Andromity Hub</title>
   <style>
 
+    :root:has(> body.vscode-light), :root:has(> body.vscode-high-contrast-light) {
+      --tint: 0, 0, 0;
+    }
     :root {
+      --tint: 255, 255, 255;
       --bg: var(--vscode-editor-background, #1e1e1e);
       --card-bg: var(--vscode-sideBar-background, #252526);
-      --card-border: var(--vscode-widget-border, rgba(255,255,255,0.08));
+      --card-border: var(--vscode-widget-border, rgba(var(--tint), 0.08));
       --card-hover-border: var(--vscode-focusBorder, #007fd4);
       --text: var(--vscode-editor-foreground, #cccccc);
       --text-muted: var(--vscode-descriptionForeground, #888888);
@@ -1467,7 +1579,7 @@ export class SettingsPanel {
     .usage-progress-bar-wrap {
       width: 100%;
       height: 6px;
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
       border-radius: 3px;
       overflow: hidden;
       margin-top: 4px;
@@ -1482,7 +1594,7 @@ export class SettingsPanel {
       flex-direction: column;
       gap: 4px;
       padding: 8px 10px;
-      background: rgba(255, 255, 255, 0.025);
+      background: rgba(var(--tint), 0.025);
       border: 1px solid var(--card-border);
       border-radius: 6px;
     }
@@ -1602,7 +1714,31 @@ export class SettingsPanel {
     .cron-fact dd { margin: 0; font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .cron-outcome.success { color: var(--tag-green-fg); }
     .cron-outcome.failed, .cron-outcome.timeout { color: #f85149; }
-    .cron-outcome.interrupted { color: var(--tag-orange-fg); }
+    .cron-outcome.interrupted, .cron-outcome.needs_attention { color: var(--tag-orange-fg); }
+    .cron-outcome.skipped, .cron-outcome.missed { color: var(--text-muted); }
+    .cron-card.error { border-left-color: var(--tag-orange-fg); }
+    .cron-status-pill.error { background: color-mix(in srgb, var(--tag-orange-fg) 14%, transparent); color: var(--tag-orange-fg); border-color: color-mix(in srgb, var(--tag-orange-fg) 40%, transparent); }
+    .cron-notice {
+      font-size: 11.5px;
+      color: var(--text);
+      background: color-mix(in srgb, var(--tag-orange-fg) 10%, transparent);
+      border: 1px solid color-mix(in srgb, var(--tag-orange-fg) 35%, transparent);
+      padding: 6px 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .cron-notice .btn, .cron-last-error .btn { padding: 2px 8px; font-size: 11px; }
+    .cron-last-error.with-fix { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+    .cron-schedule-preview { font-size: 11.5px; color: var(--text-muted); display: flex; flex-direction: column; gap: 2px; min-height: 16px; }
+    .cron-schedule-preview.valid strong { color: var(--text); font-weight: 600; }
+    .cron-schedule-preview.invalid { color: #f85149; }
+    .cron-form-hint { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+    .cron-form-error { font-size: 12px; color: #f85149; background: rgba(248, 81, 73, 0.08); border: 1px solid rgba(248, 81, 73, 0.25); padding: 6px 8px; }
+    .cron-form-error[hidden] { display: none; }
+    .cron-trigger-badge { font-size: 10px; padding: 0 5px; border: 1px solid var(--card-border); color: var(--text-muted); margin-left: 4px; }
     .cron-last-error {
       font-size: 11.5px;
       color: #f85149;
@@ -1664,7 +1800,10 @@ export class SettingsPanel {
     .cron-run.success .cron-run-icon, .cron-run.success .cron-run-status { color: var(--tag-green-fg); }
     .cron-run.failed .cron-run-icon, .cron-run.failed .cron-run-status,
     .cron-run.timeout .cron-run-icon, .cron-run.timeout .cron-run-status { color: #f85149; }
-    .cron-run.interrupted .cron-run-icon, .cron-run.interrupted .cron-run-status { color: var(--tag-orange-fg); }
+    .cron-run.interrupted .cron-run-icon, .cron-run.interrupted .cron-run-status,
+    .cron-run.needs_attention .cron-run-icon, .cron-run.needs_attention .cron-run-status { color: var(--tag-orange-fg); }
+    .cron-run.skipped .cron-run-icon, .cron-run.skipped .cron-run-status,
+    .cron-run.missed .cron-run-icon, .cron-run.missed .cron-run-status { color: var(--text-muted); }
     .cron-run.running .cron-run-icon, .cron-run.running .cron-run-status { color: var(--tag-blue-fg); }
     .cron-run-meta { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .cron-run-summary svg { transition: transform 0.15s ease; color: var(--text-muted); }
@@ -1799,7 +1938,7 @@ export class SettingsPanel {
       width: 4px;
     }
     .nav-tabs::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.1);
+      background: rgba(var(--tint), 0.1);
       border-radius: 4px;
     }
 
@@ -1825,7 +1964,7 @@ export class SettingsPanel {
 
     .nav-tab:hover {
       color: var(--text);
-      background: rgba(255, 255, 255, 0.05);
+      background: rgba(var(--tint), 0.05);
     }
 
     .nav-tab.active {
@@ -1858,7 +1997,7 @@ export class SettingsPanel {
       font-size: 10px;
       padding: 1px 6px;
       border-radius: 10px;
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
       color: var(--text-muted);
       font-family: var(--font-mono);
       font-weight: 600;
@@ -1868,7 +2007,7 @@ export class SettingsPanel {
     }
 
     .nav-tab.active .nav-tab-badge {
-      background: rgba(255, 255, 255, 0.15);
+      background: rgba(var(--tint), 0.15);
       color: var(--text);
     }
 
@@ -2014,7 +2153,7 @@ export class SettingsPanel {
 
     .nav-floating-tooltip .tooltip-badge {
       font-size: 10px;
-      background: rgba(255, 255, 255, 0.12);
+      background: rgba(var(--tint), 0.12);
       padding: 1px 5px;
       border-radius: 3px;
       color: var(--text-muted);
@@ -2128,13 +2267,13 @@ export class SettingsPanel {
     }
 
     .btn-secondary {
-      background: rgba(255,255,255,0.08);
+      background: rgba(var(--tint), 0.08);
       color: var(--text);
       border: 1px solid var(--card-border);
     }
 
     .btn-secondary:hover {
-      background: rgba(255,255,255,0.12);
+      background: rgba(var(--tint), 0.12);
     }
 
     .btn-danger {
@@ -2169,11 +2308,33 @@ export class SettingsPanel {
       letter-spacing: 0.5px;
     }
 
+    .airgap-hosts {
+      margin-top: 10px;
+      padding-left: 26px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .airgap-hosts textarea {
+      width: 100%;
+      box-sizing: border-box;
+      resize: vertical;
+      font-family: var(--vscode-editor-font-family, monospace);
+    }
+    .airgap-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .airgap-state:empty { display: none; }
+    .airgap-results { display: flex; flex-direction: column; gap: 4px; }
+    .airgap-result { font-size: 12px; }
+    .airgap-result.pass strong { color: var(--vscode-testing-iconPassed, #1a7f37); }
+    .airgap-result.fail strong { color: var(--vscode-errorForeground, #cf222e); }
+
     .chip {
+      font-family: inherit;
+      line-height: inherit;
       padding: 3px 9px;
       border-radius: 4px;
       font-size: 11px;
-      background: rgba(255, 255, 255, 0.05);
+      background: rgba(var(--tint), 0.05);
       border: 1px solid var(--card-border);
       color: var(--text-muted);
       cursor: pointer;
@@ -2183,7 +2344,7 @@ export class SettingsPanel {
 
     .chip:hover {
       color: var(--text);
-      border-color: rgba(255,255,255,0.2);
+      border-color: rgba(var(--tint), 0.2);
     }
 
     .chip.active {
@@ -2441,13 +2602,13 @@ export class SettingsPanel {
       font-size: 10.5px;
       border-radius: 4px;
       border: 1px solid var(--card-border);
-      background: rgba(255, 255, 255, 0.03);
+      background: rgba(var(--tint), 0.03);
       color: var(--text-muted);
       cursor: pointer;
       transition: all 0.15s ease;
     }
     .pin-card-btn:hover {
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
       color: #f59e0b;
       border-color: rgba(245, 158, 11, 0.35);
     }
@@ -2488,7 +2649,7 @@ export class SettingsPanel {
       border-radius: 4px;
       cursor: pointer;
       border: 1px solid var(--card-border);
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
       color: var(--text);
       transition: all 0.15s;
     }
@@ -2685,7 +2846,7 @@ export class SettingsPanel {
     }
 
     .chart-grid-line {
-      stroke: rgba(255, 255, 255, 0.06);
+      stroke: rgba(var(--tint), 0.06);
       stroke-dasharray: 4 4;
       stroke-width: 1;
     }
@@ -2705,7 +2866,7 @@ export class SettingsPanel {
 
     .chart-col-group:hover .chart-col-bg,
     .chart-col-group.active .chart-col-bg {
-      fill: rgba(255, 255, 255, 0.05);
+      fill: rgba(var(--tint), 0.05);
     }
 
     .chart-bar {
@@ -2743,7 +2904,7 @@ export class SettingsPanel {
       background: rgba(18, 18, 24, 0.98);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
-      border: 1px solid rgba(255, 255, 255, 0.18);
+      border: 1px solid rgba(var(--tint), 0.18);
       border-radius: 9px;
       padding: 10px 14px;
       font-size: 12px;
@@ -2767,7 +2928,7 @@ export class SettingsPanel {
       font-size: 12px;
       margin-bottom: 6px;
       padding-bottom: 5px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      border-bottom: 1px solid rgba(var(--tint), 0.08);
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -2803,15 +2964,15 @@ export class SettingsPanel {
 
     /* Usage Breakdown Rows */
     .usage-item-row {
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid rgba(255, 255, 255, 0.05);
+      background: rgba(var(--tint), 0.02);
+      border: 1px solid rgba(var(--tint), 0.05);
       border-radius: 6px;
       padding: 10px 12px;
       transition: all 0.15s ease;
     }
 
     .usage-item-row:hover {
-      background: rgba(255, 255, 255, 0.04);
+      background: rgba(var(--tint), 0.04);
       border-color: rgba(9, 249, 148, 0.25);
     }
 
@@ -2825,7 +2986,7 @@ export class SettingsPanel {
     .usage-progress-bar-wrap {
       width: 100%;
       height: 5px;
-      background: rgba(255, 255, 255, 0.06);
+      background: rgba(var(--tint), 0.06);
       border-radius: 3px;
       overflow: hidden;
     }
@@ -3078,28 +3239,28 @@ export class SettingsPanel {
 
         <div class="filter-chips">
           <span class="chip-label">Category:</span>
-          <div class="chip active" data-category="all">All</div>
-          <div class="chip" data-category="pinned">📌 Pinned</div>
-          <div class="chip" data-category="free">Free Tier</div>
-          <div class="chip" data-category="coding">Coding & Agentic</div>
-          <div class="chip" data-category="reasoning">Reasoning / Thinking</div>
-          <div class="chip" data-category="vision">Vision & Multimodal</div>
-          <div class="chip" data-category="flagship">Flagships</div>
+          <button type="button" class="chip active" data-category="all">All</button>
+          <button type="button" class="chip" data-category="pinned">📌 Pinned</button>
+          <button type="button" class="chip" data-category="free">Free Tier</button>
+          <button type="button" class="chip" data-category="coding">Coding & Agentic</button>
+          <button type="button" class="chip" data-category="reasoning">Reasoning / Thinking</button>
+          <button type="button" class="chip" data-category="vision">Vision & Multimodal</button>
+          <button type="button" class="chip" data-category="flagship">Flagships</button>
         </div>
 
         <div class="filter-chips">
           <span class="chip-label">Provider:</span>
-          <div class="chip active" data-provider="all">All Providers</div>
-          <div class="chip" data-provider="andromity">Andromity</div>
-          <div class="chip" data-provider="openrouter">OpenRouter</div>
-          <div class="chip" data-provider="anthropic">Anthropic</div>
-          <div class="chip" data-provider="openai">OpenAI</div>
-          <div class="chip" data-provider="google">Gemini</div>
-          <div class="chip" data-provider="deepseek">DeepSeek</div>
-          <div class="chip" data-provider="groq">Groq</div>
-          <div class="chip" data-provider="ollama">Ollama (Local)</div>
+          <button type="button" class="chip active" data-provider="all">All Providers</button>
+          <button type="button" class="chip" data-provider="andromity">Andromity</button>
+          <button type="button" class="chip" data-provider="openrouter">OpenRouter</button>
+          <button type="button" class="chip" data-provider="anthropic">Anthropic</button>
+          <button type="button" class="chip" data-provider="openai">OpenAI</button>
+          <button type="button" class="chip" data-provider="google">Gemini</button>
+          <button type="button" class="chip" data-provider="deepseek">DeepSeek</button>
+          <button type="button" class="chip" data-provider="groq">Groq</button>
+          <button type="button" class="chip" data-provider="ollama">Ollama (Local)</button>
           <span id="custom-provider-chips" style="display:contents;"></span>
-          <div class="chip" data-provider="nvidia">NVIDIA NIM</div>
+          <button type="button" class="chip" data-provider="nvidia">NVIDIA NIM</button>
         </div>
 
         <div class="custom-model-bar">
@@ -3146,52 +3307,105 @@ export class SettingsPanel {
       </div>
       <div class="cron-summary" id="cron-summary"></div>
 
-      <!-- Add Cron Job Form Drawer -->
+      <!-- Add / Edit Cron Job Form Drawer -->
       <div class="cron-form" id="cron-create-form" style="display:none;">
-        <div style="font-size:14px; font-weight:600; margin-bottom:4px;">Create Scheduled Job</div>
+        <div style="font-size:14px; font-weight:600; margin-bottom:4px;" id="cron-form-title">Create Scheduled Job</div>
         <div class="cron-form-row">
           <div class="cron-form-col">
-            <label>Job Name</label>
+            <label for="cron-name-input">Job Name</label>
             <input type="text" id="cron-name-input" placeholder="e.g. Daily Health & Test Suite">
           </div>
           <div class="cron-form-col">
-            <label>Schedule / Date & Time</label>
+            <label for="cron-schedule-select">Schedule</label>
             <select id="cron-schedule-select">
-              <option value="every 15m">Every 15 minutes (every 15m)</option>
-              <option value="every 30m">Every 30 minutes (every 30m)</option>
-              <option value="every 1h" selected>Every 1 hour (every 1h)</option>
-              <option value="every 2h">Every 2 hours (every 2h)</option>
-              <option value="every 6h">Every 6 hours (every 6h)</option>
-              <option value="every 12h">Every 12 hours (every 12h)</option>
-              <option value="every 1d">Every 1 day (every 1d)</option>
-              <option value="daily at 09:00">Daily at 9:00 AM (daily at 09:00)</option>
-              <option value="daily at 18:00">Daily at 6:00 PM (daily at 18:00)</option>
-              <option value="custom">Custom Date, Time, or Cron...</option>
+              <option value="every 15m">Every 15 minutes</option>
+              <option value="every 30m">Every 30 minutes</option>
+              <option value="every 1h" selected>Every hour</option>
+              <option value="every 2h">Every 2 hours</option>
+              <option value="every 6h">Every 6 hours</option>
+              <option value="every 12h">Every 12 hours</option>
+              <option value="daily at 09:00">Every day at 9:00</option>
+              <option value="weekdays at 09:00">Weekdays at 9:00</option>
+              <option value="mondays at 09:00">Every Monday at 9:00</option>
+              <option value="daily at 18:00">Every day at 18:00</option>
+              <option value="custom">Custom schedule…</option>
             </select>
-            <input type="text" id="cron-custom-schedule" style="display:none; margin-top:6px;" placeholder="every 45m · daily at 09:00 · 2026-09-20 14:00 · 0 9 * * *">
+            <input type="text" id="cron-custom-schedule" style="display:none; margin-top:6px;" aria-label="Custom schedule" placeholder="every 45m · weekdays at 08:30 · 2026-12-01 14:00 · 0 9 * * 1-5">
           </div>
         </div>
+        <div class="cron-schedule-preview" id="cron-schedule-preview" aria-live="polite"></div>
         <div class="cron-form-row">
           <div class="cron-form-col">
-            <label>AI Model</label>
+            <label for="cron-model-select">AI Model</label>
             <select id="cron-model-select">
               <option value="">Default Active Model</option>
             </select>
           </div>
           <div class="cron-form-col">
-            <label>Allowed Shell Commands (Optional)</label>
-            <input type="text" id="cron-commands-input" placeholder="e.g. pytest, npm test, git status">
+            <label for="cron-mode-select">Permission Mode</label>
+            <select id="cron-mode-select">
+              <option value="safe">SAFE · reads files, no edits</option>
+              <option value="trust">TRUST · edits files</option>
+              <option value="full">FULL</option>
+              <option value="yolo">YOLO · approves everything</option>
+            </select>
           </div>
         </div>
         <div class="cron-form-row">
           <div class="cron-form-col" style="flex:100%;">
-            <label>Prompt / Agent Instructions</label>
+            <label for="cron-commands-input">Allowed Shell Commands</label>
+            <input type="text" id="cron-commands-input" placeholder="e.g. pytest, npm test, git status">
+            <div class="cron-form-hint">Nobody approves commands during a scheduled run. Commands not on this list are blocked, and the run is marked Needs attention.</div>
+          </div>
+        </div>
+        <div class="cron-form-row">
+          <div class="cron-form-col">
+            <label for="cron-timeout-select">Time Limit</label>
+            <select id="cron-timeout-select">
+              <option value="300">5 minutes</option>
+              <option value="600" selected>10 minutes</option>
+              <option value="900">15 minutes</option>
+              <option value="1800">30 minutes</option>
+              <option value="3600">1 hour</option>
+              <option value="7200">2 hours</option>
+            </select>
+          </div>
+          <div class="cron-form-col">
+            <label for="cron-onfail-select">When a Run Fails</label>
+            <select id="cron-onfail-select">
+              <option value="retry">Retry temporary errors</option>
+              <option value="notify">Record it and wait</option>
+              <option value="disable">Pause the job</option>
+            </select>
+          </div>
+          <div class="cron-form-col">
+            <label for="cron-notify-select">Notify Me</label>
+            <select id="cron-notify-select">
+              <option value="failures">When a run needs attention</option>
+              <option value="always">After every run</option>
+              <option value="never">Never</option>
+            </select>
+          </div>
+          <div class="cron-form-col">
+            <label for="cron-catchup-select">Missed Runs</label>
+            <select id="cron-catchup-select">
+              <option value="once">Run once when Andromity is back (within 24h)</option>
+              <option value="skip">Skip them</option>
+            </select>
+          </div>
+        </div>
+        <div class="cron-form-row">
+          <div class="cron-form-col" style="flex:100%;">
+            <label for="cron-prompt-input">Prompt / Agent Instructions</label>
             <textarea id="cron-prompt-input" rows="3" placeholder="e.g. Inspect git status, run unit tests, and summarize any failures or lint issues."></textarea>
           </div>
         </div>
+        <div class="cron-form-hint" id="cron-form-folder"></div>
+        <div class="cron-form-error" id="cron-form-error" role="alert" hidden></div>
         <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:4px;">
           <button class="btn btn-secondary" id="btn-cancel-cron">Cancel</button>
-          <button class="btn" id="btn-save-cron">Create Job</button>
+          <button class="btn btn-secondary" id="btn-save-run-cron">Save and run now</button>
+          <button class="btn" id="btn-save-cron">Create job</button>
         </div>
       </div>
 
@@ -3253,8 +3467,8 @@ export class SettingsPanel {
       <div class="model-controls">
         <div class="filter-chips">
           <span class="chip-label">View:</span>
-          <div class="chip active" id="filter-skills-installed">Installed (<span id="installed-skills-num">0</span>)</div>
-          <div class="chip" id="filter-skills-registry">Browse Online Registry (<span id="remote-skills-num">0</span>)</div>
+          <button type="button" class="chip active" id="filter-skills-installed">Installed (<span id="installed-skills-num">0</span>)</button>
+          <button type="button" class="chip" id="filter-skills-registry">Browse Online Registry (<span id="remote-skills-num">0</span>)</button>
         </div>
 
         <div class="search-row">
@@ -3271,8 +3485,8 @@ export class SettingsPanel {
         <div class="filter-chips" id="skills-source-chips" style="display:none;"></div>
         <div class="filter-chips" id="skills-scope-chips" style="display:none;">
           <span class="chip-label">Install to:</span>
-          <div class="chip active" data-action="skills-scope" data-value="user">All projects</div>
-          <div class="chip" data-action="skills-scope" data-value="project">This project only</div>
+          <button type="button" class="chip active" data-action="skills-scope" data-value="user">All projects</button>
+          <button type="button" class="chip" data-action="skills-scope" data-value="project">This project only</button>
         </div>
       </div>
 
@@ -3298,8 +3512,8 @@ export class SettingsPanel {
       <div class="model-controls">
         <div class="filter-chips">
           <span class="chip-label">View:</span>
-          <div class="chip active" id="filter-mcp-yours">Yours (<span id="mcp-yours-num">0</span>)</div>
-          <div class="chip" id="filter-mcp-discover">Discover (<span id="mcp-discover-num">0</span>)</div>
+          <button type="button" class="chip active" id="filter-mcp-yours">Yours (<span id="mcp-yours-num">0</span>)</button>
+          <button type="button" class="chip" id="filter-mcp-discover">Discover (<span id="mcp-discover-num">0</span>)</button>
         </div>
         <div class="search-row" id="connectors-search-row" style="display:none;">
           <div class="search-input-wrap">
@@ -3329,14 +3543,14 @@ export class SettingsPanel {
         </div>
         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
           <div class="filter-chips" id="usage-scope-chips" style="margin: 0;">
-            <div class="chip active" data-usage-scope="global">All Projects (Global)</div>
-            <div class="chip" data-usage-scope="project">This Project</div>
+            <button type="button" class="chip active" data-usage-scope="global">All Projects (Global)</button>
+            <button type="button" class="chip" data-usage-scope="project">This Project</button>
           </div>
           <div class="filter-chips" id="usage-range-chips" style="margin: 0;">
-            <div class="chip active" data-usage-range="all">All Time</div>
-            <div class="chip" data-usage-range="month">30 Days</div>
-            <div class="chip" data-usage-range="week">7 Days</div>
-            <div class="chip" data-usage-range="today">Today</div>
+            <button type="button" class="chip active" data-usage-range="all">All Time</button>
+            <button type="button" class="chip" data-usage-range="month">30 Days</button>
+            <button type="button" class="chip" data-usage-range="week">7 Days</button>
+            <button type="button" class="chip" data-usage-range="today">Today</button>
           </div>
         </div>
       </div>
@@ -3410,7 +3624,7 @@ export class SettingsPanel {
         <div style="overflow-x: auto; margin-top: 10px;">
           <table class="diag-table" id="usage-sessions-table">
             <thead>
-              <tr style="background: rgba(255,255,255,0.03); border-bottom: 1px solid var(--card-border);">
+              <tr style="background: rgba(var(--tint), 0.03); border-bottom: 1px solid var(--card-border);">
                 <th style="text-align:left; padding:8px 12px; font-size:11px; color:var(--text-muted);">Session Name</th>
                 <th style="text-align:left; padding:8px 12px; font-size:11px; color:var(--text-muted);">Model / Provider</th>
                 <th style="text-align:right; padding:8px 12px; font-size:11px; color:var(--text-muted);">Tokens</th>
@@ -3594,12 +3808,43 @@ export class SettingsPanel {
 
         <div class="settings-card">
           <label class="checkbox-row">
+            <input type="checkbox" id="setting-next-steps">
+            <div>
+              <div class="setting-label">Suggested Next Steps</div>
+              <div class="setting-desc">After a reply, Andromity may suggest one follow-up you can start with a click or put in the input with Tab. Also applies to the terminal app.</div>
+            </div>
+          </label>
+        </div>
+
+        <div class="settings-card">
+          <label class="checkbox-row">
             <input type="checkbox" id="setting-telemetry">
             <div>
               <div class="setting-label">Anonymous Telemetry</div>
               <div class="setting-desc">Sends anonymous session metadata to help improve Andromity: OS, app version, provider name (e.g. "anthropic"), model name (e.g. "claude-sonnet-5"), reasoning mode, and coarse session stats (turn count, duration bucket). <strong>No prompts, code, file paths, or API keys are ever transmitted.</strong> Opt out anytime with <code>DO_NOT_TRACK=1</code>.</div>
             </div>
           </label>
+        </div>
+
+        <div class="settings-card airgap-card">
+          <label class="checkbox-row">
+            <input type="checkbox" id="setting-airgap">
+            <div>
+              <div class="setting-label">Air-gap Mode</div>
+              <div class="setting-desc">Andromity makes no network connections except to this machine and the private hosts you list below. Cloud models, web search, remote MCP servers, sign-in and telemetry turn off, and commands the agent runs are blocked from the internet where possible. For complete isolation, also use your firewall. <a href="#" class="docs-link" data-docs-url="${DOCS.airGap}">How air-gap mode works</a></div>
+              <div class="setting-desc airgap-state" id="airgap-state" aria-live="polite"></div>
+            </div>
+          </label>
+          <div class="airgap-hosts">
+            <label class="setting-label" for="airgap-hosts">Allowed private hosts</label>
+            <textarea id="airgap-hosts" class="custom-model-input" rows="2" spellcheck="false" placeholder="10.0.0.5, gpu-box.lan, 10.0.0.0/8"></textarea>
+            <div class="setting-desc">For a model server on your network. Separate with commas or new lines. Public addresses are ignored, and only your user settings can add hosts.</div>
+            <div class="airgap-actions">
+              <button type="button" class="btn btn-secondary" data-action="airgap-save-hosts">Save hosts</button>
+              <button type="button" class="btn btn-secondary" data-action="airgap-self-test">Run self-test</button>
+            </div>
+            <div id="airgap-results" class="airgap-results" aria-live="polite"></div>
+          </div>
         </div>
 
         <div class="settings-card">
@@ -3794,7 +4039,7 @@ export class SettingsPanel {
             <span>View Full MIT License Text</span>
             <span style="font-size: 11px; color: var(--text-muted); font-weight: normal;">Click to expand</span>
           </summary>
-          <pre style="margin-top: 10px; margin-bottom: 4px; font-family: var(--font-mono); font-size: 11px; line-height: 1.5; color: var(--text); white-space: pre-wrap; background: rgba(0,0,0,0.15); padding: 10px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05); user-select: text;">MIT License
+          <pre style="margin-top: 10px; margin-bottom: 4px; font-family: var(--font-mono); font-size: 11px; line-height: 1.5; color: var(--text); white-space: pre-wrap; background: rgba(0,0,0,0.15); padding: 10px; border-radius: 4px; border: 1px solid rgba(var(--tint), 0.05); user-select: text;">MIT License
 
 Copyright (c) 2026 Andromity Contributors
 
@@ -4223,7 +4468,50 @@ SOFTWARE.</pre>
     const selectMaxSubagents = document.getElementById("setting-max-subagents");
     const checkAutoCompact = document.getElementById("setting-auto-compact");
     const checkSound = document.getElementById("setting-sound");
+    const checkNextSteps = document.getElementById("setting-next-steps");
     const checkTelemetry = document.getElementById("setting-telemetry");
+    const checkAirGap = document.getElementById("setting-airgap");
+    const airGapHosts = document.getElementById("airgap-hosts");
+    const airGapStateEl = document.getElementById("airgap-state");
+    const airGapResults = document.getElementById("airgap-results");
+
+    function renderAirGap(state) {
+      if (!state || !checkAirGap) return;
+      checkAirGap.checked = !!state.enabled;
+      checkAirGap.disabled = !!state.locked;
+      const engine = state.engine || {};
+      const parts = [];
+      if (state.enabled) {
+        parts.push(state.source === "organization" ? "On, set by your organization."
+          : state.source === "workspace" ? "On, turned on by this project's settings."
+          : engine.sources && engine.sources.indexOf("config") !== -1 && state.source === "off" ? "On from config.toml."
+          : "On.");
+        if (engine.blocked_count) parts.push("Blocked " + engine.blocked_count + " connection attempt" + (engine.blocked_count === 1 ? "" : "s") + " since the engine started.");
+      } else if (engine.enabled) {
+        parts.push("On from config.toml ([default] airgap = true). Edit that file to turn it off.");
+      }
+      if (engine.ignored_hosts && engine.ignored_hosts.length) {
+        parts.push("Ignored (public): " + engine.ignored_hosts.join(", ") + ".");
+      }
+      if (airGapStateEl) airGapStateEl.textContent = parts.join(" ");
+      if (airGapHosts && document.activeElement !== airGapHosts) airGapHosts.value = (state.allowedHosts || []).join(", ");
+    }
+
+    function renderAirGapResults(result) {
+      if (!airGapResults) return;
+      if (!result) {
+        airGapResults.innerHTML = '<div class="airgap-result fail">The self-test could not run. Check that the engine is running, then try again.</div>';
+        return;
+      }
+      if (!result.enabled) {
+        airGapResults.innerHTML = '<div class="airgap-result">Turn on air-gap mode first. The self-test only runs while it is on, so it never makes a real connection.</div>';
+        return;
+      }
+      airGapResults.innerHTML = result.checks.map(function(c) {
+        return '<div class="airgap-result ' + (c.ok ? "pass" : "fail") + '"><strong>' + (c.ok ? "PASS" : "FAIL") + '</strong> ' +
+          escapeHtml(c.check) + ' <span class="setting-desc">' + escapeHtml(c.detail) + '</span></div>';
+      }).join("");
+    }
     const checkCoAuthor = document.getElementById("setting-coauthor");
 
     if (selectStartupSession) {
@@ -4260,9 +4548,17 @@ SOFTWARE.</pre>
     checkAutoCompact.addEventListener("change", () => {
       vscode.postMessage({ type: "update_setting", key: "autoCompact", value: checkAutoCompact.checked });
     });
+    checkNextSteps?.addEventListener("change", () => {
+      vscode.postMessage({ type: "toggle_next_steps", value: checkNextSteps.checked });
+    });
     checkSound.addEventListener("change", () => {
       vscode.postMessage({ type: "toggle_sound", value: checkSound.checked });
     });
+    if (checkAirGap) {
+      checkAirGap.addEventListener("change", () => {
+        vscode.postMessage({ type: "toggle_airgap", value: checkAirGap.checked });
+      });
+    }
     if (checkTelemetry) {
       checkTelemetry.addEventListener("change", () => {
         vscode.postMessage({ type: "toggle_telemetry", value: checkTelemetry.checked });
@@ -4346,10 +4642,29 @@ SOFTWARE.</pre>
     }
 
     // Delegated actions
+    // Non-button controls (cards, tags) marked role="button" activate on Enter/Space.
+    document.addEventListener("keydown", (e) => {
+      if (e.defaultPrevented || (e.key !== "Enter" && e.key !== " ")) return;
+      const target = e.target;
+      if (!target || target.getAttribute?.("role") !== "button" || ["BUTTON", "A", "INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)) return;
+      e.preventDefault();
+      target.click();
+    });
+
     document.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-action]");
       if (!btn) return;
+      if (btn.tagName === "A") e.preventDefault();
       const action = btn.dataset.action;
+      if (action === "airgap-save-hosts") {
+        vscode.postMessage({ type: "save_airgap_hosts", hosts: airGapHosts ? airGapHosts.value : "" });
+        return;
+      }
+      if (action === "airgap-self-test") {
+        if (airGapResults) airGapResults.innerHTML = '<div class="airgap-result">Running the self-test…</div>';
+        vscode.postMessage({ type: "airgap_self_test" });
+        return;
+      }
       
       if (action === "select-model") {
         selectModel(btn.dataset.id, btn.dataset.provider);
@@ -4574,7 +4889,9 @@ SOFTWARE.</pre>
       if (currentConfig.max_subagents && selectMaxSubagents) selectMaxSubagents.value = String(currentConfig.max_subagents);
       if (checkAutoCompact) checkAutoCompact.checked = currentConfig.auto_compact !== false;
       if (checkSound) checkSound.checked = msg.soundNotifications !== false;
+      if (checkNextSteps) checkNextSteps.checked = msg.nextStepSuggestions !== false;
       if (checkTelemetry) checkTelemetry.checked = msg.telemetry !== false;
+      renderAirGap(msg.airGap);
       if (checkCoAuthor) checkCoAuthor.checked = msg.includeCoAuthor !== false;
 
       const wp = msg.wallpaper || {};
@@ -4745,6 +5062,12 @@ SOFTWARE.</pre>
           updateActiveBanner();
           break;
         }
+        case "airgap_state":
+          renderAirGap(msg.airGap);
+          break;
+        case "airgap_self_test_result":
+          renderAirGapResults(msg.result);
+          break;
         case "setting_updated": {
           if (msg.key === "mode") {
             selectMode.value = msg.value.toLowerCase();
@@ -4801,12 +5124,27 @@ SOFTWARE.</pre>
         }
         case "crons_refreshed": {
           allCrons = msg.crons || [];
+          allCrons.forEach(j => { if (j.running === false) cronRunning.delete(String(j.id)); });
           renderCrons();
           const btn = document.getElementById("btn-refresh-crons");
           if (btn) {
             btn.disabled = false;
             btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg><span>Refresh</span>';
           }
+          break;
+        }
+        case "cron_preview_result": {
+          renderCronPreview(msg);
+          break;
+        }
+        case "cron_saved": {
+          closeCronForm();
+          break;
+        }
+        case "cron_save_failed": {
+          cronSaving = false;
+          syncCronSaveButtons();
+          setCronFormError(msg.error || "The job could not be saved.");
           break;
         }
         case "cron_runs_loaded": {
@@ -4904,6 +5242,11 @@ SOFTWARE.</pre>
       const input = document.getElementById("key-input-" + providerId);
       if (!input) return;
       const key = input.value.trim();
+      if (!key) {
+        input.value = "";
+        input.focus();
+        return;
+      }
       vscode.postMessage({ type: "set_api_key", provider: providerId, apiKey: key });
       input.value = "";
     };
@@ -4951,7 +5294,7 @@ SOFTWARE.</pre>
       }
 
       list.innerHTML = projects.map(p => 
-        '<div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: rgba(255,255,255,0.03); border: 1px solid var(--card-border); border-radius: 4px;">' +
+        '<div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: rgba(var(--tint), 0.03); border: 1px solid var(--card-border); border-radius: 4px;">' +
           '<div>' +
             '<div style="font-size: 12px; font-weight: 500; word-break: break-all;">' + escapeHtml(p.path) + '</div>' +
             '<div style="font-size: 10px; color: var(--text-muted);">Trusted at: ' + escapeHtml(p.trusted_at ? p.trusted_at.slice(0,10) : 'N/A') + '</div>' +
@@ -5201,7 +5544,7 @@ SOFTWARE.</pre>
                 '<input type="password" class="key-input" id="key-input-' + escapeHtml(p.id) + '" placeholder="' + (hasKey ? '•••••••••••••••• (Configured)' : 'Paste API Key here…') + '">' +
                 '<button class="btn" data-action="save-key" data-id="' + escapeHtml(p.id) + '">Save</button>' +
               '</div>' +
-              (meta.portal ? '<a class="portal-link" data-action="open-portal" data-url="' + escapeHtml(meta.portal) + '">Get API Key &rarr;</a>' : '')
+              (meta.portal ? '<a class="portal-link" href="#" data-action="open-portal" data-url="' + escapeHtml(meta.portal) + '">Get API Key &rarr;</a>' : '')
             : '<div class="item-card-desc">' + (!ollamaChecked ? 'Checking Ollama…' : !ollamaStatus ? 'Could not check Ollama' : ollamaStatus.running ? 'Ollama running · ' + (ollamaStatus.models || []).length + ' installed models' : 'Ollama is not running') + '</div>' +
               (ollamaChecked && ollamaStatus?.installed && !ollamaStatus.running ? '<button class="btn" data-action="start-ollama">Start Ollama</button>' : '') +
               (ollamaChecked && !ollamaStatus?.running ? '<button class="btn" data-action="ollama-download">Install Ollama</button>' : '') +
@@ -5457,7 +5800,7 @@ SOFTWARE.</pre>
         const dStr = s.updated_at || s.created_at || "";
         const dateFormatted = dStr ? new Date(dStr).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : "N/A";
 
-        return '<tr style="border-bottom: 1px solid rgba(255,255,255,0.03);">' +
+        return '<tr style="border-bottom: 1px solid rgba(var(--tint), 0.03);">' +
           '<td style="padding:8px 12px; font-weight:500; font-size:12px; word-break:break-all;">' + escapeHtml(sName) + '</td>' +
           '<td style="padding:8px 12px; font-size:11px; color:var(--text-muted);">' + escapeHtml(modelStr) + '</td>' +
           '<td style="padding:8px 12px; text-align:right; font-size:12px; font-weight:600; font-family:var(--font-mono);">' + Number(tokens).toLocaleString() + '</td>' +
@@ -5509,8 +5852,8 @@ SOFTWARE.</pre>
     }
 
     function skillChip(action, value, label, active, count) {
-      return '<div class="chip' + (active ? ' active' : '') + '" data-action="' + action + '" data-value="' + escapeHtml(value) + '">' +
-        escapeHtml(label) + (count === undefined ? '' : '<span class="chip-count">' + count + '</span>') + '</div>';
+      return '<button type="button" class="chip' + (active ? ' active' : '') + '" data-action="' + action + '" data-value="' + escapeHtml(value) + '">' +
+        escapeHtml(label) + (count === undefined ? '' : '<span class="chip-count">' + count + '</span>') + '</button>';
     }
 
     function renderSkillFilters(base) {
@@ -5567,7 +5910,7 @@ SOFTWARE.</pre>
 
     function installedSkillCard(s) {
       const update = skillUpdateFor(s);
-      return '<div class="item-card" data-action="skill-open" data-skill-name="' + escapeHtml(s.name) + '" data-source-id="' + escapeHtml(s.source || '') + '" data-skill-path="' + escapeHtml(s.path || '') + '">' +
+      return '<div class="item-card" data-action="skill-open" data-skill-name="' + escapeHtml(s.name) + '" data-source-id="' + escapeHtml(s.source || '') + '" data-skill-path="' + escapeHtml(s.path || '') + '" tabindex="0" role="button" aria-label="Open skill ' + escapeHtml(s.name) + '">' +
         '<div class="item-card-top">' +
           '<div class="item-card-title">' +
             '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' +
@@ -5593,8 +5936,8 @@ SOFTWARE.</pre>
       const hasUpdate = !!(installed && !fromOtherSource && installed.version && r.version && installed.version !== r.version);
       const buttonLabel = !installed ? 'Install Skill' : hasUpdate ? 'Update' : fromOtherSource ? 'Replace' : 'Reinstall';
       const tags = (r.tags || []).slice(0, 4).map(t =>
-        '<span class="skill-tag" data-action="skills-tag" data-value="' + escapeHtml(t) + '">#' + escapeHtml(t) + '</span>').join('');
-      return '<div class="item-card" data-action="skill-open" data-skill-name="' + escapeHtml(r.name) + '" data-source-id="' + escapeHtml(r.source_id || '') + '">' +
+        '<span class="skill-tag" data-action="skills-tag" data-value="' + escapeHtml(t) + '" tabindex="0" role="button">#' + escapeHtml(t) + '</span>').join('');
+      return '<div class="item-card" data-action="skill-open" data-skill-name="' + escapeHtml(r.name) + '" data-source-id="' + escapeHtml(r.source_id || '') + '" tabindex="0" role="button" aria-label="Open skill ' + escapeHtml(r.name) + '">' +
         '<div class="item-card-top">' +
           '<div class="item-card-title">' +
             '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' +
@@ -5678,7 +6021,7 @@ SOFTWARE.</pre>
         (hasUpdate ? '<span class="badge orange">Update available</span>' : '');
 
       const tags = remote ? (remote.tags || []).map(t =>
-        '<span class="skill-tag" data-action="skills-tag" data-value="' + escapeHtml(t) + '">#' + escapeHtml(t) + '</span>').join("") : "";
+        '<span class="skill-tag" data-action="skills-tag" data-value="' + escapeHtml(t) + '" tabindex="0" role="button">#' + escapeHtml(t) + '</span>').join("") : "";
 
       let rows = "";
       if (remote) {
@@ -5695,8 +6038,8 @@ SOFTWARE.</pre>
       const needsScope = remote && (!installed || fromOtherSource);
       const scopeChips = needsScope
         ? '<div class="filter-chips"><span class="chip-label">Install to:</span>' +
-          '<div class="chip' + (skillsInstallScope === "user" ? " active" : "") + '" data-action="skills-scope" data-value="user">All projects</div>' +
-          '<div class="chip' + (skillsInstallScope === "project" ? " active" : "") + '" data-action="skills-scope" data-value="project">This project only</div></div>'
+          '<button type="button" class="chip' + (skillsInstallScope === "user" ? " active" : "") + '" data-action="skills-scope" data-value="user">All projects</button>' +
+          '<button type="button" class="chip' + (skillsInstallScope === "project" ? " active" : "") + '" data-action="skills-scope" data-value="project">This project only</button></div>'
         : "";
 
       const installAttrs = remote
@@ -5874,7 +6217,7 @@ SOFTWARE.</pre>
                         : '';            // error/auth/unknown → no extra class (red below)
         const dotStyle  = isError    ? 'background:#f85149;'
                         : isAuth     ? 'background:#d29922;'
-                        : isDisabled ? 'background:rgba(255,255,255,0.2);'
+                        : isDisabled ? 'background:rgba(var(--tint), 0.2);'
                         : '';
 
         // Status badge
@@ -5884,7 +6227,7 @@ SOFTWARE.</pre>
                          : isDisabled ? ''
                          : '';
         const badgeStyle = isError   ? 'background:rgba(248,81,73,0.15); color:#f85149; border:1px solid rgba(248,81,73,0.3);'
-                         : isDisabled ? 'background:rgba(255,255,255,0.06); color:var(--text-muted);'
+                         : isDisabled ? 'background:rgba(var(--tint), 0.06); color:var(--text-muted);'
                          : '';
         const badgeLabel = isRunning  ? 'Connected'
                          : isError    ? 'error'
@@ -5910,7 +6253,7 @@ SOFTWARE.</pre>
           '</div>' +
           '<div class="item-card-desc mcp-endpoint"><code>' + cmdStr + '</code></div>' +
           (isError && s.error ? '<div style="font-size:11px; color:#f85149; margin-top:6px; padding:5px 8px; background:rgba(248,81,73,0.08); border:1px solid rgba(248,81,73,0.2);">' + escapeHtml(s.error) + '</div>' : '') +
-          (isError && s.error_detail ? '<div style="font-size:10.5px; color:var(--text-muted); margin-top:4px; padding:5px 8px; background:rgba(255,255,255,0.03); border:1px solid var(--card-border); max-height:80px; overflow:auto; white-space:pre-wrap; word-break:break-word;">' + escapeHtml(s.error_detail) + '</div>' : '') +
+          (isError && s.error_detail ? '<div style="font-size:10.5px; color:var(--text-muted); margin-top:4px; padding:5px 8px; background:rgba(var(--tint), 0.03); border:1px solid var(--card-border); max-height:80px; overflow:auto; white-space:pre-wrap; word-break:break-word;">' + escapeHtml(s.error_detail) + '</div>' : '') +
           (isRunning ? '<details class="mcp-tools"><summary>View tools (' + escapeHtml(String(s.tools_count || 0)) + ')</summary>' +
             '<div class="mcp-tools-list">' + (toolsHtml || '<div class="mcp-tool-description">' +
               (s.tools_count > 0 ? 'Tool details unavailable. Update the daemon and refresh.' : 'This server currently exposes no tools.') + '</div>') + '</div></details>' : '') +
@@ -5937,20 +6280,186 @@ SOFTWARE.</pre>
     const btnSaveCron = document.getElementById("btn-save-cron");
     const btnRefreshCrons = document.getElementById("btn-refresh-crons");
 
-    if (btnToggleAddCron && cronCreateForm) {
-      btnToggleAddCron.addEventListener("click", () => {
-        const isHidden = cronCreateForm.style.display === "none";
-        cronCreateForm.style.display = isHidden ? "flex" : "none";
-        btnToggleAddCron.textContent = isHidden ? "Close Form" : "+ New Cron Job";
+    let cronEditingId = null;
+    let cronPreviewSeq = 0;
+    let cronPreviewTimer = null;
+    let cronScheduleValid = true;
+    let cronSaving = false;
+
+    function cronField(id) { return document.getElementById(id); }
+
+    function setCronSelect(id, value, label) {
+      const sel = cronField(id);
+      if (!sel) return;
+      const v = String(value);
+      if (!Array.from(sel.options).some(o => o.value === v)) {
+        const opt = document.createElement("option");
+        opt.value = v;
+        opt.textContent = label || v;
+        sel.appendChild(opt);
+      }
+      sel.value = v;
+    }
+
+    function currentCronSchedule() {
+      const sel = cronField("cron-schedule-select");
+      const custom = cronField("cron-custom-schedule");
+      if (!sel) return "every 1h";
+      return sel.value === "custom" ? (custom ? custom.value.trim() : "") : sel.value;
+    }
+
+    function setCronFormError(text) {
+      const el = cronField("cron-form-error");
+      if (!el) return;
+      el.textContent = text || "";
+      el.hidden = !text;
+    }
+
+    function syncCronSaveButtons() {
+      ["btn-save-cron", "btn-save-run-cron"].forEach(id => {
+        const b = cronField(id);
+        if (b) b.disabled = cronSaving || !cronScheduleValid;
       });
     }
 
-    if (btnCancelCron && cronCreateForm) {
-      btnCancelCron.addEventListener("click", () => {
-        cronCreateForm.style.display = "none";
-        if (btnToggleAddCron) btnToggleAddCron.textContent = "+ New Cron Job";
+    function requestCronPreview() {
+      clearTimeout(cronPreviewTimer);
+      cronPreviewTimer = setTimeout(() => {
+        const schedule = currentCronSchedule();
+        const box = cronField("cron-schedule-preview");
+        cronPreviewSeq += 1;
+        if (!schedule) {
+          if (box) { box.textContent = "Enter a schedule."; box.className = "cron-schedule-preview invalid"; }
+          cronScheduleValid = false;
+          syncCronSaveButtons();
+          return;
+        }
+        vscode.postMessage({ type: "cron_preview", schedule: schedule, requestId: cronPreviewSeq });
+      }, 250);
+    }
+
+    function renderCronPreview(msg) {
+      if (msg.requestId !== cronPreviewSeq) return;
+      const box = cronField("cron-schedule-preview");
+      if (!box) return;
+      if (msg.unavailable) {
+        box.textContent = "";
+        box.className = "cron-schedule-preview";
+        cronScheduleValid = true;
+      } else if (!msg.valid) {
+        box.textContent = msg.error || "This schedule is not valid.";
+        box.className = "cron-schedule-preview invalid";
+        cronScheduleValid = false;
+      } else {
+        const times = (msg.next_runs || []).slice(0, 5).map(formatCronAbsolute).filter(Boolean);
+        box.innerHTML = "<strong>" + escapeHtml(msg.description || "") + "</strong>" +
+          "<span>" + (times.length ? "Next: " + escapeHtml(times.join(" · ")) : "No upcoming runs.") + "</span>";
+        box.className = "cron-schedule-preview valid";
+        cronScheduleValid = true;
+      }
+      syncCronSaveButtons();
+    }
+
+    function openCronForm(job) {
+      if (!cronCreateForm) return;
+      cronEditingId = job ? String(job.id) : null;
+      const title = cronField("cron-form-title");
+      if (title) title.textContent = job ? "Edit " + (job.name || "job") : "Create Scheduled Job";
+      const saveBtn = cronField("btn-save-cron");
+      if (saveBtn) saveBtn.textContent = job ? "Save changes" : "Create job";
+      cronField("cron-name-input").value = job ? (job.name || "") : "";
+      cronField("cron-prompt-input").value = job ? (job.prompt || "") : "";
+      cronField("cron-commands-input").value = job && Array.isArray(job.allowed_commands) ? job.allowed_commands.join(", ") : "";
+      const sel = cronField("cron-schedule-select");
+      const custom = cronField("cron-custom-schedule");
+      const schedule = job ? String(job.schedule || "") : "every 1h";
+      const isPreset = Array.from(sel.options).some(o => o.value === schedule && o.value !== "custom");
+      sel.value = isPreset ? schedule : "custom";
+      custom.value = isPreset ? "" : schedule;
+      custom.style.display = isPreset ? "none" : "block";
+      setCronSelect("cron-mode-select", job ? String(job.mode || "trust").toLowerCase() : "safe");
+      const timeout = job ? Number(job.timeout_seconds || 600) : 600;
+      setCronSelect("cron-timeout-select", timeout, Math.round(timeout / 60) + " minutes");
+      setCronSelect("cron-onfail-select", job ? (job.on_failure || "notify") : "retry");
+      setCronSelect("cron-notify-select", job ? (job.notify || "failures") : "failures");
+      setCronSelect("cron-catchup-select", job ? (job.catch_up || "once") : "once");
+      const modelSel = cronField("cron-model-select");
+      if (modelSel) {
+        if (job && job.model && !Array.from(modelSel.options).some(o => o.value === job.model)) {
+          const opt = document.createElement("option");
+          opt.value = job.model;
+          opt.dataset.provider = job.provider || "";
+          opt.textContent = job.model + (job.provider ? " (" + job.provider + ")" : "");
+          modelSel.appendChild(opt);
+        }
+        modelSel.value = job && job.model ? job.model : "";
+      }
+      const folder = cronField("cron-form-folder");
+      if (folder) {
+        const where = job && job.project_path ? job.project_path : currentWorkspacePath;
+        folder.textContent = where ? "Runs in " + where : "Open a folder in VS Code to create scheduled jobs.";
+      }
+      setCronFormError("");
+      cronSaving = false;
+      cronScheduleValid = true;
+      syncCronSaveButtons();
+      cronCreateForm.style.display = "flex";
+      if (btnToggleAddCron) btnToggleAddCron.textContent = "Close Form";
+      requestCronPreview();
+      cronField("cron-name-input").focus();
+    }
+
+    function closeCronForm() {
+      if (!cronCreateForm) return;
+      cronCreateForm.style.display = "none";
+      cronEditingId = null;
+      cronSaving = false;
+      if (btnToggleAddCron) btnToggleAddCron.textContent = "+ New Cron Job";
+    }
+
+    function submitCronForm(runNow) {
+      const prompt = cronField("cron-prompt-input").value.trim();
+      const schedule = currentCronSchedule();
+      if (!schedule) { setCronFormError("Enter a schedule."); return; }
+      if (!prompt) {
+        setCronFormError("Enter a prompt for the job.");
+        cronField("cron-prompt-input").focus();
+        return;
+      }
+      const modelSelect = cronField("cron-model-select");
+      const pickedOption = modelSelect && modelSelect.value ? modelSelect.options[modelSelect.selectedIndex] : null;
+      const payload = {
+        name: cronField("cron-name-input").value.trim() || "Scheduled Job",
+        schedule: schedule,
+        prompt: prompt,
+        model: (modelSelect ? modelSelect.value : "") || activeModelId,
+        // A picked model carries its own provider; the default uses the active one.
+        provider: (pickedOption && pickedOption.dataset.provider) || activeModelProvider,
+        mode: cronField("cron-mode-select").value,
+        allowed_commands: cronField("cron-commands-input").value.trim(),
+        timeout_seconds: Number(cronField("cron-timeout-select").value),
+        on_failure: cronField("cron-onfail-select").value,
+        notify: cronField("cron-notify-select").value,
+        catch_up: cronField("cron-catchup-select").value,
+      };
+      setCronFormError("");
+      cronSaving = true;
+      syncCronSaveButtons();
+      if (cronEditingId) {
+        vscode.postMessage({ type: "cron_update", id: cronEditingId, payload: payload, runNow: !!runNow });
+      } else {
+        vscode.postMessage({ type: "cron_create", payload: Object.assign({}, payload, { run_now: !!runNow }) });
+      }
+    }
+
+    if (btnToggleAddCron && cronCreateForm) {
+      btnToggleAddCron.addEventListener("click", () => {
+        if (cronCreateForm.style.display === "none") openCronForm(null);
+        else closeCronForm();
       });
     }
+
+    if (btnCancelCron) btnCancelCron.addEventListener("click", closeCronForm);
 
     const cronScheduleSelect = document.getElementById("cron-schedule-select");
     const cronCustomScheduleInput = document.getElementById("cron-custom-schedule");
@@ -5960,57 +6469,14 @@ SOFTWARE.</pre>
           cronCustomScheduleInput.style.display = cronScheduleSelect.value === "custom" ? "block" : "none";
           if (cronScheduleSelect.value === "custom") cronCustomScheduleInput.focus();
         }
+        requestCronPreview();
       });
     }
+    if (cronCustomScheduleInput) cronCustomScheduleInput.addEventListener("input", requestCronPreview);
 
-    if (btnSaveCron) {
-      btnSaveCron.addEventListener("click", () => {
-        const nameInput = document.getElementById("cron-name-input");
-        const scheduleSelect = document.getElementById("cron-schedule-select");
-        const customScheduleInput = document.getElementById("cron-custom-schedule");
-        const modelSelect = document.getElementById("cron-model-select");
-        const commandsInput = document.getElementById("cron-commands-input");
-        const promptInput = document.getElementById("cron-prompt-input");
-
-        const name = (nameInput ? nameInput.value : "").trim();
-        let schedule = scheduleSelect ? scheduleSelect.value : "every 1h";
-        if (schedule === "custom" && customScheduleInput && customScheduleInput.value.trim()) {
-          schedule = customScheduleInput.value.trim();
-        }
-        const prompt = (promptInput ? promptInput.value : "").trim();
-        const model = (modelSelect ? modelSelect.value : "") || activeModelId;
-        // A picked model carries its own provider; the default uses the active one.
-        const pickedOption = modelSelect && modelSelect.value ? modelSelect.options[modelSelect.selectedIndex] : null;
-        const provider = (pickedOption && pickedOption.dataset.provider) || activeModelProvider;
-        const allowedCommands = (commandsInput ? commandsInput.value : "").trim();
-
-        if (!prompt) {
-          if (promptInput) {
-            promptInput.focus();
-            promptInput.placeholder = "Please enter a prompt or instruction first...";
-          }
-          return;
-        }
-
-        vscode.postMessage({
-          type: "cron_create",
-          payload: {
-            name: name || "Scheduled Job",
-            schedule: schedule,
-            prompt: prompt,
-            model: model,
-            provider: provider,
-            allowed_commands: allowedCommands,
-          }
-        });
-
-        if (nameInput) nameInput.value = "";
-        if (promptInput) promptInput.value = "";
-        if (commandsInput) commandsInput.value = "";
-        if (cronCreateForm) cronCreateForm.style.display = "none";
-        if (btnToggleAddCron) btnToggleAddCron.textContent = "+ New Cron Job";
-      });
-    }
+    if (btnSaveCron) btnSaveCron.addEventListener("click", () => submitCronForm(false));
+    const btnSaveRunCron = document.getElementById("btn-save-run-cron");
+    if (btnSaveRunCron) btnSaveRunCron.addEventListener("click", () => submitCronForm(true));
 
     if (btnRefreshCrons) {
       btnRefreshCrons.addEventListener("click", () => {
@@ -6050,7 +6516,22 @@ SOFTWARE.</pre>
         } else if (action === "delete") {
           vscode.postMessage({ type: "cron_delete", id });
         } else if (action === "new-cron") {
-          if (btnToggleAddCron && cronCreateForm && cronCreateForm.style.display === "none") btnToggleAddCron.click();
+          openCronForm(null);
+        } else if (action === "edit") {
+          const job = allCrons.find(j => String(j.id) === String(id));
+          if (job) openCronForm(job);
+        } else if (action === "duplicate") {
+          vscode.postMessage({ type: "cron_duplicate", id });
+        } else if (action === "fix") {
+          const fix = btn.dataset.fix;
+          if (fix === "api_keys") {
+            switchTab("keys", true);
+          } else if (fix === "trust_workspace") {
+            if (currentWorkspacePath) vscode.postMessage({ type: "trust_folder", path: currentWorkspacePath });
+          } else {
+            const job = allCrons.find(j => String(j.id) === String(id));
+            if (job) openCronForm(job);
+          }
         } else if (action === "history" || action === "refresh-history") {
           const runsDiv = document.getElementById("cron-runs-" + id);
           if (!runsDiv) return;
@@ -6097,7 +6578,11 @@ SOFTWARE.</pre>
     const cronRunsCache = {};
     const cronOpenHistory = new Set();
     const cronRunning = new Set();
-    const CRON_OUTCOME = { success: "Succeeded", failed: "Failed", timeout: "Timed out", interrupted: "Interrupted", running: "Running", never: "Never run" };
+    const CRON_OUTCOME = { success: "Succeeded", needs_attention: "Needs attention", failed: "Failed", timeout: "Timed out", interrupted: "Interrupted", skipped: "Skipped", missed: "Missed", running: "Running", never: "Never run" };
+    const CRON_TRIGGER = { manual: "Manual", catch_up: "Catch-up", retry: "Retry" };
+    const CRON_FIX = { api_keys: "Open API keys", trust_workspace: "Trust this workspace", edit_job: "Edit job" };
+    const CRON_ON_FAILURE = { retry: "Retry temporary errors", notify: "Record and wait", disable: "Pause the job" };
+    const CRON_NOTIFY = { failures: "When it needs attention", always: "After every run", never: "Never" };
     const cronSvg = (body) => '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + body + '</svg>';
     const CRON_ICON = {
       success: cronSvg('<polyline points="20 6 9 17 4 12"></polyline>'),
@@ -6105,6 +6590,9 @@ SOFTWARE.</pre>
       timeout: cronSvg('<circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline>'),
       interrupted: cronSvg('<line x1="12" y1="6" x2="12" y2="13"></line><line x1="12" y1="18" x2="12.01" y2="18"></line>'),
       running: cronSvg('<circle cx="12" cy="12" r="4" fill="currentColor"></circle>'),
+      needs_attention: cronSvg('<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line>'),
+      skipped: cronSvg('<polyline points="13 17 18 12 13 7"></polyline><polyline points="6 17 11 12 6 7"></polyline>'),
+      missed: cronSvg('<polyline points="13 17 18 12 13 7"></polyline><polyline points="6 17 11 12 6 7"></polyline>'),
     };
     const CHEVRON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>';
 
@@ -6114,6 +6602,30 @@ SOFTWARE.</pre>
       if (isNaN(date.getTime())) return "";
       const time = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
       return date.toDateString() === new Date().toDateString() ? "Today " + time : date.toLocaleDateString([], { month: "short", day: "numeric" }) + ", " + time;
+    }
+
+    function formatCronAbsolute(iso) {
+      if (!iso) return "";
+      const date = new Date(iso);
+      if (isNaN(date.getTime())) return "";
+      const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      const today = new Date();
+      const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+      if (date.toDateString() === today.toDateString()) return "Today " + time;
+      if (date.toDateString() === tomorrow.toDateString()) return "Tomorrow " + time;
+      return date.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + " " + time;
+    }
+
+    function cronFolderName(path) {
+      if (!path) return "";
+      const parts = String(path).split(String.fromCharCode(92)).join("/").split("/").filter(Boolean);
+      return parts.length ? parts[parts.length - 1] : String(path);
+    }
+
+    function cronFixButton(job) {
+      const fix = job.fix_action;
+      if (!fix || !CRON_FIX[fix]) return "";
+      return '<button class="btn btn-secondary" data-action="fix" data-fix="' + escapeHtml(fix) + '" data-id="' + escapeHtml(String(job.id)) + '">' + CRON_FIX[fix] + '</button>';
     }
 
     function formatCronDuration(ms) {
@@ -6148,9 +6660,11 @@ SOFTWARE.</pre>
       }
       const active = allCrons.filter(j => j.enabled !== false);
       const next = active.slice().sort((a, b) => cronMinutesUntil(a.next_run_in) - cronMinutesUntil(b.next_run_in))[0];
+      const attention = allCrons.filter(j => (j.enabled === false && j.paused_reason) || j.last_status === "needs_attention" || j.last_status === "failed" || j.last_status === "timeout").length;
       const parts = ["<span><strong>" + allCrons.length + "</strong> job" + (allCrons.length === 1 ? "" : "s") + "</span>",
         "<span><strong>" + active.length + "</strong> active</span>"];
       if (cronRunning.size) parts.push("<span><strong>" + cronRunning.size + "</strong> running now</span>");
+      if (attention) parts.push("<span><strong>" + attention + "</strong> need" + (attention === 1 ? "s" : "") + " attention</span>");
       if (next && cronMinutesUntil(next.next_run_in) !== Infinity) {
         parts.push("<span>Next: <strong>" + escapeHtml(next.name || next.id) + "</strong> " + (next.next_run_in === "now" ? "due now" : "in " + escapeHtml(next.next_run_in)) + "</span>");
       }
@@ -6164,28 +6678,47 @@ SOFTWARE.</pre>
     function cronCardHtml(job) {
       const id = String(job.id);
       const enabled = job.enabled !== false;
-      const running = cronRunning.has(id);
-      const state = running ? "running" : enabled ? "active" : "paused";
-      const stateLabel = running ? "Running" : enabled ? "Active" : "Paused";
+      const running = cronRunning.has(id) || job.running === true;
+      const needsFix = !enabled && !!job.paused_reason;
+      const state = running ? "running" : needsFix ? "error" : enabled ? "active" : "paused";
+      const stateLabel = running ? "Running" : needsFix ? "Paused · needs fixing" : enabled ? "Active" : "Paused";
       const nextIn = job.next_run_in;
-      const next = running ? "Running now" : !enabled ? "Paused" : nextIn === "now" ? "Due now" : nextIn === "completed" ? "No more runs" : nextIn ? "In " + nextIn : "—";
+      let next;
+      if (running) next = "Running now";
+      else if (!enabled) next = "Paused";
+      else if (job.schedule_valid === false) next = "Invalid schedule";
+      else if (!job.next_run_at || nextIn === "completed") next = "No more runs";
+      else next = formatCronAbsolute(job.next_run_at) + (nextIn === "now" ? " · due now" : nextIn ? " · in " + nextIn : "");
       const lastStatus = job.last_status || "never";
       const lastWhen = formatCronWhen(job.last_run);
       const last = lastWhen
         ? escapeHtml(lastWhen) + ' · <span class="cron-outcome ' + escapeHtml(lastStatus) + '">' + escapeHtml(CRON_OUTCOME[lastStatus] || lastStatus) + '</span>'
-        : "Never run";
+        : (lastStatus === "skipped" || lastStatus === "missed" ? '<span class="cron-outcome ' + escapeHtml(lastStatus) + '">' + escapeHtml(CRON_OUTCOME[lastStatus]) + '</span>' : "Never run");
       const model = job.model ? escapeHtml(job.model) + (job.provider ? ' <span style="color:var(--text-muted)">· ' + escapeHtml(job.provider) + '</span>' : '') : "Default model";
       const cmds = Array.isArray(job.allowed_commands) ? job.allowed_commands.join(", ") : String(job.allowed_commands || "");
+      const folder = job.project_path ? '<span title="' + escapeHtml(job.project_path) + '">' + escapeHtml(cronFolderName(job.project_path)) + '</span>' : "—";
+      const timeoutMin = job.timeout_seconds ? Math.round(job.timeout_seconds / 60) + " min" : "10 min";
       const historyOpen = cronOpenHistory.has(id);
+      let notice = "";
+      if (job.folder_problem) {
+        notice = '<div class="cron-notice"><span>' + escapeHtml(job.folder_problem) + '</span></div>';
+      } else if (needsFix) {
+        notice = '<div class="cron-notice"><span>' + escapeHtml(job.paused_reason) + '</span><span style="display:flex; gap:6px;">' + cronFixButton(job) + '<button class="btn btn-secondary" data-action="toggle" data-id="' + escapeHtml(id) + '">Resume</button></span></div>';
+      } else if (job.last_error && ["failed", "timeout", "needs_attention", "skipped", "missed", "interrupted"].indexOf(lastStatus) >= 0) {
+        const fixBtn = cronFixButton(job);
+        notice = '<div class="cron-last-error' + (fixBtn ? ' with-fix' : '') + '"><span>' + escapeHtml(job.last_error) + '</span>' + fixBtn + '</div>';
+      }
       return '<article class="cron-card ' + state + '" data-job-id="' + escapeHtml(id) + '">' +
         '<div class="cron-card-head">' +
           '<div class="cron-card-heading">' +
             '<span class="cron-card-name">' + escapeHtml(job.name || id) + '</span>' +
-            '<span class="cron-interval-pill" title="Schedule">' + escapeHtml(job.schedule || "") + '</span>' +
+            '<span class="cron-interval-pill" title="' + escapeHtml(job.schedule || "") + '">' + escapeHtml(job.schedule_description || job.schedule || "") + '</span>' +
             '<span class="cron-status-pill ' + state + '">' + stateLabel + '</span>' +
           '</div>' +
           '<div class="cron-card-actions">' +
             '<button class="btn" data-action="run" data-id="' + escapeHtml(id) + '"' + (running ? ' disabled' : '') + '>' + (running ? 'Running…' : 'Run now') + '</button>' +
+            '<button class="btn btn-secondary" data-action="edit" data-id="' + escapeHtml(id) + '">Edit</button>' +
+            '<button class="btn btn-secondary" data-action="duplicate" data-id="' + escapeHtml(id) + '" title="Make a paused copy of this job">Duplicate</button>' +
             '<button class="btn btn-secondary" data-action="toggle" data-id="' + escapeHtml(id) + '">' + (enabled ? 'Pause' : 'Resume') + '</button>' +
             '<button class="btn-icon-danger" data-action="delete" data-id="' + escapeHtml(id) + '" title="Delete job" aria-label="Delete ' + escapeHtml(job.name || "job") + '"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>' +
           '</div>' +
@@ -6196,9 +6729,13 @@ SOFTWARE.</pre>
           cronFact("Last run", last) +
           cronFact("Model", model) +
           cronFact("Permission mode", escapeHtml(String(job.mode || "trust").toUpperCase())) +
-          (cmds ? cronFact("Allowed commands", '<code>' + escapeHtml(cmds) + '</code>') : "") +
+          cronFact("Folder", folder) +
+          cronFact("Time limit", escapeHtml(timeoutMin)) +
+          cronFact("On failure", escapeHtml(CRON_ON_FAILURE[job.on_failure] || job.on_failure || "")) +
+          cronFact("Notify", escapeHtml(CRON_NOTIFY[job.notify] || CRON_NOTIFY.failures)) +
+          (cmds ? cronFact("Allowed commands", '<code>' + escapeHtml(cmds) + '</code>') : cronFact("Allowed commands", "None")) +
         '</dl>' +
-        (lastStatus === "failed" && job.last_error ? '<div class="cron-last-error">' + escapeHtml(job.last_error) + '</div>' : "") +
+        notice +
         '<button class="cron-history-toggle" data-action="history" data-id="' + escapeHtml(id) + '" aria-expanded="' + historyOpen + '" aria-controls="cron-runs-' + escapeHtml(id) + '">' + CHEVRON + '<span>Run history</span></button>' +
         '<div id="cron-runs-' + escapeHtml(id) + '" class="cron-runs-container"' + (historyOpen ? '' : ' hidden') + '></div>' +
       '</article>';
@@ -6232,8 +6769,12 @@ SOFTWARE.</pre>
       const sessionName = "Cron run: " + (run.job_name || "job") + " (" + when + ")";
       let detail = "";
       if (run.error) detail += '<div class="cron-last-error">' + escapeHtml(run.error) + '</div>';
+      if (run.blocked_tools && run.blocked_tools.length) detail += '<div><span class="cron-run-label">Blocked</span> ' + escapeHtml(run.blocked_tools.join("; ")) + '</div>';
+      if (run.scheduled_for && run.trigger === "catch_up") detail += '<div><span class="cron-run-label">Planned for</span> ' + escapeHtml(formatCronAbsolute(run.scheduled_for)) + '</div>';
       if (tools) detail += '<div><span class="cron-run-label">Tools</span> ' + escapeHtml(run.tools_used.join(", ")) + '</div>';
-      detail += output ? '<div class="cron-run-label">Output</div><pre class="cron-run-output">' + escapeHtml(output) + '</pre>' : '<div class="cron-runs-empty">No output recorded.</div>';
+      if (status !== "skipped" && status !== "missed") {
+        detail += output ? '<div class="cron-run-label">Output</div><pre class="cron-run-output">' + escapeHtml(output) + '</pre>' : '<div class="cron-runs-empty">No output recorded.</div>';
+      }
       detail += '<div class="cron-run-actions">' + (sId
         ? '<button class="btn btn-secondary" data-action="open-session" data-session-id="' + escapeHtml(sId) + '" data-session-name="' + escapeHtml(sessionName) + '">Open session</button>' +
           '<button class="btn btn-secondary" data-action="open-session-tab" data-session-id="' + escapeHtml(sId) + '" data-session-name="' + escapeHtml(sessionName) + '">Open in tab</button>' +
@@ -6243,7 +6784,8 @@ SOFTWARE.</pre>
         '<button class="cron-run-summary" data-action="expand-run" aria-expanded="false">' +
           '<span class="cron-run-icon">' + (CRON_ICON[status] || "") + '</span>' +
           '<span>' + escapeHtml(when) + '</span>' +
-          '<span class="cron-run-status">' + escapeHtml(CRON_OUTCOME[status] || status) + (run.duration_ms ? ' · ' + formatCronDuration(run.duration_ms) : '') + '</span>' +
+          '<span class="cron-run-status">' + escapeHtml(CRON_OUTCOME[status] || status) + (run.duration_ms ? ' · ' + formatCronDuration(run.duration_ms) : '') +
+            (CRON_TRIGGER[run.trigger] ? '<span class="cron-trigger-badge">' + CRON_TRIGGER[run.trigger] + '</span>' : '') + '</span>' +
           '<span class="cron-run-meta">' + escapeHtml(meta) + '</span>' +
           CHEVRON +
         '</button>' +

@@ -171,11 +171,15 @@ export class PlanEditorPanel {
   <script nonce="${nonce}" src="${markedUri}"></script>
   <style>
 
+    :root:has(> body.vscode-light), :root:has(> body.vscode-high-contrast-light) {
+      --tint: 0, 0, 0;
+    }
     :root {
+      --tint: 255, 255, 255;
       --bg: var(--vscode-editor-background);
       --fg: var(--vscode-editor-foreground);
-      --card-bg: var(--vscode-sideBar-background, rgba(255, 255, 255, 0.03));
-      --border: var(--vscode-widget-border, rgba(255, 255, 255, 0.08));
+      --card-bg: var(--vscode-sideBar-background, rgba(var(--tint), 0.03));
+      --border: var(--vscode-widget-border, rgba(var(--tint), 0.08));
       --accent: #06b6d4;
       --accent-blue: #0284c7;
       --blue-hover: #0369a1;
@@ -272,14 +276,14 @@ export class PlanEditorPanel {
       font-weight: 500;
       border-radius: 4px;
       border: 1px solid var(--border);
-      background: rgba(255, 255, 255, 0.05);
+      background: rgba(var(--tint), 0.05);
       color: var(--fg);
       cursor: pointer;
       white-space: nowrap;
       transition: background 0.12s;
     }
     .btn-review-toggle:hover {
-      background: rgba(255, 255, 255, 0.1);
+      background: rgba(var(--tint), 0.1);
     }
     .btn-proceed {
       display: inline-flex;
@@ -381,7 +385,7 @@ export class PlanEditorPanel {
         justify-content: flex-end;
         gap: 6px;
         padding-top: 5px;
-        border-top: 1px dashed rgba(255, 255, 255, 0.06);
+        border-top: 1px dashed rgba(var(--tint), 0.06);
       }
       .btn-review-toggle, .btn-proceed {
         padding: 4px 10px;
@@ -401,7 +405,7 @@ export class PlanEditorPanel {
     /* Feedback Drawer */
     .feedback-drawer {
       padding: 12px 20px;
-      background: rgba(255, 255, 255, 0.02);
+      background: rgba(var(--tint), 0.02);
       border-bottom: 1px solid var(--border);
       display: none;
       flex-direction: column;
@@ -472,7 +476,7 @@ export class PlanEditorPanel {
       text-transform: uppercase;
       letter-spacing: 0.5px;
       color: var(--pending-fg);
-      background: rgba(255, 255, 255, 0.02);
+      background: rgba(var(--tint), 0.02);
       border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
@@ -489,14 +493,14 @@ export class PlanEditorPanel {
       gap: 12px;
       padding: 8px 16px;
       font-size: 12.5px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      border-bottom: 1px solid rgba(var(--tint), 0.03);
       transition: background 0.1s;
     }
     .step-item:last-child {
       border-bottom: none;
     }
     .step-item:hover {
-      background: rgba(255, 255, 255, 0.02);
+      background: rgba(var(--tint), 0.02);
     }
     .step-item.step-done {
       color: var(--pending-fg);
@@ -564,7 +568,7 @@ export class PlanEditorPanel {
     .plan-markdown h2 { font-size: 15px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
     .plan-markdown h3 { font-size: 13.5px; }
     .plan-markdown code {
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--tint), 0.08);
       padding: 2px 5px;
       border-radius: 3px;
       font-family: var(--vscode-editor-font-family, monospace);
@@ -856,14 +860,14 @@ export class PlanEditorPanel {
               headerHtml = '<thead><tr>' + token.header.map(cell => {
                 const align = cell.align ? ' style="text-align:' + cell.align + ';"' : '';
                 const content = cell.tokens && self.parser ? self.parser.parseInline(cell.tokens) : (cell.text || '');
-                return '<th style="padding:8px 12px; background:rgba(255,255,255,0.06); border-bottom:1px solid var(--border); font-weight:600;' + (cell.align ? ' text-align:' + cell.align + ';' : '') + '">' + content + '</th>';
+                return '<th style="padding:8px 12px; background:rgba(var(--tint), 0.06); border-bottom:1px solid var(--border); font-weight:600;' + (cell.align ? ' text-align:' + cell.align + ';' : '') + '">' + content + '</th>';
               }).join('') + '</tr></thead>';
             }
             if (token && token.rows) {
               bodyHtml = '<tbody>' + token.rows.map(row => {
                 return '<tr>' + row.map(cell => {
                   const content = cell.tokens && self.parser ? self.parser.parseInline(cell.tokens) : (cell.text || '');
-                  return '<td style="padding:6px 12px; border-bottom:1px solid rgba(255,255,255,0.04);' + (cell.align ? ' text-align:' + cell.align + ';' : '') + '">' + content + '</td>';
+                  return '<td style="padding:6px 12px; border-bottom:1px solid rgba(var(--tint), 0.04);' + (cell.align ? ' text-align:' + cell.align + ';' : '') + '">' + content + '</td>';
                 }).join('') + '</tr>';
               }).join('') + '</tbody>';
             }
@@ -929,14 +933,14 @@ export class PlanEditorPanel {
               var headers = tableLines[0].replace(/^\\|/, '').replace(/\\|$/, '').split('|');
               var tableHtml = '<div style="overflow-x:auto; margin:10px 0; border:1px solid var(--border); border-radius:6px;"><table style="width:100%; border-collapse:collapse; font-size:12px;"><thead><tr>';
               for (var h = 0; h < headers.length; h++) {
-                tableHtml += '<th style="text-align:' + (aligns[h] || 'left') + '; padding:8px 12px; background:rgba(255,255,255,0.06); border-bottom:1px solid var(--border); font-weight:600;">' + renderInline(headers[h].trim()) + '</th>';
+                tableHtml += '<th style="text-align:' + (aligns[h] || 'left') + '; padding:8px 12px; background:rgba(var(--tint), 0.06); border-bottom:1px solid var(--border); font-weight:600;">' + renderInline(headers[h].trim()) + '</th>';
               }
               tableHtml += '</tr></thead><tbody>';
               for (var r = 1; r < tableLines.length; r++) {
                 var cells = tableLines[r].replace(/^\\|/, '').replace(/\\|$/, '').split('|');
                 tableHtml += '<tr>';
                 for (var c = 0; c < headers.length; c++) {
-                  tableHtml += '<td style="text-align:' + (aligns[c] || 'left') + '; padding:6px 12px; border-bottom:1px solid rgba(255,255,255,0.04);">' + renderInline((cells[c] || '').trim()) + '</td>';
+                  tableHtml += '<td style="text-align:' + (aligns[c] || 'left') + '; padding:6px 12px; border-bottom:1px solid rgba(var(--tint), 0.04);">' + renderInline((cells[c] || '').trim()) + '</td>';
                 }
                 tableHtml += '</tr>';
               }

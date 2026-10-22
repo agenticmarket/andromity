@@ -176,6 +176,25 @@ def init_schema() -> None:
             except sqlite3.OperationalError:
                 pass
 
+        cron_job_columns = (
+            ("next_run_at", "TEXT"), ("catch_up", "TEXT NOT NULL DEFAULT 'once'"),
+            ("max_retries", "INTEGER NOT NULL DEFAULT 2"), ("notify", "TEXT NOT NULL DEFAULT 'failures'"),
+            ("consecutive_failures", "INTEGER NOT NULL DEFAULT 0"), ("paused_reason", "TEXT"),
+            ("last_error_type", "TEXT"), ("updated_at", "TEXT"), ("running_since", "TEXT"), ("lease_owner", "TEXT"),
+        )
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(cron_jobs)")}
+        for col_name, col_type in cron_job_columns:
+            if col_name not in existing:
+                conn.execute(f"ALTER TABLE cron_jobs ADD COLUMN {col_name} {col_type};")
+        cron_run_columns = (
+            ("error_type", "TEXT"), ("trigger", "TEXT NOT NULL DEFAULT 'schedule'"),
+            ("scheduled_for", "TEXT"), ("blocked_tools", "TEXT NOT NULL DEFAULT '[]'"),
+        )
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(cron_runs)")}
+        for col_name, col_type in cron_run_columns:
+            if col_name not in existing:
+                conn.execute(f"ALTER TABLE cron_runs ADD COLUMN {col_name} {col_type};")
+
         _SCHEMA_INITIALIZED = True
 
 

@@ -1,6 +1,6 @@
 [project]
 name = "andromity"
-version = "0.2.21"
+version = "0.2.22"
 description = "Open-source AI coding agent for terminal and IDE workflows with BYOK, local Ollama, MCP tools and subagents."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,13 +24,13 @@ classifiers = [
 dependencies = [
     "textual>=8.2.8,<9.0",
     "pillow>=10.0",
-    "litellm>=1.50,<2.0",
+    "litellm>=1.50,<1.106",
     "tomli>=2.0; python_version<'3.12'",
     "tomli-w>=1.0",
     "gitpython>=3.1",
     "rich>=13.0",
     "click>=8.0",
-    "mcp>=1.0.0,<2.0",
+    "mcp>=2.2,<3",
     "httpx>=0.28.0",
     "httpx-sse>=0.4.0",
     "watchdog>=3.0",
