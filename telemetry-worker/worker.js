@@ -177,8 +177,8 @@ export default {
         const body = await request.json().catch(() => ({}));
         const rawTargetId = typeof body.user_id === 'string' ? body.user_id.trim() : '';
         const targetUserId = rawTargetId.replace(/^usr_/, '');
-        if (!targetUserId || !/^[a-zA-Z0-9_-]{4,64}$/.test(targetUserId)) {
-          return new Response(JSON.stringify({ error: 'Valid user_id or prefix parameter is required' }), {
+        if (!targetUserId || !/^[a-zA-Z0-9_-]{8,64}$/.test(targetUserId)) {
+          return new Response(JSON.stringify({ error: 'A full user_id is required' }), {
             status: 400,
             headers: { ...securityHeaders, 'Content-Type': 'application/json' },
           });
@@ -192,15 +192,15 @@ export default {
         }
 
         const purgeBatch = await env.DB.batch([
-          env.DB.prepare(`DELETE FROM feature_events WHERE user_id = ? OR user_id = ? OR user_id LIKE (? || '%')`).bind(rawTargetId, targetUserId, targetUserId),
-          env.DB.prepare(`DELETE FROM events WHERE user_id = ? OR user_id = ? OR user_id LIKE (? || '%')`).bind(rawTargetId, targetUserId, targetUserId),
-          env.DB.prepare(`DELETE FROM sessions WHERE user_id = ? OR user_id = ? OR user_id LIKE (? || '%')`).bind(rawTargetId, targetUserId, targetUserId),
-          env.DB.prepare(`DELETE FROM users WHERE user_id = ? OR user_id = ? OR user_id LIKE (? || '%')`).bind(rawTargetId, targetUserId, targetUserId),
-          env.DB.prepare(`DELETE FROM activity_days WHERE user_id = ? OR user_id = ? OR user_id LIKE (? || '%')`).bind(rawTargetId, targetUserId, targetUserId),
-          env.DB.prepare(`DELETE FROM activity_facts WHERE user_id = ? OR user_id = ? OR user_id LIKE (? || '%')`).bind(rawTargetId, targetUserId, targetUserId),
-          env.DB.prepare(`DELETE FROM task_runs WHERE user_id = ? OR user_id = ? OR user_id LIKE (? || '%')`).bind(rawTargetId, targetUserId, targetUserId),
+          env.DB.prepare(`DELETE FROM feature_events WHERE user_id IN (?, ?)`).bind(rawTargetId, targetUserId),
+          env.DB.prepare(`DELETE FROM events WHERE user_id IN (?, ?)`).bind(rawTargetId, targetUserId),
+          env.DB.prepare(`DELETE FROM sessions WHERE user_id IN (?, ?)`).bind(rawTargetId, targetUserId),
+          env.DB.prepare(`DELETE FROM users WHERE user_id IN (?, ?)`).bind(rawTargetId, targetUserId),
+          env.DB.prepare(`DELETE FROM activity_days WHERE user_id IN (?, ?)`).bind(rawTargetId, targetUserId),
+          env.DB.prepare(`DELETE FROM activity_facts WHERE user_id IN (?, ?)`).bind(rawTargetId, targetUserId),
+          env.DB.prepare(`DELETE FROM task_runs WHERE user_id IN (?, ?)`).bind(rawTargetId, targetUserId),
           env.DB.prepare('DELETE FROM telemetry_stats_cache').bind(),
-          env.DB.prepare(`DELETE FROM telemetry_receipts WHERE user_id = ? OR user_id = ? OR user_id LIKE (? || '%')`).bind(rawTargetId, targetUserId, targetUserId),
+          env.DB.prepare(`DELETE FROM telemetry_receipts WHERE user_id IN (?, ?)`).bind(rawTargetId, targetUserId),
         ]);
 
         // Evict Edge caches and in-memory L1 cache so next stats query is fresh immediately
@@ -345,14 +345,14 @@ export default {
 
       const version = String(data.version || '0.0.0').slice(0, 20).replace(/[^0-9a-zA-Z.-]/g, '');
 
-      const rawCountry = String(data.country || request.cf?.country || '').toUpperCase().trim();
+      const rawCountry = String(request.cf?.country || data.country || '').toUpperCase().trim();
       const country = /^[A-Z]{2}$/.test(rawCountry) ? rawCountry : 'XX';
 
       // v2 — model/provider fields (safe, bounded)
       let provider        = String(data.provider || 'unknown').slice(0, 32).replace(/[^a-zA-Z0-9._-]/g, '') || 'unknown';
       let model           = String(data.model    || 'unknown').slice(0, 64).replace(/[^a-zA-Z0-9._:-]/g, '') || 'unknown';
 
-      // API key scrubbing guard (Zero-PII guarantee)
+      // Drop values that look like API keys
       const KEY_REGEX = /(?:sk-[a-zA-Z0-9_\-]{16,}|nvapi-[a-zA-Z0-9_\-]{16,}|gsk_[a-zA-Z0-9_\-]{16,}|AIza[a-zA-Z0-9_\-]{16,}|xai-[a-zA-Z0-9_\-]{16,}|key-[a-zA-Z0-9_\-]{16,})/;
       if (KEY_REGEX.test(model) || (model.length >= 32 && /^[a-zA-Z0-9_\-]{32,}$/.test(model))) {
         model = 'scrubbed_api_key';
@@ -974,7 +974,7 @@ function renderStatsHtml(stats) {
 
     <div class="tables-row">
       <div>
-        <div class="section-title">Zero-PII Error Diagnostics & Reliability</div>
+        <div class="section-title">Error Diagnostics & Reliability</div>
         <table>
           <thead><tr><th>Error Category</th><th>Affected Users</th><th>Total Failures</th></tr></thead>
           <tbody>

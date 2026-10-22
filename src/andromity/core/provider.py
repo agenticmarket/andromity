@@ -284,9 +284,8 @@ async def stream_completion(
         kwargs["extra_body"].setdefault("provider", {})
         kwargs["extra_body"]["provider"]["allow_fallbacks"] = True
 
-    # OpenCode Zen: Cloudflare requires User-Agent matching the official client
     if provider_name == "opencode":
-        kwargs["extra_headers"] = {"User-Agent": "opencode/1.0.0"}
+        kwargs["extra_headers"] = {"User-Agent": "Andromity"}
 
     log.info("stream_completion start: provider=%s model=%s litellm_model=%s",
              provider_name, model, litellm_model)

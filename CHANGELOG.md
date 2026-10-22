@@ -2,6 +2,17 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
+## [Unreleased]
+
+### Added
+- [SECURITY.md](SECURITY.md) explains how to report a vulnerability privately and what response to expect.
+- [TELEMETRY.md](TELEMETRY.md) lists every telemetry event and field, how to turn telemetry off, and how to have your data deleted.
+
+### Changed
+- The OpenCode connection now needs your own OpenCode API key. It no longer reads OpenCode's credential file and identifies itself as Andromity.
+- Tips, news and command content are no longer fetched when telemetry is off or air-gap mode is on.
+- The VS Code extension sends no feature events if it cannot read your telemetry setting.
+
 ## [0.2.22] — 2026-10-20
 
 ### Added
@@ -81,7 +92,7 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 
 ### Fixed
 - MCP OAuth discovery rejected servers whose metadata differed only by a trailing slash in the resource or issuer URL, such as Vercel and Google. Google sign-ins now ask for offline access, so their tokens refresh instead of expiring after an hour.
-- OpenRouter showed Andromity as two different apps: requests made with your own OpenRouter key said "Andromity" from `andromity.agenticmarket.dev`, while gateway requests said "Andromity Coding Agent" from `agenticmarket.dev`. The gateway now sends "Andromity" from `https://andromity.agenticmarket.dev` too, so OpenRouter counts them as one app.
+- OpenRouter listed Andromity under two different app names. All Andromity requests now identify as "Andromity" from `https://andromity.agenticmarket.dev`, so OpenRouter counts them as one app.
 
 ## [0.2.19] — 2026-10-15
 
@@ -328,7 +339,7 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 ### Telemetry & Privacy Hardening
 - **Real-Time Privacy Synchronization**: Added real-time event listeners in VS Code (`onDidChangeTelemetryEnabled`, `onDidChangeConfiguration`) to dynamically synchronize telemetry opt-out state to the daemon without restarting.
 - **Zero-Bypass Privacy Enforcement**: Strict bypass when `DO_NOT_TRACK=1`, `ANDROMITY_NO_TELEMETRY=1`, `CI=1`, or when telemetry is disabled in VS Code settings. Automatically injects opt-out flags into child daemon environments.
-- **Edge Worker Production Deployment**: Live Cloudflare D1 worker endpoints (`/ping`, `/event`) with zero-PII guarantees, strict rate limiting, and automated health checks.
+- **Edge Worker Production Deployment**: Live Cloudflare D1 worker endpoints (`/ping`, `/event`) that never collect code, prompts or file paths, with strict rate limiting, and automated health checks.
 - **Automated Telemetry Test Suite**: Added dedicated automated unit tests (`tests/test_telemetry.py`) covering all 9 opt-out and toggle conditions.
 
 ### Documentation & Global Marketplace Assets
@@ -376,7 +387,7 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 ## [0.2.4] — 2026-08-30
 
 ### Telemetry & Infrastructure
-- **Cloudflare D1 & Worker Redesign**: Modernized telemetry ingestion architecture with Cloudflare D1 SQL storage, automated rate limiting, and zero-PII security guarantees.
+- **Cloudflare D1 & Worker Redesign**: Modernized telemetry ingestion architecture with Cloudflare D1 SQL storage, and automated rate limiting.
 - **Platform Detection**: Added clean OS and client provider breakdown telemetry without sensitive workspace data.
 
 ---
@@ -408,7 +419,7 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 - **Strict per-job isolation**: Each scheduled task keeps its own permission level, model choice, and context window separate from your main interactive session.
 
 ### Telemetry & Privacy
-- **Zero-PII anonymous metrics**: The optional telemetry ping only sends OS name, version, and model provider distribution. No file names, no code contents, no prompt data.
+- **Usage metrics**: The optional telemetry ping only sends OS name, version, and model provider distribution. No file names, no code contents, no prompt data.
 
 ---
 

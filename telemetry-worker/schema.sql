@@ -83,7 +83,7 @@ CREATE INDEX IF NOT EXISTS idx_events_model      ON events(model);
 
 -- -----------------------------------------------------------------------
 -- feature_events: user interaction with key features (waterfall, side_by_side, etc.)
--- Zero PII: only aggregate counts & features
+-- Feature names and counts only; no code, prompts or paths
 -- -----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS feature_events (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,

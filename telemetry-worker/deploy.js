@@ -40,11 +40,7 @@ if (!d1Id || d1Id === 'your_d1_database_id_here') {
 }
 
 const tomlTemplate = fs.readFileSync(path.join(__dirname, 'wrangler.toml'), 'utf8');
-let tomlResolved = tomlTemplate.replace(/\$\{TELEMETRY_D1_ID\}/g, d1Id);
-
-if (env['STATS_SECRET']) {
-  tomlResolved += `\n\n[vars]\nSTATS_SECRET = "${env['STATS_SECRET']}"\n`;
-}
+const tomlResolved = tomlTemplate.replace(/\$\{TELEMETRY_D1_ID\}/g, d1Id);
 
 const tempConfig = path.join(__dirname, 'wrangler.deploy.toml');
 fs.writeFileSync(tempConfig, tomlResolved, 'utf8');
@@ -53,9 +49,18 @@ console.log('✅  Config resolved securely from .env. Deploying...\n');
 let exitCode = 0;
 try {
   execSync(`npx wrangler deploy --config wrangler.deploy.toml`, {
+    cwd: __dirname,
     stdio: 'inherit',
     env: process.env,
   });
+  if (env['STATS_SECRET']) {
+    execSync(`npx wrangler secret put STATS_SECRET --config wrangler.deploy.toml`, {
+      cwd: __dirname,
+      input: env['STATS_SECRET'],
+      stdio: ['pipe', 'inherit', 'inherit'],
+      env: process.env,
+    });
+  }
 } catch (err) {
   exitCode = err.status ?? 1;
 } finally {

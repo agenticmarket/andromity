@@ -751,7 +751,7 @@
         "andromity.telemetry": {
           "type": "boolean",
           "default": true,
-          "description": "Send anonymous usage and performance telemetry: launches, error categories, and which features are used (feature names only, never prompts, code or file paths). Also follows VS Code's telemetry setting."
+          "description": "Send usage and performance telemetry linked to a random installation ID: client, OS, version, provider and model name, session and task outcomes, error categories and feature names. Never prompts, code or file paths. Also follows VS Code's telemetry setting."
         },
         "andromity.gatewayUrl": {
           "type": "string",

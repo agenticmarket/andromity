@@ -4,10 +4,12 @@ Dynamic edge lore, developer tips, and seasonal events fetcher for Andromity.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Optional
 
 import httpx
 
+from andromity.config import config
 from andromity.core import network_policy
 
 logger = logging.getLogger(__name__)
@@ -16,6 +18,17 @@ LORE_BASE_URL = "https://telemetry.agenticmarket.dev"
 
 _LORE_CACHE: dict[str, dict[str, Any]] = {}
 
+_OPT_OUT_VALUES = ("1", "true", "True", "TRUE")
+
+
+def _remote_content_allowed() -> bool:
+    """Tips, news and command content come from the telemetry host, so they follow the telemetry opt-out."""
+    if network_policy.enabled():
+        return False
+    if os.environ.get("DO_NOT_TRACK") in _OPT_OUT_VALUES or os.environ.get("ANDROMITY_NO_TELEMETRY") in _OPT_OUT_VALUES:
+        return False
+    return bool(config.get("default", "telemetry", True))
+
 
 async def fetch_lore_directive(command: str) -> Optional[dict[str, Any]]:
     """Fetch behavioral lore directive for special unlisted commands."""
@@ -23,7 +36,7 @@ async def fetch_lore_directive(command: str) -> Optional[dict[str, Any]]:
     if cmd in _LORE_CACHE:
         return _LORE_CACHE[cmd]
 
-    if network_policy.enabled():
+    if not _remote_content_allowed():
         return None
     try:
         async with httpx.AsyncClient(timeout=3.5, headers={"User-Agent": "Andromity-CLI"}) as client:
@@ -39,6 +52,8 @@ async def fetch_lore_directive(command: str) -> Optional[dict[str, Any]]:
 
 async def fetch_random_tip(tag: Optional[str] = None) -> Optional[dict[str, Any]]:
     """Fetch a curated developer tip from the edge."""
+    if not _remote_content_allowed():
+        return None
     try:
         params = {"tag": tag} if tag else {}
         async with httpx.AsyncClient(timeout=3.5, headers={"User-Agent": "Andromity-CLI"}) as client:
@@ -52,7 +67,7 @@ async def fetch_random_tip(tag: Optional[str] = None) -> Optional[dict[str, Any]
 
 async def fetch_latest_news() -> Optional[dict[str, Any]]:
     """Fetch latest release highlights and announcements from the edge."""
-    if network_policy.enabled():
+    if not _remote_content_allowed():
         return None
     try:
         async with httpx.AsyncClient(timeout=3.5, headers={"User-Agent": "Andromity-CLI"}) as client:
@@ -66,7 +81,7 @@ async def fetch_latest_news() -> Optional[dict[str, Any]]:
 
 async def fetch_seasonal_event() -> Optional[dict[str, Any]]:
     """Fetch active seasonal festival or event modifier."""
-    if network_policy.enabled():
+    if not _remote_content_allowed():
         return None
     try:
         async with httpx.AsyncClient(timeout=3.5, headers={"User-Agent": "Andromity-CLI"}) as client:

@@ -3820,8 +3820,8 @@ export class SettingsPanel {
           <label class="checkbox-row">
             <input type="checkbox" id="setting-telemetry">
             <div>
-              <div class="setting-label">Anonymous Telemetry</div>
-              <div class="setting-desc">Sends anonymous session metadata to help improve Andromity: OS, app version, provider name (e.g. "anthropic"), model name (e.g. "claude-sonnet-5"), reasoning mode, and coarse session stats (turn count, duration bucket). <strong>No prompts, code, file paths, or API keys are ever transmitted.</strong> Opt out anytime with <code>DO_NOT_TRACK=1</code>.</div>
+              <div class="setting-label">Usage Telemetry</div>
+              <div class="setting-desc">Sends usage data linked to a random installation ID to help improve Andromity: OS, app version, country, provider and model name, reasoning mode, session and task outcomes, error categories and the names of features you use. <strong>No prompts, code, file paths, or API keys are ever transmitted.</strong> Opt out anytime here or with <code>DO_NOT_TRACK=1</code>.</div>
             </div>
           </label>
         </div>

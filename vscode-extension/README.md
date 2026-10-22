@@ -183,7 +183,7 @@ Customize Andromity in **Settings** (`Ctrl+,` → search `Andromity`):
 - `andromity.permissionMode`: Default permission mode (`safe`, `trust`, `full`, `yolo`).
 - `andromity.reasoningEffort`: Thinking effort for reasoning models (default `auto`; pick supported levels in the chat model picker, or `budget:<tokens>` for models with a thinking-token budget).
 - `andromity.soundNotifications`: Turn completion sound cues on or off.
-- `andromity.telemetry`: Anonymous usage and performance telemetry: launches, errors by category, and which features are used, by feature name only (on by default; also follows VS Code's telemetry setting).
+- `andromity.telemetry`: Usage and performance telemetry linked to a random installation ID; never prompts, code or file paths ([full list](https://github.com/agenticmarket/andromity/blob/main/TELEMETRY.md)). On by default; also follows VS Code's telemetry setting.
 
 ---
 
@@ -191,7 +191,7 @@ Customize Andromity in **Settings** (`Ctrl+,` → search `Andromity`):
 
 - **Where your code goes:** to the model provider you choose. The built-in Andromity provider routes requests through the Andromity edge gateway, which forwards them without storing prompts, code, or completions.
 - **API keys:** stored on your machine in the Andromity config file (`~/.andromity/config.toml`, or `%APPDATA%\andromity\config.toml` on Windows); keep that file private. Sign-in tokens use VS Code Secret Storage.
-- **Telemetry:** anonymous usage and performance data: launches, session length, error categories, and which features are used (feature names such as `fingerprint` or `cmd_openwaterfall`). Never prompts, code, file paths, or model output. Turn it off with `andromity.telemetry`, VS Code's telemetry setting, or `DO_NOT_TRACK=1`.
+- **Telemetry:** usage and performance data linked to a random installation ID: client, OS, version, country, provider and model name, session length and turn counts, task outcomes, error categories, and which features are used (feature names such as `fingerprint`). Never prompts, code, file paths, or model output. Full list: [TELEMETRY.md](https://github.com/agenticmarket/andromity/blob/main/TELEMETRY.md). Turn it off with `andromity.telemetry`, VS Code's telemetry setting, or `DO_NOT_TRACK=1`.
 - **Local models:** with Ollama, model inference runs on your machine. Web tools, remote MCP servers, and package installs can still use the network.
 
 ---
