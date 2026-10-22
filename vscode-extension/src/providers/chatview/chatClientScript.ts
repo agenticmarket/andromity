@@ -5396,7 +5396,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           lbl.classList.remove('skeleton', 'skeleton-text');
         }
         if (lbl.parentElement) {
-          lbl.parentElement.title = 'Working style: ' + display + ' (Click to choose)';
+          lbl.parentElement.title = 'Profile: ' + display + ' (Click to choose)';
         }
       }
       if (iconEl && PROFILE_ICONS[p]) {
@@ -6808,7 +6808,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const rows = [
         { id: 'model', icon: 'sparkle', label: 'Model', value: model, hint: 'Change model' },
         { id: 'mode', icon: 'shield', label: 'Mode', value: mode, hint: 'Change permission mode' },
-        { id: 'profile', icon: 'person', label: 'Style', value: envLabel('prompt-profile-label'), hint: 'Change working style' },
+        { id: 'profile', icon: 'person', label: 'Profile', value: envLabel('prompt-profile-label'), hint: 'Change working profile' },
         { id: 'reasoning', icon: 'lightbulb', label: 'Reasoning', value: envLabel('prompt-reasoning-label'), hint: 'Change reasoning effort' },
         { id: 'branch', icon: 'git-branch', label: 'Branch', value: branch || '', hint: 'Switch branch' },
         { id: 'folder', icon: 'folder', label: 'Folder', value: sidePanelData.folder || '', hint: 'Show in Explorer' },
