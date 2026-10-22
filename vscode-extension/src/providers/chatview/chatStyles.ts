@@ -6146,6 +6146,7 @@ export function getChatStyles(): string {
       display: inline-flex;
       align-items: center;
       gap: 5px;
+      z-index: 10;
       cursor: pointer;
       white-space: nowrap;
       flex-shrink: 0;
@@ -6417,6 +6418,7 @@ export function getChatStyles(): string {
     #btn-prompt-reasoning.is-unsupported {
       opacity: 0.55;
       cursor: not-allowed;
+      display: none;
     }
     .reasoning-popover-badge.badge-unsupported {
       background: rgba(var(--tint), 0.08);
