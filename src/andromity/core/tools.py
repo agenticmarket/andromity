@@ -1514,7 +1514,10 @@ async def session_send_message_async(to_session: str, content: str) -> str:
         content=content,
     )
     if success:
-        return f"Message sent successfully to '{to_session}'."
+        return (
+            f"Message delivered to '{to_session}' inbox; it reads it on its next turn and is not woken by it. "
+            f"To have it act now, use wait_for_answer or handoff with to_session."
+        )
     return f"Failed to send message: target session '{to_session}' was not found or is offline."
 
 
@@ -1600,7 +1603,7 @@ def session_answer_question(question_id: str, answer: str) -> str:
 
 
 def session_watch(target_session: Optional[str] = None, reason: str = "") -> str:
-    """Put current session into standby 'watching' mode to wait for updates, questions, or handoffs from another session."""
+    """Put current session into standby 'watching' mode until a question or handoff addressed to it arrives."""
     cur_sess = _current_session_var.get()
     if not cur_sess:
         return "Error: No active session found."
@@ -2228,7 +2231,7 @@ CORE_TOOLS = [
         "type": "function",
         "function": {
             "name": "session_watch",
-            "description": "Put the current session into standby 'watching' mode waiting for updates, questions, or handoffs from another session without consuming tokens.",
+            "description": "Put the current session into standby 'watching' mode without consuming tokens. Only a question or a handoff addressed to this session wakes it; plain messages wait in the inbox until its next turn.",
             "parameters": {
                 "type": "object",
                 "properties": {
