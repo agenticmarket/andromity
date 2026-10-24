@@ -1428,7 +1428,7 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(scriptCode.includes("update_config") && scriptCode.includes("reasoningEffort"), "Script must dispatch reasoningEffort update_config");
   });
 
-  it("should render sleek session status badges with watching pill and pulse indicator", () => {
+  it("renders session statuses as text, shimmering only while live", () => {
     const styles = getChatStyles();
     const state: ChatViewState = {
       currentSessionId: "sess-test",
@@ -1442,14 +1442,14 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
 
     // CSS asserts
     assert.ok(styles.includes(".session-badge-status"), "Styles must define .session-badge-status");
-    assert.ok(styles.includes(".session-status-watching"), "Styles must define .session-status-watching");
-    assert.ok(styles.includes(".session-pulse-dot"), "Styles must define .session-pulse-dot");
-    assert.ok(styles.includes("@keyframes sessionPulse"), "Styles must define sessionPulse keyframe");
+    assert.ok(styles.includes(".status-shimmer {"), "Styles must define .status-shimmer");
+    assert.ok(styles.includes("@keyframes statusShimmer"), "Styles must define statusShimmer keyframe");
+    assert.ok(!styles.includes("session-pulse-dot") && !styles.includes("session-active-dot"), "Session dots must be gone");
 
     // Script asserts
     assert.ok(scriptCode.includes("session-status-watching"), "Script must render session-status-watching badge");
-    assert.ok(scriptCode.includes("session-pulse-dot"), "Script must render pulse dot for watching session");
-    assert.ok(scriptCode.includes("<span>Watching</span>"), "Script must render Watching label in title case");
+    assert.ok(scriptCode.includes('session-status-watching status-shimmer status-shimmer-slow" title="Watching for events/replies">Watching</span>'), "Watching must shimmer slowly");
+    assert.ok(!scriptCode.includes("session-pulse-dot") && !scriptCode.includes("sp-dot") && !scriptCode.includes("bg-run-dot"), "Status dots must be gone");
   });
 
   it("puts visible BYOK providers before the single trial and sign-in actions", () => {

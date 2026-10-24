@@ -522,9 +522,10 @@ export function getChatStyles(): string {
       background: var(--surface-hover);
       border-color: var(--popover-border);
     }
-    .session-item.active {
+    .session-item.active,
+    .session-item.active:hover {
       background: var(--vscode-list-activeSelectionBackground, rgba(56, 189, 248, 0.12));
-      border-color: var(--vscode-focusBorder, rgba(56, 189, 248, 0.35));
+      border-color: transparent;
       color: var(--vscode-list-activeSelectionForeground, var(--fg));
       font-weight: 600;
     }
@@ -562,99 +563,49 @@ export function getChatStyles(): string {
       min-width: 0;
     }
 
-    .session-active-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: #38bdf8;
-      box-shadow: 0 0 6px #38bdf8;
-      flex-shrink: 0;
-      display: inline-block;
-    }
     @keyframes sessionSpin {
       0% { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
     }
-    .session-running-arc {
-      width: 13px;
-      height: 13px;
-      animation: sessionSpin 0.85s linear infinite;
-      color: #38bdf8;
-      flex-shrink: 0;
-      display: inline-block;
-      vertical-align: middle;
-      margin-left: 2px;
+    .status-shimmer {
+      background: linear-gradient(100deg, currentColor 0%, currentColor 38%, color-mix(in srgb, currentColor 30%, var(--fg)) 50%, currentColor 62%, currentColor 100%);
+      background-size: 250% 100%;
+      background-position: 100% 0;
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      animation: statusShimmer 3.2s linear infinite;
+    }
+    .status-shimmer.status-shimmer-slow { animation-duration: 4.2s; }
+    @keyframes statusShimmer {
+      0% { background-position: 100% 0; }
+      100% { background-position: -150% 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .status-shimmer { animation: none; background: none; -webkit-text-fill-color: currentColor; }
     }
     .session-badge-status {
       display: inline-flex;
       align-items: center;
-      gap: 4px;
-      font-size: 9.5px;
+      font-size: 11px;
       font-weight: 500;
-      letter-spacing: 0.2px;
-      padding: 1.5px 7px;
-      border-radius: 999px;
-      background: var(--surface-hover);
-      border: 1px solid var(--popover-border);
-      color: var(--fg);
-      opacity: 0.8;
+      color: var(--muted);
       flex-shrink: 0;
       line-height: 1.3;
       white-space: nowrap;
-      vertical-align: middle;
-      transition: all 0.15s ease;
     }
-    .session-badge-status.session-status-watching {
-      color: #38bdf8;
-      background: rgba(56, 189, 248, 0.1);
-      border: 1px solid rgba(56, 189, 248, 0.28);
-      font-weight: 500;
-    }
-    .session-badge-status.session-status-watching:hover {
-      background: rgba(56, 189, 248, 0.16);
-      border-color: rgba(56, 189, 248, 0.45);
-    }
-    .session-badge-status.session-status-running {
-      color: #38bdf8;
-      background: rgba(56, 189, 248, 0.1);
-      border: 1px solid rgba(56, 189, 248, 0.28);
-    }
+    .session-badge-status.session-status-running { color: var(--vscode-charts-blue, #38bdf8); }
     .session-badge-status.session-status-unread {
-      color: #34d399;
-      background: rgba(52, 211, 153, 0.1);
-      border: 1px solid rgba(52, 211, 153, 0.28);
+      color: var(--vscode-charts-blue, #38bdf8);
       font-weight: 600;
     }
     .session-badge-status.session-status-paused,
     .session-badge-status.session-status-paused_limit_reached,
     .session-badge-status.session-status-interrupted {
-      color: #fbbf24;
-      background: rgba(251, 191, 36, 0.1);
-      border: 1px solid rgba(251, 191, 36, 0.28);
+      color: var(--vscode-charts-yellow, #fbbf24);
     }
-    .session-badge-status.session-status-error {
-      color: #f87171;
-      background: rgba(248, 113, 113, 0.1);
-      border: 1px solid rgba(248, 113, 113, 0.28);
-    }
-    .session-badge-status.session-status-approval_required {
-      color: #fb923c;
-      background: rgba(251, 146, 60, 0.1);
-      border: 1px solid rgba(251, 146, 60, 0.28);
-    }
-    .session-badge-status .session-pulse-dot {
-      width: 5px;
-      height: 5px;
-      border-radius: 50%;
-      background: currentColor;
-      box-shadow: 0 0 6px currentColor;
-      animation: sessionPulse 2s ease-in-out infinite;
-      flex-shrink: 0;
-    }
-    @keyframes sessionPulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.35; transform: scale(0.85); }
-    }
+    .session-badge-status.session-status-error { color: var(--vscode-charts-red, #f87171); }
+    .session-badge-status.session-status-approval_required { color: var(--vscode-charts-orange, #fb923c); }
     .session-item-meta {
       font-size: 11px;
       color: var(--fg);
@@ -7200,10 +7151,10 @@ export function getChatStyles(): string {
       pointer-events: none;
       user-select: none;
     }
-    .skeleton-text { height: 11px; min-width: 64px; display:inline-block; }
-    .skeleton-pill { height: 16px; min-width: 72px; border-radius: 12px; display:inline-flex; }
-    .skeleton-session { height: 13px; width: 110px; border-radius: 4px; }
-    .skeleton-card { height: 42px; border-radius: 6px; margin: 6px 0; }
+    .skeleton.skeleton-text { height: 11px; min-width: 64px; display:inline-block; }
+    .skeleton.skeleton-pill { height: 16px; min-width: 72px; border-radius: 12px; display:inline-flex; }
+    .skeleton.skeleton-session { height: 13px; width: 110px; border-radius: 4px; }
+    .skeleton.skeleton-card { height: 42px; border-radius: 6px; margin: 6px 0; }
     @keyframes skeleton-shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
     /* ─── Interactive Slot (Permissions, Clarifying Questions, Plan Approvals) ─── */
     #interactive-slot {
@@ -8294,8 +8245,29 @@ export function getChatStyles(): string {
     .next-step-btn.primary:hover {
       background: var(--vscode-button-hoverBackground, var(--accent));
     }
+    .next-step-card.has-choices {
+      position: relative;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+      padding: 9px 10px 10px 12px;
+    }
+    .next-step-card.has-choices .next-step-text {
+      flex: none;
+      padding-right: 22px;
+    }
+    .next-step-card.has-choices .next-step-title {
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
     .next-step-card.has-choices .next-step-actions {
       flex-wrap: wrap;
+      margin-left: 0;
+    }
+    .next-step-card.has-choices .next-step-dismiss {
+      position: absolute;
+      top: 6px;
+      right: 6px;
     }
     .next-step-new-tag {
       margin-left: 6px;
@@ -8335,17 +8307,6 @@ export function getChatStyles(): string {
       font-size: 12px;
       color: var(--fg);
     }
-    .bg-run-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      flex-shrink: 0;
-      background: var(--vscode-charts-blue, #38bdf8);
-    }
-    .bg-run-row.status-waiting .bg-run-dot { background: var(--vscode-charts-yellow, #d29922); }
-    .bg-run-row.status-finished .bg-run-dot { background: var(--vscode-charts-green, var(--green, #3fb950)); }
-    .bg-run-row.status-cancelled .bg-run-dot { background: var(--muted); }
-    .bg-run-row.status-error .bg-run-dot { background: var(--vscode-charts-red, var(--red, #f85149)); }
     .bg-run-text {
       flex: 1;
       min-width: 0;
@@ -8354,6 +8315,10 @@ export function getChatStyles(): string {
       white-space: nowrap;
     }
     .bg-run-label { color: var(--muted); }
+    .bg-run-row.status-running .bg-run-label { color: var(--vscode-charts-blue, #38bdf8); }
+    .bg-run-row.status-waiting .bg-run-label { color: var(--vscode-charts-yellow, #d29922); }
+    .bg-run-row.status-finished .bg-run-label { color: var(--vscode-charts-green, var(--green, #3fb950)); }
+    .bg-run-row.status-error .bg-run-label { color: var(--vscode-charts-red, var(--red, #f85149)); }
     .bg-run-title { font-weight: 500; }
     .bg-run-summary { color: var(--muted); }
     .bg-run-summary::before { content: " · "; }

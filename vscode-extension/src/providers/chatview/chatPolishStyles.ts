@@ -412,13 +412,7 @@ export function getChatPolishStyles(): string {
     .sp-status.del { color: var(--vscode-gitDecoration-deletedResourceForeground, #f85149); }
     .sp-add { color: var(--vscode-gitDecoration-addedResourceForeground, #3fb950); }
     .sp-del { color: var(--vscode-gitDecoration-deletedResourceForeground, #f85149); }
-    .sp-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: rgba(var(--tint), 0.25); }
-    .sp-dot.running { background: var(--vscode-testing-iconPassed, #3fb950); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-testing-iconPassed, #3fb950) 18%, transparent); }
-    .sp-dot.attention { background: var(--vscode-editorWarning-foreground, #d29922); }
-    .sp-dot.error { background: var(--vscode-errorForeground, #f85149); }
-    .sp-dot.starting { background: var(--muted); animation: sp-pulse 1.2s ease-in-out infinite; }
-    @keyframes sp-pulse { 50% { opacity: 0.35; } }
-    @media (prefers-reduced-motion: reduce) { .sp-dot.starting { animation: none; } .sp-chevron { transition: none; } }
+    @media (prefers-reduced-motion: reduce) { .sp-chevron { transition: none; } }
 
     .sp-kv {
       display: grid;
@@ -527,7 +521,8 @@ export function getChatPolishStyles(): string {
     .sp-server-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
     .sp-server-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
     .sp-server-kind { font-size: 10px; font-weight: 400; color: var(--muted); }
-    .sp-server-status { display: inline-flex; align-items: center; gap: 7px; flex-shrink: 0; font-size: 10px; color: var(--muted); }
+    .sp-server-status { flex-shrink: 0; font-size: 10px; color: var(--muted); white-space: nowrap; }
+    .sp-server-status.running { color: var(--vscode-testing-iconPassed, #3fb950); }
     .sp-server-status.warn { color: var(--vscode-editorWarning-foreground, #d29922); }
     .sp-server-status.error { color: var(--vscode-errorForeground, #f85149); }
     .sp-server-total { padding-top: 6px; color: var(--muted); font-size: 10px; }

@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Status shimmer demo</title>
+<style>
+  :root {
+    --bg: #1e1e1e;
+    --panel: #181818;
+    --fg: #cccccc;
+    --muted: #8b8b8b;
+    --border: #2b2b2b;
+    --surface-hover: #2a2d2e;
+    --tint: 255, 255, 255;
+    --green: #3fb950;
+    --blue: #38bdf8;
+    --yellow: #d29922;
+    --red: #f85149;
+    --shine: #ffffff;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  body.light {
+    --bg: #ffffff;
+    --panel: #f8f8f8;
+    --fg: #3b3b3b;
+    --muted: #767676;
+    --border: #e5e5e5;
+    --surface-hover: #ececec;
+    --tint: 0, 0, 0;
+    --green: #1a7f37;
+    --blue: #0969da;
+    --yellow: #9a6700;
+    --red: #cf222e;
+    --shine: #000000;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font);
+    font-size: 13px;
+    padding: 24px;
+  }
+  h1 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+  .toolbar button {
+    font: inherit; font-size: 12px; color: var(--fg); background: transparent;
+    border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; cursor: pointer;
+  }
+  .toolbar button.on { background: var(--surface-hover); border-color: rgba(var(--tint), 0.3); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 18px; }
+  .col h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); font-weight: 600; margin: 0 0 10px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 14px; }
+  .card-title { font-size: 12px; font-weight: 600; margin: 0 0 8px; display: flex; justify-content: space-between; }
+  .card-title span { color: var(--muted); font-weight: 400; }
+
+  /* ── Shared rows ─────────────────────────────────── */
+  .sp-server { display: flex; align-items: center; gap: 8px; padding: 6px 6px; border-radius: 5px; }
+  .sp-server:hover { background: var(--surface-hover); }
+  .sp-server-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .sp-server-name { font-weight: 500; }
+  .sp-server-kind { font-size: 11px; color: var(--muted); }
+  .sp-server-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .sp-server-status.warn { color: var(--yellow); }
+  .sp-server-status.error { color: var(--red); }
+
+  .session-item { padding: 7px 8px; border-radius: 6px; display: flex; flex-direction: column; gap: 3px; }
+  .session-item:hover { background: var(--surface-hover); }
+  .session-item.active { background: rgba(var(--tint), 0.08); }
+  .session-item-title { display: flex; align-items: center; gap: 6px; font-weight: 500; }
+  .session-title-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-item-meta { font-size: 11px; color: var(--muted); }
+
+  .bg-run-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; border: 1px solid var(--border); border-radius: 7px; font-size: 12px; margin-bottom: 6px; }
+  .bg-run-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bg-run-title { font-weight: 500; }
+  .bg-run-open { font: inherit; font-size: 11px; color: var(--fg); background: transparent; border: 1px solid var(--border); border-radius: 5px; padding: 2px 8px; }
+
+  /* ── BEFORE: current dot indicators ──────────────── */
+  .sp-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: rgba(var(--tint), 0.25); }
+  .sp-dot.running { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 18%, transparent); }
+  .sp-dot.attention { background: var(--yellow); }
+  .sp-dot.error { background: var(--red); }
+  .sp-dot.starting { background: var(--muted); animation: sp-pulse 1.2s ease-in-out infinite; }
+  @keyframes sp-pulse { 50% { opacity: 0.35; } }
+
+  .session-active-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 6px var(--blue); flex-shrink: 0; }
+  .session-badge-status { display: inline-flex; align-items: center; gap: 4px; font-size: 9.5px; font-weight: 500; padding: 1.5px 7px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
+  .session-status-watching { color: var(--blue); background: color-mix(in srgb, var(--blue) 10%, transparent); border-color: color-mix(in srgb, var(--blue) 28%, transparent); }
+  .session-status-unread { color: #34d399; background: rgba(52, 211, 153, 0.1); border-color: rgba(52, 211, 153, 0.28); font-weight: 600; }
+  .session-status-paused { color: #fbbf24; background: rgba(251, 191, 36, 0.1); border-color: rgba(251, 191, 36, 0.28); }
+  .session-status-error { color: #f87171; background: rgba(248, 113, 113, 0.1); border-color: rgba(248, 113, 113, 0.28); }
+  .session-pulse-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 6px currentColor; animation: sessionPulse 2s ease-in-out infinite; }
+  @keyframes sessionPulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.85); } }
+  .session-running-arc { width: 13px; height: 13px; animation: spin 0.85s linear infinite; color: var(--blue); flex-shrink: 0; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .bg-run-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--blue); }
+  .bg-run-row.status-waiting .bg-run-dot { background: var(--yellow); }
+  .bg-run-row.status-finished .bg-run-dot { background: var(--green); }
+  .bg-run-row.status-error .bg-run-dot { background: var(--red); }
+  .bg-run-label { color: var(--muted); }
+
+  /* ── AFTER: shimmer text, no dots ─────────────────
+     Live states (running / starting / watching) glint.
+     Settled states keep plain coloured text.          */
+  .shimmer {
+    --base: var(--muted);
+    background: linear-gradient(
+      100deg,
+      var(--base) 0%,
+      var(--base) 38%,
+      color-mix(in srgb, var(--base) 25%, var(--shine)) 50%,
+      var(--base) 62%,
+      var(--base) 100%
+    );
+    background-size: 250% 100%;
+    background-position: 100% 0;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: shimmer-text var(--speed, 3.2s) linear infinite;
+  }
+  @keyframes shimmer-text {
+    0%   { background-position: 100% 0; }
+    100% { background-position: -150% 0; }
+  }
+  .shimmer.live   { --base: var(--green); }
+  .shimmer.info   { --base: var(--blue); }
+  .shimmer.idle   { --base: var(--muted); }
+  .shimmer.slow   { --speed: 4.2s; }
+
+  /* Variant B: skeleton chip — the sweep runs behind the text */
+  .chip {
+    position: relative;
+    overflow: hidden;
+    display: inline-flex;
+    align-items: center;
+    font-size: 10.5px;
+    font-weight: 500;
+    padding: 1px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+    color: var(--c, var(--muted));
+    background: color-mix(in srgb, var(--c, var(--muted)) 12%, transparent);
+  }
+  .chip.sweep::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--c, var(--muted)) 35%, transparent), transparent);
+    animation: chip-sweep var(--speed, 1.6s) ease-in-out infinite;
+  }
+  @keyframes chip-sweep { to { transform: translateX(100%); } }
+  .chip.live { --c: var(--green); }
+  .chip.info { --c: var(--blue); }
+  .chip.warn { --c: var(--yellow); }
+  .chip.err  { --c: var(--red); }
+  .chip.idle { --c: var(--muted); }
+  .chip.slow { --speed: 2.4s; }
+
+  .plain { font-size: 11px; white-space: nowrap; }
+  .plain.warn { color: var(--yellow); }
+  .plain.err  { color: var(--red); }
+  .plain.idle { color: var(--muted); }
+  .plain.done { color: var(--green); }
+  .plain.new  { color: var(--blue); font-weight: 600; }
+
+  .session-item.active .session-title-text { color: var(--fg); }
+
+  .shimmer.label { font-size: 11px; white-space: nowrap; }
+  .shimmer.title-line { font-weight: 500; }
+
+  body.no-motion .shimmer,
+  body.no-motion .chip.sweep::after,
+  body.no-motion .sp-dot,
+  body.no-motion .session-pulse-dot,
+  body.no-motion .session-running-arc { animation: none; }
+  body.no-motion .shimmer { color: var(--base); background: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .shimmer, .chip.sweep::after { animation: none; }
+    .shimmer { color: var(--base); background: none; }
+  }
+
+  .variant { display: none; }
+  body.v-a .variant.a, body.v-b .variant.b { display: block; }
+  .note { color: var(--muted); font-size: 11.5px; margin: 4px 0 0; line-height: 1.5; }
+</style>
+</head>
+<body class="v-a">
+  <h1>Status indicators: dots → shimmer</h1>
+  <p class="sub">Left is what ships today. Right replaces every dot with text. Live states glint, settled states stay still.</p>
+
+  <div class="toolbar">
+    <button data-variant="v-a" class="on">A · Text shimmer</button>
+    <button data-variant="v-b">B · Skeleton chip</button>
+    <button id="theme">Light theme</button>
+    <button id="motion">Reduced motion</button>
+  </div>
+
+  <div class="grid">
+    <!-- ───────────── BEFORE ───────────── -->
+    <div class="col">
+      <h2>Before · dots</h2>
+
+      <div class="card">
+        <div class="card-title">MCP servers <span>2/5 running</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">github</span><span class="sp-server-kind">Remote · 24 tools</span></span><span class="sp-server-status"><span class="sp-dot running"></span>Running</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">postgres</span><span class="sp-server-kind">Local · 6 tools</span></span><span class="sp-server-status"><span class="sp-dot running"></span>Running</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">filesystem</span><span class="sp-server-kind">Local</span></span><span class="sp-server-status"><span class="sp-dot starting"></span>Starting…</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">linear</span><span class="sp-server-kind">Remote</span></span><span class="sp-server-status warn"><span class="sp-dot attention"></span>Sign in</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">sentry</span><span class="sp-server-kind">Remote</span></span><span class="sp-server-status error"><span class="sp-dot error"></span>Error</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">puppeteer</span><span class="sp-server-kind">Local</span></span><span class="sp-server-status"><span class="sp-dot"></span>Off</span></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Sessions</div>
+        <div class="session-item active"><div class="session-item-title"><span class="session-active-dot"></span><span class="session-title-text">Refactor auth middleware</span><svg class="session-running-arc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.56"/></svg></div><div class="session-item-meta">14 msgs · 2m</div></div>
+        <div class="session-item"><div class="session-item-title"><span class="session-title-text">Add rate limit tests</span><svg class="session-running-arc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.56"/></svg></div><div class="session-item-meta">6 msgs · just now</div></div>
+        <div class="session-item"><div class="session-item-title"><span class="session-title-text">Watch CI for PR</span><span class="session-badge-status session-status-watching"><span class="session-pulse-dot"></span>Watching</span></div><div class="session-item-meta">3 msgs · 5m</div></div>
+        <div class="session-item"><div class="session-item-title"><span class="session-title-text">Fix flaky e2e test</span><span class="session-badge-status session-status-unread"><span class="session-pulse-dot"></span>New</span></div><div class="session-item-meta">22 msgs · 8m</div></div>
+        <div class="session-item"><div class="session-item-title"><span class="session-title-text">Migrate config loader</span><span class="session-badge-status session-status-paused">Paused</span></div><div class="session-item-meta">9 msgs · 1h</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Background runs (in chat)</div>
+        <div class="bg-run-row"><span class="bg-run-dot"></span><span class="bg-run-text"><span class="bg-run-label">Running in background</span> <span class="bg-run-title">Write release notes</span></span><button class="bg-run-open">Open</button></div>
+        <div class="bg-run-row status-waiting"><span class="bg-run-dot"></span><span class="bg-run-text"><span class="bg-run-label">Needs your input</span> <span class="bg-run-title">Bump dependencies</span></span><button class="bg-run-open">Open</button></div>
+        <div class="bg-run-row status-finished"><span class="bg-run-dot"></span><span class="bg-run-text"><span class="bg-run-label">Background session finished</span> <span class="bg-run-title">Lint fixes</span></span><button class="bg-run-open">Open</button></div>
+        <div class="bg-run-row status-error"><span class="bg-run-dot"></span><span class="bg-run-text"><span class="bg-run-label">Background session couldn't finish</span> <span class="bg-run-title">Docker build</span></span><button class="bg-run-open">Open</button></div>
+      </div>
+    </div>
+
+    <!-- ───────────── AFTER · A ───────────── -->
+    <div class="col variant a">
+      <h2>After · A · text shimmer</h2>
+
+      <div class="card">
+        <div class="card-title">MCP servers <span>2/5 running</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">github</span><span class="sp-server-kind">Remote · 24 tools</span></span><span class="shimmer live label">Running</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">postgres</span><span class="sp-server-kind">Local · 6 tools</span></span><span class="shimmer live label">Running</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">filesystem</span><span class="sp-server-kind">Local</span></span><span class="shimmer idle label">Starting…</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">linear</span><span class="sp-server-kind">Remote</span></span><span class="plain warn">Sign in</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">sentry</span><span class="sp-server-kind">Remote</span></span><span class="plain err">Error</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">puppeteer</span><span class="sp-server-kind">Local</span></span><span class="plain idle">Off</span></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Sessions</div>
+        <div class="session-item active"><div class="session-item-title"><span class="session-title-text">Refactor auth middleware</span><span class="shimmer info label">Running</span></div><div class="session-item-meta">14 msgs · 2m</div></div>
+        <div class="session-item"><div class="session-item-title"><span class="session-title-text">Add rate limit tests</span><span class="shimmer info label">Running</span></div><div class="session-item-meta">6 msgs · just now</div></div>
+        <div class="session-item"><div class="session-item-title"><span class="session-title-text">Watch CI for PR</span><span class="shimmer idle slow label">Watching</span></div><div class="session-item-meta">3 msgs · 5m</div></div>
+        <div class="session-item"><div class="session-item-title"><span class="session-title-text">Fix flaky e2e test</span><span class="plain new">New</span></div><div class="session-item-meta">22 msgs · 8m</div></div>
+        <div class="session-item"><div class="session-item-title"><span class="session-title-text">Migrate config loader</span><span class="plain warn">Paused</span></div><div class="session-item-meta">9 msgs · 1h</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Background runs (in chat)</div>
+        <div class="bg-run-row"><span class="bg-run-text"><span class="shimmer info">Running in background</span> <span class="bg-run-title">Write release notes</span></span><button class="bg-run-open">Open</button></div>
+        <div class="bg-run-row"><span class="bg-run-text"><span class="plain warn" style="font-size:12px">Needs your input</span> <span class="bg-run-title">Bump dependencies</span></span><button class="bg-run-open">Open</button></div>
+        <div class="bg-run-row"><span class="bg-run-text"><span class="plain done" style="font-size:12px">Background session finished</span> <span class="bg-run-title">Lint fixes</span></span><button class="bg-run-open">Open</button></div>
+        <div class="bg-run-row"><span class="bg-run-text"><span class="plain err" style="font-size:12px">Background session couldn't finish</span> <span class="bg-run-title">Docker build</span></span><button class="bg-run-open">Open</button></div>
+      </div>
+      <p class="note">The word itself carries a light sweep, like a loading skeleton. Running = green (MCP) or blue (sessions); Starting / Watching = grey sweep. Everything that is not in progress is still text, no dot.</p>
+    </div>
+
+    <!-- ───────────── AFTER · B ───────────── -->
+    <div class="col variant b">
+      <h2>After · B · skeleton chip</h2>
+
+      <div class="card">
+        <div class="card-title">MCP servers <span>2/5 running</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">github</span><span class="sp-server-kind">Remote · 24 tools</span></span><span class="chip live sweep">Running</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">postgres</span><span class="sp-server-kind">Local · 6 tools</span></span><span class="chip live sweep">Running</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">filesystem</span><span class="sp-server-kind">Local</span></span><span class="chip idle sweep">Starting…</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">linear</span><span class="sp-server-kind">Remote</span></span><span class="chip warn">Sign in</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">sentry</span><span class="sp-server-kind">Remote</span></span><span class="chip err">Error</span></div>
+        <div class="sp-server"><span class="sp-server-text"><span class="sp-server-name">puppeteer</span><span class="sp-server-kind">Local</span></span><span class="chip idle">Off</span></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Sessions</div>
+        <div class="session-item active"><div class="session-item-title"><span class="session-title-text">Refactor auth middleware</span><span class="chip info sweep">Running</span></div><div class="session-item-meta">14 msgs · 2m</div></div>
+        <div class="session-item"><div class="session-item-title"><span class="session-title-text">Add rate limit tests</span><span class="chip info sweep">Running</span></div><div class="session-item-meta">6 msgs · just now</div></div>
+        <div class="session-item"><div class="session-item-title"><span class="session-title-text">Watch CI for PR</span><span class="chip idle sweep slow">Watching</span></div><div class="session-item-meta">3 msgs · 5m</div></div>
+        <div class="session-item"><div class="session-item-title"><span class="session-title-text">Fix flaky e2e test</span><span class="chip info">New</span></div><div class="session-item-meta">22 msgs · 8m</div></div>
+        <div class="session-item"><div class="session-item-title"><span class="session-title-text">Migrate config loader</span><span class="chip warn">Paused</span></div><div class="session-item-meta">9 msgs · 1h</div></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Background runs (in chat)</div>
+        <div class="bg-run-row"><span class="chip info sweep">Running</span><span class="bg-run-text"><span class="bg-run-title">Write release notes</span></span><button class="bg-run-open">Open</button></div>
+        <div class="bg-run-row"><span class="chip warn">Needs input</span><span class="bg-run-text"><span class="bg-run-title">Bump dependencies</span></span><button class="bg-run-open">Open</button></div>
+        <div class="bg-run-row"><span class="chip live">Finished</span><span class="bg-run-text"><span class="bg-run-title">Lint fixes</span></span><button class="bg-run-open">Open</button></div>
+        <div class="bg-run-row"><span class="chip err">Failed</span><span class="bg-run-text"><span class="bg-run-title">Docker build</span></span><button class="bg-run-open">Open</button></div>
+      </div>
+      <p class="note">A soft tinted pill with a skeleton-style highlight sliding through it while the thing is live. Settled states keep the pill but stop moving.</p>
+    </div>
+  </div>
+
+<script>
+  document.querySelectorAll('[data-variant]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.body.classList.remove('v-a', 'v-b');
+      document.body.classList.add(btn.dataset.variant);
+      document.querySelectorAll('[data-variant]').forEach(b => b.classList.toggle('on', b === btn));
+    });
+  });
+  document.getElementById('theme').addEventListener('click', e => {
+    const light = document.body.classList.toggle('light');
+    e.target.classList.toggle('on', light);
+  });
+  document.getElementById('motion').addEventListener('click', e => {
+    const off = document.body.classList.toggle('no-motion');
+    e.target.classList.toggle('on', off);
+  });
+</script>
+</body>
+</html>

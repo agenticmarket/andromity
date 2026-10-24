@@ -3688,11 +3688,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       renderHomeRecentSessions(allSessions.filter(s => !s.parent_session));
     }
 
-    function renderRunningArc() {
-      return '<svg class="session-running-arc" viewBox="0 0 24 24" fill="none" title="Running">' +
-        '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-opacity="0.25"></circle>' +
-        '<path d="M12 3a9 9 0 0 1 9 9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"></path>' +
-      '</svg>';
+    function renderRunningLabel() {
+      return '<span class="session-badge-status session-status-running status-shimmer">Running</span>';
     }
 
     function renderSessionItemHtml(s, opts) {
@@ -3712,40 +3709,29 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const sessState = sessionsState[s.id];
       const isRunningSess = !!((sessState && sessState.isRunning) || s.status === 'running');
 
-      // Sleek minimalist spinning circular arc icon when running (No bulky RUNNING text badge)
-      const runningArc = isRunningSess ? renderRunningArc() : '';
+      const runningLabel = isRunningSess ? renderRunningLabel() : '';
 
       let statusBadge = '';
       if (sessState && sessState.hasUnread && !isCur) {
-        statusBadge = '<span class="session-badge-status session-status-unread"><span class="session-pulse-dot"></span><span>New</span></span>';
+        statusBadge = '<span class="session-badge-status session-status-unread">New</span>';
       } else if (s.status && s.status !== 'idle' && s.status !== 'running') {
         const rawStatus = String(s.status);
         if (rawStatus === 'watching') {
-          statusBadge = '<span class="session-badge-status session-status-watching" title="Watching for events/replies">' +
-            '<span class="session-pulse-dot"></span>' +
-            '<span>Watching</span>' +
-          '</span>';
+          statusBadge = '<span class="session-badge-status session-status-watching status-shimmer status-shimmer-slow" title="Watching for events/replies">Watching</span>';
         } else if (rawStatus === 'paused' || rawStatus === 'paused_limit_reached') {
-          statusBadge = '<span class="session-badge-status session-status-paused" title="Paused">' +
-            '<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>' +
-            '<span>Paused</span>' +
-          '</span>';
+          statusBadge = '<span class="session-badge-status session-status-paused" title="Paused">Paused</span>';
         } else if (rawStatus === 'interrupted') {
           statusBadge = '<span class="session-badge-status session-status-interrupted" title="Andromity stopped before this reply finished, for example because VS Code was closed. Open the chat and send a message to continue.">' +
             '<span>Interrupted</span>' +
           '</span>';
         } else if (rawStatus === 'approval_required') {
-          statusBadge = '<span class="session-badge-status session-status-approval_required" title="Action Approval Required">' +
-            '<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>' +
-            '<span>Approval</span>' +
-          '</span>';
+          statusBadge = '<span class="session-badge-status session-status-approval_required" title="Action Approval Required">Approval</span>';
         } else {
           const displayLabel = rawStatus.charAt(0).toUpperCase() + rawStatus.slice(1).replace(/_/g, ' ');
           statusBadge = '<span class="session-badge-status session-status-' + escapeHtml(rawStatus) + '">' + escapeHtml(displayLabel) + '</span>';
         }
       }
 
-      const activeDot = isCur ? '<span class="session-active-dot" title="Active session"></span>' : '';
       const subTag = isSubsession ? '<span class="subsession-tag">Subagent</span>' : '';
       const branchSymbol = isSubsession ? ('<span class="subsession-branch-symbol">' + (isLastChild ? '└' : '├') + '</span>') : '';
 
@@ -3764,10 +3750,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         '<div class="session-item-info" data-session-id="' + escapeHtml(s.id) + '">' +
           '<div class="session-item-title">' +
             branchSymbol +
-            activeDot +
             subTag +
             '<span class="session-title-text" title="' + name + '">' + name + '</span>' +
-            runningArc +
+            runningLabel +
             statusBadge +
           '</div>' +
           '<div class="session-item-meta">' +
@@ -6769,13 +6754,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function mcpStatusView(status) {
-      if (status === 'running') return { dot: 'running', label: null };
-      if (status === 'needs_auth') return { dot: 'attention', label: 'Sign in' };
-      if (status === 'needs_trust') return { dot: 'attention', label: 'Trust folder' };
-      if (status === 'initializing') return { dot: 'starting', label: 'Starting…' };
-      if (status === 'disabled') return { dot: '', label: 'Off' };
-      if (status === 'error') return { dot: 'error', label: 'Error' };
-      return { dot: '', label: status };
+      if (status === 'running') return { tone: 'running status-shimmer', label: 'Running' };
+      if (status === 'needs_auth') return { tone: 'warn', label: 'Sign in' };
+      if (status === 'needs_trust') return { tone: 'warn', label: 'Trust folder' };
+      if (status === 'initializing') return { tone: 'status-shimmer', label: 'Starting…' };
+      if (status === 'disabled') return { tone: '', label: 'Off' };
+      if (status === 'error') return { tone: 'error', label: 'Error' };
+      return { tone: '', label: status };
     }
 
     function renderSidePanelMcp() {
@@ -6789,7 +6774,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         return '<button type="button" class="sp-server" data-action="open-mcp-settings" title="Manage ' + escapeHtml(s.name) + ' in MCP settings">' +
           '<span class="sp-server-text"><span class="sp-server-name">' + escapeHtml(s.name) + '</span>' +
             '<span class="sp-server-kind">' + (s.remote ? 'Remote' : 'Local') + (s.status === 'running' ? ' · ' + s.tools + ' tool' + (s.tools === 1 ? '' : 's') : '') + '</span></span>' +
-          '<span class="sp-server-status ' + (view.dot === 'attention' ? 'warn' : view.dot === 'error' ? 'error' : '') + '"><span class="sp-dot ' + view.dot + '" aria-hidden="true"></span>' + escapeHtml(view.label || 'Running') + '</span>' +
+          '<span class="sp-server-status ' + view.tone + '">' + escapeHtml(view.label) + '</span>' +
         '</button>';
       }).join('');
       const summary = servers.length
@@ -7814,8 +7799,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function backgroundRunHtml(run) {
       const status = BACKGROUND_LABELS[run.status] ? run.status : 'running';
-      return '<span class="bg-run-dot" aria-hidden="true"></span>' +
-        '<span class="bg-run-text"><span class="bg-run-label">' + BACKGROUND_LABELS[status] + '</span> ' +
+      return '<span class="bg-run-text"><span class="bg-run-label' + (status === 'running' ? ' status-shimmer' : '') + '">' + BACKGROUND_LABELS[status] + '</span> ' +
           '<span class="bg-run-title">' + escapeHtml(run.title || 'New session') + '</span>' +
           (run.summary && status !== 'running' && status !== 'waiting' ? '<span class="bg-run-summary">' + escapeHtml(run.summary) + '</span>' : '') +
         '</span>' +
@@ -8468,8 +8452,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     function clearSkeletonState() {
       try {
         document.body.classList.remove('loading');
-        // skeleton-text fixes the height at 11px, which clips real labels.
-        document.querySelectorAll('.skeleton, .skeleton-text').forEach(el => el.classList.remove('skeleton', 'skeleton-text'));
+        // The skeleton size classes fix a placeholder height, which clips real labels.
+        const skeletonClasses = ['skeleton', 'skeleton-text', 'skeleton-pill', 'skeleton-session', 'skeleton-card'];
+        document.querySelectorAll(skeletonClasses.map(c => '.' + c).join(', ')).forEach(el => el.classList.remove(...skeletonClasses));
         document.querySelectorAll('[aria-busy="true"]').forEach(el => el.removeAttribute('aria-busy'));
       } catch {}
     }
