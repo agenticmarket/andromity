@@ -2,6 +2,20 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [0.2.23] — 2026-10-24
+
+### Changed
+- **The model picker shows the model you're using.** Your current model is listed first under **Current** with an **Active** label, even when it is far down the list or no longer offered, and it comes first in search results. Only the model on your session's provider is marked, not every provider with the same model ID.
+- **Every Andromity model is listed.** The Model Hub and the chat model picker show every model the Andromity provider offers, with its name, description, pricing and context window, instead of Auto alone. Picking a model that isn't available to you right now shows a clear message with **Sign In** or **Switch Model** instead of retrying.
+- **Session panel on more screens.** The session panel appears from 1100px wide, docked beside a slightly narrower chat, instead of needing 1500px. That covers most laptop screens and a chat open next to your files. Narrower views show the chat only.
+- The profile picker is called **Profile** everywhere: the session panel row, the prompt-bar button and the picker menu.
+- The reasoning button is hidden when the selected model doesn't support reasoning, instead of showing a disabled control.
+- No feature events are sent if the extension can't read your telemetry setting.
+
+### Fixed
+- Prompt-bar buttons stay clickable when other elements overlap them.
+- The session title no longer cuts off the bottoms of letters like g, j and y.
+
 ## [0.2.22] — 2026-10-20
 
 ### Added

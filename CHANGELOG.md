@@ -2,7 +2,7 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
-## [Unreleased]
+## [0.2.23] — 2026-10-24
 
 ### Added
 - [SECURITY.md](SECURITY.md) explains how to report a vulnerability privately and what response to expect.
@@ -21,6 +21,11 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
   - The message box has a rounded border that lights up when focused.
 - **Dialogs share one look.** Every dialog (model, connection, profile, trust, undo, sessions, skills, scheduled jobs, batch review, settings and help) uses the same title bar, spacing and buttons, and longer dialogs scroll on small terminals.
 - **Model picker.** Enter or Space picks a provider or model, your current model stays selected when the list refreshes, a custom model ID takes priority over the list, and the lists fit small terminals.
+- **VS Code model picker.** Your current model is listed first under **Current** with an **Active** label, and the picker and Model Hub show every model the Andromity provider offers, not just Auto.
+- **VS Code session panel on more screens.** It appears from 1100px wide, docked beside the chat, instead of needing 1500px.
+
+### Fixed
+- VS Code: prompt-bar buttons stay clickable when other elements overlap them, and the session title no longer cuts off the bottoms of letters like g, j and y.
 
 ## [0.2.22] — 2026-10-20
 

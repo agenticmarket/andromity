@@ -5,7 +5,7 @@
 
   **The open-source coding agent that shows you exactly what it did. Waterfall, Fingerprint and Blast radius trace every model call, file read, edit and command. Bring your own key.**
 
-  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.22-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.23-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white)](https://discord.gg/taPJSNy4)
   [![PyPI](https://img.shields.io/pypi/v/andromity)](https://pypi.org/project/andromity/)
   [![GitHub Stars](https://img.shields.io/github/stars/agenticmarket/andromity?style=social)](https://github.com/agenticmarket/andromity)
