@@ -253,7 +253,8 @@ export function getChatStyles(): string {
       font-size: 13px;
       font-weight: 600;
       letter-spacing: -0.01em;
-      line-height: 1;
+      /* Room for descenders (g, j, y), which overflow: hidden would otherwise clip. */
+      line-height: 1.35;
     }
 
     /* Model Pill */
@@ -1809,6 +1810,17 @@ export function getChatStyles(): string {
 
     .flyout-item.active .flyout-item-name {
       color: #38bdf8;
+    }
+
+    .flyout-active-label {
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: #38bdf8;
+      padding: 1px 6px;
+      border-radius: 4px;
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      flex-shrink: 0;
     }
 
     .flyout-active-dot {
@@ -6146,6 +6158,7 @@ export function getChatStyles(): string {
       display: inline-flex;
       align-items: center;
       gap: 5px;
+      z-index: 10;
       cursor: pointer;
       white-space: nowrap;
       flex-shrink: 0;
@@ -6417,6 +6430,7 @@ export function getChatStyles(): string {
     #btn-prompt-reasoning.is-unsupported {
       opacity: 0.55;
       cursor: not-allowed;
+      display: none;
     }
     .reasoning-popover-badge.badge-unsupported {
       background: rgba(var(--tint), 0.08);

@@ -1,3 +1,0 @@
-[console_scripts]
-andromity = andromity.cli:main
-andromity-ci = andromity.ci.runner:main

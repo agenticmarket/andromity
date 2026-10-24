@@ -23,7 +23,6 @@ SELECT f.user_id, COALESCE(f.session_id,''), f.date, COALESCE(f.client,'unknown'
   COALESCE(s.provider,'unknown'), COALESCE(s.model,'unknown'), COALESCE(s.provider_type,'cloud'),
   COALESCE(s.profile,'builder'), f.created_at
 FROM feature_events f LEFT JOIN sessions s ON s.session_id=f.session_id;
-CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_events_session_event_id ON events(session_id,event,id);
 CREATE INDEX IF NOT EXISTS idx_features_session_date ON feature_events(session_id,date);
 CREATE INDEX IF NOT EXISTS idx_activity_session_date_user ON activity_days(session_id,date,user_id);

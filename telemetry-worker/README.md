@@ -1,64 +1,38 @@
 # Andromity Telemetry Worker
 
-This is a simple Cloudflare Worker that receives the anonymous first-launch ping from Andromity CLI users. It tracks daily active installs by OS and version using Cloudflare KV.
+The Cloudflare Worker behind `telemetry.agenticmarket.dev`. It receives Andromity's usage telemetry and stores it in Cloudflare D1.
 
-## 🔒 Privacy & Telemetry Policy
-
-Andromity collects a **single anonymous ping on first launch** and a **ping on session start** to help us understand usage, track active users, and prioritize platform support. 
-
-**What is collected (exactly):**
-```json
-{ 
-  "event": "first_launch", 
-  "os": "windows", 
-  "python": "3.12", 
-  "version": "0.2.1",
-  "user_id": "a1b2c3d4..." 
-}
-```
-*(Note: `session_start` events also include the AI provider and profile being used)*
-
-**What is NEVER collected:**
-- No file paths, code, or prompts
-- No API keys or environment variables
-- No personally identifiable information (emails, usernames, IP addresses)
-
-### How to Opt-Out
-We respect developer privacy. You can disable this entirely in three ways:
-1. Turn it off in the TUI Settings menu (**Ctrl+E** -> **Advanced**)
-2. Set an environment variable: `export DO_NOT_TRACK=1`
-3. Edit `~/.andromity/config.toml` and set `telemetry = false` under `[default]`
+**What is collected, what is never collected, and how to turn it off:** see [TELEMETRY.md](../TELEMETRY.md).
 
 ## Deployment
 
-1. Install dependencies:
+1. Install dependencies and sign in to Cloudflare:
    ```bash
-   npm install -g wrangler
+   npm install
+   npx wrangler login
    ```
 
-2. Login to Cloudflare:
+2. Create the D1 database and apply the schema:
    ```bash
-   wrangler login
+   npx wrangler d1 create andromity-telemetry
+   npx wrangler d1 execute andromity-telemetry --remote --file=schema.sql
    ```
 
-3. Create the KV namespace:
+3. Copy `.env.example` to `.env` and set `TELEMETRY_D1_ID` (and optionally `STATS_SECRET`).
+
+4. Deploy:
    ```bash
-   npx wrangler kv namespace create TELEMETRY_KV
+   npm run deploy
+   ```
+   `deploy.js` deploys the worker and, when `STATS_SECRET` is set in `.env`, stores it as an encrypted Worker secret.
+
+5. Set the administrative secret separately; it is never read from `.env`:
+   ```bash
+   npx wrangler secret put ADMIN_SECRET
    ```
 
-4. Copy `.env.example` to `.env` and fill in the KV namespace ID from step 3:
-   ```bash
-   cp .env.example .env
-   # then edit .env and set TELEMETRY_KV_ID=<your_id_here>
-   ```
+## Tests
 
-5. Deploy:
-   ```bash
-   node deploy.js
-   # or: npm run deploy
-   ```
-   This script reads your `.env`, injects the KV ID, deploys, and removes any
-   temporary files with secrets automatically.
-
-6. Cloudflare will output the worker URL. Update `src/andromity/telemetry.py`
-   to point to `https://telemetry.agenticmarket.dev/ping`.
+```bash
+npm test
+```

@@ -144,7 +144,7 @@ def test_send_feature_used_and_session_update(monkeypatch):
 
 
 def test_cron_seed_preset_and_error_telemetry_tokens():
-    """Verify that CRON_SEED_PRESET_NAMES and error categories adhere to Zero-PII tokens."""
+    """Verify that CRON_SEED_PRESET_NAMES and error categories are plain identifier tokens."""
     from andromity.server.rpc_handler import CRON_SEED_PRESET_NAMES
 
     assert "Run Tests & Verify Build" in CRON_SEED_PRESET_NAMES

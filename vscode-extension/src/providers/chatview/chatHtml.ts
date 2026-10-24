@@ -1083,7 +1083,7 @@ ${styles}
   <!-- Status Bar Footer -->
   <div class="status-bar" id="status-bar-footer">
     <div class="status-bar-left">
-      <button class="prompt-pill-btn" id="btn-prompt-profile" title="Working style" aria-label="Working style" aria-haspopup="menu" aria-expanded="false">
+      <button class="prompt-pill-btn" id="btn-prompt-profile" title="Profile" aria-label="Profile" aria-haspopup="menu" aria-expanded="false">
         <span id="prompt-profile-icon" class="prompt-profile-icon">
           ${getProfileSvg(state.currentProfile)}
         </span>
@@ -1095,8 +1095,8 @@ ${styles}
       </button>
 
       <!-- Agent Profile Popover Menu -->
-      <div class="menu-popover profile-popover" id="profile-popover" style="display:none;" role="menu" aria-label="Working style">
-        <div class="menu-popover-header">Working style</div>
+      <div class="menu-popover profile-popover" id="profile-popover" style="display:none;" role="menu" aria-label="Profile">
+        <div class="menu-popover-header">Profile</div>
         <div class="menu-popover-list">
           <button type="button" class="menu-popover-item ${(!state.currentProfile || state.currentProfile.toLowerCase() === 'builder') ? 'active' : ''}" data-profile="builder" role="menuitem">
             <span class="menu-popover-icon">${getProfileSvg('builder')}</span>

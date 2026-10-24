@@ -1972,7 +1972,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this._rpcClient.call<any[]>("skills.list", { project_path: workspaceFolder }).catch(() => []),
       ]);
 
-      this._models = (models || []).filter(m => m.provider !== "andromity" || m.id === "auto");
+      this._models = models || [];
       this._providers = providers || [];
       if (!this._providers.some(p => p.id === "andromity")) {
         this._providers.unshift({
@@ -2427,7 +2427,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           const msg = err.message || String(err);
           const lowerMsg = msg.toLowerCase();
 
-          // Zero-PII error classification
+          // Error category only; no message text or paths
           let errCategory = "error_generic";
           if (lowerMsg.includes("already running a turn") || lowerMsg.includes("-32603") || lowerMsg.includes("agent_busy")) {
             errCategory = "error_agent_busy";

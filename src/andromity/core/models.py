@@ -719,17 +719,24 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
         ]
         if data and isinstance(data.get("data"), list):
             for item in data.get("data", []):
+                if not isinstance(item, dict):
+                    continue
                 m_id = item.get("id", "")
                 if m_id and m_id != "auto":
-                    models.append({
+                    context_window = item.get("context_window")
+                    has_window = isinstance(context_window, int) and context_window > 0
+                    entry = {
                         "id": m_id,
-                        "name": m_id,
-                        "desc": f"Gateway model ({item.get('owned_by', 'cloud')})",
-                        "context": "128K",
-                        "pricing": "Included in quota",
+                        "name": item.get("label") or m_id,
+                        "desc": item.get("description") or f"Gateway model ({item.get('owned_by', 'cloud')})",
+                        "context": f"{context_window // 1000}K" if has_window else "128K",
+                        "pricing": item.get("pricing") or "Included in quota",
                         "is_free": True,
                         "tags": ["cloud"],
-                    })
+                    }
+                    if has_window:
+                        entry["context_limit"] = context_window
+                    models.append(entry)
         return _cache_and_return(provider_key, models)
 
     return _cache_and_return(provider_key, [])

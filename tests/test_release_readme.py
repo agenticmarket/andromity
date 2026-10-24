@@ -80,7 +80,8 @@ def test_create_readme_only_pr_and_reuse_existing_branch():
             return [state["pull"]] if state["pull"] else []
         if path == "pulls":
             assert method == "POST" and data["base"] == "main"
-            assert "No AI inference" in data["body"]
+            assert "release notes](" in data["body"] and "Review and merge when ready." in data["body"]
+            assert "AI" not in data["body"]
             state["pull"] = {"html_url": "https://github.com/owner/repo/pull/1", "state": "open"}
             return state["pull"]
         raise AssertionError(path)

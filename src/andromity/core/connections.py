@@ -1,8 +1,6 @@
 """Provider connection metadata and common LiteLLM request routing."""
-import json
 import logging
 import re
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -108,12 +106,8 @@ def provider_request(provider: str, model: str) -> dict[str, Any]:
     if provider == "andromity" and not key:
         key = "anonymous_trial"
     if provider == "opencode" and not key:
-        try:
-            auth = json.loads((Path.home() / ".local/share/opencode/auth.json").read_text(encoding="utf-8"))
-            key = auth.get("opencode", {}).get("key") or auth.get("openrouter", {}).get("key")
-        except (OSError, ValueError, TypeError):
-            pass
-    if adapter == "openai" and provider not in ("openai", "andromity", "opencode") and not key:
+        raise ValueError("Add your OpenCode API key to use this connection.")
+    if adapter == "openai" and provider not in ("openai", "andromity") and not key:
         # LiteLLM otherwise reads OPENAI_API_KEY even for an unrelated endpoint.
         key = "not-required"
     request: dict[str, Any] = {"model": routed_model}

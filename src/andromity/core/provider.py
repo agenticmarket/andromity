@@ -284,9 +284,8 @@ async def stream_completion(
         kwargs["extra_body"].setdefault("provider", {})
         kwargs["extra_body"]["provider"]["allow_fallbacks"] = True
 
-    # OpenCode Zen: Cloudflare requires User-Agent matching the official client
     if provider_name == "opencode":
-        kwargs["extra_headers"] = {"User-Agent": "opencode/1.0.0"}
+        kwargs["extra_headers"] = {"User-Agent": "Andromity"}
 
     log.info("stream_completion start: provider=%s model=%s litellm_model=%s",
              provider_name, model, litellm_model)
@@ -342,7 +341,7 @@ async def stream_completion(
                     ))
                 )
 
-                if is_daily_quota or is_auth_error or is_bad_request:
+                if is_daily_quota or is_auth_error or is_bad_request or gateway_model_unavailable(e):
                     log.info("Non-retryable provider error: %s (HTTP %s).", type(e).__name__, getattr(e, "status_code", "unknown"))
                     yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
                     yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"])
@@ -553,6 +552,22 @@ def extract_clean_error_message(err_or_text: Any) -> str:
     return raw.strip()
 
 
+def gateway_model_unavailable(e: Exception) -> Optional[Dict[str, Any]]:
+    import json
+    import re
+
+    match = re.search(r'(\{[\s\S]*\})', str(e) or "")
+    if not match:
+        return None
+    try:
+        error = json.loads(match.group(1)).get("error")
+    except (ValueError, AttributeError):
+        return None
+    if isinstance(error, dict) and error.get("type") == "model_unavailable":
+        return error
+    return None
+
+
 def classify_error_info(
     e: Exception,
     provider: str = "",
@@ -624,6 +639,7 @@ def classify_error_info(
 
     from andromity.core.network_policy import AirgapBlockedError, AirgapFeatureOff
     is_airgap = isinstance(e, (AirgapFeatureOff, AirgapBlockedError)) or "air-gap mode" in low
+    unavailable = gateway_model_unavailable(e)
 
     if is_airgap:
         err_type = "airgap"
@@ -636,6 +652,26 @@ def classify_error_info(
             f'{icon_settings}Choose a local model</button>'
         )
         actions_tui = ["Press Ctrl+L and choose a local model, such as one served by Ollama"]
+    elif unavailable:
+        needs_sign_in = unavailable.get("action") == "sign_in"
+        err_type = "model_unavailable"
+        badge = "SIGN IN REQUIRED" if needs_sign_in else "MODEL UNAVAILABLE"
+        title = "Sign in to use this model" if needs_sign_in else "Model Not Available"
+        desc_text = clean_msg or "This model isn't available right now. Switch to another model."
+        desc_html = html.escape(desc_text)
+        switch_class = "btn-error-secondary" if needs_sign_in else "btn-error-retry"
+        actions_html = (
+            (
+                f'<button class="btn-error-retry" data-action="open-account-login" title="Sign in with AgenticMarket">'
+                f'{icon_account}Sign In</button>'
+                if needs_sign_in else ""
+            )
+            + f'<button class="{switch_class}" data-action="switch-model-flyout" title="Choose another model">'
+            f'{icon_model}Switch Model</button>'
+        )
+        actions_tui = (
+            ["Sign in with AgenticMarket from the Andromity VS Code extension"] if needs_sign_in else []
+        ) + ["Press Ctrl+L to switch model"]
     elif is_html and is_not_found:
         err_type = "endpoint_not_found"
         badge = "INVALID ENDPOINT"

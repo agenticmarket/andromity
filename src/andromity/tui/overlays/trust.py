@@ -4,6 +4,8 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Static, Button
 
+from andromity.tui.overlays.dialog import dialog_styles
+
 
 class TrustPromptOverlay(ModalScreen):
     """Shown on startup when a project folder has not been trusted yet."""
@@ -70,7 +72,10 @@ TrustPromptOverlay {
     background: $success-lighten-1;
     color: $background;
 }
-"""
+""" + dialog_styles(
+        "tp-dialog", "tp-title", "tp-footer",
+        primary=("tp-trust",),
+    )
 
     def __init__(self, project_path: str, **kwargs):
         super().__init__(**kwargs)
@@ -84,10 +89,10 @@ TrustPromptOverlay {
                 yield Static(escape(self._project_path), id="tp-path")
                 yield Static(
                     "Do you trust the files in this folder?\n\n"
-                    "  [yellow]⚠[/]  Read and search files [dim]— requires trust[/]\n"
-                    "  [yellow]⚠[/]  Write and edit files [dim]— requires trust[/]\n"
-                    "  [yellow]⚠[/]  Run shell commands [dim]— requires trust[/]\n"
-                    "  [green]✓[/]  Web search and chat [dim]— always allowed[/]\n\n"
+                    "  [$text-warning]⚠[/]  Read and search files [dim]— requires trust[/]\n"
+                    "  [$text-warning]⚠[/]  Write and edit files [dim]— requires trust[/]\n"
+                    "  [$text-warning]⚠[/]  Run shell commands [dim]— requires trust[/]\n"
+                    "  [$text-success]✓[/]  Web search and chat [dim]— always allowed[/]\n\n"
                     "[dim]Trust is saved permanently. Use /untrust to revoke.[/]",
                     id="tp-info"
                 )

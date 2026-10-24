@@ -1,29 +1,14 @@
 """
-Andromity anonymous telemetry — privacy-safe, opt-out at any time.
+Andromity usage telemetry, linked to a random per-installation ID; opt-out at any time.
 
-What is collected:
-  - A random anonymous UUID (never linked to identity)
-  - Client type (vscode / tui / cli / server)
-  - OS family (windows / darwin / linux)
-  - App version
-  - Provider name (e.g. "anthropic") — equivalent to reporting browser name
-  - Model name (e.g. "claude-sonnet-5") — not content, just model id
-  - Whether local or cloud inference is used
-  - Reasoning effort setting (off / low / medium / high)
-  - Number of MCP tools enabled at session start (integer count only)
-  - Session end: turn count, had_error (bool), duration bucket, coarse tool counts
-  - Feature usage: the name of a feature that was used (e.g. "fingerprint",
-    "cmd_openwaterfall", "turn_rail_used"), with the anonymous UUID and session id,
-    so we can see which features people use and which nobody does
+TELEMETRY.md at the repository root is the public list of every event and field sent;
+keep it in sync with the payloads in this module.
 
-What is NEVER collected:
-  - Prompts, code, file contents, file paths, API keys
-  - Precise IP addresses (Cloudflare resolves country server-side, IP not stored)
-  - Machine fingerprint, hostname, username
+Never collected: prompts, responses, code, file contents, file names or paths, API keys,
+names, emails, hostnames or hardware identifiers. The worker derives country server-side
+and does not store IP addresses.
 
-Opt-out:
-  - Set env var  DO_NOT_TRACK=1  or  ANDROMITY_NO_TELEMETRY=1
-  - Or toggle "Anonymous Telemetry" off in settings
+Opt-out: DO_NOT_TRACK=1, ANDROMITY_NO_TELEMETRY=1, `telemetry = false` in config, or air-gap mode.
 """
 from __future__ import annotations
 
@@ -323,7 +308,7 @@ def send_feature_used(
 ) -> None:
     """
     Fire when an anonymous user interacts with a feature (e.g. 'waterfall', 'side_by_side').
-    Strictly Zero-PII: only the sanitized feature name, never arguments, code, or paths.
+    Only the sanitized feature name is sent, never arguments, code, or paths.
     """
     if not _should_send_telemetry():
         return

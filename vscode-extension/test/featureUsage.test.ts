@@ -35,5 +35,8 @@ it("sends only the name and session, honours the opt-out gate and counts once pe
   setFeatureUsageGate(() => false);
   recordFeatureUse("cmd_openchat", { client });
   assert.equal(client.sent.length, 4, "nothing is sent when telemetry is off");
+  setFeatureUsageGate(() => { throw new Error("setting unreadable"); });
+  recordFeatureUse("cmd_openchat", { client });
+  assert.equal(client.sent.length, 4, "nothing is sent when the opt-out cannot be read");
   setFeatureUsageGate(() => true);
 });

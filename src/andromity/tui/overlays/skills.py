@@ -14,6 +14,9 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Static, Button, Input, Checkbox
 
+from andromity.tui.overlays.dialog import dialog_styles
+
+
 from andromity.core.skills import REGISTRY_SOURCES, RemoteSkill, SkillsManager
 from andromity.tui.markup_utils import escape_textual as escape
 
@@ -90,7 +93,11 @@ SkillsScreen {
 #sk-footer #sk-install:hover { color: $success !important; }
 #sk-footer #sk-uninstall:hover { color: $error !important; }
 #sk-footer #sk-refresh:hover { color: $accent !important; }
-"""
+""" + dialog_styles(
+        "sk-dialog", "sk-title-bar", "sk-footer",
+        primary=("sk-install",),
+        danger=("sk-uninstall",),
+    )
 
     def __init__(self, project_path: str, **kwargs):
         super().__init__(**kwargs)

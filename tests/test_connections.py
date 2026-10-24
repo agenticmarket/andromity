@@ -120,3 +120,15 @@ def test_real_stream_html_404_reaches_connection_test_without_body_dump(monkeypa
     result = immediate(connections.test_connection("custom"))
     assert result["error_type"] == "endpoint_not_found"
     assert "private-page-marker" not in str(result) + caplog.text
+
+
+def test_opencode_never_falls_back_to_another_credential(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-unrelated-openai-key")
+    monkeypatch.setattr(connections.config, "get_provider_config", lambda provider: None)
+    monkeypatch.setattr(connections.config, "get_api_key", lambda provider: None)
+    with pytest.raises(ValueError, match="OpenCode API key"):
+        connections.provider_request("opencode", "some-model")
+    monkeypatch.setattr(connections.config, "get_api_key", lambda provider: "oc-own-key" if provider == "opencode" else None)
+    request = connections.provider_request("opencode", "some-model")
+    assert request["api_key"] == "oc-own-key"
+    assert request["extra_headers"] == {"User-Agent": "Andromity"}

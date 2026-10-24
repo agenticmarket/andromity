@@ -25,6 +25,8 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Static, Button, Input, Collapsible
+
+from andromity.tui.overlays.dialog import dialog_styles
 from textual import events, on
 
 from andromity.core.cron import (
@@ -107,7 +109,10 @@ CronRunLogModal {
     overflow-y: auto;
 }
 .log-line { margin-bottom: 0; }
-"""
+""" + dialog_styles(
+        "run-log-dialog", "run-log-title-bar", "run-log-actions",
+        toolbar=True,
+    )
 
     def __init__(self, run: CronRun, **kwargs):
         super().__init__(**kwargs)
@@ -305,6 +310,17 @@ CronManagerOverlay {
     background: transparent !important;
     color: $text-muted 40% !important;
 }
+#cron-footer.history-actions {
+    height: 6;
+    layout: grid;
+    grid-size: 4;
+    grid-columns: 1fr;
+    grid-rows: 1;
+    grid-gutter: 1;
+}
+#cron-footer.history-actions Button {
+    width: 1fr !important; min-width: 0 !important; margin: 0 !important;
+}
 #cron-footer #btn-cron-run:enabled:hover, #cron-footer #btn-hist-run-now:enabled:hover {
     background: $success !important;
     color: $background !important;
@@ -352,7 +368,11 @@ CronManagerOverlay {
 .history-row.selected { background: $surface-lighten-1; border-left: tall $accent; }
 .detail-card { background: $surface-darken-1; padding: 1; margin: 0 0 1 0; border: solid $surface-lighten-1; }
 #history-empty { padding: 2; }
-"""
+""" + dialog_styles(
+        "cron-dialog", "cron-title-bar", "cron-footer",
+        primary=("btn-cron-run", "btn-hist-run-now"),
+        danger=("btn-cron-remove", "btn-hist-delete-run"),
+    )
 
     def __init__(self, scheduler: CronScheduler, project_path: str, **kwargs):
         super().__init__(**kwargs)
@@ -537,6 +557,7 @@ CronManagerOverlay {
 
     def _switch_tab(self, tab: str):
         self._active_tab = tab
+        self.query_one("#cron-footer").set_class(tab == "history", "history-actions")
         self.query_one("#cron-tab-jobs").set_class(tab != "jobs", "hidden")
         self.query_one("#cron-tab-history").set_class(tab != "history", "hidden")
         self.query_one("#tab-jobs").set_class(tab == "jobs", "active")

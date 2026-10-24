@@ -1,4 +1,5 @@
 """Tests for session."""
+import re
 import tempfile
 from pathlib import Path
 import pytest
@@ -297,21 +298,20 @@ async def test_tool_sequence_expands_while_working_and_collapses_on_finish():
         col = ts.query_one("#tools-col", Collapsible)
         assert col.collapsed is False
 
-        # Add a tool and check title shows active tool working
+        # Add a tool and check title highlights the running tool
         ts.add_tool(ToolIndicator("read_file", "t1"))
         await pilot.pause()
         assert col.collapsed is False
-        assert "read_file" in ts._title()
-        assert "working" in ts._title()
+        assert "[$primary]read_file" in ts._title()
 
-        # Mark tool done — sequence is still active in the turn so title must still say "working", NOT "done"
+        # Mark tool done — the turn is still active, so the title must not claim "done"
         ts.mark_tool_done("t1")
         await pilot.pause()
-        assert "working" in ts._title()
+        assert "read_file" not in ts._title()
         assert "done" not in ts._title()
 
-        # Finish turn -> auto-collapse and show worked/complete
+        # Finish turn -> auto-collapse and show it finished
         ts.finish()
         await pilot.pause()
         assert col.collapsed is True
-        assert "worked for" in ts._title() or "complete" in ts._title()
+        assert re.search(r"· (done|\d+s)\[/dim\]$", ts._title())

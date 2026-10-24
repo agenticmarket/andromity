@@ -1939,7 +1939,7 @@ class JsonRpcHandler:
                     "session_id": session_id,
                     "error": "The run could not finish. Pending messages are paused. Check your connection and provider settings, then retry.",
                 })
-                # Zero-PII error classification telemetry
+                # Error category only; no message text or paths
                 try:
                     from andromity.telemetry import send_feature_used
                     err_lower = str(e).lower()
@@ -2329,7 +2329,7 @@ class JsonRpcHandler:
         return [{"id": k, "name": k.capitalize(), "description": descs.get(k, ""), "tools": v.get("tools", [])} for k, v in PROFILES.items()]
 
     async def rpc_telemetry_recordFeature(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Record anonymous feature usage telemetry (Zero-PII)."""
+        """Record a feature-usage telemetry event (feature name only)."""
         params = params or {}
         feature = params.get("feature") or params.get("feature_name") or ""
         session_id = params.get("session_id")

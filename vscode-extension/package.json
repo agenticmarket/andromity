@@ -2,7 +2,7 @@
   "name": "andromity-agent",
   "displayName": "Andromity: Free AI Coding Agent for VS Code",
   "description": "Free, open-source AI coding agent and an alternative to Cline, Kilo Code, Claude Code and Cursor that shows exactly what it did: live Waterfall, Fingerprint and Blast radius of every model call, file and command. Use DeepSeek V4, GLM 5.3, Kimi K3, Qwen, Claude Opus 5.5, GPT-6, Gemini 4 or Grok with your own keys, OpenRouter or free local Ollama. MCP, subagents, diffs and undo.",
-  "version": "0.2.22",
+  "version": "0.2.23",
   "publisher": "agenticmarket",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -751,7 +751,7 @@
         "andromity.telemetry": {
           "type": "boolean",
           "default": true,
-          "description": "Send anonymous usage and performance telemetry: launches, error categories, and which features are used (feature names only, never prompts, code or file paths). Also follows VS Code's telemetry setting."
+          "description": "Send usage and performance telemetry linked to a random installation ID: client, OS, version, provider and model name, session and task outcomes, error categories and feature names. Never prompts, code or file paths. Also follows VS Code's telemetry setting."
         },
         "andromity.gatewayUrl": {
           "type": "string",

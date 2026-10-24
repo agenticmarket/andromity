@@ -83,7 +83,8 @@ async def test_execute_session_messaging_tools():
         "to_session": "worker-session",
         "content": "Hello worker!",
     })
-    assert "Message sent successfully" in res_send
+    assert "Message delivered to 'worker-session' inbox" in res_send
+    assert "not woken" in res_send
 
     # Broadcast
     res_bcast = await execute_tool_async("session_broadcast", {

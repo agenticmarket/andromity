@@ -18,12 +18,13 @@ class ChatMessage(Widget):
     DEFAULT_CSS = """\
 ChatMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
 .assistant-header, #assistant-header { width: 1fr; content-align: left middle; }
-ChatMessage.session-message { border-left: tall $primary; background: $primary 8%; margin: 1 0; padding: 0 1; }
-ChatMessage.session-question { border-left: tall $accent; background: $accent 8%; margin: 1 0; padding: 0 1; }
-ChatMessage.session-answer { border-left: tall $success; background: $success 8%; margin: 1 0; padding: 0 1; }
-ChatMessage.session-state { border-left: tall $secondary; background: $secondary 6%; margin: 1 0; padding: 0 1; }
-ChatMessage.session-handoff { border-left: tall $warning; background: $warning 8%; margin: 1 0; padding: 0 1; }
-.session-error-card { border-left: tall #ef4444; background: #ef4444 12%; margin: 1 0; padding: 0 1; }
+.user-msg { margin: 1 0 0 0; }
+ChatMessage.session-message { border-left: solid $primary; margin: 1 0; padding: 0 1; }
+ChatMessage.session-question { border-left: solid $accent; margin: 1 0; padding: 0 1; }
+ChatMessage.session-answer { border-left: solid $success; margin: 1 0; padding: 0 1; }
+ChatMessage.session-state { border-left: solid $foreground 30%; margin: 1 0; padding: 0 1; }
+ChatMessage.session-handoff { border-left: solid $warning; margin: 1 0; padding: 0 1; }
+.session-error-card { border-left: solid $error; margin: 1 0; padding: 0 1; }
 """
     def __init__(self, role: str, content: str = "", show_header: bool = True,
                  show_footer: bool = True, heading: str = "", **kwargs):
@@ -68,17 +69,17 @@ ChatMessage.session-handoff { border-left: tall $warning; background: $warning 8
         if "new-session" in content:
             actions.append("Press Ctrl+N to start a new session")
 
-        out = [f"[bold red]⚠ [{escape(badge)}] {escape(title)}[/bold red]", f"\n{escape(clean_desc)}"]
+        out = [f"[bold $error]{escape(badge)}[/] {escape(title)}", f"\n{escape(clean_desc)}"]
         if timer_str:
-            out.append(f"\n[bold green]⏱ {escape(timer_str)}[/bold green]")
+            out.append(f"\n[$success]{escape(timer_str)}[/]")
         if actions:
-            out.append("\n[dim]Options:\n" + "\n".join(f"  • {a}" for a in actions) + "[/dim]")
+            out.append("\n[dim]" + "\n".join(f"  {a}" for a in actions) + "[/dim]")
 
         yield Static("\n".join(out), classes="session-error-card")
 
     def compose(self) -> ComposeResult:
         if self.role == "user":
-            yield Static(f"[bold cyan]◆ You:[/bold cyan] {escape(self._content)}")
+            yield Static(f"[bold $primary]›[/] {escape(self._content)}", classes="user-msg")
         elif self.role == "assistant":
             if self._show_header:
                 yield Static(_ASSISTANT_HEADER, classes="assistant-header")
@@ -91,7 +92,7 @@ ChatMessage.session-handoff { border-left: tall $warning; background: $warning 8
                 yield Static("")
             if self._show_footer:
                 with Horizontal(classes="response-footer"):
-                    yield Button("⧉ Copy", classes="copy-btn")
+                    yield Button("copy", classes="copy-btn")
                     yield Static("", classes="resp-time")
         elif self.role == "system":
             yield Static(f"[dim italic]{escape(self._content)}[/dim italic]")
@@ -103,7 +104,7 @@ ChatMessage.session-handoff { border-left: tall $warning; background: $warning 8
             yield Static(f"[b]{escape(self._heading)}[/b]\n{escape(self._content)}")
 
     def on_button_pressed(self, event: Button.Pressed):
-        """Copy the raw message content when the ⧉ button is pressed."""
+        """Copy the raw message content when the copy button is pressed."""
         if event.button.has_class("copy-btn"):
             try:
                 self.app.copy_to_clipboard(self._content)
@@ -118,7 +119,7 @@ ChatMessage.session-handoff { border-left: tall $warning; background: $warning 8
             if tool_calls:
                 label = "tool call" if tool_calls == 1 else "tool calls"
                 tool_part = f" · {tool_calls} {label}"
-            self.query_one(".resp-time", Static).update(f"⏱  {elapsed_s:.1f}s{tool_part}")
+            self.query_one(".resp-time", Static).update(f"{elapsed_s:.1f}s{tool_part}")
         except Exception:
             pass
 
@@ -129,8 +130,7 @@ class QueuedMessageBadge(Widget):
 QueuedMessageBadge {
     width: 1fr; height: auto; min-height: 1;
     padding: 0 1; margin: 0;
-    border-left: tall $warning-darken-1;
-    background: $warning 15%;
+    border-left: solid $warning;
 }
 """
     def __init__(self, prompt: str, queue_pos: int, **kwargs):
@@ -141,8 +141,7 @@ QueuedMessageBadge {
     def compose(self) -> ComposeResult:
         short = self._prompt[:50] + ("\u2026" if len(self._prompt) > 50 else "")
         yield Static(
-            f"[yellow bold]⏳ Queued #{self._queue_pos}:[/] [dim]{escape(short)}[/]"
-            f"  [dim italic](will send after current response)[/]"
+            f"[$warning]queued {self._queue_pos}[/] [dim]{escape(short)}[/]"
         )
 
 
@@ -303,22 +302,6 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
             self._spinner_frame += 1
             self._update_title()
 
-    def _get_icon(self) -> str:
-        name = self.tool_name.lower()
-        if "subagent" in name:
-            return "🤖"
-        if "file" in name or "read" in name or "write" in name or "edit" in name:
-            return "📝"
-        if "dir" in name or "list" in name:
-            return "📁"
-        if "shell" in name or "cmd" in name or "exec" in name or "run" in name:
-            return "💻"
-        if "search" in name or "grep" in name:
-            return "🔍"
-        if "web" in name or "browser" in name:
-            return "🌐"
-        return "🛠️"
-
     def _title_text(self) -> str:
         summary = ""
         if self.tool_name == "spawn_subagent" and getattr(self, "_current_subagent_activity", None) and not self._done:
@@ -335,29 +318,18 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
                 summary = f" ({val})"
 
         elapsed = int(time.time() - self._start_time)
-        icon = self._get_icon()
 
         if self._done:
-            status_color = "$success"
-            status = f"done in {elapsed}s"
-            spin = "  "
-            timeout_warn = ""
+            mark = "[$success]✓[/]"
+            status = f"{elapsed}s"
         else:
             spin_char = self._SPINNER_CHARS[self._spinner_frame % len(self._SPINNER_CHARS)]
-            spin = f"[dim $primary]{spin_char}[/dim $primary] "
-            # Warn when approaching the 120s default timeout
+            mark = f"[$primary]{spin_char}[/]"
+            status = f"{elapsed}s"
             if elapsed >= 100:
-                status_color = "$error"
-                status = f"running ({elapsed}s) ⚠ timeout soon"
-            elif elapsed >= 60:
-                status_color = "$warning"
-                status = f"running ({elapsed}s)"
-            else:
-                status_color = "$warning"
-                status = f"running ({elapsed}s)"
-            timeout_warn = ""
+                status += " · [$error]timeout soon[/]"
 
-        return f"{spin}[dim]{icon} {escape(self.tool_name)}{escape(summary)} [{status_color}]{status}[/{status_color}]{timeout_warn}[/dim]"
+        return f"{mark} [dim]{escape(self.tool_name)}{escape(summary)} {status}[/dim]"
 
 
     def _update_title(self):
@@ -397,7 +369,7 @@ ToolIndicator Collapsible { border: none; padding: 0; background: transparent; }
 
 class ToolSequence(Widget):
     """Groups all tool calls of one turn into a single collapsible summary,
-    e.g. "🛠 4 tools · worked for 32s". Expand to reveal each tool's own
+    e.g. "4 tools · 32s". Expand to reveal each tool's own
     collapsible (args / result).
     """
     DEFAULT_CSS = """\
@@ -405,8 +377,6 @@ ToolSequence { width: 1fr; height: auto; min-height: 1; padding: 0 1; margin: 0;
 ToolSequence Collapsible { border: none; padding: 0; background: transparent; }
 #tools-list { height: auto; }
 """
-    _TOOL_ICON = "🛠️"
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._started = time.time()
@@ -423,7 +393,7 @@ ToolSequence Collapsible { border: none; padding: 0; background: transparent; }
         auto_expand = config.get("default", "expand_tools_while_working", True)
         is_collapsed = self._finished or not auto_expand
         with Collapsible(title=self._title(), collapsed=is_collapsed, id="tools-col"):
-            yield Button("⧉ Copy tool log", classes="copy-tools-btn")
+            yield Button("copy log", classes="copy-tools-btn")
             yield Vertical(id="tools-list")
 
     def on_mount(self):
@@ -444,16 +414,16 @@ ToolSequence Collapsible { border: none; padding: 0; background: transparent; }
         label = f"{self._count} tool" + ("s" if self._count != 1 else "")
         if self._finished:
             # Replayed sequences have no recorded duration — just say complete
-            status = "complete" if elapsed < 1 else f"worked for {elapsed}s"
+            status = "done" if elapsed < 1 else f"{elapsed}s"
         elif not self._last_tool_done and self._last_tool:
             # A specific tool is actively executing
-            status = f"[$primary]{escape(self._last_tool)}[/$primary] working… ({elapsed}s)"
+            status = f"[$primary]{escape(self._last_tool)}[/$primary] {elapsed}s"
         elif self._last_tool_done and self._count > 0:
-            status = f"working… ({elapsed}s)"
+            status = f"{elapsed}s"
         else:
             # Turn/block is still active (thinking, between tools, or preparing next step)
-            status = f"working… ({elapsed}s)"
-        return f"[dim]{self._TOOL_ICON} {label} · {status}[/dim]"
+            status = f"{elapsed}s"
+        return f"[dim]{label} · {status}[/dim]"
 
     def _tick(self):
         if self._finished:
@@ -546,7 +516,7 @@ class ThinkingBubble(Widget):
 ThinkingBubble { width: 1fr; height: auto; padding: 0 1; margin: 0; }
 ThinkingBubble Collapsible { border: none; padding: 0; margin: 0; background: transparent; }
 ThinkingBubble Collapsible > Contents { padding: 0; margin: 0; }
-#think-md { color: $primary; text-style: italic; padding: 0 0 0 3; margin: 0; }
+#think-md { color: $text-muted; text-style: italic; padding: 0 0 0 2; margin: 0; }
 """
     _SPINNER_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
     
@@ -572,7 +542,7 @@ ThinkingBubble Collapsible > Contents { padding: 0; margin: 0; }
     def compose(self) -> ComposeResult:
         # Collapsed by default — shows the live spinner + elapsed time in the
         # title; expand to read the reasoning. Stays in place once finished.
-        title = "   [dim italic]thought[/dim italic]" if self._done else "[dim $primary]⠋[/dim $primary]  [dim italic]thinking (0s)[/dim italic]"
+        title = "[dim italic]thought[/dim italic]" if self._done else "[dim]⠋ thinking 0s[/dim]"
         with Collapsible(title=title, collapsed=True, id="think-col"):
             yield Static(escape(self._text), id="think-md", classes="dim italic")
 
@@ -603,7 +573,7 @@ ThinkingBubble Collapsible > Contents { padding: 0; margin: 0; }
             elapsed = int(time.time() - self._start_time)
             try:
                 col = self.query_one("#think-col", Collapsible)
-                col.title = f"[dim $primary]{spin}[/dim $primary]  [dim $primary italic]thinking ({elapsed}s)[/dim $primary italic]"
+                col.title = f"[dim]{spin} thinking {elapsed}s[/dim]"
             except Exception:
                 pass
 
@@ -638,14 +608,14 @@ ThinkingBubble Collapsible > Contents { padding: 0; margin: 0; }
         elapsed = int(time.time() - self._start_time)
         try:
             col = self.query_one("#think-col", Collapsible)
-            col.title = f"   [dim italic]thought ({elapsed}s)[/dim italic]"
+            col.title = f"[dim italic]thought {elapsed}s[/dim italic]"
         except Exception:
             pass
 
 class StreamingMessage(Widget):
     DEFAULT_CSS = """\
 StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
-#stream-placeholder { color: $primary; margin: 0 0 0 1; }
+#stream-placeholder { color: $text-muted; margin: 0; }
 """
     _SPINNER_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
@@ -665,7 +635,7 @@ StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
         return "".join(self._chunks)
 
     def compose(self) -> ComposeResult:
-        yield Static("[dim $primary]⠋ Thinking…[/dim $primary]", id="stream-placeholder")
+        yield Static("[dim]⠋[/dim]", id="stream-placeholder")
         yield Markdown("", id="stream-content")
 
     def show_header(self):
@@ -707,7 +677,7 @@ StreamingMessage { width: 1fr; height: auto; min-height: 1; padding: 0 1; }
             spin = self._SPINNER_CHARS[self._spinner_frame % len(self._SPINNER_CHARS)]
             try:
                 placeholder = self.query_one("#stream-placeholder", Static)
-                placeholder.update(f"[dim $primary]{spin} Thinking…[/dim $primary]")
+                placeholder.update(f"[dim]{spin}[/dim]")
             except Exception:
                 pass
         elif self._pending:

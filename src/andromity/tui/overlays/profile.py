@@ -1,9 +1,10 @@
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import Static, Button, RadioButton, RadioSet
-from textual.reactive import reactive
 
+from andromity.tui.overlays.dialog import DialogRadioButton, dialog_styles
 
 PROFILES = {
     "builder": {
@@ -31,6 +32,7 @@ PROFILES = {
 
 class ProfilePickerOverlay(ModalScreen):
     """Profile picker overlay."""
+    AUTO_FOCUS = "#pp-radioset"
     DEFAULT_CSS = """\
 ProfilePickerOverlay {
     align: center middle;
@@ -38,7 +40,7 @@ ProfilePickerOverlay {
 }
 #pp-dialog {
     width: 90%; max-width: 62;
-    height: auto; max-height: 28;
+    height: 85%; max-height: 28; min-height: 16;
     border: solid $accent-darken-2;
     background: $surface;
     padding: 0;
@@ -51,7 +53,7 @@ ProfilePickerOverlay {
     text-style: bold;
 }
 #pp-body {
-    height: auto;
+    height: 1fr;
     padding: 1 2;
 }
 #pp-radioset {
@@ -105,17 +107,20 @@ ProfilePickerOverlay {
     background: $accent-lighten-1;
     color: $background;
 }
-"""
+""" + dialog_styles(
+        "pp-dialog", "pp-title", "pp-footer",
+        primary=("pp-apply",),
+    )
 
     _selected: reactive[str] = reactive("")
 
     def compose(self) -> ComposeResult:
         with Vertical(id="pp-dialog"):
             yield Static(" Select Profile ", id="pp-title")
-            with Vertical(id="pp-body"):
+            with VerticalScroll(id="pp-body"):
                 with RadioSet(id="pp-radioset"):
                     for key, info in PROFILES.items():
-                        yield RadioButton(f" {info['name']}  [dim]({key})[/]", id=f"profile-{key}")
+                        yield DialogRadioButton(f" {info['name']}  [dim]({key})[/]", id=f"profile-{key}")
                 yield Static("", id="pp-desc")
                 yield Static("[dim]Profile controls which tools the agent can use.[/]", id="pp-hint")
             with Horizontal(id="pp-footer"):

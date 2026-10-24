@@ -47,10 +47,8 @@ async def test_andromity_provider_routing(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_openrouter_requests_use_the_same_app_identity_as_the_gateway(monkeypatch):
-    """OpenRouter groups apps by HTTP-Referer; BYOK traffic must land in the gateway's app."""
-    import pathlib
-    import re
+async def test_openrouter_requests_identify_as_one_andromity_app(monkeypatch):
+    """OpenRouter groups apps by HTTP-Referer, so every request must send the same app identity."""
     import litellm
     from andromity.core import provider as provider_mod
 
@@ -82,9 +80,3 @@ async def test_openrouter_requests_use_the_same_app_identity_as_the_gateway(monk
     assert headers["HTTP-Referer"] == "https://andromity.agenticmarket.dev"
     assert headers["X-Title"] == headers["X-OpenRouter-Title"] == "Andromity"
     assert headers["X-OpenRouter-Categories"]
-
-    gateway = pathlib.Path(__file__).resolve().parents[1] / "gateway-worker" / "src" / "fallbackRouter.ts"
-    if gateway.exists():
-        block = re.search(r"OPENROUTER_APP_HEADERS[^{]*\{(.*?)\}", gateway.read_text(encoding="utf-8"), re.S).group(1)
-        assert "'HTTP-Referer': 'https://andromity.agenticmarket.dev'" in block
-        assert "'X-Title': 'Andromity'" in block

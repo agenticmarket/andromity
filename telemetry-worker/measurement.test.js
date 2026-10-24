@@ -262,3 +262,35 @@ test('events reporting the literal unknown session id are not pooled into one sh
   assert.ok(ids.every(id=>id!=='unknown'));
   db.sqlite.close();
 });
+
+test('adoption counts prompted, completed and repeat-completed users per scope',async()=>{
+  const db=database();
+  const run=(id,outcome)=>[{event:'task_started',run_id:`run-${id}-aaaaaaaaaaaa`},{event:'task_finished',run_id:`run-${id}-aaaaaaaaaaaa`,outcome,active_seconds:5}];
+  const user=(userId,sessionId,client)=>fields({userId,sessionId,client});
+  for(const event of [...run('a1','completed'),...run('a2','completed')]) await ingestTelemetry(db,event,user('user-repeat-01','sess-r1','vscode'));
+  for(const event of run('b1','completed')) await ingestTelemetry(db,event,user('user-single-01','sess-s1','cli'));
+  for(const event of run('c1','failed')) await ingestTelemetry(db,event,user('user-failed-01','sess-f1','vscode'));
+  await ingestTelemetry(db,{event:'session_start'},user('user-sessiononly','sess-o1','vscode'));
+  await ingestTelemetry(db,{event:'feature_use',feature_name:'settings_open'},user('user-featureonly','sess-x1','cli'));
+
+  const all=await getD1Stats({DB:db},new URLSearchParams('timeRange=all'));
+  assert.deepEqual({...all.adoption},{observed:5,prompted:4,completed:2,repeat_completed:1});
+
+  const vscode=await getD1Stats({DB:db},new URLSearchParams('timeRange=all&client=vscode'));
+  assert.deepEqual({...vscode.adoption},{observed:3,prompted:3,completed:1,repeat_completed:1});
+  db.sqlite.close();
+});
+
+test('admin purge deletes only the exact user, never users sharing a prefix',async()=>{
+  const db=database();
+  await ingestTelemetry(db,{event:'session_start'},fields({userId:'user-12345678',sessionId:'session-a'}));
+  await ingestTelemetry(db,{event:'session_start'},fields({userId:'user-123456789',sessionId:'session-b'}));
+  const purge=body=>worker.fetch(new Request('https://telemetry.test/api/admin/purge-user',{
+    method:'POST',headers:{'x-stats-key':'admin-secret','Content-Type':'application/json'},body:JSON.stringify(body)
+  }),{DB:db,ADMIN_SECRET:'admin-secret'},{waitUntil(){}});
+  assert.equal((await purge({user_id:'user'})).status,400);
+  assert.equal((await purge({user_id:'user-12345678'})).status,200);
+  const remaining=db.sqlite.prepare('SELECT user_id FROM users ORDER BY user_id').all().map(r=>r.user_id);
+  assert.deepEqual(remaining,['user-123456789']);
+  db.sqlite.close();
+});

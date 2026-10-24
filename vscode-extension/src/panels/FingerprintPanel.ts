@@ -30,7 +30,7 @@ export class FingerprintPanel {
         return;
       }
     } catch {
-      // In mock/test environments
+      return;
     }
     let features = FingerprintPanel._sessionRecordedFeatures.get(sessionId);
     if (!features) {

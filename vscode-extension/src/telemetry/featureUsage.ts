@@ -1,4 +1,4 @@
-/** Anonymous "was this feature used" events. Each event is only a feature name
+/** "Was this feature used" events. Each event is only a feature name
  *  (plus the session id it happened in); it goes through the daemon's
  *  telemetry.recordFeature to the Andromity telemetry worker, where the admin
  *  dashboard counts users and uses per name. Never prompts, code, paths, model
@@ -40,7 +40,7 @@ function telemetryAllowed(): boolean {
   try {
     return telemetryGate();
   } catch {
-    return true;
+    return false;
   }
 }
 

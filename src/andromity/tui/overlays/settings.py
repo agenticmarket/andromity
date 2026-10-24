@@ -19,6 +19,7 @@ from textual.widgets import (
     ContentSwitcher, Input, RadioSet, RadioButton, Switch, Collapsible
 )
 
+from andromity.tui.overlays.dialog import DialogRadioButton, dialog_styles
 from andromity.config import config, get_shell
 from andromity.core.mcp import MCPClientManager, MCPStdioSession
 from andromity.tui.panels.chat import ChatPanel
@@ -149,9 +150,9 @@ SettingsScreen {
 }
 #settings-body { height: 1fr; }
 #settings-sidebar {
-    width: 25; height: 1fr;
-    border-right: solid $primary-darken-2;
-    background: $surface-darken-1;
+    width: 22; max-width: 30%; height: 1fr;
+    border-right: solid $surface-lighten-1;
+    background: $surface;
 }
 #settings-footer {
     dock: bottom;
@@ -188,7 +189,7 @@ SettingsScreen {
 
 /* ── Pane ── */
 .settings-pane  { height: 1fr; overflow-y: auto; }
-.settings-label { text-style: bold; color: $accent; margin-bottom: 1; }
+.settings-label { text-style: bold; color: $text; margin-bottom: 1; }
 .field-label    { color: $text-muted; height: 1; margin-top: 1; }
 .section-hint   { color: $text-muted; margin-bottom: 1; }
 .settings-input { width: 1fr; }
@@ -346,7 +347,10 @@ SettingsScreen {
 .usage-model-tok   { width: 12; color: $accent; content-align: right middle; }
 .usage-model-cost  { width: 18; color: $success; content-align: right middle; }
 .usage-empty      { color: $text-muted; margin-top: 2; }
-"""
+""" + dialog_styles(
+        "settings-dialog", "settings-title", "settings-footer",
+        primary=("settings-save",),
+    )
 
     def __init__(self, mcp_manager: MCPClientManager = None,
                  project_path: str = "", **kwargs):
@@ -408,13 +412,13 @@ SettingsScreen {
                                     id="setting-user-email")
                         yield Label("Default Permission Mode:", classes="field-label")
                         with RadioSet(id="setting-permission-mode"):
-                            yield RadioButton(
+                            yield DialogRadioButton(
                                 "Safe   — ask before every write & shell", id="perm-safe")
-                            yield RadioButton(
+                            yield DialogRadioButton(
                                 "Trust  — auto writes, ask shell cmds",    id="perm-trust")
-                            yield RadioButton(
+                            yield DialogRadioButton(
                                 "Full   — auto-approve writes & shell",    id="perm-full")
-                            yield RadioButton(
+                            yield DialogRadioButton(
                                 "Yolo   — no confirmations at all  ⚠",    id="perm-yolo")
                         yield Label("Shell (read-only):", classes="field-label")
                         yield Input(value=get_shell(), id="setting-shell", disabled=True)
@@ -478,7 +482,7 @@ SettingsScreen {
                         from andromity.tui.overlays.profile import PROFILES
                         with RadioSet(id="setting-profiles"):
                             for key, info in PROFILES.items():
-                                yield RadioButton(
+                                yield DialogRadioButton(
                                     f"{info['name']}  [dim]({key})[/]",
                                     id=f"prof-{key}")
                         for key, info in PROFILES.items():
@@ -748,9 +752,9 @@ SettingsScreen {
                 yield Input(placeholder="e.g. my-server", id="mcp-add-name")
                 yield Label("Type:", classes="field-label")
                 with RadioSet(id="mcp-add-type"):
-                    yield RadioButton("Local process (stdio)",
+                    yield DialogRadioButton("Local process (stdio)",
                                       id="add-type-stdio", value=True)
-                    yield RadioButton("Remote HTTP/SSE",
+                    yield DialogRadioButton("Remote HTTP/SSE",
                                       id="add-type-remote")
                 yield Label("Command:", classes="field-label",
                             id="mcp-add-cmd-label")

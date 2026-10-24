@@ -1,7 +1,7 @@
 const allowed = ['country','client','os','version','provider','model','timeRange',
   'excludeCountry','excludeClient','excludeOS','excludeVersion','excludeProvider','excludeModel'];
 const flights = new WeakMap();
-const snapshotLifetimeSeconds = 600;
+const snapshotLifetimeSeconds = 1800;
 
 export function normalizeStatsParams(params) {
   const normalized = new URLSearchParams();

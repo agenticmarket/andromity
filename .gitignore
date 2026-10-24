@@ -28,46 +28,23 @@ test2.py
 scratch/
 src/test.txt
 dist/
-.freebuff/
 benchmark/
-opencode/
 .vscode/mcp.json
-try.html
-PERFORMANCE_RECOMMENDATIONS.md
-playbook.md
 .eval-venv/
-demo.html
-solo-developer-playbook.md
 vscode-extension/node_modules
 vscode-extension/dist-test/
 vscode-extension/bin/
 .pyinstaller-build/
 dist-server/
 build/
-sqlite_migration_plan.md
 *.vsix
-pannel/
-knownbug.md
 
 .session_cache/
-temp_asset.jpg
-debug_snap.png
-scripts/sync_agent.py
-scripts/browser_runner.py
-wallpaper-ambient-test.html
-/wildcat-panther-dusk.jpg
-/product
-/product/
-landing-page-experimental/
-litellm_disclosure_package/
-prefect_disclosure_package/
-prefect_disclosure_package.zip
-security_audit/
 *.mp4
 *.mov
 *.webm
 
-# Production Secrets, Private Keys & Environment Variables (Zero Public Exposure)
+# Secrets, keys and environment files
 .dev.vars
 **/.dev.vars
 .env
@@ -77,15 +54,16 @@ security_audit/
 *.key
 credentials.json
 service_account.json
-gateway-worker/
-gateway-blueprint/
 logs/
 AGENTS.md
 .agents/
-.commandcode/
-landing-page-next/
 docs/
 
-# Local-only material kept out of the public repo (the website is a separate private repo)
-/private/
 .claude/
+*.egg-info/
+
+# Separate repositories and local workspace folders
+gateway-worker/
+pannel/
+/product/
+/private/
