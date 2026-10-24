@@ -7,6 +7,7 @@ import { getFingerprintHtml } from "../providers/fingerprint/fingerprintHtml.js"
 import { buildFingerprintTrace } from "../providers/fingerprint/fingerprintTrace.js";
 import { DOCS } from "../docsLinks.js";
 import { WaterfallTraceStore } from "./WaterfallPanel.js";
+import { noteFeatureUse } from "../telemetry/featureUsage.js";
 
 export class FingerprintPanel {
   public static readonly viewType = "andromity.fingerprint";
@@ -70,6 +71,7 @@ export class FingerprintPanel {
     context: vscode.ExtensionContext,
     viewColumn: vscode.ViewColumn = vscode.ViewColumn.Active
   ): FingerprintPanel {
+    noteFeatureUse("fingerprint");
     if (rpcClient) {
       WaterfallTraceStore.init(rpcClient);
       FingerprintPanel.recordFeature(sessionId, "fingerprint", rpcClient);

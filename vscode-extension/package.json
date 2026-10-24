@@ -728,6 +728,11 @@
           "default": true,
           "description": "Play sound notifications on turn finish or approval required."
         },
+        "andromity.featureTips": {
+          "type": "boolean",
+          "default": true,
+          "description": "After a reply, now and then show a short tip about a feature you have not used yet, such as Fingerprint or Cron Jobs. At most one a day."
+        },
         "andromity.includeCoAuthor": {
           "type": "boolean",
           "default": true,

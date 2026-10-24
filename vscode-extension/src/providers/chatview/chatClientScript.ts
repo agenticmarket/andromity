@@ -4524,6 +4524,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           dismissNextStep('dismissed');
           promptInput.focus();
           break;
+        case 'feature-tip-run':
+        case 'feature-tip-menu':
+        case 'feature-tip-hide':
+        case 'feature-tip-off':
+          featureTipAction(action);
+          break;
         case 'open-session-tab': {
           e.stopPropagation();
           const tabSid = target.getAttribute('data-session-id') || target.closest('[data-session-id]')?.getAttribute('data-session-id');
@@ -7732,7 +7738,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         '<div class="next-step-actions">' + buttons +
           '<button class="next-step-dismiss" data-action="next-step-dismiss" aria-label="Dismiss suggestion" title="Dismiss (Esc)">&times;</button>' +
         '</div>';
-      chatContainer.appendChild(card);
+      const tipCard = document.getElementById('feature-tip-card');
+      if (tipCard) chatContainer.insertBefore(card, tipCard);
+      else chatContainer.appendChild(card);
       if (input) input.setAttribute('placeholder', step.title + '  ·  Tab to use');
       if (!step.reported) {
         step.reported = true;
@@ -7857,6 +7865,118 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       chatContainer.insertBefore(line, chatContainer.firstChild);
     }
     // ── End next-step suggestion ─────────────────────────────────────────────
+
+    // ── Feature tips ─────────────────────────────────────────────────────────
+    // After a reply, the extension may pick one tip about a feature this user has not
+    // used yet. The webview only reports what the turn did and draws the card.
+    const FEATURE_TIP_COPY = {
+      fingerprint: {
+        html: '<strong>Fingerprint</strong> shows every file this turn touched and what else depends on them, so you can see the blast radius before you commit.',
+        action: () => 'Open Fingerprint',
+      },
+      commit_message: {
+        html: 'Ready to commit? Andromity can <strong>write the commit message</strong> for these changes from the Source Control panel.',
+        action: () => 'Write commit message',
+      },
+      inline_edit: {
+        html: 'For small changes like this, select the code and press <kbd>Ctrl</kbd>+<kbd>I</kbd> to <strong>edit it in place</strong> without leaving the editor.',
+        action: (file) => file ? 'Open ' + file.split(/[\\\\/]/).pop() : '',
+      },
+      cron_jobs: {
+        html: 'Want this to run on its own? <strong>Cron Jobs</strong> can run a prompt on a schedule and keep the results in a session.',
+        action: () => 'Open Cron Jobs',
+      },
+      generate_tests: {
+        html: 'This change has no tests yet. Right-click a file and choose <strong>Andromity › Generate Unit Tests</strong>, or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> in the editor.',
+        action: (file) => file ? 'Write tests for ' + file.split(/[\\\\/]/).pop() : '',
+      },
+      fix_terminal_error: {
+        html: 'When a command fails in your own terminal, right-click the output and choose <strong>Fix Terminal Error</strong>. Andromity reads the error and fixes the cause.',
+        action: () => 'Got it',
+      },
+      air_gap: {
+        html: 'You are on a local model. With <strong>air-gap mode</strong> on, Andromity connects only to this machine and hosts you allow: no cloud models, telemetry or remote MCP servers.',
+        action: () => 'How air-gap works',
+      },
+      mcp_servers: {
+        html: '<strong>MCP servers</strong> let the agent use tools like GitHub, Jira or your database. Add one from Settings.',
+        action: () => 'Browse MCP servers',
+      },
+    };
+
+    function finishedTurnFacts(msg) {
+      const prompts = chatContainer.querySelectorAll('.message-wrap.user:not([data-steering])');
+      const lastPrompt = prompts[prompts.length - 1];
+      if (!lastPrompt) return null;
+      let toolCalls = 0;
+      let shellCommands = 0;
+      for (let el = lastPrompt.nextElementSibling; el; el = el.nextElementSibling) {
+        toolCalls += (el.matches('.tool-card, .activity-row') ? 1 : 0) + el.querySelectorAll('.tool-card, .activity-row').length;
+        shellCommands += (el.matches('.activity-row-command') ? 1 : 0) + el.querySelectorAll('.activity-row-command').length;
+      }
+      return {
+        type: 'turn_finished',
+        sessionId: msg.session_id || currentSessionId,
+        editedFiles: Array.from(turnEditedFiles).slice(0, 50),
+        toolCalls,
+        shellCommands,
+        scheduled: Boolean(msg.scheduled || (sessionsState[currentSessionId] && sessionsState[currentSessionId].scheduledRun)),
+      };
+    }
+
+    function removeFeatureTip() {
+      const existing = document.getElementById('feature-tip-card');
+      if (existing) existing.remove();
+    }
+
+    function renderFeatureTip(id, file) {
+      const copy = FEATURE_TIP_COPY[id];
+      if (!copy) return;
+      removeFeatureTip();
+      const label = copy.action(file || '');
+      const card = document.createElement('div');
+      card.id = 'feature-tip-card';
+      card.className = 'feature-tip-card';
+      card.setAttribute('role', 'note');
+      card.dataset.tip = id;
+      card.dataset.file = file || '';
+      card.innerHTML = '<svg class="feature-tip-bulb" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14"/></svg>' +
+        '<div class="feature-tip-text"><span class="feature-tip-label">Did you know</span>' + copy.html + '</div>' +
+        (label ? '<button class="next-step-btn" data-action="feature-tip-run">' + escapeHtml(label) + '</button>' : '') +
+        '<button class="next-step-dismiss" data-action="feature-tip-menu" aria-label="Dismiss tip" aria-haspopup="menu" aria-expanded="false" title="Dismiss">&times;</button>' +
+        '<div class="feature-tip-menu" role="menu" hidden>' +
+          '<button role="menuitem" data-action="feature-tip-hide">Hide this tip</button>' +
+          '<button role="menuitem" data-action="feature-tip-off">Don\\'t show tips</button>' +
+        '</div>';
+      chatContainer.appendChild(card);
+      scrollToBottomIfNeeded();
+    }
+
+    function setFeatureTipMenu(open) {
+      const card = document.getElementById('feature-tip-card');
+      if (!card) return;
+      card.querySelector('.feature-tip-menu').hidden = !open;
+      card.querySelector('[data-action="feature-tip-menu"]').setAttribute('aria-expanded', String(open));
+    }
+
+    function featureTipAction(action) {
+      const card = document.getElementById('feature-tip-card');
+      if (!card) return;
+      const tip = card.dataset.tip;
+      if (action === 'feature-tip-menu') {
+        setFeatureTipMenu(card.querySelector('.feature-tip-menu').hidden);
+        return;
+      }
+      if (action === 'feature-tip-run') vscode.postMessage({ type: 'feature_tip_run', tip, file: card.dataset.file });
+      else if (action === 'feature-tip-hide') vscode.postMessage({ type: 'feature_tip_hide', tip });
+      else if (action === 'feature-tip-off') vscode.postMessage({ type: 'feature_tip_off' });
+      card.remove();
+    }
+
+    document.addEventListener('click', (event) => {
+      if (!event.target.closest || !event.target.closest('#feature-tip-card')) setFeatureTipMenu(false);
+    });
+    // ── End feature tips ─────────────────────────────────────────────────────
 
     function updateSessionActivityIndicator() {
       const dot = document.getElementById('session-activity-dot');
@@ -8219,6 +8339,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function startAssistantTurn() {
       isRunning = true;
+      removeFeatureTip();
       // Only stick to bottom if user was already at the bottom; do not steal scroll if user is reading history
       if (!userScrolledUp && !_isUserActivelyScrolling && isAtBottom(2)) {
         userScrolledUp = false;
@@ -10254,6 +10375,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               if (tf) turnEditedFiles.add(tf);
             }
           }
+          const finishedTurn = finishedTurnFacts(msg);
           endAssistantTurn();
           interactiveSlot.innerHTML = '';
           activePendingApprovalId = null;
@@ -10269,7 +10391,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (pendingPlan) handleBackendMessage(pendingPlan);
           flushQueue();
           renderNextStep();
+          if (finishedTurn) vscode.postMessage(finishedTurn);
           break; }
+
+        case 'feature_tip':
+          if (msg.session_id === currentSessionId && !isRunning) renderFeatureTip(msg.tip, msg.file);
+          break;
 
         case 'agent_cancelled': {
           if (msg.session_id) {

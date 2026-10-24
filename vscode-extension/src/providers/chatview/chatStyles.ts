@@ -8295,6 +8295,72 @@ export function getChatStyles(): string {
       background: var(--surface-hover);
     }
 
+    /* Feature tip: one feature this user has not tried, under the reply */
+    .feature-tip-card {
+      --tip-color: var(--vscode-editorLightBulb-foreground, #e2c08d);
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 8px 0 4px;
+      padding: 8px 8px 8px 10px;
+      border: 1px dashed color-mix(in srgb, var(--tip-color) 40%, transparent);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--tip-color) 6%, transparent);
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--fg);
+      animation: featureTipIn 0.35s ease both;
+    }
+    .feature-tip-bulb { color: var(--tip-color); flex-shrink: 0; }
+    .feature-tip-text { flex: 1; min-width: 0; }
+    .feature-tip-text strong { font-weight: 600; }
+    .feature-tip-label {
+      display: block;
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+      color: var(--tip-color);
+    }
+    .feature-tip-text kbd {
+      font: 10.5px var(--font-mono);
+      padding: 0 5px;
+      border: 1px solid var(--border);
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      background: rgba(var(--tint), 0.04);
+    }
+    .feature-tip-menu {
+      position: absolute;
+      right: 4px;
+      top: calc(100% + 2px);
+      z-index: 20;
+      min-width: 160px;
+      padding: 4px;
+      background: var(--popover-bg);
+      border: 1px solid var(--popover-border);
+      border-radius: 7px;
+      box-shadow: 0 8px 24px var(--popover-shadow);
+    }
+    .feature-tip-menu[hidden] { display: none; }
+    .feature-tip-menu button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      font: inherit;
+      font-size: 12px;
+      color: var(--fg);
+      background: none;
+      border: none;
+      padding: 5px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .feature-tip-menu button:hover,
+    .feature-tip-menu button:focus-visible { background: var(--surface-hover); outline: none; }
+    @keyframes featureTipIn { from { opacity: 0; transform: translateY(4px); } }
+    @media (prefers-reduced-motion: reduce) { .feature-tip-card { animation: none; } }
+
     /* A suggestion running in its own session, shown in the session it came from */
     .bg-run-row {
       display: flex;
