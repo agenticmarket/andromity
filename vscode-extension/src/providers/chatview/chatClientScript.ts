@@ -5045,6 +5045,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         modelFlyout.style.display = 'flex';
         if (flyoutSearch) flyoutSearch.value = '';
         renderFlyoutList('');
+        if (flyoutList) flyoutList.scrollTop = 0;
         if (flyoutSearch) setTimeout(() => flyoutSearch.focus(), 50);
       }
     }
@@ -5083,6 +5084,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       renderFlyoutList(flyoutSearch ? flyoutSearch.value.toLowerCase().trim() : '');
     };
 
+    /** The one model the session is using: same provider and ID, else same ID, else the bare ID. */
+    function activeFlyoutModel(pool) {
+      return pool.find(m => m.id === currentModel && (m.provider || 'openrouter') === currentProvider)
+        || pool.find(m => m.id === currentModel)
+        || { id: currentModel, name: formatModelDisplayName(currentModel), provider: currentProvider };
+    }
+
     function renderFlyoutList(query) {
       if (!flyoutList) return;
       const modelsPool = (allModels && allModels.length > 0) ? allModels : DEFAULT_POPULAR_MODELS;
@@ -5097,15 +5105,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         return;
       }
 
+      const active = activeFlyoutModel(modelsPool);
+      const isActiveModel = m => m.id === active.id && (m.provider || 'openrouter') === (active.provider || 'openrouter');
+
       function renderFlyoutItem(m) {
-        const isActive = m.id === currentModel;
+        const isActive = isActiveModel(m);
         const isPinned = isModelPinned(m.id, m.provider);
-        return '<div class="flyout-item ' + (isActive ? 'active' : '') + '" data-action="pick-model" data-model-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || 'openrouter') + '">' +
+        return '<div class="flyout-item ' + (isActive ? 'active' : '') + '"' + (isActive ? ' aria-current="true"' : '') + ' data-action="pick-model" data-model-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || 'openrouter') + '">' +
           '<div class="flyout-item-info">' +
             (isActive ? '<span class="flyout-active-dot"></span>' : '') +
             '<span class="flyout-item-name">' + escapeHtml(m.name || m.id) + '</span>' +
           '</div>' +
           '<div class="flyout-item-actions">' +
+            (isActive ? '<span class="flyout-active-label">Active</span>' : '') +
             '<span class="flyout-item-meta">' + escapeHtml(m.provider || 'openrouter') + (m.pricing ? ' · ' + escapeHtml(m.pricing) : '') + '</span>' +
             '<button class="flyout-pin-btn ' + (isPinned ? 'pinned' : '') + '" data-action="toggle-pin" data-model-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || 'openrouter') + '" data-name="' + escapeHtml(m.name || m.id) + '" title="' + (isPinned ? 'Unpin model' : 'Pin to top of picker') + '">' +
               '<svg width="11" height="11" viewBox="0 0 24 24" fill="' + (isPinned ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
@@ -5118,23 +5130,23 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
 
       if (!query) {
-        const pinnedItems = filtered.filter(m => isModelPinned(m.id, m.provider));
-        const otherItems = filtered.filter(m => !isModelPinned(m.id, m.provider)).slice(0, 45);
+        const rest = filtered.filter(m => !isActiveModel(m));
+        const pinnedItems = rest.filter(m => isModelPinned(m.id, m.provider));
+        const otherItems = rest.filter(m => !isModelPinned(m.id, m.provider)).slice(0, 45);
 
-        let html = '';
+        let html = '<div class="flyout-section-title"><span>CURRENT</span></div>' + renderFlyoutItem(active);
         if (pinnedItems.length > 0) {
           html += '<div class="flyout-section-title"><span>PINNED</span><span class="flyout-section-count">' + pinnedItems.length + '</span></div>';
           html += pinnedItems.map(renderFlyoutItem).join('');
-          html += '<div class="flyout-section-title"><span>ALL MODELS</span></div>';
         }
-        html += otherItems.map(renderFlyoutItem).join('');
+        if (otherItems.length > 0) {
+          html += '<div class="flyout-section-title"><span>ALL MODELS</span></div>';
+          html += otherItems.map(renderFlyoutItem).join('');
+        }
         flyoutList.innerHTML = html;
       } else {
-        const sorted = [...filtered].sort((a, b) => {
-          const aPin = isModelPinned(a.id, a.provider) ? 1 : 0;
-          const bPin = isModelPinned(b.id, b.provider) ? 1 : 0;
-          return bPin - aPin;
-        }).slice(0, 50);
+        const rank = m => (isActiveModel(m) ? 2 : 0) + (isModelPinned(m.id, m.provider) ? 1 : 0);
+        const sorted = [...filtered].sort((a, b) => rank(b) - rank(a)).slice(0, 50);
         flyoutList.innerHTML = sorted.map(renderFlyoutItem).join('');
       }
     }
@@ -6518,7 +6530,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     // var, not let/const: the token counter can render before this block runs.
     var sidePanelData = { mcp: null, changes: undefined, folder: '' };
     var sidePanelRequestedAt = 0;
-    var SIDE_PANEL_WIDE = typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 1500px)') : null;
+    var SIDE_PANEL_WIDE = typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 1100px)') : null;
     var SIDE_PANEL_CARDS = [
       { id: 'context', title: 'Context window', icon: '<path d="M12 3a9 9 0 1 0 9 9"></path><path d="M12 3v9h9"></path>' },
       { id: 'changes', title: 'Changes', icon: '<path d="M6 3v12"></path><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path>' },
@@ -8601,7 +8613,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             hidePlanTracker();
           }
           if (msg.models && msg.models.length > 0) {
-            allModels = msg.models.filter(m => m.provider !== 'andromity' || m.id === 'auto');
+            allModels = msg.models;
           }
           if (msg.providers) {
             allProviders = msg.providers;
@@ -8646,7 +8658,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         case 'ollama_detected': {
           if (Array.isArray(msg.models) && msg.models.length > 0) {
-            allModels = msg.models.filter(m => m.provider !== 'andromity' || m.id === 'auto');
+            allModels = msg.models;
             updateModelBadge();
           }
           if (msg.model) showOllamaBanner(msg.model);

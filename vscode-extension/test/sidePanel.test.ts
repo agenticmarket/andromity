@@ -342,7 +342,22 @@ describe("side panel in the chat", () => {
     assert.match(html, /id="btn-mcp-status" data-action="open-mcp-settings"/);
     const css = readFileSync(join(__dirname, "..", "..", "src", "providers", "chatview", "chatPolishStyles.ts"), "utf8");
     assert.match(css, /\.side-panel, #btn-top-side-panel \{ display: none; \}/);
-    assert.match(css, /@media \(min-width: 1500px\) \{\s*body:not\(\.side-panel-off\) \.side-panel \{/);
+    assert.match(css, /@media \(min-width: 1100px\) \{\s*body:not\(\.side-panel-off\) \.side-panel \{/);
+    const script = readFileSync(join(__dirname, "..", "..", "src", "providers", "chatview", "chatClientScript.ts"), "utf8");
+    assert.match(script, /SIDE_PANEL_WIDE = [^;]*matchMedia\('\(min-width: 1100px\)'\)/);
+  });
+
+  it("docks beside a narrower chat between 1100px and 1500px, keeping the top and bottom bars full width", () => {
+    const css = readFileSync(join(__dirname, "..", "..", "src", "providers", "chatview", "chatPolishStyles.ts"), "utf8");
+    const docked = css.match(/@media \(min-width: 1100px\) and \(max-width: 1499\.98px\) \{([\s\S]*?)\n    \}/);
+    assert.ok(docked, "docked range rule");
+    const reserve = Number(/--sp-reserve: (\d+)px/.exec(docked![1])?.[1]);
+    assert.match(docked![1], /body:not\(\.side-panel-off\) \{[^}]*padding-right: var\(--sp-reserve\)/);
+    assert.match(docked![1], /\.top-bar,\s*body:not\(\.side-panel-off\) \.status-bar \{ margin-right: calc\(-1 \* var\(--sp-reserve\)\); \}/);
+    const panelMin = Number(/width: clamp\((\d+)px/.exec(css)?.[1]);
+    const panelRight = Number(/right: (\d+)px;\s*width: clamp/.exec(css)?.[1]);
+    assert.ok(reserve >= panelMin + panelRight, "the reserved space covers the panel and its edge gap");
+    assert.ok(1100 - reserve >= 700, "the chat keeps a readable width at the narrowest docked size");
   });
 
   function orderedPanel(h: ReturnType<typeof setup>) {

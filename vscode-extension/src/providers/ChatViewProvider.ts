@@ -1972,7 +1972,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this._rpcClient.call<any[]>("skills.list", { project_path: workspaceFolder }).catch(() => []),
       ]);
 
-      this._models = (models || []).filter(m => m.provider !== "andromity" || m.id === "auto");
+      this._models = models || [];
       this._providers = providers || [];
       if (!this._providers.some(p => p.id === "andromity")) {
         this._providers.unshift({

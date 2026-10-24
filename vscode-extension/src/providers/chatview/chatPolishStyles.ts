@@ -193,9 +193,16 @@ export function getChatPolishStyles(): string {
     .status-mcp-btn:hover { color: var(--fg); background: var(--surface-hover); }
     .status-bar-right { display: flex; align-items: center; }
 
-    /* Wide-mode session panel: lives in the empty space right of the centred chat column. */
+    /* Session panel. From 1500px it sits in the empty space right of the centred chat
+       column; from 1100px the chat area gives up that space so the panel docks beside it.
+       Narrower views show the chat only. */
     .side-panel, #btn-top-side-panel { display: none; }
-    @media (min-width: 1500px) {
+    @media (min-width: 1100px) and (max-width: 1499.98px) {
+      body:not(.side-panel-off) { --sp-reserve: 330px; padding-right: var(--sp-reserve); }
+      body:not(.side-panel-off) .top-bar,
+      body:not(.side-panel-off) .status-bar { margin-right: calc(-1 * var(--sp-reserve)); }
+    }
+    @media (min-width: 1100px) {
       body:not(.side-panel-off) .side-panel {
         display: flex;
         flex-direction: column;

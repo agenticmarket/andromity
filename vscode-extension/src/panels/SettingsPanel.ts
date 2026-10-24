@@ -332,7 +332,7 @@ export class SettingsPanel {
         const fullState = {
           type: "state_loaded",
           config: { ...fastRes.configData, permission_mode: fastRes.permissionMode },
-          models: (models || []).filter(m => m.provider !== "andromity" || m.id === "auto"),
+          models: models || [],
           providers: fastRes.providers || [],
           account,
           skills: skills || [],
@@ -576,7 +576,7 @@ export class SettingsPanel {
             }, 3000).catch(() => []);
           }
 
-          const filtered = (models || []).filter(m => m.provider !== "andromity" || m.id === "auto");
+          const filtered = models || [];
           this._panel.webview.postMessage({
             type: "models_refreshed",
             models: filtered,
@@ -4969,7 +4969,7 @@ SOFTWARE.</pre>
         }
         case "state_loaded": {
           vscode.postMessage({type:'check_ollama_status'});
-          allModels = (msg.models || []).filter(m => m.provider !== "andromity" || m.id === "auto");
+          allModels = msg.models || [];
           allProviders = msg.providers || [];
           pinnedModels = msg.pinnedModels || (msg.config && msg.config.pinned_models) || [];
           allSkills = msg.skills || [];
@@ -5044,7 +5044,7 @@ SOFTWARE.</pre>
         case "models_refreshed": {
           iconRefresh.classList.remove("spinning");
           refreshLabel.textContent = "Refresh Catalog";
-          const incoming = (msg.models || []).filter(m => m.provider !== "andromity" || m.id === "auto");
+          const incoming = msg.models || [];
           allModels = msg.provider ? allModels.filter(m => m.provider !== msg.provider).concat(incoming) : incoming;
           document.getElementById("model-count-badge").textContent = allModels.length;
           renderModels();

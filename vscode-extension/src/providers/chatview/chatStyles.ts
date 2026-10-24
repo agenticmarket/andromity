@@ -253,7 +253,8 @@ export function getChatStyles(): string {
       font-size: 13px;
       font-weight: 600;
       letter-spacing: -0.01em;
-      line-height: 1;
+      /* Room for descenders (g, j, y), which overflow: hidden would otherwise clip. */
+      line-height: 1.35;
     }
 
     /* Model Pill */
@@ -1809,6 +1810,17 @@ export function getChatStyles(): string {
 
     .flyout-item.active .flyout-item-name {
       color: #38bdf8;
+    }
+
+    .flyout-active-label {
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: #38bdf8;
+      padding: 1px 6px;
+      border-radius: 4px;
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      flex-shrink: 0;
     }
 
     .flyout-active-dot {

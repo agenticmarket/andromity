@@ -56,7 +56,7 @@ export function element(base: Record<string, any> = {}): any {
   });
 }
 
-export function loadChat(options: { state?: Partial<ChatViewState>; storage?: Record<string, string> } = {}) {
+export function loadChat(options: { state?: Partial<ChatViewState>; storage?: Record<string, string>; elements?: Record<string, any> } = {}) {
   const docListeners: Record<string, Function[]> = {};
   const observers: Function[] = [];
   const byId: Record<string, any> = {
@@ -67,6 +67,7 @@ export function loadChat(options: { state?: Partial<ChatViewState>; storage?: Re
     "mention-palette": element({ style: { display: "none" } }),
     "questions-carousel-card": null,
     "image-lightbox-overlay": null,
+    ...options.elements,
   };
   const promptBox = element();
   const body = element({ tagName: "BODY" });
