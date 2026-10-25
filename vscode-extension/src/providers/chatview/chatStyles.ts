@@ -1097,6 +1097,14 @@ ${STATUS_SHIMMER_STYLES}
       white-space: nowrap;
       transition: all 0.15s ease;
     }
+    .tracker-count.bg-strip-count {
+      color: var(--vscode-charts-blue, #38bdf8);
+      font-family: inherit;
+      font-weight: 500;
+      background: none;
+      border: none;
+      padding: 0;
+    }
     .plan-tracker-strip.is-complete .tracker-count {
       color: #10b981;
       background: rgba(16, 185, 129, 0.08);

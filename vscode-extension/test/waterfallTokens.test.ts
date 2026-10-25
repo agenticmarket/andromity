@@ -63,6 +63,7 @@ function loadWaterfall() {
   return {
     send: (data: Record<string, unknown>) => listeners.forEach(cb => cb({ data })),
     tokens: () => byId.get("wf-total-tokens")?.textContent,
+    byId: (id: string) => byId.get(id),
   };
 }
 
@@ -95,4 +96,29 @@ it("adds live calls on top of the history total without double counting a later 
   assert.equal(wf.tokens(), (28270).toLocaleString());
   wf.send(history(28270, 3));
   assert.equal(wf.tokens(), (28270).toLocaleString());
+});
+
+const bgStart = (toolId: string, processId: string, ts: number) => ({
+  type: "tool_start", tool_id: toolId, tool_name: "shell_bg", args: JSON.stringify({ command: "x", process_id: processId }), ts,
+});
+
+it("keeps a background command that failed at startup failed when its result arrives after the exit", () => {
+  const wf = loadWaterfall();
+  wf.send(bgStart("t1", "ticker", 1000));
+  wf.send({ type: "process_started", process_id: "ticker", pid: 1 });
+  wf.send({ type: "process_exited", process_id: "ticker", exit_code: 1, duration: 0.6 });
+  wf.send({ type: "tool_result", tool_id: "t1", tool_name: "shell_bg", success: true, ts: 1000.6,
+    result: "Background process started with id 'ticker' (PID 1), but it exited after 0.6s with code 1, so nothing is running in the background." });
+  assert.equal(wf.byId("wf-bar-t1").classList.contains("running"), false);
+});
+
+it("keeps a renamed background process running until its own exit", () => {
+  const wf = loadWaterfall();
+  wf.send(bgStart("t2", "ticker", 2000));
+  wf.send({ type: "process_started", process_id: "ticker-b198", pid: 2 });
+  wf.send({ type: "tool_result", tool_id: "t2", tool_name: "shell_bg", success: true, ts: 2002,
+    result: "Background process started with id 'ticker-b198' (PID 2).\nUse shell_read('ticker-b198') to see live output." });
+  assert.equal(wf.byId("wf-bar-t2").classList.contains("running"), true);
+  wf.send({ type: "process_exited", process_id: "ticker-b198", exit_code: 0, duration: 60 });
+  assert.equal(wf.byId("wf-bar-t2").classList.contains("running"), false);
 });

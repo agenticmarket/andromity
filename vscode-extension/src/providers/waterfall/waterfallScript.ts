@@ -256,7 +256,10 @@ export function getWaterfallScript(sessionId: string): string {
 
         let metaHtml = '';
         metaHtml += \`<div class="wf-detail-item" title="Total wall-clock duration of this operation"><div class="wf-detail-key">Duration</div><div class="wf-detail-val">\${formatMs(effectiveDuration)}</div></div>\`;
-        metaHtml += \`<div class="wf-detail-item" title="Status of execution (running, done, or error)"><div class="wf-detail-key">Status</div><div class="wf-detail-val"><span class="wf-badge-pill \${span.status === 'done' ? 'response' : span.status === 'error' ? 'error' : 'thinking'}">\${span.status}</span></div></div>\`;
+        // Running details are rebuilt every frame; a clock-based delay keeps the shimmer moving instead of restarting.
+        metaHtml += \`<div class="wf-detail-item" title="Status of execution (running, done, or error)"><div class="wf-detail-key">Status</div><div class="wf-detail-val">\${span.status === 'running'
+          ? '<span class="wf-status-live status-shimmer" style="animation-delay: -' + (now % 3200) + 'ms">Running</span>'
+          : '<span class="wf-badge-pill ' + (span.status === 'done' ? 'response' : span.status === 'error' ? 'error' : 'thinking') + '">' + span.status + '</span>'}</div></div>\`;
 
         if (span.type === 'llm') {
           if (span.model) metaHtml += \`<div class="wf-detail-item" title="Model and provider that generated this response"><div class="wf-detail-key">Model</div><div class="wf-detail-val">\${escapeHtml(span.model)}</div></div>\`;
@@ -1107,7 +1110,10 @@ export function getWaterfallScript(sessionId: string): string {
               break;
             } else {
               const isBgProc = (span.name === 'shell_bg' || msg.tool_name === 'shell_bg');
-              if (isBgProc && msg.success !== false) {
+              // A command that ends within shell_bg's first seconds is reported as "...exited after 0.6s with code 1...",
+              // and its exit event arrives before this result, so the result must not mark it running again.
+              const startupExit = isBgProc ? /exited after [0-9.]+s with code (-?[0-9]+)/.exec(String(msg.result || '')) : null;
+              if (isBgProc && msg.success !== false && !startupExit) {
                 const procMatch = String(msg.result || '').match(/with id '([^']+)'/);
                 const procId = procMatch ? procMatch[1] : (span.processId || '');
                 if (procId) {
@@ -1123,7 +1129,8 @@ export function getWaterfallScript(sessionId: string): string {
               } else {
                 span.endTime = msg.ts ? msg.ts * 1000 : Date.now();
                 span.durationMs = msg.duration_ms || (span.endTime - span.startTime);
-                span.status = msg.success === false ? 'error' : 'done';
+                span.status = msg.success === false || (startupExit && startupExit[1] !== '0') ? 'error' : 'done';
+                if (startupExit) span.isBackground = false;
                 span.result = msg.result || '';
                 addLog('TOOL-END', span.name + ' finished in ' + formatMs(span.durationMs) + ' (' + span.status + ')');
 
