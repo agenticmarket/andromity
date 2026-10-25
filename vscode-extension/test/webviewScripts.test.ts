@@ -1849,9 +1849,19 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.equal(rowEl.getAttribute("data-process-id"), "dev-server", "Row must store data-process-id");
 
     const innerHtml = rowEl.innerHTML;
-    assert.ok(innerHtml.includes("RUNNING (BG)"), "Must display RUNNING (BG) status badge");
+    assert.ok(innerHtml.includes('<span class="bg-proc-badge running status-shimmer">Running</span>'), "Must show running as shimmering Running text");
     assert.ok(innerHtml.includes("bg-proc-stop-btn"), "Must render 1-click Stop button");
     assert.ok(!innerHtml.includes("View Logs"), "Must STRICTLY NOT contain any View Logs button (per user constraint)");
+
+    // A requested id that was already taken is renamed by the server; the card must use the real id.
+    const renamedRow = sandbox.window.renderBackgroundProcessActivityRow(
+      "shell_bg",
+      JSON.stringify({ command: "npm run dev", process_id: "dev-server" }),
+      "running_bg",
+      "Background process started with id 'dev-server-739d' (PID 4322)."
+    );
+    assert.equal(renamedRow.getAttribute("data-process-id"), "dev-server-739d", "Row must use the id the server assigned");
+    assert.ok(renamedRow.innerHTML.includes('data-process-id="dev-server-739d"'), "Stop must target the id the server assigned");
 
     // 4. Verify Waterfall script handles process_started and process_exited
     assert.ok(waterfallScript.includes("case 'process_started':"), "Waterfall must handle process_started event");

@@ -325,9 +325,11 @@ export function getChatActivityStyles(): string {
       white-space: nowrap;
     }
     .bg-proc-badge.running {
-      background: rgba(88, 166, 255, 0.18);
-      color: var(--accent, #58a6ff);
-      border: 1px solid rgba(88, 166, 255, 0.35);
+      padding: 0;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0;
+      color: var(--vscode-charts-blue, #38bdf8);
     }
     .bg-proc-badge.done {
       background: rgba(63, 185, 80, 0.18);

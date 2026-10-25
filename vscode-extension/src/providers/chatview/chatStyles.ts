@@ -1,6 +1,27 @@
 import { getPromptStyles } from "./chatPromptStyles.js";
 import { getTurnRailStyles } from "./turnRail.js";
 
+/** Shimmering text for live statuses; needs a `--fg` variable in the page. */
+export const STATUS_SHIMMER_STYLES = `
+    .status-shimmer {
+      background: linear-gradient(100deg, currentColor 0%, currentColor 38%, color-mix(in srgb, currentColor 30%, var(--fg)) 50%, currentColor 62%, currentColor 100%);
+      background-size: 250% 100%;
+      background-position: 100% 0;
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      animation: statusShimmer 3.2s linear infinite;
+    }
+    .status-shimmer.status-shimmer-slow { animation-duration: 4.2s; }
+    @keyframes statusShimmer {
+      0% { background-position: 100% 0; }
+      100% { background-position: -150% 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .status-shimmer { animation: none; background: none; -webkit-text-fill-color: currentColor; }
+    }
+`;
+
 export function getChatStyles(): string {
   return `
 
@@ -567,23 +588,7 @@ export function getChatStyles(): string {
       0% { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
     }
-    .status-shimmer {
-      background: linear-gradient(100deg, currentColor 0%, currentColor 38%, color-mix(in srgb, currentColor 30%, var(--fg)) 50%, currentColor 62%, currentColor 100%);
-      background-size: 250% 100%;
-      background-position: 100% 0;
-      -webkit-background-clip: text;
-      background-clip: text;
-      -webkit-text-fill-color: transparent;
-      animation: statusShimmer 3.2s linear infinite;
-    }
-    .status-shimmer.status-shimmer-slow { animation-duration: 4.2s; }
-    @keyframes statusShimmer {
-      0% { background-position: 100% 0; }
-      100% { background-position: -150% 0; }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      .status-shimmer { animation: none; background: none; -webkit-text-fill-color: currentColor; }
-    }
+${STATUS_SHIMMER_STYLES}
     .session-badge-status {
       display: inline-flex;
       align-items: center;

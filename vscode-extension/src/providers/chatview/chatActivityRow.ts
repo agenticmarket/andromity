@@ -436,11 +436,9 @@ export function getChatActivityScript(): string {
         }
 
         var cmd = parsedArgs.CommandLine || parsedArgs.command || parsedArgs.cmd || '';
-        var procId = processId || parsedArgs.process_id || '';
-        if (!procId && typeof toolResult === 'string') {
-          var m = toolResult.match(/with id '([^']+)'/);
-          if (m) procId = m[1];
-        }
+        // The server renames an id that is already taken, so the id in the result wins over the requested one.
+        var resultId = typeof toolResult === 'string' ? /with id '([^']+)'/.exec(toolResult) : null;
+        var procId = processId || (resultId && resultId[1]) || parsedArgs.process_id || '';
 
         var isRunning = (status === 'running' || status === 'running_bg');
         var wrap = document.createElement('div');
@@ -461,7 +459,7 @@ export function getChatActivityScript(): string {
 
         var endedLabels = { error: 'FAILED', stopped: 'STOPPED', ended: 'ENDED', done: 'DONE' };
         var tagHtml = isRunning ?
-          '<span class="bg-proc-badge running"><span class="activity-running-dot"></span> RUNNING (BG)</span>' :
+          '<span class="bg-proc-badge running status-shimmer">Running</span>' :
           ('<span class="bg-proc-badge ' + (status === 'error' || status === 'stopped' ? 'stopped' : 'done') + '"' +
             (status === 'ended' ? ' title="This process is no longer running"' : '') + '>' +
             (endedLabels[status] || 'DONE') +
