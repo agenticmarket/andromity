@@ -2,6 +2,51 @@
 
 All notable changes to Andromity are tracked here. We follow semantic versioning.
 
+## [0.2.24] — 2026-10-26
+
+### Added
+- **In-chat check-in (VS Code).** After a reply that went well, at most a few times, the chat asks "How's Andromity working for you?". Love it leads to a review link; It's OK and Not great ask what gets in the way most. The feedback endpoint accepts the answer as optional `sentiment` and `annoyances` fields on the same anonymous note, and the admin panel's **User Feedback** page shows the sentiment split and the most common annoyances for the last 30 days. Run `telemetry-worker/feedback-checkin.sql` once on an existing database.
+- The admin panel names the newer error codes (shared capacity busy, daily limit, session already running and others) instead of listing them as unclassified.
+- **Send Feedback in VS Code.** A small box sends a note to the Andromity team with the client, OS family and version. It is stored with the country Cloudflare reports for the connection, but not with your telemetry ID or IP address. It is off in air-gap mode. [TELEMETRY.md](TELEMETRY.md) explains what is stored and how to have a note deleted.
+- **VS Code tips for features you haven't tried.** After a reply, at most one "Did you know" card a day introduces a feature that fits what the turn did. Turn tips off with the `andromity.featureTips` setting.
+- **Chapter rail in the VS Code plan tab.** Click a section mark to jump to it, or step through sections with Alt+Up and Alt+Down.
+
+### Changed
+- **Clear messages when shared capacity runs out.** When every upstream provider behind the Andromity gateway is throttled or failing, the gateway answers with one Andromity message, "very high demand right now", with how long capacity should take to return, instead of passing on the provider's own error. Provider wording about account credits, keys and per-account limits, provider account IDs and provider headers no longer reach users. Failures that come from the request itself, such as a prompt that is too long, keep their explanation without the provider's details.
+- Gateway errors carry `x-andromity-error-type` and `x-andromity-error-action` headers, plus `Retry-After` when the wait is known, because OpenAI-compatible client libraries keep only an error's message and headers.
+- The agent shows a **High demand** card with the gateway's message, the local time capacity is expected back, **Switch Model** first when the wait is long, and **Use Your Own Key**. It no longer spends half a minute retrying when the gateway says capacity returns much later. Gateway errors marked "model unavailable" are now recognised through the same headers; before, they were missed in real use.
+- **Safer agent defaults.** The system prompt now covers secrets (never hardcoded, no placeholder keys), refusing system-wiping commands, not working around blocked tools, instruction files that cannot widen permissions, data leaks through URLs and images, and secure coding defaults for profiles that edit code. Subagents get the same rules, and the context passed to them is marked as data.
+- **Branches and pull requests.** The builder and coder profiles never commit to the default branch, use `andromity/<topic>` branches, push and open pull requests only when you ask, open drafts for unfinished work, and never merge without you.
+- Replies use plainer language, and questions about Andromity point to the docs site.
+- Anonymous use of the Andromity provider is counted per install, with a random ID kept separate from the telemetry ID, instead of a shared default.
+- VS Code: session, MCP server and background run statuses show as text, and running states shimmer.
+
+### Security
+- Write approvals judge a path by where it really lands. Names that Windows rewrites (`.git./config`, trailing spaces, `::$DATA` streams), symlinks and junctions no longer get past the checks that guard `.git`, `.vscode`, `package.json` and the other files that control what runs later.
+- In TRUST mode, an allowlisted command needs approval when an argument reaches outside the project (`..`, absolute or network paths, `~`, wildcards) or uses a git option that writes files or runs programs, such as `--output`, `--ext-diff`, `-O` or `-c`.
+- Subagents in TRUST mode can't write sensitive or execution-control files, and fetch only allowed domains.
+- Scheduled runs in SAFE and TRUST mode don't change execution-control files, fetch only allowed domains, and don't run MCP tools that may change data.
+- `grep_search` skips files that `read_file` refuses, such as credential files and `.env`.
+- `fetch_url` checks the address it actually connects to, so a name that re-resolves to a private address (DNS rebinding) is refused.
+- A project `skills` folder that links outside the project is ignored.
+- OAuth sign-in opens only https pages, or http on localhost.
+- `write_plan` stores only known step statuses.
+- VS Code: **Settings → Trust & Security** lists the commands and domains you chose to always allow, each with **Remove**.
+- VS Code: trusting a folder lists the MCP servers its own config will start. Command approvals list risks in plain words, a message that looks like it contains a secret is held until you choose to redact or send it, and **Run** on a chat code block shows the whole command before running one that hides text or would do lasting damage.
+
+### Fixed
+- Provider errors are classified by whole HTTP status codes. An error whose request ID or reset time contained "401", "404" or "500" could be shown as a sign-in problem, a missing model or an outage, and could skip the rate-limit retry.
+- `andromity run` no longer crashes with a `UnicodeEncodeError` when it prints an error card on a Windows console or into a redirected log that cannot encode symbols such as the timer icon.
+- `grep_search` results on Windows show the relative path and line number, instead of the absolute path with the line number inside the text.
+- TUI: Ctrl+E (Settings), Ctrl+U (Profile) and Ctrl+D (Viewer) work while you type in the message box.
+- TUI: the notice for an untrusted folder says that reading files is blocked too.
+- TUI: the status bar says "cost unknown" for a model with no price data, instead of `?$0.0000`.
+- TUI: the session browser no longer fills up with the empty session each launch leaves behind, and its **Messages** column counts only the conversation, not the system prompt.
+- TUI: `/trust` describes what it unlocks accurately, and the model picker says "1 live model".
+- VS Code: signing in or out updates the welcome screen again, a call waiting for approval shows **Needs approval** instead of **Running**, and rate limit errors say when the limit resets.
+- VS Code: the Waterfall's **Duration** total no longer drops to 0 when a turn ends, and its inactive tabs no longer show as bright blocks.
+- VS Code: loading placeholders no longer clip the session title.
+
 ## [0.2.23] — 2026-10-24
 
 ### Added

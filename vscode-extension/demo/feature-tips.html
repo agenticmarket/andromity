@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Feature tips demo</title>
+<style>
+  :root {
+    --bg: #181818;
+    --chat: #1e1e1e;
+    --fg: #cccccc;
+    --muted: #8b8b8b;
+    --border: #2b2b2b;
+    --surface: #222222;
+    --surface-hover: #2a2d2e;
+    --tint: 255, 255, 255;
+    --accent: #38bdf8;
+    --btn: #0078d4;
+    --btn-fg: #ffffff;
+    --btn2: #313131;
+    --tip: #e2c08d;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --mono: "Cascadia Code", Consolas, monospace;
+  }
+  body.light {
+    --bg: #f3f3f3;
+    --chat: #ffffff;
+    --fg: #3b3b3b;
+    --muted: #6f6f6f;
+    --border: #e5e5e5;
+    --surface: #f8f8f8;
+    --surface-hover: #ececec;
+    --tint: 0, 0, 0;
+    --accent: #0969da;
+    --btn2: #e4e4e4;
+    --tip: #9a6700;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.5 var(--font); padding: 24px; }
+  h1 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; max-width: 760px; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .toolbar .group-label { color: var(--muted); font-size: 11px; margin-right: 2px; }
+  .toolbar button {
+    font: inherit; font-size: 12px; color: var(--fg); background: transparent;
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; cursor: pointer;
+  }
+  .toolbar button.on { background: var(--surface-hover); border-color: rgba(var(--tint), 0.3); }
+  .toolbar + .toolbar { margin-bottom: 20px; }
+
+  .layout { display: grid; grid-template-columns: minmax(300px, 480px) minmax(0, 1fr); gap: 28px; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+
+  /* ── Mock chat panel ─────────────────────────── */
+  .chat { background: var(--chat); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .chat-top { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-weight: 500; }
+  .chat-top .chev { color: var(--muted); margin-left: auto; font-size: 10px; }
+  .chat-body { padding: 14px 14px 10px; min-height: 420px; }
+  .prompt-card { background: rgba(var(--tint), 0.05); border: 1px solid var(--border); border-radius: 8px; padding: 8px 11px; margin-bottom: 14px; }
+  .reply p { margin: 0 0 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 10px; }
+  .chip { display: inline-flex; gap: 6px; align-items: center; padding: 2px 8px; border: 1px solid rgba(var(--tint), 0.1); background: rgba(var(--tint), 0.04); border-radius: 6px; font-size: 11.5px; }
+  .chip .add { color: #3fb950; font-family: var(--mono); font-size: 10.5px; }
+  .chip .del { color: #f85149; font-family: var(--mono); font-size: 10.5px; }
+  .footer { color: var(--muted); font-size: 11px; display: flex; gap: 10px; margin-bottom: 10px; }
+  .composer { margin: 0 14px 14px; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; color: var(--muted); font-size: 12.5px; }
+
+  .next-step-card { display: flex; align-items: center; gap: 12px; margin: 8px 0 4px; padding: 8px 8px 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+  .next-step-text { flex: 1; min-width: 0; }
+  .next-step-label { font-size: 10.5px; color: var(--muted); }
+  .next-step-title { font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .btn { font: inherit; font-size: 11.5px; font-weight: 500; padding: 3px 10px; border-radius: 5px; border: 1px solid var(--border); background: var(--btn2); color: var(--fg); cursor: pointer; white-space: nowrap; }
+  .btn.primary { background: var(--btn); color: var(--btn-fg); border-color: transparent; }
+  .x { background: transparent; border: none; color: var(--muted); font-size: 15px; line-height: 1; padding: 2px 5px; border-radius: 4px; cursor: pointer; }
+  .x:hover { color: var(--fg); background: var(--surface-hover); }
+
+  /* ── Tip: style A, quiet line ────────────────── */
+  .tip-line {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 10px 0 2px;
+    padding: 6px 4px 6px 2px;
+    font-size: 12px;
+    color: var(--muted);
+    animation: tipIn 0.35s ease both;
+  }
+  .tip-line .bulb { color: var(--tip); flex-shrink: 0; margin-top: 2px; }
+  .tip-line .tip-text { flex: 1; min-width: 0; }
+  .tip-line .tip-label { color: var(--tip); font-weight: 600; margin-right: 4px; }
+  .tip-line .tip-text strong { color: var(--fg); font-weight: 500; }
+  .tip-line .tip-action {
+    font: inherit; font-size: 12px; background: none; border: none; padding: 0; margin-left: 6px;
+    color: var(--accent); cursor: pointer; white-space: nowrap;
+  }
+  .tip-line .tip-action:hover { text-decoration: underline; }
+
+  /* ── Tip: style B, compact card ──────────────── */
+  .tip-card {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 10px 0 2px;
+    padding: 8px 8px 8px 10px;
+    border: 1px dashed color-mix(in srgb, var(--tip) 40%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--tip) 6%, transparent);
+    font-size: 12px;
+    animation: tipIn 0.35s ease both;
+  }
+  .tip-card .bulb { color: var(--tip); flex-shrink: 0; }
+  .tip-card .tip-text { flex: 1; min-width: 0; }
+  .tip-card .tip-label { display: block; font-size: 10.5px; color: var(--tip); font-weight: 600; letter-spacing: 0.2px; }
+  .tip-card .tip-text strong { font-weight: 500; }
+  @keyframes tipIn { from { opacity: 0; transform: translateY(4px); } }
+
+  kbd {
+    font: 10.5px var(--mono);
+    padding: 0 5px;
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    background: rgba(var(--tint), 0.04);
+    color: var(--fg);
+  }
+
+  /* × opens a small menu */
+  .tip-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 2px);
+    z-index: 5;
+    min-width: 170px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    padding: 4px;
+    display: none;
+  }
+  .tip-menu.open { display: block; }
+  .tip-menu button { display: block; width: 100%; text-align: left; font: inherit; font-size: 12px; color: var(--fg); background: none; border: none; padding: 5px 8px; border-radius: 4px; cursor: pointer; }
+  .tip-menu button:hover { background: var(--surface-hover); }
+
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 7px 14px; font-size: 12px; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+
+  /* ── Right column notes ─────────────────────── */
+  .notes h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  .notes table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 18px; }
+  .notes th, .notes td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .notes th { color: var(--muted); font-weight: 500; }
+  .notes tr.current td { background: rgba(var(--tint), 0.04); }
+  .notes ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
+  .notes li { margin-bottom: 4px; }
+</style>
+</head>
+<body>
+  <h1>Feature tips after a turn</h1>
+  <p class="sub">One tip at most, under the reply, only for a feature this user has never opened, and only when the turn makes it relevant. Pick a tip and a style to see each case.</p>
+
+  <div class="toolbar" id="tip-picker">
+    <span class="group-label">Tip</span>
+    <button data-tip="fingerprint" class="on">Fingerprint</button>
+    <button data-tip="commit">Commit message</button>
+    <button data-tip="inline">Inline edit</button>
+    <button data-tip="cron">Cron jobs</button>
+  </div>
+  <div class="toolbar">
+    <span class="group-label">Style</span>
+    <button data-style="line" class="on">A · Quiet line</button>
+    <button data-style="card">B · Compact card</button>
+    <span class="group-label" style="margin-left:10px">Show</span>
+    <button id="toggle-next" class="on">With next-step card</button>
+    <button id="theme">Light theme</button>
+    <button id="replay">Replay</button>
+  </div>
+
+  <div class="layout">
+    <div class="chat">
+      <div class="chat-top">Harden the rate limiter <span class="chev">▾</span></div>
+      <div class="chat-body">
+        <div class="prompt-card" id="prompt"></div>
+        <div class="reply" id="reply"></div>
+        <div class="footer"><span>7.4s</span><span>08:56 PM</span><span>Copy</span></div>
+        <div id="next-step"></div>
+        <div id="tip-slot"></div>
+      </div>
+      <div class="composer">Ask Andromity…</div>
+    </div>
+
+    <div class="notes">
+      <h2>When each tip can appear</h2>
+      <table>
+        <thead><tr><th>Tip</th><th>Shown when</th><th>Gone for good once</th></tr></thead>
+        <tbody id="rules"></tbody>
+      </table>
+      <h2>Rules for every tip</h2>
+      <ul>
+        <li>At most one tip a day, only after a turn that finished cleanly.</li>
+        <li>Nothing during a user's first two sessions.</li>
+        <li>Each tip shows at most twice, and never again once the feature is used.</li>
+        <li>× offers "Hide this tip" or "Don't show tips". There is also a setting to turn tips off.</li>
+        <li>Sits under the suggested next step, never as a second card competing with it.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+  const BULB = '<svg class="bulb" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14"/></svg>';
+
+  const TIPS = {
+    fingerprint: {
+      prompt: 'Add a sliding window to the rate limiter and update the tests.',
+      reply: '<p>Done. The limiter now keeps a sliding window per key, and the old fixed-window flag still works.</p>' +
+        '<div class="chips"><span class="chip">limiter.ts <span class="add">+48</span><span class="del">−12</span></span><span class="chip">store.ts <span class="add">+9</span></span><span class="chip">limiter.test.ts <span class="add">+31</span></span><span class="chip">config.ts <span class="add">+2</span></span></div>',
+      next: 'Run the test suite',
+      html: '<strong>Fingerprint</strong> shows every file this turn touched and what else depends on them, so you can see the blast radius before you commit.',
+      action: 'Open Fingerprint',
+      toast: 'Opens Fingerprint Trace & Blast Radius for this session',
+      when: 'The turn edited files',
+      used: 'Fingerprint is opened once',
+    },
+    commit: {
+      prompt: 'Fix the off-by-one in pagination.',
+      reply: '<p>Fixed. <code>pageCount</code> rounded down, so the last partial page was dropped. Added a test for 21 items at 10 per page.</p>' +
+        '<div class="chips"><span class="chip">paginate.ts <span class="add">+3</span><span class="del">−2</span></span><span class="chip">paginate.test.ts <span class="add">+14</span></span></div>',
+      next: 'Check other callers of pageCount',
+      html: 'Ready to commit? Andromity can <strong>write the commit message</strong> for these changes from the Source Control panel.',
+      action: 'Write commit message',
+      toast: 'Runs Generate Commit Message for the staged changes',
+      when: 'The turn edited files in a git repo, and there are uncommitted changes',
+      used: 'Generate Commit Message is run once',
+    },
+    inline: {
+      prompt: 'Rename getUsr to getUser everywhere.',
+      reply: '<p>Renamed in 3 files. Nothing else referenced the old name.</p>' +
+        '<div class="chips"><span class="chip">users.ts <span class="add">+1</span><span class="del">−1</span></span><span class="chip">routes.ts <span class="add">+2</span><span class="del">−2</span></span><span class="chip">auth.ts <span class="add">+1</span><span class="del">−1</span></span></div>',
+      next: '',
+      html: 'For small changes like this, select the code and press <kbd>Ctrl</kbd>+<kbd>I</kbd> to <strong>edit it in place</strong> without leaving the editor.',
+      action: 'Open users.ts',
+      toast: 'Opens users.ts so you can try Ctrl+I on it',
+      when: 'A short turn that edited a few lines, after the user\'s third session',
+      used: 'Inline edit is used once',
+    },
+    cron: {
+      prompt: 'Check for outdated dependencies and list the risky ones.',
+      reply: '<p>Found 6 outdated packages. Two have breaking changes in their next major version: <code>express</code> and <code>zod</code>. The rest are safe patch updates.</p>',
+      next: 'Update the 4 safe packages',
+      html: 'Want this to run on its own? <strong>Cron Jobs</strong> can run a prompt on a schedule and keep the results in a session.',
+      action: 'Open Cron Jobs',
+      toast: 'Opens the Cron Jobs page',
+      when: 'The user has used Andromity on 3+ days and the turn was a check or report, not an edit',
+      used: 'A cron job is created',
+    },
+  };
+
+  let tipId = 'fingerprint';
+  let style = 'line';
+  let withNext = true;
+
+  function tipHtml(t) {
+    const menu = '<div class="tip-menu"><button data-menu="hide">Hide this tip</button><button data-menu="off">Don\'t show tips</button></div>';
+    if (style === 'card') {
+      return '<div class="tip-card" role="note">' + BULB +
+        '<div class="tip-text"><span class="tip-label">Did you know</span>' + t.html + '</div>' +
+        '<button class="btn" data-run>' + t.action + '</button>' +
+        '<button class="x" data-dismiss aria-label="Dismiss tip">&times;</button>' + menu + '</div>';
+    }
+    return '<div class="tip-line" role="note">' + BULB +
+      '<div class="tip-text"><span class="tip-label">Tip</span>' + t.html +
+      '<button class="tip-action" data-run>' + t.action + ' →</button></div>' +
+      '<button class="x" data-dismiss aria-label="Dismiss tip">&times;</button>' + menu + '</div>';
+  }
+
+  function render() {
+    const t = TIPS[tipId];
+    document.getElementById('prompt').textContent = t.prompt;
+    document.getElementById('reply').innerHTML = t.reply;
+    document.getElementById('next-step').innerHTML = withNext && t.next
+      ? '<div class="next-step-card"><div class="next-step-text"><div class="next-step-label">Suggested next step</div><div class="next-step-title">' + t.next + '</div></div><button class="btn primary">Do it</button><button class="x">&times;</button></div>'
+      : '';
+    document.getElementById('tip-slot').innerHTML = tipHtml(t);
+    document.getElementById('rules').innerHTML = Object.entries(TIPS).map(([id, r]) =>
+      '<tr class="' + (id === tipId ? 'current' : '') + '"><td>' + ({ fingerprint: 'Fingerprint', commit: 'Commit message', inline: 'Inline edit', cron: 'Cron jobs' })[id] + '</td><td>' + r.when + '</td><td>' + r.used + '</td></tr>').join('');
+  }
+
+  function toast(text) {
+    const el = document.getElementById('toast');
+    el.textContent = text;
+    el.classList.add('show');
+    clearTimeout(toast.timer);
+    toast.timer = setTimeout(() => el.classList.remove('show'), 1800);
+  }
+
+  function setOn(selector, attr, value) {
+    document.querySelectorAll(selector).forEach(b => b.classList.toggle('on', b.dataset[attr] === value));
+  }
+
+  document.getElementById('tip-picker').addEventListener('click', e => {
+    const b = e.target.closest('[data-tip]');
+    if (!b) return;
+    tipId = b.dataset.tip;
+    setOn('[data-tip]', 'tip', tipId);
+    render();
+  });
+  document.querySelectorAll('[data-style]').forEach(b => b.addEventListener('click', () => {
+    style = b.dataset.style;
+    setOn('[data-style]', 'style', style);
+    render();
+  }));
+  document.getElementById('toggle-next').addEventListener('click', e => {
+    withNext = !withNext;
+    e.target.classList.toggle('on', withNext);
+    render();
+  });
+  document.getElementById('theme').addEventListener('click', e => {
+    e.target.classList.toggle('on', document.body.classList.toggle('light'));
+  });
+  document.getElementById('replay').addEventListener('click', render);
+
+  document.getElementById('tip-slot').addEventListener('click', e => {
+    if (e.target.closest('[data-run]')) { toast(TIPS[tipId].toast); return; }
+    if (e.target.closest('[data-dismiss]')) { e.target.closest('[role="note"]').querySelector('.tip-menu').classList.toggle('open'); return; }
+    const m = e.target.closest('[data-menu]');
+    if (m) {
+      document.getElementById('tip-slot').innerHTML = '';
+      toast(m.dataset.menu === 'off' ? 'Tips turned off. Turn them back on in Settings.' : 'This tip won\'t show again.');
+    }
+  });
+
+  render();
+</script>
+</body>
+</html>

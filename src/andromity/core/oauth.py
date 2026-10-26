@@ -167,6 +167,19 @@ def _error_html(reason: str) -> bytes:
 
 # ── PKCE (RFC 7636) ──────────────────────────────────────────────────────────
 
+def is_browser_safe_auth_url(url: str) -> bool:
+    """The authorization endpoint comes from server metadata and is handed to the OS browser
+    launcher, which would also start any other registered protocol handler."""
+    try:
+        parts = urllib.parse.urlsplit(str(url or ""))
+    except ValueError:
+        return False
+    scheme = parts.scheme.lower()
+    if not parts.hostname:
+        return False
+    return scheme == "https" or (scheme == "http" and parts.hostname in ("localhost", "127.0.0.1", "::1"))
+
+
 def pkce_generate() -> tuple[str, str]:
     """
     Return (code_verifier, code_challenge) using S256 method.
@@ -673,6 +686,10 @@ async def full_oauth_flow(
         return None
     if auth_method != "none" and not client_secret:
         on_status("This server requires a client secret. Retry registration or configure oauth.client_secret.")
+        return None
+
+    if not is_browser_safe_auth_url(auth_ep):
+        on_status("The server's sign-in page is not an https address, so it was not opened.")
         return None
 
     # PKCE + state

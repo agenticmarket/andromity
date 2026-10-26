@@ -410,6 +410,8 @@ StatusBar {
         cost_source = getattr(self, "cost_source", "")
         if cost_source == "free":
             return f"$0.00 (free) [dim]·[/dim] "
+        if cost_source == "unpriced" and not self.cost:
+            return "[dim]cost unknown[/dim] [dim]·[/dim] "
         cost_prefix = "~" if "estimate" in cost_source else ("?" if cost_source == "unpriced" else "")
         return f"{cost_prefix}${self.cost:.4f} [dim]·[/dim] "
 
@@ -593,6 +595,10 @@ class ChatInput(TextArea):
         # priority=True so it shadows TextArea's default paste — lets us grab
         # an image off the clipboard instead of inserting its text repr.
         Binding("ctrl+v", "paste_image_or_text", "Paste", priority=True),
+        # TextArea uses these for line editing, which hid the app shortcuts the footer advertises.
+        Binding("ctrl+e", "app.toggle_settings", "Settings", show=False),
+        Binding("ctrl+u", "app.toggle_profile", "Profile", show=False),
+        Binding("ctrl+d", "app.toggle_diff", "Viewer", show=False),
     ]
 
     def __init__(self, **kwargs):

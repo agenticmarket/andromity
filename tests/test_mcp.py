@@ -275,7 +275,8 @@ async def test_mcp_live_stdio_server_integration(tmp_path, monkeypatch):
         # 7. Check list_tools and execute_tool_async
         register_mcp_manager(manager)
         executed = await execute_tool_async("mcp__mockserver__calc_add", {"a": 15, "b": 25})
-        assert executed == "40"
+        assert executed.startswith('<external_content source="mcp:mockserver">')
+        assert executed.endswith("\n40\n</external_content>")
 
         # 8. Check status summary
         summary = manager.get_status_summary()

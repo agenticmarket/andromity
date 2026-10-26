@@ -29,6 +29,14 @@ Every event includes the random ID, the client (`vscode`, `tui`, `cli` or `serve
 
 Model and provider names are the identifiers you configured (for example `anthropic` and `claude-sonnet-4-6`). Values are length-limited and stripped to safe characters before sending, and anything that looks like an API key is removed.
 
+## Feedback you send
+
+**Send Feedback** in VS Code opens a box where you can write a note to the Andromity team. A note is sent only when you submit it, and only with the client, OS family and Andromity version. The worker also stores the country Cloudflare reports for the connection. A note is **not** linked to your telemetry ID, and the worker does not store your IP address. Anything that looks like an API key is removed before it is stored. If you include your email address so we can reply, we use it only for that.
+
+Now and then, after a reply that went well, the chat asks **How's Andromity working for you?** Nothing is sent unless you pick an answer. Picking one sends your choice (Love it, It's OK or Not great), any of the listed annoyances you tick, and the optional note, stored the same way as a note: with the client, OS family, version and country, not linked to your telemetry ID and without your IP address. Usage telemetry records only whether a check-in was shown, answered or dismissed, never your answer. **Don't ask again** on the card stops the check-in for good.
+
+Notes and check-ins are sent whether or not telemetry is on, because you send each one yourself. Air-gap mode turns the feedback box and the check-in off. To delete a note you sent, email hello@agenticmarket.dev with the subject line `Feedback deletion` and roughly what it said and when.
+
 ## What is never collected
 
 - Prompts, responses, code, file contents, file names or paths

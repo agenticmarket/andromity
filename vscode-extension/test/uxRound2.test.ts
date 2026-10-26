@@ -26,6 +26,8 @@ describe("light themes", () => {
     const waterfall = getWaterfallStyles();
     assert.equal((waterfall.match(WHITE) || []).length, 1, "only the decorative progress shimmer stays white");
     assert.match(waterfall, LIGHT_TINT);
+    assert.doesNotMatch(waterfall, /:\s*;/, "every Waterfall declaration has a value");
+    assert.match(waterfall, /\.wf-tab \{[^}]*background: transparent;/, "inactive Waterfall tabs keep the panel background");
   });
 
   it("Settings, Plan, Changes Review and background task panels follow the theme too", () => {

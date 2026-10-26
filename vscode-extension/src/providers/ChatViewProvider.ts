@@ -44,9 +44,17 @@ import { getChatViewHtml, ChatViewState } from "./chatview/chatHtml.js";
 import { PlanViewProvider } from "./PlanViewProvider.js";
 import { accountUrl } from "./accountEndpoints.js";
 import { recordFeatureUse } from "../telemetry/featureUsage.js";
+import { FeatureTipsController } from "../engagement/featureTipsController.js";
+import { isFeatureTipId, isSourcePath, isTestPath } from "../engagement/featureTips.js";
+import { DOCS } from "../docsLinks.js";
 import { cronRunToast, SCHEDULED_RUN_BUSY, SCHEDULED_RUN_BUSY_TEXT } from "../cronNotifications.js";
 import { wakeSessionForQuestion } from "../collabActions.js";
 import { recordNextStepEvent } from "../nextSteps.js";
+import { handleFeedbackMessage } from "../engagement/feedbackWebview.js";
+import { ANNOYANCES } from "../engagement/checkIn.js";
+import type { FeedbackNotifications } from "../engagement/feedbackNotifications.js";
+import { checkSessionForNavigation } from "../sessionNavigation.js";
+import { confirmAndOpenLink } from "../linkOpener.js";
 
 export interface OllamaStatus {
   running: boolean;
@@ -205,11 +213,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return (this._runningSessions?.size || 0) > 0;
   }
 
+  private readonly _featureTips: FeatureTipsController | null;
+  private _checkIn: FeedbackNotifications | null = null;
+
   constructor(
     private readonly _extensionUri: vscode.Uri,
     private readonly _context?: vscode.ExtensionContext
   ) {
     ChatViewProvider.currentProvider = this;
+    this._featureTips = this._context ? new FeatureTipsController(this._context.globalState) : null;
+    if (this._featureTips) this._context?.subscriptions.push(this._featureTips);
     if (this._context) {
       let activeEditorDebounce: NodeJS.Timeout | null = null;
       const syncActiveEditor = () => {
@@ -245,6 +258,91 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         watcher.onDidDelete(invalidateIndex),
         vscode.workspace.onDidChangeWorkspaceFolders(invalidateIndex)
       );
+    }
+  }
+
+  private async _handleFeatureTipMessage(message: any): Promise<void> {
+    const tips = this._featureTips;
+    if (!tips) return;
+    if (message.type === "turn_finished") {
+      const sessionId = String(message.sessionId || this._currentSessionId || "");
+      const count = (value: unknown) => Math.max(0, Number(value) || 0);
+      const files: string[] = Array.isArray(message.editedFiles)
+        ? message.editedFiles.filter((f: unknown): f is string => typeof f === "string" && !!f)
+        : [];
+      const sourceFiles = files.filter(isSourcePath);
+      const tip = await tips.onTurnFinished({
+        sessionId,
+        filesEdited: files.length,
+        sourceFilesEdited: sourceFiles.length,
+        testFilesEdited: files.filter(isTestPath).length,
+        toolCalls: count(message.toolCalls),
+        shellCommands: count(message.shellCommands),
+        inGitRepo: this._inGitRepo(),
+        scheduled: message.scheduled === true,
+        localModel: this._currentProvider === "ollama",
+        airGapOn: currentAirGap().enabled,
+        mcpServers: tips.wantsMcpCount() ? await this._mcpServerCount() : -1,
+      });
+      if (tip && sessionId === this._currentSessionId) {
+        const file = tip === "generate_tests" ? sourceFiles[0] : tip === "inline_edit" ? files[0] : "";
+        this._postToWebview({ type: "feature_tip", session_id: sessionId, tip, file: file || "" });
+      }
+      return;
+    }
+    if (message.type === "feature_tip_off") {
+      await tips.turnOff();
+      return;
+    }
+    if (!isFeatureTipId(message.tip)) return;
+    if (message.type === "feature_tip_hide") {
+      await tips.hide(message.tip);
+      return;
+    }
+    await tips.acted(message.tip);
+    switch (message.tip) {
+      case "fingerprint":
+        await vscode.commands.executeCommand("andromity.openFingerprint");
+        break;
+      case "commit_message":
+        await vscode.commands.executeCommand("workbench.view.scm");
+        await vscode.commands.executeCommand("andromity.generateCommitMessage");
+        break;
+      case "inline_edit":
+        if (typeof message.file === "string" && message.file) await this.openFile(message.file);
+        break;
+      case "cron_jobs":
+        await vscode.commands.executeCommand("andromity.openCrons");
+        break;
+      case "generate_tests":
+        if (typeof message.file === "string" && message.file) {
+          await this.openFile(message.file);
+          await vscode.commands.executeCommand("andromity.generateTests");
+        }
+        break;
+      case "air_gap":
+        await vscode.env.openExternal(vscode.Uri.parse(DOCS.airGap));
+        break;
+      case "mcp_servers":
+        SettingsPanel.createOrShow(this._extensionUri, this._rpcClient, "mcp", () => this.refreshConfig());
+        break;
+    }
+  }
+
+  private async _mcpServerCount(): Promise<number> {
+    if (!this._rpcClient) return -1;
+    const projectPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const servers = await this._rpcClient.call<any[]>("mcp.list", { project_path: projectPath }, 5000).catch(() => null);
+    return Array.isArray(servers) ? servers.length : -1;
+  }
+
+  private _inGitRepo(): boolean {
+    try {
+      const git = vscode.extensions.getExtension("vscode.git");
+      const api = git?.isActive ? git.exports?.getAPI?.(1) : null;
+      return Boolean(api && api.repositories && api.repositories.length > 0);
+    } catch {
+      return false;
     }
   }
 
@@ -442,6 +540,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public setPlanViewProvider(provider: PlanViewProvider) {
     this._planViewProvider = provider;
+  }
+
+  public setFeedbackCheckIn(checkIn: FeedbackNotifications) {
+    this._checkIn = checkIn;
+  }
+
+  /** Puts the check-in under the reply just finished. Only when someone is looking at the chat. */
+  public showFeedbackCheckIn(): boolean {
+    if (!this._view?.visible || !this._currentSessionId) return false;
+    this._postToWebview({
+      type: "feedback_checkin",
+      session_id: this._currentSessionId,
+      annoyances: ANNOYANCES.map((a) => ({ id: a.id, label: a.label })),
+    });
+    return true;
   }
 
   public updateCurrentPlan(plan: any, sessionId?: string) {
@@ -952,7 +1065,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         isAuthenticated: true,
         plan: "authenticated",
         username: username || "Developer",
-        token: token.slice(0, 8) + "...",
       });
       await this.fetchUsage(true);
       if (SettingsPanel.currentPanel) {
@@ -1022,8 +1134,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _usageInFlight: Promise<any> | null = null;
+  private _installClientId: string | null = null;
   private _lastUsageData: any = null;
   private _lastUsageFetchedAt: number = 0;
+
+  /** The per-install ID the daemon sends with gateway requests, so usage matches its quota. */
+  private async _gatewayClientId(): Promise<string> {
+    if (this._installClientId) return this._installClientId;
+    const result = await this._rpcClient?.call("gateway.clientId", {}).catch(() => null);
+    const id = typeof result?.client_id === "string" ? result.client_id.trim() : "";
+    if (id) this._installClientId = id;
+    return id || "local_client";
+  }
 
   public async fetchUsage(forceRefresh = false): Promise<any> {
     if (!forceRefresh && this._lastUsageData && Date.now() - this._lastUsageFetchedAt < 10000) {
@@ -1036,7 +1158,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._usageInFlight = (async () => {
       const token = await this._context?.secrets.get("andromity.authToken");
       const storedUsername = await this._context?.secrets.get("andromity.userName");
-      const clientId = storedUsername || "local_client";
+      const clientId = storedUsername || (token ? "local_client" : await this._gatewayClientId());
       const gatewayUrl = this._getGatewayBaseUrl();
       let rejectedToken = false;
 
@@ -2473,7 +2595,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         SettingsPanel.createOrShow(
           this._extensionUri,
           this._rpcClient,
-          "keys",
+          message.tab === "mcp" ? "mcp" : "keys",
           () => this.refreshConfig()
         );
         break;
@@ -2482,6 +2604,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case "retry_turn": {
         this._postToWebview({ type: "retry_result", session_id: message.sessionId || this._currentSessionId,
           success: false, error: "The daemon is disconnected. Reconnect and try again." });
+        break;
+      }
+
+      case "open_link": {
+        await confirmAndOpenLink(message.url);
+        break;
+      }
+
+      case "submit_feedback":
+      case "feedback_issue": {
+        const reply = await handleFeedbackMessage(message, this._context);
+        if (reply) this._postToWebview(reply);
+        break;
+      }
+
+      case "checkin_send": {
+        if (this._checkIn) this._postToWebview(await this._checkIn.sendCheckIn(message));
+        break;
+      }
+
+      case "checkin_dismiss": {
+        await this._checkIn?.dismissCheckIn(message.never === true);
+        break;
+      }
+
+      case "checkin_review": {
+        await this._checkIn?.reviewFromCheckIn();
         break;
       }
 
@@ -3103,6 +3252,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "navigate_session": {
+        const result = await checkSessionForNavigation(this._rpcClient, message.sessionId,
+          vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+        this._postToWebview(result);
+        if (result.status === "ok") {
+          recordFeatureUse("session_switched");
+          this.setCurrentSessionId(result.sessionId, true);
+        }
+        break;
+      }
+
       case "reset_auto_wake": {
         if (this._rpcClient && message.sessionId) {
           await this._rpcClient.call("session.resetAutoWake", {
@@ -3501,6 +3661,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "webview_error": {
         console.error("[Andromity Webview Error]", message);
+        break;
+      }
+
+      case "turn_finished":
+      case "feature_tip_run":
+      case "feature_tip_hide":
+      case "feature_tip_off": {
+        await this._handleFeatureTipMessage(message);
         break;
       }
 

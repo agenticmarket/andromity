@@ -5,7 +5,7 @@
 
   **The open-source coding agent that shows you exactly what it did. Waterfall, Fingerprint and Blast radius trace every model call, file read, edit and command. Bring your own key.**
 
-  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.23-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.24-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white)](https://discord.gg/taPJSNy4)
   [![PyPI](https://img.shields.io/pypi/v/andromity)](https://pypi.org/project/andromity/)
   [![GitHub Stars](https://img.shields.io/github/stars/agenticmarket/andromity?style=social)](https://github.com/agenticmarket/andromity)
@@ -197,7 +197,7 @@ andromity run "review session.py" --dry-run       # see what it would do
 
 ## Privacy
 
-Your code goes to the model provider you configure. With a local Ollama model, inference stays on your machine. The built-in `andromity` provider routes requests through the Andromity edge gateway, which forwards them without storing prompts, source code, or completions.
+Your code goes to the model provider you configure. With a local Ollama model, inference stays on your machine. The built-in `andromity` provider routes requests through the Andromity edge gateway, which forwards them without storing prompts, source code, or completions. For quotas and abuse prevention it keeps request metadata (account or install ID, a keyed IP fingerprint, country, model and token counts) for 14 days.
 
 - API keys stay on your machine in `~/.andromity/config.toml` (`%APPDATA%\andromity\config.toml` on Windows); keep that file private
 - Sessions stored locally in `~/.andromity/sessions/`

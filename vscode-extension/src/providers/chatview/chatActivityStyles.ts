@@ -209,6 +209,22 @@ export function getChatActivityStyles(): string {
       animation: activityPulse 1.4s ease-in-out infinite;
     }
 
+    .activity-row.awaiting-approval,
+    .tool-card.awaiting-approval {
+      border-color: rgba(251, 191, 36, 0.35);
+      background: rgba(251, 191, 36, 0.04);
+    }
+
+    .activity-row.awaiting-approval .activity-action,
+    .tool-card.awaiting-approval .tool-tag {
+      color: var(--vscode-editorWarning-foreground, #fbbf24);
+    }
+
+    .activity-row.awaiting-approval .activity-running-dot {
+      background: var(--vscode-editorWarning-foreground, #fbbf24);
+      animation: none;
+    }
+
     .activity-row.activity-row-failed {
       border-color: rgba(248, 81, 73, 0.3);
       background: rgba(248, 81, 73, 0.04);
@@ -312,6 +328,19 @@ export function getChatActivityStyles(): string {
       word-break: break-all;
     }
 
+    .tool-external-tag {
+      display: inline-flex;
+      align-items: center;
+      margin-right: 6px;
+      padding: 1px 6px;
+      border: 1px solid color-mix(in srgb, var(--vscode-editorWarning-foreground, #d29922) 45%, transparent);
+      border-radius: 4px;
+      color: var(--vscode-editorWarning-foreground, #d29922);
+      font-size: 10px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
     /* Background Process Badges & 1-Click Stop Button */
     .bg-proc-badge {
       display: inline-flex;
@@ -325,9 +354,11 @@ export function getChatActivityStyles(): string {
       white-space: nowrap;
     }
     .bg-proc-badge.running {
-      background: rgba(88, 166, 255, 0.18);
-      color: var(--accent, #58a6ff);
-      border: 1px solid rgba(88, 166, 255, 0.35);
+      padding: 0;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0;
+      color: var(--vscode-charts-blue, #38bdf8);
     }
     .bg-proc-badge.done {
       background: rgba(63, 185, 80, 0.18);

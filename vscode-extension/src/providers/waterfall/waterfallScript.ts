@@ -31,6 +31,7 @@ export function getWaterfallScript(sessionId: string): string {
           toolMs: 0,
           promptTokens: 0,
           completionTokens: 0,
+          historyTokens: 0,
           totalTokens: 0
         }
       };
@@ -256,7 +257,10 @@ export function getWaterfallScript(sessionId: string): string {
 
         let metaHtml = '';
         metaHtml += \`<div class="wf-detail-item" title="Total wall-clock duration of this operation"><div class="wf-detail-key">Duration</div><div class="wf-detail-val">\${formatMs(effectiveDuration)}</div></div>\`;
-        metaHtml += \`<div class="wf-detail-item" title="Status of execution (running, done, or error)"><div class="wf-detail-key">Status</div><div class="wf-detail-val"><span class="wf-badge-pill \${span.status === 'done' ? 'response' : span.status === 'error' ? 'error' : 'thinking'}">\${span.status}</span></div></div>\`;
+        // Running details are rebuilt every frame; a clock-based delay keeps the shimmer moving instead of restarting.
+        metaHtml += \`<div class="wf-detail-item" title="Status of execution (running, done, or error)"><div class="wf-detail-key">Status</div><div class="wf-detail-val">\${span.status === 'running'
+          ? '<span class="wf-status-live status-shimmer" style="animation-delay: -' + (now % 3200) + 'ms">Running</span>'
+          : '<span class="wf-badge-pill ' + (span.status === 'done' ? 'response' : span.status === 'error' ? 'error' : 'thinking') + '">' + span.status + '</span>'}</div></div>\`;
 
         if (span.type === 'llm') {
           if (span.model) metaHtml += \`<div class="wf-detail-item" title="Model and provider that generated this response"><div class="wf-detail-key">Model</div><div class="wf-detail-val">\${escapeHtml(span.model)}</div></div>\`;
@@ -570,6 +574,22 @@ export function getWaterfallScript(sessionId: string): string {
 
       // History spans carry no per-call tokens, so the session total from history is kept as a
       // base for what those spans used; spans streamed live add their own tokens on top.
+      // Prompt and completion are summed over calls seen live. History reports only a combined total,
+      // kept as historyTokens: the part of totalTokens that has no prompt/completion split.
+      function syncTokenTotals() {
+        let prompt = 0;
+        let completion = 0;
+        for (const s of state.spans.values()) {
+          if (s.fromHistory || !s.totalTokens) continue;
+          prompt += s.promptTokens || 0;
+          completion += s.completionTokens || 0;
+        }
+        state.totals.promptTokens = prompt;
+        state.totals.completionTokens = completion;
+        state.totals.historyTokens = state.historyTokenBase || 0;
+        state.totals.totalTokens = state.totals.historyTokens + liveSpanTokens();
+      }
+
       function liveSpanTokens() {
         let tokens = 0;
         for (const s of state.spans.values()) {
@@ -594,7 +614,7 @@ export function getWaterfallScript(sessionId: string): string {
         state.totals.durationMs = durMs;
         state.totals.llmMs = llmMs;
         state.totals.toolMs = toolMs;
-        state.totals.totalTokens = (state.historyTokenBase || 0) + liveSpanTokens();
+        syncTokenTotals();
       }
 
       function updateSummaryStats() {
@@ -858,6 +878,26 @@ export function getWaterfallScript(sessionId: string): string {
             break;
           }
 
+          case 'input_applied': {
+            // A message sent while the agent works is applied between two steps; the work after it is its own turn.
+            // User message N is turn N, the same id history uses, so a later history load updates this turn.
+            const at = msg.ts ? msg.ts * 1000 : Date.now();
+            const turnId = typeof msg.turn_index === 'number' ? 'turn_' + (msg.turn_index + 1) : 'turn_' + (state.turns.size + 1);
+            if (turnId === state.currentTurnId) break;
+            const previous = state.turns.get(state.currentTurnId);
+            if (previous && !previous.endTime) {
+              previous.endTime = at;
+              previous.durationMs = Math.max(0, at - previous.startTime);
+              updateTimingBars(previous.id);
+            }
+            ensureTurn(turnId, msg.prompt || '', at);
+            state.isRunning = true;
+            recalcTotals();
+            addLog('INPUT', 'Message applied during the turn: ' + cleanPromptForDisplay(msg.prompt || '').slice(0, 80));
+            updateSummaryStats();
+            break;
+          }
+
           case 'waterfall_llm_start': {
             state.isRunning = true;
             const turn = ensureTurn(state.currentTurnId, undefined, msg.ts ? msg.ts * 1000 : undefined);
@@ -1107,7 +1147,10 @@ export function getWaterfallScript(sessionId: string): string {
               break;
             } else {
               const isBgProc = (span.name === 'shell_bg' || msg.tool_name === 'shell_bg');
-              if (isBgProc && msg.success !== false) {
+              // A command that ends within shell_bg's first seconds is reported as "...exited after 0.6s with code 1...",
+              // and its exit event arrives before this result, so the result must not mark it running again.
+              const startupExit = isBgProc ? /exited after [0-9.]+s with code (-?[0-9]+)/.exec(String(msg.result || '')) : null;
+              if (isBgProc && msg.success !== false && !startupExit) {
                 const procMatch = String(msg.result || '').match(/with id '([^']+)'/);
                 const procId = procMatch ? procMatch[1] : (span.processId || '');
                 if (procId) {
@@ -1123,7 +1166,8 @@ export function getWaterfallScript(sessionId: string): string {
               } else {
                 span.endTime = msg.ts ? msg.ts * 1000 : Date.now();
                 span.durationMs = msg.duration_ms || (span.endTime - span.startTime);
-                span.status = msg.success === false ? 'error' : 'done';
+                span.status = msg.success === false || (startupExit && startupExit[1] !== '0') ? 'error' : 'done';
+                if (startupExit) span.isBackground = false;
                 span.result = msg.result || '';
                 addLog('TOOL-END', span.name + ' finished in ' + formatMs(span.durationMs) + ' (' + span.status + ')');
 
@@ -1449,6 +1493,7 @@ export function getWaterfallScript(sessionId: string): string {
               turn.durationMs = turn.endTime - turn.startTime;
               updateTimingBars(turn.id);
             }
+            recalcTotals();
             addLog('DONE', 'Turn completed');
             updateSummaryStats();
             break;
@@ -1490,6 +1535,7 @@ export function getWaterfallScript(sessionId: string): string {
             if (turn) {
               updateTimingBars(turn.id);
             }
+            recalcTotals();
             addLog('CANCEL', 'Turn execution cancelled by user');
             updateSummaryStats();
             break;
@@ -1531,6 +1577,7 @@ export function getWaterfallScript(sessionId: string): string {
             if (turn) {
               updateTimingBars(turn.id);
             }
+            recalcTotals();
             addLog('ERROR', \`Execution error: \${msg.error || 'Unknown error'}\`);
             updateSummaryStats();
             break;
@@ -1856,8 +1903,7 @@ export function getWaterfallScript(sessionId: string): string {
               }
 
               state.historyTokenBase = Math.max(0, (sData.token_total || 0) - liveSpanTokens());
-              state.totals.totalTokens = state.historyTokenBase + liveSpanTokens();
-              state.totals.promptTokens = sData.context_tokens || 0;
+              syncTokenTotals();
               state.isRunning = sData.status === 'running';
 
               // Watermark: number of user-turns materialised from history.
@@ -1988,7 +2034,7 @@ export function getWaterfallScript(sessionId: string): string {
           state.committedToolCallIds.clear();
           state.committedLlmTurnIds.clear();
           state.logs = [];
-          state.totals = { durationMs: 0, llmMs: 0, toolMs: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+          state.totals = { durationMs: 0, llmMs: 0, toolMs: 0, promptTokens: 0, completionTokens: 0, historyTokens: 0, totalTokens: 0 };
           state.historyTokenBase = 0;
           els.timelineContainer.innerHTML = '';
           els.logContainer.innerHTML = '';
@@ -2015,6 +2061,8 @@ export function getWaterfallScript(sessionId: string): string {
                 status: s.status,
                 ttfbMs: s.ttfbMs,
                 tokens: s.totalTokens,
+                promptTokens: s.promptTokens || 0,
+                completionTokens: s.completionTokens || 0,
                 args: s.args,
                 result: s.result,
                 response: s.response || '',

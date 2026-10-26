@@ -1,6 +1,7 @@
 """Web search and URL content fetching tools with safety guardrails."""
 import gzip
 import html
+import http.client
 import json
 import logging
 import os
@@ -136,6 +137,48 @@ def _clean_html(html_text: str) -> str:
     return "\n\n".join(lines)
 
 
+class PrivatePeerError(ConnectionRefusedError):
+    """The host resolved to a private address at connect time (DNS rebinding)."""
+
+
+def _reject_private_peer(sock: socket.socket) -> None:
+    from andromity.core.security import _is_private_ip
+    try:
+        peer = sock.getpeername()[0]
+    except OSError:
+        return
+    if _is_private_ip(str(peer)):
+        sock.close()
+        raise PrivatePeerError(f"the host resolved to the private/internal address {peer} when connecting")
+
+
+class _PeerCheckedHTTPConnection(http.client.HTTPConnection):
+    def connect(self):
+        super().connect()
+        _reject_private_peer(self.sock)
+
+
+class _PeerCheckedHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        super().connect()
+        _reject_private_peer(self.sock)
+
+
+class _PeerCheckedHTTPHandler(urllib.request.HTTPHandler):
+    def do_open(self, http_class, req, **kwargs):
+        return super().do_open(_PeerCheckedHTTPConnection, req, **kwargs)
+
+
+class _PeerCheckedHTTPSHandler(urllib.request.HTTPSHandler):
+    def do_open(self, http_class, req, **kwargs):
+        return super().do_open(_PeerCheckedHTTPSConnection, req, **kwargs)
+
+
+def _goes_through_proxy(url: str, host: str) -> bool:
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    return bool(urllib.request.getproxies().get(scheme)) and not urllib.request.proxy_bypass(host)
+
+
 def fetch_url(url: str, max_chars: int = 10000) -> str:
     """Fetch and return cleaned text content from a web URL.
     
@@ -184,7 +227,11 @@ def fetch_url(url: str, max_chars: int = 10000) -> str:
             "Accept-Language": "en-US,en;q=0.9",
         }
     )
-    opener = urllib.request.build_opener(_SafeRedirectHandler())
+    handlers: List[urllib.request.BaseHandler] = [_SafeRedirectHandler()]
+    if not _goes_through_proxy(url, host):
+        # The check above resolved the name once; the connection resolves it again.
+        handlers += [_PeerCheckedHTTPHandler(), _PeerCheckedHTTPSHandler()]
+    opener = urllib.request.build_opener(*handlers)
     attempt = 0
     while True:
         try:
@@ -269,6 +316,8 @@ def _describe_fetch_error(e: BaseException) -> str:
         return f"the site returned HTTP {e.code} ({e.reason})."
     if _is_timeout_error(e):
         return f"the request timed out after {FETCH_TIMEOUT_S} seconds. The site may be slow or unreachable."
+    if isinstance(e, urllib.error.URLError) and isinstance(e.reason, PrivatePeerError):
+        return f"blocked for security: {e.reason}. Fetching private/internal addresses is not allowed."
     if isinstance(e, urllib.error.URLError):
         return f"the site could not be reached ({e.reason}). Check the URL and the network connection."
     if isinstance(e, ssl.SSLError):

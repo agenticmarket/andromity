@@ -119,6 +119,37 @@ async def test_agent_waterfall_events(session):
     assert tool_results[0].ts > 0
 
 
+@pytest.mark.asyncio
+async def test_failed_provider_call_adds_no_estimated_tokens(session):
+    agent = Agent(session, profile="builder", auto_approve=True)
+
+    async def mock_stream(messages, tools=None, **kwargs):
+        yield TextDelta(text='<div class="andromity-error-card">Request rejected</div>')
+        yield Done(outcome="error", error_type="invalid_request")
+
+    with patch("andromity.core.agent.stream_completion", side_effect=mock_stream):
+        events = [event async for event in agent.run("hello " * 200)]
+
+    llm_end = next(e for e in events if isinstance(e, LLMCallEnd))
+    assert (llm_end.prompt_tokens, llm_end.completion_tokens, llm_end.total_tokens) == (0, 0, 0)
+    assert session.token_total == 0
+
+
+@pytest.mark.asyncio
+async def test_successful_call_without_usage_is_still_estimated(session):
+    agent = Agent(session, profile="builder", auto_approve=True)
+
+    async def mock_stream(messages, tools=None, **kwargs):
+        yield TextDelta(text="A reply long enough to count.")
+        yield Done()
+
+    with patch("andromity.core.agent.stream_completion", side_effect=mock_stream):
+        events = [event async for event in agent.run("hello")]
+
+    llm_end = next(e for e in events if isinstance(e, LLMCallEnd))
+    assert llm_end.total_tokens > 0
+    assert session.token_total == llm_end.total_tokens
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("effort", ["off", "auto", "xhigh"])

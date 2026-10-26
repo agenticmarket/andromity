@@ -193,6 +193,105 @@ export function getChatPolishStyles(): string {
     .status-mcp-btn:hover { color: var(--fg); background: var(--surface-hover); }
     .status-bar-right { display: flex; align-items: center; }
 
+    /* Back and forward through recent sessions, before the session name in wide views. */
+    .session-nav { display: none; }
+    @media (min-width: 1100px) {
+      .session-nav { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
+    }
+    .session-nav-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      border: none;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .session-nav-btn:hover:not(:disabled) { color: var(--fg); background: var(--surface-hover); }
+    .session-nav-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+    .session-nav-btn:disabled { opacity: 0.35; cursor: default; }
+
+    /* Feedback: a bug button beside the MCP button in the status bar of wide views, opening a small form above it. */
+    .feedback-dock { display: none; }
+    @media (min-width: 1100px) {
+      .feedback-dock { display: inline-flex; position: relative; align-items: center; }
+    }
+    .feedback-dock-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      border: none;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      transition: color 0.15s ease, background 0.15s ease;
+    }
+    .feedback-dock-btn:hover, .feedback-dock-btn[aria-expanded="true"] { color: var(--fg); background: var(--surface-hover); }
+    .feedback-dock-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+    .feedback-popover {
+      position: absolute;
+      right: 0;
+      bottom: 30px;
+      z-index: 20;
+      width: 320px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 14px;
+      border: 1px solid var(--popover-border);
+      border-radius: 12px;
+      background: var(--popover-bg);
+      box-shadow: 0 12px 32px var(--popover-shadow);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .feedback-popover[hidden] { display: none; }
+    .feedback-title { font-size: 13px; font-weight: 600; color: var(--fg); }
+    .feedback-hint { margin: 0; color: var(--muted); }
+    .feedback-text {
+      width: 100%;
+      min-height: 96px;
+      resize: vertical;
+      box-sizing: border-box;
+      padding: 8px 10px;
+      border: 1px solid var(--input-border);
+      border-radius: 8px;
+      background: var(--input-bg);
+      color: var(--fg);
+      font: inherit;
+    }
+    .feedback-text:focus { outline: none; border-color: var(--accent); }
+    .feedback-meta { display: flex; justify-content: space-between; gap: 8px; min-height: 16px; color: var(--muted); font-size: 11px; }
+    .feedback-status.error { color: var(--red); }
+    .feedback-status.ok { color: var(--green); }
+    .feedback-count { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+    .feedback-actions { display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+    .feedback-btn {
+      padding: 5px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: transparent;
+      color: var(--fg);
+      font: inherit;
+      cursor: pointer;
+    }
+    .feedback-btn:hover:not(:disabled) { background: var(--surface-hover); }
+    .feedback-btn.primary {
+      border-color: transparent;
+      background: var(--vscode-button-background, var(--accent));
+      color: var(--vscode-button-foreground, #fff);
+    }
+    .feedback-btn.primary:hover:not(:disabled) { background: var(--vscode-button-hoverBackground, var(--accent)); }
+    .feedback-btn:disabled { opacity: 0.5; cursor: default; }
+
     /* Session panel. From 1500px it sits in the empty space right of the centred chat
        column; from 1100px the chat area gives up that space so the panel docks beside it.
        Narrower views show the chat only. */
@@ -412,13 +511,7 @@ export function getChatPolishStyles(): string {
     .sp-status.del { color: var(--vscode-gitDecoration-deletedResourceForeground, #f85149); }
     .sp-add { color: var(--vscode-gitDecoration-addedResourceForeground, #3fb950); }
     .sp-del { color: var(--vscode-gitDecoration-deletedResourceForeground, #f85149); }
-    .sp-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: rgba(var(--tint), 0.25); }
-    .sp-dot.running { background: var(--vscode-testing-iconPassed, #3fb950); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-testing-iconPassed, #3fb950) 18%, transparent); }
-    .sp-dot.attention { background: var(--vscode-editorWarning-foreground, #d29922); }
-    .sp-dot.error { background: var(--vscode-errorForeground, #f85149); }
-    .sp-dot.starting { background: var(--muted); animation: sp-pulse 1.2s ease-in-out infinite; }
-    @keyframes sp-pulse { 50% { opacity: 0.35; } }
-    @media (prefers-reduced-motion: reduce) { .sp-dot.starting { animation: none; } .sp-chevron { transition: none; } }
+    @media (prefers-reduced-motion: reduce) { .sp-chevron { transition: none; } }
 
     .sp-kv {
       display: grid;
@@ -527,7 +620,8 @@ export function getChatPolishStyles(): string {
     .sp-server-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
     .sp-server-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
     .sp-server-kind { font-size: 10px; font-weight: 400; color: var(--muted); }
-    .sp-server-status { display: inline-flex; align-items: center; gap: 7px; flex-shrink: 0; font-size: 10px; color: var(--muted); }
+    .sp-server-status { flex-shrink: 0; font-size: 10px; color: var(--muted); white-space: nowrap; }
+    .sp-server-status.running { color: var(--vscode-testing-iconPassed, #3fb950); }
     .sp-server-status.warn { color: var(--vscode-editorWarning-foreground, #d29922); }
     .sp-server-status.error { color: var(--vscode-errorForeground, #f85149); }
     .sp-server-total { padding-top: 6px; color: var(--muted); font-size: 10px; }

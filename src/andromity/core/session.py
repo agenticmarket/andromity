@@ -778,13 +778,18 @@ class Session:
         if db_sessions:
             ids = [s.id for s in db_sessions]
             ph = ",".join("?" * len(ids))
-            counts = dict(conn.execute(
-                f"SELECT session_id, COUNT(*) FROM session_messages WHERE session_id IN ({ph}) GROUP BY session_id",
-                ids
-            ).fetchall())
+            counts = {
+                row[0]: (row[1], row[2] or 0)
+                for row in conn.execute(
+                    f"SELECT session_id, COUNT(*), SUM(CASE WHEN role != 'system' THEN 1 ELSE 0 END) "
+                    f"FROM session_messages WHERE session_id IN ({ph}) GROUP BY session_id",
+                    ids
+                ).fetchall()
+            }
             for s in db_sessions:
-                cnt = counts.get(s.id, 0)
+                cnt, conversation = counts.get(s.id, (0, 0))
                 s.message_count = cnt
+                s.conversation_count = conversation
                 s.messages = [{}] * cnt
         return db_sessions
 

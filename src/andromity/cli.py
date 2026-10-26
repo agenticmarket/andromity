@@ -1,4 +1,5 @@
 import asyncio
+import sys
 import click
 
 
@@ -54,7 +55,17 @@ def run(prompt, file, yes, dry_run, profile, provider, model):
             prompt = f.read()
     if not prompt:
         raise click.UsageError("Must provide PROMPT or --file")
+    _tolerate_narrow_console()
     asyncio.run(_run_async(prompt, yes, dry_run, profile, provider, model))
+
+
+def _tolerate_narrow_console() -> None:
+    """Replies and error cards contain symbols a cp1252 console or redirected output cannot encode."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
 
 
 @main.command()

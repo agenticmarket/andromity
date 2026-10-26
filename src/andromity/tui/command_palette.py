@@ -31,7 +31,7 @@ COMMAND_DESCRIPTIONS = {
     "/new":      "Start a new session",
     "/compact":  "Summarize & compress old context (frees tokens)",
     "/rename":   "Rename current session",
-    "/trust":    "Trust this folder (enable file writes + shell)",
+    "/trust":    "Trust this folder (lets Andromity read, edit and run commands)",
     "/untrust":  "Remove trust for this folder",
     "/dry-run":  "Toggle dry-run (simulate tools, no writes)",
     "/debug":    "Toggle debug mode (tool calls inline + log path)",

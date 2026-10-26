@@ -93,11 +93,13 @@ def get_approved_skill_roots(project_path: Optional[Path] = None) -> List[Path]:
     roots: List[Path] = []
     if project_path:
         p = Path(project_path).resolve()
-        roots.extend([
-            (p / ".agents" / "skills").resolve(),
-            (p / ".andromity" / "skills").resolve(),
-            (p / "skills").resolve(),
-        ])
+        for candidate in (p / ".agents" / "skills", p / ".andromity" / "skills", p / "skills"):
+            # A repository can ship these folders as links; one pointing outside the
+            # project would make everything it reaches readable as a "skill".
+            resolved = candidate.resolve()
+            if resolved == p or not resolved.is_relative_to(p):
+                continue
+            roots.append(resolved)
     
     roots.append((get_config_dir() / "skills").resolve())
     roots.append((Path.home() / ".andromity" / "skills").resolve())

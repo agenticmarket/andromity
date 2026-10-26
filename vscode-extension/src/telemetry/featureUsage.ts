@@ -2,7 +2,9 @@
  *  (plus the session id it happened in); it goes through the daemon's
  *  telemetry.recordFeature to the Andromity telemetry worker, where the admin
  *  dashboard counts users and uses per name. Never prompts, code, paths, model
- *  output or settings values. The daemon applies the same opt-outs again. */
+ *  output or settings values. The daemon applies the same opt-outs again.
+ *  Local listeners (feature tips) hear every use whether or not telemetry is
+ *  on; what they hear stays on this machine. */
 
 interface TelemetryRpc {
   call<T = unknown>(method: string, params?: unknown): Promise<T>;
@@ -15,6 +17,7 @@ let telemetryGate: () => boolean = () => true;
 const seenPerSession = new Map<string, Set<string>>();
 const MAX_TRACKED_SESSIONS = 200;
 const NO_SESSION = "";
+const localListeners = new Set<(feature: string) => void>();
 
 export function setFeatureUsageClient(client: TelemetryRpc | null): void {
   activeClient = client;
@@ -30,6 +33,25 @@ export function featureName(raw: string): string {
     .replace(/^_|_$/g, "")
     .slice(0, 31)
     .replace(/_$/, "");
+}
+
+/** Hears every feature use on this machine, telemetry or not. Returns an unsubscribe. */
+export function onFeatureUse(listener: (feature: string) => void): () => void {
+  localListeners.add(listener);
+  return () => localListeners.delete(listener);
+}
+
+/** Tells local listeners a feature was used without sending anything anywhere. */
+export function noteFeatureUse(feature: string): void {
+  const name = featureName(feature);
+  if (!name) return;
+  for (const listener of localListeners) {
+    try {
+      listener(name);
+    } catch {
+      // A listener must never break the action that reported the use.
+    }
+  }
 }
 
 export function setFeatureUsageGate(gate: () => boolean): void {
@@ -53,6 +75,7 @@ export interface FeatureUseOptions {
 
 export function recordFeatureUse(feature: string, options: FeatureUseOptions = {}): void {
   const name = featureName(feature);
+  noteFeatureUse(name);
   const client = options.client ?? activeClient;
   if (!name || !client || !telemetryAllowed()) return;
   if (options.oncePerSession) {

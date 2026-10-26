@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
 import { escapeHtml, getNonce } from "../providers/webviewSecurity.js";
+import { STATUS_SHIMMER_STYLES } from "../providers/chatview/chatStyles.js";
+import { confirmAndOpenLink } from "../linkOpener.js";
 
 export class BackgroundTaskPanel {
   public static readonly viewType = "andromity.backgroundTaskTab";
@@ -105,6 +107,9 @@ export class BackgroundTaskPanel {
               await vscode.env.clipboard.writeText(message.text);
               vscode.window.showInformationMessage("Copied to clipboard");
             }
+            break;
+          case "open_url":
+            await confirmAndOpenLink(message.url, "Open this link from the task output?");
             break;
         }
       },
@@ -430,6 +435,19 @@ export class BackgroundTaskPanel {
       margin-top: 12px;
       padding-top: 8px;
     }
+    .out-link {
+      color: var(--vscode-textLink-foreground, var(--cyan));
+      text-decoration: underline;
+      text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+      text-underline-offset: 2px;
+      cursor: pointer;
+    }
+    .out-link:hover, .out-link:focus-visible {
+      color: var(--vscode-textLink-activeForeground, var(--cyan));
+      text-decoration-color: currentColor;
+    }
+    .out-link:focus-visible { outline: 1px solid var(--vscode-focusBorder, #38bdf8); outline-offset: 1px; }
+${STATUS_SHIMMER_STYLES}
   </style>
 </head>
 <body>
@@ -448,7 +466,7 @@ export class BackgroundTaskPanel {
         </div>
         <div class="task-title-row">
           <span class="status-badge running" id="status-badge">
-            <span id="status-text">Connecting…</span>
+            <span id="status-text" class="status-shimmer">Connecting…</span>
           </span>
           <span class="timer-text" id="timer-text">0s</span>
         </div>
@@ -496,6 +514,69 @@ export class BackgroundTaskPanel {
     let fullOutput = '';
     let clearedOutput = null;
 
+    // Control characters stay out of links so colour codes printed around a URL are not part of it.
+    const URL_PATTERN = /https?:\\/\\/[^\\s<>"'\`\\u0000-\\u001f\\u007f]+/g;
+
+    function trimUrl(url) {
+      const openers = { ')': '(', ']': '[', '}': '{' };
+      while (url.length > 0) {
+        const last = url[url.length - 1];
+        const opener = openers[last];
+        const unbalanced = !!opener && url.split(opener).length < url.split(last).length;
+        if (!'.,;:!?\\'"'.includes(last) && !unbalanced) break;
+        url = url.slice(0, -1);
+      }
+      return url;
+    }
+
+    // Output is polled every second; redrawing unchanged text would drop link focus and selection.
+    let renderedOutput = null;
+
+    function renderOutput(text) {
+      if (text === renderedOutput) return;
+      renderedOutput = text;
+      const parts = [];
+      let last = 0;
+      let match;
+      URL_PATTERN.lastIndex = 0;
+      while ((match = URL_PATTERN.exec(text)) !== null) {
+        const url = trimUrl(match[0]);
+        if (!/^https?:\\/\\/[^/]/.test(url)) continue;
+        if (match.index > last) parts.push(text.slice(last, match.index));
+        parts.push({ url });
+        last = match.index + url.length;
+        URL_PATTERN.lastIndex = last;
+      }
+      if (!parts.length) {
+        terminalEl.textContent = text;
+        return;
+      }
+      if (last < text.length) parts.push(text.slice(last));
+      terminalEl.replaceChildren(...parts.map((part) => {
+        if (typeof part === 'string') return document.createTextNode(part);
+        const link = document.createElement('a');
+        link.className = 'out-link';
+        link.textContent = part.url;
+        link.dataset.url = part.url;
+        link.tabIndex = 0;
+        link.setAttribute('role', 'link');
+        link.title = 'Open ' + part.url;
+        return link;
+      }));
+    }
+
+    function openLink(event) {
+      const link = event.target && event.target.closest ? event.target.closest('.out-link') : null;
+      if (!link) return;
+      if (typeof getSelection === 'function' && String(getSelection())) return;
+      event.preventDefault();
+      vscode.postMessage({ type: 'open_url', url: link.dataset.url });
+    }
+    terminalEl.addEventListener('click', openLink);
+    terminalEl.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') openLink(event);
+    });
+
     function syncFollow() {
       btnAutoScroll.classList.toggle('active', autoScroll);
       btnAutoScroll.setAttribute('aria-pressed', String(autoScroll));
@@ -530,6 +611,7 @@ export class BackgroundTaskPanel {
 
     btnClear.onclick = () => {
       clearedOutput = fullOutput;
+      renderedOutput = '';
       terminalEl.textContent = '';
       notice.textContent = 'View cleared. Waiting for output to change.';
     };
@@ -556,7 +638,10 @@ export class BackgroundTaskPanel {
             if (!msg.command) msg.command = envelope[4];
             startTime = Date.now() - Number(envelope[3]) * 1000;
             timerText.textContent = formatSecs(Number(envelope[3]));
-            if (isRunning && envelope[1] === 'running') statusText.textContent = 'Running';
+            if (isRunning && envelope[1] === 'running') {
+              statusText.textContent = 'Running';
+              statusText.classList.toggle('status-shimmer', true);
+            }
             if (isRunning && envelope[2] !== undefined) {
               showExited({ exit_code: Number(envelope[2]) });
             }
@@ -565,7 +650,7 @@ export class BackgroundTaskPanel {
           if (clearedOutput !== output) {
             clearedOutput = null;
             const scrollTop = terminalEl.scrollTop;
-            terminalEl.textContent = output === '(no output yet)' ? '' : output;
+            renderOutput(output === '(no output yet)' ? '' : output);
             if (!autoScroll) terminalEl.scrollTop = scrollTop;
             notice.textContent = output === '(no output yet)' ? 'Task has not written output yet' : (isRunning ? 'Output updates every second' : 'Task finished');
           }
@@ -592,6 +677,7 @@ export class BackgroundTaskPanel {
         const code = msg.exit_code !== undefined ? msg.exit_code : 0;
         statusBadge.className = 'status-badge ' + (code === 0 ? 'done' : 'stopped');
         statusText.textContent = msg.was_killed ? 'Stopped' : (code === 0 ? 'Completed' : 'Failed');
+        statusText.classList.toggle('status-shimmer', false);
         btnStop.disabled = true;
         btnStop.remove();
 

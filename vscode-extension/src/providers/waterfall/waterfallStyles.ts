@@ -1,3 +1,5 @@
+import { STATUS_SHIMMER_STYLES } from "../chatview/chatStyles.js";
+
 export function getWaterfallStyles(): string {
   return `
     :root:has(> body.vscode-light), :root:has(> body.vscode-high-contrast-light) {
@@ -289,7 +291,8 @@ export function getWaterfallStyles(): string {
       border-radius: var(--radius);
       font-size: 12px;
       font-weight: 500;
-      color: ;
+      color: var(--muted);
+      background: transparent;
       cursor: pointer;
       border: 1px solid transparent;
       transition: all 0.15s ease;
@@ -727,6 +730,13 @@ export function getWaterfallStyles(): string {
       word-break: break-all;
     }
 
+    .wf-status-live {
+      font-family: var(--vscode-font-family, system-ui, sans-serif);
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--vscode-charts-blue, #38bdf8);
+    }
+${STATUS_SHIMMER_STYLES}
     .wf-badge-pill {
       display: inline-block;
       font-size: 10px;

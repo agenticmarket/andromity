@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { getNonce, scriptJson } from "../providers/webviewSecurity.js";
 import { RpcClient } from "../server/RpcClient.js";
 import { getSafeMarkdownScript } from "../providers/safeMarkdown.js";
+import { getPlanChapterRailScript, getPlanChapterRailStyles } from "./planChapterRail.js";
 
 export class PlanEditorPanel {
   public static currentPanel: PlanEditorPanel | undefined;
@@ -586,6 +587,7 @@ export class PlanEditorPanel {
       text-align: center;
       color: var(--pending-fg);
     }
+    ${getPlanChapterRailStyles()}
   </style>
 </head>
 <body>
@@ -984,6 +986,8 @@ export class PlanEditorPanel {
       }
       return html;
     }
+
+    ${getPlanChapterRailScript()}
 
     // Render embedded initial plan if available
     var embeddedPlan = ${scriptJson(this._currentPlan || null)};

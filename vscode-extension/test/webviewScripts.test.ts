@@ -1428,7 +1428,7 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.ok(scriptCode.includes("update_config") && scriptCode.includes("reasoningEffort"), "Script must dispatch reasoningEffort update_config");
   });
 
-  it("should render sleek session status badges with watching pill and pulse indicator", () => {
+  it("renders session statuses as text, shimmering only while live", () => {
     const styles = getChatStyles();
     const state: ChatViewState = {
       currentSessionId: "sess-test",
@@ -1442,14 +1442,14 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
 
     // CSS asserts
     assert.ok(styles.includes(".session-badge-status"), "Styles must define .session-badge-status");
-    assert.ok(styles.includes(".session-status-watching"), "Styles must define .session-status-watching");
-    assert.ok(styles.includes(".session-pulse-dot"), "Styles must define .session-pulse-dot");
-    assert.ok(styles.includes("@keyframes sessionPulse"), "Styles must define sessionPulse keyframe");
+    assert.ok(styles.includes(".status-shimmer {"), "Styles must define .status-shimmer");
+    assert.ok(styles.includes("@keyframes statusShimmer"), "Styles must define statusShimmer keyframe");
+    assert.ok(!styles.includes("session-pulse-dot") && !styles.includes("session-active-dot"), "Session dots must be gone");
 
     // Script asserts
     assert.ok(scriptCode.includes("session-status-watching"), "Script must render session-status-watching badge");
-    assert.ok(scriptCode.includes("session-pulse-dot"), "Script must render pulse dot for watching session");
-    assert.ok(scriptCode.includes("<span>Watching</span>"), "Script must render Watching label in title case");
+    assert.ok(scriptCode.includes('session-status-watching status-shimmer status-shimmer-slow" title="Watching for events/replies">Watching</span>'), "Watching must shimmer slowly");
+    assert.ok(!scriptCode.includes("session-pulse-dot") && !scriptCode.includes("sp-dot") && !scriptCode.includes("bg-run-dot"), "Status dots must be gone");
   });
 
   it("puts visible BYOK providers before the single trial and sign-in actions", () => {
@@ -1849,9 +1849,19 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
     assert.equal(rowEl.getAttribute("data-process-id"), "dev-server", "Row must store data-process-id");
 
     const innerHtml = rowEl.innerHTML;
-    assert.ok(innerHtml.includes("RUNNING (BG)"), "Must display RUNNING (BG) status badge");
+    assert.ok(innerHtml.includes('<span class="bg-proc-badge running status-shimmer">Running</span>'), "Must show running as shimmering Running text");
     assert.ok(innerHtml.includes("bg-proc-stop-btn"), "Must render 1-click Stop button");
     assert.ok(!innerHtml.includes("View Logs"), "Must STRICTLY NOT contain any View Logs button (per user constraint)");
+
+    // A requested id that was already taken is renamed by the server; the card must use the real id.
+    const renamedRow = sandbox.window.renderBackgroundProcessActivityRow(
+      "shell_bg",
+      JSON.stringify({ command: "npm run dev", process_id: "dev-server" }),
+      "running_bg",
+      "Background process started with id 'dev-server-739d' (PID 4322)."
+    );
+    assert.equal(renamedRow.getAttribute("data-process-id"), "dev-server-739d", "Row must use the id the server assigned");
+    assert.ok(renamedRow.innerHTML.includes('data-process-id="dev-server-739d"'), "Stop must target the id the server assigned");
 
     // 4. Verify Waterfall script handles process_started and process_exited
     assert.ok(waterfallScript.includes("case 'process_started':"), "Waterfall must handle process_started event");

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 from typing import AsyncGenerator, List, Dict, Any, Optional
 
@@ -118,7 +119,8 @@ def sanitize_messages_for_api(messages: List[Dict[str, Any]]) -> List[Dict[str, 
     3. Drops orphaned 'tool' messages that have no preceding assistant tool_calls.
     4. Re-orders tool responses if displaced, and synthesizes tool responses for any
        unfulfilled tool_calls (e.g. if a turn was cancelled mid-execution).
-    5. Ensures assistant message content is not None when tool_calls is absent.
+    5. Drops assistant messages with neither text nor tool_calls. Sent last they read as a
+       prefill, which newer Anthropic models reject; anywhere else providers reject empty content.
     """
     if not messages:
         return []
@@ -144,8 +146,11 @@ def sanitize_messages_for_api(messages: List[Dict[str, Any]]) -> List[Dict[str, 
         if role == "assistant":
             tcalls = msg.get("tool_calls")
             if not tcalls:
-                if msg.get("content") is None:
-                    msg["content"] = ""
+                content = msg.get("content")
+                is_empty = content is None or (isinstance(content, str) and not content.strip()) or content == []
+                if is_empty:
+                    i += 1
+                    continue
                 sanitized.append(msg)
                 i += 1
             else:
@@ -254,13 +259,14 @@ async def stream_completion(
         kwargs.setdefault("options", {})["num_ctx"] = _num_ctx
 
     if provider_name == "andromity":
+        from andromity.core.client_identity import gateway_client_id
         try:
             from andromity import __version__ as _pkg_ver
         except Exception:
             _pkg_ver = "0.2.15"
         andromity_headers = {
             "User-Agent": "Andromity",
-            "x-andromity-client-id": config.get("user", "anonymous_id", "local_client"),
+            "x-andromity-client-id": gateway_client_id(),
             "x-andromity-version": _pkg_ver,
         }
         if turn_id:
@@ -328,9 +334,10 @@ async def stream_completion(
                 )
                 is_auth_error = (
                     isinstance(e, (litellm.AuthenticationError, litellm.PermissionDeniedError))
+                    or has_status_code(msg, "401") or has_status_code(msg, "403")
                     or any(k in msg for k in (
                         "missing credentials", "please pass an `api_key`", "please pass an api_key",
-                        "invalid api key", "invalid_api_key", "unauthorized", "401", "forbidden", "403",
+                        "invalid api key", "invalid_api_key", "unauthorized", "forbidden",
                         "no api key", "missing api key"
                     ))
                 )
@@ -341,13 +348,13 @@ async def stream_completion(
                     ))
                 )
 
-                if is_daily_quota or is_auth_error or is_bad_request or gateway_model_unavailable(e):
+                if is_daily_quota or is_auth_error or is_bad_request or gateway_model_unavailable(e) or gateway_wait_is_long(e):
                     log.info("Non-retryable provider error: %s (HTTP %s).", type(e).__name__, getattr(e, "status_code", "unknown"))
                     yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
                     yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"])
                     return
 
-                is_429 = "429" in msg or "rate limit" in msg or "ratelimit" in msg or "quota" in msg
+                is_429 = has_status_code(msg, "429") or "rate limit" in msg or "ratelimit" in msg or "quota" in msg
                 if attempt < len(STREAM_BACKOFF_DELAYS):
                     wait_s = STREAM_BACKOFF_DELAYS[attempt]
                     if is_429:
@@ -552,20 +559,76 @@ def extract_clean_error_message(err_or_text: Any) -> str:
     return raw.strip()
 
 
-def gateway_model_unavailable(e: Exception) -> Optional[Dict[str, Any]]:
-    import json
-    import re
+def gateway_error(e: Exception, *types: str) -> Optional[Dict[str, Any]]:
+    """The structured error the Andromity gateway sends, when its type is one of `types`.
 
+    LiteLLM keeps only the message text and the response headers of a failed call, so the type,
+    action and wait come from the gateway's headers; a raw JSON body is read when one is present.
+    """
     match = re.search(r'(\{[\s\S]*\})', str(e) or "")
-    if not match:
-        return None
+    if match:
+        try:
+            error = json.loads(match.group(1)).get("error")
+        except (ValueError, AttributeError):
+            error = None
+        if isinstance(error, dict) and error.get("type") in types:
+            return error
+    raw_headers = getattr(e, "litellm_response_headers", None) or getattr(getattr(e, "response", None), "headers", None)
     try:
-        error = json.loads(match.group(1)).get("error")
-    except (ValueError, AttributeError):
+        headers = {str(k).lower(): str(v) for k, v in dict(raw_headers or {}).items()}
+    except (TypeError, ValueError):
         return None
-    if isinstance(error, dict) and error.get("type") == "model_unavailable":
-        return error
-    return None
+    error_type = headers.get("x-andromity-error-type")
+    if error_type not in types:
+        return None
+    error = {"type": error_type, "message": extract_clean_error_message(e)}
+    if headers.get("x-andromity-error-action"):
+        error["action"] = headers["x-andromity-error-action"]
+    if headers.get("retry-after", "").strip().isdigit():
+        error["retry_after"] = int(headers["retry-after"].strip())
+    return error
+
+
+def gateway_model_unavailable(e: Exception) -> Optional[Dict[str, Any]]:
+    return gateway_error(e, "model_unavailable")
+
+
+def gateway_capacity_error(e: Exception, provider: str = "") -> Optional[Dict[str, Any]]:
+    """Shared capacity is exhausted or unavailable. The gateway writes these messages for users."""
+    error = gateway_error(e, "service_busy")
+    if error is None and provider == "andromity":
+        error = gateway_error(e, "service_unavailable")
+    if error is None or not isinstance(error.get("message"), str) or not error["message"].strip():
+        return None
+    return error
+
+
+def gateway_wait_is_long(e: Exception) -> bool:
+    """Retrying in a few seconds cannot help when the gateway says capacity returns much later."""
+    error = gateway_error(e, "service_busy")
+    if not error:
+        return False
+    wait = error.get("retry_after")
+    return error.get("action") == "switch_model" or (isinstance(wait, (int, float)) and wait > 60)
+
+
+def _timer_badge_html(text: str) -> str:
+    import html
+    return (
+        '<div class="error-card-timer" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-family:var(--font-mono,monospace);color:#10b981;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.22);padding:3px 9px;border-radius:4px;margin-top:8px;">'
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>'
+        f'{html.escape(text)}'
+        '</div>'
+    )
+
+
+# Cards whose explanation is complete without the underlying exception text.
+QUIET_ERROR_TYPES = {"quota_exceeded", "service_busy", "service_unavailable"}
+
+
+def has_status_code(text: str, code: str) -> bool:
+    """An HTTP status as a whole number; request IDs and timestamps often contain "404" or "500"."""
+    return re.search(rf"(?<!\d){re.escape(code)}(?!\d)", text or "") is not None
 
 
 def classify_error_info(
@@ -584,13 +647,16 @@ def classify_error_info(
     clean_msg = extract_clean_error_message(e)
     is_html = bool(re.search(r"<(?:!doctype\s+html|html\b|head\b|body\b)", msg, re.IGNORECASE))
 
+    def has_code(*codes: str) -> bool:
+        return any(has_status_code(msg, code) for code in codes)
+
     disp_model = model or "the selected model"
     disp_prov = (provider or "AI provider").capitalize()
 
     is_vision = (
         has_images
         or any(k in low for k in ("image", "vision", "multimodal", "modality", "does not support image"))
-    ) and any(k in low for k in ("image", "vision", "multimodal", "modality", "support", "400", "payload"))
+    ) and (any(k in low for k in ("image", "vision", "multimodal", "modality", "support", "payload")) or has_code("400"))
 
     is_not_found = (
         getattr(e, "status_code", None) == 404
@@ -600,12 +666,12 @@ def classify_error_info(
         or "no endpoints found" in low
         or "model_not_found" in low
         or "does not exist" in low
-        or ("404" in msg and ("model" in low or "endpoint" in low or "not found" in low))
+        or (has_code("404") and ("model" in low or "endpoint" in low or "not found" in low))
     )
 
     is_rate = (
         getattr(e, "status_code", None) == 429
-        or "429" in msg
+        or has_code("429")
         or "rate limit" in low
         or "ratelimit" in low
         or "quota" in low
@@ -613,14 +679,14 @@ def classify_error_info(
         or "daily limit" in low
         or "free trial" in low
     )
-    is_upstream = getattr(e, "status_code", None) in (500, 502, 503, 504) or any(k in low for k in (
+    is_upstream = getattr(e, "status_code", None) in (500, 502, 503, 504) or has_code("500", "502", "503", "504") or any(k in low for k in (
         "midstreamfallbackerror", "serviceunavailable", "service_unavailable", "service unavailable",
-        "503", "502", "500", "504", "bad gateway", "gateway timeout",
+        "bad gateway", "gateway timeout",
         "upstream error", "apiconnectionerror", "connection reset", "broken pipe"
     ))
     is_context = any(k in low for k in ("context length", "maximum context", "token limit", "context_length_exceeded", "prompt is too long", "context window"))
-    is_auth = getattr(e, "status_code", None) in (401, 403) or err_cls in ("AuthenticationError", "PermissionDeniedError") or any(k in low for k in (
-        "401", "403", "unauthorized", "invalid api key", "authentication error",
+    is_auth = getattr(e, "status_code", None) in (401, 403) or err_cls in ("AuthenticationError", "PermissionDeniedError") or has_code("401", "403") or any(k in low for k in (
+        "unauthorized", "invalid api key", "authentication error",
         "invalid_api_key", "forbidden", "missing credentials", "please pass an `api_key`",
         "please pass an api_key", "no api key", "missing api key"
     ))
@@ -640,6 +706,7 @@ def classify_error_info(
     from andromity.core.network_policy import AirgapBlockedError, AirgapFeatureOff
     is_airgap = isinstance(e, (AirgapFeatureOff, AirgapBlockedError)) or "air-gap mode" in low
     unavailable = gateway_model_unavailable(e)
+    capacity = gateway_capacity_error(e, provider)
 
     if is_airgap:
         err_type = "airgap"
@@ -672,6 +739,39 @@ def classify_error_info(
         actions_tui = (
             ["Sign in with AgenticMarket from the Andromity VS Code extension"] if needs_sign_in else []
         ) + ["Press Ctrl+L to switch model"]
+    elif capacity:
+        busy = capacity.get("type") == "service_busy"
+        err_type = "service_busy" if busy else "service_unavailable"
+        badge = "HIGH DEMAND" if busy else "UNAVAILABLE"
+        title = "Andromity is busy right now" if busy else "Shared models are unavailable"
+        desc_text = capacity["message"].strip()
+        wait = capacity.get("retry_after")
+        if isinstance(wait, (int, float)) and not isinstance(wait, bool) and 0 < wait <= 86400:
+            if wait <= 90:
+                timer_text = "Expected back in about a minute"
+            else:
+                back_at = datetime.now().astimezone() + timedelta(seconds=float(wait))
+                timer_text = f"Expected back around {back_at.strftime('%H:%M')} your time"
+            timer_html = _timer_badge_html(timer_text)
+        desc_html = f"<div>{html.escape(desc_text)}</div>{timer_html}"
+        retry_first = capacity.get("action") == "retry"
+        retry_btn = (
+            f'<button class="{"btn-error-retry" if retry_first else "btn-error-secondary"}" data-action="retry-turn" title="Try this turn again">'
+            f'{icon_retry}Retry Turn</button>'
+        )
+        switch_btn = (
+            f'<button class="{"btn-error-secondary" if retry_first else "btn-error-retry"}" data-action="switch-model-flyout" title="Choose another model">'
+            f'{icon_model}Switch Model</button>'
+        )
+        own_key_btn = (
+            f'<button class="btn-error-secondary" data-action="open-settings" title="Use your own API key">'
+            f'{icon_settings}Use Your Own Key</button>'
+        )
+        actions_html = (retry_btn + switch_btn if retry_first else switch_btn + retry_btn) + own_key_btn
+        actions_tui = (
+            ["Wait a minute and type /retry", "Press Ctrl+L to switch model"] if retry_first
+            else ["Press Ctrl+L to switch model", "Wait and type /retry later"]
+        ) + ["Press Ctrl+E and add your own API key to skip shared limits"]
     elif is_html and is_not_found:
         err_type = "endpoint_not_found"
         badge = "INVALID ENDPOINT"
@@ -743,12 +843,7 @@ def classify_error_info(
             h = max(0, secs // 3600)
             m = max(0, (secs % 3600) // 60)
             timer_text = f"Quota resets in {h}h {m}m (00:00 UTC)"
-            timer_html = (
-                f'<div style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-family:var(--font-mono,monospace);color:#10b981;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.22);padding:3px 9px;border-radius:4px;margin-top:8px;">'
-                f'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>'
-                f'{timer_text}'
-                f'</div>'
-            )
+            timer_html = _timer_badge_html(timer_text)
             err_type = "quota_exceeded"
             badge = "QUOTA LIMIT"
             title = "Daily Limit Reached"
@@ -972,7 +1067,7 @@ def format_error_html(info: dict) -> str:
     icon_alert = '<span class="error-header-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span>'
 
     details_block = ""
-    if info["type"] != "quota_exceeded" and info.get("raw_preview"):
+    if info["type"] not in QUIET_ERROR_TYPES and info.get("raw_preview"):
         raw_esc = html.escape(info["raw_preview"])
         details_block = (
             f'  <details class="error-details">\n'
@@ -1031,7 +1126,7 @@ def format_error_terminal(info: dict) -> str:
         for act in actions:
             lines.append(f"> • {act}")
 
-    if err_type != "quota_exceeded" and raw_preview:
+    if err_type not in QUIET_ERROR_TYPES and raw_preview:
         clean_prev = raw_preview.replace("\n", " ")[:200]
         lines.extend([
             ">",

@@ -2,6 +2,47 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [0.2.24] — 2026-10-26
+
+### Added
+- **A quick check-in in the chat.** Now and then, after a reply that went well, the chat asks how Andromity is working for you. **Love it** offers a link to leave a review. **It's OK** and **Not great** ask what gets in the way most, with one-click choices and an optional note. Every step offers the review link. It replaces the rating notification, never appears after an error or during a scheduled run, is off in air-gap mode, and **Don't ask again** stops it. Your answer reaches the team without your telemetry ID.
+- **Risk notes on command approvals.** The approval card lists in plain words what deserves a second look, such as deleting files recursively, downloading and running a script, force-pushing, running with elevated privileges, or reading secrets and sending data off the machine. Enter no longer approves a command flagged as destructive; click **Allow once** or press Ctrl+Y. Web fetches are flagged when the address carries a credential or a long block of data, or goes to a raw IP address.
+- **A warning before a secret leaves your machine.** If a message looks like it contains an API key, token, private key or database password, Andromity holds it and offers **Redact and send**, **Send anyway** or **Edit message**. Messages to local Ollama models are not checked.
+- **When a rate limit lifts.** Rate limit errors say when the limit resets, if the provider reports it, and lead with **Switch Model** when the wait is long.
+- **High demand card.** When Andromity's shared models are at capacity, the card shows a plain explanation and the time they are expected back, with **Switch Model**, **Retry Turn** and **Use Your Own Key**, instead of the upstream provider's error. Expected-back times on error cards show as their own badge instead of running into the message.
+- Suggested next steps have **See the exact request**, which shows the prompt **Do it** sends.
+- **Remembered approvals in Settings.** **Trust & Security** lists the commands and web domains you chose to always allow, each with **Remove**. Before, they could only be removed by editing the config file.
+- **Send feedback without leaving the editor.** The new **Andromity: Send Feedback** command opens a small box where you type a note. It goes straight to the Andromity team with your client, OS family and extension version, and is stored with the country Cloudflare reports for the connection. It is not linked to your telemetry ID, and your IP address isn't stored. If it can't be sent, you can copy it into a GitHub issue instead. It is turned off in air-gap mode.
+- **Tips for features you haven't tried.** After a reply, a short "Did you know" card can introduce one feature that fits what the turn did, such as Fingerprint, commit messages, inline edit, cron jobs, test generation, fixing terminal errors, air-gap mode or MCP servers.
+  - At most one tip a day, none during your first two sessions or on scheduled runs, and each tip shows at most twice.
+  - A tip retires once you click it, hide it or use the feature. Which features you've used is kept on your machine, so this works with telemetry off.
+  - Turn tips off from the card's menu or with the new `andromity.featureTips` setting.
+- **Chapter rail in the plan tab.** A rail of section marks with previews runs beside the plan. Click a mark to jump to that section, or step through sections with Alt+Up and Alt+Down.
+
+### Changed
+- A call waiting for your approval shows **Needs approval** instead of **Running**, its timer stops, and it is no longer marked as stuck after 45 seconds.
+- The approval card offers to remember a command only when the command can be remembered. Commands that use shell operators such as `&&` or `|`, and commands flagged as destructive, are approved one run at a time.
+- **Run** on a chat code block first shows the whole command and asks, when the command hides text off screen, contains invisible characters, or would do lasting damage. It does nothing in a workspace VS Code doesn't trust.
+- Approvals in `@andromity` chat show the full arguments and the same risk notes. Handing a task from Copilot to Andromity shows the whole task and the permission mode it will run in.
+- Trusting a folder lists the MCP servers that folder's own config will start, with any passwords or keys in their arguments redacted, so you know which programs you are allowing.
+- Short tables fit narrow side bars instead of scrolling sideways.
+- The model badge says **Choose a model** when no model is selected, instead of naming one.
+- **Statuses as text.** The session list, MCP servers and background runs show their status as a word instead of a dot, and running, starting and watching states shimmer. The open session is marked by its background only.
+- Suggestions with several options show the question above the buttons.
+- The side panel's MCP button opens the MCP tab in Settings.
+- **Safer agent defaults.** The agent keeps secrets out of code, refuses system-wiping commands, doesn't work around blocked tools, and doesn't let instruction files widen its permissions. The builder and coder profiles work on `andromity/<topic>` branches, never commit to the default branch, and push or open pull requests only when you ask.
+- Anonymous use of the Andromity provider is counted per install, with a random ID kept separate from your telemetry ID, instead of a shared default.
+
+### Fixed
+- Signing in or out updates the welcome screen's **Sign In** button and account state again. Since 0.2.12 the update stopped partway.
+- A plan step with an unexpected status can no longer add markup to the Plan view, and links in the Plan view open only http and https addresses.
+- Paths that start with a mix of forward and back slashes are treated as network shares and are not opened.
+- Error cards match status codes as whole numbers. A rate limit whose reset time or request ID happened to contain "404" or "500" was shown as **Model Not Available** or a service outage.
+- **Recent Sessions** no longer lists sessions that were opened in the terminal app and never used, and session lists count only the conversation, not the system prompt.
+- The Waterfall's **Duration** total no longer drops to 0 when a turn finishes, is cancelled or fails.
+- The Waterfall's inactive **Stream Log** and **Stats & Profiling** tabs no longer show as bright button blocks.
+- Loading placeholders no longer clip the session title once it loads.
+
 ## [0.2.23] — 2026-10-24
 
 ### Changed

@@ -12,7 +12,7 @@ loader._load = function (id, ...args) {
 const { BackgroundTaskPanel } = require("../src/panels/BackgroundTaskPanel.js");
 loader._load = originalLoad;
 
-function harness() {
+function harness(extraDocument: Record<string, unknown> = {}) {
   const html = BackgroundTaskPanel.prototype._getHtml.call({
     _processId: "task-1", _command: '<script>alert("test")</script>',
     _panel: { webview: { cspSource: "vscode-webview:" } },
@@ -20,15 +20,20 @@ function harness() {
   const elements = new Map<string, any>();
   for (const id of html.matchAll(/id="([^"]+)"/g)) {
     const listeners = new Map<string, () => void>();
-    elements.set(id[1], { textContent: '', disabled: false, scrollTop: 0, scrollHeight: 1000, clientHeight: 200,
+    const el: any = { textContent: '', disabled: false, scrollTop: 0, scrollHeight: 1000, clientHeight: 200,
       classList: { toggle() {} }, setAttribute() {}, remove() {},
-      addEventListener: (event: string, fn: () => void) => listeners.set(event, fn), listeners });
+      addEventListener: (event: string, fn: () => void) => listeners.set(event, fn), listeners };
+    el.replaceChildren = (...nodes: Array<{ textContent: string }>) => {
+      el.children = nodes;
+      el.textContent = nodes.map((node) => node.textContent).join('');
+    };
+    elements.set(id[1], el);
   }
   const messages: unknown[] = [];
   let receive: (event: { data: unknown }) => void = () => {};
   vm.runInNewContext(html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)![1], {
     acquireVsCodeApi: () => ({ postMessage: (msg: unknown) => messages.push(msg) }),
-    document: { getElementById: (id: string) => elements.get(id) },
+    document: { getElementById: (id: string) => elements.get(id), ...extraDocument },
     window: { addEventListener: (_event: string, fn: typeof receive) => { receive = fn; } },
     setInterval: () => 1, clearInterval() {}, Date,
   });
@@ -79,6 +84,61 @@ it("detects an already exited process and retains its status through final outpu
   h.send({ type: 'logs_update', output: 'final output' });
   assert.equal(h.elements.get('status-text').textContent, 'Stopped');
   assert.equal(h.elements.get('terminal-output').textContent, 'final output');
+});
+
+function linkContext() {
+  const created: any[] = [];
+  return {
+    created,
+    document: {
+      createTextNode: (text: string) => ({ textContent: text }),
+      createElement: () => {
+        const attrs: Record<string, string> = {};
+        const el = { textContent: '', className: '', dataset: {} as Record<string, string>, title: '', tabIndex: -1, attrs,
+          setAttribute: (k: string, v: string) => { attrs[k] = v; } };
+        created.push(el);
+        return el;
+      },
+    },
+  };
+}
+
+it("turns URLs in the output into links and asks the extension to open them", () => {
+  const ctx = linkContext();
+  const h = harness(ctx.document);
+  const terminal = h.elements.get('terminal-output');
+
+  const output = "  Local:   \u001b[36mhttp://localhost:5173/\u001b[39m\nDocs (see https://example.com/a_(b)).\nftp://nope";
+  h.send({ type: 'logs_update', output });
+  assert.equal(terminal.textContent, output, "links keep the visible text unchanged");
+  assert.deepEqual(ctx.created.map((el) => el.dataset.url), ["http://localhost:5173/", "https://example.com/a_(b)"]);
+  assert.equal(ctx.created[0].className, 'out-link');
+
+  h.send({ type: 'logs_update', output });
+  assert.equal(ctx.created.length, 2, "an unchanged poll keeps the existing links");
+
+  const click = (target: unknown) => {
+    let prevented = false;
+    terminal.listeners.get('click')({ target: { closest: () => target }, preventDefault: () => { prevented = true; } });
+    return prevented;
+  };
+  assert.equal(click(ctx.created[0]), true);
+  assert.equal(JSON.stringify(h.messages.at(-1)), JSON.stringify({ type: 'open_url', url: "http://localhost:5173/" }));
+  const before = h.messages.length;
+  assert.equal(click(null), false, "clicks outside a link do nothing");
+  assert.equal(h.messages.length, before);
+});
+
+it("shows running as shimmering text and drops the shimmer once the task ends", () => {
+  const h = harness();
+  const toggles: Array<[string, boolean]> = [];
+  h.elements.get('status-text').classList = { toggle: (name: string, on: boolean) => toggles.push([name, on]) };
+  assert.ok(h.html.includes('<span id="status-text" class="status-shimmer">'));
+  assert.ok(h.html.includes('.status-shimmer {'), "the panel carries the shared shimmer styles");
+  h.send({ type: 'logs_update', output: "Process 'task-1' | running | 3s elapsed\nCommand: x\n--- last 1 lines ---\nok" });
+  h.send({ type: 'process_exited', exit_code: 0 });
+  assert.deepEqual(toggles, [['status-shimmer', true], ['status-shimmer', false]]);
+  assert.equal(h.elements.get('status-text').textContent, 'Completed');
 });
 
 it("renders a stable task heading and accessible output and Stop controls in the composer", () => {

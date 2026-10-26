@@ -2,6 +2,8 @@ import * as vscode from "vscode";
 import { normalizeShellCommand, resolveShellPath, shellFamilyForLanguage } from "./shellLanguages.js";
 import { currentAirGap } from "../airgapState.js";
 import { terminalAirGapEnv } from "../airgap.js";
+import { describeCommandRisks, hasHiddenContent, revealHiddenContent } from "../commandRisk.js";
+import { requireWorkspaceTrust } from "../server/securityPolicy.js";
 
 export type RunState = "running" | "succeeded" | "failed" | "untracked";
 
@@ -69,12 +71,31 @@ function trackExecution(execution: vscode.TerminalShellExecution, command: strin
   });
 }
 
+/**
+ * Chat code blocks come from the model. A block that hides part of itself or would do
+ * lasting damage is shown in full, with the reasons, before it reaches a terminal.
+ */
+export async function confirmUnusualCommand(command: string): Promise<boolean> {
+  const reasons = describeCommandRisks(command).filter((r) => r.level === "danger").map((r) => r.label);
+  if (hasHiddenContent(command)) reasons.push("Contains hidden characters or text pushed off screen");
+  if (!reasons.length) return true;
+  const choice = await vscode.window.showWarningMessage(
+    "Run this command in a new terminal?",
+    { modal: true, detail: reasons.map((r) => "• " + r).join("\n") + "\n\n" + revealHiddenContent(command) },
+    "Run",
+  );
+  return choice === "Run";
+}
+
 /** Opens a new integrated terminal and runs a chat code block in it. */
 export async function runCodeBlockInTerminal(code: unknown, lang: unknown, report?: (status: RunStatus) => void): Promise<void> {
   const family = shellFamilyForLanguage(typeof lang === "string" ? lang : "");
   if (!family) return;
   const command = normalizeShellCommand(typeof code === "string" ? code : "", family);
   if (!command.trim()) return;
+
+  if (!requireWorkspaceTrust("run commands from chat")) return;
+  if (!(await confirmUnusualCommand(command))) return;
 
   const shellPath = resolveShellPath(family, process.platform, vscode.env.shell || "");
   if (shellPath === null) {

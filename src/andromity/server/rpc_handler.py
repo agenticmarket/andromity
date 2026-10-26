@@ -663,6 +663,7 @@ class JsonRpcHandler:
                     "updated_at": getattr(s, "updated_at", None),
                     "created_at": getattr(s, "created_at", None),
                     "message_count": len(s.messages),
+                    "conversation_count": getattr(s, "conversation_count", len(s.messages)),
                     "token_total": getattr(s, "token_total", 0),
                     "context_tokens": getattr(s, "context_tokens", 0),
                     "cost_usd": getattr(s, "cost_usd", 0.0),
@@ -1667,7 +1668,7 @@ class JsonRpcHandler:
 
             from andromity.core.security import is_sensitive_path
             target_path = str(args.get("path", "") or args.get("target_path", "") or args.get("target_file", "") or args.get("file_path", ""))
-            is_sensitive = is_sensitive_path(target_path) if target_path else False
+            is_sensitive = is_sensitive_path(target_path, session.project_path) if target_path else False
 
             # 3. Read-only tools bypass approval UNLESS accessing sensitive credentials/keys
             if is_sensitive:
@@ -1683,7 +1684,7 @@ class JsonRpcHandler:
                 if mode == "safe":
                     needs_approval = True
                 elif mode == "trust":
-                    if is_sensitive or is_execution_control_path(target_path):
+                    if is_sensitive or is_execution_control_path(target_path, session.project_path):
                         needs_approval = True
                     else:
                         return True
@@ -1858,7 +1859,7 @@ class JsonRpcHandler:
                         self.notify("agent/inputApplied", {
                             "session_id": session_id, "input_id": event.input_id,
                             "prompt": event.prompt, "image_uris": event.image_uris or [],
-                            "turn_index": event.turn_index,
+                            "turn_index": event.turn_index, "ts": time.time(),
                         })
                     elif isinstance(event, Done):
                         if event.outcome != "success":
@@ -2364,10 +2365,10 @@ class JsonRpcHandler:
                 if str(value).lower() == "trust":
                     from andromity.core.security import is_sensitive_path, is_execution_control_path, is_command_allowlisted, is_domain_allowed, mcp_tool_may_change
                     target = str(args.get("path") or args.get("target_path") or args.get("target_file") or args.get("file_path") or "")
-                    if is_sensitive_path(target):
+                    if is_sensitive_path(target, session.project_path):
                         continue
                     if tool_name in ("write_file", "edit_file", "edit_file_multi"):
-                        if is_execution_control_path(target):
+                        if is_execution_control_path(target, session.project_path):
                             continue
                     elif tool_name in ("shell_exec", "shell_bg"):
                         allowed = (config.get("default", "allowed_commands", []) or []) + (getattr(session, "allowed_commands", []) or [])
@@ -2732,6 +2733,10 @@ class JsonRpcHandler:
         config.set_api_key(provider, api_key)
         config.save()
         return {"success": True, "provider": provider, "has_key": bool(api_key)}
+
+    async def rpc_gateway_clientId(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        from andromity.core.client_identity import gateway_client_id
+        return {"client_id": await asyncio.to_thread(gateway_client_id)}
 
     async def rpc_auth_logout(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
         config.set_api_key("andromity", "")

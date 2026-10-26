@@ -169,6 +169,20 @@ describe("copy chat as Markdown", () => {
     assert.ok(!markdown.includes("file contents"));
   });
 
+  it("puts a reply that spans several steps under one heading", () => {
+    const { markdown, count } = formatChatMarkdown({ name: "Arch", messages: [
+      { role: "user", content: "Explain the architecture" },
+      { role: "assistant", content: "I'll start with the layout.", tool_calls: [{ id: "1" }] } as any,
+      { role: "tool", content: "listing" },
+      { role: "assistant", content: "It is a set of sample projects." },
+      { role: "user", content: "what is good about this" },
+      { role: "assistant", content: "The pipeline." },
+    ] });
+    assert.equal(count, 4);
+    assert.equal(markdown, "# Arch\n\n### You\n\nExplain the architecture\n\n### Andromity\n\nI'll start with the layout.\n\n" +
+      "It is a set of sample projects.\n\n### You\n\nwhat is good about this\n\n### Andromity\n\nThe pipeline.\n");
+  });
+
   it("copies to the clipboard, and says when there is nothing to copy", async () => {
     await copySessionAsMarkdown({ call: async () => session } as any, "s1");
     assert.equal(clipboard.length, 1);

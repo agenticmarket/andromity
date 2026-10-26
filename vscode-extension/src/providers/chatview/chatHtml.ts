@@ -28,7 +28,7 @@ export interface ChatViewState {
 }
 
 export function formatModelDisplayName(id?: string, models?: { id: string; name: string }[]): string {
-  if (!id || id === "Loading model...") return "Claude 3.7 Sonnet";
+  if (!id || id === "Loading model...") return "Choose a model";
   const found = models?.find((m) => m.id === id);
   if (found?.name) return found.name;
   const parts = id.split("/");
@@ -170,6 +170,14 @@ ${styles}
 
   <div class="top-bar">
     <div class="top-bar-left">
+      <div class="session-nav" role="group" aria-label="Session history">
+        <button type="button" class="session-nav-btn" id="btn-session-back" disabled aria-label="Previous session" title="Previous session (Alt+Left)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <button type="button" class="session-nav-btn" id="btn-session-forward" disabled aria-label="Next session" title="Next session (Alt+Right)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+      </div>
       <div class="session-badge-btn" id="btn-session-picker" role="button" tabindex="0" aria-label="Current session, click to switch or manage sessions" title="Sessions (Click to switch or manage sessions)">
         <span class="session-badge-text skeleton skeleton-session" id="active-session-name" aria-busy="true">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
         <span class="session-activity-dot" id="session-activity-dot" style="display:none;" title="Background session activity"></span>
@@ -514,9 +522,9 @@ ${styles}
                 <span class="provider-chip-name">Anthropic</span>
                 <span class="provider-chip-badge">Claude</span>
               </button>
-              <button class="onboarding-provider-chip" data-provider="openai" data-model="gpt-4o" data-portal="https://platform.openai.com/api-keys" data-name="OpenAI (GPT-4o)">
+              <button class="onboarding-provider-chip" data-provider="openai" data-model="gpt-4o" data-portal="https://platform.openai.com/api-keys" data-name="OpenAI">
                 <span class="provider-chip-name">OpenAI</span>
-                <span class="provider-chip-badge">GPT-4o</span>
+                <span class="provider-chip-badge">GPT</span>
               </button>
               <button class="onboarding-provider-chip" data-provider="google" data-model="gemini-2.5-flash" data-portal="https://aistudio.google.com/app/apikey" data-name="Google Gemini">
                 <span class="provider-chip-name">Google</span>
@@ -532,7 +540,7 @@ ${styles}
               </button>
               <button class="onboarding-provider-chip" data-provider="deepseek" data-model="deepseek-chat" data-portal="https://platform.deepseek.com/api_keys" data-name="DeepSeek">
                 <span class="provider-chip-name">DeepSeek</span>
-                <span class="provider-chip-badge">V3 / R1</span>
+                <span class="provider-chip-badge">Chat &amp; Reasoner</span>
               </button>
             </div>
 
@@ -643,7 +651,7 @@ ${styles}
 
             <div class="onboarding-search-wrap">
               <svg class="onboarding-search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-              <input type="text" class="onboarding-search-input" id="onboarding-step2-search" placeholder="Filter models (e.g. Sonnet, GPT-4o, DeepSeek)..." autocomplete="off" spellcheck="false" />
+              <input type="text" class="onboarding-search-input" id="onboarding-step2-search" placeholder="Filter models (e.g. Claude, GPT, DeepSeek)..." autocomplete="off" spellcheck="false" />
             </div>
 
             <div class="onboarding-models-list" id="onboarding-step2-models-list" role="listbox">
@@ -776,6 +784,7 @@ ${styles}
       <section class="sp-card" id="sp-env" aria-label="Environment"></section>
     </div>
   </aside>
+
   <div class="sp-menu" id="sp-menu" role="menu" aria-label="Session panel" hidden></div>
 
   <div id="interactive-slot"></div>
@@ -933,7 +942,7 @@ ${styles}
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
             </span>
             <span class="tracker-title" id="bg-strip-title">Background Tasks</span>
-            <span class="tracker-count" id="bg-strip-count">1 running</span>
+            <span class="tracker-count bg-strip-count status-shimmer" id="bg-strip-count">1 running</span>
             <span class="bg-strip-timer" id="bg-strip-timer" aria-hidden="true">0s</span>
           </div>
           <div class="tracker-actions">
@@ -1206,6 +1215,25 @@ ${styles}
       </div>
     </div>
     <div class="status-bar-right">
+      <div class="feedback-dock" id="feedback-dock">
+        <div class="feedback-popover" id="feedback-popover" role="dialog" aria-labelledby="feedback-title" hidden>
+          <div class="feedback-title" id="feedback-title">Send feedback</div>
+          <p class="feedback-hint">Found a bug or want something built? This goes straight to the Andromity team. Only your note, OS and extension version are sent. Add your email if you'd like a reply.</p>
+          <textarea id="feedback-text" class="feedback-text" rows="5" maxlength="2000" placeholder="What happened, or what should we build next?" aria-label="Your feedback"></textarea>
+          <div class="feedback-meta">
+            <span class="feedback-status" id="feedback-status" role="status" aria-live="polite"></span>
+            <span class="feedback-count" id="feedback-count">0/2000</span>
+          </div>
+          <div class="feedback-actions">
+            <button type="button" class="feedback-btn" id="btn-feedback-cancel">Cancel</button>
+            <button type="button" class="feedback-btn" id="btn-feedback-issue" hidden>Open GitHub issue</button>
+            <button type="button" class="feedback-btn primary" id="btn-feedback-send" disabled>Send</button>
+          </div>
+        </div>
+        <button type="button" class="feedback-dock-btn" id="btn-feedback-dock" title="Send feedback" aria-label="Send feedback" aria-expanded="false" aria-controls="feedback-popover">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/></svg>
+        </button>
+      </div>
       <button type="button" class="status-mcp-btn" id="btn-mcp-status" data-action="open-mcp-settings" title="Open MCP settings" aria-label="Open MCP settings">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M9 2v6M15 2v6M7 8h10v4a5 5 0 0 1-10 0V8zM12 17v5"></path>

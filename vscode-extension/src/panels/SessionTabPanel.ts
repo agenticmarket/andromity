@@ -25,6 +25,9 @@ import { WaterfallPanel } from "./WaterfallPanel.js";
 import { BackgroundTaskPanel } from "./BackgroundTaskPanel.js";
 import { wakeSessionForQuestion } from "../collabActions.js";
 import { recordNextStepEvent } from "../nextSteps.js";
+import { handleFeedbackMessage } from "../engagement/feedbackWebview.js";
+import { checkSessionForNavigation } from "../sessionNavigation.js";
+import { confirmAndOpenLink } from "../linkOpener.js";
 
 /**
  * SessionTabPanel allows opening any Andromity session in a dedicated editor tab
@@ -637,6 +640,17 @@ export class SessionTabPanel {
         this._postMessage({ type: "ollama_status_updated", status: await this._viewProvider.probeOllama() });
         break;
       }
+      case "open_link": {
+        await confirmAndOpenLink(message.url);
+        break;
+      }
+
+      case "submit_feedback":
+      case "feedback_issue": {
+        const reply = await handleFeedbackMessage(message, this._context);
+        if (reply) this._postMessage(reply);
+        break;
+      }
       case "open_external":
       case "open_external_url": {
         try {
@@ -885,6 +899,14 @@ export class SessionTabPanel {
         if (message.sessionId && message.sessionId !== this._sessionId) {
           await this._switchSession(message.sessionId);
         }
+        break;
+      }
+
+      case "navigate_session": {
+        const result = await checkSessionForNavigation(this._rpcClient, message.sessionId,
+          vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+        this._postMessage(result);
+        if (result.status === "ok" && result.sessionId !== this._sessionId) await this._switchSession(result.sessionId);
         break;
       }
 

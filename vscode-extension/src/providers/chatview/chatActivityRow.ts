@@ -427,6 +427,24 @@ export function getChatActivityScript(): string {
         return m ? (m[1] === '0' ? 'done' : 'error') : null;
       };
 
+      // Output from the internet or an MCP server reaches the model wrapped as <external_content source="...">.
+      window.externalContentSource = function(toolResult) {
+        var m = /^<external_content source="([^"]+)">/.exec(String(toolResult || ''));
+        return m ? m[1] : null;
+      };
+
+      window.markExternalToolCard = function(card, toolResult) {
+        var source = window.externalContentSource(toolResult);
+        if (!card || !source || card.querySelector('.tool-external-tag')) return;
+        var tag = document.createElement('span');
+        tag.className = 'tool-external-tag';
+        tag.textContent = source.indexOf('mcp:') === 0 ? 'External tool' : 'From the web';
+        tag.title = (source.indexOf('mcp:') === 0 ? 'This output came from the MCP server ' + source.slice(4) : 'This output came from the open internet') +
+          '. Andromity tells the model to treat it as data, not instructions.';
+        var statusTag = card.querySelector('.tool-tag');
+        if (statusTag && statusTag.parentNode) statusTag.parentNode.insertBefore(tag, statusTag);
+      };
+
       window.renderBackgroundProcessActivityRow = function(toolName, toolArgs, status, toolResult, processId) {
         var parsedArgs = {};
         if (typeof toolArgs === 'string') {
@@ -436,11 +454,9 @@ export function getChatActivityScript(): string {
         }
 
         var cmd = parsedArgs.CommandLine || parsedArgs.command || parsedArgs.cmd || '';
-        var procId = processId || parsedArgs.process_id || '';
-        if (!procId && typeof toolResult === 'string') {
-          var m = toolResult.match(/with id '([^']+)'/);
-          if (m) procId = m[1];
-        }
+        // The server renames an id that is already taken, so the id in the result wins over the requested one.
+        var resultId = typeof toolResult === 'string' ? /with id '([^']+)'/.exec(toolResult) : null;
+        var procId = processId || (resultId && resultId[1]) || parsedArgs.process_id || '';
 
         var isRunning = (status === 'running' || status === 'running_bg');
         var wrap = document.createElement('div');
@@ -461,7 +477,7 @@ export function getChatActivityScript(): string {
 
         var endedLabels = { error: 'FAILED', stopped: 'STOPPED', ended: 'ENDED', done: 'DONE' };
         var tagHtml = isRunning ?
-          '<span class="bg-proc-badge running"><span class="activity-running-dot"></span> RUNNING (BG)</span>' :
+          '<span class="bg-proc-badge running status-shimmer">Running</span>' :
           ('<span class="bg-proc-badge ' + (status === 'error' || status === 'stopped' ? 'stopped' : 'done') + '"' +
             (status === 'ended' ? ' title="This process is no longer running"' : '') + '>' +
             (endedLabels[status] || 'DONE') +
