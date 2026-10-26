@@ -56,8 +56,7 @@ def execute_agent_task(
         body=(
             "Andromity task mode is unavailable: this Action supports PR reviews, "
             "but does not execute coding tasks or create pull requests. No files "
-            "were changed and no model tokens were spent. For release README "
-            "updates, use the Andromity Release Notes workflow."
+            "were changed and no model tokens were spent."
         ),
         marker=f"<!-- andromity-task-status-{issue_number} -->",
     )
