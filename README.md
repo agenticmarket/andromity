@@ -258,13 +258,13 @@ Join our growing community of autonomous AI developers, students, and engineers:
 ---
 
 <!-- andromity:latest-release:start -->
-## Latest release: v0.2.19
+## Latest release: v0.2.23
 
-- A background command (`shell_bg`) that exits within its first two seconds is no longer reported to the agent as running. The tool result now includes the exit code and output, with a reminder of the active shell's syntax. On Windows that shell is PowerShell, so a bash loop such as `for i in $(seq 1 180); do …; done` exits at once with a parse error. Previously the agent was told the process had started and kept saying it was running. The agent is no longer woken a second time for an exit it already saw.
-- Background processes are registered before their output reader starts, so a process that ends instantly is no longer missed.
-- Background process notices are no longer lost:
+- **The model picker shows the model you're using.** Your current model is listed first under **Current** with an **Active** label, even when it is far down the list or no longer offered, and it comes first in search results. Only the model on your session's provider is marked, not every provider with the same model ID.
+- **Every Andromity model is listed.** The Model Hub and the chat model picker show every model the Andromity provider offers, with its name, description, pricing and context window, instead of Auto alone. Picking a model that isn't available to you right now shows a clear message with **Sign In** or **Switch Model** instead of retrying.
+- **Session panel on more screens.** The session panel appears from 1100px wide, docked beside a slightly narrower chat, instead of needing 1500px. That covers most laptop screens and a chat open next to your files. Narrower views show the chat only.
 
-[Release notes](https://github.com/agenticmarket/andromity/releases/tag/v0.2.19) · [Full changelog](CHANGELOG.md)
+[Release notes](https://github.com/agenticmarket/andromity/releases/tag/v0.2.23) · [Full changelog](CHANGELOG.md)
 <!-- andromity:latest-release:end -->
 
 ## Changelog
