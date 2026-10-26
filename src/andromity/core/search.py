@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Callable, List, Optional, Set
 
 from andromity.core.debug_log import get_logger
 
@@ -320,6 +320,7 @@ def grep_search(
     file_pattern: Optional[str] = None,
     max_results: int = 50,
     multiline: bool = False,
+    skip_file: Optional[Callable[[Path], bool]] = None,
 ) -> str:
     """
     Search for a text pattern across the codebase.
@@ -376,7 +377,7 @@ def grep_search(
             )
             if result.returncode == 0 and result.stdout.strip():
                 lines = result.stdout.strip().splitlines()
-                return _format_grep_output(lines, search_path, max_results)
+                return _format_grep_output(lines, search_path, max_results, skip_file)
             elif result.returncode == 1:
                 return f"No matches found for '{query}' in {path}."
         except Exception as e:
@@ -439,13 +440,11 @@ def grep_search(
             if all_git_lines:
                 filtered = []
                 for line in all_git_lines:
-                    parts = line.split(":", 2)
-                    if len(parts) >= 2:
-                        file_part = parts[0]
-                        if not _is_excluded_path(Path(file_part), search_path):
-                            filtered.append(line)
+                    match = _GREP_LINE.match(line)
+                    if match and not _is_excluded_path(Path(match.group(1)), search_path):
+                        filtered.append(line)
                 if filtered:
-                    return _format_grep_output(filtered, search_path, max_results)
+                    return _format_grep_output(filtered, search_path, max_results, skip_file, Path(git_cwd))
             # All patterns returned no-match → definitive empty result, no need for Python fallback
             if no_match_count == len(expanded_patterns):
                 return f"No matches found for '{query}' in {path}."
@@ -453,7 +452,7 @@ def grep_search(
             log.warning("git grep failed, falling back: %s", e)
 
     # 3. Pure Python fallback (Tier 3) — last resort with hard 8s timeout
-    return _python_grep(query, search_path, case_sensitive, expanded_patterns, max_results)
+    return _python_grep(query, search_path, case_sensitive, expanded_patterns, max_results, skip_file=skip_file)
 
 
 def _is_git_worktree(path: Path) -> bool:
@@ -479,6 +478,7 @@ def _python_grep(
     max_results: int = 50,
     timeout_s: float = 8.0,
     file_pattern: Optional[str] = None,
+    skip_file: Optional[Callable[[Path], bool]] = None,
 ) -> str:
     """Pure-Python grep fallback. `patterns` is a list of fnmatch-style globs
     (already brace-expanded). Uses a wall-clock timeout to avoid hanging."""
@@ -523,6 +523,8 @@ def _python_grep(
 
             file_path = current_dir / fname
             if _is_excluded_path(file_path, root):
+                continue
+            if skip_file and skip_file(file_path):
                 continue
             # Skip files larger than 5MB in pure Python fallback to prevent memory/CPU stalls
             try:
@@ -589,12 +591,31 @@ def _matches_glob_pattern(rel_path: str, fname: str, pattern: str) -> bool:
     return False
 
 
-def _format_grep_output(lines: List[str], root: Path, max_results: int) -> str:
+_GREP_LINE = re.compile(r"^((?:[A-Za-z]:)?[^:\n]*):(\d+):(.*)$", re.S)
+
+
+def _format_grep_output(lines: List[str], root: Path, max_results: int,
+                        skip_file: Optional[Callable[[Path], bool]] = None,
+                        base: Optional[Path] = None) -> str:
+    if skip_file:
+        kept = []
+        for raw_line in lines:
+            match = _GREP_LINE.match(raw_line)
+            if match:
+                file_path = Path(match.group(1))
+                if not file_path.is_absolute():
+                    file_path = (base or root) / file_path
+                if skip_file(file_path):
+                    continue
+            kept.append(raw_line)
+        lines = kept
+        if not lines:
+            return "No matches found."
     formatted: List[str] = []
     for raw_line in lines[:max_results]:
-        parts = raw_line.split(":", 2)
-        if len(parts) >= 3:
-            file_part, line_no, content = parts[0], parts[1], parts[2]
+        match = _GREP_LINE.match(raw_line)
+        if match:
+            file_part, line_no, content = match.group(1), match.group(2), match.group(3)
             try:
                 rel = Path(file_part).relative_to(root)
             except ValueError:

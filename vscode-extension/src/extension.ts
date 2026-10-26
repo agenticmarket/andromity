@@ -238,6 +238,8 @@ export async function activate(context: vscode.ExtensionContext) {
   const planProvider = new PlanViewProvider(context.extensionUri);
   chatProvider.setPlanViewProvider(planProvider);
   const feedbackNotifications = new FeedbackNotifications(context);
+  chatProvider.setFeedbackCheckIn(feedbackNotifications);
+  feedbackNotifications.setCheckInPresenter(() => chatProvider.showFeedbackCheckIn());
 
   // Plan approve/reject flows through the chat session + queue (TUI parity).
   planProvider.setPlanActionHandler(async (approved, feedback, sessionId) => {
@@ -417,8 +419,8 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     });
 
-    rpcClient.on("agent/done", () => {
-      void feedbackNotifications.onTurnCompleted().catch(() => {});
+    rpcClient.on("agent/done", (params: any) => {
+      void feedbackNotifications.onTurnCompleted({ outcome: params?.outcome, scheduled: params?.scheduled }).catch(() => {});
     });
 
     log("[Andromity] Python daemon client wired successfully.");
@@ -1132,6 +1134,8 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     registerTrackedCommand("andromity.rateExtension", () => feedbackNotifications.rate()),
+
+    registerTrackedCommand("andromity.sendFeedback", () => feedbackNotifications.sendFeedback()),
 
     registerTrackedCommand("andromity.shareExtension", () => feedbackNotifications.share()),
 

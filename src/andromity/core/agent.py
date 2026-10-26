@@ -565,6 +565,7 @@ class Agent:
         if hasattr(self, "orchestrator") and self.orchestrator:
             setattr(self.orchestrator, "current_turn_id", user_turn_id)
         iteration_idx = 0
+        self._suggested_last_step = False
         while True:
             for applied in self._apply_steering():
                 yield applied
@@ -671,6 +672,9 @@ class Agent:
                 prompt_tokens = last_usage.get("prompt_tokens", 0) if isinstance(last_usage, dict) else (getattr(last_usage, "prompt_tokens", 0) or 0)
                 completion_tokens = last_usage.get("completion_tokens", 0) if isinstance(last_usage, dict) else (getattr(last_usage, "completion_tokens", 0) or 0)
                 total_tokens = last_usage.get("total_tokens", prompt_tokens + completion_tokens) if isinstance(last_usage, dict) else (getattr(last_usage, "total_tokens", 0) or (prompt_tokens + completion_tokens))
+            elif provider_outcome == "error":
+                # A failed request reports no usage, and its text is the error card, so there is nothing to estimate.
+                prompt_tokens = completion_tokens = total_tokens = 0
             else:
                 prompt_tokens = _estimate_tokens(self.session.messages)
                 completion_tokens = len(assistant_content) // 4 + len(assistant_thinking) // 4
@@ -716,6 +720,13 @@ class Agent:
                 break
 
             if not assistant_content and not tool_calls_to_execute:
+                if self._suggested_last_step:
+                    # The suggestion's result tells the model to end its turn, so an empty reply is that ending.
+                    self._suggested_last_step = False
+                    self._empty_retried = False
+                    yield Done(usage=last_usage, outcome="success")
+                    self._fire_session_end(had_error=False, error_type=None)
+                    break
                 # Model returned nothing — retry once before giving up
                 if not getattr(self, '_empty_retried', False):
                     self._empty_retried = True
@@ -1062,6 +1073,15 @@ class Agent:
                         yield PlanUpdated(plan=plan)
                         if tool_name == "write_plan" and plan.status == "pending":
                             yield PlanApprovalRequired(plan=plan)
+
+            # A step that only suggests the next step ends the turn: asking the model again would only
+            # return an empty reply. A message the user queued in the meantime still gets its reply.
+            step_tools = {(call.get("function") or {}).get("name") for call in tool_calls_to_execute if isinstance(call, dict)}
+            self._suggested_last_step = "suggest_next_step" in step_tools
+            if step_tools == {"suggest_next_step"} and not self.input_queue.peek(steering_only=True):
+                yield Done(usage=last_usage, outcome="success")
+                self._fire_session_end(had_error=False, error_type=None)
+                break
 
     def _tools_for_this_call(self) -> list:
         """Collaboration tools only when another session is around or something is waiting for this one."""

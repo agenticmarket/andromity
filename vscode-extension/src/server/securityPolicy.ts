@@ -1,5 +1,7 @@
+import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
+import { findSecrets, redactSecrets } from "../secretScan.js";
 
 /** Host-side checks for security-relevant requests that arrive from webviews.
  *  A webview renders model output, so anything it sends is treated as
@@ -106,12 +108,49 @@ export async function confirmAndromityTrust(requestedPath?: unknown): Promise<st
     }
     return null;
   }
+  const servers = projectMcpServers(target);
+  const shown = servers.slice(0, 10).map((s) => "• " + s).join("\n") + (servers.length > 10 ? `\n…and ${servers.length - 10} more` : "");
+  const detail = servers.length
+    ? `${target}\n\nThis folder's MCP config also starts these servers, which run as programs on your computer:\n${shown}`
+    : target;
   const choice = await vscode.window.showWarningMessage(
     `Allow Andromity to edit files and run commands in ${path.basename(target)}?`,
-    { modal: true, detail: target },
+    { modal: true, detail },
     "Trust Folder"
   );
   return choice === "Trust Folder" ? target : null;
+}
+
+const PROJECT_MCP_CONFIGS = [[".andromity", "mcp.json"], [".vscode", "mcp.json"]];
+const MAX_MCP_CONFIG_BYTES = 1_000_000;
+
+/** MCP servers a folder's own config starts once Andromity trusts it, with secrets in their arguments redacted. */
+export function projectMcpServers(folder: string): string[] {
+  const seen = new Set<string>();
+  const servers: string[] = [];
+  for (const parts of PROJECT_MCP_CONFIGS) {
+    let data: any;
+    try {
+      const file = path.join(folder, ...parts);
+      if (fs.statSync(file).size > MAX_MCP_CONFIG_BYTES) continue;
+      data = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch {
+      continue;
+    }
+    const entries = data?.mcpServers ?? data?.servers;
+    if (!entries || typeof entries !== "object") continue;
+    for (const [name, raw] of Object.entries(entries)) {
+      const server = raw as any;
+      if (seen.has(name) || !server || typeof server !== "object" || server.disabled === true) continue;
+      seen.add(name);
+      const url = server.serverUrl ?? server.url;
+      const launch = typeof server.command === "string"
+        ? [server.command, ...(Array.isArray(server.args) ? server.args.map(String) : [])].join(" ")
+        : typeof url === "string" ? "connects to " + url : "";
+      if (launch) servers.push(`${name}: ${redactSecrets(launch, findSecrets(launch))}`);
+    }
+  }
+  return servers;
 }
 
 /** MCP servers configured in a project can launch local processes. */
@@ -123,8 +162,17 @@ export function requireWorkspaceTrust(action: string): boolean {
 
 const DOUBLE_BACKSLASH = String.fromCharCode(92).repeat(2);
 
+const LEADING_DOUBLE_SEPARATOR = /^[\\/]{2}/;
+
+/** Any spelling Windows treats as a network share or device path, including mixed slashes. */
 export function isUncPath(p: string): boolean {
-  return p.startsWith(DOUBLE_BACKSLASH) || p.startsWith("//");
+  if (typeof p !== "string") return false;
+  if (LEADING_DOUBLE_SEPARATOR.test(p.trim())) return true;
+  try {
+    return path.win32.isAbsolute(p) && path.win32.resolve(p).startsWith(DOUBLE_BACKSLASH);
+  } catch {
+    return false;
+  }
 }
 
 export function isInsideWorkspace(p: string): boolean {

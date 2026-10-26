@@ -16,7 +16,11 @@ The Cloudflare Worker behind `telemetry.agenticmarket.dev`. It receives Andromit
    ```bash
    npx wrangler d1 create andromity-telemetry
    npx wrangler d1 execute andromity-telemetry --remote --file=schema.sql
+   npx wrangler d1 execute andromity-telemetry --remote --file=blog.sql
+   npx wrangler d1 execute andromity-telemetry --remote --file=feedback.sql
+   npx wrangler d1 execute andromity-telemetry --remote --file=feedback-checkin.sql
    ```
+   On a database that already has the `feedback` table, run only `feedback-checkin.sql`, once. Until it runs, check-in answers are kept inside the note text.
 
 3. Copy `.env.example` to `.env` and set `TELEMETRY_D1_ID` (and optionally `STATS_SECRET`).
 

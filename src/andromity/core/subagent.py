@@ -371,13 +371,20 @@ class SubAgent:
                 target_p = str(targs.get("path") or targs.get("file_path") or "")
                 if target_p and self.project_path:
                     from pathlib import Path
+                    from andromity.core.security import is_execution_control_path, is_sensitive_path
                     try:
-                        resolved_target = Path(target_p).resolve()
                         resolved_proj = Path(self.project_path).resolve()
+                        raw_target = Path(target_p)
+                        resolved_target = (raw_target if raw_target.is_absolute() else resolved_proj / raw_target).resolve()
                         if not resolved_target.is_relative_to(resolved_proj):
                             res_str = f"TOOL BLOCKED: Writing to paths outside project directory is prohibited in TRUST mode ({target_p})."
                     except Exception:
-                        pass
+                        res_str = f"TOOL BLOCKED: Could not verify that '{target_p}' is inside the project."
+                    if res_str is None and (is_sensitive_path(target_p, self.project_path) or is_execution_control_path(target_p, self.project_path)):
+                        res_str = (
+                            f"TOOL BLOCKED: '{target_p}' is a sensitive or execution-control file (git hooks, editor tasks, "
+                            "package scripts, MCP config). Subagents cannot change it; report the change to the parent agent instead."
+                        )
             elif self.permission_mode == "trust" and tname in ("shell_exec", "shell_bg"):
                 from andromity.core.security import is_command_allowlisted
                 from andromity.config import config
@@ -388,7 +395,7 @@ class SubAgent:
             elif self.permission_mode in ("safe", "trust") and tname in ("read_file", "view_file", "grep_search"):
                 from andromity.core.security import is_sensitive_path
                 target_p = str(targs.get("path") or targs.get("file_path") or "")
-                if target_p and is_sensitive_path(target_p):
+                if target_p and is_sensitive_path(target_p, self.project_path):
                     res_str = f"TOOL BLOCKED: Subagents cannot access sensitive file '{target_p}'."
             elif tname == "fetch_url":
                 from andromity.core.security import _is_private_ip, get_domain
@@ -396,6 +403,14 @@ class SubAgent:
                 dom = get_domain(url_target)
                 if dom and _is_private_ip(dom):
                     res_str = f"SECURITY BLOCKED: Fetching internal/private network addresses is blocked ({dom})."
+                elif self.permission_mode in ("safe", "trust"):
+                    from andromity.core.security import is_domain_allowed
+                    from andromity.config import config
+                    if not is_domain_allowed(url_target, config.get("default", "allowed_domains", []) or []):
+                        res_str = (
+                            f"TOOL BLOCKED: '{dom or url_target}' is not an allowed domain, and subagents cannot ask for approval. "
+                            "Report the URL to the parent agent instead."
+                        )
 
         t_start = time.time()
         if res_str is None:

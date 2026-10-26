@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
 import { escapeHtml, getNonce } from "../providers/webviewSecurity.js";
 import { STATUS_SHIMMER_STYLES } from "../providers/chatview/chatStyles.js";
+import { confirmAndOpenLink } from "../linkOpener.js";
 
 export class BackgroundTaskPanel {
   public static readonly viewType = "andromity.backgroundTaskTab";
@@ -108,7 +109,7 @@ export class BackgroundTaskPanel {
             }
             break;
           case "open_url":
-            await this._openUrl(message.url);
+            await confirmAndOpenLink(message.url, "Open this link from the task output?");
             break;
         }
       },
@@ -180,23 +181,6 @@ export class BackgroundTaskPanel {
     } catch {
       this._panel.webview.postMessage({ type: "task_error", message: "Could not stop this task. Try again.", stop_failed: true });
     }
-  }
-
-  private async _openUrl(url: unknown) {
-    if (typeof url !== "string") return;
-    let uri: vscode.Uri;
-    try {
-      uri = vscode.Uri.parse(url, true);
-    } catch {
-      return;
-    }
-    if (uri.scheme !== "http" && uri.scheme !== "https") return;
-    const choice = await vscode.window.showInformationMessage(
-      "Open this link from the task output?",
-      { modal: true, detail: url },
-      "Open"
-    );
-    if (choice === "Open") await vscode.env.openExternal(uri);
   }
 
   private _handleExited(exitCode: number, duration?: number, wasKilled: boolean = false) {

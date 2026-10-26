@@ -3,6 +3,7 @@ import { buildStatsScope, measurementQueries } from './statsScope.js';
 import { cachedStats } from './statsCache.js';
 import { sessionSummaries, featureSummaries } from './metricSummaries.js';
 import { handleBlogRequest } from './blog.js';
+import { handleFeedbackRequest } from './feedback.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -42,12 +43,11 @@ export default {
 
     const adminKey = request.headers.get('x-stats-key') ||
                      request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
-    const blogResponse = await handleBlogRequest(request, env, {
-      url,
-      headers: securityHeaders,
-      isAdmin: Boolean(env.ADMIN_SECRET) && timingSafeMatch(adminKey, env.ADMIN_SECRET),
-    });
+    const isAdmin = Boolean(env.ADMIN_SECRET) && timingSafeMatch(adminKey, env.ADMIN_SECRET);
+    const blogResponse = await handleBlogRequest(request, env, { url, headers: securityHeaders, isAdmin });
     if (blogResponse) return blogResponse;
+    const feedbackResponse = await handleFeedbackRequest(request, env, { url, headers: securityHeaders, isAdmin });
+    if (feedbackResponse) return feedbackResponse;
 
     if (request.method === 'GET') {
       if (url.pathname === '/api/stats' || url.pathname === '/stats') {

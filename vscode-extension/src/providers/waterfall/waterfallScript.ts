@@ -31,6 +31,7 @@ export function getWaterfallScript(sessionId: string): string {
           toolMs: 0,
           promptTokens: 0,
           completionTokens: 0,
+          historyTokens: 0,
           totalTokens: 0
         }
       };
@@ -573,6 +574,22 @@ export function getWaterfallScript(sessionId: string): string {
 
       // History spans carry no per-call tokens, so the session total from history is kept as a
       // base for what those spans used; spans streamed live add their own tokens on top.
+      // Prompt and completion are summed over calls seen live. History reports only a combined total,
+      // kept as historyTokens: the part of totalTokens that has no prompt/completion split.
+      function syncTokenTotals() {
+        let prompt = 0;
+        let completion = 0;
+        for (const s of state.spans.values()) {
+          if (s.fromHistory || !s.totalTokens) continue;
+          prompt += s.promptTokens || 0;
+          completion += s.completionTokens || 0;
+        }
+        state.totals.promptTokens = prompt;
+        state.totals.completionTokens = completion;
+        state.totals.historyTokens = state.historyTokenBase || 0;
+        state.totals.totalTokens = state.totals.historyTokens + liveSpanTokens();
+      }
+
       function liveSpanTokens() {
         let tokens = 0;
         for (const s of state.spans.values()) {
@@ -597,7 +614,7 @@ export function getWaterfallScript(sessionId: string): string {
         state.totals.durationMs = durMs;
         state.totals.llmMs = llmMs;
         state.totals.toolMs = toolMs;
-        state.totals.totalTokens = (state.historyTokenBase || 0) + liveSpanTokens();
+        syncTokenTotals();
       }
 
       function updateSummaryStats() {
@@ -857,6 +874,26 @@ export function getWaterfallScript(sessionId: string): string {
               }
             }
             addLog('AGENT', 'Agent turn started: ' + (state.currentTurnId || 'turn_1'));
+            updateSummaryStats();
+            break;
+          }
+
+          case 'input_applied': {
+            // A message sent while the agent works is applied between two steps; the work after it is its own turn.
+            // User message N is turn N, the same id history uses, so a later history load updates this turn.
+            const at = msg.ts ? msg.ts * 1000 : Date.now();
+            const turnId = typeof msg.turn_index === 'number' ? 'turn_' + (msg.turn_index + 1) : 'turn_' + (state.turns.size + 1);
+            if (turnId === state.currentTurnId) break;
+            const previous = state.turns.get(state.currentTurnId);
+            if (previous && !previous.endTime) {
+              previous.endTime = at;
+              previous.durationMs = Math.max(0, at - previous.startTime);
+              updateTimingBars(previous.id);
+            }
+            ensureTurn(turnId, msg.prompt || '', at);
+            state.isRunning = true;
+            recalcTotals();
+            addLog('INPUT', 'Message applied during the turn: ' + cleanPromptForDisplay(msg.prompt || '').slice(0, 80));
             updateSummaryStats();
             break;
           }
@@ -1456,6 +1493,7 @@ export function getWaterfallScript(sessionId: string): string {
               turn.durationMs = turn.endTime - turn.startTime;
               updateTimingBars(turn.id);
             }
+            recalcTotals();
             addLog('DONE', 'Turn completed');
             updateSummaryStats();
             break;
@@ -1497,6 +1535,7 @@ export function getWaterfallScript(sessionId: string): string {
             if (turn) {
               updateTimingBars(turn.id);
             }
+            recalcTotals();
             addLog('CANCEL', 'Turn execution cancelled by user');
             updateSummaryStats();
             break;
@@ -1538,6 +1577,7 @@ export function getWaterfallScript(sessionId: string): string {
             if (turn) {
               updateTimingBars(turn.id);
             }
+            recalcTotals();
             addLog('ERROR', \`Execution error: \${msg.error || 'Unknown error'}\`);
             updateSummaryStats();
             break;
@@ -1863,8 +1903,7 @@ export function getWaterfallScript(sessionId: string): string {
               }
 
               state.historyTokenBase = Math.max(0, (sData.token_total || 0) - liveSpanTokens());
-              state.totals.totalTokens = state.historyTokenBase + liveSpanTokens();
-              state.totals.promptTokens = sData.context_tokens || 0;
+              syncTokenTotals();
               state.isRunning = sData.status === 'running';
 
               // Watermark: number of user-turns materialised from history.
@@ -1995,7 +2034,7 @@ export function getWaterfallScript(sessionId: string): string {
           state.committedToolCallIds.clear();
           state.committedLlmTurnIds.clear();
           state.logs = [];
-          state.totals = { durationMs: 0, llmMs: 0, toolMs: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+          state.totals = { durationMs: 0, llmMs: 0, toolMs: 0, promptTokens: 0, completionTokens: 0, historyTokens: 0, totalTokens: 0 };
           state.historyTokenBase = 0;
           els.timelineContainer.innerHTML = '';
           els.logContainer.innerHTML = '';
@@ -2022,6 +2061,8 @@ export function getWaterfallScript(sessionId: string): string {
                 status: s.status,
                 ttfbMs: s.ttfbMs,
                 tokens: s.totalTokens,
+                promptTokens: s.promptTokens || 0,
+                completionTokens: s.completionTokens || 0,
                 args: s.args,
                 result: s.result,
                 response: s.response || '',

@@ -291,7 +291,8 @@ export function getWaterfallStyles(): string {
       border-radius: var(--radius);
       font-size: 12px;
       font-weight: 500;
-      color: ;
+      color: var(--muted);
+      background: transparent;
       cursor: pointer;
       border: 1px solid transparent;
       transition: all 0.15s ease;

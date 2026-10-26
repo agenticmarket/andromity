@@ -787,6 +787,22 @@ export class SettingsPanel {
         break;
       }
 
+      case "forget_approval": {
+        const key = message.kind === "command" ? "allowed_commands" : message.kind === "domain" ? "allowed_domains" : null;
+        if (!key || typeof message.value !== "string") break;
+        try {
+          const current = await this._rpcClient.call<any>("config.get", {});
+          const remembered = current?.config?.default?.[key];
+          const next = Array.isArray(remembered) ? remembered.filter((entry: unknown) => entry !== message.value) : [];
+          await this._rpcClient.call("config.set", { section: "default", key, value: next });
+          await this.loadData(true);
+        } catch (err: any) {
+          vscode.window.showErrorMessage(`Could not remove the remembered approval: ${err.message}`);
+          await this.loadData(true);
+        }
+        break;
+      }
+
       case "revoke_trust": {
         try {
           await this._rpcClient.call("trust.revoke", { project_path: message.path });
@@ -3678,6 +3694,12 @@ export class SettingsPanel {
         </div>
 
         <div class="settings-card">
+          <div class="setting-label">Remembered approvals</div>
+          <div class="setting-desc">Commands and web domains you chose to always allow. In TRUST mode they run without asking. Remove any you no longer want.</div>
+          <div id="remembered-approvals-list" style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px;"></div>
+        </div>
+
+        <div class="settings-card">
           <div class="setting-label">Permission Modes Explained</div>
           <table class="diag-table" style="margin-top: 6px;">
             <tr>
@@ -4703,6 +4725,9 @@ SOFTWARE.</pre>
         vscode.postMessage({ type: "open_license_file" });
       } else if (action === "revoke-trust") {
         revokeTrustPath(btn.dataset.path);
+      } else if (action === "forget-approval") {
+        btn.disabled = true;
+        vscode.postMessage({ type: "forget_approval", kind: btn.dataset.kind, value: btn.dataset.value });
       } else if (action === "toggle-current-trust") {
         const isTrusted = trustInfo.is_trusted;
         const targetPath = currentWorkspacePath || (trustInfo && trustInfo.project_path) || "";
@@ -5259,7 +5284,24 @@ SOFTWARE.</pre>
       vscode.postMessage({ type: "revoke_trust", path });
     };
 
+    function renderRememberedApprovals() {
+      const list = document.getElementById("remembered-approvals-list");
+      if (!list) return;
+      const defaults = (currentConfig && currentConfig.config && currentConfig.config.default) || {};
+      const group = (title, kind, values) => {
+        const items = Array.isArray(values) ? values.map(String).filter(Boolean) : [];
+        return '<div style="font-size: 11px; font-weight: 600; color: var(--text-muted); margin-top: 4px;">' + title + ' (' + items.length + ')</div>' +
+          (items.length ? items.map(value =>
+            '<div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 10px; background: rgba(var(--tint), 0.03); border: 1px solid var(--card-border); border-radius: 4px;">' +
+              '<code style="font-size: 12px; word-break: break-all;">' + escapeHtml(value) + '</code>' +
+              '<button class="btn btn-danger" style="padding: 3px 8px; font-size: 11px; flex-shrink: 0;" data-action="forget-approval" data-kind="' + kind + '" data-value="' + escapeHtml(value) + '" aria-label="Stop always allowing ' + escapeHtml(value) + '">Remove</button>' +
+            '</div>').join('') : '<div style="color: var(--text-muted); font-size: 12px;">None</div>');
+      };
+      list.innerHTML = group("Commands", "command", defaults.allowed_commands) + group("Web domains", "domain", defaults.allowed_domains);
+    }
+
     function renderTrust() {
+      renderRememberedApprovals();
       const isTrusted = trustInfo.is_trusted;
       const badge = document.getElementById("trust-status-badge");
       const btn = document.getElementById("btn-toggle-current-trust");
@@ -5282,7 +5324,7 @@ SOFTWARE.</pre>
           btn.textContent = "Trust Workspace";
           btn.setAttribute("data-action", "toggle-current-trust");
         }
-        if (desc) desc.textContent = "Folder: " + (currentWorkspacePath || "Current Project") + " (Restricted Mode — file writes and shell commands require confirmation)";
+        if (desc) desc.textContent = "Folder: " + (currentWorkspacePath || "Current Project") + " (Restricted: Andromity can't read or edit files or run commands here until you trust it)";
       }
 
       const list = document.getElementById("trusted-folders-list");

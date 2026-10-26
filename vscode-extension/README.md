@@ -3,9 +3,11 @@
 
   # Andromity — AI Coding Agent for VS Code
 
-  **The open-source coding agent that shows you exactly what it did. Waterfall, Fingerprint and Blast radius trace every model call, file read, edit and command. Bring your own API key or run local models with Ollama.**
+  **Your AI agent just changed 30 files. Andromity shows you exactly what it did.**
 
-  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.23-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
+  **The open-source coding agent with built-in agent observability: Waterfall, Fingerprint and Blast radius trace every model call, file read, edit and command. A free alternative to Cline, Claude Code and Cursor. Bring your own API key or run local models with Ollama.**
+
+  [![VS Code Marketplace](https://img.shields.io/badge/VS_Marketplace-v0.2.24-blueviolet?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![VS Code](https://img.shields.io/badge/VS_Code-%5E1.85.0-blue?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
   [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-informational)](https://marketplace.visualstudio.com/items?itemName=agenticmarket.andromity-agent)
 
@@ -15,15 +17,15 @@
 
 </div>
 
+<div align="center">
+  <img src="https://cdn.agenticmarket.dev/andromity/git/with_waterfall.webp?v=0.2.8" alt="Andromity AI coding agent with agent observability: live Waterfall trace of every model call, file edit and command in VS Code" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+</div>
+
 ---
 
-**Andromity** is an open-source (MIT), BYOK (Bring Your Own Key) AI coding agent for VS Code. It plans multi-file tasks, edits code, runs commands and tests, and manages parallel subagents, while you review its plans, inspect native diffs, and roll back a turn with one click. Use it as an open-source alternative to the agent modes in Copilot or Cursor.
+**Andromity** is an open-source (MIT), BYOK (Bring Your Own Key) AI coding agent for VS Code. It plans multi-file tasks, edits code, runs commands and tests, and manages parallel subagents, while you review its plans, inspect native diffs, and roll back a turn with one click. Use it as an open-source alternative to Cline, Kilo Code, Claude Code, or the agent modes in Copilot and Cursor.
 
 Connect your preferred AI provider (**Anthropic Claude, OpenAI, Google Gemini, DeepSeek, Groq, OpenRouter, NVIDIA NIM**) or run models **locally and free with Ollama**.
-
-<div align="center">
-  <img src="https://cdn.agenticmarket.dev/andromity/git/with_waterfall.webp?v=0.2.8" alt="Andromity AI Coding Agent with Live Waterfall Trace in VS Code" width="100%" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
-</div>
 
 ---
 
@@ -189,7 +191,7 @@ Customize Andromity in **Settings** (`Ctrl+,` → search `Andromity`):
 
 ## 🔒 Privacy & Security
 
-- **Where your code goes:** to the model provider you choose. The built-in Andromity provider routes requests through the Andromity edge gateway, which forwards them without storing prompts, code, or completions.
+- **Where your code goes:** to the model provider you choose. The built-in Andromity provider routes requests through the Andromity edge gateway, which forwards them without storing prompts, code, or completions. For quotas and abuse prevention it keeps request metadata (account or install ID, a keyed IP fingerprint, country, model and token counts) for 14 days.
 - **API keys:** stored on your machine in the Andromity config file (`~/.andromity/config.toml`, or `%APPDATA%\andromity\config.toml` on Windows); keep that file private. Sign-in tokens use VS Code Secret Storage.
 - **Telemetry:** usage and performance data linked to a random installation ID: client, OS, version, country, provider and model name, session length and turn counts, task outcomes, error categories, and which features are used (feature names such as `fingerprint`). Never prompts, code, file paths, or model output. Full list: [TELEMETRY.md](https://github.com/agenticmarket/andromity/blob/main/TELEMETRY.md). Turn it off with `andromity.telemetry`, VS Code's telemetry setting, or `DO_NOT_TRACK=1`.
 - **Local models:** with Ollama, model inference runs on your machine. Web tools, remote MCP servers, and package installs can still use the network.

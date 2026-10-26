@@ -1,6 +1,10 @@
 import { ChatViewState } from "./chatHtml.js";
 import { scriptJson } from "../webviewSecurity.js";
 import { getPromptDisplayScript } from "../promptDisplay.js";
+import { getCommandRiskScript } from "../../commandRisk.js";
+import { getRateLimitResetScript } from "./rateLimitReset.js";
+import { getSecretScanScript } from "../../secretScan.js";
+import { getUrlRiskScript } from "../../urlRisk.js";
 import { getThinkingOrbsScript } from "./thinkingOrbs.js";
 import { getToolTargetsScript } from "./toolTargets.js";
 import { getStreamingRenderScript } from "./streamingRender.js";
@@ -12,6 +16,10 @@ import { normalizeSidePanelPreferences } from "../../sidePanelPreferences.js";
 export function getChatClientScript(sidebarIconUri: string, state: ChatViewState): string {
   return `
     ${getPromptDisplayScript()}
+    ${getCommandRiskScript()}
+    ${getRateLimitResetScript()}
+    ${getSecretScanScript()}
+    ${getUrlRiskScript()}
     ${getThinkingOrbsScript()}
     ${getToolTargetsScript()}
     function updateToolTarget(card, name, args) {
@@ -885,6 +893,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let currentProfile = ${scriptJson(state.currentProfile || "builder")};
     let currentReasoning = ${scriptJson(state.currentReasoning || "medium")};
     let isAndromityActive = false;
+    let lastAuthState = null;
     const DEFAULT_POPULAR_MODELS = [
       { id: 'auto', name: 'Andromity Auto (Smart Router)', provider: 'andromity', pricing: 'Free' },
       { id: 'qwen/qwen-2.5-coder-32b-instruct:free', name: 'Qwen 2.5 Coder 32B Free', provider: 'openrouter', pricing: 'Free' },
@@ -1236,7 +1245,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const doneCount = toolSeqDoneTools.size;
 
       // Update live elapsed counter on each active tool card
-      currentToolSequence.querySelectorAll('.tool-card[data-start-ts], .activity-row.running[data-start-ts]').forEach(card => {
+      currentToolSequence.querySelectorAll('.tool-card[data-start-ts]:not(.awaiting-approval), .activity-row.running[data-start-ts]:not(.awaiting-approval)').forEach(card => {
         const startTs = parseInt(card.getAttribute('data-start-ts') || '0', 10);
         const toolId = card.id ? card.id.replace('tool-', '') : '';
         const elapsedEl = card.querySelector('#elapsed-' + toolId) || card.querySelector('.tool-elapsed');
@@ -1250,6 +1259,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         el.textContent = label + ' · ' + (elapsed < 1 ? 'complete' : 'worked for ' + elapsed + 's');
       } else if (doneCount > 0 && doneCount >= toolSeqCount) {
         el.textContent = label + ' · all done · waiting for model... (' + elapsed + 's)';
+      } else if (awaitingApprovalRow && awaitingApprovalRow.isConnected) {
+        el.textContent = label + ' · waiting for your approval';
       } else if (lastToolRunning && lastToolName) {
         el.textContent = label + ' · ' + lastToolName + ' working... (' + elapsed + 's)';
       } else if (doneCount > 0) {
@@ -3602,6 +3613,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
     }
 
+    // The system prompt is stored as a message but is not part of the conversation.
+    function sessionMessageCount(s) {
+      return typeof s.conversation_count === 'number' ? s.conversation_count : (s.message_count || 0);
+    }
+
     function renderHomeRecentSessions(sessions) {
       if (!recentSessionsSection || !recentSessionsList) return;
       if (!sessions || sessions.length === 0) {
@@ -3609,12 +3625,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         return;
       }
 
-      // Only show past sessions that have actual messages (message_count > 0) and are NOT the current active session
-      const pastSessionsWithHistory = sessions.filter(s => 
-        s.id !== currentSessionId && 
-        s.message_count && 
-        s.message_count > 0
-      );
+      const pastSessionsWithHistory = sessions.filter(s => s.id !== currentSessionId && sessionMessageCount(s) > 0);
 
       if (pastSessionsWithHistory.length === 0) {
         recentSessionsSection.style.display = 'none';
@@ -3626,7 +3637,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       recentSessionsList.innerHTML = recent.map(s => {
         const name = escapeHtml(cleanPromptForDisplay(s.name) || s.id || 'Untitled Session');
         const dateStr = formatDateBadge(s.updated_at || s.created_at);
-        const msgsText = s.message_count + (s.message_count === 1 ? ' msg' : ' msgs');
+        const count = sessionMessageCount(s);
+        const msgsText = count + (count === 1 ? ' msg' : ' msgs');
         const modelTag = s.model ? escapeHtml(s.model.split('/').pop().replace(/-/g, ' ')) : '';
 
         return '<div class="recent-session-card" data-action="switch-session" data-session-id="' + escapeHtml(s.id) + '">' +
@@ -3702,7 +3714,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       const isCur = s.id === currentSessionId;
       const name = escapeHtml(cleanPromptForDisplay(s.name) || s.id || (isSubsession ? 'Subagent Task' : 'Session'));
-      const msgs = s.message_count ? (s.message_count + ' msgs') : 'Empty';
+      const count = typeof s.conversation_count === 'number' ? s.conversation_count : (s.message_count || 0);
+      const msgs = count ? (count + (count === 1 ? ' msg' : ' msgs')) : 'Empty';
       const cost = (s.cost_usd && Number(s.cost_usd) > 0) ? ('$' + Number(s.cost_usd).toFixed(3)) : '';
       const timeStr = formatDateBadge(s.updated_at || s.created_at);
       const timeTooltip = formatFullTimeTooltip(s.updated_at || s.created_at);
@@ -4517,6 +4530,24 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'next-step-run':
           runNextStep(target.getAttribute('data-opt-idx'));
           break;
+        case 'secret-redact-send': {
+          const delivery = secretWarningDelivery;
+          promptInput.value = redactSecrets(promptInput.value, findSecrets(promptInput.value));
+          hideSecretWarning();
+          sendCurrentPrompt(delivery);
+          break;
+        }
+        case 'secret-send-anyway': {
+          const delivery = secretWarningDelivery;
+          secretWarningAcceptedFor = promptInput.value.trim();
+          hideSecretWarning();
+          sendCurrentPrompt(delivery);
+          break;
+        }
+        case 'secret-edit':
+          hideSecretWarning();
+          promptInput.focus();
+          break;
         case 'next-step-new-session':
           startNextStepInNewSession();
           break;
@@ -4529,6 +4560,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'feature-tip-hide':
         case 'feature-tip-off':
           featureTipAction(action);
+          break;
+        case 'checkin-sentiment':
+        case 'checkin-chip':
+        case 'checkin-send':
+        case 'checkin-skip':
+        case 'checkin-review':
+        case 'checkin-never':
+        case 'checkin-close':
+          checkInAction(action, target);
           break;
         case 'open-session-tab': {
           e.stopPropagation();
@@ -4708,6 +4748,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             const isClamped = pContent.classList.toggle('clamped');
             target.textContent = isClamped ? 'Show more ▾' : 'Show less ▴';
           }
+          break;
+        }
+        case 'open-link': {
+          e.preventDefault?.();
+          const url = target.getAttribute('data-url');
+          if (url) vscode.postMessage({ type: 'open_link', url });
           break;
         }
         case 'open-docs': {
@@ -5166,7 +5212,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     };
 
     function formatModelDisplayName(id) {
-      if (!id || id === 'Loading model...') return 'Claude 3.7 Sonnet';
+      if (!id || id === 'Loading model...') return 'Choose a model';
       const parts = id.split('/');
       const raw = parts.length > 1 ? parts.slice(1).join('/') : parts[0];
       return raw
@@ -5829,7 +5875,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const found = allModels.find(m => m.id === currentModel);
       let name = found ? (found.name || found.id) : formatModelDisplayName(currentModel);
       if (!name || name === "Loading model...") {
-        name = "Claude 3.7 Sonnet";
+        name = "Choose a model";
       }
       if (activeModelName) {
         activeModelName.textContent = name;
@@ -5851,6 +5897,39 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       updateReasoningBadge();
     }
     updateModelBadge();
+
+    let secretWarningAcceptedFor = null;
+    let secretWarningDelivery = undefined;
+
+    function hideSecretWarning() {
+      const box = document.getElementById('secret-warning');
+      if (box) box.remove();
+    }
+
+    // Local models keep text on this machine; anything else goes to a provider and into session history.
+    function showSecretWarning(secrets, delivery) {
+      hideSecretWarning();
+      secretWarningDelivery = delivery;
+      const box = document.createElement('div');
+      box.id = 'secret-warning';
+      box.className = 'secret-warning';
+      box.setAttribute('role', 'alertdialog');
+      box.setAttribute('aria-labelledby', 'secret-warning-title');
+      const kinds = Array.from(new Set(secrets.map(s => s.label)));
+      const what = secrets.length === 1 ? 'a ' + kinds[0] : secrets.length + ' secrets (' + kinds.join(', ') + ')';
+      box.innerHTML = '<div class="secret-warning-title" id="secret-warning-title">This message looks like it contains ' + escapeHtml(what) + '</div>' +
+        '<div class="secret-warning-body">Sending it shares it with the model provider and saves it in this session. ' +
+          secrets.map(s => '<code>' + escapeHtml(s.preview) + '</code>').join(' ') + '</div>' +
+        '<div class="secret-warning-actions">' +
+          '<button class="secret-warning-btn primary" data-action="secret-redact-send">Redact and send</button>' +
+          '<button class="secret-warning-btn" data-action="secret-send-anyway">Send anyway</button>' +
+          '<button class="secret-warning-btn" data-action="secret-edit">Edit message</button>' +
+        '</div>';
+      const promptBox = document.querySelector('.prompt-box');
+      if (promptBox && promptBox.parentElement) promptBox.parentElement.insertBefore(box, promptBox);
+      const primary = box.querySelector('[data-action="secret-redact-send"]');
+      if (primary) primary.focus();
+    }
 
     function sendCurrentPrompt(delivery) {
       if (pendingInputDraft) return;
@@ -5877,6 +5956,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           return;
         }
       }
+
+      if (text && currentProvider !== 'ollama' && secretWarningAcceptedFor !== text) {
+        const secrets = findSecrets(text);
+        if (secrets.length) {
+          showSecretWarning(secrets, delivery);
+          return;
+        }
+      }
+      secretWarningAcceptedFor = null;
+      hideSecretWarning();
 
       if (text) {
         if (sentPromptsHistory.length === 0 || sentPromptsHistory[sentPromptsHistory.length - 1] !== text) {
@@ -6244,7 +6333,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             if (!href.startsWith('http://') && !href.startsWith('https://') && !href.startsWith('mailto:') && !href.startsWith('#')) {
               return '<a href="#" class="md-file-link" data-action="open-file" data-file-path="' + escapeHtml(href) + '" style="color:var(--accent); text-decoration:underline;"' + (title ? (' title="' + escapeHtml(title) + '"') : '') + '>' + text + '</a>';
             }
-            return '<a href="' + escapeHtml(href) + '" target="_blank" style="color:var(--accent); text-decoration:underline;"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + text + '</a>';
+            if (href.startsWith('#')) return '<a href="' + escapeHtml(href) + '" style="color:var(--accent); text-decoration:underline;">' + text + '</a>';
+            return externalLinkHtml(href, text, title);
           },
           image(token) {
             const href = token && typeof token === 'object' ? (token.href || '') : String(token || '');
@@ -6253,9 +6343,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             // Remote images would load without a click and can carry data out in the URL; show them as links instead.
             if (!href.startsWith('data:image/')) {
               const label = escapeHtml(text || href);
-              if (href.startsWith('http://') || href.startsWith('https://')) {
-                return '<a href="' + escapeHtml(href) + '" target="_blank" style="color:var(--accent); text-decoration:underline;">' + label + '</a>';
-              }
+              if (href.startsWith('http://') || href.startsWith('https://')) return externalLinkHtml(href, label, '');
               return label;
             }
             return '<img class="md-image" src="' + escapeHtml(href) + '" alt="' + escapeHtml(text || '') + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + ' loading="lazy" />';
@@ -6293,7 +6381,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       // 2. Images & links
       t = t.replace(/!\\[([^\\]]*)\\]\\(([^)]+)\\)/g, '<img class="md-image" src="$2" alt="$1" title="$1" loading="lazy" />');
-      t = t.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank" style="color:var(--accent); text-decoration:underline;">$1</a>');
+      t = t.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, function(_, label, href) {
+        return /^https?:\\/\\//i.test(href) ? externalLinkHtml(href.replace(/&amp;/g, '&'), label, '') : label;
+      });
 
       // 3. Strikethrough
       t = t.replace(/~~(.*?)~~/g, '<del>$1</del>');
@@ -7730,10 +7820,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             (o.new_session ? '<span class="next-step-new-tag">new session</span>' : '') + '</button>').join('')
         : '<button class="next-step-btn primary" data-action="next-step-run">Do it</button>' +
           (step.new_session ? '<button class="next-step-btn" data-action="next-step-new-session" title="Start this in a new session">New session</button>' : '');
+      // The buttons send these prompts as if typed, so the exact text is one click away before sending.
+      const requestHtml = choices
+        ? step.options.map(o => '<div class="next-step-request-item"><span class="next-step-request-name">' + escapeHtml(o.title) + '</span>' + escapeHtml(o.prompt) + '</div>').join('')
+        : escapeHtml(step.prompt);
       card.innerHTML = '<div class="next-step-text">' +
           '<div class="next-step-label">Suggested next step</div>' +
           '<div class="next-step-title" title="' + escapeHtml(choices ? step.question || step.title : step.prompt) + '">' +
             escapeHtml(choices ? step.question || 'Choose what to do next' : step.title) + '</div>' +
+          '<details class="next-step-request"><summary>See the exact request</summary><div class="next-step-request-body">' + requestHtml + '</div></details>' +
         '</div>' +
         '<div class="next-step-actions">' + buttons +
           '<button class="next-step-dismiss" data-action="next-step-dismiss" aria-label="Dismiss suggestion" title="Dismiss (Esc)">&times;</button>' +
@@ -7931,7 +8026,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function renderFeatureTip(id, file) {
       const copy = FEATURE_TIP_COPY[id];
-      if (!copy) return;
+      if (!copy || document.getElementById('checkin-card')) return;
       removeFeatureTip();
       const label = copy.action(file || '');
       const card = document.createElement('div');
@@ -7977,6 +8072,154 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (!event.target.closest || !event.target.closest('#feature-tip-card')) setFeatureTipMenu(false);
     });
     // ── End feature tips ─────────────────────────────────────────────────────
+
+    // ── Feedback check-in: how it feels first, then what gets in the way ────
+    const CHECKIN_FACES = [
+      { id: 'love', face: '😍', label: 'Love it' },
+      { id: 'ok', face: '😐', label: 'It\\'s OK' },
+      { id: 'bad', face: '😞', label: 'Not great' },
+    ];
+    let checkIn = null;
+
+    function startCheckIn(msg) {
+      if (msg.session_id !== currentSessionId || isRunning) return;
+      removeFeatureTip();
+      const previous = document.getElementById('checkin-card');
+      if (previous) previous.remove();
+      const choices = Array.isArray(msg.annoyances) ? msg.annoyances : [];
+      checkIn = {
+        step: 'ask', sentiment: '', picked: new Set(), note: '', sending: false, error: '',
+        annoyances: choices.filter(a => a && typeof a.id === 'string' && typeof a.label === 'string').slice(0, 10),
+      };
+      const card = document.createElement('div');
+      card.id = 'checkin-card';
+      card.className = 'checkin-card';
+      card.setAttribute('role', 'group');
+      card.setAttribute('aria-labelledby', 'checkin-title');
+      chatContainer.appendChild(card);
+      renderCheckIn();
+      scrollToBottomIfNeeded();
+    }
+
+    function renderCheckIn() {
+      const card = document.getElementById('checkin-card');
+      if (!card || !checkIn) return;
+      const typed = document.getElementById('checkin-note');
+      if (typed) checkIn.note = typed.value;
+      const disabled = checkIn.sending ? ' disabled' : '';
+      const error = checkIn.error ? '<div class="checkin-error" role="alert">' + escapeHtml(checkIn.error) + '</div>' : '';
+      const review = '<button class="checkin-link" data-action="checkin-review">Leave a review</button>';
+      let body = '';
+      if (checkIn.step === 'ask') {
+        body = '<div class="checkin-title" id="checkin-title">How\\'s Andromity working for you?</div>' +
+          '<div class="checkin-faces">' +
+            CHECKIN_FACES.map(f => '<button class="checkin-face" data-action="checkin-sentiment" data-sentiment="' + f.id + '"' + disabled + '>' +
+              '<span class="checkin-emoji" aria-hidden="true">' + f.face + '</span>' + escapeHtml(f.label) + '</button>').join('') +
+          '</div>' + error +
+          '<div class="checkin-foot"><span>Your answer goes to the Andromity team and isn\\'t linked to your usage data.</span>' +
+            '<button class="checkin-link" data-action="checkin-never">Don\\'t ask again</button></div>';
+      } else if (checkIn.step === 'details') {
+        const lead = checkIn.sentiment === 'bad' ? 'Sorry it\\'s been frustrating. What gets in the way most?' : 'Thanks. What would make it better?';
+        body = '<div class="checkin-title" id="checkin-title">' + lead + '</div>' +
+          '<div class="checkin-chips" role="group" aria-label="What gets in the way">' +
+            checkIn.annoyances.map(a => '<button class="checkin-chip" data-action="checkin-chip" data-id="' + escapeHtml(a.id) + '" aria-pressed="' +
+              (checkIn.picked.has(a.id) ? 'true' : 'false') + '"' + disabled + '>' + escapeHtml(a.label) + '</button>').join('') +
+          '</div>' +
+          '<textarea class="checkin-note" id="checkin-note" rows="2" maxlength="2000" aria-label="Anything else (optional)" placeholder="Anything else? Add your email if you\\'d like a reply. (optional)"' + disabled + '></textarea>' +
+          error +
+          '<div class="checkin-actions">' +
+            '<button class="next-step-btn primary" data-action="checkin-send"' + disabled + '>' + (checkIn.sending ? 'Sending…' : 'Send') + '</button>' +
+            '<button class="next-step-btn" data-action="checkin-skip"' + disabled + '>Skip</button>' + review +
+          '</div>';
+      } else if (checkIn.sentiment === 'love') {
+        body = '<div class="checkin-title" id="checkin-title">Thanks, that means a lot!</div>' +
+          '<div class="checkin-text">Would you leave a quick review? It helps other developers find Andromity.</div>' +
+          '<div class="checkin-actions"><button class="next-step-btn primary" data-action="checkin-review">Write a review</button>' +
+          '<button class="next-step-btn" data-action="checkin-close">Not now</button></div>';
+      } else {
+        body = '<div class="checkin-title" id="checkin-title">Thanks, this goes straight to the Andromity team.</div>' +
+          '<div class="checkin-actions">' + review + '</div>';
+      }
+      card.innerHTML = '<button class="next-step-dismiss checkin-close" data-action="checkin-close" aria-label="Close" title="Close">&times;</button>' + body;
+      const note = document.getElementById('checkin-note');
+      if (note) note.value = checkIn.note;
+      // Later steps are taller; keep the whole card, including Send, above the prompt box.
+      if (checkIn.step !== 'ask' && typeof card.scrollIntoView === 'function') card.scrollIntoView({ block: 'nearest' });
+    }
+
+    function sendCheckIn(withDetails) {
+      if (!checkIn || checkIn.sending) return;
+      const note = document.getElementById('checkin-note');
+      if (note) checkIn.note = note.value;
+      vscode.postMessage({
+        type: 'checkin_send',
+        sentiment: checkIn.sentiment,
+        annoyances: withDetails ? Array.from(checkIn.picked) : [],
+        message: withDetails ? checkIn.note : '',
+      });
+      checkIn.sending = true;
+      checkIn.error = '';
+      renderCheckIn();
+    }
+
+    function closeCheckIn() {
+      const card = document.getElementById('checkin-card');
+      if (card) card.remove();
+      checkIn = null;
+    }
+
+    function checkInAction(action, target) {
+      if (!checkIn || !document.getElementById('checkin-card')) return;
+      if (action === 'checkin-sentiment') {
+        const sentiment = target.getAttribute('data-sentiment');
+        if (!CHECKIN_FACES.some(f => f.id === sentiment) || checkIn.sending) return;
+        checkIn.sentiment = sentiment;
+        if (sentiment === 'love') {
+          sendCheckIn(false);
+          return;
+        }
+        checkIn.step = 'details';
+        renderCheckIn();
+        const firstChip = document.querySelector('#checkin-card .checkin-chip');
+        if (firstChip) firstChip.focus({ preventScroll: true });
+      } else if (action === 'checkin-chip') {
+        const id = target.getAttribute('data-id');
+        if (!checkIn.annoyances.some(a => a.id === id)) return;
+        if (checkIn.picked.has(id)) checkIn.picked.delete(id);
+        else checkIn.picked.add(id);
+        target.setAttribute('aria-pressed', checkIn.picked.has(id) ? 'true' : 'false');
+      } else if (action === 'checkin-send') {
+        sendCheckIn(true);
+      } else if (action === 'checkin-skip') {
+        sendCheckIn(false);
+      } else if (action === 'checkin-review') {
+        vscode.postMessage({ type: 'checkin_review' });
+        closeCheckIn();
+      } else if (action === 'checkin-never') {
+        vscode.postMessage({ type: 'checkin_dismiss', never: true });
+        closeCheckIn();
+      } else if (action === 'checkin-close') {
+        // A face was already chosen: closing the follow-up still keeps that answer.
+        if (checkIn.step === 'ask' && !checkIn.sending) vscode.postMessage({ type: 'checkin_dismiss', never: false });
+        else if (checkIn.step === 'details' && !checkIn.sending) {
+          vscode.postMessage({ type: 'checkin_send', sentiment: checkIn.sentiment, annoyances: [], message: '' });
+        }
+        closeCheckIn();
+      }
+    }
+
+    function finishCheckIn(msg) {
+      if (!checkIn) return;
+      checkIn.sending = false;
+      if (msg.ok) {
+        checkIn.step = 'thanks';
+        checkIn.error = '';
+      } else {
+        checkIn.error = String(msg.error || 'Your answer couldn\\'t be sent.');
+      }
+      renderCheckIn();
+    }
+    // ── End feedback check-in ────────────────────────────────────────────────
 
     function updateSessionActivityIndicator() {
       const dot = document.getElementById('session-activity-dot');
@@ -8400,6 +8643,23 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       scrollToBottomIfNeeded();
     }
 
+    // A turn still running when its session is loaded continues in the reply drawn from history.
+    // A fresh wrapper would look like a second turn with no prompt before it.
+    function resumeAssistantTurn(startedAtMs) {
+      const last = chatContainer.lastElementChild;
+      const previous = last && last.classList.contains('message-wrap') && last.classList.contains('assistant') ? last : null;
+      startAssistantTurn();
+      if (startedAtMs) currentTurnStartTime = startedAtMs;
+      if (!previous) return;
+      const fresh = currentTurnAssistantDiv;
+      previous.querySelectorAll(':scope > .message-footer').forEach((footer) => footer.remove());
+      const loader = fresh.querySelector('#turn-loading-indicator');
+      if (loader) previous.appendChild(loader);
+      fresh.remove();
+      currentTurnAssistantDiv = previous;
+      accumulatedAssistantText = previous._rawMarkdown ? previous._rawMarkdown + String.fromCharCode(10, 10) : '';
+    }
+
     function getLangBadgeHtml(filePath) {
       const parts = filePath.split('.');
       const ext = parts.length > 1 ? parts.pop().toLowerCase().trim() : '';
@@ -8595,6 +8855,185 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       setBackgroundRunWaiting(sid, true);
     }
 
+    // Web links open only through the extension, which shows the full address and asks first.
+    function externalLinkHtml(href, labelHtml, title) {
+      const safeHref = escapeHtml(href);
+      return '<a href="#" class="md-ext-link" data-action="open-link" data-url="' + safeHref + '" title="' + (title ? escapeHtml(title) + ' · ' : '') + safeHref + '" style="color:var(--accent); text-decoration:underline;">' + labelHtml + '</a>';
+    }
+
+    // Back and forward through the sessions shown in this view, like a browser's history.
+    const sessionNavBack = document.getElementById('btn-session-back');
+    const sessionNavForward = document.getElementById('btn-session-forward');
+    const SESSION_HISTORY_LIMIT = 50;
+    const sessionHistory = { entries: [], index: -1, pending: null };
+
+    function syncSessionNav() {
+      const busy = !!sessionHistory.pending;
+      if (sessionNavBack) sessionNavBack.disabled = busy || sessionHistory.index <= 0;
+      if (sessionNavForward) sessionNavForward.disabled = busy || sessionHistory.index >= sessionHistory.entries.length - 1;
+    }
+
+    function noteSessionShown(sessionId) {
+      if (!sessionId) return;
+      const history = sessionHistory;
+      if (history.pending && history.pending.id === sessionId) {
+        history.index = history.pending.index;
+        history.pending = null;
+      } else if (history.entries[history.index] !== sessionId) {
+        history.entries = history.entries.slice(0, history.index + 1);
+        history.entries.push(sessionId);
+        if (history.entries.length > SESSION_HISTORY_LIMIT) history.entries.shift();
+        history.index = history.entries.length - 1;
+      }
+      syncSessionNav();
+    }
+
+    function navigateSession(step) {
+      const history = sessionHistory;
+      const index = history.index + step;
+      if (history.pending || index < 0 || index >= history.entries.length) return;
+      history.pending = { id: history.entries[index], index };
+      syncSessionNav();
+      vscode.postMessage({ type: 'navigate_session', sessionId: history.pending.id });
+    }
+
+    function clearSessionNavPending(sessionId) {
+      if (sessionHistory.pending && sessionHistory.pending.id === sessionId) {
+        sessionHistory.pending = null;
+        syncSessionNav();
+      }
+    }
+
+    function forgetSession(sessionId) {
+      const history = sessionHistory;
+      const entries = [];
+      let index = -1;
+      history.entries.forEach((id, i) => {
+        if (id === sessionId || id === entries[entries.length - 1]) {
+          if (i === history.index) index = entries.length - 1;
+          return;
+        }
+        entries.push(id);
+        if (i === history.index) index = entries.length - 1;
+      });
+      history.entries = entries;
+      history.index = Math.max(Math.min(index, entries.length - 1), entries.length ? 0 : -1);
+    }
+
+    function handleSessionNavResult(msg) {
+      if (!sessionHistory.pending || sessionHistory.pending.id !== msg.sessionId) return;
+      if (msg.status === 'ok') return;
+      sessionHistory.pending = null;
+      if (msg.status === 'missing') {
+        forgetSession(msg.sessionId);
+        appendSystemNote('Session not found. It may have been deleted.');
+      } else {
+        appendSystemNote('Could not open that session. Reconnect and try again.');
+      }
+      syncSessionNav();
+    }
+
+    if (sessionNavBack) sessionNavBack.addEventListener('click', () => navigateSession(-1));
+    if (sessionNavForward) sessionNavForward.addEventListener('click', () => navigateSession(1));
+    document.addEventListener('keydown', (event) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      const target = event.target;
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || ''))) return;
+      event.preventDefault();
+      navigateSession(event.key === 'ArrowLeft' ? -1 : 1);
+    });
+    noteSessionShown(currentSessionId);
+
+    const feedbackDockBtn = document.getElementById('btn-feedback-dock');
+    const feedbackPopover = document.getElementById('feedback-popover');
+    const feedbackText = document.getElementById('feedback-text');
+    const feedbackStatus = document.getElementById('feedback-status');
+    const feedbackCount = document.getElementById('feedback-count');
+    const feedbackSendBtn = document.getElementById('btn-feedback-send');
+    const feedbackIssueBtn = document.getElementById('btn-feedback-issue');
+    const feedbackCancelBtn = document.getElementById('btn-feedback-cancel');
+    let feedbackSending = false;
+    let feedbackCloseTimer = null;
+
+    function setFeedbackStatus(text, tone) {
+      feedbackStatus.textContent = text || '';
+      feedbackStatus.className = 'feedback-status' + (tone ? ' ' + tone : '');
+    }
+
+    function syncFeedbackForm() {
+      feedbackCount.textContent = feedbackText.value.length + '/2000';
+      feedbackSendBtn.disabled = feedbackSending || !feedbackText.value.trim();
+    }
+
+    function toggleFeedback(open) {
+      clearTimeout(feedbackCloseTimer);
+      const focusWasInside = feedbackPopover.contains(document.activeElement);
+      feedbackPopover.hidden = !open;
+      feedbackDockBtn.setAttribute('aria-expanded', String(open));
+      if (open) {
+        feedbackIssueBtn.hidden = true;
+        setFeedbackStatus('');
+        syncFeedbackForm();
+        feedbackText.focus();
+      } else if (focusWasInside) {
+        feedbackDockBtn.focus();
+      }
+    }
+
+    function sendFeedback() {
+      if (feedbackSendBtn.disabled) return;
+      feedbackSending = true;
+      feedbackIssueBtn.hidden = true;
+      syncFeedbackForm();
+      setFeedbackStatus('Sending…');
+      vscode.postMessage({ type: 'submit_feedback', message: feedbackText.value });
+    }
+
+    function handleFeedbackResult(msg) {
+      feedbackSending = false;
+      if (msg.ok) {
+        feedbackText.value = '';
+        syncFeedbackForm();
+        setFeedbackStatus('Thanks! Your feedback reached the Andromity team.', 'ok');
+        feedbackCloseTimer = setTimeout(() => toggleFeedback(false), 2500);
+        return;
+      }
+      syncFeedbackForm();
+      setFeedbackStatus(msg.error || 'Your feedback could not be sent.', 'error');
+      feedbackIssueBtn.hidden = !msg.canOpenIssue;
+    }
+
+    if (feedbackDockBtn && feedbackPopover) {
+      feedbackDockBtn.addEventListener('click', () => toggleFeedback(feedbackPopover.hidden));
+      feedbackCancelBtn.addEventListener('click', () => toggleFeedback(false));
+      feedbackSendBtn.addEventListener('click', sendFeedback);
+      feedbackIssueBtn.addEventListener('click', () => {
+        vscode.postMessage({ type: 'feedback_issue', message: feedbackText.value });
+        toggleFeedback(false);
+      });
+      feedbackText.addEventListener('input', () => {
+        if (!feedbackSending) setFeedbackStatus('');
+        feedbackIssueBtn.hidden = true;
+        syncFeedbackForm();
+      });
+      feedbackText.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+          event.preventDefault();
+          sendFeedback();
+        }
+      });
+      feedbackPopover.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+          event.stopPropagation();
+          toggleFeedback(false);
+        }
+      });
+      document.addEventListener('mousedown', (event) => {
+        if (!feedbackPopover.hidden && !(event.target && event.target.closest && event.target.closest('#feedback-dock'))) toggleFeedback(false);
+      });
+    }
+
     function handleBackendMessage(msg) {
       if (!msg) return;
       if (needsStreamSettle(msg.type)) settleStreamingRender();
@@ -8660,6 +9099,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'init_state':
           clearSkeletonState();
           currentSessionId = msg.sessionId;
+          noteSessionShown(currentSessionId);
           requestQueueSnapshot();
           allModels = msg.models || [];
           if (msg.pinnedModels) {
@@ -8774,14 +9214,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         case 'auth_state_changed': {
           const isAuthed = !!msg.isAuthenticated;
+          const authChanged = lastAuthState !== null && lastAuthState !== isAuthed;
+          lastAuthState = isAuthed;
           isAndromityActive = isAuthed;
           try {
             localStorage.setItem('andromity_active_status', isAuthed ? 'true' : 'false');
             localStorage.setItem('andromity_plan', msg.plan || (isAuthed ? 'authenticated' : 'anonymous'));
           } catch {}
-          if (onboardingHero) {
-            onboardingHero.style.display = isAuthed ? 'none' : 'flex';
-          }
+          updateOnboardingVisibility();
           const btnSignIn = document.getElementById('zero-gateway-signin-btn');
           const badgeActive = document.getElementById('zero-gateway-active-badge');
           const gatewaySub = document.getElementById('zero-gateway-sub');
@@ -8797,10 +9237,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               : 'Multi-cloud edge fallback &bull; Instant free trial';
           }
           renderCloudAccountUsage({ plan: isAuthed ? 'authenticated' : 'anonymous', username: msg.username, status: 'checking' });
-          if (isAuthed) {
-            appendSystemNote('✅ Signed in with AgenticMarket account. Authenticated access is now active.');
-          } else {
-            appendSystemNote('Signed out of AgenticMarket. Switched to anonymous free tier.');
+          if (authChanged) {
+            appendSystemNote(isAuthed
+              ? 'Signed in with AgenticMarket account. Authenticated access is now active.'
+              : 'Signed out of AgenticMarket. Switched to anonymous free tier.');
           }
           break;
         }
@@ -8931,6 +9371,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           updateBgProcessStripUI();
           if (msg.sessionId) {
             currentSessionId = msg.sessionId;
+            noteSessionShown(currentSessionId);
           }
           if (sessionsState[currentSessionId]) {
             sessionsState[currentSessionId].hasUnread = false;
@@ -8989,6 +9430,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           removeTurnLoader();
           finishCurrentThinking();
+          awaitingApprovalRow = null;
           chatContainer.innerHTML = '';
           interactiveSlot.innerHTML = '';
           delete interactiveSlot.dataset.interactionId;
@@ -9011,6 +9453,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           turnEditedFiles.clear();
           if (msg.session && msg.session.id) {
             currentSessionId = msg.session.id;
+            noteSessionShown(currentSessionId);
             requestQueueSnapshot();
           }
           if (msg.session) {
@@ -9022,6 +9465,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             (msg.session && (msg.session.status === 'running' || msg.session.is_running)) ||
             (sessionsState[currentSessionId] && sessionsState[currentSessionId].isRunning)
           );
+          const runningTurnPrompt = ((msg.session && msg.session.messages) || []).filter((m) => m && m.role === 'user').pop();
+          const runningTurnStart = runningTurnPrompt && runningTurnPrompt.ts ? Date.parse(runningTurnPrompt.ts) || 0 : 0;
           sessionsState[currentSessionId] = sessionsState[currentSessionId] || {};
           sessionsState[currentSessionId].isRunning = sessionIsRunning;
           if (sessionIsRunning) {
@@ -9261,6 +9706,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                       // Delegated listener handles tool-header click without double toggle
                       currentTurnToolBody.appendChild(tDiv);
                       updateToolTarget(tDiv, toolName, toolArgs);
+                      if (typeof window.markExternalToolCard === 'function') window.markExternalToolCard(tDiv, toolResultsForLoad.get(tc.id));
                     }
                   }
 
@@ -9336,6 +9782,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           applyTabComposerState(msg.draft, msg.images);
           if (msg.session) {
             currentSessionId = msg.session.id || currentSessionId;
+            noteSessionShown(currentSessionId);
             if (msg.session.model) {
               currentModel = msg.session.model;
               if (msg.session.provider) currentProvider = msg.session.provider;
@@ -9356,24 +9803,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             if (buffered && buffered.length > 0) {
               // Ensure a live turn wrapper exists to append into
               const needTurn = !currentTurnAssistantDiv || !chatContainer.contains(currentTurnAssistantDiv);
-              if (needTurn) {
-                // Create a continuation wrapper that visually continues the last assistant turn
-                // If chat already ends with an assistant wrap, reuse it; else start a new turn
-                const lastWrap = chatContainer.querySelector('.message-wrap.assistant:last-of-type');
-                if (lastWrap && buffered.some(e => e.t==='text_delta' || e.t==='tool_start')) {
-                  currentTurnAssistantDiv = lastWrap;
-                  // find or create assistant-text slot
-                  let found = lastWrap.querySelector('.assistant-text');
-                  if (found) { currentAssistantContent = found; }
-                }
-                if (!currentTurnAssistantDiv || !chatContainer.contains(currentTurnAssistantDiv)) {
-                  startAssistantTurn();
-                } else {
-                  // mark as running so prompt aura matches background session state
-                  const st = sessionsState[currentSessionId];
-                  if (st && st.isRunning) { isRunning = true; document.querySelector('.prompt-box')?.classList.add('is-generating'); cancelBtn.style.display='flex'; sendBtn.style.display='none'; }
-                }
-              }
+              if (needTurn) resumeAssistantTurn(runningTurnStart);
               for (const ev of buffered) {
                 if (ev.t === 'thinking_delta') {
                   removeTurnLoader(); setTurnOrb(null);
@@ -9420,11 +9850,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             }
           }
           if (sessionIsRunning && (!currentTurnAssistantDiv || !chatContainer.contains(currentTurnAssistantDiv))) {
-            // Only start a brand-new turn wrapper if the live-buffer replay didn't already
-            // attach one. The replay above sets currentTurnAssistantDiv when it finds a
-            // matching last-assistant-wrap to continue into, so we should NOT create a
-            // second wrapper here — that caused the "new turn" visual break after session switch.
-            startAssistantTurn();
+            resumeAssistantTurn(runningTurnStart);
           }
           if (runtime) handleBackendMessage({ type: 'session_runtime', session_id: currentSessionId, runtime });
           if (currentSessionId && !nextStepBySession[currentSessionId] && !sessionIsRunning &&
@@ -9468,6 +9894,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         }
         case 'session_load_failed':
+          clearSessionNavPending(msg.session_id);
           if (msg.session_id === currentSessionId) appendSystemNote('Could not load this session. Reconnect and try again.');
           clearSkeletonState();
           break;
@@ -9480,6 +9907,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (state?.interactions) delete state.interactions[msg.interaction_id];
           if (!state?.interactions || !Object.keys(state.interactions).length) setBackgroundRunWaiting(sid, false);
           if (sid !== currentSessionId || interactiveSlot.dataset.interactionId !== msg.interaction_id) break;
+          clearAwaitingApproval();
           interactiveSlot.innerHTML = '';
           delete interactiveSlot.dataset.interactionId;
           delete interactiveSlot.dataset.submitting;
@@ -9820,6 +10248,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                     tag.textContent = msg.success === false ? 'FAILED' : 'DONE';
                     tag.style.background = msg.success === false ? 'rgba(248, 81, 73, 0.2)' : 'rgba(63, 185, 80, 0.2)';
                     tag.style.color = msg.success === false ? 'var(--red)' : 'var(--green)';
+                    if (typeof window.markExternalToolCard === 'function') window.markExternalToolCard(targetTool, msg.result);
                   }
 
                   if ((msg.tool_name === 'shell_kill') && msg.success !== false) {
@@ -9896,6 +10325,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             break;
           }
           interactiveSlot.innerHTML = renderPermissionCard(msg);
+          markAwaitingApproval(msg.tool_name);
           scrollToBottomIfNeeded();
           break; }
 
@@ -10161,6 +10591,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         }
 
+        case 'session_nav_result':
+          handleSessionNavResult(msg);
+          break;
+
+        case 'feedback_result':
+          if (feedbackPopover) handleFeedbackResult(msg);
+          break;
+
         case 'retry_result': {
           if (msg.session_id && msg.session_id !== currentSessionId) break;
           document.querySelectorAll('[data-retry-pending="true"]').forEach(card => {
@@ -10398,6 +10836,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.session_id === currentSessionId && !isRunning) renderFeatureTip(msg.tip, msg.file);
           break;
 
+        case 'feedback_checkin':
+          startCheckIn(msg);
+          break;
+
+        case 'checkin_result':
+          finishCheckIn(msg);
+          break;
+
         case 'agent_cancelled': {
           if (msg.session_id) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
@@ -10559,7 +11005,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             const sObj = allSessions.find(s => s.id === (msg.session_id || currentSessionId));
             if (sObj) {
               sObj.name = msg.name;
-              if (msg.message_count !== undefined) sObj.message_count = msg.message_count;
+              if (msg.message_count !== undefined) {
+                sObj.message_count = msg.message_count;
+                delete sObj.conversation_count;
+              }
               if (msg.context_tokens !== undefined) sObj.context_tokens = msg.context_tokens;
               renderHomeRecentSessions(allSessions);
             }
@@ -10743,7 +11192,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             bodyHtml += '<' + tagName + '>' + escapeHtml(nodeText) + '</' + tagName + '>';
           } else if (node.tagName === 'BR') {
             bodyHtml += '<br>';
-          } else if (nodeText.trim().startsWith('Quota resets in')) {
+          } else if (node.classList.contains('error-card-timer') || nodeText.trim().startsWith('Quota resets in')) {
             timerText = nodeText.trim();
           } else {
             bodyHtml += escapeHtml(nodeText);
@@ -10808,6 +11257,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       const cleanMsg = extractCleanErrorMessage(trimmed);
       const low = trimmed.toLowerCase();
+      // Status codes as whole numbers: timestamps and IDs in the text often contain "404" or "500".
+      const hasCode = (code) => new RegExp('(^|[^0-9])' + code + '([^0-9]|$)').test(low);
       let badge = 'ERROR';
       let title = 'Turn Interrupted';
       let desc = cleanMsg || trimmed;
@@ -10844,7 +11295,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             '<button class="btn-error-secondary" data-action="open-settings" title="Configure BYOK">' + iconSettings + 'Open Settings</button>' +
             '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">' + iconModel + 'Switch Model</button>';
         }
-      } else if (low.includes('notfound') || low.includes('not found') || low.includes('no endpoints found') || low.includes('model_not_found') || (low.includes('404') && (low.includes('model') || low.includes('endpoint')))) {
+      } else if (low.includes('notfound') || low.includes('not found') || low.includes('no endpoints found') || low.includes('model_not_found') || (hasCode('404') && (low.includes('model') || low.includes('endpoint')))) {
         badge = 'NOT FOUND';
         title = 'Model Not Available';
         desc = (cleanMsg || 'The requested model was not found or has no active endpoints.') + ' Please switch to another model.';
@@ -10854,18 +11305,36 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       } else if (low.includes('image') || low.includes('vision') || low.includes('multimodal') || low.includes('does not support')) {
         badge = 'IMAGE NOT SUPPORTED';
         title = 'Model Does Not Support Images';
-        desc = 'The active model does not accept image attachments. Switch to a vision model (e.g. Claude 3.7 Sonnet, GPT-4o, Gemini 2.0 Flash) or retry with text only.';
+        desc = 'The active model does not accept image attachments. Switch to a model that accepts images, or retry with text only.';
         eType = 'vision_unsupported';
         actionsHtml = '<button class="btn-error-retry" data-action="retry-without-image" title="Retry without image">' + iconRetry + 'Retry without Image</button>' +
           '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to a vision model">' + iconModel + 'Switch Model</button>';
-      } else if (low.includes('429') || low.includes('rate limit') || low.includes('quota')) {
+      } else if (hasCode('429') || low.includes('rate limit') || low.includes('quota')) {
         badge = 'RATE LIMIT';
         title = 'Rate Limit Reached';
-        desc = (cleanMsg || 'Rate limit or quota threshold reached for the model provider.') + ' Please wait a moment and click Retry.';
         eType = 'rate_limit';
-        actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>' +
-          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch model">' + iconModel + 'Switch Model</button>';
-      } else if (low.includes('midstream') || low.includes('503') || low.includes('502') || low.includes('500') || low.includes('serviceunavailable') || low.includes('service unavailable') || low.includes('bad gateway') || low.includes('upstream error')) {
+        const reason = (cleanMsg || 'Rate limit or quota threshold reached for the model provider.').trim();
+        const sentence = /[.!?]$/.test(reason) ? reason : reason + '.';
+        const resetAt = rateLimitResetAt(trimmed, Date.now());
+        const waitMs = resetAt === null ? 0 : resetAt - Date.now();
+        const longWait = waitMs > 2 * 60 * 1000;
+        if (resetAt === null) {
+          desc = sentence + ' Please wait a moment and click Retry.';
+        } else {
+          const at = new Date(resetAt);
+          const sameDay = at.toDateString() === new Date().toDateString();
+          const clock = at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+          const when = waitMs < 60 * 1000
+            ? 'in under a minute'
+            : waitMs < 90 * 60 * 1000
+              ? 'in about ' + Math.ceil(waitMs / 60000) + ' min (' + clock + ')'
+              : 'at ' + (sameDay ? clock : at.toLocaleDateString([], { weekday: 'short' }) + ' ' + clock);
+          desc = sentence + ' The limit resets ' + when + '.' + (longWait ? ' Switch to another model to keep working now.' : ' Retry after that.');
+        }
+        const retryBtn = '<button class="' + (longWait ? 'btn-error-secondary' : 'btn-error-retry') + '" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>';
+        const switchBtn = '<button class="' + (longWait ? 'btn-error-retry' : 'btn-error-secondary') + '" data-action="switch-model-flyout" title="Switch model">' + iconModel + 'Switch Model</button>';
+        actionsHtml = longWait ? switchBtn + retryBtn : retryBtn + switchBtn;
+      } else if (low.includes('midstream') || hasCode('503') || hasCode('502') || hasCode('500') || low.includes('serviceunavailable') || low.includes('service unavailable') || low.includes('bad gateway') || low.includes('upstream error')) {
         badge = 'SERVICE DISRUPTED';
         title = 'Upstream Service Interruption';
         desc = (cleanMsg || 'The upstream provider experienced a temporary service disruption or disconnect.') + ' This is usually transient—click Retry to continue.';
@@ -10879,7 +11348,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         eType = 'context_exceeded';
         actionsHtml = '<button class="btn-error-retry" data-action="trigger-compact" title="Compact context">' + iconCompact + 'Compact Context</button>' +
           '<button class="btn-error-secondary" data-action="new-session" title="New session">' + iconPlus + 'New Session</button>';
-      } else if (low.includes('401') || low.includes('403') || low.includes('unauthorized') || low.includes('api key') || low.includes('missing credentials') || low.includes('pass an api_key') || low.includes('no api key')) {
+      } else if (hasCode('401') || hasCode('403') || low.includes('unauthorized') || low.includes('api key') || low.includes('missing credentials') || low.includes('pass an api_key') || low.includes('no api key')) {
         badge = 'AUTHENTICATION';
         title = 'Authentication Error';
         desc = (cleanMsg || 'Invalid or missing API key.') + ' Please check your provider settings.';
@@ -11102,6 +11571,45 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let activePendingApprovalId = null;
     let activePendingToolName = '';
     let activePendingPlan = false;
+    let activePendingCanRemember = false;
+    let activePendingDangerous = false;
+
+    let awaitingApprovalRow = null;
+
+    // The call is parked until the user answers, so its row must not read as running or stuck.
+    function markAwaitingApproval(toolName) {
+      clearAwaitingApproval();
+      if (!toolName) return;
+      const rows = Array.from(chatContainer.querySelectorAll('[data-tool-name][data-start-ts]'))
+        .filter(el => el.getAttribute('data-tool-name') === toolName);
+      const row = rows[rows.length - 1];
+      if (!row) return;
+      awaitingApprovalRow = row;
+      row.classList.add('awaiting-approval');
+      row.classList.remove('stuck');
+      const action = row.querySelector('.activity-action');
+      if (action) { row.dataset.actionText = action.textContent; action.textContent = 'Needs approval'; }
+      const tag = row.querySelector('.tool-tag');
+      if (tag) { row.dataset.tagText = tag.textContent; tag.textContent = 'APPROVAL'; }
+      const elapsed = row.querySelector('.tool-elapsed');
+      if (elapsed) elapsed.textContent = '';
+      updateToolSeqHeader();
+    }
+
+    function clearAwaitingApproval() {
+      const row = awaitingApprovalRow;
+      awaitingApprovalRow = null;
+      if (!row) return;
+      row.classList.remove('awaiting-approval');
+      const action = row.querySelector('.activity-action');
+      if (action && row.dataset.actionText) action.textContent = row.dataset.actionText;
+      const tag = row.querySelector('.tool-tag');
+      if (tag && row.dataset.tagText) tag.textContent = row.dataset.tagText;
+      delete row.dataset.actionText;
+      delete row.dataset.tagText;
+      if (row.hasAttribute('data-start-ts')) row.setAttribute('data-start-ts', String(Date.now()));
+      updateToolSeqHeader();
+    }
 
     function renderPermissionCard(msg) {
       activePendingPlan = false;
@@ -11111,24 +11619,36 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       activePendingToolName = toolName;
       const toolArgs = msg.args || {};
 
-      let actionTitle = 'Running action';
+      let actionTitle = 'Approve action';
       let iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
       let iconClass = 'command';
       let codeDisplay = '';
       let editPreviewHtml = '';
       let subPath = '';
+      let risks = [];
+      let rememberNote = '';
 
       const lowerTool = toolName.toLowerCase();
-      const canRemember = /^(shell_exec|shell_bg|fetch_url)$/.test(lowerTool);
+      let canRemember = /^(shell_exec|shell_bg|fetch_url)$/.test(lowerTool);
       if (lowerTool === 'shell_exec' || lowerTool === 'shell_bg' || lowerTool === 'run_command' || lowerTool === 'bash' || lowerTool === 'exec' || lowerTool === 'cmd') {
-        actionTitle = 'Running command';
+        actionTitle = 'Run command';
         iconClass = 'command';
         iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>';
-        const cmd = toolArgs.command || toolArgs.cmd || toolArgs.CommandLine || '';
+        const cmd = String(toolArgs.command || toolArgs.cmd || toolArgs.CommandLine || '');
         const isWin = typeof navigator !== 'undefined' && ((navigator.platform && navigator.platform.indexOf('Win') > -1) || (navigator.userAgent && /win/i.test(navigator.userAgent)));
         const shellName = isWin ? 'powershell' : 'bash';
         codeDisplay = (shellName + ': ' + cmd).trim();
         subPath = cmd;
+        risks = describeCommandRisks(cmd);
+        if (canRemember) {
+          if (risks.some(r => r.level === 'danger')) {
+            canRemember = false;
+            rememberNote = 'Commands with this kind of risk are approved one run at a time.';
+          } else if (!canRememberCommand(cmd)) {
+            canRemember = false;
+            rememberNote = 'Commands that use shell operators such as &&, | or $( ) are approved one run at a time.';
+          }
+        }
       } else if (/^(edit_file|edit_file_multi|write_file|write_to_file|replace_file_content|multi_replace_file_content|create_file)$/.test(lowerTool)) {
         const isWholeFileWrite = lowerTool === 'write_file' || lowerTool === 'write_to_file' || lowerTool === 'create_file';
         actionTitle = isWholeFileWrite ? 'Write file' : 'Edit file';
@@ -11166,6 +11686,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         iconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>';
         codeDisplay = 'url: ' + (toolArgs.url || toolArgs.Url || '');
         try { subPath = new URL(toolArgs.url || '').hostname; } catch { subPath = toolArgs.url || ''; }
+        risks = describeUrlRisks(String(toolArgs.url || toolArgs.Url || ''));
+        if (canRemember && risks.some(r => r.level === 'danger')) {
+          canRemember = false;
+          rememberNote = 'Addresses with this kind of risk are approved one fetch at a time.';
+        }
       } else {
         actionTitle = 'Execute ' + toolName;
         iconClass = 'command';
@@ -11191,6 +11716,14 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
       } catch {}
 
+      activePendingCanRemember = canRemember;
+      activePendingDangerous = risks.some(r => r.level === 'danger');
+      const riskHtml = risks.length
+        ? '<ul class="permission-risks" aria-label="Things to check before allowing">' +
+            risks.map(r => '<li class="permission-risk risk-' + escapeHtml(r.level) + '">' + escapeHtml(r.label) + '</li>').join('') +
+          '</ul>'
+        : '';
+
       return '<div class="permission-card" id="permission-card-' + escapeHtml(approvalId) + '">' +
         '<div class="permission-header">' +
           '<div class="permission-title-row">' +
@@ -11203,6 +11736,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             '</button>' +
           '</div>' +
           '<div class="permission-code-box">' + escapeHtml(codeDisplay) + '</div>' +
+          riskHtml +
           editPreviewHtml +
           (rawParams ? (
             '<div class="permission-params-toggle" data-action="toggle-perm-params">' +
@@ -11244,6 +11778,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               '<kbd class="perm-kbd">Ctrl</kbd> <kbd class="perm-kbd">Shift</kbd> <kbd class="perm-kbd">Y</kbd>' +
             '</div>' +
           '</div>' +
+          (rememberNote ? '<div class="permission-remember-note">' + escapeHtml(rememberNote) + '</div>' : '') +
 
           '<div class="permission-option-row option-deny" data-action="reject-tool" data-approval-id="' + escapeHtml(approvalId) + '" tabindex="0" role="button">' +
             '<div class="option-row-main">' +
@@ -11473,8 +12008,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (!activePendingApprovalId) return;
       const isToolInput = isInput;
 
-      // 1. Allow Once: Ctrl+Y, or Enter (when not inside input)
-      if ((e.ctrlKey && (e.key === 'y' || e.key === 'Y') && !e.altKey && !e.shiftKey) || (!isToolInput && e.key === 'Enter')) {
+      // 1. Allow Once: Ctrl+Y, or Enter (when not inside input, and never for a destructive command)
+      if ((e.ctrlKey && (e.key === 'y' || e.key === 'Y') && !e.altKey && !e.shiftKey) || (!isToolInput && e.key === 'Enter' && !activePendingDangerous)) {
         e.preventDefault();
         window.approveTool(activePendingApprovalId, 'once', activePendingToolName);
         return;
@@ -11503,7 +12038,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     });
 
     window.approveTool = function(approvalId, scope, toolName) {
-      if (scope && scope !== 'once' && !/^(shell_exec|shell_bg|fetch_url)$/.test(toolName || activePendingToolName)) return;
+      if (scope && scope !== 'once' && (!activePendingCanRemember || !/^(shell_exec|shell_bg|fetch_url)$/.test(toolName || activePendingToolName))) return;
       if (interactiveSlot.dataset.submitting) return;
       interactiveSlot.dataset.submitting = 'true';
       interactiveSlot.querySelectorAll('button').forEach(button => { button.disabled = true; });
@@ -11773,11 +12308,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const _origEndAssistantTurn = endAssistantTurn;
     endAssistantTurn = function() {
       _origEndAssistantTurn();
+      clearAwaitingApproval();
       scheduleFocus();
     };
 
     setInterval(function() {
-      document.querySelectorAll('[data-start-ts]').forEach(function(el) {
+      document.querySelectorAll('[data-start-ts]:not(.awaiting-approval)').forEach(function(el) {
         var ts = parseInt(el.getAttribute('data-start-ts') || '0', 10);
         if (!ts) return;
         var elapsed = Math.floor((Date.now() - ts) / 1000);

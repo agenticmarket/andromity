@@ -5,6 +5,7 @@ import { ClarifyingQuestionsEvent, ToolApprovalEvent } from "../server/types.js"
 import { EditorBridge } from "./EditorBridge.js";
 import { runAgentTurn } from "./agentTurn.js";
 import { recordFeatureUse } from "../telemetry/featureUsage.js";
+import { describeCommandRisks } from "../commandRisk.js";
 
 export const CHAT_PARTICIPANT_ID = "andromity.agent";
 export const DELEGATE_TOOL_NAME = "andromity_delegate";
@@ -54,8 +55,11 @@ function previousSessionId(context: vscode.ChatContext): string | undefined {
   return undefined;
 }
 
-function truncate(text: string, max: number): string {
-  return text.length > max ? text.slice(0, max) + "\n…" : text;
+/** A code block no content can close early, so the whole text is shown as text. */
+export function fencedBlock(text: string, language = ""): string {
+  const longestRun = Math.max(0, ...(text.match(/`+/g) || []).map((run) => run.length));
+  const fence = "`".repeat(Math.max(3, longestRun + 1));
+  return `${fence}${language}\n${text}\n${fence}`;
 }
 
 function buildPrompt(request: vscode.ChatRequest): string {
@@ -67,9 +71,20 @@ function buildPrompt(request: vscode.ChatRequest): string {
   return EditorBridge.formatPromptWithEditorState(prompt, EditorBridge.getActiveContext(), true);
 }
 
+/** The full request, plus plain-language risk notes for shell commands. MCP tool names come from third parties, so they cannot add markup. */
+export function approvalMarkdown(event: ToolApprovalEvent): string {
+  const toolName = String(event.tool_name ?? "").replace(/[`\r\n]/g, "'");
+  const args = JSON.stringify(event.args ?? {}, null, 2);
+  const command = /^(shell_exec|shell_bg)$/.test(toolName) ? String(event.args?.command ?? "") : "";
+  const risks = command ? describeCommandRisks(command) : [];
+  const riskList = risks.length
+    ? "\n" + risks.map((r) => (r.level === "danger" ? `- **${r.label}**` : `- ${r.label}`)).join("\n") + "\n"
+    : "";
+  return `\n\n**Approval needed:** \`${toolName}\`\n\n${fencedBlock(args, "json")}\n${riskList}`;
+}
+
 function streamApproval(stream: vscode.ChatResponseStream, event: ToolApprovalEvent) {
-  const args = truncate(JSON.stringify(event.args ?? {}, null, 2), 1500);
-  stream.markdown(`\n\n**Approval needed:** \`${event.tool_name}\`\n\n\`\`\`json\n${args}\n\`\`\`\n`);
+  stream.markdown(approvalMarkdown(event));
   const base = { sessionId: event.session_id, approvalId: event.approval_id };
   stream.button({ command: "andromity.chat.resolveApproval", title: "Approve", arguments: [{ ...base, approved: true }] });
   stream.button({ command: "andromity.chat.resolveApproval", title: "Reject", arguments: [{ ...base, approved: false }] });
@@ -209,7 +224,10 @@ export function registerChatIntegration(context: vscode.ExtensionContext, deps: 
           invocationMessage: "Delegating to Andromity…",
           confirmationMessages: {
             title: "Run this task with Andromity?",
-            message: new vscode.MarkdownString(truncate(options.input.task || "", 600)),
+            message: new vscode.MarkdownString(
+              `Andromity will run this task in **${String(deps.getTurnDefaults().mode || "safe").toUpperCase()}** mode:\n\n`
+              + fencedBlock(options.input.task || "", "text"),
+            ),
           },
         };
       },

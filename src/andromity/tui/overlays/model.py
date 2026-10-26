@@ -402,7 +402,7 @@ ModelPickerScreen.compact #mp-footer { height: 3; padding: 0 1; }
 
         self.query_one("#mp-models-header").update(
             "[bold]Choose a model[/] "
-            f"[$text-success]· {len(live_models)} live models[/]"
+            f"[$text-success]· {len(live_models)} live model{'' if len(live_models) == 1 else 's'}[/]"
         )
         self._populate_models(live_models, provider_key)
 

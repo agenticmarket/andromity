@@ -2,6 +2,7 @@
 import ipaddress
 import socket
 import re
+from pathlib import Path, PurePath
 from typing import List, Optional
 from urllib.parse import urlparse
 
@@ -132,10 +133,55 @@ SOURCE_CODE_EXTS = {
 }
 
 
-def is_sensitive_path(path: str) -> bool:
+_DRIVE = re.compile(r"[A-Za-z]:")
+
+
+def _policy_name(part: str) -> str:
+    """A path component as Windows opens it: no NTFS stream suffix, no trailing dots or spaces."""
+    name = part
+    if ":" in name and not _DRIVE.fullmatch(name.rstrip("/\\")):
+        name = name.split(":", 1)[0]
+    stripped = name.rstrip(". ")
+    return (stripped or name).lower()
+
+
+def _policy_parts(path: str) -> List[str]:
+    try:
+        return [_policy_name(p) for p in PurePath(path.strip().replace("\\", "/")).parts]
+    except Exception:
+        return []
+
+
+def _resolved_policy_path(path: str, root: Optional[str]) -> Optional[str]:
+    """Where a path really lands, relative to the project when it is inside it.
+
+    Catches symlinks, junctions, 8.3 short names and Windows name normalisation,
+    which a check on the string the model sent cannot see.
+    """
+    if not path or not root:
+        return None
+    try:
+        base = Path(root).resolve()
+        candidate = Path(path.strip())
+        resolved = (candidate if candidate.is_absolute() else base / candidate).resolve()
+        try:
+            return resolved.relative_to(base).as_posix()
+        except ValueError:
+            return resolved.as_posix()
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def is_sensitive_path(path: str, root: Optional[str] = None) -> bool:
     if not path:
         return False
-    from pathlib import PurePath
+    if _is_sensitive_literal(path):
+        return True
+    resolved = _resolved_policy_path(path, root)
+    return bool(resolved) and _is_sensitive_literal(resolved)
+
+
+def _is_sensitive_literal(path: str) -> bool:
     normalized = path.strip().replace("\\", "/")
     lower = normalized.lower()
 
@@ -149,16 +195,17 @@ def is_sensitive_path(path: str) -> bool:
         pure = None
 
     if pure:
-        name_lower = pure.name.lower()
+        name_lower = _policy_name(pure.name) if pure.name else ""
         if name_lower in SENSITIVE_NAMES or name_lower.startswith(".env."):
             return True
 
         for part in pure.parts:
-            if part.lower() in SENSITIVE_DIRS:
+            if _policy_name(part) in SENSITIVE_DIRS:
                 return True
 
-        if pure.suffix.lower() in SOURCE_CODE_EXTS:
-            return pure.stem.lower() in {"secret", "secrets", "password", "passwords", "credential", "credentials"}
+        policy_name = PurePath(name_lower) if name_lower else pure
+        if policy_name.suffix.lower() in SOURCE_CODE_EXTS:
+            return policy_name.stem.lower() in {"secret", "secrets", "password", "passwords", "credential", "credentials"}
 
         if SENSITIVE_KEYWORD_REGEX.search(name_lower):
             return True
@@ -176,14 +223,20 @@ EXECUTION_CONTROL_DIRS = {".git", ".andromity", ".vscode", ".husky"}
 EXECUTION_CONTROL_NAMES = {".envrc", "package.json", ".mcp.json", ".gitmodules"}
 
 
-def is_execution_control_path(path: str) -> bool:
-    if not path:
-        return False
-    from pathlib import PurePath
-    parts = [p.lower() for p in PurePath(path.strip().replace("\\", "/")).parts]
+def _is_execution_control_literal(path: str) -> bool:
+    parts = _policy_parts(path)
     if not parts:
         return False
     return parts[-1] in EXECUTION_CONTROL_NAMES or any(p in EXECUTION_CONTROL_DIRS for p in parts[:-1])
+
+
+def is_execution_control_path(path: str, root: Optional[str] = None) -> bool:
+    if not path:
+        return False
+    if _is_execution_control_literal(path):
+        return True
+    resolved = _resolved_policy_path(path, root)
+    return bool(resolved) and _is_execution_control_literal(resolved)
 
 
 MCP_CHANGE_WORDS = ("write", "insert", "update", "delete", "create", "drop", "push", "exec", "post")
@@ -236,11 +289,39 @@ def is_command_allowlisted(command: str, allowed: Optional[List[str]] = None) ->
     if matched_prefix_tokens is None:
         return False
 
+    is_git = tokens[0].lower() in ("git", "git.exe")
     for token in tokens[len(matched_prefix_tokens):]:
         clean_token = token.split("=", 1)[-1].strip("'\"")
-        if is_sensitive_path(clean_token):
+        if is_sensitive_path(clean_token) or _escapes_workspace(clean_token):
+            return False
+        if is_git and _GIT_UNSAFE_OPTION.match(token):
             return False
 
     return True
+
+
+# Options that make an otherwise read-only git command write files, run programs or read outside the repo.
+_GIT_UNSAFE_OPTION = re.compile(
+    r"^(?:--output(?:=|$)|--ext-diff$|--textconv$|--no-index$|-O|--open-files-in-pager|--upload-pack|"
+    r"--receive-pack|--exec(?:=|$)|--exec-path|-c$|--config-env|--git-dir|--work-tree)",
+    re.IGNORECASE,
+)
+
+
+_WINDOWS_SWITCH = re.compile(r"^/[A-Za-z?]{1,2}(?::[A-Za-z-]*)?$")
+
+
+def _escapes_workspace(value: str) -> bool:
+    """Arguments an allowlisted command may not take without a person looking: other
+    folders, home, network shares and globs that the shell expands to unseen paths."""
+    if not value:
+        return False
+    if _WINDOWS_SWITCH.match(value):
+        return False
+    if value.startswith("~") or any(ch in value for ch in "*?[]"):
+        return True
+    if re.match(r"^(?:[A-Za-z]:|[\\/])", value):
+        return True
+    return any(part == ".." for part in re.split(r"[\\/]", value))
 
 

@@ -50,6 +50,13 @@ def _session_label(s: Session) -> str:
     return "[dim]Empty session[/]"
 
 
+def _worth_listing(s: Session, current_id: str) -> bool:
+    """Every launch starts a session holding only the system prompt; once left, it is just clutter."""
+    if s.id == current_id or getattr(s, "conversation_count", 1) > 0:
+        return True
+    return getattr(s, "status", "idle") in ("running", "approval_required") or bool(s.name and s.name.startswith("cron:"))
+
+
 def _session_status(s: Session, current_id: str) -> str:
     """Status badge for a session row: running, approval_required, error, active, idle, or empty."""
     status_val = getattr(s, "status", "idle")
@@ -136,7 +143,8 @@ SessionBrowserOverlay {
             pass
 
     def _load_sessions(self, keep_cursor: bool = False):
-        self._sessions = Session.list_sessions(self._project_path, limit=self._session_limit)
+        loaded = Session.list_sessions(self._project_path, limit=self._session_limit)
+        self._sessions = [s for s in loaded if _worth_listing(s, self._current_id)]
         table = self.query_one("#sb-data", DataTable)
         
         # Save cursor position if loading more
@@ -147,7 +155,7 @@ SessionBrowserOverlay {
         for s in self._sessions:
             age = _time_ago(getattr(s, "updated_at", s.created_at))
             tokens = f"{s.token_total:,}" if s.token_total else "—"
-            msg_count = str(getattr(s, "message_count", len(s.messages)))
+            msg_count = str(getattr(s, "conversation_count", getattr(s, "message_count", len(s.messages))))
             table.add_row(_session_label(s), _session_status(s, self._current_id), age, tokens, msg_count)
             
         if self._sessions:
@@ -156,7 +164,7 @@ SessionBrowserOverlay {
             
         # Hide load more if we probably loaded everything
         load_more_btn = self.query_one("#sb-load-more", Button)
-        if len(self._sessions) < self._session_limit:
+        if len(loaded) < self._session_limit:
             load_more_btn.display = False
         else:
             load_more_btn.display = True

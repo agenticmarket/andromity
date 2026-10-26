@@ -543,10 +543,16 @@ def cron_tool_decision(job: "CronJob", tool_name: str, args: Dict[str, Any], tru
     mode = (job.mode or "trust").lower()
     if mode == "yolo":
         return True, None
-    from andromity.core.security import is_sensitive_path
+    from andromity.core.security import is_execution_control_path, is_sensitive_path
     target_path = str(args.get("path", "") or args.get("target_path", "") or args.get("target_file", "") or args.get("file_path", ""))
-    if target_path and is_sensitive_path(target_path):
+    if target_path and is_sensitive_path(target_path, job.project_path):
         return False, f"Blocked: '{target_path}' is a sensitive file, and scheduled runs never touch sensitive files. {_UNATTENDED_NOTE}"
+    is_write = tool_name in ("write_file", "edit_file", "edit_file_multi")
+    if mode != "full" and is_write and target_path and is_execution_control_path(target_path, job.project_path):
+        return False, (
+            f"Blocked: '{target_path}' controls what runs later (git hooks, editor tasks, package scripts, MCP servers), "
+            f"and only FULL mode may change it without a person approving. {_UNATTENDED_NOTE}"
+        )
     if tool_name in ("shell_exec", "shell_bg"):
         from andromity.core.security import is_command_allowlisted
         command = str(args.get("command", "")).strip()
@@ -560,7 +566,30 @@ def cron_tool_decision(job: "CronJob", tool_name: str, args: Dict[str, Any], tru
         )
     if tool_name in _SAFE_BLOCKED_TOOLS and mode == "safe":
         return False, f"Blocked: this scheduled job runs in SAFE mode, which does not allow '{tool_name}'. {_UNATTENDED_NOTE}"
+    if mode in ("safe", "trust"):
+        reason = _unattended_network_block(tool_name, args, mode)
+        if reason:
+            return False, f"{reason} {_UNATTENDED_NOTE}"
     return True, None
+
+
+def _unattended_network_block(tool_name: str, args: Dict[str, Any], mode: str) -> Optional[str]:
+    """The checks an interactive run would ask a person about, answered "no" when nobody is there."""
+    if tool_name in ("web_search", "fetch_url") and mode == "safe":
+        return f"Blocked: this scheduled job runs in SAFE mode, which does not allow '{tool_name}'."
+    if tool_name == "fetch_url":
+        from andromity.config import config
+        from andromity.core.security import is_domain_allowed
+        url = str(args.get("url", ""))
+        if not is_domain_allowed(url, config.get("default", "allowed_domains", []) or []):
+            return f"Blocked: '{url[:120]}' is not on the allowed domains list, and scheduled runs only fetch allowed domains."
+    if tool_name.startswith("mcp__"):
+        from andromity.core.security import mcp_tool_may_change
+        if mode == "safe":
+            return f"Blocked: this scheduled job runs in SAFE mode, which does not allow MCP tools such as '{tool_name}'."
+        if mcp_tool_may_change(tool_name):
+            return f"Blocked: '{tool_name}' may change data, and only FULL mode runs such MCP tools without a person approving."
+    return None
 
 
 def build_unattended_prompt(job: "CronJob", default_allowed: Optional[List[str]] = None) -> str:

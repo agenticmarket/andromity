@@ -4046,7 +4046,7 @@ ${STATUS_SHIMMER_STYLES}
     .md-table tr:last-child td {
       border-bottom: none;
     }
-    .assistant-text table { min-width: 420px; }
+    .assistant-text table { min-width: min(420px, 100%); }
     .assistant-text td:first-child { min-width: 125px; }
     .assistant-text td p { margin: 0; }
 
@@ -7294,6 +7294,51 @@ ${STATUS_SHIMMER_STYLES}
       overflow-y: auto;
     }
 
+    .permission-risks {
+      list-style: none;
+      margin: 8px 0 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .permission-risk {
+      display: flex;
+      align-items: flex-start;
+      gap: 7px;
+      font-size: 11.5px;
+      line-height: 1.4;
+      color: var(--vscode-descriptionForeground, var(--muted));
+    }
+
+    .permission-risk::before {
+      content: '';
+      flex-shrink: 0;
+      width: 6px;
+      height: 6px;
+      margin-top: 5px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: 0.85;
+    }
+
+    .permission-risk.risk-danger {
+      color: var(--vscode-errorForeground, #f85149);
+      font-weight: 600;
+    }
+
+    .permission-risk.risk-warn {
+      color: var(--vscode-editorWarning-foreground, #cca700);
+    }
+
+    .permission-remember-note {
+      padding: 6px 12px 8px;
+      font-size: 11px;
+      line-height: 1.4;
+      color: var(--vscode-descriptionForeground, var(--muted));
+    }
+
     .permission-diff-box {
       background: rgba(0, 0, 0, 0.4);
       border: 1px solid rgba(var(--tint), 0.06);
@@ -8228,6 +8273,94 @@ ${STATUS_SHIMMER_STYLES}
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .secret-warning {
+      margin: 0 0 8px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--vscode-inputValidation-warningBorder, rgba(251, 191, 36, 0.5));
+      background: rgba(251, 191, 36, 0.06);
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--fg);
+    }
+    .secret-warning-title {
+      font-weight: 600;
+      color: var(--vscode-editorWarning-foreground, #fbbf24);
+    }
+    .secret-warning-body {
+      margin-top: 4px;
+      color: var(--vscode-descriptionForeground, var(--muted));
+      overflow-wrap: anywhere;
+    }
+    .secret-warning-body code {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 1px 4px;
+      border-radius: 3px;
+      background: rgba(var(--tint), 0.06);
+    }
+    .secret-warning-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .secret-warning-btn {
+      font: inherit;
+      font-size: 11.5px;
+      padding: 4px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      border: 1px solid var(--vscode-button-border, transparent);
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+    }
+    .secret-warning-btn:hover {
+      background: var(--vscode-button-secondaryHoverBackground);
+    }
+    .secret-warning-btn.primary {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+    }
+    .secret-warning-btn.primary:hover {
+      background: var(--vscode-button-hoverBackground);
+    }
+    .secret-warning-btn:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: 2px;
+    }
+    .next-step-request {
+      margin-top: 4px;
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground, var(--muted));
+    }
+    .next-step-request summary {
+      cursor: pointer;
+      width: fit-content;
+      list-style-position: inside;
+    }
+    .next-step-request summary:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: 2px;
+    }
+    .next-step-request-body {
+      margin-top: 4px;
+      padding: 6px 8px;
+      max-height: 140px;
+      overflow-y: auto;
+      border-radius: 4px;
+      background: rgba(var(--tint), 0.04);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      color: var(--fg);
+    }
+    .next-step-request-item + .next-step-request-item {
+      margin-top: 6px;
+    }
+    .next-step-request-name {
+      display: block;
+      font-weight: 600;
+    }
     .next-step-actions {
       display: flex;
       align-items: center;
@@ -8309,6 +8442,97 @@ ${STATUS_SHIMMER_STYLES}
     }
 
     /* Feature tip: one feature this user has not tried, under the reply */
+    .checkin-card {
+      position: relative;
+      margin: 10px 0 4px;
+      padding: 10px 34px 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(var(--tint), 0.03);
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--fg);
+      animation: featureTipIn 0.35s ease both;
+    }
+    .checkin-close {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+    }
+    .checkin-title { font-weight: 600; }
+    .checkin-text { margin-top: 2px; color: var(--vscode-descriptionForeground, var(--muted)); }
+    .checkin-faces, .checkin-chips, .checkin-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .checkin-actions { align-items: center; }
+    .checkin-face, .checkin-chip {
+      font: inherit;
+      font-size: 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--fg);
+      cursor: pointer;
+    }
+    .checkin-face:hover:not(:disabled), .checkin-chip:hover:not(:disabled) {
+      background: var(--vscode-list-hoverBackground, rgba(var(--tint), 0.06));
+    }
+    .checkin-chip[aria-pressed="true"] {
+      border-color: var(--vscode-focusBorder, var(--accent));
+      background: color-mix(in srgb, var(--vscode-focusBorder, #0078d4) 18%, transparent);
+    }
+    .checkin-face:focus-visible, .checkin-chip:focus-visible, .checkin-link:focus-visible, .checkin-note:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: 1px;
+    }
+    .checkin-face:disabled, .checkin-chip:disabled { opacity: 0.55; cursor: default; }
+    .checkin-emoji { font-size: 15px; line-height: 1; }
+    .checkin-note {
+      display: block;
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 8px;
+      padding: 6px 8px;
+      font: inherit;
+      font-size: 12px;
+      resize: vertical;
+      border-radius: 5px;
+      border: 1px solid var(--vscode-input-border, var(--border));
+      background: var(--vscode-input-background, transparent);
+      color: var(--vscode-input-foreground, var(--fg));
+    }
+    .checkin-foot {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 4px 10px;
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground, var(--muted));
+    }
+    .checkin-link {
+      font: inherit;
+      font-size: 11px;
+      padding: 0;
+      border: none;
+      background: none;
+      color: var(--vscode-textLink-foreground, var(--accent));
+      cursor: pointer;
+    }
+    .checkin-link:hover { text-decoration: underline; }
+    .checkin-error {
+      margin-top: 6px;
+      font-size: 11.5px;
+      color: var(--vscode-errorForeground, #f85149);
+    }
     .feature-tip-card {
       --tip-color: var(--vscode-editorLightBulb-foreground, #e2c08d);
       position: relative;

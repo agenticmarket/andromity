@@ -22,14 +22,22 @@ function textOf(content: unknown): string {
  *  their output, system messages and the IDE context attached to prompts are left out. */
 export function formatChatMarkdown(session: SessionTranscript): { markdown: string; count: number } {
   const blocks: string[] = [];
+  let lastSpeaker = "";
   for (const message of session.messages || []) {
+    let speaker = "";
+    let text = "";
     if (message.role === "user") {
-      const text = cleanPromptForDisplay(textOf(message.content)).trim();
-      if (text) blocks.push(`### You\n\n${text}`);
+      speaker = "You";
+      text = cleanPromptForDisplay(textOf(message.content)).trim();
     } else if (message.role === "assistant") {
-      const text = textOf(message.content).trim();
-      if (text) blocks.push(`### Andromity\n\n${text}`);
+      speaker = "Andromity";
+      text = textOf(message.content).trim();
     }
+    if (!text) continue;
+    // A reply spans several assistant messages around its tool calls; they share one heading.
+    if (speaker === lastSpeaker) blocks[blocks.length - 1] += `\n\n${text}`;
+    else blocks.push(`### ${speaker}\n\n${text}`);
+    lastSpeaker = speaker;
   }
   const title = session.name ? `# ${cleanPromptForDisplay(session.name).trim()}\n\n` : "";
   return { markdown: blocks.length ? title + blocks.join("\n\n") + "\n" : "", count: blocks.length };

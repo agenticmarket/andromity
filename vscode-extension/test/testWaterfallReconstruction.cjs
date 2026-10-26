@@ -313,6 +313,15 @@ assert.strictEqual(state.totals.toolMs, 400 + 400, "Total tool ms must equal sum
 assert.strictEqual(state.totals.llmMs + state.totals.toolMs, state.totals.durationMs, "LLM ms + Tool ms must equal Total durationMs");
 
 console.log("[PASS] All sequential timeline assertions verified with ZERO overlaps!");
+
+// 7. A live turn that ends adds its duration to the summary totals
+const liveStart = (baseTs + 60000) / 1000;
+sandbox.window.postMessage({ type: "agent_started", prompt: "run the tests", ts: liveStart });
+sandbox.window.postMessage({ type: "waterfall_llm_start", turn_id: "live_1", model: "m", ts: liveStart });
+sandbox.window.postMessage({ type: "waterfall_llm_end", turn_id: "live_1", model: "m", duration_ms: 1200, ts: liveStart + 1.2 });
+sandbox.window.postMessage({ type: "agent_done", ts: liveStart + 1.5 });
+assert.strictEqual(state.totals.durationMs, 7570 + 1500, "Ending a live turn must add its 1500ms to the Duration total");
+console.log("[PASS] Live turn duration counted in totals once the turn ends");
 console.log("================================================================================");
 console.log("WATERFALL PAST SESSION RECONSTRUCTION VERIFIED 100% SUCCESFULLY!");
 console.log("================================================================================");

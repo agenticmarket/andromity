@@ -70,3 +70,46 @@ it("a valid sign-in is applied to the daemon before credentials are saved", asyn
     assert.deepEqual(calls, ["config.set_api_key", "config.set", "config.set", "store"]);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+it("anonymous usage lookups send the daemon's per-install ID instead of the shared fallback", async () => {
+  const originalFetch = globalThis.fetch;
+  const sent: Array<string | null> = [];
+  const calls: string[] = [];
+  const provider = Object.create(ChatViewProvider.prototype);
+  provider._getGatewayBaseUrl = () => "https://gateway.example";
+  provider._context = { secrets: { get: async () => undefined } };
+  provider._rpcClient = { call: async (method: string) => {
+    calls.push(method);
+    return { client_id: "anon_0123456789abcdef0123456789abcdef" };
+  } };
+  provider.broadcastToWebviews = () => {};
+  try {
+    globalThis.fetch = async (_url: any, init?: any) => {
+      sent.push(new Headers(init?.headers).get("x-andromity-client-id"));
+      return new Response('{"plan":"anonymous"}');
+    };
+    await provider.fetchUsage(true);
+    await provider.fetchUsage(true);
+    assert.deepEqual(sent, Array(2).fill("anon_0123456789abcdef0123456789abcdef"));
+    assert.deepEqual(calls, ["gateway.clientId"]);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+it("anonymous usage lookups still work when the daemon cannot report its ID", async () => {
+  const originalFetch = globalThis.fetch;
+  const sent: Array<string | null> = [];
+  const provider = Object.create(ChatViewProvider.prototype);
+  provider._getGatewayBaseUrl = () => "https://gateway.example";
+  provider._context = { secrets: { get: async () => undefined } };
+  provider._rpcClient = { call: async () => { throw new Error("daemon starting"); } };
+  provider.broadcastToWebviews = () => {};
+  try {
+    globalThis.fetch = async (_url: any, init?: any) => {
+      sent.push(new Headers(init?.headers).get("x-andromity-client-id"));
+      return new Response('{"plan":"anonymous"}');
+    };
+    const usage = await provider.fetchUsage(true);
+    assert.equal(usage.plan, "anonymous");
+    assert.deepEqual(sent, ["local_client"]);
+  } finally { globalThis.fetch = originalFetch; }
+});

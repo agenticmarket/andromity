@@ -427,6 +427,24 @@ export function getChatActivityScript(): string {
         return m ? (m[1] === '0' ? 'done' : 'error') : null;
       };
 
+      // Output from the internet or an MCP server reaches the model wrapped as <external_content source="...">.
+      window.externalContentSource = function(toolResult) {
+        var m = /^<external_content source="([^"]+)">/.exec(String(toolResult || ''));
+        return m ? m[1] : null;
+      };
+
+      window.markExternalToolCard = function(card, toolResult) {
+        var source = window.externalContentSource(toolResult);
+        if (!card || !source || card.querySelector('.tool-external-tag')) return;
+        var tag = document.createElement('span');
+        tag.className = 'tool-external-tag';
+        tag.textContent = source.indexOf('mcp:') === 0 ? 'External tool' : 'From the web';
+        tag.title = (source.indexOf('mcp:') === 0 ? 'This output came from the MCP server ' + source.slice(4) : 'This output came from the open internet') +
+          '. Andromity tells the model to treat it as data, not instructions.';
+        var statusTag = card.querySelector('.tool-tag');
+        if (statusTag && statusTag.parentNode) statusTag.parentNode.insertBefore(tag, statusTag);
+      };
+
       window.renderBackgroundProcessActivityRow = function(toolName, toolArgs, status, toolResult, processId) {
         var parsedArgs = {};
         if (typeof toolArgs === 'string') {

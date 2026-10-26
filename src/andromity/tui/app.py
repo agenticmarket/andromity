@@ -610,13 +610,14 @@ class AndromityApp(App):
         
         from andromity.core.security import is_sensitive_path
         target_path = str(args.get("path", "") or args.get("target_path", "") or args.get("target_file", ""))
-        is_sensitive = is_sensitive_path(target_path) if target_path else False
+        policy_root = getattr(self.session, "project_path", None) or self._project_path
+        is_sensitive = is_sensitive_path(target_path, policy_root) if target_path else False
 
         from andromity.core.security import is_execution_control_path
         write_needs_upfront_approval = (
             tool_name in ("write_file", "edit_file", "edit_file_multi")
             and mode not in ("yolo", "full")
-            and (is_sensitive or is_execution_control_path(target_path))
+            and (is_sensitive or is_execution_control_path(target_path, policy_root))
         )
 
         if tool_name in ("write_file", "edit_file", "edit_file_multi") and not write_needs_upfront_approval:
@@ -1042,8 +1043,9 @@ class AndromityApp(App):
             chat.add_system_message(f"[green]✓ Folder trusted.[/] Full access enabled.")
         else:
             chat.add_system_message(
-                "[yellow]Read-only mode.[/] File writes and shell commands are blocked.\n"
-                "Use [bold cyan]/trust[/] to enable full access."
+                "[yellow]Folder not trusted.[/] Reading files, editing them and running commands are blocked; "
+                "chat and web search still work.\n"
+                "Use [bold cyan]/trust[/] to enable them."
             )
         self._show_welcome()
 
