@@ -177,13 +177,32 @@ export function isUncPath(p: string): boolean {
 
 const MAX_LINK_HOPS = 40;
 
+function isWithin(root: string, p: string): boolean {
+  const relative = path.relative(root, p);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+type WorkspaceFolderPath = { opened: string; real: string };
+
+/** The open folders as VS Code opened them, with their real paths. VS Code
+ *  already reads every open folder, so resolving one contacts no new host. */
+async function workspaceFolderPaths(): Promise<WorkspaceFolderPath[]> {
+  const folders = await Promise.all((vscode.workspace.workspaceFolders ?? []).map(async (folder) => {
+    const opened = folder.uri.fsPath;
+    return fs.promises.realpath(opened).then((real) => ({ opened, real }), () => null);
+  }));
+  return folders.filter((folder): folder is WorkspaceFolderPath => folder !== null);
+}
+
 /** The real path p leads to, or null when p or a link it passes through names a
- *  network path. Each link is read and its target checked before anything
- *  follows it, since even resolving a path through a link to a share sends
- *  Windows credentials to that host. Rejects when nothing exists there. */
-async function realLocalPath(p: string): Promise<string | null> {
+ *  network path outside every open folder. Each link is read and its target
+ *  checked before anything follows it, since even resolving a path through a
+ *  link to a share sends Windows credentials to that host. Rejects when nothing
+ *  exists there. */
+async function realPathWithin(p: string, roots: string[]): Promise<string | null> {
+  const foreign = (q: string) => !roots.some((root) => isWithin(root, q));
   const start = path.resolve(p);
-  if (isUncPath(start)) return null;
+  if (isUncPath(start) && foreign(start)) return null;
   let current = path.parse(start).root;
   const rest = start.slice(current.length).split(path.sep).filter(Boolean);
   let hops = 0;
@@ -196,30 +215,12 @@ async function realLocalPath(p: string): Promise<string | null> {
     if (++hops > MAX_LINK_HOPS) throw new Error(`Too many links in ${p}`);
     const link = await fs.promises.readlink(next);
     const target = path.resolve(current, link);
-    if (isUncPath(link) || isUncPath(target)) return null;
+    if ((isUncPath(link) || isUncPath(target)) && foreign(target)) return null;
     current = path.parse(target).root;
     rest.unshift(...target.slice(current.length).split(path.sep).filter(Boolean));
   }
   const real = await fs.promises.realpath(current);
-  return isUncPath(real) ? null : real;
-}
-
-function isWithin(root: string, p: string): boolean {
-  const relative = path.relative(root, p);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-/** Whether p, once links and junctions are followed, is inside an open folder.
- *  Folders are compared by their real paths, so a folder opened through a link
- *  still contains its files. */
-export async function isInsideWorkspace(p: string): Promise<boolean> {
-  const real = await realLocalPath(p).catch(() => null);
-  if (!real) return false;
-  for (const folder of vscode.workspace.workspaceFolders ?? []) {
-    const root = await realLocalPath(folder.uri.fsPath).catch(() => null);
-    if (root && isWithin(root, real)) return true;
-  }
-  return false;
+  return isUncPath(real) && foreign(real) ? null : real;
 }
 
 export type OpenPathCheck = { status: "open"; path: string } | { status: "missing" | "refused" };
@@ -230,10 +231,13 @@ function refuseNetworkPath(): OpenPathCheck {
 }
 
 /** Paths in webview messages can come from model output, so they are judged by
- *  their real path. Network paths are refused outright (touching one sends
- *  Windows credentials to that host), relative paths need an open folder, and
- *  files outside the workspace need an explicit confirmation. An allowed path
- *  comes back resolved, and that real path is the one to open. */
+ *  their real path. Network paths are refused unless they lie inside an open
+ *  folder (touching one sends Windows credentials to that host), relative paths
+ *  need an open folder, and files outside the workspace need an explicit
+ *  confirmation. A file inside a folder comes back spelled through the folder
+ *  as VS Code opened it, which reaches the same file and keeps a mapped drive a
+ *  drive letter (VS Code refuses UNC hosts the user has not allowed); any other
+ *  allowed path comes back as its real path. */
 export async function checkOpenPath(p: string): Promise<OpenPathCheck> {
   if (isUncPath(p)) return refuseNetworkPath();
   const root = currentWorkspaceFolder();
@@ -241,14 +245,12 @@ export async function checkOpenPath(p: string): Promise<OpenPathCheck> {
     void vscode.window.showWarningMessage("Open a folder to follow relative file links.");
     return { status: "refused" };
   }
-  let real: string | null;
-  try {
-    real = await realLocalPath(root ? path.resolve(root, p) : p);
-  } catch {
-    return { status: "missing" };
-  }
+  const folders = await workspaceFolderPaths();
+  const real = await realPathWithin(root ? path.resolve(root, p) : p, folders.map((folder) => folder.real)).catch(() => undefined);
+  if (real === undefined) return { status: "missing" };
   if (real === null) return refuseNetworkPath();
-  if (await isInsideWorkspace(real)) return { status: "open", path: real };
+  const home = folders.find((folder) => isWithin(folder.real, real));
+  if (home) return { status: "open", path: path.join(home.opened, path.relative(home.real, real)) };
   const choice = await vscode.window.showWarningMessage(
     "Open a file outside this workspace?",
     { modal: true, detail: real },

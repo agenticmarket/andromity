@@ -154,10 +154,11 @@ describe("opening a path from a webview", () => {
     assert.deepEqual(await checkOpenPath(path.join(ws, "out", "secret.txt")), { status: "open", path: real(secret) });
   });
 
-  it("counts files as inside a workspace folder opened through a link", async () => {
-    useFolders(path.join(base, "alias"));
-    assert.deepEqual(await checkOpenPath("src/a.ts"), { status: "open", path: real(source) });
-    assert.deepEqual(await checkOpenPath(source), { status: "open", path: real(source) });
+  it("counts files as inside a workspace folder opened through a link, and opens them through it", async () => {
+    const alias = path.join(base, "alias");
+    useFolders(alias);
+    assert.deepEqual(await checkOpenPath("src/a.ts"), { status: "open", path: path.join(alias, "src", "a.ts") });
+    assert.deepEqual(await checkOpenPath(source), { status: "open", path: path.join(alias, "src", "a.ts") });
     assert.equal(dialogs.length, 0);
   });
 
@@ -236,6 +237,56 @@ describe("links to network shares", () => {
   it("gives up on links that loop", async () => {
     useFolders("/ws");
     assert.deepEqual(await policy.checkOpenPath("loop/a.txt"), { status: "missing" });
+  });
+});
+
+describe("workspaces on a network share", { skip: process.platform !== "win32" && "drive letters and UNC roots are Windows paths" }, () => {
+  const looked: string[] = [];
+  const links: Record<string, string> = {
+    "z:\\proj\\docs": "\\\\other\\share\\",
+    "z:\\proj\\notes": "\\\\server\\share\\proj\\src",
+  };
+  const policy = policyWithFs({
+    promises: {
+      lstat: async (p: string) => {
+        looked.push(p);
+        return { isSymbolicLink: () => p.toLowerCase() in links };
+      },
+      readlink: async (p: string) => links[p.toLowerCase()],
+      realpath: async (p: string) => {
+        looked.push(p);
+        return /^z:/i.test(p) ? "\\\\server\\share" + p.slice(2) : p;
+      },
+    },
+  });
+  const lookedUnder = (prefix: string) => looked.filter((p) => p.toLowerCase().startsWith(prefix.toLowerCase()));
+
+  it("opens a mapped drive's own files through the drive letter, also through a link that stays inside", async () => {
+    useFolders("Z:\\proj");
+    assert.deepEqual(await policy.checkOpenPath("src/a.ts"), { status: "open", path: "Z:\\proj\\src\\a.ts" });
+    assert.deepEqual(await policy.checkOpenPath("Z:\\proj\\src\\a.ts"), { status: "open", path: "Z:\\proj\\src\\a.ts" });
+    assert.deepEqual(await policy.checkOpenPath("notes/a.ts"), { status: "open", path: "Z:\\proj\\src\\a.ts" });
+    assert.equal(await policy.allowOpenPath("Z:\\proj\\src\\a.ts"), true);
+    assert.deepEqual(dialogs, []);
+    assert.deepEqual(notices, []);
+  });
+
+  it("refuses links to other shares, explicit network paths and shares outside the folder", async () => {
+    useFolders("Z:\\proj");
+    answer = "Open";
+    for (const p of ["docs/a.txt", "\\\\server\\share\\proj\\src\\a.ts", "\\\\server\\share\\elsewhere\\a.txt", "Z:\\elsewhere\\a.txt"]) {
+      assert.deepEqual(await policy.checkOpenPath(p), { status: "refused" }, p);
+    }
+    assert.deepEqual(notices, [NETWORK_REFUSAL, NETWORK_REFUSAL, NETWORK_REFUSAL, NETWORK_REFUSAL]);
+    assert.equal(dialogs.length, 0);
+    assert.deepEqual(lookedUnder("\\\\other"), []);
+  });
+
+  it("opens files of a folder opened by its network path, but nothing beside it", async () => {
+    useFolders("\\\\server\\share\\proj");
+    assert.deepEqual(await policy.checkOpenPath("src/a.ts"), { status: "open", path: "\\\\server\\share\\proj\\src\\a.ts" });
+    assert.deepEqual(await policy.checkOpenPath("../elsewhere/a.txt"), { status: "refused" });
+    assert.deepEqual(lookedUnder("\\\\server\\share\\elsewhere"), []);
   });
 });
 

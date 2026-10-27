@@ -17,7 +17,7 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 - **Reused tool-call ids.** A provider that reuses a tool-call id can no longer give a new call an earlier approval or refusal.
 
 ### Security
-- VS Code: file links in chat and Fingerprint are judged by where they really lead. Symlinks and junctions out of the workspace ask first and name the real file, links to network shares are refused without connecting to them, and relative paths need an open folder.
+- VS Code: file links in chat and Fingerprint are judged by where they really lead. Symlinks and junctions out of the workspace ask first and name the real file, links to network shares outside the workspace are refused without connecting to them, and relative paths need an open folder. In a folder opened by its network path, links to the folder's own files now open.
 
 ## [0.2.25] — 2026-10-31
 
