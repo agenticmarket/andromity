@@ -439,10 +439,15 @@ class Agent:
         moved = {old_positions[id(message)]: len(new_messages) + offset
                  for offset, message in enumerate(keep_turns) if id(message) in old_positions}
         # Kept as stored, flags included; every request is cleaned for the provider when it is sent.
-        new_messages.extend(dict(message) for message in keep_turns)
+        kept = [dict(message) for message in keep_turns]
+        new_messages.extend(kept)
 
         self.session.rebase_turn_records(moved)
         self.session.messages = new_messages
+        for original, replacement in zip(keep_turns, kept):
+            entry = self._message_images.pop(id(original), None)
+            if entry and entry[0] is original:
+                self._message_images[id(replacement)] = (replacement, entry[1])
         self.session.context_tokens = 0
         self.session.save()
         if not force:

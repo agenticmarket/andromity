@@ -6,6 +6,7 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 
 ### Fixed
 - **Undo after a long conversation.** Once a conversation had been compacted, undoing one turn could revert the files of many earlier turns, not just that one. Undo now finds each turn by where it starts in the conversation as it is now, undoes exactly the turns asked for, and says plainly when a turn was summarized and can no longer be undone. A message sent while a turn was running no longer counts as a turn of its own. The turn during which a conversation compacts itself can be undone too; before, its files were left as they were. This applies to VS Code and the terminal app. In the terminal app, a turn that stopped before it started (for example, an image sent to a model that can't read images) no longer gets in the way of undoing earlier turns.
+- **Pasted images when a conversation compacts.** If a long conversation compacted itself on the turn you sent an image, the model got your message without the image. It now gets the image too, in VS Code and the terminal app.
 
 ## [0.2.24] — 2026-10-26
 
