@@ -13,6 +13,9 @@ All notable changes to the "andromity" extension will be documented in this file
 ### Fixed
 - Andromity's own git calls no longer run programs set in a repository's config.
 
+### Security
+- File links in chat and Fingerprint are judged by where they really lead. A symlink or junction in the workspace that points outside it asks before opening and names the real file, a link to a network share is refused without connecting to it, and with no folder open a relative path is refused. A file that no longer exists is reported as not found, and the file that opens is the one that was checked.
+
 ## [0.2.25] — 2026-10-31
 
 ### Added

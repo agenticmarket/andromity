@@ -16,6 +16,9 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 - **Git calls no longer run programs from repository config.** Snapshots, undo, status, diffs, Changes Review and search turn off hooks, fsmonitor, clean and smudge filters and textconv, so a cloned repository can't run code through them. Discard refuses files whose filter was turned off.
 - **Reused tool-call ids.** A provider that reuses a tool-call id can no longer give a new call an earlier approval or refusal.
 
+### Security
+- VS Code: file links in chat and Fingerprint are judged by where they really lead. Symlinks and junctions out of the workspace ask first and name the real file, links to network shares are refused without connecting to them, and relative paths need an open folder.
+
 ## [0.2.25] — 2026-10-31
 
 ### Added

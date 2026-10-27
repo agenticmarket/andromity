@@ -175,32 +175,89 @@ export function isUncPath(p: string): boolean {
   }
 }
 
-export function isInsideWorkspace(p: string): boolean {
-  const resolved = path.resolve(p);
-  return (vscode.workspace.workspaceFolders ?? []).some((folder) => {
-    const relative = path.relative(folder.uri.fsPath, resolved);
-    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-  });
+const MAX_LINK_HOPS = 40;
+
+/** The real path p leads to, or null when p or a link it passes through names a
+ *  network path. Each link is read and its target checked before anything
+ *  follows it, since even resolving a path through a link to a share sends
+ *  Windows credentials to that host. Rejects when nothing exists there. */
+async function realLocalPath(p: string): Promise<string | null> {
+  const start = path.resolve(p);
+  if (isUncPath(start)) return null;
+  let current = path.parse(start).root;
+  const rest = start.slice(current.length).split(path.sep).filter(Boolean);
+  let hops = 0;
+  while (rest.length) {
+    const next = path.join(current, rest.shift()!);
+    if (!(await fs.promises.lstat(next)).isSymbolicLink()) {
+      current = next;
+      continue;
+    }
+    if (++hops > MAX_LINK_HOPS) throw new Error(`Too many links in ${p}`);
+    const link = await fs.promises.readlink(next);
+    const target = path.resolve(current, link);
+    if (isUncPath(link) || isUncPath(target)) return null;
+    current = path.parse(target).root;
+    rest.unshift(...target.slice(current.length).split(path.sep).filter(Boolean));
+  }
+  const real = await fs.promises.realpath(current);
+  return isUncPath(real) ? null : real;
 }
 
-/** Paths in webview messages can come from model output. Network paths are
- *  refused outright (touching one sends Windows credentials to that host), and
- *  local files outside the workspace need an explicit confirmation. */
-export async function allowOpenPath(p: string): Promise<boolean> {
-  if (isUncPath(p)) {
-    void vscode.window.showWarningMessage("Andromity does not open files on network shares from chat links.");
-    return false;
+function isWithin(root: string, p: string): boolean {
+  const relative = path.relative(root, p);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/** Whether p, once links and junctions are followed, is inside an open folder.
+ *  Folders are compared by their real paths, so a folder opened through a link
+ *  still contains its files. */
+export async function isInsideWorkspace(p: string): Promise<boolean> {
+  const real = await realLocalPath(p).catch(() => null);
+  if (!real) return false;
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    const root = await realLocalPath(folder.uri.fsPath).catch(() => null);
+    if (root && isWithin(root, real)) return true;
   }
-  // Callers join relative paths onto the workspace, so check where they land
-  // ("../../.ssh/id_rsa" is relative but outside).
+  return false;
+}
+
+export type OpenPathCheck = { status: "open"; path: string } | { status: "missing" | "refused" };
+
+function refuseNetworkPath(): OpenPathCheck {
+  void vscode.window.showWarningMessage("Andromity does not open files on network shares from chat links.");
+  return { status: "refused" };
+}
+
+/** Paths in webview messages can come from model output, so they are judged by
+ *  their real path. Network paths are refused outright (touching one sends
+ *  Windows credentials to that host), relative paths need an open folder, and
+ *  files outside the workspace need an explicit confirmation. An allowed path
+ *  comes back resolved, and that real path is the one to open. */
+export async function checkOpenPath(p: string): Promise<OpenPathCheck> {
+  if (isUncPath(p)) return refuseNetworkPath();
   const root = currentWorkspaceFolder();
-  const resolved = path.isAbsolute(p) || !root ? p : path.resolve(root, p);
-  if (isUncPath(resolved)) return false;
-  if (!path.isAbsolute(resolved) || isInsideWorkspace(resolved)) return true;
+  if (!root && !path.isAbsolute(p)) {
+    void vscode.window.showWarningMessage("Open a folder to follow relative file links.");
+    return { status: "refused" };
+  }
+  let real: string | null;
+  try {
+    real = await realLocalPath(root ? path.resolve(root, p) : p);
+  } catch {
+    return { status: "missing" };
+  }
+  if (real === null) return refuseNetworkPath();
+  if (await isInsideWorkspace(real)) return { status: "open", path: real };
   const choice = await vscode.window.showWarningMessage(
     "Open a file outside this workspace?",
-    { modal: true, detail: resolved },
+    { modal: true, detail: real },
     "Open"
   );
-  return choice === "Open";
+  return choice === "Open" ? { status: "open", path: real } : { status: "refused" };
+}
+
+/** checkOpenPath as a yes or no. */
+export async function allowOpenPath(p: string): Promise<boolean> {
+  return (await checkOpenPath(p)).status === "open";
 }

@@ -28,7 +28,7 @@ import { handleInteractionMessage, reportDisconnectedAction } from "../server/in
 import { PROVIDER_ID_PATTERN, refreshProviderModels, runKeyCheck, supportsKeyTests, unverifiedNotice } from "../server/keyCheck.js";
 import { SessionHydration } from "../server/sessionHydration.js";
 import {
-  allowOpenPath,
+  checkOpenPath,
   clampPromptMode,
   confirmAndromityTrust,
   confirmPermissionMode,
@@ -874,38 +874,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         cleanPath = match[1];
         if (!line) line = parseInt(match[2], 10);
       }
-      if (!(await allowOpenPath(cleanPath))) return;
-      const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      let resolvedPath = path.isAbsolute(cleanPath) ? cleanPath : (ws ? path.join(ws, cleanPath) : cleanPath);
-
-      if (!fs.existsSync(resolvedPath)) {
-        let found = false;
-        if (vscode.workspace.workspaceFolders) {
-          for (const wf of vscode.workspace.workspaceFolders) {
-            const candidate = path.join(wf.uri.fsPath, cleanPath);
-            if (fs.existsSync(candidate)) {
-              resolvedPath = candidate;
-              found = true;
-              break;
-            }
-          }
-        }
-        if (!found) {
-          const matchDir = this._findWorkspaceDirectory(cleanPath);
-          if (matchDir) {
-            resolvedPath = matchDir;
-            found = true;
-          }
-        }
-        if (!found) {
-          const files = await vscode.workspace.findFiles(`**/${cleanPath}`, "**/node_modules/**", 1);
-          if (files && files.length > 0) {
-            resolvedPath = files[0].fsPath;
-            found = true;
-          }
-        }
-      }
-
+      const resolvedPath = await this._chatLinkTarget(cleanPath);
+      if (!resolvedPath) return;
       const uri = vscode.Uri.file(resolvedPath);
 
       // If directory/folder: reveal in Explorer sidebar view
@@ -931,6 +901,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } catch (err: any) {
       vscode.window.showErrorMessage(`Failed to open: ${err.message}`);
     }
+  }
+
+  /** The real path a chat link opens: the path itself, then the same path under
+   *  each workspace folder, then a folder or file of that name in the workspace.
+   *  Every candidate goes through the open-path policy and the first one that
+   *  exists decides. */
+  private async _chatLinkTarget(cleanPath: string): Promise<string | null> {
+    let check = await checkOpenPath(cleanPath);
+    for (const wf of vscode.workspace.workspaceFolders ?? []) {
+      if (check.status !== "missing") break;
+      check = await checkOpenPath(path.join(wf.uri.fsPath, cleanPath));
+    }
+    if (check.status === "missing") {
+      const found = this._findWorkspaceDirectory(cleanPath)
+        ?? (await vscode.workspace.findFiles(`**/${cleanPath}`, "**/node_modules/**", 1))[0]?.fsPath;
+      if (found) check = await checkOpenPath(found);
+    }
+    if (check.status === "open") return check.path;
+    if (check.status === "missing") vscode.window.showErrorMessage(`Could not find ${cleanPath}.`);
+    return null;
   }
 
   private _findWorkspaceDirectory(dirName: string): string | null {

@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -112,6 +112,18 @@ describe("Andromity folder trust", () => {
 });
 
 describe("paths from webview messages", () => {
+  let credentials = "";
+  before(() => {
+    fs.mkdirSync(path.join(workspaceRoot, "src"), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, "src", "a.ts"), "");
+    credentials = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "andromity-outside-")), "credentials");
+    fs.writeFileSync(credentials, "");
+  });
+  after(() => {
+    fs.rmSync(path.join(workspaceRoot, "src"), { recursive: true, force: true });
+    fs.rmSync(path.dirname(credentials), { recursive: true, force: true });
+  });
+
   it("refuses network paths outright", async () => {
     reset(true, "Open");
     assert.ok(isUncPath("\\\\attacker\\share\\x"));
@@ -125,13 +137,13 @@ describe("paths from webview messages", () => {
     assert.equal(await allowOpenPath(path.join(workspaceRoot, "src", "a.ts")), true);
     assert.equal(await allowOpenPath("src/a.ts"), true);
     assert.equal(dialogs.length, 0);
-    assert.equal(await allowOpenPath(path.join(os.homedir(), ".aws", "credentials")), false);
+    assert.equal(await allowOpenPath(credentials), false);
     assert.equal(dialogs.length, 1);
   });
 
   it("treats relative paths that climb out of the workspace as outside", async () => {
     reset(true, undefined);
-    assert.equal(await allowOpenPath("../../Users/x/.ssh/id_rsa"), false);
+    assert.equal(await allowOpenPath(path.relative(workspaceRoot, credentials)), false);
     assert.equal(dialogs.length, 1);
   });
 });
