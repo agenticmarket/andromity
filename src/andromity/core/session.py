@@ -63,6 +63,14 @@ def normalize_project_path(project_path: Optional[str] = None) -> str:
     return s
 
 
+_COMPACTION_SUMMARY_PREFIXES = ("[Previous context summary", "[Conversation summary")
+
+
+def is_compaction_summary(message: Dict[str, Any]) -> bool:
+    """The user-role message compaction writes in place of the turns it summarized."""
+    return message.get("role") == "user" and str(message.get("content") or "").startswith(_COMPACTION_SUMMARY_PREFIXES)
+
+
 class Session:
     def __init__(
         self,
@@ -370,6 +378,9 @@ class Session:
             }
             
             removed_count = len(compacted_away)
+            first_kept = len(self.messages) - len(recent_msgs)
+            moved = {0: 0, **{first_kept + i: 3 + i for i in range(len(recent_msgs))}}
+            self.rebase_turn_records(moved)
             self.messages = [system_msg, summary_msg, ack_msg] + recent_msgs
             self.context_tokens = 0  # Force recalculation of the next prompt size
             self.save()
@@ -379,27 +390,63 @@ class Session:
         """Return the 0-based indices in self.messages that correspond to user prompt turns."""
         return [i for i, m in enumerate(self.messages) if m.get("role") == "user" and not m.get("steering")]
 
+    def turn_starts(self) -> List[int]:
+        """Where each turn that can still be undone begins: the user's prompts, without messages sent while a turn
+        was running and without the summary that compaction puts in place of earlier turns."""
+        return [i for i, m in enumerate(self.messages)
+                if m.get("role") == "user" and not m.get("steering") and not is_compaction_summary(m)]
+
+    def _record_start(self, record: Any, starts: set, compacted_before: bool) -> Optional[int]:
+        """Where a turn record's prompt is in the conversation as it is now, or None when that can't be told: the
+        turn was summarized, its position no longer holds a prompt, or the conversation was compacted by a version
+        that left records' positions stale (only `anchored` records are kept current through compaction)."""
+        if not isinstance(record, dict) or record.get("compacted"):
+            return None
+        count = record.get("msg_count")
+        if isinstance(count, int) and not isinstance(count, bool):
+            if compacted_before and not record.get("anchored"):
+                return None
+            return count if count in starts else None
+        number = record.get("turn_index")
+        if not isinstance(number, int) or isinstance(number, bool) or compacted_before:
+            return None
+        prompts = self.get_user_turn_indices()
+        return prompts[number] if 0 <= number < len(prompts) else None
+
+    def _record_context(self) -> tuple:
+        return set(self.turn_starts()), any(map(is_compaction_summary, self.messages))
+
+    def rebase_turn_records(self, moved: Dict[int, int]) -> None:
+        """Before compaction replaces the messages (`moved` maps old positions to new), point each turn record at
+        its prompt's new position and mark it kept current. A turn whose prompt is summarized can no longer be
+        undone on its own."""
+        starts, compacted_before = self._record_context()
+        for record in getattr(self, "undo_stack", None) or []:
+            start = self._record_start(record, starts, compacted_before)
+            if start is None:
+                if isinstance(record, dict):
+                    record["compacted"] = True
+            elif start in moved:
+                record["msg_count"] = moved[start]
+                record["anchored"] = True
+            else:
+                record["compacted"] = True
+
     def rollback_to_turn(self, target_turn_index: int) -> tuple[int, int, Optional[Dict[str, Any]]]:
-        """Rollback session messages and undo stack to before the given user turn index (0-based).
+        """Roll the conversation back to before one of the turns that can still be undone (0-based among
+        `turn_starts`), dropping the undo records of the turns removed.
 
-        Args:
-            target_turn_index: 0-based index among user turns to rollback to.
-                               e.g., in a 4-turn conversation (turns 0, 1, 2, 3), target_turn_index=2
-                               means undo turns 3 and 2, restoring state to before turn 2 started.
-
-        Returns:
-            (turns_undone, popped_message_count, snapshot_record_or_None)
+        Returns (turns_undone, popped_message_count, the first removed turn's record or None).
         """
-        user_turn_indices = self.get_user_turn_indices()
-        total_turns = len(user_turn_indices)
-        if total_turns == 0:
+        starts = self.turn_starts()
+        if not starts:
             return 0, 0, None
 
-        target_idx = max(0, min(int(target_turn_index), total_turns - 1))
-        turns_undone = total_turns - target_idx
-        cutoff_msg_idx = user_turn_indices[target_idx]
+        target_idx = max(0, min(int(target_turn_index), len(starts) - 1))
+        cutoff_msg_idx = starts[target_idx]
 
         with self._save_lock:
+            removed = self.turn_records_from(cutoff_msg_idx)
             old_count = len(self.messages)
             self.messages = self.messages[:cutoff_msg_idx]
             popped = old_count - len(self.messages)
@@ -410,21 +457,25 @@ class Session:
                 for m in self.messages
             )
 
-            # Extract matching pre-turn snapshot from undo_stack if available
-            target_snapshot = None
-            if hasattr(self, "undo_stack") and self.undo_stack:
-                if all("turn_index" in record for record in self.undo_stack):
-                    target_snapshot = next((record for record in self.undo_stack if record["turn_index"] == target_idx), None)
-                    self.undo_stack = [record for record in self.undo_stack if record["turn_index"] < target_idx]
-                elif target_idx < len(self.undo_stack):
-                    target_snapshot = self.undo_stack[target_idx]
-                    self.undo_stack = self.undo_stack[:target_idx]
-                else:
-                    target_snapshot = self.undo_stack.pop() if self.undo_stack else None
+            if removed:
+                gone = {id(record) for record in removed}
+                self.undo_stack = [record for record in self.undo_stack if id(record) not in gone]
 
             self.save()
 
-        return turns_undone, popped, target_snapshot
+        return len(starts) - target_idx, popped, removed[0] if removed else None
+
+    def turn_records_from(self, position: int) -> List[Dict[str, Any]]:
+        """The records of the turns that start at or after a message position, oldest first."""
+        starts, compacted_before = self._record_context()
+        found = [(start, record) for record in getattr(self, "undo_stack", None) or []
+                 if (start := self._record_start(record, starts, compacted_before)) is not None and start >= position]
+        return [record for _, record in sorted(found, key=lambda pair: pair[0])]
+
+    def turn_was_added(self, record: Any) -> bool:
+        """Whether the prompt a turn record was made for is in the conversation."""
+        starts, compacted_before = self._record_context()
+        return self._record_start(record, starts, compacted_before) is not None
 
     # ── Plan helpers (session-scoped) ────────────────────────────────────────
 

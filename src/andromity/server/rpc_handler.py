@@ -78,7 +78,7 @@ from andromity.core.models import (
     fetch_live_models_sync,
     get_cached_live_models,
 )
-from andromity.core.session import Session
+from andromity.core.session import Session, is_compaction_summary
 from andromity.server.runtime import SessionRuntime
 from andromity.server.protocol import (
     AGENT_BUSY,
@@ -92,6 +92,16 @@ from andromity.server.protocol import (
 )
 
 log = logging.getLogger("andromity.server")
+
+
+def _undo_limit_error(available: int, summarized: bool) -> str:
+    """Why undo can't reach back as far as asked."""
+    turns = f"{available} turn{'' if available == 1 else 's'}"
+    if summarized:
+        reach = f"Only the last {turns} can be undone. " if available else ""
+        return reach + ("Earlier turns were summarized when the conversation was compacted, so they can't be "
+                        "undone from here.")
+    return f"There {'is' if available == 1 else 'are'} only {turns} to undo."
 
 
 class JsonRpcHandler:
@@ -1018,9 +1028,14 @@ class JsonRpcHandler:
             return {"success": False, "error": f"Session {session_id} is currently running an active turn. Cancel or wait for it to finish."}
         session = self._get_or_load_session(session_id, params.get("project_path"))
 
-        user_turn_indices = session.get_user_turn_indices()
-        total_turns = len(user_turn_indices)
-        if total_turns == 0:
+        # Turns are counted from where they start in the conversation as it is now, so a compacted history
+        # can't shift which turn is meant; the chat counts the same way, from the newest prompt back.
+        starts = session.turn_starts()
+        total_turns = len(starts)
+        summarized = (any(is_compaction_summary(message) for message in session.messages)
+                      or any(isinstance(record, dict) and record.get("compacted")
+                             for record in getattr(session, "undo_stack", None) or []))
+        if total_turns == 0 and not summarized:
             return {
                 "success": True,
                 "turns_undone": 0,
@@ -1033,21 +1048,21 @@ class JsonRpcHandler:
         if target_turn is None:
             target_turn = params.get("target_turn_index")
 
-        if target_turn is not None:
-            target_turn_idx = max(0, min(int(target_turn), total_turns - 1))
-            turns_to_undo = total_turns - target_turn_idx
-        elif "turns_to_undo" in params:
-            turns_to_undo = max(1, min(int(params["turns_to_undo"]), total_turns))
-            target_turn_idx = total_turns - turns_to_undo
+        if params.get("turns_to_undo") is not None:
+            turns_to_undo = max(1, int(params["turns_to_undo"]))
+        elif target_turn is not None and total_turns:
+            turns_to_undo = total_turns - max(0, min(int(target_turn), total_turns - 1))
         else:
             turns_to_undo = 1
-            target_turn_idx = total_turns - 1
+        if turns_to_undo > total_turns:
+            return {"success": False, "error": _undo_limit_error(total_turns, summarized)}
+        target_turn_idx = total_turns - turns_to_undo
+        cutoff = starts[target_turn_idx]
 
         if not config.is_trusted(session.project_path):
             return {"success": False, "error": "Trust this workspace before undoing file changes."}
         self._review_repo({"project_path": session.project_path}, mutate=True)
-        records = [record for record in getattr(session, "undo_stack", [])
-                   if record.get("turn_index", -1) >= target_turn_idx]
+        records = session.turn_records_from(cutoff)
         repo = get_repo(Path(session.project_path))
         rollback_msg = "Conversation restored; no file checkpoint available."
         if records:
@@ -1837,7 +1852,7 @@ class JsonRpcHandler:
                             session.undo_stack = []
                         user_turn_idx = len(session.get_user_turn_indices())
                         turn_checkpoint = {"snapshot_hash": snap_hash, "msg_count": len(session.messages),
-                                           "turn_index": user_turn_idx}
+                                           "turn_index": user_turn_idx, "anchored": True}
                         session.undo_stack.append(turn_checkpoint)
                         session.save()
                 except Exception as snap_err:
@@ -1961,7 +1976,7 @@ class JsonRpcHandler:
                     pass
             finally:
                 if turn_checkpoint:
-                    if len(session.get_user_turn_indices()) <= turn_checkpoint["turn_index"]:
+                    if not session.turn_was_added(turn_checkpoint):
                         session.undo_stack.remove(turn_checkpoint)
                     elif not turn_checkpoint.get("after_hash"):
                         turn_checkpoint["after_hash"] = await asyncio.to_thread(create_pre_edit_snapshot, Path(session.project_path))

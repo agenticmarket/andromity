@@ -2,6 +2,11 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **Undo after a long conversation.** After the conversation was compacted, **Undo to here** could revert the files of many earlier turns instead of just the ones you chose. It now undoes exactly those turns, and tells you when a turn was summarized and can't be undone. A message you sent while a turn was running no longer throws off which turns **Undo to here** undoes. The turn during which the conversation compacted itself can be undone too; before, its files were left as they were.
+
 ## [0.2.24] — 2026-10-26
 
 ### Added

@@ -4710,23 +4710,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           resendEditedPrompt(target.closest('.message-wrap.user'));
           break;
         case 'undo-turn': {
-          const userWrap = target.closest('.message-wrap.user');
-          const allUserWraps = Array.from(chatContainer.querySelectorAll('.message-wrap.user'));
-          const totalTurns = allUserWraps.length;
-          let turnIndex = -1;
-          if (userWrap) {
-            turnIndex = allUserWraps.indexOf(userWrap);
-          }
-          if (turnIndex < 0 && target.hasAttribute && target.hasAttribute('data-turn-index')) {
-            turnIndex = parseInt(target.getAttribute('data-turn-index'), 10);
-          }
-          const turnsToUndo = (turnIndex >= 0 && totalTurns > 0) ? (totalTurns - turnIndex) : 1;
-          vscode.postMessage({
-            type: 'undo_turn',
-            turnIndex: turnIndex >= 0 ? turnIndex : undefined,
-            totalTurns: totalTurns,
-            turnsToUndo: turnsToUndo,
-          });
+          vscode.postMessage(Object.assign({ type: 'undo_turn' }, undoRequestFor(target.closest('.message-wrap.user'))));
           break;
         }
         case 'carousel-prev': {
@@ -7400,16 +7384,24 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         appendSystemNote('Stop the current turn before editing an earlier message.');
         return;
       }
-      const allUserWraps = Array.from(chatContainer.querySelectorAll('.message-wrap.user'));
-      const turnIndex = allUserWraps.indexOf(wrap);
-      if (turnIndex < 0) return;
-      vscode.postMessage({
-        type: 'undo_turn',
-        turnIndex: turnIndex,
-        totalTurns: allUserWraps.length,
-        turnsToUndo: allUserWraps.length - turnIndex,
-        resendPrompt: text,
-      });
+      const request = undoRequestFor(wrap);
+      if (request.turnIndex === undefined) return;
+      vscode.postMessage(Object.assign({ type: 'undo_turn', resendPrompt: text }, request));
+    }
+
+    /** Undo for the turn a prompt belongs to, counted the way the engine counts: from the newest prompt back,
+     *  where a message sent while a turn was running is part of that turn, not a turn of its own. */
+    function undoRequestFor(wrap) {
+      const isTurnPrompt = (el) => el && el.matches && el.matches('.message-wrap.user:not([data-steering])');
+      let prompt = wrap;
+      while (prompt && !isTurnPrompt(prompt)) prompt = prompt.previousElementSibling;
+      const prompts = Array.from(chatContainer.querySelectorAll('.message-wrap.user:not([data-steering])'));
+      const turnIndex = prompt ? prompts.indexOf(prompt) : -1;
+      return {
+        turnIndex: turnIndex >= 0 ? turnIndex : undefined,
+        totalTurns: prompts.length,
+        turnsToUndo: turnIndex >= 0 ? prompts.length - turnIndex : 1,
+      };
     }
 
     // Empty-chat starters: two generic buttons become specific when there is something to act on.

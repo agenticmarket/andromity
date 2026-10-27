@@ -151,6 +151,23 @@ PlanPanel { height: 1fr; border-top: solid $foreground 12%; }
 """
 
 
+def _newest_turn_start(session: Any, prompt: str) -> int | None:
+    """Where the newest turn starts in the conversation as it is now, or None when that turn isn't the one with
+    this prompt (it was summarized when the conversation was compacted)."""
+    starts = session.turn_starts()
+    if not starts:
+        return None
+    content = str(session.messages[starts[-1]].get("content") or "")
+    return starts[-1] if content.startswith(prompt or "") else None
+
+
+def _prompt_added(session: Any, count_before: int, summarized_before: int) -> bool:
+    """Whether a turn's prompt reached the conversation. Compaction, which can leave fewer messages than before,
+    only runs once the prompt is in."""
+    summarized = len(getattr(session, "compacted_history", None) or [])
+    return len(session.messages) > count_before or summarized > summarized_before
+
+
 class AndromityApp(App):
     TITLE = "Andromity"
     CSS = CSS
@@ -1355,6 +1372,7 @@ class AndromityApp(App):
         # ── UI feedback FIRST — zero perceived lag ────────────────────────────
         # Show "thinking" state immediately before any blocking work.
         msg_count_before = len(self.session.messages)
+        summarized_before = len(getattr(self.session, "compacted_history", None) or [])
         self._pre_write_contents.clear()  # fresh file-content tracking for this turn
         chat.start_assistant_message()
 
@@ -1492,7 +1510,9 @@ class AndromityApp(App):
                 _err_msg = _err_msg[:157] + "..."
             chat.append_text("\nThe run could not finish. Pending messages are paused. Check your provider settings and retry.\n")
         finally:
-            if snapshot_hash:
+            if not _prompt_added(self.session, msg_count_before, summarized_before):
+                self._undo_stack = [checkpoint for checkpoint in self._undo_stack if checkpoint is not turn_checkpoint]
+            elif snapshot_hash:
                 from andromity.core.git_ops import create_pre_edit_snapshot
                 turn_checkpoint["after_hash"] = await asyncio.to_thread(create_pre_edit_snapshot, Path(self._project_path))
             self._current_task = None
@@ -2415,8 +2435,14 @@ Your output must be:
     async def _async_perform_undo(self, checkpoint: dict):
         try:
             snapshot_hash = checkpoint.get("snapshot_hash")
-            msg_count = checkpoint.get("msg_count", 0)
             undone_prompt = checkpoint.get("prompt", "")
+            cutoff = _newest_turn_start(self.session, undone_prompt)
+            if cutoff is None:
+                self._undo_stack.append(checkpoint)
+                self.query_one(ChatPanel).add_system_message(
+                    "[yellow]Undo stopped: this turn was summarized when the conversation was compacted, "
+                    "so it can't be undone from here.[/]")
+                return
 
             # ── 1. Revert file changes (in background thread) ─────────────────
             files_reverted = False
@@ -2438,16 +2464,15 @@ Your output must be:
                 self.query_one(ChatPanel).add_system_message("[yellow]Undo stopped: files changed after the turn or the checkpoint is incomplete. Review changes first.[/]")
                 return
 
-            if msg_count <= len(self.session.messages):
-                self.session.messages = self.session.messages[:msg_count]
-                try:
-                    from andromity.core.agent import _estimate_tokens as _est2
-                    self.session.context_tokens = _est2(self.session.messages)
-                except Exception:
-                    self.session.context_tokens = sum(
-                        len(str(msg.get("content", ""))) // 4 + len(str(msg.get("thinking", ""))) // 4 for msg in self.session.messages
-                    )
-                self.session.save()
+            self.session.messages = self.session.messages[:cutoff]
+            try:
+                from andromity.core.agent import _estimate_tokens as _est2
+                self.session.context_tokens = _est2(self.session.messages)
+            except Exception:
+                self.session.context_tokens = sum(
+                    len(str(msg.get("content", ""))) // 4 + len(str(msg.get("thinking", ""))) // 4 for msg in self.session.messages
+                )
+            self.session.save()
 
             # ── 3. Clean visual chat panel rollback (await before system msg) ─
             chat = self.query_one(ChatPanel)

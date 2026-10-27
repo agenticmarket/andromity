@@ -435,9 +435,14 @@ class Agent:
             "role": "assistant",
             "content": "Understood. I have the context from our previous conversation and will continue from here.",
         })
-        new_messages.extend(keep_turns)
+        old_positions = {id(message): index for index, message in enumerate(self.session.messages)}
+        moved = {old_positions[id(message)]: len(new_messages) + offset
+                 for offset, message in enumerate(keep_turns) if id(message) in old_positions}
+        # Kept as stored, flags included; every request is cleaned for the provider when it is sent.
+        new_messages.extend(dict(message) for message in keep_turns)
 
-        self.session.messages = sanitize_messages_for_api(new_messages)
+        self.session.rebase_turn_records(moved)
+        self.session.messages = new_messages
         self.session.context_tokens = 0
         self.session.save()
         if not force:
