@@ -118,6 +118,7 @@ export class SettingsPanel {
           providers: providers || [],
           account,
           waitlistJoined: SettingsPanel._waitlistJoined(),
+          waitlistOffered: SettingsPanel._waitlistOffered(),
           skills: skills || [],
           remoteSkills: SettingsPanel._cachedState?.remoteSkills || [],
           mcpServers: mcpServers || [],
@@ -244,10 +245,15 @@ export class SettingsPanel {
     return SettingsPanel.waitlist?.joined() === true;
   }
 
+  private static _waitlistOffered(): boolean {
+    return SettingsPanel.waitlist?.offered() === true;
+  }
+
   public static postWaitlistState(): void {
     const joined = SettingsPanel._waitlistJoined();
-    if (SettingsPanel._cachedState) SettingsPanel._cachedState.waitlistJoined = joined;
-    SettingsPanel.currentPanel?._panel.webview.postMessage({ type: "waitlist_state", joined });
+    const offered = SettingsPanel._waitlistOffered();
+    if (SettingsPanel._cachedState) Object.assign(SettingsPanel._cachedState, { waitlistJoined: joined, waitlistOffered: offered });
+    SettingsPanel.currentPanel?._panel.webview.postMessage({ type: "waitlist_state", joined, offered });
   }
 
   public static updateMcpServers(mcpServers: unknown[]): void {
@@ -309,6 +315,7 @@ export class SettingsPanel {
             providers: providers || [],
             account,
             waitlistJoined: SettingsPanel._waitlistJoined(),
+          waitlistOffered: SettingsPanel._waitlistOffered(),
             systemInfo: systemInfo || {},
             trustData: trustData || { is_trusted: false, trusted_projects: [] },
             currentWorkspace: workspaceFolder || "",
@@ -350,6 +357,7 @@ export class SettingsPanel {
           providers: fastRes.providers || [],
           account,
           waitlistJoined: SettingsPanel._waitlistJoined(),
+          waitlistOffered: SettingsPanel._waitlistOffered(),
           skills: skills || [],
           remoteSkills: SettingsPanel._cachedState?.remoteSkills || [],
           mcpServers: mcpServers || [],
@@ -4310,6 +4318,7 @@ SOFTWARE.</pre>
     let currentUsageScope = "global";
     let currentAccount = { isAuthenticated: false, username: "", email: "", plan: "free" };
     let waitlistJoined = false;
+    let waitlistOffered = false;
     let waitlistOfferNoted = false;
 
     function noteWaitlistOffer() {
@@ -4927,6 +4936,7 @@ SOFTWARE.</pre>
       if (currentConfig.default_provider) activeModelProvider = (currentConfig.default_provider || "").toLowerCase();
       if (msg.account) currentAccount = msg.account;
       if (typeof msg.waitlistJoined === "boolean") waitlistJoined = msg.waitlistJoined;
+      if (typeof msg.waitlistOffered === "boolean") waitlistOffered = msg.waitlistOffered;
 
       const setEl = (id, val) => {
         const el = document.getElementById(id);
@@ -5030,6 +5040,7 @@ SOFTWARE.</pre>
         }
         case "waitlist_state": {
           waitlistJoined = msg.joined === true;
+          waitlistOffered = msg.offered === true;
           renderProviders();
           break;
         }
@@ -5627,7 +5638,9 @@ SOFTWARE.</pre>
             '</div>' +
             (waitlistJoined
               ? '<button class="btn btn-secondary waitlist-offer" data-action="join-waitlist" disabled>On the waitlist ✓</button>'
-              : '<button class="btn btn-secondary waitlist-offer" data-action="join-waitlist" title="Opens a short form in the chat">Need more? Join the waitlist</button>') +
+              : waitlistOffered
+                ? '<button class="btn btn-secondary waitlist-offer" data-action="join-waitlist" title="Opens a short form in the chat">Need more? Join the waitlist</button>'
+                : '') +
           '</div>';
         }
 

@@ -267,7 +267,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const onboardingOwnProvider = document.getElementById('onboarding-own-provider');
     const onboardingTrialSection = document.getElementById('onboarding-trial-section');
     let waitlistJoined = false;
+    let waitlistOffered = false;
     let waitlistOfferNoted = false;
+    let waitlistGatewayOfferNoted = false;
     let waitlistForm = null;
     const btnOnboardingInstantStart = document.getElementById('btn-onboarding-instant-start');
     const btnOnboardingGithubLogin = document.getElementById('btn-onboarding-github-login');
@@ -3057,7 +3059,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         onboardingSection.style.display = 'flex';
         readyHeroSection.style.display = 'none';
         showOnboardingKeyStep();
-        noteWaitlistOffer();
+        if (waitlistOffered) noteWaitlistOffer();
       } else {
         userDismissedOnboarding = true;
         onboardingSection.style.display = 'none';
@@ -3088,7 +3090,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           window.__onboarding_viewed_tracked = true;
           vscode.postMessage({ type: 'telemetry_feature', feature: 'onboarding_viewed' });
         }
-        noteWaitlistOffer();
+        if (waitlistOffered) noteWaitlistOffer();
       } else {
         onboardingSection.style.display = 'none';
         readyHeroSection.style.display = 'flex';
@@ -8243,15 +8245,25 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function syncWaitlistOffers() {
       document.querySelectorAll('.waitlist-offer').forEach((button) => {
+        if (button.classList.contains('onboarding-waitlist-offer')) button.hidden = !waitlistOffered;
         button.disabled = waitlistJoined;
         const label = button.querySelector('.waitlist-offer-label');
         if (label) label.textContent = waitlistOfferLabel();
       });
     }
 
-    function setWaitlistJoined(joined) {
+    function setWaitlistState(joined, offered) {
       waitlistJoined = joined;
+      waitlistOffered = offered || joined;
       syncWaitlistOffers();
+      if (waitlistOffered && onboardingSection && onboardingSection.style.display === 'flex') noteWaitlistOffer();
+    }
+
+    /** Tells the host the gateway offered the waitlist, so the Andromity cards may offer it too. */
+    function noteGatewayWaitlistOffer() {
+      if (waitlistGatewayOfferNoted || waitlistOffered) return;
+      waitlistGatewayOfferNoted = true;
+      vscode.postMessage({ type: 'waitlist_offered' });
     }
 
     function noteWaitlistOffer() {
@@ -8261,7 +8273,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function openWaitlistForm(msg) {
-      if (msg.joined === true) setWaitlistJoined(true);
+      if (msg.joined === true) setWaitlistState(true, true);
       const previous = document.getElementById('waitlist-card');
       if (previous) previous.remove();
       const choices = (list) => (Array.isArray(list) ? list : [])
@@ -8316,7 +8328,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const chips = (list, action, isPicked) => list.map(c => '<button class="checkin-chip" data-action="' + action + '" data-id="' + escapeHtml(c.id) +
         '" aria-pressed="' + (isPicked(c.id) ? 'true' : 'false') + '"' + disabled + '>' + escapeHtml(c.label) + '</button>').join('');
       return '<div class="checkin-title" id="waitlist-title">Join the waitlist</div>' +
-        '<div class="checkin-text">Two quick questions. No email needed.</div>' +
+        '<div class="checkin-text">Two quick questions. No email needed. Please don\\'t include contact details.</div>' +
         '<div class="waitlist-question" id="waitlist-wants-label">What would you want?</div>' +
         '<div class="checkin-chips" role="group" aria-labelledby="waitlist-wants-label">' +
           chips(waitlistForm.wants, 'waitlist-want', id => waitlistForm.picked.has(id)) +
@@ -8382,7 +8394,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function finishWaitlistForm(msg) {
-      if (msg.ok) setWaitlistJoined(true);
+      if (msg.ok) setWaitlistState(true, true);
       if (!waitlistForm) return;
       waitlistForm.sending = false;
       if (msg.ok) {
@@ -11019,7 +11031,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
 
         case 'waitlist_state':
-          setWaitlistJoined(msg.joined === true);
+          setWaitlistState(msg.joined === true, msg.offered === true);
           break;
 
         case 'waitlist_form':
@@ -11404,6 +11416,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       });
       if (errorType === 'quota_exceeded' && source.getAttribute('data-error-action') === 'join_waitlist') {
         actionsHtml += waitlistOfferButton();
+        noteGatewayWaitlistOffer();
         noteWaitlistOffer();
       }
       const detailsNode = source.querySelector('.error-details .error-code');

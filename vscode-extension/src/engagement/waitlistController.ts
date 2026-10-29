@@ -5,9 +5,11 @@ import { recordFeatureUse } from "../telemetry/featureUsage.js";
 import { WAITLIST_HEARD_FROM, WAITLIST_WANTS, cleanWaitlistAnswer, submitWaitlist, waitlistPayload } from "./waitlist.js";
 
 const JOINED_KEY = "andromity.waitlistJoined";
+/** Set once a gateway error has carried the join_waitlist action. Until then no card offers the waitlist. */
+const OFFERED_KEY = "andromity.waitlistOffered";
 
 /** Chat page messages the waitlist handles. None of them needs the engine. */
-export const WAITLIST_MESSAGES: ReadonlySet<unknown> = new Set(["waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
+export const WAITLIST_MESSAGES: ReadonlySet<unknown> = new Set(["waitlist_offered", "waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
 
 export interface WaitlistChoice {
   id: string;
@@ -17,6 +19,7 @@ export interface WaitlistChoice {
 export interface WaitlistStateMessage {
   type: "waitlist_state";
   joined: boolean;
+  offered: boolean;
 }
 
 export interface WaitlistFormMessage {
@@ -34,9 +37,9 @@ export interface WaitlistReply {
 
 export type WaitlistPageMessage = WaitlistFormMessage | WaitlistReply;
 
-/** The waitlist offer, its form and the local joined flag. Usage telemetry records the steps, never the answers. */
+/** The waitlist offer, its form and the local flags. Usage telemetry records only that the offer was shown. */
 export class WaitlistController {
-  private readonly _joinListeners = new Set<() => void>();
+  private readonly _listeners = new Set<() => void>();
   private _joining: Promise<WaitlistReply> | null = null;
 
   constructor(private readonly _context: vscode.ExtensionContext) {}
@@ -45,14 +48,29 @@ export class WaitlistController {
     return this._context.globalState.get<boolean>(JOINED_KEY) === true;
   }
 
-  stateMessage(): WaitlistStateMessage {
-    return { type: "waitlist_state", joined: this.joined() };
+  /** The backend has offered the waitlist at least once. */
+  offered(): boolean {
+    return this.joined() || this._context.globalState.get<boolean>(OFFERED_KEY) === true;
   }
 
-  /** Called after a join is stored, so every open page can show it. */
-  onDidJoin(listener: () => void): vscode.Disposable {
-    this._joinListeners.add(listener);
-    return { dispose: () => this._joinListeners.delete(listener) };
+  stateMessage(): WaitlistStateMessage {
+    return { type: "waitlist_state", joined: this.joined(), offered: this.offered() };
+  }
+
+  /** Called after the offered or joined flag changes, so every open page can show it. */
+  onDidChange(listener: () => void): vscode.Disposable {
+    this._listeners.add(listener);
+    return { dispose: () => this._listeners.delete(listener) };
+  }
+
+  async markOffered(): Promise<void> {
+    if (this.offered()) return;
+    try {
+      await this._context.globalState.update(OFFERED_KEY, true);
+    } catch {
+      return;
+    }
+    this._notify();
   }
 
   offerShown(): void {
@@ -61,7 +79,9 @@ export class WaitlistController {
 
   /** Handles the waitlist messages of a chat page. Returns false for any other message. */
   async handleMessage(message: { type?: unknown }, post: (reply: WaitlistPageMessage) => void): Promise<boolean> {
-    if (message.type === "waitlist_offer_shown") {
+    if (message.type === "waitlist_offered") {
+      await this.markOffered();
+    } else if (message.type === "waitlist_offer_shown") {
       this.offerShown();
     } else if (message.type === "waitlist_open") {
       this._openForm(post);
@@ -88,7 +108,6 @@ export class WaitlistController {
       void vscode.window.showInformationMessage(airGapOffMessage("joining the waitlist"));
       return;
     }
-    if (!joined) recordFeatureUse("waitlist_form_opened");
     post({
       type: "waitlist_form",
       joined,
@@ -117,14 +136,17 @@ export class WaitlistController {
     } catch {
       // The entry is stored; a lost local flag only means the offer can appear again.
     }
-    recordFeatureUse("waitlist_joined");
-    for (const listener of this._joinListeners) {
+    this._notify();
+    return { type: "waitlist_result", ok: true };
+  }
+
+  private _notify(): void {
+    for (const listener of this._listeners) {
       try {
         listener();
       } catch {
-        // One page failing to update must not fail the join.
+        // One page failing to update must not fail the change.
       }
     }
-    return { type: "waitlist_result", ok: true };
   }
 }

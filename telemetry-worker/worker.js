@@ -4,7 +4,7 @@ import { cachedStats } from './statsCache.js';
 import { sessionSummaries, featureSummaries } from './metricSummaries.js';
 import { handleBlogRequest } from './blog.js';
 import { handleFeedbackRequest } from './feedback.js';
-import { handleWaitlistRequest } from './waitlist.js';
+import { handleWaitlistRequest, withoutCors } from './waitlist.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -21,7 +21,8 @@ export default {
 
     // 1. Immediately answer CORS preflights before any rate limiting
     if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: securityHeaders });
+      const headers = new URL(request.url).pathname === '/waitlist' ? withoutCors(securityHeaders) : securityHeaders;
+      return new Response(null, { status: 204, headers });
     }
 
     // 2. IP Rate limiting with proper CORS headers on 429

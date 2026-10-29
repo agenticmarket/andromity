@@ -8,8 +8,14 @@ export const HEARD_FROM = ['marketplace', 'search', 'friend', 'reddit', 'x', 'yo
 export const MAX_WANTS_NOTE = 300;
 export const MAX_HEARD_NOTE = 200;
 const NOT_READY = 'Waitlist is not available yet';
+const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 const MISSING_TABLE = /no such table/i;
 const ENTRY_COLUMNS = 'id, wants, wants_note, heard_from, heard_note, client, os, version, country, created_at';
+
+/** The public route answers no browser origin: only the editor's own requests, which CORS does not govern, should join. */
+export function withoutCors(headers) {
+  return Object.fromEntries(Object.entries(headers).filter(([name]) => !/^access-control-/i.test(name)));
+}
 
 function isMissingTable(err) {
   return MISSING_TABLE.test(String(err?.message || err));
@@ -18,12 +24,12 @@ function isMissingTable(err) {
 function optionalNote(value, name, max) {
   if (value === undefined || value === null) return { note: null };
   if (typeof value !== 'string') return { error: `${name} must be a string` };
-  const note = cleanText(value);
+  const note = cleanText(value).replace(EMAIL_PATTERN, '[email removed]');
   if (note.length > max) return { error: `${name} is longer than ${max} characters` };
   return { note: note || null };
 }
 
-/** Validates a waitlist entry against the known choices. Notes are optional; key-shaped strings are replaced. */
+/** Validates a waitlist entry against the known choices. Notes are optional; key- and email-shaped strings are replaced. */
 export function cleanWaitlist(input, cfCountry) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return { error: 'Expected a JSON object' };
   const wants = input.wants;
@@ -68,14 +74,26 @@ async function readBody(request) {
   }
 }
 
+function isJson(request) {
+  return (request.headers.get('content-type') || '').split(';')[0].trim().toLowerCase() === 'application/json';
+}
+
 async function submit(request, env, headers) {
+  if (env.WAITLIST_OPEN === 'false') return json({ error: 'The waitlist is closed' }, 503, headers);
+  if (!isJson(request)) return json({ error: 'Content-Type must be application/json' }, 415, headers);
+  if (env.WAITLIST_RATE_LIMITER) {
+    const { success } = await env.WAITLIST_RATE_LIMITER.limit({ key: request.headers.get('CF-Connecting-IP') ?? 'unknown' });
+    if (!success) return json({ error: 'Too Many Requests' }, 429, { ...headers, 'Retry-After': '60' });
+  }
   const text = await readBody(request);
   if (text === null) return json({ error: 'Payload too large' }, 413, headers);
   let data = null;
   try { data = JSON.parse(text); } catch {}
   const { values, error } = cleanWaitlist(data, request.cf?.country);
   if (error) return json({ error }, 400, headers);
-  await env.DB.prepare('INSERT INTO waitlist (wants, wants_note, heard_from, heard_note, client, os, version, country) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+  // A day, not a time: an exact time could be matched against usage telemetry.
+  await env.DB.prepare(`INSERT INTO waitlist (wants, wants_note, heard_from, heard_note, client, os, version, country, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, date('now'))`)
     .bind(values.wants, values.wants_note, values.heard_from, values.heard_note, values.client, values.os, values.version, values.country).run();
   return json({ received: true }, 201, headers);
 }
@@ -94,8 +112,8 @@ function tally(rows, known, combined) {
 async function summarize(env) {
   const [totals, wants, heard] = await Promise.all([
     env.DB.prepare(`SELECT COUNT(*) AS total,
-        COALESCE(SUM(created_at >= datetime('now', '-7 days')), 0) AS last_7_days,
-        COALESCE(SUM(created_at >= datetime('now', '-30 days')), 0) AS last_30_days
+        COALESCE(SUM(date(created_at) > date('now', '-7 days')), 0) AS last_7_days,
+        COALESCE(SUM(date(created_at) > date('now', '-30 days')), 0) AS last_30_days
       FROM waitlist`).first(),
     env.DB.prepare('SELECT wants AS choice, COUNT(*) AS n FROM waitlist GROUP BY wants').all(),
     env.DB.prepare('SELECT heard_from AS choice, COUNT(*) AS n FROM waitlist GROUP BY heard_from').all(),
@@ -135,6 +153,7 @@ export async function handleWaitlistRequest(request, env, { url, headers, isAdmi
   const path = url.pathname;
   const admin = path === '/api/admin/waitlist' || path.startsWith('/api/admin/waitlist/');
   if (!admin && path !== '/waitlist') return null;
+  if (!admin) headers = withoutCors(headers);
   if (!env.DB) return json({ error: 'Database not bound' }, 500, headers);
   if (admin && !isAdmin) return json({ error: 'Unauthorized' }, 401, headers);
   if (!admin && request.method !== 'POST') return json({ error: 'Method Not Allowed' }, 405, headers);

@@ -631,7 +631,7 @@ ${styles}
                 <span>Sign in with AgenticMarket</span>
               </button>
             </div>
-            <button type="button" class="onboarding-waitlist-offer waitlist-offer" data-action="join-waitlist"><span class="waitlist-offer-label">Need more? Join the waitlist</span></button>
+            <button type="button" class="onboarding-waitlist-offer waitlist-offer" data-action="join-waitlist" hidden><span class="waitlist-offer-label">Need more? Join the waitlist</span></button>
           </div>
 
 

@@ -244,7 +244,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const waitlist = new WaitlistController(context);
   chatProvider.setWaitlist(waitlist);
   SettingsPanel.waitlist = waitlist;
-  context.subscriptions.push(waitlist.onDidJoin(() => {
+  context.subscriptions.push(waitlist.onDidChange(() => {
     chatProvider.broadcastToWebviews(waitlist.stateMessage());
     SettingsPanel.postWaitlistState();
   }));
