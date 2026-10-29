@@ -67,19 +67,26 @@ type FakeClient = ReturnType<typeof fakeClient>;
 
 function fakeBridge(mode: "timeout" | "later") {
   const waits: number[] = [];
-  let connect: (client: FakeClient) => void = () => {};
-  const connected = new Promise<FakeClient>((resolve) => { connect = resolve; });
+  const waiting: Array<(client: FakeClient | null) => void> = [];
+  let live: FakeClient | null = null;
   return {
     waits,
-    connect: (client: FakeClient) => connect(client),
+    connect: (client: FakeClient) => {
+      live = client;
+      for (const resolve of waiting.splice(0)) resolve(client);
+    },
+    disconnect: () => { live = null; },
+    getClient: (): FakeClient | null => live,
     waitForClient: (timeoutMs: number): Promise<FakeClient | null> => {
       waits.push(timeoutMs);
-      return mode === "timeout" ? Promise.resolve(null) : connected;
+      if (live || mode === "timeout") return Promise.resolve(live);
+      return new Promise((resolve) => waiting.push(resolve));
     },
   };
 }
+type FakeBridge = ReturnType<typeof fakeBridge>;
 
-function chatView(win: VsCodeWindow, engine: { client?: FakeClient; bridge?: ReturnType<typeof fakeBridge> } = {}) {
+function chatView(win: VsCodeWindow, engine: { client?: FakeClient; bridge?: FakeBridge | null } = {}) {
   const provider: any = new win.ChatViewProvider({ fsPath: "/extension" });
   const posted: any[] = [];
   let startupLoads = 0;
@@ -90,11 +97,18 @@ function chatView(win: VsCodeWindow, engine: { client?: FakeClient; bridge?: Ret
     getWorkspaceIndex: async () => ({ files: [], dirs: [] }),
     _loadStartupState: async () => { startupLoads++; },
   });
-  if (engine.bridge) provider.setPythonBridge(engine.bridge);
-  if (engine.client) provider.setRpcClient(engine.client);
+  const bridge = engine.bridge === undefined ? fakeBridge("timeout") : engine.bridge;
+  if (bridge) provider.setPythonBridge(bridge);
+  const connect = (client: FakeClient) => {
+    bridge?.connect(client);
+    provider.setRpcClient(client);
+  };
+  if (engine.client) connect(engine.client);
   return {
     provider,
+    bridge,
     posted,
+    connect,
     startupLoads: () => startupLoads,
     ready: (type = "ready"): Promise<void> => provider._handleWebviewMessage({ type }),
   };
@@ -122,7 +136,7 @@ describe("chat_view_opened telemetry", () => {
     await view.ready();
     await chatView(win, { client }).ready();
     const restarted = fakeClient();
-    view.provider.setRpcClient(restarted);
+    view.connect(restarted);
     await view.ready();
     assert.equal(client.opened().length, 1);
     assert.equal(restarted.opened().length, 0, "a restarted engine is still the same window");
@@ -146,7 +160,7 @@ describe("chat_view_opened telemetry", () => {
 
   it("fails nothing and sends nothing while the engine is not connected", async () => {
     const win = newWindow();
-    const alone = chatView(win);
+    const alone = chatView(win, { bridge: null });
     await assert.doesNotReject(alone.ready());
     const starting = fakeBridge("timeout");
     const waiting = chatView(win, { bridge: starting });
@@ -179,7 +193,7 @@ describe("chat_view_opened telemetry", () => {
     const view = chatView(newWindow(), { bridge: fakeBridge("timeout") });
     await view.ready();
     const client = fakeClient();
-    view.provider.setRpcClient(client);
+    view.connect(client);
     await settle();
     assert.ok(view.posted.some((message) => message.type === "backend_ready"), "the chat did connect");
     assert.equal(client.opened().length, 1, "an engine slower than 3 s to start (first-run install, cold start) loses the event");
@@ -187,10 +201,32 @@ describe("chat_view_opened telemetry", () => {
 
   it("does not count an engine connection as an open when no chat view reported ready", async () => {
     const client = fakeClient();
-    chatView(newWindow()).provider.setRpcClient(client);
+    chatView(newWindow()).connect(client);
     await settle();
     assert.equal(client.opened().length, 0);
   });
+
+  for (const bridgeReports of ["no client", "a different client"] as const) {
+    it(`sends nothing to a dead engine when the bridge reports ${bridgeReports}, then sends it once to the engine that replaces it`, async () => {
+      const view = chatView(newWindow());
+      const dead = fakeClient();
+      view.connect(dead);
+      const interim = fakeClient();
+      if (bridgeReports === "no client") view.bridge!.disconnect();
+      else view.bridge!.connect(interim);
+      await assert.doesNotReject(view.ready());
+      await view.ready("webview_ready");
+      await settle();
+      assert.equal(dead.opened().length, 0, "the event would be lost on a client that can't deliver it");
+      assert.equal(interim.opened().length, 0, "the chat isn't bound to that client yet");
+      const replacement = fakeClient();
+      view.connect(replacement);
+      await view.ready();
+      await settle();
+      assert.deepEqual(replacement.opened(), [{ feature: "chat_view_opened" }]);
+      assert.equal(dead.opened().length + interim.opened().length, 0);
+    });
+  }
 
   it("does not record it again after the user has worked in many sessions in the same window", async () => {
     const client = fakeClient();

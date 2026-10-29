@@ -82,6 +82,21 @@ function memento(initial?: unknown, options: { failWrites?: boolean } = {}) {
   };
 }
 
+function vscodeMemento() {
+  const store = new Map<string, unknown>();
+  let failing = false;
+  return {
+    saved: (): any => store.get(STATE_KEY),
+    failSaves: (fail: boolean) => { failing = fail; },
+    get: (key: string) => store.get(key),
+    update: (key: string, value: unknown): Promise<void> => {
+      if (value === undefined) store.delete(key);
+      else store.set(key, JSON.parse(JSON.stringify(value)));
+      return failing ? Promise.reject(new Error("disk full")) : Promise.resolve();
+    },
+  };
+}
+
 describe("early fingerprint tip: rules", () => {
   it("shows the fingerprint tip in each of a user's first two sessions after a turn that edited a file", () => {
     assert.equal(pickTip(initialFeatureTipsState(), EDIT, "2026-10-01"), "fingerprint", "before any session is recorded");
@@ -391,6 +406,44 @@ describe("early fingerprint tip: controller", () => {
       for (const sessionId of ["a", "a", "b", "b"]) shown.push(await tips.onTurnFinished(turn(sessionId)));
       assert.ok(shown.filter(Boolean).length <= 1, `tips shown on one day: ${JSON.stringify(shown)}`);
     } finally {
+      tips.dispose();
+    }
+  });
+
+  it("does not count a showing whose save failed, so a later save carries no phantom showing", async (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: DAY[1] });
+    const sent: string[] = [];
+    setFeatureUsageGate(() => true);
+    setFeatureUsageClient({ call: async (_method: string, params?: any): Promise<any> => { sent.push(params?.feature); return {}; } });
+    const store = vscodeMemento();
+    const tips = new FeatureTipsController(store);
+    try {
+      store.failSaves(true);
+      assert.equal(await tips.onTurnFinished(turn("a")), null, "a showing that could not be saved is not shown");
+      const rolledBack = normalizeFeatureTipsState(store.saved());
+      assert.equal(rolledBack.tips.fingerprint.shown, 0, "the in-memory value is rolled back");
+      assert.equal(rolledBack.lastTipDay, "", "the day's tip is not used up");
+      assert.deepEqual(sent, [], "no tip_shown event for a tip that was not shown");
+
+      store.failSaves(false);
+      assert.equal(await tips.onTurnFinished(turn("a")), "fingerprint");
+      assert.equal(store.saved().tips.fingerprint.shown, 1);
+      assert.equal(store.saved().lastTipDay, dayKey(1));
+
+      t.mock.timers.setTime(DAY[2]);
+      store.failSaves(true);
+      assert.equal(await tips.onTurnFinished(turn("b")), null);
+      assert.equal(store.saved().tips.fingerprint.shown, 1, "no phantom second showing");
+      assert.equal(store.saved().lastTipDay, dayKey(1));
+
+      store.failSaves(false);
+      assert.equal(await tips.onTurnFinished(turn("b")), "fingerprint", "the second showing is still available");
+      assert.equal(store.saved().tips.fingerprint.shown, 2);
+      t.mock.timers.setTime(DAY[3]);
+      assert.equal(await tips.onTurnFinished(turn("b")), null, "and there is no third");
+      assert.deepEqual(sent, ["tip_shown_fingerprint", "tip_shown_fingerprint"]);
+    } finally {
+      setFeatureUsageClient(null);
       tips.dispose();
     }
   });
