@@ -135,6 +135,21 @@ test('opened counts a user who has activity but no users row, matching summary.t
   assert.equal(row.opened.new + row.opened.week + row.opened.older, row.opened.total);
 });
 
+test('a user without a users row is placed by their first activity in any client, and is never an install', async () => {
+  const today = '2026-11-01';
+  const db = seeded(`${today} 12:00:00`, b => b
+    .user('known-user', '2026-10-01T00:00:00.000Z').open('known-user', '2026-10-01').open('known-user', today)
+    .open('orphan-today', today).turn('orphan-today', today, 'completed')
+    .open('orphan-day-6', '2026-10-26', { client: 'cli' }).open('orphan-day-6', today)
+    .open('orphan-day-7', '2026-10-25', { client: 'cli' }).open('orphan-day-7', today));
+  const all = await stats(db);
+  assert.equal(all.summary.today.dau, 4);
+  assert.deepEqual(all.usage_daily[0].opened, { total: 4, new: 1, week: 1, older: 2 });
+  assert.deepEqual(all.usage_daily[0].used, { total: 1, new: 1, week: 0, older: 0 });
+  assert.deepEqual((await stats(db, 'client=vscode')).usage_daily[0].opened, { total: 4, new: 1, week: 1, older: 2 });
+  assert.equal(all.cohorts.reduce((n, c) => n + c.installs, 0), 1);
+});
+
 test('timeRange trims usage_daily to 30, 7 or 1 days and leaves cohorts and turn reliability alone', async () => {
   const today = '2026-11-01';
   const db = seeded(`${today} 12:00:00`, b => b
@@ -197,17 +212,17 @@ test('dimension and exclusion filters scope opened, used, cohorts and turn relia
   assert.deepEqual(vscode.turn_reliability.last_7d, { turns: 1, finished_turns: 1, failed_turns: 0, failure_rate: 0,
     sessions: 1, last_turn_failed_sessions: 0, last_turn_failure_rate: 0 });
   assert.deepEqual(vscode.cohorts.find(c => c.week_start === '2026-10-26'),
-    { week_start: '2026-10-26', installs: 1, used: 1, came_back: 0, used_after_7d: null, used_after_14d: null });
+    { week_start: '2026-10-26', installs: 1, used: 1, came_back: 0, used_days_7_13: null, used_days_14_20: null });
   assert.deepEqual(vscode.cohorts.find(c => c.week_start === '2026-09-28'),
-    { week_start: '2026-09-28', installs: 1, used: 0, came_back: 0, used_after_7d: 0, used_after_14d: 0 });
+    { week_start: '2026-09-28', installs: 1, used: 0, came_back: 0, used_days_7_13: 0, used_days_14_20: 0 });
 
   const cli = await stats(db, 'client=cli');
   assert.deepEqual(cli.turn_reliability.last_7d, { turns: 2, finished_turns: 2, failed_turns: 1, failure_rate: 50,
     sessions: 2, last_turn_failed_sessions: 1, last_turn_failure_rate: 50 });
   assert.deepEqual(cli.cohorts.find(c => c.week_start === '2026-10-26'),
-    { week_start: '2026-10-26', installs: 1, used: 1, came_back: 0, used_after_7d: null, used_after_14d: null });
+    { week_start: '2026-10-26', installs: 1, used: 1, came_back: 0, used_days_7_13: null, used_days_14_20: null });
   assert.deepEqual(cli.cohorts.find(c => c.week_start === '2026-09-28'),
-    { week_start: '2026-09-28', installs: 1, used: 1, came_back: 1, used_after_7d: 1, used_after_14d: 1 });
+    { week_start: '2026-09-28', installs: 1, used: 1, came_back: 1, used_days_7_13: 0, used_days_14_20: 0 });
 
   const ranged = await stats(db, 'client=cli&timeRange=today');
   assert.deepEqual(ranged.cohorts, cli.cohorts);
@@ -240,51 +255,145 @@ test('hostile filter values are bound as data, match nothing and leave the schem
   assert.deepEqual((await stats(db, `client=${'x'.repeat(96)}`)).usage_daily[0].opened, zero);
 });
 
-test('cohorts are eight Monday-start UTC weeks with install, return and after-N-day counts', async () => {
-  const db = seeded('2026-11-01 12:00:00', b => b
-    .user('sunday-install', '2026-10-25T23:59:59.999Z').open('sunday-install', '2026-10-25')
-    .user('monday-install', '2026-10-26T00:00:00.000Z').open('monday-install', '2026-10-26')
-    .user('legacy-format', '2026-10-26 08:00:00').open('legacy-format', '2026-10-26')
-    .user('oldest-week', '2026-09-07T00:00:00.000Z').open('oldest-week', '2026-09-07')
-    .user('too-old', '2026-09-06T23:59:59.999Z').open('too-old', '2026-09-06').open('too-old', '2026-10-30').turn('too-old', '2026-10-30', 'completed')
-    .user('never-used', '2026-10-05T09:00:00.000Z').open('never-used', '2026-10-05')
-    .user('same-day', '2026-10-05T09:00:00.000Z').open('same-day', '2026-10-05').turn('same-day', '2026-10-05', 'completed')
-    .user('next-day', '2026-10-05T23:00:00.000Z').open('next-day', '2026-10-05').open('next-day', '2026-10-06').turn('next-day', '2026-10-06', 'failed')
-    .user('day-seven', '2026-10-05T09:00:00.000Z').open('day-seven', '2026-10-05').open('day-seven', '2026-10-12').session('day-seven', '2026-10-12')
-    .user('day-fourteen', '2026-10-11T22:00:00.000Z').open('day-fourteen', '2026-10-11').open('day-fourteen', '2026-10-25').turn('day-fourteen', '2026-10-25', null)
-    .user('day-six', '2026-10-11T22:00:00.000Z').open('day-six', '2026-10-11').open('day-six', '2026-10-17').turn('day-six', '2026-10-17', 'completed')
-    .user('opened-only', '2026-10-05T09:00:00.000Z').open('opened-only', '2026-10-05').open('opened-only', '2026-10-20'));
+const cohortRow = (week_start, installs, used, came_back, used_days_7_13, used_days_14_20) =>
+  ({ week_start, installs, used, came_back, used_days_7_13, used_days_14_20 });
+
+test('cohorts are eight Monday-start UTC weeks with install, return and bounded week-2 and week-3 counts', async () => {
+  const prompt = (b, id, day, kind = 'turn') => {
+    b.open(id, day);
+    return kind === 'session' ? b.session(id, day) : b.turn(id, day, 'completed');
+  };
+  const db = seeded('2026-11-01 12:00:00', b => {
+    b.user('sunday-install', '2026-10-25T23:59:59.999Z').open('sunday-install', '2026-10-25')
+      .user('monday-install', '2026-10-26T00:00:00.000Z').open('monday-install', '2026-10-26')
+      .user('legacy-format', '2026-10-26 08:00:00').open('legacy-format', '2026-10-26')
+      .user('oldest-week', '2026-09-07T00:00:00.000Z').open('oldest-week', '2026-09-07')
+      .user('too-old', '2026-09-06T23:59:59.999Z').open('too-old', '2026-09-06').open('too-old', '2026-10-30').turn('too-old', '2026-10-30', 'completed')
+      .user('never-used', '2026-10-05T09:00:00.000Z').open('never-used', '2026-10-05')
+      .user('opened-only', '2026-10-05T09:00:00.000Z').open('opened-only', '2026-10-05').open('opened-only', '2026-10-20');
+    const installs = [
+      ['same-day', '2026-10-05T09:00:00.000Z', ['2026-10-05']],
+      ['next-day', '2026-10-05T23:00:00.000Z', ['2026-10-06']],
+      ['day-six', '2026-10-11T22:00:00.000Z', ['2026-10-17']],
+      ['day-seven', '2026-10-05T09:00:00.000Z', ['2026-10-12'], 'session'],
+      ['day-thirteen', '2026-10-05T09:00:00.000Z', ['2026-10-18']],
+      ['day-fourteen', '2026-10-11T22:00:00.000Z', ['2026-10-25']],
+      ['day-twenty', '2026-10-06T09:00:00.000Z', ['2026-10-26']],
+      ['day-twenty-one', '2026-10-05T09:00:00.000Z', ['2026-10-26']],
+      ['both-windows', '2026-10-07T09:00:00.000Z', ['2026-10-15', '2026-10-22', '2026-10-22']],
+    ];
+    for (const [id, first, days, kind] of installs) {
+      b.user(id, first).open(id, first.slice(0, 10));
+      for (const day of days) prompt(b, id, day, kind);
+    }
+  });
   const { cohorts } = await stats(db);
-  const row = (week_start, installs, used, came_back, used_after_7d, used_after_14d) =>
-    ({ week_start, installs, used, came_back, used_after_7d, used_after_14d });
   assert.deepEqual(cohorts, [
-    row('2026-10-26', 2, 0, 0, null, null),
-    row('2026-10-19', 1, 0, 0, null, null),
-    row('2026-10-12', 0, 0, 0, 0, null),
-    row('2026-10-05', 7, 5, 4, 2, 1),
-    row('2026-09-28', 0, 0, 0, 0, 0),
-    row('2026-09-21', 0, 0, 0, 0, 0),
-    row('2026-09-14', 0, 0, 0, 0, 0),
-    row('2026-09-07', 1, 0, 0, 0, 0),
+    cohortRow('2026-10-26', 2, 0, 0, null, null),
+    cohortRow('2026-10-19', 1, 0, 0, null, null),
+    cohortRow('2026-10-12', 0, 0, 0, 0, null),
+    cohortRow('2026-10-05', 11, 9, 8, 3, 3),
+    cohortRow('2026-09-28', 0, 0, 0, 0, 0),
+    cohortRow('2026-09-21', 0, 0, 0, 0, 0),
+    cohortRow('2026-09-14', 0, 0, 0, 0, 0),
+    cohortRow('2026-09-07', 1, 0, 0, 0, 0),
   ]);
 });
 
-test('after-7 and after-14 day counts stay null until the last possible install day of the week is that old', async () => {
+test('week-2 and week-3 counts stay null until the window has passed for the last possible install day', async () => {
   const build = b => b
     .user('sunday-install', '2026-10-25T23:59:59.999Z').open('sunday-install', '2026-10-25')
-    .open('sunday-install', '2026-11-01').turn('sunday-install', '2026-11-01', 'completed')
+    .open('sunday-install', '2026-11-07').turn('sunday-install', '2026-11-07', 'completed')
     .user('mid-october', '2026-10-12T10:00:00.000Z').open('mid-october', '2026-10-12')
     .open('mid-october', '2026-10-26').turn('mid-october', '2026-10-26', 'completed');
-  const sunday = (await stats(seeded('2026-11-01 23:59:59', build))).cohorts;
-  const monday = (await stats(seeded('2026-11-02 00:00:00', build))).cohorts;
+  const saturday = (await stats(seeded('2026-11-07 23:59:59', build))).cohorts;
+  const sunday = (await stats(seeded('2026-11-08 00:00:00', build))).cohorts;
+  const monday = (await stats(seeded('2026-11-09 00:00:00', build))).cohorts;
   const week = (cohorts, start) => cohorts.find(c => c.week_start === start);
-  assert.deepEqual(sunday.map(c => c.week_start), Array.from({ length: 8 }, (_, i) => shift('2026-10-26', -7 * i)));
-  assert.deepEqual(monday.map(c => c.week_start), Array.from({ length: 8 }, (_, i) => shift('2026-11-02', -7 * i)));
-  assert.deepEqual([week(sunday, '2026-10-19').used_after_7d, week(monday, '2026-10-19').used_after_7d], [null, 1]);
-  assert.deepEqual([week(sunday, '2026-10-12').used_after_14d, week(monday, '2026-10-12').used_after_14d], [null, 1]);
-  assert.equal(week(monday, '2026-10-19').used_after_14d, null);
-  assert.equal(week(monday, '2026-10-26').used_after_7d, null);
-  assert.equal(week(monday, '2026-11-02').used_after_7d, null);
+  assert.deepEqual(saturday.map(c => c.week_start), Array.from({ length: 8 }, (_, i) => shift('2026-11-02', -7 * i)));
+  assert.deepEqual(sunday.map(c => c.week_start), Array.from({ length: 8 }, (_, i) => shift('2026-11-02', -7 * i)));
+  assert.deepEqual(monday.map(c => c.week_start), Array.from({ length: 8 }, (_, i) => shift('2026-11-09', -7 * i)));
+  assert.deepEqual([week(saturday, '2026-10-19').used_days_7_13, week(sunday, '2026-10-19').used_days_7_13], [null, 1]);
+  assert.deepEqual([week(saturday, '2026-10-12').used_days_14_20, week(sunday, '2026-10-12').used_days_14_20], [null, 1]);
+  assert.equal(week(saturday, '2026-10-12').used_days_7_13, 0);
+  assert.equal(week(sunday, '2026-10-19').used_days_14_20, null);
+  assert.equal(week(sunday, '2026-10-26').used_days_7_13, null);
+  assert.deepEqual(week(saturday, '2026-10-19'), cohortRow('2026-10-19', 1, 1, 1, null, null));
+});
+
+test('weeks with an install older than every retained row report only installs, and say so with null', async () => {
+  const db = seeded('2026-11-01 12:00:00', b => b
+    .user('purged-user', '2026-10-08T10:00:00.000Z').open('purged-user', '2026-10-20').turn('purged-user', '2026-10-20', 'completed')
+    .user('purged-peer', '2026-10-10T10:00:00.000Z')
+    .user('old-user', '2026-09-30T10:00:00.000Z')
+    .user('boundary-user', '2026-10-14T00:00:00.000Z').open('boundary-user', '2026-10-14')
+    .open('boundary-user', '2026-10-21').turn('boundary-user', '2026-10-21', 'completed')
+    .user('later-user', '2026-10-16T10:00:00.000Z').open('later-user', '2026-10-16').turn('later-user', '2026-10-16', 'failed')
+    .user('after-user', '2026-10-20T10:00:00.000Z').open('after-user', '2026-10-20').session('after-user', '2026-10-20'));
+  const { cohorts, usage_daily } = await stats(db);
+  assert.deepEqual(cohorts, [
+    cohortRow('2026-10-26', 0, 0, 0, null, null),
+    cohortRow('2026-10-19', 1, 1, 0, null, null),
+    cohortRow('2026-10-12', 2, 2, 1, 1, null),
+    cohortRow('2026-10-05', 2, null, null, null, null),
+    cohortRow('2026-09-28', 1, null, null, null, null),
+    cohortRow('2026-09-21', 0, 0, 0, 0, 0),
+    cohortRow('2026-09-14', 0, 0, 0, 0, 0),
+    cohortRow('2026-09-07', 0, 0, 0, 0, 0),
+  ]);
+  assert.deepEqual(usage_daily.find(day => day.date === '2026-10-20').used, { total: 2, new: 1, week: 0, older: 1 });
+});
+
+test('a purge is detected from the oldest row in any of the task, session and activity tables', async () => {
+  const build = extra => b => {
+    b.user('install', '2026-10-13T10:00:00.000Z').open('install', '2026-10-15').turn('install', '2026-10-15', 'completed');
+    extra(b);
+  };
+  const week = async extra => (await stats(seeded('2026-11-01 12:00:00', build(extra)))).cohorts
+    .find(c => c.week_start === '2026-10-12');
+  assert.equal((await week(() => {})).used, null);
+  assert.equal((await week(b => b.turn('someone', '2026-10-13', 'completed'))).used, 1);
+  assert.equal((await week(b => b.session('someone', '2026-10-13'))).used, 1);
+  assert.equal((await week(b => b.open('someone', '2026-10-13'))).used, 1);
+  assert.equal((await week(b => b.open('someone', '2026-10-14'))).used, null);
+  const mixed = await week(b => b.user('later-install', '2026-10-16T10:00:00.000Z').open('later-install', '2026-10-16')
+    .turn('later-install', '2026-10-16', 'completed'));
+  assert.deepEqual(mixed, cohortRow('2026-10-12', 2, null, null, null, null));
+});
+
+test('installs with no retained task, session or activity rows at all are treated as purged', async () => {
+  const { cohorts } = await stats(seeded('2026-11-01 12:00:00', b => b.user('lonely', '2026-10-20T10:00:00.000Z')));
+  assert.deepEqual(cohorts.find(c => c.week_start === '2026-10-19'), cohortRow('2026-10-19', 1, null, null, null, null));
+  assert.deepEqual(cohorts.find(c => c.week_start === '2026-10-12'), cohortRow('2026-10-12', 0, 0, 0, 0, null));
+});
+
+test('filtered prompt days need matching activity for the same user, session and date', async () => {
+  const today = '2026-11-01';
+  const db = seeded(`${today} 12:00:00`, b => b
+    .user('switcher', '2026-10-20T10:00:00.000Z').open('switcher', '2026-10-20', { model: 'a' })
+    .open('switcher', '2026-10-31', { session: 'sw-0', model: 'b' })
+    .open('switcher', '2026-10-31', { session: 'sw-1', model: 'a' }).session('switcher', '2026-10-31', { session: 'sw-1', model: 'a' })
+    .open('switcher', today, { session: 'sw-1', model: 'b' }));
+  const day = (result, date) => result.usage_daily.find(row => row.date === date);
+  const all = await stats(db);
+  assert.equal(day(all, '2026-10-31').used.total, 1);
+  const modelB = await stats(db, 'model=b');
+  assert.equal(day(modelB, '2026-10-31').opened.total, 1);
+  assert.equal(day(modelB, '2026-10-31').used.total, 0);
+  assert.equal(day(modelB, today).used.total, 0);
+  assert.deepEqual(modelB.cohorts.find(c => c.week_start === '2026-10-19'), cohortRow('2026-10-19', 1, 0, 0, null, null));
+  assert.deepEqual(all.cohorts.find(c => c.week_start === '2026-10-19'), cohortRow('2026-10-19', 1, 1, 1, null, null));
+});
+
+test('filtered cohorts only consider activity since the oldest cohort week starts', async () => {
+  const db = seeded('2026-11-01 12:00:00', b => b
+    .open('anchor', '2026-08-01', { client: 'cli' })
+    .user('stale-vscode', '2026-10-27T10:00:00.000Z').open('stale-vscode', '2026-09-06').open('stale-vscode', '2026-10-27', { client: 'cli' })
+    .user('edge-vscode', '2026-10-28T10:00:00.000Z').open('edge-vscode', '2026-09-07').open('edge-vscode', '2026-10-28', { client: 'cli' }));
+  const installs = async query => (await stats(db, query)).cohorts.find(c => c.week_start === '2026-10-26').installs;
+  assert.equal(await installs(''), 2);
+  assert.equal(await installs('client=vscode'), 1);
+  assert.equal(await installs('client=cli'), 2);
 });
 
 test('install-age buckets and install weeks stay correct across a year boundary', async () => {
@@ -391,7 +500,7 @@ test('recent sessions report turns, failed turns and whether the latest finished
 test('snapshots cached under older stats versions are not served', async () => {
   const db = database();
   const day = new Date().toISOString().slice(0, 10);
-  for (const version of ['stats-v10', 'stats-v11']) {
+  for (const version of ['stats-v10', 'stats-v11', 'stats-v12']) {
     db.sqlite.prepare('INSERT INTO telemetry_stats_cache(cache_key,payload,expires_at) VALUES (?,?,?)')
       .run(`${version}:${day}:`, JSON.stringify({ summary: { total_users: 999 } }), Math.floor(Date.now() / 1000) + 3600);
   }
@@ -459,7 +568,8 @@ function randomWorld(today, seed) {
   for (let index = 0; index < 60; index++) {
     const id = `user-${seed}-${index}`;
     const firstDay = shift(today, -int(0, 75));
-    world.users.push({ id, firstSeen: `${firstDay}T${pad(int(0, 23))}:${pad(int(0, 59))}:${pad(int(0, 59))}.000Z` });
+    const firstSeen = `${firstDay}T${pad(int(0, 23))}:${pad(int(0, 59))}:${pad(int(0, 59))}.000Z`;
+    if (rand() >= 0.1) world.users.push({ id, firstSeen });
     for (const offset of [0, ...Array.from({ length: int(0, 6) }, () => int(0, 45))]) {
       const date = shift(firstDay, offset);
       if (date > today) continue;
@@ -477,6 +587,10 @@ function randomWorld(today, seed) {
       }
     }
   }
+  if (rand() < 0.5) {
+    const purgedBefore = shift(today, -int(10, 60));
+    for (const table of ['activity', 'sessions', 'tasks']) world[table] = world[table].filter(row => row.date >= purgedBefore);
+  }
   return world;
 }
 
@@ -485,16 +599,19 @@ function reference(world, today, client) {
   const rate = (part, whole) => (whole > 0 ? Number(((part / whole) * 100).toFixed(1)) : null);
   const activity = world.activity.filter(a => !client || a.client === client);
   const activityKeys = new Set(activity.map(a => `${a.id}|${a.session}|${a.date}`));
-  const activitySessions = new Set(activity.map(a => a.session));
-  const tasks = world.tasks.filter(t => !client || activityKeys.has(`${t.id}|${t.session}|${t.date}`));
-  const sessions = world.sessions.filter(s => !client || activitySessions.has(s.session));
-  const firstDay = new Map(world.users.map(u => [u.id, u.firstSeen.slice(0, 10)]));
+  const inScope = row => !client || activityKeys.has(`${row.id}|${row.session}|${row.date}`);
+  const tasks = world.tasks.filter(inScope);
+  const sessions = world.sessions.filter(inScope);
+  const firstSeen = new Map(world.users.map(u => [u.id, u.firstSeen.slice(0, 10)]));
+  const firstActivity = new Map();
+  for (const a of world.activity) if (!(firstActivity.get(a.id) <= a.date)) firstActivity.set(a.id, a.date);
+  const firstDay = id => firstSeen.get(id) ?? firstActivity.get(id);
 
   const promptDays = new Set([...tasks, ...sessions].map(p => `${p.date}|${p.id}`));
   const split = (ids, date) => {
     const parts = { total: ids.length, new: 0, week: 0, older: 0 };
     for (const id of ids) {
-      const first = firstDay.get(id);
+      const first = firstDay(id);
       parts[first >= date ? 'new' : first >= shift(date, -6) ? 'week' : 'older'] += 1;
     }
     return parts;
@@ -506,20 +623,24 @@ function reference(world, today, client) {
   });
 
   const monday = mondayOf(today);
-  const activeUsers = new Set(activity.map(a => a.id));
-  const lastPrompt = new Map();
-  for (const p of [...tasks, ...sessions]) if (!(lastPrompt.get(p.id) >= p.date)) lastPrompt.set(p.id, p.date);
+  const cutoff = shift(monday, -49);
+  const retainedSince = [...world.tasks, ...world.sessions, ...world.activity].map(row => row.date).sort()[0];
+  const population = new Set(activity.filter(a => a.date >= cutoff).map(a => a.id));
+  const promptDates = new Map();
+  for (const p of [...tasks, ...sessions]) promptDates.set(p.id, [...(promptDates.get(p.id) ?? []), p.date]);
   const cohorts = Array.from({ length: 8 }, (_, k) => {
     const week = shift(monday, -7 * k);
-    const installs = world.users.filter(u => mondayOf(u.firstSeen.slice(0, 10)) === week && (!client || activeUsers.has(u.id)));
-    const count = check => installs.filter(u => lastPrompt.has(u.id) && check(lastPrompt.get(u.id), u.firstSeen.slice(0, 10))).length;
+    const installs = world.users.filter(u => mondayOf(u.firstSeen.slice(0, 10)) === week && (!client || population.has(u.id)));
+    const purged = installs.some(u => retainedSince === undefined || u.firstSeen.slice(0, 10) < retainedSince);
+    const count = check => installs.filter(u => (promptDates.get(u.id) ?? []).some(date => check(date, u.firstSeen.slice(0, 10)))).length;
+    const within = (from, to) => (date, first) => date >= shift(first, from) && date <= shift(first, to);
     return {
       week_start: week,
       installs: installs.length,
-      used: count(() => true),
-      came_back: count((last, first) => last > first),
-      used_after_7d: shift(week, 13) < today ? count((last, first) => last >= shift(first, 7)) : null,
-      used_after_14d: shift(week, 20) < today ? count((last, first) => last >= shift(first, 14)) : null,
+      used: purged ? null : count(() => true),
+      came_back: purged ? null : count((date, first) => date > first),
+      used_days_7_13: purged || shift(week, 19) >= today ? null : count(within(7, 13)),
+      used_days_14_20: purged || shift(week, 26) >= today ? null : count(within(14, 20)),
     };
   });
 
@@ -553,6 +674,7 @@ test('usage, cohorts and turn reliability match a reference model on random data
   const clocks = ['2026-11-01 12:00:00', '2026-11-02 00:00:00', '2026-11-08 23:59:59', '2027-01-01 00:30:00',
     '2028-02-29 18:00:00', '2028-03-01 06:00:00'];
   let seed = 1;
+  const seen = { purged: 0, measured: 0, orphans: 0 };
   for (const now of clocks) {
     for (let round = 0; round < 3; round++, seed++) {
       const today = now.slice(0, 10);
@@ -570,7 +692,12 @@ test('usage, cohorts and turn reliability match a reference model on random data
         for (const day of actual.usage_daily) {
           for (const part of ['total', 'new', 'week', 'older']) assert.ok(day.used[part] <= day.opened[part], `${label} ${day.date} ${part}`);
         }
+        seen.purged += actual.cohorts.filter(c => c.used === null).length;
+        seen.measured += actual.cohorts.filter(c => c.used_days_14_20 !== null && c.installs > 0).length;
       }
+      const known = new Set(world.users.map(u => u.id));
+      seen.orphans += new Set(world.activity.filter(a => !known.has(a.id) && a.date > shift(today, -30)).map(a => a.id)).size;
     }
   }
+  assert.ok(seen.purged > 0 && seen.measured > 0 && seen.orphans > 0, JSON.stringify(seen));
 });
