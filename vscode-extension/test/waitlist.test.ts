@@ -233,7 +233,7 @@ describe("the waitlist controller", () => {
     const controller = new WaitlistController(context());
     await controller.handleMessage({ type: "waitlist_open" }, () => {});
     await controller.join(ANSWER, async () => "joined");
-    await controller.handleMessage({ type: "waitlist_offered" }, () => {});
+    await new WaitlistController(context()).markOffered();
     assert.deepEqual(sentEvents(), [], "opening the form, joining and the offer flag record nothing");
     assert.deepEqual(features.filter((f) => f.startsWith("waitlist")), [], "not even locally");
     const recorded = JSON.stringify(rpc) + JSON.stringify(features);
@@ -383,18 +383,17 @@ describe("the waitlist controller", () => {
     assert.equal(disposedTold, 0);
   });
 
-  it("is not offered until the gateway has offered it once, and then remembers it", async () => {
+  it("is not offered until the engine marks it, and then remembers it", async () => {
     const ctx = context();
     const controller = new WaitlistController(ctx);
     let changes = 0;
     controller.onDidChange(() => changes++);
     assert.equal(controller.offered(), false);
-    assert.equal(await controller.handleMessage({ type: "waitlist_offered" }, () => { throw new Error("no reply expected"); }), true);
+    await controller.markOffered();
     assert.equal(ctx.store.get(OFFERED_KEY), true);
     assert.equal(controller.offered(), true);
     assert.equal(changes, 1, "every page hears about it");
     await controller.markOffered();
-    await controller.handleMessage({ type: "waitlist_offered" }, () => {});
     assert.equal(changes, 1, "only the first offer is a change");
     const reopened = new WaitlistController(ctx);
     assert.equal(reopened.offered(), true, "survives a restart");
@@ -429,7 +428,7 @@ describe("the waitlist controller", () => {
     const ctx = context();
     const network = stubFetch(() => new Response("{}", { status: 201 }));
     try {
-      await new WaitlistController(ctx).handleMessage({ type: "waitlist_offered" }, () => {});
+      await new WaitlistController(ctx).markOffered();
       assert.equal(ctx.store.get(OFFERED_KEY), true);
       assert.equal(network.calls.length, 0);
     } finally {
@@ -439,7 +438,20 @@ describe("the waitlist controller", () => {
 
   it("lists exactly the chat messages it handles, so routing can skip the engine for them", () => {
     const { WAITLIST_MESSAGES } = require("../src/engagement/waitlistController.js");
-    assert.deepEqual([...WAITLIST_MESSAGES].sort(), ["waitlist_join", "waitlist_offer_shown", "waitlist_offered", "waitlist_open"]);
+    assert.deepEqual([...WAITLIST_MESSAGES].sort(), ["waitlist_join", "waitlist_offer_shown", "waitlist_open"]);
+  });
+
+  it("a chat page cannot mark the waitlist offered", async () => {
+    const ctx = context();
+    const controller = new WaitlistController(ctx);
+    const posted: unknown[] = [];
+    for (const type of ["waitlist_offered", "waitlist_offer", "mark_offered", "waitlist_state"]) {
+      assert.equal(await controller.handleMessage({ type, offered: true }, (r: unknown) => posted.push(r)), false, type);
+    }
+    await controller.handleMessage({ type: "waitlist_offer_shown", offered: true }, () => {});
+    assert.equal(ctx.store.has(OFFERED_KEY), false);
+    assert.equal(controller.offered(), false);
+    assert.equal(posted.length, 0);
   });
 
   it("ignores messages that are not about the waitlist", async () => {

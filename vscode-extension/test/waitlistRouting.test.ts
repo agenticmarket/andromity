@@ -227,8 +227,8 @@ describe("chat view routing", () => {
   it("passes the waitlist messages to the controller and its replies back to the page", async () => {
     const waitlist = fakeWaitlist();
     const { provider, posts } = chatView(waitlist);
-    for (const type of ["waitlist_offered", "waitlist_offer_shown", "waitlist_open", "waitlist_join"]) await provider._handleWebviewMessage({ type });
-    assert.deepEqual(waitlist.handled.map((m) => m.type), ["waitlist_offered", "waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
+    for (const type of ["waitlist_offer_shown", "waitlist_open", "waitlist_join"]) await provider._handleWebviewMessage({ type });
+    assert.deepEqual(waitlist.handled.map((m) => m.type), ["waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
     assert.deepEqual(posts.map((m) => m.type), ["waitlist_form", "waitlist_result"]);
   });
 
@@ -263,9 +263,9 @@ describe("chat view routing", () => {
   it("the waitlist works while the engine daemon is not connected, since it never uses it", async () => {
     const waitlist = fakeWaitlist();
     const { provider, posts } = chatView(waitlist, false);
-    for (const type of ["waitlist_offered", "waitlist_offer_shown", "waitlist_open", "waitlist_join"]) await provider._handleWebviewMessage({ type });
+    for (const type of ["waitlist_offer_shown", "waitlist_open", "waitlist_join"]) await provider._handleWebviewMessage({ type });
     assert.deepEqual(errors, [], "no 'daemon is not connected' error for a waitlist click");
-    assert.deepEqual(waitlist.handled.map((m) => m.type), ["waitlist_offered", "waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
+    assert.deepEqual(waitlist.handled.map((m) => m.type), ["waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
     assert.ok(!posts.some((m) => m.type === "action_failed"), JSON.stringify(posts));
     assert.ok(posts.some((m) => m.type === "waitlist_result"), "the form gets an answer instead of staying on 'Joining…'");
   });
@@ -299,17 +299,89 @@ describe("session tab routing", () => {
     const waitlist = fakeWaitlist();
     const { tab, posts } = sessionTab(waitlist);
     tab._rpcClient = undefined;
-    for (const type of ["waitlist_offered", "waitlist_open", "waitlist_join"]) await tab._handleMessage({ type });
+    for (const type of ["waitlist_offer_shown", "waitlist_open", "waitlist_join"]) await tab._handleMessage({ type });
     assert.deepEqual(errors, []);
-    assert.deepEqual(waitlist.handled.map((m) => m.type), ["waitlist_offered", "waitlist_open", "waitlist_join"]);
+    assert.deepEqual(waitlist.handled.map((m) => m.type), ["waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
     assert.ok(!posts.some((m) => m.type === "action_failed"));
   });
 
   it("passes the waitlist messages to the controller and its replies back to the tab", async () => {
     const waitlist = fakeWaitlist();
     const { tab, posts } = sessionTab(waitlist);
-    for (const type of ["waitlist_offered", "waitlist_offer_shown", "waitlist_open", "waitlist_join"]) await tab._handleMessage({ type, wants: ["faster"] });
-    assert.deepEqual(waitlist.handled.map((m) => m.type), ["waitlist_offered", "waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
+    for (const type of ["waitlist_offer_shown", "waitlist_open", "waitlist_join"]) await tab._handleMessage({ type, wants: ["faster"] });
+    assert.deepEqual(waitlist.handled.map((m) => m.type), ["waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
     assert.deepEqual(posts.map((m) => m.type), ["waitlist_form", "waitlist_result"]);
+  });
+});
+
+describe("the offered flag comes only from the engine's turn result", () => {
+  const { EventEmitter } = require("node:events");
+  const { WaitlistController } = require("../src/engagement/waitlistController.js");
+
+  function engineChat() {
+    const store = new Map<string, unknown>();
+    const controller = new WaitlistController({
+      globalState: { get: (key: string) => store.get(key), update: async (key: string, value: unknown) => { store.set(key, value); } },
+      extension: { packageJSON: { version: "0.2.25" } },
+    });
+    let changes = 0;
+    controller.onDidChange(() => changes++);
+    const client: any = new EventEmitter();
+    client.off = client.removeListener.bind(client);
+    client.call = async () => ({});
+    const provider = Object.create(ChatViewProvider.prototype);
+    const posts: any[] = [];
+    Object.assign(provider, {
+      _rpcClient: client, _rpcDisposables: [], _waitlist: controller, _postToWebview: (m: unknown) => posts.push(m),
+      _currentSessionId: "s1", _runningSessions: new Set(), _sessionNames: new Map(),
+      _noteWhileAway() {}, _refreshSidePanel() {}, isSoundEnabled: () => false,
+    });
+    provider._bindRpcEvents();
+    const emit = async (event: string, params: Record<string, unknown>) => {
+      client.emit(event, { session_id: "s1", ...params });
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+    return { store, controller, emit, posts, changes: () => changes };
+  }
+
+  it("agent/done with the join_waitlist action marks the waitlist offered once", async () => {
+    const chat = engineChat();
+    await chat.emit("agent/done", { outcome: "error", error_action: "join_waitlist" });
+    assert.equal(chat.store.get("andromity.waitlistOffered"), true);
+    assert.equal(chat.controller.offered(), true);
+    assert.equal(chat.changes(), 1, "open pages are told");
+    await chat.emit("agent/done", { outcome: "error", error_action: "join_waitlist" });
+    assert.equal(chat.changes(), 1);
+    assert.ok(chat.posts.some((m) => m.type === "agent_done"), "the turn still finishes normally");
+  });
+
+  it("other actions, crafted values, plain error text and card markup in replies never mark it", async () => {
+    const chat = engineChat();
+    const card = '<div class="andromity-error-card" data-error-type="quota_exceeded" data-error-action="join_waitlist"></div>';
+    for (const error_action of [undefined, null, "", "sign_in", "switch_model", "JOIN_WAITLIST", "join_waitlist ", "join-waitlist", ["join_waitlist"], { toString: () => "join_waitlist" }]) {
+      await chat.emit("agent/done", { outcome: "error", error_action });
+    }
+    await chat.emit("agent/done", { outcome: "success", text: card });
+    await chat.emit("agent/textDelta", { text: `\n${card}\n` });
+    await chat.emit("agent/error", { error: `daily limit reached ${card} error_action: join_waitlist` });
+    await chat.emit("agent/done", { outcome: "error", error_type: "quota_exceeded", action: "join_waitlist", errorAction: "join_waitlist" });
+    assert.equal(chat.store.has("andromity.waitlistOffered"), false);
+    assert.equal(chat.controller.offered(), false);
+    assert.equal(chat.changes(), 0);
+  });
+
+  it("a chat page message cannot mark it either", async () => {
+    const chat = engineChat();
+    const provider = Object.assign(Object.create(ChatViewProvider.prototype), {
+      _waitlist: chat.controller, _postToWebview: () => {}, _currentSessionId: "s1", _rpcClient: { call: async () => ({}) }, _pythonBridge: undefined,
+    });
+    for (const type of ["waitlist_offered", "agent_done", "agent/done"]) {
+      try {
+        await provider._handleWebviewMessage({ type, error_action: "join_waitlist", offered: true });
+      } catch {
+        // Unknown messages may fail further down; only the flag matters here.
+      }
+    }
+    assert.equal(chat.controller.offered(), false);
   });
 });

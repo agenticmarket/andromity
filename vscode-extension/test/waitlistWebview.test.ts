@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { element, loadChat, stub } from "./helpers/chatHarness.js";
+import { getChatClientScript } from "../src/providers/chatview/chatClientScript.js";
 
 type FakeNode = Record<string, any>;
 
@@ -290,55 +291,36 @@ class MarkupParser {
 const CARD = '<div class="andromity-error-card" data-error-type="quota_exceeded" data-error-action="join_waitlist" data-retryable="true">'
   + '<div class="error-card-body">You have reached your daily limit.</div></div>';
 
-describe("the offered flag", () => {
-  it("a daily-limit card that offers the waitlist tells the extension once", () => {
+describe("the page never marks the waitlist offered itself", () => {
+  it("a genuine daily-limit card shows the offer but sends no offered flag", () => {
     const p = page();
     p.chat.sandbox.DOMParser = MarkupParser;
-    p.chat.eval(`renderMarkdown(${JSON.stringify("\n" + CARD)})`);
-    p.chat.eval(`renderMarkdown(${JSON.stringify("\n" + CARD)})`);
-    assert.deepEqual(p.posted("waitlist_offered"), [{ type: "waitlist_offered" }]);
-  });
-
-  it("is not reported again once the extension says the waitlist was offered", () => {
-    const p = page();
-    p.chat.post({ type: "waitlist_state", joined: false, offered: true });
-    p.chat.sandbox.DOMParser = MarkupParser;
-    p.chat.eval(`renderMarkdown(${JSON.stringify("\n" + CARD)})`);
+    const html = String(p.chat.eval(`renderMarkdown(${JSON.stringify("\n" + CARD)})`));
+    assert.ok(html.includes('data-action="join-waitlist"'), "the quota card still offers the waitlist");
+    assert.equal(p.posted("waitlist_offer_shown").length, 1);
     assert.equal(p.posted("waitlist_offered").length, 0);
   });
 
-  it("other cards never report it", () => {
-    for (const markup of [
-      CARD.replace(' data-error-action="join_waitlist"', ""),
-      CARD.replace("quota_exceeded", "rate_limit"),
-      CARD.replace("join_waitlist", "sign_in"),
-    ]) {
-      const p = page();
-      p.chat.sandbox.DOMParser = MarkupParser;
-      p.chat.eval(`renderMarkdown(${JSON.stringify("\n" + markup)})`);
-      assert.equal(p.posted("waitlist_offered").length, 0, markup.slice(0, 120));
-    }
-  });
-
-  it("card markup inside a code block of a reply does not report it", () => {
-    const p = page();
-    p.chat.sandbox.DOMParser = MarkupParser;
+  it("card markup a model prints in a reply, a code block or mid-line sends no offered flag", () => {
     const fence = "`".repeat(3);
-    p.chat.eval(`renderMarkdown(${JSON.stringify(`Here is the card:\n${fence}html\n${CARD}\n${fence}\n`)})`);
-    p.chat.eval(`renderMarkdown(${JSON.stringify(`Inline ${CARD} text`)})`);
-    assert.equal(p.posted("waitlist_offered").length, 0);
-  });
-
-  it("card markup that a model prints on its own line in a reply does not mark the waitlist offered", () => {
     for (const reply of [
       `Sure, here is what that error looks like:\n${CARD}\nAnything else?`,
       `${CARD}`,
+      `Here is the card:\n${fence}html\n${CARD}\n${fence}\n`,
+      `Inline ${CARD} text`,
+      CARD.replace(' data-error-action="join_waitlist"', ""),
+      CARD.replace("quota_exceeded", "rate_limit"),
     ]) {
       const p = page();
       p.chat.sandbox.DOMParser = MarkupParser;
       p.chat.eval(`renderMarkdown(${JSON.stringify(reply)})`);
-      assert.equal(p.posted("waitlist_offered").length, 0, `a model reply set the flag: ${reply.slice(0, 50)}`);
+      assert.equal(p.posted("waitlist_offered").length, 0, reply.slice(0, 60));
     }
+  });
+
+  it("the page script has no way to post the offered flag", () => {
+    const script = getChatClientScript("icon.svg", { currentSessionId: "s", currentModel: "m", currentProvider: "p", currentMode: "safe", currentProfile: "builder", currentReasoning: "medium" });
+    assert.ok(!script.includes("waitlist_offered"));
   });
 });
 

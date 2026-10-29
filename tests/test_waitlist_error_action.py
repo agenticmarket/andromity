@@ -199,3 +199,106 @@ async def test_a_turn_that_hits_the_daily_limit_shows_the_card_with_the_action_a
     assert 'data-error-type="quota_exceeded"' in text
     assert 'data-error-action="join_waitlist"' in text
     assert any(isinstance(e, Done) and e.outcome == "error" and e.error_type == "quota_exceeded" for e in events)
+
+
+async def _done_for(monkeypatch, exc, provider_name="andromity"):
+    async def fail(**kwargs):
+        raise exc
+
+    async def no_sleep(seconds, *args, **kwargs):
+        pass
+
+    monkeypatch.setattr(litellm, "acompletion", fail)
+    monkeypatch.setattr(provider.asyncio, "sleep", no_sleep)
+    events = [ev async for ev in stream_completion([{"role": "user", "content": "hi"}], provider_name=provider_name, model="auto")]
+    return next(e for e in events if isinstance(e, Done))
+
+
+@pytest.mark.asyncio
+async def test_the_turn_result_carries_the_gateway_action(monkeypatch, anonymous_limit):
+    done = await _done_for(monkeypatch, anonymous_limit)
+    assert done.outcome == "error"
+    assert done.error_type == "quota_exceeded"
+    assert done.error_action == "join_waitlist"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["openrouter", "openai", "custom", ""])
+async def test_other_providers_never_carry_an_action_in_the_turn_result(monkeypatch, anonymous_limit, name):
+    done = await _done_for(monkeypatch, anonymous_limit, name)
+    assert done.error_action is None
+
+
+@pytest.mark.asyncio
+async def test_no_action_unless_the_gateway_sent_one(monkeypatch):
+    subnet = daily_limit(message=SUBNET_MESSAGE, action=None, code="subnet_cap_reached")
+    assert (await _done_for(monkeypatch, subnet)).error_action is None
+    plain = Exception("You have reached your daily limit. join_waitlist")
+    assert (await _done_for(monkeypatch, plain)).error_action is None
+
+
+@pytest.mark.asyncio
+async def test_the_turn_result_carries_only_a_sanitised_action(monkeypatch):
+    unsafe = {}
+    for hostile in ('join_waitlist" onmouseover="alert(1)', "JOIN_WAITLIST", "join_waitlist<script>", "a" * 200):
+        done = await _done_for(monkeypatch, daily_limit(action=hostile))
+        if not (done.error_action is None or re.fullmatch(r"[a-z_]{1,40}", done.error_action)):
+            unsafe[hostile[:30]] = done.error_action[:60]
+    assert unsafe == {}, f"unsanitised actions reach agent/done: {unsafe}"
+
+
+@pytest.mark.asyncio
+async def test_the_agent_passes_the_action_on_with_its_failed_turn(tmp_path):
+    from unittest.mock import patch
+    from andromity.core.agent import Agent
+    from andromity.core.session import Session
+
+    async def failing(messages, tools=None, **kwargs):
+        yield TextDelta(text="card")
+        yield Done(outcome="error", error_type="quota_exceeded", error_action="join_waitlist")
+
+    async def succeeding(messages, tools=None, **kwargs):
+        yield TextDelta(text="ok")
+        yield Done()
+
+    for stream, expected in ((failing, "join_waitlist"), (succeeding, None)):
+        agent = Agent(Session(name="t", project_path=str(tmp_path)), profile="builder", auto_approve=True)
+        with patch("andromity.core.agent.stream_completion", side_effect=stream):
+            events = [event async for event in agent.run("hello")]
+        done = [e for e in events if isinstance(e, Done)][-1]
+        assert done.error_action == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("done, expected", [
+    (Done(outcome="error", error_type="quota_exceeded", error_action="join_waitlist"), "join_waitlist"),
+    (Done(outcome="error", error_type="quota_exceeded"), None),
+    (Done(), None),
+])
+async def test_the_server_sends_the_action_on_agent_done(tmp_path, done, expected):
+    import asyncio
+    from unittest.mock import patch
+    from andromity.server.rpc_handler import JsonRpcHandler
+    from andromity.server.protocol import JsonRpcRequest
+
+    notifications = []
+
+    async def on_notify(n):
+        notifications.append((n.method, n.params))
+
+    async def stream(messages, tools=None, **kwargs):
+        yield TextDelta(text="reply")
+        yield done
+
+    handler = JsonRpcHandler(send_notification=on_notify)
+    with patch("andromity.core.agent.stream_completion", side_effect=stream):
+        resp = await handler.handle_request(JsonRpcRequest(id=1, method="agent.prompt", params={
+            "prompt": "hi", "session_id": "waitlist-done", "project_path": str(tmp_path), "mode": "safe"}))
+        assert resp.error is None
+        for _ in range(40):
+            await asyncio.sleep(0.05)
+            if any(m == "agent/done" for m, _ in notifications):
+                break
+    finished = [p for m, p in notifications if m == "agent/done"]
+    assert finished, [m for m, _ in notifications]
+    assert finished[-1]["error_action"] == expected
