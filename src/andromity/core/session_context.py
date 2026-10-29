@@ -29,8 +29,8 @@ _MAILBOX_NOTICE = re.compile(r"\n\n\[Co-Agent Mailbox: (?:Pending questions: |\d
 def prompt_as_written(text: str) -> str:
     """A sent prompt without the session context and the co-agent mailbox notice added to it for the model."""
     text = without_session_context(text)
-    notice = _MAILBOX_NOTICE.search(text)
-    return text[:notice.start()] if notice and text.endswith("]") else text
+    notices = list(_MAILBOX_NOTICE.finditer(text))
+    return text[:notices[-1].start()] if notices and text.endswith("]") else text
 
 
 def shorten(text: str, limit: int) -> str:

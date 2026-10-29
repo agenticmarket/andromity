@@ -29,6 +29,7 @@ from andromity.tui.overlays.undo import UndoConfirmOverlay
 from andromity.tui.overlays.batch_review import BatchReviewOverlay
 from andromity.tui.overlays.questions import QuestionPanel, format_question_answers, normalize_questions
 from andromity.core.session import Session
+from andromity.core.session_context import prompt_as_written
 from andromity.core.agent import Agent
 from andromity.core.events import (
     StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired, SubAgentProgress
@@ -2519,6 +2520,9 @@ Your output must be:
                 pass
 
             # ── 5. Put the prompt and its images back, keeping any draft ──────
+            stored_text = prompt_message.get("content")
+            if isinstance(stored_text, str):
+                undone_prompt = prompt_as_written(stored_text)
             images = await _prompt_attachments(prompt_message, getattr(self.session, "storage_dir", None))
             try:
                 bar = self.query_one(InputBar)

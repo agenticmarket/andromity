@@ -7497,7 +7497,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         sessionsState[currentSessionId] = sessionsState[currentSessionId] || {};
         sessionsState[currentSessionId].draftInput = text;
       }
-      attachedImages = undone.images.slice(0, MAX_ATTACHED_IMAGES);
+      attachedImages = undone.images.slice();
       renderImageAttachments();
       attachedFiles = parsed.files.slice(0, MAX_ATTACHED_FILES).map(f => ({ name: f.name, path: f.path }));
       renderAttachedFiles();

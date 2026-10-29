@@ -169,11 +169,13 @@ def store_prompt_image(image_data: str, storage_dir: Optional[Any] = None,
     if not isinstance(image_data, str) or not image_data.startswith("data:"):
         return image_data, None
     try:
-        raw_bytes = base64.b64decode(image_data.split(",", 1)[1])
+        raw_bytes = base64.b64decode(image_data.split(",", 1)[1], validate=True)
     except (IndexError, binascii.Error, ValueError):
         return image_data, None
+    if not raw_bytes:
+        return image_data, None
 
-    name = _store_image_bytes(raw_bytes, storage_dir) if storage_dir else None
+    name = _store_image_bytes(raw_bytes, storage_dir) if storage_dir and image_mime(raw_bytes) else None
     try:
         with Image.open(io.BytesIO(raw_bytes)) as img:
             w, height = img.size
