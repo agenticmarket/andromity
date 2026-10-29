@@ -53,13 +53,17 @@ function offerButton() {
 
 /** The real chat script with just enough DOM for the waitlist card, its inputs and the offers on the page. */
 function page() {
-  const chat = loadChat();
+  const onboarding = element({ style: { display: "none" } });
+  const chat = loadChat({ elements: { "onboarding-guide-section": onboarding, "ready-hero-section": element({ style: { display: "flex" } }) } });
   const created: any[] = [];
   const inputs: Record<string, any> = {
     "waitlist-wants-note": element({ tagName: "INPUT", value: "" }),
     "waitlist-heard-note": element({ tagName: "INPUT", value: "" }),
   };
-  const offers = [offerButton(), offerButton()];
+  const onboardingOffer = offerButton();
+  onboardingOffer.hidden = true;
+  onboardingOffer.classList.add("onboarding-waitlist-offer");
+  const offers = [offerButton(), offerButton(), onboardingOffer];
   const doc = chat.sandbox.document;
   doc.createElement = (tag: string) => {
     const node = element({ tagName: tag.toUpperCase(), removed: false, remove() { this.removed = true; } });
@@ -81,7 +85,7 @@ function page() {
   };
   const posted = (type: string) => chat.posted.filter((m: any) => m.type === type).map((m: unknown) => JSON.parse(JSON.stringify(m)));
   const html = () => String(card()?.innerHTML ?? "");
-  return { chat, card, inputs, offers, click, posted, html };
+  return { chat, card, inputs, offers, onboarding, onboardingOffer, click, posted, html };
 }
 
 function openForm(p: ReturnType<typeof page>, extra: Record<string, unknown> = {}) {
@@ -259,27 +263,131 @@ describe("waitlist form in the chat", () => {
     p.chat.post({ type: "waitlist_state", joined: "true" });
     assert.ok(p.offers.every((offer) => offer.disabled === false && offer.label.textContent === OFFER), "only a real true counts");
   });
+
+  it("asks people not to include contact details", () => {
+    const p = page();
+    openForm(p);
+    assert.ok(p.html().includes("No email needed. Please don&#39;t include contact details.") || p.html().includes("No email needed. Please don't include contact details."));
+  });
+});
+
+/** A DOMParser that reads the card's attributes from the markup it is given, like the real one. */
+class MarkupParser {
+  parseFromString(markup: string) {
+    const open = /<div class="andromity-error-card"([^>]*)>/.exec(markup);
+    if (!open) return { querySelector: () => null };
+    const attrs: Record<string, string> = {};
+    for (const m of open[1].matchAll(/([a-z-]+)="([^"]*)"/g)) attrs[m[1]] = m[2];
+    const card = {
+      getAttribute: (name: string) => attrs[name] ?? null,
+      querySelector: (selector: string) => (selector === ".error-card-body" ? { ...el("DIV"), childNodes: [el("DIV", "Limit reached.")] } : null),
+      querySelectorAll: () => [],
+    };
+    return { querySelector: (selector: string) => (selector === ".andromity-error-card" ? card : null) };
+  }
+}
+
+const CARD = '<div class="andromity-error-card" data-error-type="quota_exceeded" data-error-action="join_waitlist" data-retryable="true">'
+  + '<div class="error-card-body">You have reached your daily limit.</div></div>';
+
+describe("the offered flag", () => {
+  it("a daily-limit card that offers the waitlist tells the extension once", () => {
+    const p = page();
+    p.chat.sandbox.DOMParser = MarkupParser;
+    p.chat.eval(`renderMarkdown(${JSON.stringify("\n" + CARD)})`);
+    p.chat.eval(`renderMarkdown(${JSON.stringify("\n" + CARD)})`);
+    assert.deepEqual(p.posted("waitlist_offered"), [{ type: "waitlist_offered" }]);
+  });
+
+  it("is not reported again once the extension says the waitlist was offered", () => {
+    const p = page();
+    p.chat.post({ type: "waitlist_state", joined: false, offered: true });
+    p.chat.sandbox.DOMParser = MarkupParser;
+    p.chat.eval(`renderMarkdown(${JSON.stringify("\n" + CARD)})`);
+    assert.equal(p.posted("waitlist_offered").length, 0);
+  });
+
+  it("other cards never report it", () => {
+    for (const markup of [
+      CARD.replace(' data-error-action="join_waitlist"', ""),
+      CARD.replace("quota_exceeded", "rate_limit"),
+      CARD.replace("join_waitlist", "sign_in"),
+    ]) {
+      const p = page();
+      p.chat.sandbox.DOMParser = MarkupParser;
+      p.chat.eval(`renderMarkdown(${JSON.stringify("\n" + markup)})`);
+      assert.equal(p.posted("waitlist_offered").length, 0, markup.slice(0, 120));
+    }
+  });
+
+  it("card markup inside a code block of a reply does not report it", () => {
+    const p = page();
+    p.chat.sandbox.DOMParser = MarkupParser;
+    const fence = "`".repeat(3);
+    p.chat.eval(`renderMarkdown(${JSON.stringify(`Here is the card:\n${fence}html\n${CARD}\n${fence}\n`)})`);
+    p.chat.eval(`renderMarkdown(${JSON.stringify(`Inline ${CARD} text`)})`);
+    assert.equal(p.posted("waitlist_offered").length, 0);
+  });
+
+  it("card markup that a model prints on its own line in a reply does not mark the waitlist offered", () => {
+    for (const reply of [
+      `Sure, here is what that error looks like:\n${CARD}\nAnything else?`,
+      `${CARD}`,
+    ]) {
+      const p = page();
+      p.chat.sandbox.DOMParser = MarkupParser;
+      p.chat.eval(`renderMarkdown(${JSON.stringify(reply)})`);
+      assert.equal(p.posted("waitlist_offered").length, 0, `a model reply set the flag: ${reply.slice(0, 50)}`);
+    }
+  });
 });
 
 describe("waitlist offer on the onboarding Andromity card", () => {
-  it("sits in the Andromity trial card", () => {
+  it("sits hidden in the Andromity trial card", () => {
     const source = readFileSync(join(__dirname, "..", "..", "src", "providers", "chatview", "chatHtml.ts"), "utf8");
     const trial = source.slice(source.indexOf('id="onboarding-trial-section"'), source.indexOf("<!-- Step 2"));
-    assert.ok(trial.includes('data-action="join-waitlist"'));
+    assert.match(trial, /<button type="button" class="onboarding-waitlist-offer waitlist-offer" data-action="join-waitlist" hidden>/);
     assert.ok(trial.includes(OFFER));
     assert.equal((source.match(/data-action="join-waitlist"/g) || []).length, 1);
   });
 
-  it("is noted once when the onboarding shows, and not for people who joined", () => {
+  it("stays hidden until the extension says the gateway offered the waitlist", () => {
+    const p = page();
+    p.chat.post({ type: "waitlist_state", joined: false, offered: false });
+    assert.equal(p.onboardingOffer.hidden, true);
+    p.chat.post({ type: "waitlist_state", joined: false, offered: "yes" });
+    assert.equal(p.onboardingOffer.hidden, true, "only a real true counts");
+    p.chat.post({ type: "waitlist_state", joined: false, offered: true });
+    assert.equal(p.onboardingOffer.hidden, false);
+    assert.equal(p.onboardingOffer.disabled, false);
+    p.chat.post({ type: "waitlist_state", joined: true, offered: false });
+    assert.equal(p.onboardingOffer.hidden, false, "people who joined see 'On the waitlist'");
+    assert.equal(p.onboardingOffer.disabled, true);
+    const other = p.offers[0];
+    p.chat.post({ type: "waitlist_state", joined: false, offered: false });
+    assert.notEqual(other.hidden, true, "the daily-limit card's offer is never hidden by the flag");
+  });
+
+  it("is noted only when the onboarding shows an offered waitlist, and once", () => {
     const p = page();
     p.chat.eval("toggleOnboarding(true)");
+    assert.equal(p.posted("waitlist_offer_shown").length, 0, "not offered yet");
+    p.chat.post({ type: "waitlist_state", joined: false, offered: true });
+    assert.equal(p.posted("waitlist_offer_shown").length, 1, "noted when the flag arrives while onboarding shows");
     p.chat.eval("toggleOnboarding(false)");
     p.chat.eval("toggleOnboarding(true)");
     assert.equal(p.posted("waitlist_offer_shown").length, 1);
 
+    const hidden = page();
+    hidden.chat.post({ type: "waitlist_state", joined: false, offered: true });
+    assert.equal(hidden.posted("waitlist_offer_shown").length, 0, "nothing noted while onboarding is not shown");
+    hidden.chat.eval("toggleOnboarding(true)");
+    assert.equal(hidden.posted("waitlist_offer_shown").length, 1);
+
     const joined = page();
-    joined.chat.post({ type: "waitlist_state", joined: true });
+    joined.chat.post({ type: "waitlist_state", joined: true, offered: true });
     joined.chat.eval("toggleOnboarding(true)");
     assert.equal(joined.posted("waitlist_offer_shown").length, 0);
   });
 });
+

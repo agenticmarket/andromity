@@ -41,7 +41,7 @@ const EXPECTED_PAYLOAD = {
   client: "vscode", os: osFamily(process.platform), version: "0.2.25",
 };
 const AIR_GAP_ERROR = airGapOffMessage("joining the waitlist");
-const WAITLIST_EVENTS = ["waitlist_offer_shown", "waitlist_form_opened", "waitlist_joined"];
+const OFFERED_KEY = "andromity.waitlistOffered";
 
 function context(initial: Record<string, unknown> = {}, options: { failUpdate?: boolean } = {}) {
   const store = new Map<string, unknown>(Object.entries(initial));
@@ -180,19 +180,19 @@ describe("the waitlist controller", () => {
     const ctx = context();
     const controller = new WaitlistController(ctx);
     let notified = 0;
-    controller.onDidJoin(() => notified++);
-    controller.onDidJoin(() => notified++);
+    controller.onDidChange(() => notified++);
+    controller.onDidChange(() => notified++);
     const sent: unknown[] = [];
     const submit = async (payload: unknown) => { sent.push(payload); return "joined"; };
     assert.deepEqual(await controller.join(ANSWER, submit), { type: "waitlist_result", ok: true });
     assert.deepEqual(sent, [EXPECTED_PAYLOAD]);
     assert.equal(ctx.store.get(JOINED_KEY), true);
     assert.equal(notified, 2);
-    assert.deepEqual(sentEvents().map((c) => c.params.feature), ["waitlist_joined"]);
+    assert.deepEqual(sentEvents(), [], "joining records no usage event");
 
     const reopened = new WaitlistController(ctx);
     assert.equal(reopened.joined(), true, "the joined state survives a restart");
-    assert.deepEqual(reopened.stateMessage(), { type: "waitlist_state", joined: true });
+    assert.deepEqual(reopened.stateMessage(), { type: "waitlist_state", joined: true, offered: true });
     assert.deepEqual(await controller.join(ANSWER, submit), { type: "waitlist_result", ok: true });
     assert.equal(sent.length, 1, "joining again sends nothing");
     assert.equal(notified, 2);
@@ -202,7 +202,7 @@ describe("the waitlist controller", () => {
     for (const stored of [false, "true", 1, {}, null]) {
       assert.equal(new WaitlistController(context({ [JOINED_KEY]: stored })).joined(), false, JSON.stringify(stored));
     }
-    assert.deepEqual(new WaitlistController(context()).stateMessage(), { type: "waitlist_state", joined: false });
+    assert.deepEqual(new WaitlistController(context()).stateMessage(), { type: "waitlist_state", joined: false, offered: false });
   });
 
   it("sends no telemetry id, machine id, session or workspace data on the real request path", async () => {
@@ -233,11 +233,9 @@ describe("the waitlist controller", () => {
     const controller = new WaitlistController(context());
     await controller.handleMessage({ type: "waitlist_open" }, () => {});
     await controller.join(ANSWER, async () => "joined");
-    assert.ok(sentEvents().length >= 2);
-    for (const call of sentEvents()) {
-      assert.deepEqual(Object.keys(call.params), ["feature"], JSON.stringify(call.params));
-      assert.ok(WAITLIST_EVENTS.includes(String(call.params.feature)), String(call.params.feature));
-    }
+    await controller.handleMessage({ type: "waitlist_offered" }, () => {});
+    assert.deepEqual(sentEvents(), [], "opening the form, joining and the offer flag record nothing");
+    assert.deepEqual(features.filter((f) => f.startsWith("waitlist")), [], "not even locally");
     const recorded = JSON.stringify(rpc) + JSON.stringify(features);
     for (const answer of ["reddit", "faster", "higher_limit", "more turns", "r/vscode"]) {
       assert.ok(!recorded.includes(answer), `${answer} leaked into telemetry`);
@@ -255,7 +253,7 @@ describe("the waitlist controller", () => {
     assert.equal(sentEvents("waitlist_offer_shown").length, 1);
   });
 
-  it("opening the form sends the choices and records it, but not for people who joined", async () => {
+  it("opening the form sends the choices and records nothing", async () => {
     const posted: any[] = [];
     assert.equal(await new WaitlistController(context()).handleMessage({ type: "waitlist_open" }, (r: unknown) => posted.push(r)), true);
     assert.deepEqual([...posted], [{
@@ -264,10 +262,10 @@ describe("the waitlist controller", () => {
       wants: WAITLIST_WANTS.map(({ id, label }: { id: string; label: string }) => ({ id, label })),
       heardFrom: WAITLIST_HEARD_FROM.map(({ id, label }: { id: string; label: string }) => ({ id, label })),
     }]);
-    assert.equal(sentEvents("waitlist_form_opened").length, 1);
+    assert.equal(sentEvents().length, 0);
     await new WaitlistController(context({ [JOINED_KEY]: true })).handleMessage({ type: "waitlist_open" }, (r: unknown) => posted.push(r));
     assert.equal(posted[1].joined, true);
-    assert.equal(sentEvents("waitlist_form_opened").length, 1);
+    assert.equal(sentEvents().length, 0);
   });
 
   it("air-gap mode shows a notice instead of the form and refuses to send, whatever turned it on", async () => {
@@ -298,7 +296,7 @@ describe("the waitlist controller", () => {
         assert.equal(ctx.store.has(JOINED_KEY), false);
       }
       assert.equal(network.calls.length, 0, "nothing reached the network");
-      assert.equal(sentEvents("waitlist_form_opened").length + sentEvents("waitlist_joined").length, 0);
+      assert.equal(sentEvents().length, 0);
     } finally {
       network.restore();
       delete process.env.ANDROMITY_AIRGAP;
@@ -323,7 +321,7 @@ describe("the waitlist controller", () => {
     const ctx = context();
     const controller = new WaitlistController(ctx);
     let notified = 0;
-    controller.onDidJoin(() => notified++);
+    controller.onDidChange(() => notified++);
     const unavailable = await controller.join(ANSWER, async () => "unavailable");
     assert.deepEqual(unavailable, { type: "waitlist_result", ok: false, error: "The waitlist isn't available right now. Please try again later." });
     const failed = await controller.join(ANSWER, async () => "failed");
@@ -367,22 +365,81 @@ describe("the waitlist controller", () => {
   it("a lost joined flag still reports success and updates every page", async () => {
     const controller = new WaitlistController(context({}, { failUpdate: true }));
     let notified = 0;
-    controller.onDidJoin(() => notified++);
+    controller.onDidChange(() => notified++);
     assert.deepEqual(await controller.join(ANSWER, async () => "joined"), { type: "waitlist_result", ok: true });
     assert.equal(notified, 1);
-    assert.equal(sentEvents("waitlist_joined").length, 1);
+    assert.equal(sentEvents().length, 0);
   });
 
   it("one page failing to update does not fail the join, and a disposed page is not told", async () => {
     const controller = new WaitlistController(context());
     let told = 0;
     let disposedTold = 0;
-    controller.onDidJoin(() => { throw new Error("webview disposed"); });
-    controller.onDidJoin(() => told++);
-    controller.onDidJoin(() => disposedTold++).dispose();
+    controller.onDidChange(() => { throw new Error("webview disposed"); });
+    controller.onDidChange(() => told++);
+    controller.onDidChange(() => disposedTold++).dispose();
     assert.equal((await controller.join(ANSWER, async () => "joined")).ok, true);
     assert.equal(told, 1);
     assert.equal(disposedTold, 0);
+  });
+
+  it("is not offered until the gateway has offered it once, and then remembers it", async () => {
+    const ctx = context();
+    const controller = new WaitlistController(ctx);
+    let changes = 0;
+    controller.onDidChange(() => changes++);
+    assert.equal(controller.offered(), false);
+    assert.equal(await controller.handleMessage({ type: "waitlist_offered" }, () => { throw new Error("no reply expected"); }), true);
+    assert.equal(ctx.store.get(OFFERED_KEY), true);
+    assert.equal(controller.offered(), true);
+    assert.equal(changes, 1, "every page hears about it");
+    await controller.markOffered();
+    await controller.handleMessage({ type: "waitlist_offered" }, () => {});
+    assert.equal(changes, 1, "only the first offer is a change");
+    const reopened = new WaitlistController(ctx);
+    assert.equal(reopened.offered(), true, "survives a restart");
+    assert.deepEqual(reopened.stateMessage(), { type: "waitlist_state", joined: false, offered: true });
+    assert.equal(reopened.joined(), false, "being offered is not joining");
+    assert.deepEqual(sentEvents(), [], "the flag records no usage event");
+  });
+
+  it("counts people who joined as offered, and only a stored true as offered", async () => {
+    assert.equal(new WaitlistController(context({ [JOINED_KEY]: true })).offered(), true);
+    for (const stored of ["true", 1, {}, false]) {
+      assert.equal(new WaitlistController(context({ [OFFERED_KEY]: stored })).offered(), false, JSON.stringify(stored));
+    }
+    let changes = 0;
+    const joined = new WaitlistController(context({ [JOINED_KEY]: true }));
+    joined.onDidChange(() => changes++);
+    await joined.markOffered();
+    assert.equal(changes, 0);
+  });
+
+  it("a flag that cannot be saved is not announced and does not throw", async () => {
+    const controller = new WaitlistController(context({}, { failUpdate: true }));
+    let changes = 0;
+    controller.onDidChange(() => changes++);
+    await controller.markOffered();
+    assert.equal(changes, 0);
+    assert.equal(controller.offered(), false);
+  });
+
+  it("the offered flag works in air-gap mode, because it only stores a local flag", async () => {
+    airGap = { globalValue: true };
+    const ctx = context();
+    const network = stubFetch(() => new Response("{}", { status: 201 }));
+    try {
+      await new WaitlistController(ctx).handleMessage({ type: "waitlist_offered" }, () => {});
+      assert.equal(ctx.store.get(OFFERED_KEY), true);
+      assert.equal(network.calls.length, 0);
+    } finally {
+      network.restore();
+    }
+  });
+
+  it("lists exactly the chat messages it handles, so routing can skip the engine for them", () => {
+    const { WAITLIST_MESSAGES } = require("../src/engagement/waitlistController.js");
+    assert.deepEqual([...WAITLIST_MESSAGES].sort(), ["waitlist_join", "waitlist_offer_shown", "waitlist_offered", "waitlist_open"]);
   });
 
   it("ignores messages that are not about the waitlist", async () => {

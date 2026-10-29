@@ -28,11 +28,15 @@ function d1(files) {
 
 function client({ tables = ALL_TABLES, env: extra = {} } = {}) {
   const env = { DB: d1(tables), ADMIN_SECRET: SECRET, STATS_SECRET: STATS_KEY, ...extra };
-  const call = async (path, { method = 'GET', body, headers = {}, admin = false, cf } = {}) => {
+  const call = async (path, { method = 'GET', body, headers = {}, admin = false, cf, contentType = 'application/json' } = {}) => {
     const stream = body instanceof ReadableStream;
     const request = new Request(`https://telemetry.test${path}`, {
       method,
-      headers: { ...(admin ? { 'x-stats-key': SECRET } : {}), ...headers },
+      headers: {
+        ...(admin ? { 'x-stats-key': SECRET } : {}),
+        ...(body !== undefined && contentType ? { 'Content-Type': contentType } : {}),
+        ...headers,
+      },
       body: body === undefined ? undefined : typeof body === 'string' || stream ? body : JSON.stringify(body),
       ...(stream ? { duplex: 'half' } : {}),
     });
@@ -47,9 +51,26 @@ function client({ tables = ALL_TABLES, env: extra = {} } = {}) {
   return { env, call, rows };
 }
 
-function insertEntry(sqlite, { wants = 'higher_limit', heard = 'marketplace', note = null, daysAgo = 0 } = {}) {
+function insertEntry(sqlite, { wants = 'higher_limit', heard = 'marketplace', note = null, daysAgo = 0, withTime = false } = {}) {
   sqlite.prepare(`INSERT INTO waitlist (wants, wants_note, heard_from, heard_note, client, os, version, country, created_at)
-    VALUES (?, ?, ?, NULL, 'vscode', 'linux', '0.2.25', 'GB', datetime('now', ?))`).run(wants, note, heard, `-${daysAgo} days`);
+    VALUES (?, ?, ?, NULL, 'vscode', 'linux', '0.2.25', 'GB', ${withTime ? 'datetime' : 'date'}('now', ?))`).run(wants, note, heard, `-${daysAgo} days`);
+}
+
+const todayUtc = () => new Date().toISOString().slice(0, 10);
+const noCors = (headers) => [...headers.keys()].filter((name) => name.startsWith('access-control-'));
+
+/** A Cloudflare rate limit binding: `limit` calls per key, then refusals. */
+function limiter(limit = 3) {
+  const seen = new Map();
+  const keys = [];
+  return {
+    keys,
+    limit: async ({ key }) => {
+      keys.push(key);
+      seen.set(key, (seen.get(key) || 0) + 1);
+      return { success: seen.get(key) <= limit };
+    },
+  };
 }
 
 /** A valid entry padded with an ignored field to exactly `bytes` UTF-8 bytes. */
@@ -108,7 +129,7 @@ test('an entry keeps deduplicated wants in a fixed order, trimmed notes and the 
   assert.equal(row.os, 'darwin');
   assert.equal(row.version, '0.2.25');
   assert.equal(row.country, 'GB', 'the country comes from Cloudflare, never from the body');
-  assert.ok(row.created_at);
+  assert.equal(row.created_at, todayUtc(), 'only the UTC day is stored');
 });
 
 test('client, os, version and country fall back exactly like feedback', async () => {
@@ -534,7 +555,7 @@ test('other database failures answer a plain 500 without the database message', 
   console.error = () => {};
   try {
     for (const [path, init] of [
-      ['/waitlist', { method: 'POST', body: JSON.stringify(VALID) }],
+      ['/waitlist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(VALID) }],
       ['/api/admin/waitlist', { headers: { 'x-stats-key': SECRET } }],
       ['/api/admin/waitlist/3/delete', { method: 'POST', headers: { 'x-stats-key': SECRET } }],
     ]) {
@@ -547,7 +568,7 @@ test('other database failures answer a plain 500 without the database message', 
   } finally {
     console.error = original;
   }
-  const unbound = await worker.fetch(new Request('https://telemetry.test/waitlist', { method: 'POST', body: JSON.stringify(VALID) }), { ADMIN_SECRET: SECRET }, {});
+  const unbound = await worker.fetch(new Request('https://telemetry.test/waitlist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(VALID) }), { ADMIN_SECRET: SECRET }, {});
   assert.equal(unbound.status, 500);
 });
 
@@ -561,4 +582,173 @@ test('feedback keeps its own body limit and validation after the helpers were sh
   const last = env.DB.sqlite.prepare('SELECT message, client, os, version, country FROM feedback ORDER BY id DESC LIMIT 1').get();
   assert.deepEqual({ ...last }, { message: 'key [removed]', client: 'tui', os: 'linux', version: 'v1.2.3', country: 'FR' });
   assert.equal(env.DB.sqlite.prepare('SELECT COUNT(*) AS n FROM waitlist').get().n, 0, 'feedback never writes to the waitlist');
+});
+
+test('joining needs a JSON content type, and anything else is refused with 415', async () => {
+  const { call, rows } = client();
+  for (const contentType of [null, 'text/plain', 'text/plain;charset=UTF-8', 'application/x-www-form-urlencoded', 'multipart/form-data; boundary=x',
+    'text/json', 'application/jsonp', 'application/json-patch+json', 'application/ld+json', 'application/json, text/plain']) {
+    const result = await call('/waitlist', { method: 'POST', body: VALID, contentType });
+    assert.equal(result.status, 415, String(contentType));
+    assert.deepEqual(result.data, { error: 'Content-Type must be application/json' });
+  }
+  assert.deepEqual(rows(), []);
+  for (const contentType of ['application/json', 'application/json; charset=utf-8', 'Application/JSON', ' application/json ;charset=UTF-8']) {
+    assert.equal((await call('/waitlist', { method: 'POST', body: VALID, contentType })).status, 201, contentType);
+  }
+  assert.equal(rows().length, 4);
+  assert.equal((await call('/feedback', { method: 'POST', body: { message: 'still fine' }, contentType: 'text/plain' })).status, 201, 'feedback is unchanged');
+});
+
+test('no /waitlist answer or preflight carries CORS headers, while other routes keep theirs', async () => {
+  const { call } = client({ env: { WAITLIST_RATE_LIMITER: limiter(1) } });
+  const answers = [
+    await call('/waitlist', { method: 'POST', body: VALID }),
+    await call('/waitlist', { method: 'POST', body: VALID }),
+    await call('/waitlist', { method: 'POST', body: { wants: [] }, headers: { 'CF-Connecting-IP': '198.51.100.1' } }),
+    await call('/waitlist', { method: 'POST', body: VALID, contentType: 'text/plain' }),
+    await call('/waitlist', { method: 'POST', body: bodyOfBytes(9000), headers: { 'CF-Connecting-IP': '198.51.100.2' } }),
+    await call('/waitlist'),
+    await call('/waitlist', { method: 'OPTIONS', headers: { Origin: 'https://evil.example', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type' } }),
+  ];
+  assert.deepEqual(answers.map((a) => a.status), [201, 429, 400, 415, 413, 405, 204]);
+  for (const [i, answer] of answers.entries()) assert.deepEqual(noCors(answer.headers), [], `answer ${i}`);
+  assert.equal(answers[6].headers.get('x-content-type-options'), 'nosniff', 'the other security headers stay');
+  const closed = await client({ env: { WAITLIST_OPEN: 'false' } }).call('/waitlist', { method: 'POST', body: VALID });
+  const notReady = await client({ tables: ['feedback.sql'] }).call('/waitlist', { method: 'POST', body: VALID });
+  assert.deepEqual([closed.status, notReady.status], [503, 503]);
+  assert.deepEqual([...noCors(closed.headers), ...noCors(notReady.headers)], []);
+
+  const feedbackPreflight = await call('/feedback', { method: 'OPTIONS' });
+  assert.equal(feedbackPreflight.headers.get('access-control-allow-origin'), '*');
+  assert.equal((await call('/api/admin/waitlist', { admin: true })).headers.get('access-control-allow-origin'), '*');
+});
+
+test('a /waitlist refusal from the worker-wide IP limiter carries no CORS headers either', async () => {
+  const { call } = client({ env: { RATE_LIMITER: { limit: async () => ({ success: false }) } } });
+  const refused = await call('/waitlist', { method: 'POST', body: VALID });
+  assert.equal(refused.status, 429);
+  assert.deepEqual(noCors(refused.headers), []);
+});
+
+test('the waitlist rate limit counts joins per client IP and turns the fourth away', async () => {
+  const rate = limiter(3);
+  const { call, rows } = client({ env: { WAITLIST_RATE_LIMITER: rate } });
+  const from = (ip, extra = {}) => call('/waitlist', { method: 'POST', body: VALID, headers: { 'CF-Connecting-IP': ip, ...extra } });
+  for (let i = 0; i < 3; i++) assert.equal((await from('203.0.113.5')).status, 201);
+  const fourth = await from('203.0.113.5', { 'X-Forwarded-For': `10.0.0.${Math.random()}` });
+  assert.equal(fourth.status, 429);
+  assert.deepEqual(fourth.data, { error: 'Too Many Requests' });
+  assert.equal(fourth.headers.get('retry-after'), '60');
+  assert.equal((await from('203.0.113.6')).status, 201, 'another IP has its own allowance');
+  assert.equal(rows().length, 4, 'a refused join stores nothing');
+  assert.deepEqual([...new Set(rate.keys)], ['203.0.113.5', '203.0.113.6'], 'keyed by the Cloudflare client IP only');
+
+  rate.keys.length = 0;
+  await call('/api/admin/waitlist', { admin: true });
+  await call('/feedback', { method: 'POST', body: { message: 'a note' }, headers: { 'CF-Connecting-IP': '203.0.113.5' } });
+  assert.deepEqual(rate.keys, [], 'only joining is limited');
+  assert.equal((await from('203.0.113.5', {})).status, 429);
+});
+
+test('without the rate limit binding joining still works', async () => {
+  const { call, rows } = client();
+  for (let i = 0; i < 5; i++) assert.equal((await call('/waitlist', { method: 'POST', body: VALID, headers: { 'CF-Connecting-IP': '203.0.113.5' } })).status, 201);
+  assert.equal(rows().length, 5);
+});
+
+test('WAITLIST_OPEN "false" closes joining with 503 but leaves the admin routes and feedback alone', async () => {
+  const { call, rows, env } = client({ env: { WAITLIST_OPEN: 'false', WAITLIST_RATE_LIMITER: limiter(0) } });
+  insertEntry(env.DB.sqlite);
+  for (const contentType of ['application/json', 'text/plain']) {
+    const closed = await call('/waitlist', { method: 'POST', body: VALID, contentType });
+    assert.equal(closed.status, 503);
+    assert.deepEqual(closed.data, { error: 'The waitlist is closed' });
+  }
+  assert.equal(rows().length, 1);
+  assert.equal((await call('/api/admin/waitlist', { admin: true })).data.waitlist.length, 1);
+  assert.equal((await call('/api/admin/waitlist/1/delete', { method: 'POST', admin: true })).status, 200);
+  assert.equal((await call('/feedback', { method: 'POST', body: { message: 'a note' } })).status, 201);
+  for (const open of [undefined, 'true', '', 'open']) {
+    assert.equal((await client({ env: { WAITLIST_OPEN: open } }).call('/waitlist', { method: 'POST', body: VALID })).status, 201, String(open));
+  }
+});
+
+test('WAITLIST_OPEN = false written as a wrangler.toml boolean also closes joining', async () => {
+  const { call, rows } = client({ env: { WAITLIST_OPEN: false } });
+  assert.equal((await call('/waitlist', { method: 'POST', body: VALID })).status, 503);
+  assert.deepEqual(rows(), []);
+});
+
+test('entries keep only the UTC day, even when the table default is bypassed or older rows carry a time', async () => {
+  const { env, call, rows } = client();
+  await call('/waitlist', { method: 'POST', body: VALID });
+  assert.match(rows()[0].created_at, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(rows()[0].created_at, todayUtc());
+  env.DB.sqlite.exec("INSERT INTO waitlist (wants, heard_from, client, os, version, country) VALUES ('faster', 'x', 'vscode', 'linux', '1', 'GB')");
+  assert.match(rows()[1].created_at, /^\d{4}-\d{2}-\d{2}$/, 'the column default is a day too');
+  const listed = await call('/api/admin/waitlist', { admin: true });
+  for (const entry of listed.data.waitlist) assert.match(entry.created_at, /^\d{4}-\d{2}-\d{2}$/);
+  const schema = readFileSync(new URL('./waitlist.sql', import.meta.url), 'utf8');
+  assert.ok(!/datetime\(/i.test(schema), 'no time in the schema');
+});
+
+test('the 7 and 30 day counts are whole UTC days, for day-only and older timestamped rows alike', async () => {
+  const { env, call } = client();
+  for (const daysAgo of [0, 6, 7, 29, 30, 31]) insertEntry(env.DB.sqlite, { daysAgo });
+  insertEntry(env.DB.sqlite, { daysAgo: 6, withTime: true });
+  insertEntry(env.DB.sqlite, { daysAgo: 7, withTime: true });
+  const { summary } = (await call('/api/admin/waitlist', { admin: true })).data;
+  assert.equal(summary.total, 8);
+  assert.equal(summary.last_7_days, 3, 'today and the six days before it');
+  assert.equal(summary.last_30_days, 6, 'today and the 29 days before it');
+});
+
+test('email addresses in either waitlist note are removed, while feedback notes keep them', async () => {
+  const { env, call, rows } = client();
+  const emails = ['person@example.com', 'First.Last+tag@mail.example.co.uk', 'UPPER@EXAMPLE.ORG', 'a_b-c%d@sub-domain.example.io', 'x@y.dev'];
+  for (const email of emails) {
+    const sent = await call('/waitlist', { method: 'POST', body: { ...VALID, wants_note: `mail me at ${email}, thanks`, heard_note: `<${email}>` } });
+    assert.equal(sent.status, 201, email);
+  }
+  for (const [i, row] of rows().entries()) {
+    assert.equal(row.wants_note, 'mail me at [email removed], thanks', emails[i]);
+    assert.equal(row.heard_note, '<[email removed]>', emails[i]);
+  }
+  await call('/waitlist', { method: 'POST', body: { ...VALID, wants_note: 'use @mentions and v2@beta builds, a@b' } });
+  assert.equal(rows().at(-1).wants_note, 'use @mentions and v2@beta builds, a@b', 'text that is not an address stays');
+  await call('/feedback', { method: 'POST', body: { message: 'reply to person@example.com please' } });
+  assert.equal(env.DB.sqlite.prepare('SELECT message FROM feedback').get().message, 'reply to person@example.com please');
+});
+
+test('email addresses with non-ASCII letters are removed too', async () => {
+  const { call, rows } = client();
+  for (const email of ['josé@example.com', 'renée@exämple.de', 'user@bücher.example']) {
+    await call('/waitlist', { method: 'POST', body: { ...VALID, wants_note: `write to ${email}` } });
+  }
+  const leaked = rows().map((row) => row.wants_note).filter((note) => !note.endsWith('[email removed]'));
+  assert.deepEqual(leaked, []);
+});
+
+test('a note within the length limit is not refused because an email in it was replaced', async () => {
+  const { call, rows } = client();
+  const wantsNote = 'w'.repeat(MAX_WANTS_NOTE - 'a@b.co'.length - 1) + ' a@b.co';
+  const heardNote = 'h'.repeat(MAX_HEARD_NOTE - 'a@b.io'.length - 1) + ' a@b.io';
+  assert.equal(wantsNote.length, MAX_WANTS_NOTE);
+  const sent = await call('/waitlist', { method: 'POST', body: { ...VALID, wants_note: wantsNote, heard_note: heardNote } });
+  assert.equal(sent.status, 201, JSON.stringify(sent.data));
+  assert.ok(!JSON.stringify(rows()).includes('a@b.'));
+});
+
+test('scanning a full-size note for emails stays cheap', async () => {
+  const { cleanWaitlist } = await import('./waitlist.js');
+  for (const note of ['a'.repeat(8000), 'a.'.repeat(4000), 'a'.repeat(4000) + '@' + 'b.'.repeat(1990) + '1']) {
+    const timings = [];
+    for (let i = 0; i < 3; i++) {
+      const started = performance.now();
+      cleanWaitlist({ wants: ['faster'], heard_from: 'x', wants_note: note }, 'GB');
+      timings.push(performance.now() - started);
+    }
+    assert.ok(Math.min(...timings) < 20, `${note.slice(0, 12)}… took ${Math.min(...timings).toFixed(1)} ms of CPU`);
+  }
 });

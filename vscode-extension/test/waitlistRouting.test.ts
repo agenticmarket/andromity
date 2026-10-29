@@ -35,14 +35,15 @@ const { SessionTabPanel } = require("../src/panels/SessionTabPanel.js");
 const { SettingsPanel } = require("../src/panels/SettingsPanel.js");
 
 /** Stands in for WaitlistController and records what reaches it. */
-function fakeWaitlist(joined = false) {
+function fakeWaitlist(joined = false, offered = joined) {
   const handled: any[] = [];
   let shown = 0;
   return {
     handled,
     get shown() { return shown; },
     joined: () => joined,
-    stateMessage: () => ({ type: "waitlist_state", joined }),
+    offered: () => offered,
+    stateMessage: () => ({ type: "waitlist_state", joined, offered }),
     offerShown: () => { shown++; },
     handleMessage: async (message: any, post: (reply: unknown) => void) => {
       handled.push(message);
@@ -79,7 +80,7 @@ describe("settings: the Andromity card on API keys", () => {
   const escapeHtml = slice("function escapeHtml(str) {", "\n    }");
   const stateCase = slice('case "waitlist_state": {', "break;");
 
-  function settingsPage(options: { joined?: boolean; keysActive?: boolean } = {}) {
+  function settingsPage(options: { joined?: boolean; offered?: boolean; keysActive?: boolean } = {}) {
     const posted: any[] = [];
     const grid = { innerHTML: "" };
     const pane = {
@@ -92,6 +93,7 @@ describe("settings: the Andromity card on API keys", () => {
       allProviders: [{ id: "andromity", has_key: true }, { id: "openai", has_key: false }, { id: "ollama", has_key: true }],
       currentAccount: { isAuthenticated: false },
       waitlistJoined: options.joined === true,
+      waitlistOffered: options.offered !== false,
       waitlistOfferNoted: false,
       ollamaStatus: null, ollamaChecked: false, activeProvider: "", renderModels() {},
       msg: null,
@@ -130,13 +132,39 @@ describe("settings: the Andromity card on API keys", () => {
   it("redraws the card when the joined state changes", () => {
     const page = settingsPage();
     page.render();
-    page.sandbox.msg = { type: "waitlist_state", joined: true };
+    page.sandbox.msg = { type: "waitlist_state", joined: true, offered: true };
     vm.runInContext(`switch (msg.type) { ${stateCase} } }`, page.sandbox);
     assert.equal(page.sandbox.waitlistJoined, true);
     assert.match(page.cards()[0], /disabled>On the waitlist ✓/);
-    page.sandbox.msg = { type: "waitlist_state", joined: "yes" };
+    page.sandbox.msg = { type: "waitlist_state", joined: "yes", offered: 1 };
     vm.runInContext(`switch (msg.type) { ${stateCase} } }`, page.sandbox);
     assert.equal(page.sandbox.waitlistJoined, false, "only a real true counts");
+    assert.equal(page.sandbox.waitlistOffered, false, "only a real true counts");
+    assert.ok(!page.cards()[0].includes("join-waitlist"), "hidden while the flag is not set");
+  });
+
+  it("hides the offer until the gateway has offered the waitlist, and shows it once it has", () => {
+    const page = settingsPage({ offered: false });
+    page.render();
+    assert.ok(page.cards()[0].includes("Andromity Cloud Gateway"));
+    assert.ok(!page.cards()[0].includes("join-waitlist"));
+    assert.deepEqual(page.posted, [], "a hidden offer is not noted");
+    page.sandbox.msg = { type: "waitlist_state", joined: false, offered: true };
+    vm.runInContext(`switch (msg.type) { ${stateCase} } }`, page.sandbox);
+    assert.ok(page.cards()[0].includes("Need more? Join the waitlist"));
+    assert.deepEqual(page.posted, [{ type: "waitlist_offer_shown" }]);
+  });
+
+  it("reads the offered flag from the panel's first state", () => {
+    const start = settingsHtml.indexOf('if (typeof msg.waitlistJoined === "boolean")');
+    const line = settingsHtml.slice(settingsHtml.indexOf("\n", start) + 1, settingsHtml.indexOf("\n", settingsHtml.indexOf("\n", start) + 1));
+    const page = settingsPage({ offered: false });
+    page.sandbox.msg = { waitlistOffered: true };
+    vm.runInContext(line, page.sandbox);
+    assert.equal(page.sandbox.waitlistOffered, true, line);
+    page.sandbox.msg = { waitlistOffered: "true" };
+    vm.runInContext(line, page.sandbox);
+    assert.equal(page.sandbox.waitlistOffered, true, "a non-boolean leaves it alone");
   });
 
   it("asks the extension to open the chat form, but not after joining", () => {
@@ -165,11 +193,16 @@ describe("settings: the Andromity card on API keys", () => {
       assert.equal(opened, 1);
       assert.equal(waitlist.shown, 1);
       SettingsPanel.postWaitlistState();
-      assert.deepEqual(panelPosts, [{ type: "waitlist_state", joined: true }]);
+      assert.deepEqual(panelPosts, [{ type: "waitlist_state", joined: true, offered: true }]);
       assert.equal(SettingsPanel._cachedState.waitlistJoined, true);
+      assert.equal(SettingsPanel._cachedState.waitlistOffered, true);
+      SettingsPanel.waitlist = fakeWaitlist(false, true);
+      SettingsPanel.postWaitlistState();
+      assert.deepEqual(panelPosts.at(-1), { type: "waitlist_state", joined: false, offered: true });
       SettingsPanel.waitlist = undefined;
       SettingsPanel.postWaitlistState();
-      assert.deepEqual(panelPosts.at(-1), { type: "waitlist_state", joined: false });
+      assert.deepEqual(panelPosts.at(-1), { type: "waitlist_state", joined: false, offered: false });
+      assert.equal(SettingsPanel._cachedState.waitlistOffered, false);
     } finally {
       SettingsPanel.waitlist = undefined;
       SettingsPanel.chatProvider = undefined;
@@ -194,8 +227,8 @@ describe("chat view routing", () => {
   it("passes the waitlist messages to the controller and its replies back to the page", async () => {
     const waitlist = fakeWaitlist();
     const { provider, posts } = chatView(waitlist);
-    for (const type of ["waitlist_offer_shown", "waitlist_open", "waitlist_join"]) await provider._handleWebviewMessage({ type });
-    assert.deepEqual(waitlist.handled.map((m) => m.type), ["waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
+    for (const type of ["waitlist_offered", "waitlist_offer_shown", "waitlist_open", "waitlist_join"]) await provider._handleWebviewMessage({ type });
+    assert.deepEqual(waitlist.handled.map((m) => m.type), ["waitlist_offered", "waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
     assert.deepEqual(posts.map((m) => m.type), ["waitlist_form", "waitlist_result"]);
   });
 
@@ -208,7 +241,7 @@ describe("chat view routing", () => {
       });
       await provider._handleWebviewMessage({ type: "ready" });
       const states = posts.filter((m) => m.type === "waitlist_state");
-      assert.deepEqual(states, waitlist ? [{ type: "waitlist_state", joined: true }] : []);
+      assert.deepEqual(states, waitlist ? [{ type: "waitlist_state", joined: true, offered: true }] : []);
     }
   });
 
@@ -230,9 +263,9 @@ describe("chat view routing", () => {
   it("the waitlist works while the engine daemon is not connected, since it never uses it", async () => {
     const waitlist = fakeWaitlist();
     const { provider, posts } = chatView(waitlist, false);
-    for (const type of ["waitlist_offer_shown", "waitlist_open", "waitlist_join"]) await provider._handleWebviewMessage({ type });
+    for (const type of ["waitlist_offered", "waitlist_offer_shown", "waitlist_open", "waitlist_join"]) await provider._handleWebviewMessage({ type });
     assert.deepEqual(errors, [], "no 'daemon is not connected' error for a waitlist click");
-    assert.deepEqual(waitlist.handled.map((m) => m.type), ["waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
+    assert.deepEqual(waitlist.handled.map((m) => m.type), ["waitlist_offered", "waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
     assert.ok(!posts.some((m) => m.type === "action_failed"), JSON.stringify(posts));
     assert.ok(posts.some((m) => m.type === "waitlist_result"), "the form gets an answer instead of staying on 'Joining…'");
   });
@@ -256,17 +289,27 @@ describe("session tab routing", () => {
   it("sends the joined state when the tab's page is ready", async () => {
     const { tab, posts } = sessionTab(fakeWaitlist(true));
     await tab._handleMessage({ type: "ready" });
-    assert.deepEqual(posts.filter((m) => m.type === "waitlist_state"), [{ type: "waitlist_state", joined: true }]);
+    assert.deepEqual(posts.filter((m) => m.type === "waitlist_state"), [{ type: "waitlist_state", joined: true, offered: true }]);
     const { tab: plain, posts: plainPosts } = sessionTab(null);
     await plain._handleMessage({ type: "ready" });
     assert.ok(!plainPosts.some((m) => m.type === "waitlist_state"));
   });
 
+  it("handles the waitlist in a tab while the engine daemon is not connected", async () => {
+    const waitlist = fakeWaitlist();
+    const { tab, posts } = sessionTab(waitlist);
+    tab._rpcClient = undefined;
+    for (const type of ["waitlist_offered", "waitlist_open", "waitlist_join"]) await tab._handleMessage({ type });
+    assert.deepEqual(errors, []);
+    assert.deepEqual(waitlist.handled.map((m) => m.type), ["waitlist_offered", "waitlist_open", "waitlist_join"]);
+    assert.ok(!posts.some((m) => m.type === "action_failed"));
+  });
+
   it("passes the waitlist messages to the controller and its replies back to the tab", async () => {
     const waitlist = fakeWaitlist();
     const { tab, posts } = sessionTab(waitlist);
-    for (const type of ["waitlist_offer_shown", "waitlist_open", "waitlist_join"]) await tab._handleMessage({ type, wants: ["faster"] });
-    assert.deepEqual(waitlist.handled.map((m) => m.type), ["waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
+    for (const type of ["waitlist_offered", "waitlist_offer_shown", "waitlist_open", "waitlist_join"]) await tab._handleMessage({ type, wants: ["faster"] });
+    assert.deepEqual(waitlist.handled.map((m) => m.type), ["waitlist_offered", "waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
     assert.deepEqual(posts.map((m) => m.type), ["waitlist_form", "waitlist_result"]);
   });
 });
