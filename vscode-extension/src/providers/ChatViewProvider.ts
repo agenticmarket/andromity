@@ -2330,6 +2330,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       if (this._rpcClient) {
         this._postToWebview({ type: "backend_ready" });
+        recordFeatureUse("chat_view_opened", { oncePerSession: true, client: this._rpcClient });
         if (!this._isStartupStateDelivered()) await this._loadStartupState();
       }
       return;
