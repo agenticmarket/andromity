@@ -589,9 +589,14 @@ def gateway_error(e: Exception, *types: str) -> Optional[Dict[str, Any]]:
     return error
 
 
+def _clean_action(value: Any) -> str:
+    """A gateway action id reduced to lowercase letters and underscores, at most 40 characters."""
+    return re.sub(r"[^a-z_]", "", value if isinstance(value, str) else "")[:40]
+
+
 def _error_done(e: Exception, provider: str, model: str, has_images: bool, usage: Optional[Dict[str, int]] = None) -> Done:
     info = classify_error_info(e, provider=provider, model=model, has_images=has_images)
-    return Done(usage=usage, outcome="error", error_type=info["type"], error_action=info["action"] or None)
+    return Done(usage=usage, outcome="error", error_type=info["type"], error_action=_clean_action(info["action"]) or None)
 
 
 def gateway_model_unavailable(e: Exception) -> Optional[Dict[str, Any]]:
@@ -1083,7 +1088,7 @@ def format_error_html(info: dict) -> str:
             f'  </details>\n'
         )
 
-    action = re.sub(r"[^a-z_]", "", str(info.get("action") or ""))[:40]
+    action = _clean_action(info.get("action"))
     action_attr = f' data-error-action="{action}"' if action else ""
     return (
         f'\n<div class="andromity-error-card" data-error-type="{info["type"]}"{action_attr} data-retryable="true">\n'
