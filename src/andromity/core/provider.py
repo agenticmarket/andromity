@@ -3,7 +3,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import AsyncGenerator, List, Dict, Any, Optional
+from typing import AsyncGenerator, List, Dict, Any, Iterable, Optional
 
 from andromity.config import config
 from andromity.core.debug_log import get_logger
@@ -353,7 +353,7 @@ async def stream_completion(
                     log.info("Non-retryable provider error: %s (HTTP %s).", type(e).__name__, getattr(e, "status_code", "unknown"))
                     yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
                     yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"],
-                               error_detail=short_error_detail(e))
+                               error_detail=short_error_detail(e, secrets=(resolved.get("api_key"),)), error_status=http_status(e))
                     return
 
                 is_429 = has_status_code(msg, "429") or "rate limit" in msg or "ratelimit" in msg or "quota" in msg
@@ -377,7 +377,7 @@ async def stream_completion(
                     log.error("Provider call failed after %d attempts: %s (HTTP %s).", total_attempts, type(e).__name__, getattr(e, "status_code", "unknown"))
                     yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
                     yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"],
-                               error_detail=short_error_detail(e))
+                               error_detail=short_error_detail(e, secrets=(resolved.get("api_key"),)), error_status=http_status(e))
                     return
 
             # 2. Watchdog: guard against upstream queue stall
@@ -510,7 +510,8 @@ async def stream_completion(
             else:
                 yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
             yield Done(usage=usage, outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"],
-                       error_detail=None if isinstance(e, ProviderStalledError) else short_error_detail(e))
+                       error_detail=None if isinstance(e, ProviderStalledError) else short_error_detail(e, secrets=(resolved.get("api_key"),)),
+                       error_status=http_status(e))
             return
 
 
@@ -574,14 +575,29 @@ _CREDENTIAL_TEXT = re.compile(
 )
 
 
-def redact_credentials(text: str) -> str:
-    return _CREDENTIAL_TEXT.sub("[redacted]", text or "")
+def redact_credentials(text: str, secrets: Iterable[Optional[str]] = ()) -> str:
+    """Remove the given secrets, any token that starts like one of them, and credential-like tokens."""
+    text = text or ""
+    for secret in secrets:
+        if not isinstance(secret, str) or len(secret) < 6:
+            continue
+        if len(secret) >= 8:
+            text = re.sub(re.escape(secret[:8]) + r"\S*", "[redacted]", text)
+        else:
+            text = text.replace(secret, "[redacted]")
+    return _CREDENTIAL_TEXT.sub("[redacted]", text)
 
 
-def short_error_detail(e: BaseException, limit: int = 160) -> str:
-    """One line of the provider's own error text, without markup or credential-like tokens."""
-    text = redact_credentials(" ".join(extract_clean_error_message(e).split()))
+def short_error_detail(e: BaseException, limit: int = 160, secrets: Iterable[Optional[str]] = ()) -> str:
+    """One line of the provider's own error text, without markup or credentials. Redacts before it truncates."""
+    text = redact_credentials(" ".join(extract_clean_error_message(e).split()), secrets)
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def http_status(e: BaseException) -> Optional[int]:
+    """The HTTP status a provider answered with, when the error carries one."""
+    status = getattr(e, "status_code", None)
+    return status if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599 else None
 
 
 def gateway_error(e: Exception, *types: str) -> Optional[Dict[str, Any]]:

@@ -2902,6 +2902,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "finish_onboarding_model": {
+        const check = this._onboardingCheck;
+        const unverified = check && check.provider === message.provider ? check.unverified : "";
         try {
           const provider = message.provider;
           const modelId = message.modelId;
@@ -2920,8 +2922,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             session_id: this._currentSessionId,
           }).catch(() => {});
 
-          const check = this._onboardingCheck;
-          const unverified = check && check.provider === provider ? check.unverified : "";
           this._announceKeyResult(
             unverified && (modelId ? `${unverified}. Using model ${modelId}.` : unverified),
             `Connected to ${provider || "AI Provider"}! Using model ${modelId || "ready"}.`,
@@ -2940,6 +2940,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             type: "key_configured_success",
             provider: message.provider,
             model: this._currentModel,
+            unverified: unverified || undefined,
           });
         }
         break;

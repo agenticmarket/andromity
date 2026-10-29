@@ -5172,12 +5172,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       box.parentNode.insertBefore(note, box);
     }
 
-    /** A note about a missing key goes away once that provider has one. */
+    /** A note about a missing key goes away once that provider has one or another provider is active. */
     function syncKeyRequiredNote() {
       const note = document.getElementById('key-required-note');
       if (!note) return;
-      const entry = providerEntry(note.getAttribute('data-provider') || '');
-      if (entry && entry.has_key) note.remove();
+      const noteProvider = note.getAttribute('data-provider') || '';
+      const entry = providerEntry(noteProvider);
+      if ((entry && entry.has_key) || noteProvider !== currentProvider) note.remove();
     }
 
     function currentFlyoutQuery() {
@@ -9247,8 +9248,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           if (msg.providers) {
             allProviders = msg.providers;
-            syncKeyRequiredNote();
           }
+          syncKeyRequiredNote();
           updateModelBadge();
           updateOnboardingVisibility();
           const btnSignInInit = document.getElementById('zero-gateway-signin-btn');
@@ -9386,11 +9387,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             }
             updateModelBadge();
             updateReasoningBadge();
+            syncKeyRequiredNote();
           } else if (msg.key === 'provider') {
             currentProvider = msg.value;
             currentModelReasoningCapability = null;
             updateReasoningBadge();
             updateModelBadge();
+            syncKeyRequiredNote();
           } else if (msg.key === 'profile') {
             currentProfile = msg.value;
             updateProfileBadge();

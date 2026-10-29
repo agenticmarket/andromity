@@ -40,6 +40,7 @@ class Done(StreamEvent):
     outcome: str = "success"
     error_type: Optional[str] = None
     error_detail: Optional[str] = None
+    error_status: Optional[int] = None
 
 
 @dataclass

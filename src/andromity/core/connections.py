@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 
 from andromity.config import config
 from andromity.core import network_policy
+from andromity.core.airgap_guard import is_loopback_host
 
 
 PRESETS = {
@@ -21,7 +22,6 @@ PRESETS = {
     "ollama": ("Ollama (Local)", "https://ollama.com"),
 }
 KEYLESS_PRESETS = frozenset({"andromity", "ollama"})
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def portal_url(provider: str) -> str:
@@ -29,8 +29,11 @@ def portal_url(provider: str) -> str:
 
 
 def _is_loopback(url: str) -> bool:
-    host = (urlsplit(url).hostname or "").lower() if url else ""
-    return host in _LOOPBACK_HOSTS or host.endswith(".localhost")
+    try:
+        host = urlsplit(url).hostname if url else None
+    except ValueError:
+        return False
+    return bool(host) and is_loopback_host(host)
 
 
 def key_required(provider: str, saved: Optional[dict] = None) -> bool:
@@ -166,12 +169,22 @@ def probe_model_for(provider: str) -> str:
     return "auto" if provider == "andromity" else ""
 
 
-def _probe_detail(detail: Optional[str], provider: str) -> str:
-    text = " ".join(str(detail or "").split())
-    key = config.get_api_key(provider) or ""
-    if len(key) >= 6:
-        text = text.replace(key, "[redacted]")
-    return text[:160]
+def _probe_detail(detail: Optional[str], provider: str, limit: int = 160) -> str:
+    """Redacts the saved key before shortening, so a cut can never leave part of it behind."""
+    from andromity.core.provider import redact_credentials
+    text = redact_credentials(" ".join(str(detail or "").split()), (config.get_api_key(provider),))
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _probe_error_type(error_type: str, status: Optional[int]) -> str:
+    """A real HTTP status decides first; provider text can quote unrelated numbers such as a 500 RPM limit."""
+    if status in (401, 403):
+        return "auth_error"
+    if status == 429:
+        return error_type if error_type == "quota_exceeded" else "rate_limit"
+    if status == 404:
+        return error_type if error_type == "endpoint_not_found" else "model_not_found"
+    return error_type
 
 
 async def test_connection(provider: str, model: str = "") -> dict[str, Any]:
@@ -179,7 +192,7 @@ async def test_connection(provider: str, model: str = "") -> dict[str, Any]:
 
     Built-in providers get a single attempt so a rate limit is reported rather than waited out.
     """
-    from andromity.core.provider import classify_error_info, short_error_detail, stream_completion
+    from andromity.core.provider import classify_error_info, http_status, short_error_detail, stream_completion
     from andromity.core.events import Done, TextDelta
     preset = provider in PRESETS
     if preset and key_required(provider) and not config.get_api_key(provider):
@@ -199,11 +212,13 @@ async def test_connection(provider: str, model: str = "") -> dict[str, Any]:
                 chunks.append(event.text)
             elif isinstance(event, Done):
                 if event.outcome != "success":
-                    return connection_failure(event.error_type or "generic", _probe_detail(event.error_detail, provider), model)
+                    return connection_failure(_probe_error_type(event.error_type or "generic", event.error_status),
+                                              _probe_detail(event.error_detail, provider), model)
                 finished = True
     except Exception as exc:
-        return connection_failure(classify_error_info(exc, provider=provider, model=model)["type"],
-                                  _probe_detail(short_error_detail(exc), provider), model)
+        key = config.get_api_key(provider)
+        return connection_failure(_probe_error_type(classify_error_info(exc, provider=provider, model=model)["type"], http_status(exc)),
+                                  _probe_detail(short_error_detail(exc, limit=1000, secrets=(key,)), provider), model)
     if not finished:
         return connection_failure("incomplete_stream", model=model)
     if not chunks:
