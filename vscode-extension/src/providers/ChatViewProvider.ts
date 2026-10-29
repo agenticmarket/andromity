@@ -501,6 +501,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Once per window, as soon as the chat has been shown and the engine is connected. */
   private _recordChatViewOpened() {
     if (chatViewOpenRecorded || !this._webviewReady || !this._rpcClient) return;
+    if (this._pythonBridge && this._pythonBridge.getClient() !== this._rpcClient) return;
     chatViewOpenRecorded = true;
     recordFeatureUse("chat_view_opened", { client: this._rpcClient });
   }

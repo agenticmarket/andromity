@@ -42,7 +42,6 @@ export class FeatureTipsController implements vscode.Disposable {
       result.tip = this.enabled() ? pickTip(next, facts, today) : null;
       return result.tip ? markTipShown(next, result.tip, today) : next;
     });
-    // A tip whose showing couldn't be saved would repeat after every turn.
     if (!saved) return null;
     if (result.tip) recordFeatureUse(`tip_shown_${result.tip}`, { sessionId: facts.sessionId });
     return result.tip;
@@ -69,9 +68,16 @@ export class FeatureTipsController implements vscode.Disposable {
 
   private _update(change: (state: FeatureTipsState) => FeatureTipsState): Promise<boolean> {
     const write = this._writes.then(async () => {
-      const next = change(normalizeFeatureTipsState(this._memento.get(STATE_KEY)));
-      await this._memento.update(STATE_KEY, next);
-      return true;
+      const previous = this._memento.get(STATE_KEY);
+      const next = change(normalizeFeatureTipsState(previous));
+      try {
+        await this._memento.update(STATE_KEY, next);
+        return true;
+      } catch {
+        // Memento.update changes the in-memory value before the disk write, so a failed write must be rolled back.
+        await Promise.resolve(this._memento.update(STATE_KEY, previous)).catch(() => {});
+        return false;
+      }
     }).catch(() => false);
     this._writes = write.then(() => undefined);
     return write;
