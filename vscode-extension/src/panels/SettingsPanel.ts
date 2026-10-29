@@ -8,7 +8,8 @@ import {
   resolveWebviewConfigWrite,
 } from "../server/securityPolicy.js";
 import { RpcClient } from "../server/RpcClient.js";
-import { ModelInfo, ProviderInfo, IntegrationResult, McpServerConfig, ConnectorInfo, ConnectorConnectResult } from "../server/types.js";
+import { ModelInfo, ProviderInfo, IntegrationResult, McpServerConfig, ConnectorInfo, ConnectorConnectResult, KeyCheckResult } from "../server/types.js";
+import { PROVIDER_ID_PATTERN, refreshProviderModels, runKeyCheck } from "../server/keyCheck.js";
 import { join } from "path";
 import { existsSync, readFileSync } from "fs";
 import { homedir } from "os";
@@ -23,7 +24,7 @@ import { CONNECTOR_GUIDE_SLUGS } from "./connectorGuides.js";
 const HUB_FEATURES: Record<string, string> = {
   select_model: "model_selected", toggle_pin: "model_pinned",
   save_provider: "provider_saved", delete_provider: "provider_deleted", test_provider: "provider_tested",
-  set_api_key: "api_key_saved",
+  set_api_key: "api_key_saved", test_key: "api_key_tested", refresh_provider_models: "provider_models_refreshed",
   install_skill: "skill_installed", skill_read: "skill_viewed", remove_skill: "skill_removed",
   trust_folder: "trust_granted", revoke_trust: "trust_revoked", toggle_airgap: "airgap_toggled",
   toggle_sound: "sound_toggled", toggle_next_steps: "next_steps_toggled", toggle_coauthor: "coauthor_toggled", configure_python_path: "python_path_set",
@@ -48,6 +49,7 @@ export class SettingsPanel {
   private _onConfigChangeCallback?: () => void;
   private _initialTab: string = "models";
   private _loadingPromise: Promise<void> | null = null;
+  private _disposed = false;
 
   public static extensionContext?: vscode.ExtensionContext;
   public static chatProvider?: any;
@@ -427,6 +429,33 @@ export class SettingsPanel {
     }
   }
 
+  private _postIfOpen(message: unknown): void {
+    if (!this._disposed) void this._panel.webview.postMessage(message);
+  }
+
+  /** Tests a saved key with a tiny request; a passing key also gets its live model list. */
+  private async _testKey(provider: unknown): Promise<KeyCheckResult | null> {
+    const rpc = this._rpcClient;
+    if (!rpc || typeof provider !== "string" || !PROVIDER_ID_PATTERN.test(provider)) return null;
+    const result = await runKeyCheck(rpc, provider, () => this._postIfOpen({ type: "key_test_started", provider }));
+    this._postIfOpen({ type: "key_test_result", provider, ...result });
+    if (result.ok) {
+      const refreshed = await refreshProviderModels(rpc, provider);
+      if (refreshed.models) {
+        this._postIfOpen({ type: "provider_models_refreshed", ...refreshed });
+        this._onConfigChangeCallback?.();
+      }
+    }
+    return result;
+  }
+
+  private async _providerNeedingKey(provider: unknown): Promise<ProviderInfo | null> {
+    if (typeof provider !== "string" || !provider || !this._rpcClient) return null;
+    const providers = await this._rpcClient.call<ProviderInfo[]>("config.list_providers", {}, 5000).catch(() => null);
+    const info = Array.isArray(providers) ? providers.find((p) => p.id === provider) : undefined;
+    return info && info.key_required === true && !info.has_key ? info : null;
+  }
+
   private async _handleMessage(message: any) {
     const hubFeature = HUB_FEATURES[message?.type];
     if (hubFeature) recordFeatureUse(hubFeature, { oncePerSession: HUB_ONCE.has(hubFeature) });
@@ -609,7 +638,17 @@ export class SettingsPanel {
             modelId: message.modelId,
             provider: message.provider,
           });
-          vscode.window.showInformationMessage(`Active model set to: ${message.modelId}`);
+          const keyless = await this._providerNeedingKey(message.provider);
+          if (keyless) {
+            SettingsPanel.chatProvider?.showKeyRequiredNote?.({ id: keyless.id, name: keyless.name, portal: keyless.portal || "" });
+            void Promise.resolve(vscode.window.showWarningMessage(
+              `Active model set to ${message.modelId}. Set your ${keyless.name} API key to use it.`, "Open API keys",
+            )).then((choice) => {
+              if (choice && !this._disposed) this.setInitialTab("keys");
+            });
+          } else {
+            vscode.window.showInformationMessage(`Active model set to: ${message.modelId}`);
+          }
           this._onConfigChangeCallback?.();
         } catch (err: any) {
           vscode.window.showErrorMessage(`Failed to switch model: ${err.message}`);
@@ -689,11 +728,29 @@ export class SettingsPanel {
             providers: providers || [],
             savedProvider: message.provider,
           });
-          vscode.window.showInformationMessage(`API key for ${message.provider} updated successfully.`);
+          vscode.window.showInformationMessage(`API key for ${message.provider} saved.`);
           this._onConfigChangeCallback?.();
         } catch (err: any) {
           vscode.window.showErrorMessage(`Failed to save API key: ${err.message}`);
+          break;
         }
+        await this._testKey(message.provider);
+        break;
+      }
+
+      case "test_key": {
+        if (!(await this._testKey(message.provider))) {
+          this._postIfOpen({ type: "key_test_result", provider: String(message.provider ?? "").slice(0, 64), ok: false, tone: "error", label: "Couldn't verify the key" });
+        }
+        break;
+      }
+
+      case "refresh_provider_models": {
+        const provider = typeof message.provider === "string" ? message.provider : "";
+        if (!PROVIDER_ID_PATTERN.test(provider)) break;
+        const refreshed = await refreshProviderModels(this._rpcClient, provider);
+        this._postIfOpen({ type: "provider_models_refreshed", ...refreshed });
+        if (refreshed.models) this._onConfigChangeCallback?.();
         break;
       }
 
@@ -1427,6 +1484,7 @@ export class SettingsPanel {
   }
 
   public dispose() {
+    this._disposed = true;
     this._cronEventDisposers.forEach((off) => off());
     this._cronEventDisposers = [];
     SettingsPanel.currentPanel = undefined;
@@ -2814,6 +2872,62 @@ export class SettingsPanel {
       text-decoration: underline;
     }
 
+    .key-actions-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .btn-test-key {
+      padding: 4px 12px;
+      font-size: 11px;
+    }
+
+    .btn-test-key:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .key-test-status {
+      font-size: 11px;
+      line-height: 1.4;
+      color: var(--text-muted);
+      overflow-wrap: anywhere;
+    }
+
+    .key-test-status:empty { display: none; }
+    .key-test-status.ok { color: var(--tag-green-fg); }
+    .key-test-status.warn { color: var(--tag-orange-fg); }
+    .key-test-status.error { color: #f85149; }
+
+    .models-source-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 16px;
+      margin-bottom: 12px;
+      font-size: 11.5px;
+      color: var(--text-muted);
+    }
+
+    .models-source-bar[hidden] { display: none; }
+    .source-item { display: inline-flex; align-items: center; gap: 6px; }
+    .source-name { color: var(--text); }
+    .source-reason { color: var(--tag-orange-fg); }
+
+    .source-refresh {
+      background: none;
+      border: none;
+      padding: 0;
+      font-size: 11.5px;
+      color: var(--tag-blue-fg);
+      cursor: pointer;
+    }
+
+    .source-refresh:hover { text-decoration: underline; }
+    .source-refresh:disabled { color: var(--text-muted); cursor: default; text-decoration: none; }
+
     /* Usage Stats */
     .stats-row {
       display: grid;
@@ -3301,6 +3415,7 @@ export class SettingsPanel {
         </div>
       </div>
 
+      <div class="models-source-bar" id="models-source-bar" role="status" aria-live="polite" hidden></div>
       <div class="models-grid" id="models-grid"></div>
     </div>
 
@@ -4272,6 +4387,10 @@ SOFTWARE.</pre>
     let currentUsageRange = "all";
     let currentUsageScope = "global";
     let currentAccount = { isAuthenticated: false, username: "", email: "", plan: "free" };
+    const keyTests = Object.create(null);
+    const modelRefresh = Object.create(null);
+    let keyTestRunning = "";
+    let keyTestTimer = 0;
 
     // Tabs Navigation
     const sideNav = document.getElementById("side-nav");
@@ -4699,6 +4818,21 @@ SOFTWARE.</pre>
         togglePin(btn.dataset.id, btn.dataset.provider, btn.dataset.name);
       } else if (action === "save-key") {
         saveKey(btn.dataset.id);
+      } else if (action === "test-key") {
+        if (keyTestRunning || btn.disabled || !btn.dataset.id) return;
+        startKeyTest(btn.dataset.id);
+        vscode.postMessage({ type: "test_key", provider: btn.dataset.id });
+      } else if (action === "refresh-provider-models") {
+        const pid = btn.dataset.provider;
+        if (!pid || (modelRefresh[pid] && modelRefresh[pid].running)) return;
+        modelRefresh[pid] = { running: true, message: "" };
+        renderModels();
+        vscode.postMessage({ type: "refresh_provider_models", provider: pid });
+        setTimeout(() => {
+          if (!modelRefresh[pid] || !modelRefresh[pid].running) return;
+          modelRefresh[pid] = { running: false, message: "Couldn't refresh models." };
+          renderModels();
+        }, 20000);
       } else if (action === "add-provider" || action === "edit-provider") {
         editProvider(action === "edit-provider" ? btn.dataset.id : "");
       } else if (action === "cancel-provider") {
@@ -5111,7 +5245,30 @@ SOFTWARE.</pre>
         }
         case "providers_updated": {
           allProviders = msg.providers || [];
+          if (msg.savedProvider) {
+            delete keyTests[msg.savedProvider];
+            delete modelRefresh[msg.savedProvider];
+          }
           renderProviders();
+          break;
+        }
+        case "key_test_started": {
+          startKeyTest(msg.provider || "");
+          break;
+        }
+        case "key_test_result": {
+          finishKeyTest(msg);
+          break;
+        }
+        case "provider_models_refreshed": {
+          const pid = msg.provider || "";
+          modelRefresh[pid] = { running: false, message: msg.ok ? "" : (msg.message || "Couldn't refresh models.") };
+          if (Array.isArray(msg.models)) {
+            allModels = allModels.filter(m => m.provider !== pid).concat(msg.models);
+            const countBadge = document.getElementById("model-count-badge");
+            if (countBadge) countBadge.textContent = allModels.length;
+          }
+          renderModels();
           break;
         }
         case "mcp_refreshed": {
@@ -5387,10 +5544,40 @@ SOFTWARE.</pre>
       if (prEl) prEl.textContent = target.is_free ? "Free Tier" : (target.pricing || "");
     }
 
+    function providerName(pid) {
+      const found = allProviders.find(p => p.id === pid);
+      return (found && found.name) || pid;
+    }
+
+    function showsCatalogLabel(pid) {
+      const found = allProviders.find(p => p.id === pid);
+      return pid !== "andromity" && pid !== "ollama" && !(found && found.custom);
+    }
+
+    function renderSourceBar(visibleModels) {
+      const bar = document.getElementById("models-source-bar");
+      if (!bar) return;
+      const ids = [];
+      visibleModels.forEach(m => {
+        if (m.source === "catalog" && m.provider && !ids.includes(m.provider) && showsCatalogLabel(m.provider)) ids.push(m.provider);
+      });
+      bar.hidden = ids.length === 0;
+      bar.innerHTML = ids.map(pid => {
+        const state = modelRefresh[pid] || {};
+        return '<span class="source-item">' +
+          '<span class="badge" title="Listed from the built-in catalog, not fetched from the provider">Catalog</span>' +
+          '<span class="source-name">' + escapeHtml(providerName(pid)) + '</span>' +
+          '<button type="button" class="source-refresh" data-action="refresh-provider-models" data-provider="' + escapeHtml(pid) + '"' + (state.running ? ' disabled' : '') + '>' + (state.running ? 'Refreshing…' : 'Refresh') + '</button>' +
+          (state.message ? '<span class="source-reason">' + escapeHtml(state.message) + '</span>' : '') +
+        '</span>';
+      }).join("");
+    }
+
     function renderModels() {
       const grid = document.getElementById("models-grid");
       if (!grid) return;
       updateActiveBanner();
+      renderSourceBar([]);
       if (activeProvider === 'ollama' && (!ollamaStatus?.running || !(ollamaStatus.models || []).length)) {
         const title = !ollamaChecked ? 'Checking Ollama…' : !ollamaStatus ? 'Could not check Ollama' : ollamaStatus.running ? 'No models installed' : 'Ollama is not running';
         const detail = !ollamaChecked ? 'Checking the configured Ollama server before showing installed models.' : ollamaStatus?.running ? 'Download a model first, then check again. Catalog models are not installed automatically.' : 'Start Ollama to see models installed on your server. Models from the catalog are not ready to use.';
@@ -5428,6 +5615,7 @@ SOFTWARE.</pre>
 
         return true;
       });
+      renderSourceBar(filtered);
 
       if (filtered.length === 0) {
         grid.innerHTML = '<div class="empty-state" style="grid-column: 1 / -1;">' +
@@ -5462,6 +5650,7 @@ SOFTWARE.</pre>
             '</div>' +
             '<div class="model-desc">' + escapeHtml(m.desc || "High-performance AI model.") + '</div>' +
             '<div class="model-badges">' +
+              (m.needs_key ? '<span class="badge orange" title="Set your ' + escapeHtml(providerName(m.provider)) + ' API key to use this model">Needs API key</span>' : '') +
               (ctxStr ? '<span class="badge purple">' + escapeHtml(ctxStr) + '</span>' : '') +
               (m.is_free ? '<span class="badge green">Free Tier</span>' : '') +
               ((m.tags || []).includes('coding') ? '<span class="badge orange">Coding</span>' : '') +
@@ -5586,7 +5775,11 @@ SOFTWARE.</pre>
                 '<input type="password" class="key-input" id="key-input-' + escapeHtml(p.id) + '" placeholder="' + (hasKey ? '•••••••••••••••• (Configured)' : 'Paste API Key here…') + '">' +
                 '<button class="btn" data-action="save-key" data-id="' + escapeHtml(p.id) + '">Save</button>' +
               '</div>' +
-              (meta.portal ? '<a class="portal-link" href="#" data-action="open-portal" data-url="' + escapeHtml(meta.portal) + '">Get API Key &rarr;</a>' : '')
+              '<div class="key-actions-row">' +
+                (meta.portal ? '<a class="portal-link" href="#" data-action="open-portal" data-url="' + escapeHtml(meta.portal) + '">Get API Key &rarr;</a>' : '<span></span>') +
+                '<button type="button" class="btn btn-secondary btn-test-key" data-action="test-key" data-id="' + escapeHtml(p.id) + '" data-has-key="' + (hasKey ? '1' : '0') + '">Test</button>' +
+              '</div>' +
+              '<div class="key-test-status" data-provider="' + escapeHtml(p.id) + '" role="status" aria-live="polite"></div>'
             : '<div class="item-card-desc">' + (!ollamaChecked ? 'Checking Ollama…' : !ollamaStatus ? 'Could not check Ollama' : ollamaStatus.running ? 'Ollama running · ' + (ollamaStatus.models || []).length + ' installed models' : 'Ollama is not running') + '</div>' +
               (ollamaChecked && ollamaStatus?.installed && !ollamaStatus.running ? '<button class="btn" data-action="start-ollama">Start Ollama</button>' : '') +
               (ollamaChecked && !ollamaStatus?.running ? '<button class="btn" data-action="ollama-download">Install Ollama</button>' : '') +
@@ -5594,6 +5787,56 @@ SOFTWARE.</pre>
           ) +
         '</div>';
       }).join("");
+      applyKeyTestState();
+    }
+
+    function applyKeyTestState() {
+      document.querySelectorAll('[data-action="test-key"]').forEach(btn => {
+        const pid = btn.dataset.id || "";
+        const hasKey = btn.dataset.hasKey === "1";
+        btn.disabled = !hasKey || !!keyTestRunning;
+        btn.textContent = keyTestRunning && keyTestRunning === pid ? "Testing…" : "Test";
+        btn.title = !hasKey ? "Save an API key first"
+          : keyTestRunning && keyTestRunning !== pid ? "Another key test is running"
+          : "Send a tiny request to check this key";
+      });
+      document.querySelectorAll(".key-test-status[data-provider]").forEach(el => {
+        const state = keyTests[el.dataset.provider || ""];
+        const done = state && !state.running;
+        el.className = "key-test-status" + (done && state.tone ? " " + state.tone : "");
+        el.textContent = !state ? "" : state.running ? "Testing…" : state.label;
+        el.title = done ? (state.detail || (state.model ? "Tested with " + state.model : "")) : "";
+      });
+    }
+
+    function startKeyTest(pid) {
+      if (!pid) return;
+      keyTestRunning = pid;
+      keyTests[pid] = { running: true };
+      clearTimeout(keyTestTimer);
+      keyTestTimer = setTimeout(() => {
+        if (keyTestRunning !== pid) return;
+        keyTestRunning = "";
+        keyTests[pid] = { running: false, tone: "error", label: "Couldn't reach provider" };
+        applyKeyTestState();
+      }, 25000);
+      applyKeyTestState();
+    }
+
+    function finishKeyTest(msg) {
+      const pid = msg.provider || "";
+      if (keyTestRunning === pid) {
+        keyTestRunning = "";
+        clearTimeout(keyTestTimer);
+      }
+      keyTests[pid] = {
+        running: false,
+        tone: msg.tone || (msg.ok ? "ok" : "error"),
+        label: msg.label || (msg.ok ? "Connected" : "Couldn't verify the key"),
+        detail: msg.detail || "",
+        model: msg.model || "",
+      };
+      applyKeyTestState();
     }
 
     ${getUsageScript()}

@@ -93,6 +93,20 @@ from andromity.server.protocol import (
 
 log = logging.getLogger("andromity.server")
 
+MODEL_REFRESH_FAILURES = {
+    "no_key": "No API key set.",
+    "auth_error": "Key rejected.",
+    "rate_limit": "Rate limited. Try again shortly.",
+    "timeout": "Couldn't reach provider.",
+    "offline": "Couldn't reach provider.",
+    "provider_unavailable": "The provider is unavailable. Try again later.",
+    "not_found": "This endpoint has no model list.",
+    "airgap": "Blocked by air-gap mode.",
+    "bad_response": "The provider sent an unexpected response.",
+    "empty": "The provider returned no models.",
+    "unsupported": "This provider doesn't publish a model list.",
+}
+
 
 def _undo_limit_error(available: int, summarized: bool) -> str:
     """Why undo can't reach back as far as asked."""
@@ -2423,8 +2437,14 @@ class JsonRpcHandler:
         models = []
         try:
             from andromity.core.connections import provider_info
-            providers_to_check = [target_provider] if target_provider else [p["id"] for p in provider_info()]
+            known_providers = {p["id"]: p for p in provider_info()}
+            providers_to_check = [target_provider] if target_provider else list(known_providers)
             pinned_list = config.get_pinned_models()
+
+            def _key_flags(p_key: str) -> Dict[str, bool]:
+                info = known_providers.get(p_key)
+                has_key = bool(info["has_key"]) if info else bool(config.get_api_key(p_key))
+                return {"has_key": has_key, "needs_key": bool(info and info.get("key_required")) and not has_key}
 
             async def _discover_connection(p: str) -> None:
                 if p == "ollama":
@@ -2471,6 +2491,7 @@ class JsonRpcHandler:
                     cached = openrouter_cached
 
                 from andromity.core.reasoning import get_model_reasoning_capability
+                flags = _key_flags(p)
                 if cached:
                     for m in cached:
                         m_id = m.get("id")
@@ -2486,6 +2507,8 @@ class JsonRpcHandler:
                             "tags": m.get("tags", []),
                             "is_pinned": _is_pinned(m_id, p),
                             "reasoning": get_model_reasoning_capability(p, m_id, m).to_dict(),
+                            "source": "live",
+                            **flags,
                         })
                 else:
                     # Fallback to catalog instantly
@@ -2505,6 +2528,8 @@ class JsonRpcHandler:
                             "tags": m.get("tags", []),
                             "is_pinned": _is_pinned(m_id, p),
                             "reasoning": get_model_reasoning_capability(p, m_id, m).to_dict(),
+                            "source": "catalog",
+                            **flags,
                         })
         except Exception as e:
             log.warning("Error listing models: %s", e)
@@ -2549,6 +2574,35 @@ class JsonRpcHandler:
             log.warning("Parallel model refresh encountered timeout or error: %s", e)
 
         return await self.rpc_config_list_models({"provider": target_provider})
+
+    async def rpc_config_refresh_provider_models(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Refresh one provider's live model list and say why, when it could not."""
+        provider = str((params or {}).get("provider") or "").strip()
+        if not provider:
+            raise ValueError("provider is required")
+        saved = config.get_provider_config(provider) or {}
+        status: Dict[str, Any] = {}
+        fetched: List[Dict[str, Any]] = []
+        try:
+            fetched = await asyncio.wait_for(asyncio.to_thread(
+                fetch_live_models_sync, provider, api_key=config.get_api_key(provider),
+                base_url=saved.get("base_url"), status=status,
+            ), timeout=8.0)
+        except asyncio.TimeoutError:
+            status.setdefault("error", "timeout")
+        except Exception as exc:
+            log.warning("Model refresh failed: provider=%s error=%s", provider, type(exc).__name__)
+            status.setdefault("error", "error")
+        error = status.get("error") or (None if fetched else "empty")
+        models = await self.rpc_config_list_models({"provider": provider})
+        return {
+            "provider": provider,
+            "ok": error is None,
+            "error_type": error,
+            "message": MODEL_REFRESH_FAILURES.get(error, "Couldn't refresh models.") if error else "",
+            "source": "live" if any(m.get("source") == "live" for m in models) else "catalog",
+            "models": models,
+        }
 
     async def rpc_skills_list(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """List installed and discoverable skills."""
@@ -2785,9 +2839,14 @@ class JsonRpcHandler:
         return {"success": True, "providers": await self.rpc_config_list_providers()}
 
     async def rpc_config_test_provider(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        from andromity.core.connections import connection_failure, test_connection
+        from andromity.core.connections import PRESETS, connection_failure, test_connection
+        provider = str((params or {}).get("provider") or "").strip()
+        if not provider:
+            return connection_failure("generic")
+        # Built-in providers answer within the UI's 20 s budget; custom endpoints keep their retries.
+        limit = 18 if provider in PRESETS else 30
         try:
-            return await asyncio.wait_for(test_connection(params["provider"], params.get("model", "")), 30)
+            return await asyncio.wait_for(test_connection(provider, str(params.get("model") or "")), limit)
         except asyncio.TimeoutError:
             return connection_failure("timeout")
         except Exception:

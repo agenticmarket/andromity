@@ -1,7 +1,8 @@
 """Provider connection metadata and common LiteLLM request routing."""
 import logging
 import re
-from typing import Any
+import time
+from typing import Any, Optional
 from urllib.parse import urlsplit
 
 from andromity.config import config
@@ -19,6 +20,26 @@ PRESETS = {
     "nvidia": ("NVIDIA NIM", "https://build.nvidia.com/"),
     "ollama": ("Ollama (Local)", "https://ollama.com"),
 }
+KEYLESS_PRESETS = frozenset({"andromity", "ollama"})
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def portal_url(provider: str) -> str:
+    return PRESETS.get(provider, ("", ""))[1]
+
+
+def _is_loopback(url: str) -> bool:
+    host = (urlsplit(url).hostname or "").lower() if url else ""
+    return host in _LOOPBACK_HOSTS or host.endswith(".localhost")
+
+
+def key_required(provider: str, saved: Optional[dict] = None) -> bool:
+    """A built-in cloud connection that cannot work without its own API key."""
+    if provider not in PRESETS or provider in KEYLESS_PRESETS:
+        return False
+    if saved is None:
+        saved = config.get_provider_config(provider) or {}
+    return not _is_loopback(_effective_base_url(provider, saved))
 
 
 def normalize_base_url(base_url: str, adapter: str) -> str:
@@ -69,7 +90,8 @@ def provider_info() -> list[dict[str, Any]]:
             "type": saved.get("type") or name,
             "base_url": saved.get("base_url", ""), "model": saved.get("model", ""),
             "api_version": saved.get("api_version", ""), "custom": name not in PRESETS,
-            "has_key": bool(config.get_api_key(name)) or name in ("andromity", "ollama"),
+            "has_key": bool(config.get_api_key(name)) or name in KEYLESS_PRESETS,
+            "key_required": key_required(name, saved),
             "portal": portal,
             "airgap_blocked": not network_policy.url_allowed(_effective_base_url(name, saved)),
         })
@@ -122,42 +144,99 @@ def provider_request(provider: str, model: str) -> dict[str, Any]:
     return request
 
 
+def probe_model_for(provider: str) -> str:
+    """A model that belongs to this connection: its own model, else one from its live list or catalog."""
+    from andromity.core.models import get_cached_live_models, get_models_for_provider
+
+    saved = config.get_provider_config(provider) or {}
+    own = saved.get("model")
+    if isinstance(own, str) and own.strip():
+        return own.strip()
+
+    def ids(models: list) -> list[str]:
+        return [m["id"] for m in models if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"].strip()]
+
+    live = ids(get_cached_live_models(provider))
+    catalog = ids(get_models_for_provider(provider))
+    if live:
+        available = set(live)
+        return next((m for m in catalog if m in available), live[0])
+    if catalog:
+        return catalog[0]
+    return "auto" if provider == "andromity" else ""
+
+
+def _probe_detail(detail: Optional[str], provider: str) -> str:
+    text = " ".join(str(detail or "").split())
+    key = config.get_api_key(provider) or ""
+    if len(key) >= 6:
+        text = text.replace(key, "[redacted]")
+    return text[:160]
+
+
 async def test_connection(provider: str, model: str = "") -> dict[str, Any]:
-    """An explicit, short streaming probe; no workspace content is sent."""
-    from andromity.core.provider import classify_error_info, stream_completion
+    """An explicit, short streaming probe; no workspace content is sent.
+
+    Built-in providers get a single attempt so a rate limit is reported rather than waited out.
+    """
+    from andromity.core.provider import classify_error_info, short_error_detail, stream_completion
     from andromity.core.events import Done, TextDelta
-    chunks = []
+    preset = provider in PRESETS
+    if preset and key_required(provider) and not config.get_api_key(provider):
+        return connection_failure("no_key")
+    model = model or probe_model_for(provider)
+    if not model:
+        return connection_failure("no_model")
+    chunks: list[str] = []
     finished = False
+    started = time.monotonic()
     try:
         async for event in stream_completion(
             [{"role": "user", "content": "Reply with OK."}], provider_name=provider,
-            model=model or (config.get_provider_config(provider) or {}).get("model"), first_token_timeout=15,
+            model=model, first_token_timeout=15, retry=not preset,
         ):
             if isinstance(event, TextDelta):
                 chunks.append(event.text)
             elif isinstance(event, Done):
                 if event.outcome != "success":
-                    return connection_failure(event.error_type or "generic")
+                    return connection_failure(event.error_type or "generic", _probe_detail(event.error_detail, provider), model)
                 finished = True
     except Exception as exc:
-        return connection_failure(classify_error_info(exc, provider=provider, model=model)["type"])
+        return connection_failure(classify_error_info(exc, provider=provider, model=model)["type"],
+                                  _probe_detail(short_error_detail(exc), provider), model)
     if not finished:
-        return connection_failure("incomplete_stream")
-    return {"success": bool(chunks), "message": "Connection ready." if chunks else "The provider returned no text. Check the model ID."}
+        return connection_failure("incomplete_stream", model=model)
+    if not chunks:
+        return connection_failure("empty_response", model=model)
+    return {"success": True, "message": "Connection ready.", "model": model,
+            "latency_ms": max(1, round((time.monotonic() - started) * 1000))}
 
 
-def connection_failure(error_type: str) -> dict[str, Any]:
-    messages = {
-        "endpoint_not_found": "HTTP 404: the endpoint returned a web page. Use the API base URL (for example, https://your-provider/v1), without /chat/completions.",
-        "model_not_found": "HTTP 404: the API endpoint or model was not found. Check the base URL and exact model ID from your provider.",
-        "auth_error": "HTTP 401/403: authentication or access denied. Check the API key and provider account permissions.",
-        "rate_limit": "The provider's rate limit or quota was reached. Check your allowance and retry later.",
-        "quota_exceeded": "The provider's quota was reached. Check your allowance or billing settings.",
-        "provider_unavailable": "The provider is unavailable. Check its service status and retry.",
-        "timeout": "Connection timed out. Check that the endpoint is reachable and retry.",
-        "ollama_offline": "Ollama is offline. Start Ollama and check the local endpoint.",
-        "incomplete_stream": "The provider closed the stream before completing the response. Retry or check its streaming support.",
-    }
+_FAILURE_MESSAGES = {
+    "endpoint_not_found": "HTTP 404: the endpoint returned a web page. Use the API base URL (for example, https://your-provider/v1), without /chat/completions.",
+    "model_not_found": "HTTP 404: the API endpoint or model was not found. Check the base URL and exact model ID from your provider.",
+    "auth_error": "HTTP 401/403: authentication or access denied. Check the API key and provider account permissions.",
+    "rate_limit": "The provider's rate limit or quota was reached. Check your allowance and retry later.",
+    "quota_exceeded": "The provider's quota was reached. Check your allowance or billing settings.",
+    "provider_unavailable": "The provider is unavailable. Check its service status and retry.",
+    "timeout": "Connection timed out. Check that the endpoint is reachable and retry.",
+    "ollama_offline": "Ollama is offline. Start Ollama and check the local endpoint.",
+    "incomplete_stream": "The provider closed the stream before completing the response. Retry or check its streaming support.",
+    "empty_response": "The provider returned no text. Check the model ID.",
+    "no_key": "Add an API key for this provider first.",
+    "no_model": "Choose a model for this connection.",
+    "airgap": "Air-gap mode blocks this provider. Choose a local model or allow its host.",
+}
+
+
+def connection_failure(error_type: str, detail: str = "", model: str = "") -> dict[str, Any]:
     logging.getLogger("andromity.provider").warning("Connection test failed: %s", error_type)
-    return {"success": False, "error_type": error_type,
-            "message": messages.get(error_type, "Connection failed. Check the endpoint, credentials, model ID, and provider type.")}
+    message = _FAILURE_MESSAGES.get(error_type) or (
+        f"Connection failed: {detail}" if detail
+        else "Connection failed. Check the endpoint, credentials, model ID, and provider type.")
+    result: dict[str, Any] = {"success": False, "error_type": error_type, "message": message}
+    if detail:
+        result["detail"] = detail
+    if model:
+        result["model"] = model
+    return result

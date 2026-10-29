@@ -1815,6 +1815,47 @@ ${STATUS_SHIMMER_STYLES}
       flex-shrink: 0;
     }
 
+    .flyout-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-family: inherit;
+      font-size: 10px;
+      font-weight: 600;
+      line-height: 1.3;
+      padding: 1px 6px;
+      border-radius: 4px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .flyout-tag.key {
+      color: #d29922;
+      background: rgba(210, 153, 34, 0.12);
+      border: 1px solid rgba(210, 153, 34, 0.35);
+    }
+
+    .flyout-tag.catalog {
+      color: var(--muted, #71717a);
+      background: transparent;
+      border: 1px solid rgba(var(--tint), 0.12);
+      cursor: pointer;
+    }
+
+    .flyout-tag.catalog:hover {
+      color: var(--fg, #e4e4e7);
+      border-color: rgba(var(--tint), 0.25);
+    }
+
+    .flyout-notice {
+      margin: 4px 6px 2px;
+      padding: 5px 8px;
+      font-size: 11px;
+      color: var(--muted, #71717a);
+      border: 1px dashed rgba(var(--tint), 0.15);
+      border-radius: 4px;
+    }
+
     .flyout-section-title {
       display: flex;
       align-items: center;
@@ -2729,6 +2770,9 @@ ${STATUS_SHIMMER_STYLES}
       padding: 0;
       background: transparent;
       border: none;
+    }
+    .onboarding-step2-badge.unverified {
+      color: #d29922;
     }
     .onboarding-step2-back {
       display: inline-flex;
@@ -6914,6 +6958,51 @@ ${STATUS_SHIMMER_STYLES}
       padding: 0 4px;
     }
     .ollama-detected-banner .banner-dismiss:hover {
+      color: var(--fg);
+    }
+
+    .key-required-note {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 6px 10px;
+      margin: 0 0 6px 0;
+      padding: 7px 10px;
+      font-size: 11.5px;
+      line-height: 1.4;
+      color: var(--vscode-foreground);
+      background: rgba(210, 153, 34, 0.08);
+      border: 1px solid rgba(210, 153, 34, 0.35);
+      border-radius: 6px;
+    }
+    .key-required-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .key-required-btn {
+      font: inherit;
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      color: var(--vscode-button-secondaryForeground, var(--fg));
+      background: var(--vscode-button-secondaryBackground, rgba(var(--tint), 0.08));
+      border: 1px solid rgba(var(--tint), 0.12);
+    }
+    .key-required-btn:hover {
+      background: var(--vscode-button-secondaryHoverBackground, rgba(var(--tint), 0.14));
+    }
+    .key-required-note .banner-dismiss {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 14px;
+      padding: 0 4px;
+    }
+    .key-required-note .banner-dismiss:hover {
       color: var(--fg);
     }
 

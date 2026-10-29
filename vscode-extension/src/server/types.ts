@@ -49,6 +49,9 @@ export interface ModelInfo {
   is_free?: boolean;
   tags?: string[];
   is_pinned?: boolean;
+  has_key?: boolean;
+  needs_key?: boolean;
+  source?: "live" | "catalog";
 }
 
 export interface PinnedModelInfo {
@@ -67,6 +70,45 @@ export interface ProviderInfo {
   model?: string;
   api_version?: string;
   custom?: boolean;
+  key_required?: boolean;
+}
+
+/** Reply of config.test_provider. */
+export interface ProviderProbeReply {
+  success?: boolean;
+  error_type?: string;
+  message?: string;
+  detail?: string;
+  model?: string;
+  latency_ms?: number;
+}
+
+/** Reply of config.refresh_provider_models. */
+export interface ProviderModelsReply {
+  provider?: string;
+  ok?: boolean;
+  error_type?: string | null;
+  message?: string;
+  source?: "live" | "catalog";
+  models?: ModelInfo[];
+}
+
+export type KeyCheckTone = "ok" | "warn" | "error";
+
+export interface KeyCheckResult {
+  ok: boolean;
+  tone: KeyCheckTone;
+  label: string;
+  errorType?: string;
+  detail?: string;
+  model?: string;
+}
+
+export interface ProviderModelsRefresh {
+  provider: string;
+  ok: boolean;
+  message: string;
+  models: ModelInfo[] | null;
 }
 
 export interface PendingInputInfo {

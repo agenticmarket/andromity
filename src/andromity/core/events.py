@@ -39,6 +39,7 @@ class Done(StreamEvent):
     usage: Optional[Dict[str, int]] = None
     outcome: str = "success"
     error_type: Optional[str] = None
+    error_detail: Optional[str] = None
 
 
 @dataclass
