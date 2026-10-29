@@ -2,6 +2,7 @@ import { ingestTelemetry } from './ingest.js';
 import { buildStatsScope, measurementQueries } from './statsScope.js';
 import { cachedStats } from './statsCache.js';
 import { sessionSummaries, featureSummaries } from './metricSummaries.js';
+import { usageQueries, usageResults } from './usageStats.js';
 import { handleBlogRequest } from './blog.js';
 import { handleFeedbackRequest } from './feedback.js';
 
@@ -440,7 +441,10 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
   };
   const scope = buildStatsScope(params);
   const prepare = sql => scope.prepare(env.DB, sql);
-  const measurement = await batch(measurementQueries(scope, env.DB));
+  const measurementStatements = measurementQueries(scope, env.DB);
+  const measured = await batch([...measurementStatements, ...usageQueries(params, env.DB)]);
+  const measurement = measured.slice(0, measurementStatements.length);
+  const usage = usageResults(measured.slice(measurementStatements.length));
   const [sessionRows, featureRows] = await batch([
     prepare(`SELECT user_id,client,country,os,version,provider,model,provider_type,reasoning_effort,
       profile,turn_count,created_at FROM sessions`),
@@ -518,6 +522,12 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
           THEN 1 ELSE 0 END AS had_error,
         (SELECT group_concat(DISTINCT ef.feature_name) FROM feature_events ef
           WHERE ef.session_id=s.session_id AND ef.user_id=s.user_id AND ef.feature_name LIKE 'error_%') AS error_categories,
+        (SELECT COUNT(*) FROM task_runs tr WHERE tr.session_id=s.session_id AND tr.user_id=s.user_id) AS turns,
+        (SELECT COUNT(*) FROM task_runs tr
+          WHERE tr.session_id=s.session_id AND tr.user_id=s.user_id AND tr.outcome='failed') AS failed_turns,
+        (SELECT tr.outcome='failed' FROM task_runs tr
+          WHERE tr.session_id=s.session_id AND tr.user_id=s.user_id AND tr.outcome IN ('completed','failed','cancelled')
+          ORDER BY tr.date DESC, tr.started_at DESC, tr.run_id DESC LIMIT 1) AS last_turn_failed,
         COALESCE(
           e.duration_bucket,
           CASE
@@ -620,6 +630,7 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
     cohort_health: measurement[1].results[0],
     retention: measurement[2].results[0],
     task_outcomes: measurement[3].results[0],
+    ...usage,
     measurement_version: 2,
     coverage: { legacy_activity: true, task_outcomes_require_version: "0.2.14", watermark: "Observed activity; opt-outs and historical gaps are excluded." },
     filters: Object.fromEntries(params),
@@ -645,6 +656,7 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
     recent_sessions: (recentSessionsRes.results ?? []).map(session => ({...session,
       error_categories: [...new Set(String(session.error_categories || '').split(',')
         .filter(category => /^error_[a-z0-9_]{1,58}$/.test(category)))],
+      last_turn_failed: session.last_turn_failed == null ? null : session.last_turn_failed === 1,
     })),
     user_distribution: userBucketsRes.results ?? [],
     // v2
