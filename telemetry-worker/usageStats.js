@@ -6,6 +6,11 @@ const lastDays = span => `days(date) AS (
     SELECT date('now','-${span} days')
     UNION ALL SELECT date(date,'+1 day') FROM days WHERE date < date('now')
   )`;
+const sessionDays = (scope, since) => `SELECT s.date, s.user_id FROM sessions s WHERE s.date >= ${since}${scope.hasScope
+  ? ' AND EXISTS (SELECT 1 FROM scoped_activity a WHERE a.user_id=s.user_id AND a.session_id=s.session_id AND a.date=s.date)'
+  : ''}`;
+const usedOnDays = (from, to) => `EXISTS (SELECT 1 FROM prompt_days p WHERE p.user_id=m.user_id
+          AND p.date BETWEEN date(m.first_day,'+${from} days') AND date(m.first_day,'+${to} days'))`;
 
 export function usageQueries(params, db) {
   const scope = buildStatsScope(params);
@@ -19,7 +24,7 @@ export function usageQueries(params, db) {
     scope.prepareExplicit(db, `WITH ${lastDays(span)}, prompt_days AS (
         SELECT date, user_id FROM ${usage.tasks} WHERE date >= date('now','-${span} days')
         UNION
-        SELECT date, user_id FROM ${usage.sessions} WHERE date >= date('now','-${span} days')
+        ${sessionDays(scope, `date('now','-${span} days')`)}
       ), user_days AS (
         SELECT a.date,
           CASE WHEN a.first_day >= a.date THEN 'new'
@@ -46,25 +51,38 @@ export function usageQueries(params, db) {
     dimensionScope.prepareExplicit(db, `WITH weeks(week_start) AS (
         SELECT date('now','-6 days','weekday 1')
         UNION ALL SELECT date(week_start,'-7 days') FROM weeks WHERE week_start > ${installCutoff}
-      ), last_prompt AS (
-        SELECT user_id, MAX(date) AS last_date FROM (
-          SELECT user_id, date FROM ${fixed.tasks} WHERE date >= ${installCutoff}
-          UNION ALL
-          SELECT user_id, date FROM ${fixed.sessions} WHERE date >= ${installCutoff}
-        ) GROUP BY user_id
+      ), retained(since) AS (
+        SELECT MIN(day) FROM (
+          SELECT MIN(date) AS day FROM task_runs
+          UNION ALL SELECT MIN(date) FROM sessions
+          UNION ALL SELECT MIN(date) FROM activity_facts
+        )
+      ), prompt_days AS (
+        SELECT date, user_id FROM ${fixed.tasks} WHERE date >= ${installCutoff}
+        UNION
+        ${sessionDays(dimensionScope, installCutoff)}
       ), members AS (
-        SELECT date(u.first_seen,'-6 days','weekday 1') AS week_start, date(u.first_seen) AS first_day, p.last_date
-        FROM users u LEFT JOIN last_prompt p ON p.user_id=u.user_id
+        SELECT u.user_id, date(u.first_seen,'-6 days','weekday 1') AS week_start, date(u.first_seen) AS first_day,
+          r.since IS NULL OR date(u.first_seen) < r.since AS purged
+        FROM users u, retained r
         WHERE u.first_seen >= ${installCutoff}
-          ${dimensionScope.hasScope ? 'AND u.user_id IN (SELECT user_id FROM scoped_activity)' : ''}
+          ${dimensionScope.hasScope ? `AND u.user_id IN (SELECT user_id FROM scoped_activity WHERE date >= ${installCutoff})` : ''}
+      ), member_use AS (
+        SELECT m.week_start, m.purged,
+          EXISTS (SELECT 1 FROM prompt_days p WHERE p.user_id=m.user_id) AS used,
+          EXISTS (SELECT 1 FROM prompt_days p WHERE p.user_id=m.user_id AND p.date > m.first_day) AS came_back,
+          ${usedOnDays(7, 13)} AS week_2,
+          ${usedOnDays(14, 20)} AS week_3
+        FROM members m
       )
-      SELECT w.week_start, COUNT(m.week_start) AS installs, COUNT(m.last_date) AS used,
-        COUNT(CASE WHEN m.last_date > m.first_day THEN 1 END) AS came_back,
-        CASE WHEN date(w.week_start,'+13 days') < date('now')
-          THEN COUNT(CASE WHEN m.last_date >= date(m.first_day,'+7 days') THEN 1 END) END AS used_after_7d,
-        CASE WHEN date(w.week_start,'+20 days') < date('now')
-          THEN COUNT(CASE WHEN m.last_date >= date(m.first_day,'+14 days') THEN 1 END) END AS used_after_14d
-      FROM weeks w LEFT JOIN members m ON m.week_start=w.week_start
+      SELECT w.week_start, COUNT(mu.week_start) AS installs, MAX(mu.purged) AS purged,
+        COUNT(CASE WHEN mu.used THEN 1 END) AS used,
+        COUNT(CASE WHEN mu.came_back THEN 1 END) AS came_back,
+        CASE WHEN date(w.week_start,'+19 days') < date('now')
+          THEN COUNT(CASE WHEN mu.week_2 THEN 1 END) END AS used_days_7_13,
+        CASE WHEN date(w.week_start,'+26 days') < date('now')
+          THEN COUNT(CASE WHEN mu.week_3 THEN 1 END) END AS used_days_14_20
+      FROM weeks w LEFT JOIN member_use mu ON mu.week_start=w.week_start
       GROUP BY w.week_start ORDER BY w.week_start DESC`),
     // A session is counted once, on the date of its latest finished turn (recency 1 among finished turns).
     dimensionScope.prepareExplicit(db, `WITH ${lastDays(29)}, turns AS (
@@ -112,13 +130,14 @@ export function usageResults([daily, cohorts, turns]) {
     usage_daily: (daily.results ?? []).map(row => ({
       date: row.date, opened: split(row, 'opened'), used: split(row, 'used'),
     })),
+    // A purged week had prompts deleted by the retention purge, so only its installs are still known.
     cohorts: (cohorts.results ?? []).map(row => ({
       week_start: row.week_start,
       installs: row.installs,
-      used: row.used,
-      came_back: row.came_back,
-      used_after_7d: row.used_after_7d ?? null,
-      used_after_14d: row.used_after_14d ?? null,
+      used: row.purged ? null : row.used,
+      came_back: row.purged ? null : row.came_back,
+      used_days_7_13: row.purged ? null : row.used_days_7_13 ?? null,
+      used_days_14_20: row.purged ? null : row.used_days_14_20 ?? null,
     })),
     turn_reliability: {
       // Turn rows are the gap-filled last 30 days, newest first.

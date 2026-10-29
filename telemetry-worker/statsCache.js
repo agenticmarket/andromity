@@ -14,7 +14,7 @@ export function normalizeStatsParams(params) {
 
 export async function cachedStats(env, params, compute) {
   const normalized = normalizeStatsParams(params);
-  const key = 'stats-v12:' + new Date().toISOString().slice(0,10) + ':' + normalized.toString();
+  const key = 'stats-v13:' + new Date().toISOString().slice(0,10) + ':' + normalized.toString();
   let pending = flights.get(env.DB);
   if (!pending) { pending = new Map(); flights.set(env.DB, pending); }
   if (pending.has(key)) return pending.get(key);

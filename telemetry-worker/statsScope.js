@@ -53,8 +53,8 @@ export function buildStatsScope(params = new URLSearchParams()) {
     hasScope,
     rangeDays: days,
     tables: hasScope
-      ? { activity: 'scoped_activity', sessions: 'scoped_sessions', tasks: 'scoped_tasks' }
-      : { activity: 'activity_facts', sessions: 'sessions', tasks: 'task_runs' },
+      ? { activity: 'scoped_activity', tasks: 'scoped_tasks' }
+      : { activity: 'activity_facts', tasks: 'task_runs' },
     prepare(db, sql) {
       return withScope(db, sql.replace(/\b(FROM|JOIN)\s+(sessions|users|events|feature_events)\b/gi,
         (_, keyword, table) => `${keyword} ${ { sessions: hasScope ? 'scoped_sessions' : 'sessions',
