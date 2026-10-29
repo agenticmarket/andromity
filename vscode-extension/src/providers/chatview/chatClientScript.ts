@@ -907,6 +907,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const promptQueue = [];
     const serverQueues = {};
     const appliedInputIds = new Set();
+    // The running turn's message held only images the model can't read, so it was never sent.
+    let currentTurnUnsent = false;
     let queueSupported = false;
     let pendingInputDraft = null;
 
@@ -8575,6 +8577,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function startAssistantTurn() {
       isRunning = true;
+      currentTurnUnsent = false;
       removeFeatureTip();
       // Only stick to bottom if user was already at the bottom; do not steal scroll if user is reading history
       if (!userScrolledUp && !_isUserActivelyScrolling && isAtBottom(2)) {
@@ -10811,7 +10814,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               if (tf) turnEditedFiles.add(tf);
             }
           }
-          const finishedTurn = finishedTurnFacts(msg);
+          const finishedTurn = currentTurnUnsent ? null : finishedTurnFacts(msg);
+          currentTurnUnsent = false;
           endAssistantTurn();
           interactiveSlot.innerHTML = '';
           activePendingApprovalId = null;
@@ -11462,6 +11466,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           ? Array.from(chatContainer.querySelectorAll('.message-wrap.user')).find((el) => el.getAttribute('data-input-id') === String(msg.input_id))
           : null;
         if (prompt) prompt.remove();
+        currentTurnUnsent = true;
         const placeholderOnly = currentTurnAssistantDiv && Array.from(currentTurnAssistantDiv.children)
           .every((el) => el.classList.contains('assistant-header') || el.id === 'turn-loading-indicator');
         if (placeholderOnly) {

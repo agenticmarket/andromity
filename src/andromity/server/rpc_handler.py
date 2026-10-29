@@ -18,7 +18,7 @@ from andromity import __version__
 from andromity.core.session_context import background_context as _background_context, message_text as _message_text, shorten as _shorten
 from andromity.core.tools import collab_action
 from andromity.config import config, get_config_dir
-from andromity.core.agent import Agent
+from andromity.core.agent import Agent, only_unreadable_images
 
 READ_ONLY_TOOLS = {
     # Core read-only filesystem & search inspection
@@ -1637,7 +1637,12 @@ class JsonRpcHandler:
         prompt_repo = get_repo(Path(session.project_path))
         if prompt_repo and str(Path(prompt_repo.working_tree_dir).resolve()) in self._git_mutating_roots:
             raise ValueError("Wait for file restoration to finish before starting another turn.")
-        if prompt:
+        model = params.get("model") or config.get("default", "model", "claude-sonnet-4-6")
+        provider = params.get("provider") or config.get("default", "provider", "anthropic")
+        # A message of only images the model can't read adds no turn: it takes no background results and names no chat.
+        unsent = only_unreadable_images(prompt, params.get("image_uris") or params.get("images"),
+                                        params.get("image_only"), provider, model)
+        if prompt and not unsent:
             prompt = self._with_background_results(session, prompt)
 
         if not params.get("is_auto_wake"):
@@ -1651,8 +1656,6 @@ class JsonRpcHandler:
 
         profile = params.get("profile") or config.get("default", "profile", "builder")
         session.profile = profile
-        model = params.get("model") or config.get("default", "model", "claude-sonnet-4-6")
-        provider = params.get("provider") or config.get("default", "provider", "anthropic")
         reasoning_effort = params.get("reasoning_effort") or config.get("default", "reasoning_effort", "auto")
         # Respect per-session mode passed from client, falling back to server default
         mode = (params.get("mode") or config.get("default", "permission_mode", "safe")).lower()
@@ -1800,7 +1803,7 @@ class JsonRpcHandler:
                 self.notify("agent/interactionResolved", {"session_id": session_id, "interaction_id": question_id})
 
         # Auto-title session from first user prompt if still default
-        if not is_auto_wake and (session.name in ("new-session", "Main Session") or session.name.startswith("Session ") or session.name.startswith("session-")):
+        if not is_auto_wake and not unsent and (session.name in ("new-session", "Main Session") or session.name.startswith("Session ") or session.name.startswith("session-")):
             try:
                 auto_name = Session.auto_name_from_message(prompt)
                 if auto_name:

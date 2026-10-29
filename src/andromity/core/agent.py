@@ -14,6 +14,7 @@ from andromity.core.tools import (
     execute_tool, parse_next_step, register_session, requires_workspace_trust,
 )
 from andromity.core.context_breakdown import AUTO_COMPACT_THRESHOLD
+from andromity.core.inputs import PendingInput
 from andromity.core.events import (
     StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired, PlanUpdated,
     LLMCallStart, LLMCallEnd, InputApplied, NextStepSuggested, ImagesSkipped
@@ -86,6 +87,61 @@ def _with_skipped_images_note(content: Any, count: int) -> Any:
         return [*content, {"type": "text", "text": note}]
     text = content if isinstance(content, str) else ""
     return f"{text}\n\n{note}" if text.strip() else note
+
+
+def model_supports_vision(provider: str, model: str) -> bool:
+    """Best-effort check that a model accepts images.
+
+    LiteLLM's supports_vision() is unreliable for routed/aggregator and
+    local providers — it reports False for many OpenRouter vision models
+    (e.g. dots-3-note supports images but supports_vision() says no). So
+    we only block models known explicitly to be text-only (e.g. DeepSeek-R1,
+    text-only Llama/Qwen) or direct providers reporting False.
+    """
+    litellm_model = f"{provider}/{model}" if model and "/" not in model else model
+    if not litellm_model:
+        return True
+
+    m_lower = model.lower()
+    # Explicit vision indicators
+    vision_indicators = (
+        "vision", "-vl", "vl-", "llava", "bakllava", "gemma3", "gemma-3",
+        "minicpm", "pixtral", "omni", "gpt-4o", "gpt-4.1", "gpt-5",
+        "claude-3", "claude-opus", "claude-sonnet", "claude-haiku", "gemini",
+        "o1", "o3", "o4"
+    )
+    if any(vi in m_lower for vi in vision_indicators):
+        return True
+
+    # Explicit known text-only model families across all providers
+    text_only_indicators = (
+        "deepseek",
+        "llama-3.1", "llama-3.2-1b", "llama-3.2-3b", "llama-3.3", "llama3.1", "llama3.3",
+        "qwen2.5-coder", "qwen2.5-7b", "qwen2.5-14b", "qwen2.5-32b", "qwen2.5-72b",
+        "mistral-large", "mistral-small", "codellama", "phi-4", "phi4"
+    )
+    if any(ti in m_lower for ti in text_only_indicators) and "vision" not in m_lower and "vl" not in m_lower:
+        return False
+
+    cfg = config.get_provider_config(provider) or {}
+    routed_or_local = provider in ("openrouter", "ollama", "nvidia") \
+        or (cfg.get("type") and cfg.get("type") != provider)
+    if routed_or_local:
+        return True
+    try:
+        import litellm
+        return litellm.supports_vision(litellm_model) is not False
+    except Exception:
+        return True
+
+
+def _holds_no_text(text: Any, image_only: Any) -> bool:
+    return bool(image_only) or not str(text or "").strip()
+
+
+def only_unreadable_images(text: Any, images: Optional[list], image_only: Any, provider: str, model: str) -> bool:
+    """Whether a message holds nothing but images the model can't read; such a message is not sent and adds no turn."""
+    return bool(images) and _holds_no_text(text, image_only) and not model_supports_vision(provider, model)
 
 
 _ERROR_FEATURE_NAMES = {
@@ -232,14 +288,16 @@ class Agent:
         stored in the session is swapped for the OpenAI-style content-parts
         list (text + image_url data URIs) on the fly — so session history and
         replay stay clean and compact. A message whose images were left out
-        because the model can't read them says so after the user's text.
+        because the model can't read them says so after the user's text, and
+        earlier images stay out once the model is switched to one that can't.
         """
         msgs = [
             {k: v for k, v in m.items() if k in ("role", "content", "tool_calls", "name", "tool_call_id")}
             for m in self.session.messages
         ]
+        send_images = bool(self._message_images) and self._model_supports_vision()
         for original, msg in zip(self.session.messages, msgs):
-            entry = self._message_images.get(id(original))
+            entry = self._message_images.get(id(original)) if send_images else None
             if entry and entry[0] is original:
                 msg["content"] = entry[1]
             if original.get("role") == "user" and (skipped := skipped_image_count(original)):
@@ -257,7 +315,7 @@ class Agent:
             skipped = len(attached) if attached and not self._model_supports_vision() else 0
             if skipped:
                 self._note_images_skipped()
-                if payload.get("image_only") or not str(prompt).strip():
+                if _holds_no_text(prompt, payload.get("image_only")):
                     events.append(ImagesSkipped(skipped, prompt_added=False, steering=True, input_id=item.id))
                     self.input_queue.applied(item)
                     continue
@@ -288,51 +346,18 @@ class Agent:
             pass
 
     def _model_supports_vision(self) -> bool:
-        """Best-effort check that the active model accepts images.
+        return model_supports_vision(self.provider or config.get("default", "provider", ""),
+                                     self.model or config.get("default", "model", ""))
 
-        LiteLLM's supports_vision() is unreliable for routed/aggregator and
-        local providers — it reports False for many OpenRouter vision models
-        (e.g. dots-3-note supports images but supports_vision() says no). So
-        we only block models known explicitly to be text-only (e.g. DeepSeek-R1,
-        text-only Llama/Qwen) or direct providers reporting False.
-        """
-        provider = self.provider or config.get("default", "provider", "")
-        model = self.model or config.get("default", "model", "")
-        litellm_model = f"{provider}/{model}" if model and "/" not in model else model
-        if not litellm_model:
-            return True
+    def drops_message(self, text: Any, images: Optional[list], image_only: Any = False) -> bool:
+        """Whether a message holds nothing but images this model can't read, so it is not sent and adds no turn."""
+        return bool(images) and _holds_no_text(text, image_only) and not self._model_supports_vision()
 
-        m_lower = model.lower()
-        # Explicit vision indicators
-        vision_indicators = (
-            "vision", "-vl", "vl-", "llava", "bakllava", "gemma3", "gemma-3",
-            "minicpm", "pixtral", "omni", "gpt-4o", "gpt-4.1", "gpt-5",
-            "claude-3", "claude-opus", "claude-sonnet", "claude-haiku", "gemini",
-            "o1", "o3", "o4"
-        )
-        if any(vi in m_lower for vi in vision_indicators):
-            return True
-
-        # Explicit known text-only model families across all providers
-        text_only_indicators = (
-            "deepseek",
-            "llama-3.1", "llama-3.2-1b", "llama-3.2-3b", "llama-3.3", "llama3.1", "llama3.3",
-            "qwen2.5-coder", "qwen2.5-7b", "qwen2.5-14b", "qwen2.5-32b", "qwen2.5-72b",
-            "mistral-large", "mistral-small", "codellama", "phi-4", "phi4"
-        )
-        if any(ti in m_lower for ti in text_only_indicators) and "vision" not in m_lower and "vl" not in m_lower:
-            return False
-
-        cfg = config.get_provider_config(provider) or {}
-        routed_or_local = provider in ("openrouter", "ollama", "nvidia") \
-            or (cfg.get("type") and cfg.get("type") != provider)
-        if routed_or_local:
-            return True
-        try:
-            import litellm
-            return litellm.supports_vision(litellm_model) is not False
-        except Exception:
-            return True
+    def steering_adds_input(self, item: PendingInput) -> bool:
+        """Whether a message sent while the turn runs counts as a new instruction."""
+        payload = item.payload
+        return not self.drops_message(payload.get("prompt"), payload.get("image_uris") or payload.get("images"),
+                                      payload.get("image_only"))
 
     async def _compact_context(self, force: bool = False) -> AsyncGenerator[StreamEvent, None]:
         if not force and not config.get("advanced", "auto_compact", True):
@@ -532,7 +557,7 @@ class Agent:
         self._turn_image_parts = None
         attached = image_uris or images or []
         skipped_images = len(attached) if attached and not self._model_supports_vision() else 0
-        if skipped_images and (image_only or not str(user_input or "").strip()):
+        if skipped_images and _holds_no_text(user_input, image_only):
             self._note_images_skipped()
             yield ImagesSkipped(skipped_images, prompt_added=False)
             yield Done(outcome="success")
@@ -881,7 +906,8 @@ class Agent:
                 elif self.on_questions:
                     try:
                         result = await self.input_queue.interaction(
-                            self.on_questions(questions), "Questions superseded by a new user instruction.")
+                            self.on_questions(questions), "Questions superseded by a new user instruction.",
+                            self.steering_adds_input)
                         interaction_superseded = result == "Questions superseded by a new user instruction."
                     except Exception as e:
                         _log.warning("on_questions callback error: %s", e, exc_info=True)
@@ -956,7 +982,8 @@ class Agent:
                 if not self.auto_approve and self.on_tool_approval:
                     import inspect
                     approval_res = await self.input_queue.interaction(
-                        self.on_tool_approval(tool_name, args), (False, "Superseded by a new user instruction")
+                        self.on_tool_approval(tool_name, args), (False, "Superseded by a new user instruction"),
+                        self.steering_adds_input,
                     ) if inspect.iscoroutinefunction(self.on_tool_approval) else self.on_tool_approval(tool_name, args)
                     interaction_superseded = approval_res == (False, "Superseded by a new user instruction")
                     is_approved = True

@@ -1485,7 +1485,7 @@ class AndromityApp(App):
                 elif isinstance(event, PlanApprovalRequired):
                     log.info("Plan approval required. Pausing agent loop.")
                     self._plan_approval_future = asyncio.Future()
-                    await self._inputs().interaction(self._plan_approval_future, False)
+                    await self._inputs().interaction(self._plan_approval_future, False, self.agent.steering_adds_input)
                     self._plan_approval_future = None
                 elif isinstance(event, Done):
                     if event.outcome != "success":
@@ -1743,8 +1743,8 @@ class AndromityApp(App):
             except Exception:
                 pass
             chat.add_user_message(prompt, image_count=len(images) if images else 0)
-            # Auto-name session from the first user message
-            if not self._session_named:
+            # Auto-name session from the first user message the model gets
+            if not self._session_named and not self.agent.drops_message(prompt, images):
                 self._session_named = True
                 name = Session.auto_name_from_message(prompt)
                 self.session.rename(name)

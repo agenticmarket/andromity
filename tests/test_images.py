@@ -132,7 +132,7 @@ async def test_openrouter_model_not_blocked_on_supports_vision_false(session):
 
 
 def test_messages_for_api_swaps_last_user_content(session):
-    agent = Agent(session, profile="builder", auto_approve=True, dry_run=True)
+    agent = Agent(session, profile="builder", auto_approve=True, dry_run=True, provider="openai", model="gpt-4o")
     session.add_message("system", "sys")
     session.add_message("user", "plain text")
 

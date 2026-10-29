@@ -21,6 +21,10 @@ class PendingInput:
                 "image_count": len(self.payload.get("images") or self.payload.get("image_uris") or [])}
 
 
+def _every_message(item: PendingInput) -> bool:
+    return True
+
+
 class InputQueue:
     """All mutations run synchronously on the owning runtime's event loop."""
 
@@ -33,17 +37,21 @@ class InputQueue:
         self.paused = False
         self.on_change = on_change
         self.steering = asyncio.Event()
+        self._supersedes: Callable[[PendingInput], bool] = _every_message
 
     def snapshot(self) -> dict[str, Any]:
         return {"session_id": self.session_id, "epoch": self.epoch, "revision": self.revision,
                 "paused": self.paused, "items": [item.to_dict() for item in self.items]}
 
-    def changed(self) -> None:
-        self.revision += 1
-        if any(item.delivery == "steer" for item in self.items) and not self.paused:
+    def _update_steering(self) -> None:
+        if not self.paused and any(item.delivery == "steer" and self._supersedes(item) for item in self.items):
             self.steering.set()
         else:
             self.steering.clear()
+
+    def changed(self) -> None:
+        self.revision += 1
+        self._update_steering()
         if self.on_change:
             self.on_change(self.snapshot())
 
@@ -104,9 +112,15 @@ class InputQueue:
         item.payload = {}
         self.changed()
 
-    async def interaction(self, awaitable: Any, superseded: Any) -> Any:
-        """Steering dismisses an unanswered interaction; it never approves it."""
+    async def interaction(self, awaitable: Any, superseded: Any,
+                          supersedes: Optional[Callable[[PendingInput], bool]] = None) -> Any:
+        """Steering dismisses an unanswered interaction; it never approves it.
+
+        `supersedes` picks the steering messages that count as a new instruction; by default every one does.
+        """
         task = asyncio.ensure_future(awaitable)
+        self._supersedes = supersedes or _every_message
+        self._update_steering()
         signal = asyncio.create_task(self.steering.wait())
         try:
             done, _ = await asyncio.wait({task, signal}, return_when=asyncio.FIRST_COMPLETED)
@@ -116,6 +130,8 @@ class InputQueue:
                 return task.result()
             return superseded
         finally:
+            self._supersedes = _every_message
+            self._update_steering()
             for pending in (task, signal):
                 if not pending.done():
                     pending.cancel()
