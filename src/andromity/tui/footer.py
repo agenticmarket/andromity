@@ -1087,6 +1087,14 @@ InputBar {
         elif event.image is not None:
             self._add_attachment(event.image)
 
+    def restore_attachments(self, images: list) -> None:
+        """Give back images from a message that was not sent, after any attached since."""
+        room = max(0, MAX_IMAGES - len(self._attachments))
+        restored = [img for img in images if not any(img is kept for kept in self._attachments)][:room]
+        if restored:
+            self._attachments.extend(restored)
+            self._update_attachment_bar()
+
     def _add_attachment(self, img):
         """Append an image, enforcing the 5-image cap, and refresh the chips."""
         if len(self._attachments) >= MAX_IMAGES:

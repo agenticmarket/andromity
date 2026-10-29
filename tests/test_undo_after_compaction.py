@@ -324,7 +324,8 @@ async def _serve(session: Session, root: Path, prompt: str, **params) -> None:
     handler._active_sessions[session.id] = session
     await handler.rpc_agent_prompt({"session_id": session.id, "project_path": str(root), "prompt": prompt,
                                     "mode": "full", **params})
-    await handler._running_tasks[session.id]
+    if session.id in handler._running_tasks:
+        await handler._running_tasks[session.id]
     await asyncio.sleep(0)
 
 

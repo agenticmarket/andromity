@@ -29,7 +29,7 @@ from andromity.tui.overlays.undo import UndoConfirmOverlay
 from andromity.tui.overlays.batch_review import BatchReviewOverlay
 from andromity.tui.overlays.questions import QuestionPanel, format_question_answers, normalize_questions
 from andromity.core.session import Session
-from andromity.core.agent import Agent
+from andromity.core.agent import Agent, note_images_skipped
 from andromity.core.events import (
     StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired, SubAgentProgress
 )
@@ -1312,6 +1312,12 @@ class AndromityApp(App):
         panel = self.query_one("#queue-panel", QueuePanel)
         panel.update_queue(self._inputs().snapshot())
 
+    def _restore_attachments(self, images: list) -> None:
+        try:
+            self.query_one(InputBar).restore_attachments(images)
+        except Exception:
+            log.debug("Images could not be put back in the input bar", exc_info=True)
+
     def _inputs(self):
         from andromity.core.inputs import InputQueue
         if self.session.id not in self._input_queues:
@@ -1350,6 +1356,13 @@ class AndromityApp(App):
         self.agent.input_queue = self._inputs()
         chat = self.query_one(ChatPanel)
         self._clear_next_step()
+        if self.agent.drops_message(prompt, images):
+            note_images_skipped(self.session.id)
+            chat.add_system_message(images_skipped_notice(len(images)))
+            self._restore_attachments(images)
+            self._is_streaming = False
+            self.call_after_refresh(self._drain_inputs)
+            return
         # The suggestion shows once the turn ends, as a card rather than a tool call.
         next_step = None
         next_step_tool_ids: set = set()
@@ -1365,7 +1378,6 @@ class AndromityApp(App):
         tool_calls_count = 0
         estimated_tokens = 0
         first_text_seen = False
-        prompt_skipped = False
         new_files_created = False  # True only when write_file creates a brand-new file
 
         tools_used = set()  # track which tools were called this stream
@@ -1414,13 +1426,10 @@ class AndromityApp(App):
                     notice = images_skipped_notice(event.count)
                     if event.prompt_added:
                         chat.add_reply_notice(notice)
-                    elif event.steering:
-                        chat.add_inline_notice(notice)
-                        first_text_seen = False
                     else:
-                        prompt_skipped = True
-                        chat.discard_empty_turn()
-                        chat.add_system_message(notice)
+                        chat.add_inline_notice(notice)
+                        self._restore_attachments(event.images or [])
+                        first_text_seen = False
                 elif isinstance(event, ThinkingDelta):
                     if not hasattr(chat, "_thinking") or not getattr(chat, "_thinking", None):
                         chat.start_thinking_message()
@@ -1537,8 +1546,7 @@ class AndromityApp(App):
             # Show how long the response took as a distinct colored footnote,
             # e.g. "⏱ 3.5s · 4 tool calls" (kept separate from the AI text)
             try:
-                if not prompt_skipped:
-                    chat.add_response_time(time.time() - turn_started, tool_calls_count)
+                chat.add_response_time(time.time() - turn_started, tool_calls_count)
             except Exception:
                 pass
             if next_step is not None:

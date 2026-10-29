@@ -80,8 +80,8 @@ def _estimate_tokens(messages: list) -> int:
 
 def _with_skipped_images_note(content: Any, count: int) -> Any:
     """The user's message as sent to a model that was not given the images attached to it."""
-    images, them = ("1 image", "it") if count == 1 else (f"{count} images", "them")
-    note = (f"[The user attached {images} that could not be shown because this model does not accept images. "
+    images, were, them = ("1 image", "was", "it") if count == 1 else (f"{count} images", "were", "them")
+    note = (f"[The user attached {images} that {were} not sent to the assistant, so you cannot see {them}. "
             f"If the request depends on {them}, say so instead of guessing.]")
     if isinstance(content, list):
         return [*content, {"type": "text", "text": note}]
@@ -133,6 +133,14 @@ def model_supports_vision(provider: str, model: str) -> bool:
         return litellm.supports_vision(litellm_model) is not False
     except Exception:
         return True
+
+
+def note_images_skipped(session_id: str) -> None:
+    try:
+        from andromity.telemetry import send_feature_used
+        send_feature_used("image_skipped_no_vision", session_id=session_id)
+    except Exception:
+        pass
 
 
 def _holds_no_text(text: Any, image_only: Any) -> bool:
@@ -314,15 +322,20 @@ class Agent:
             attached = payload.get("image_uris") or payload.get("images") or []
             skipped = len(attached) if attached and not self._model_supports_vision() else 0
             if skipped:
-                self._note_images_skipped()
+                note_images_skipped(self.session.id)
                 if _holds_no_text(prompt, payload.get("image_only")):
-                    events.append(ImagesSkipped(skipped, prompt_added=False, steering=True, input_id=item.id))
+                    events.append(ImagesSkipped(skipped, prompt_added=False, steering=True, input_id=item.id,
+                                                images=list(attached)))
                     self.input_queue.applied(item)
                     continue
             uris = payload.get("image_uris") or []
             if not uris and payload.get("images"):
                 from andromity.core.images import image_to_data_uri
                 uris = [image_to_data_uri(image) for image in payload["images"]]
+            if skipped:
+                from andromity.core.images import save_and_thumbnail_image
+                storage_dir = getattr(self.session, "storage_dir", None)
+                uris = [save_and_thumbnail_image(uri, storage_dir=storage_dir) for uri in uris]
             self.session.add_message("user", content=prompt, images=uris or None, images_skipped=skipped or None,
                                      turn_id=getattr(self, "current_user_turn_id", None), steering=True)
             if uris and not skipped:
@@ -337,13 +350,6 @@ class Agent:
                 events.append(ImagesSkipped(skipped, steering=True, input_id=item.id))
             self.input_queue.applied(item)
         return events
-
-    def _note_images_skipped(self) -> None:
-        try:
-            from andromity.telemetry import send_feature_used
-            send_feature_used("image_skipped_no_vision", session_id=self.session.id)
-        except Exception:
-            pass
 
     def _model_supports_vision(self) -> bool:
         return model_supports_vision(self.provider or config.get("default", "provider", ""),
@@ -513,9 +519,18 @@ class Agent:
 
     async def run(self, user_input: str, images: list = None, image_uris: list = None,
                   image_only: bool = False) -> AsyncGenerator[StreamEvent, None]:
+        """Run one user turn. ``image_only`` marks text a client wrote in for a message that holds
+        only images; a message with nothing but images this model can't read is not sent, runs no
+        task and adds no turn."""
         import asyncio
         import uuid
         from andromity.telemetry import send_task_event
+        attached = image_uris or images or []
+        if self.drops_message(user_input, attached, image_only):
+            note_images_skipped(self.session.id)
+            yield ImagesSkipped(len(attached), prompt_added=False, images=list(attached))
+            yield Done(outcome="success")
+            return
         run_id = uuid.uuid4().hex
         self._telemetry_turn_start = time.monotonic()
         first_response_ms = None
@@ -523,7 +538,7 @@ class Agent:
         metadata = {"provider": self.provider, "model": self.model}
         send_task_event("task_started", self.session.id, run_id, **metadata)
         try:
-            async for event in self._run(user_input, images, image_uris, image_only):
+            async for event in self._run(user_input, images, image_uris):
                 if first_response_ms is None and isinstance(event, TextDelta):
                     first_response_ms = int((time.monotonic() - self._telemetry_turn_start) * 1000)
                 if isinstance(event, Done):
@@ -541,27 +556,18 @@ class Agent:
                     active_seconds=time.monotonic() - self._telemetry_turn_start,
                     first_response_ms=first_response_ms, **metadata)
 
-    async def _run(self, user_input: str, images: list = None, image_uris: list = None,
-                   image_only: bool = False) -> AsyncGenerator[StreamEvent, None]:
+    async def _run(self, user_input: str, images: list = None, image_uris: list = None) -> AsyncGenerator[StreamEvent, None]:
         """Run one user turn.
 
         Accepts either raw ``images`` (paths/PIL objects — will be encoded)
-        or pre-encoded ``image_uris`` (data: URIs — used as-is). ``image_only``
-        marks text a client wrote in for a message that holds only images.
-
-        A model that can't read images gets the text without them. A message
-        with nothing but images is not sent at all and adds no turn.
+        or pre-encoded ``image_uris`` (data: URIs — used as-is). A model that
+        can't read images gets the text without them.
         """
         register_session(self.session)
         self._refresh_prompt_if_stale()
         self._turn_image_parts = None
         attached = image_uris or images or []
         skipped_images = len(attached) if attached and not self._model_supports_vision() else 0
-        if skipped_images and _holds_no_text(user_input, image_only):
-            self._note_images_skipped()
-            yield ImagesSkipped(skipped_images, prompt_added=False)
-            yield Done(outcome="success")
-            return
         _uris: list | None = None
         if image_uris:          # already-encoded URIs from the TUI paste path
             _uris = image_uris
@@ -623,7 +629,7 @@ class Agent:
                 pass
 
         if skipped_images:
-            self._note_images_skipped()
+            note_images_skipped(self.session.id)
             yield ImagesSkipped(skipped_images)
 
         async for event in self._compact_context():

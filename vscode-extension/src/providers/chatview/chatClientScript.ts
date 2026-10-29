@@ -907,8 +907,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const promptQueue = [];
     const serverQueues = {};
     const appliedInputIds = new Set();
-    // The running turn's message held only images the model can't read, so it was never sent.
-    let currentTurnUnsent = false;
+    // Sessions whose running turn's message held only images the model can't read, so it was never sent.
+    const unsentTurnSessions = new Set();
+    // Images of messages sent from this view and not yet started or applied, by input id, to give back if dropped.
+    const queuedImages = new Map();
     let queueSupported = false;
     let pendingInputDraft = null;
 
@@ -4892,6 +4894,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         }
         case 'remove-queued':
+          queuedImages.delete(target.getAttribute('data-input-id'));
           if (queueSupported) vscode.postMessage({ type: 'queue_remove', sessionId: currentSessionId, inputId: target.getAttribute('data-input-id') });
           else removeQueued(parseInt(target.getAttribute('data-idx') || '0', 10));
           break;
@@ -8577,7 +8580,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function startAssistantTurn() {
       isRunning = true;
-      currentTurnUnsent = false;
+      unsentTurnSessions.delete(currentSessionId);
       removeFeatureTip();
       // Only stick to bottom if user was already at the bottom; do not steal scroll if user is reading history
       if (!userScrolledUp && !_isUserActivelyScrolling && isAtBottom(2)) {
@@ -10622,6 +10625,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         case 'input_accepted':
           if (pendingInputDraft && msg.request_id === pendingInputDraft.requestId) {
+            rememberQueuedImages(msg.input_id, pendingInputDraft.images);
             if (currentSessionId === pendingInputDraft.sessionId && promptInput.value.trim() === pendingInputDraft.text &&
                 JSON.stringify(attachedImages) === JSON.stringify(pendingInputDraft.images) &&
                 JSON.stringify(attachedFiles) === JSON.stringify(pendingInputDraft.files)) {
@@ -10639,6 +10643,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           appendSystemNote(msg.error || 'Message was not accepted. Your draft is preserved.');
           break;
         case 'input_applied':
+          queuedImages.delete(msg.input_id);
           if (msg.session_id !== currentSessionId || appliedInputIds.has(msg.input_id)) break;
           appliedInputIds.add(msg.input_id);
           endAssistantTurn();
@@ -10700,6 +10705,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             }
             updateSessionActivityIndicator();
           }
+          if (msg.input_id) queuedImages.delete(msg.input_id);
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
           if (msg.input_id && !appliedInputIds.has(msg.input_id)) {
             appliedInputIds.add(msg.input_id);
@@ -10814,8 +10820,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               if (tf) turnEditedFiles.add(tf);
             }
           }
-          const finishedTurn = currentTurnUnsent ? null : finishedTurnFacts(msg);
-          currentTurnUnsent = false;
+          const finishedTurn = unsentTurnSessions.delete(msg.session_id || currentSessionId) ? null : finishedTurnFacts(msg);
           endAssistantTurn();
           interactiveSlot.innerHTML = '';
           activePendingApprovalId = null;
@@ -11446,6 +11451,21 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       return notice;
     }
 
+    function rememberQueuedImages(inputId, images) {
+      if (!inputId || !Array.isArray(images) || images.length === 0) return;
+      queuedImages.set(inputId, images.slice());
+      while (queuedImages.size > 10) queuedImages.delete(queuedImages.keys().next().value);
+    }
+
+    // Images of a message that was not sent go back to the composer, after any attached since.
+    function giveBackImages(images) {
+      const fresh = (images || []).filter((uri) => typeof uri === 'string' && uri && !attachedImages.includes(uri));
+      const room = 5 - attachedImages.length;
+      if (!fresh.length || room <= 0) return;
+      attachedImages.push(...fresh.slice(0, room));
+      renderImageAttachments();
+    }
+
     function showImagesSkipped(msg) {
       const notice = buildImagesSkippedNotice(msg.count);
       if (msg.prompt_added !== false) {
@@ -11460,13 +11480,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (currentToolSequence) finishToolSequence();
         currentAssistantContent = null;
         (currentTurnAssistantDiv || chatContainer).appendChild(notice);
+        giveBackImages(queuedImages.get(msg.input_id));
+        queuedImages.delete(msg.input_id);
       } else {
         // No turn was added, so the prompt and its empty reply leave the transcript; undo counts prompts in it.
         const prompt = msg.input_id
           ? Array.from(chatContainer.querySelectorAll('.message-wrap.user')).find((el) => el.getAttribute('data-input-id') === String(msg.input_id))
           : null;
-        if (prompt) prompt.remove();
-        currentTurnUnsent = true;
+        if (prompt) {
+          giveBackImages(Array.from(prompt.querySelectorAll('.prompt-image-thumb')).map((img) => img.src));
+          prompt.remove();
+        }
+        unsentTurnSessions.add(msg.session_id || currentSessionId);
         const placeholderOnly = currentTurnAssistantDiv && Array.from(currentTurnAssistantDiv.children)
           .every((el) => el.classList.contains('assistant-header') || el.id === 'turn-loading-indicator');
         if (placeholderOnly) {

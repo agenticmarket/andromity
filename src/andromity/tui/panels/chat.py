@@ -1271,20 +1271,6 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
         self._finish_tool_sequence()
         self.add_system_message(text)
 
-    def discard_empty_turn(self) -> None:
-        """Remove the reply placeholder of a turn that ended without asking the model."""
-        if self._tool_seq is not None or self._thinking is not None:
-            return
-        if self._streaming is not None:
-            if self._streaming._text.strip():
-                return
-            self._streaming.remove()
-            self._streaming = None
-        if self._turn_header is not None:
-            self._turn_header.remove()
-            self._turn_header = None
-        self._header_shown = False
-
     def _finish_tool_sequence(self):
         """Freeze the current turn's tool summary once the turn ends."""
         if self._tool_seq is not None:
