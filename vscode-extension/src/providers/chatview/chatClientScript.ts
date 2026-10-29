@@ -246,6 +246,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const recentSessionsList = document.getElementById('recent-sessions-list');
     let allSessions = [];
     let allProviders = [];
+    let flyoutNotice = '';
+    const refreshingProviders = new Set();
     let sessionDisplayLimit = 10;
     const sessionsState = {};
     const sessionLiveBuffer = new Map(); // sessionId -> Array<raw msg> for replay when switching to a live session
@@ -3402,7 +3404,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       return 0;
     }
 
-    function showOnboardingModelStep(provider, models, defaultModel) {
+    function showOnboardingModelStep(provider, models, defaultModel, unverified) {
       onboardingPendingProvider = provider || selectedOnboardingProvider || 'anthropic';
       
       const rawList = Array.isArray(models) ? models.slice() : [];
@@ -3428,7 +3430,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       if (onboardingStep2Badge) {
         const provName = provider ? (provider.charAt(0).toUpperCase() + provider.slice(1)) : 'AI';
-        onboardingStep2Badge.textContent = provName + ' connected';
+        onboardingStep2Badge.textContent = unverified || (provName + ' connected');
+        onboardingStep2Badge.className = 'onboarding-step2-badge' + (unverified ? ' unverified' : '');
+        onboardingStep2Badge.title = unverified ? 'The key is saved. Test it again in Settings, API keys.' : '';
       }
 
       if (onboardingStep2Search) onboardingStep2Search.value = '';
@@ -3446,6 +3450,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (btnOnboardingSave) {
         btnOnboardingSave.disabled = false;
         btnOnboardingSave.innerHTML = '<span>Connect & Continue</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+        btnOnboardingSave.title = '';
       }
       if (btnOnboardingOllamaSave) {
         btnOnboardingOllamaSave.disabled = false;
@@ -4884,6 +4889,26 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           break;
         }
+        case 'open-api-keys':
+          vscode.postMessage({ type: 'open_settings', tab: 'keys' });
+          break;
+        case 'dismiss-key-note':
+          hideKeyRequiredNote();
+          break;
+        case 'refresh-provider-models': {
+          const refreshId = target.getAttribute('data-provider') || '';
+          if (!refreshId || refreshingProviders.has(refreshId)) break;
+          refreshingProviders.add(refreshId);
+          flyoutNotice = 'Refreshing ' + providerDisplayName(refreshId) + ' models…';
+          renderFlyoutList(currentFlyoutQuery());
+          vscode.postMessage({ type: 'refresh_provider_models', provider: refreshId });
+          setTimeout(() => {
+            if (!refreshingProviders.delete(refreshId)) return;
+            flyoutNotice = providerDisplayName(refreshId) + ": Couldn't refresh models.";
+            if (modelFlyout && modelFlyout.style.display === 'flex') renderFlyoutList(currentFlyoutQuery());
+          }, 20000);
+          break;
+        }
         case 'send-starter':
           promptInput.value = target.getAttribute('data-prompt') || '';
           sendCurrentPrompt();
@@ -5091,6 +5116,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
         modelFlyout.style.display = 'flex';
         if (flyoutSearch) flyoutSearch.value = '';
+        if (refreshingProviders.size === 0) flyoutNotice = '';
         renderFlyoutList('');
         if (flyoutList) flyoutList.scrollTop = 0;
         if (flyoutSearch) setTimeout(() => flyoutSearch.focus(), 50);
@@ -5131,6 +5157,60 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       renderFlyoutList(flyoutSearch ? flyoutSearch.value.toLowerCase().trim() : '');
     };
 
+    function providerEntry(id) {
+      return (allProviders || []).find(p => p && p.id === id) || null;
+    }
+
+    function providerDisplayName(id) {
+      const entry = providerEntry(id);
+      return (entry && entry.name) || id || 'this provider';
+    }
+
+    /** The built-in provider and custom connections never show a catalog label. */
+    function showsCatalogLabel(id) {
+      const entry = providerEntry(id);
+      return !!id && id !== 'andromity' && id !== 'ollama' && !(entry && entry.custom);
+    }
+
+    function hideKeyRequiredNote() {
+      const note = document.getElementById('key-required-note');
+      if (note) note.remove();
+    }
+
+    function showKeyRequiredNote(providerId, name, portal) {
+      hideKeyRequiredNote();
+      const box = document.querySelector('.prompt-box');
+      if (!providerId || !box || !box.parentNode) return;
+      const entry = providerEntry(providerId) || {};
+      const label = name || entry.name || providerId;
+      const url = String(portal || entry.portal || '');
+      const note = document.createElement('div');
+      note.id = 'key-required-note';
+      note.className = 'key-required-note';
+      note.setAttribute('role', 'status');
+      note.setAttribute('data-provider', providerId);
+      note.innerHTML = '<span class="key-required-text">These are catalog models. Set your ' + escapeHtml(label) + ' API key to use them.</span>' +
+        '<span class="key-required-actions">' +
+          (url.startsWith('https://') ? '<button type="button" class="key-required-btn" data-action="open-portal" data-url="' + escapeHtml(url) + '">Get API key</button>' : '') +
+          '<button type="button" class="key-required-btn" data-action="open-api-keys">Open API keys</button>' +
+          '<button type="button" class="banner-dismiss" data-action="dismiss-key-note" title="Dismiss" aria-label="Dismiss">&times;</button>' +
+        '</span>';
+      box.parentNode.insertBefore(note, box);
+    }
+
+    /** A note about a missing key goes away once that provider has one or another provider is active. */
+    function syncKeyRequiredNote() {
+      const note = document.getElementById('key-required-note');
+      if (!note) return;
+      const noteProvider = note.getAttribute('data-provider') || '';
+      const entry = providerEntry(noteProvider);
+      if ((entry && entry.has_key) || noteProvider !== currentProvider) note.remove();
+    }
+
+    function currentFlyoutQuery() {
+      return flyoutSearch ? flyoutSearch.value.toLowerCase().trim() : '';
+    }
+
     /** The one model the session is using: same provider and ID, else same ID, else the bare ID. */
     function activeFlyoutModel(pool) {
       return pool.find(m => m.id === currentModel && (m.provider || 'openrouter') === currentProvider)
@@ -5147,8 +5227,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         return hay.includes(query);
       });
 
+      const notice = flyoutNotice ? '<div class="flyout-notice" role="status">' + escapeHtml(flyoutNotice) + '</div>' : '';
       if (filtered.length === 0) {
-        flyoutList.innerHTML = '<div style="padding:14px; text-align:center; color:var(--muted); font-size:11.5px;">No matching models found.<br><button class="prompt-pill-btn" data-action="open-model-hub" style="margin-top:8px;">Browse Model Hub</button></div>';
+        flyoutList.innerHTML = notice + '<div style="padding:14px; text-align:center; color:var(--muted); font-size:11.5px;">No matching models found.<br><button class="prompt-pill-btn" data-action="open-model-hub" style="margin-top:8px;">Browse Model Hub</button></div>';
         return;
       }
 
@@ -5158,6 +5239,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       function renderFlyoutItem(m) {
         const isActive = isActiveModel(m);
         const isPinned = isModelPinned(m.id, m.provider);
+        const catalogTag = !m.needs_key && m.source === 'catalog' && showsCatalogLabel(m.provider);
         return '<div class="flyout-item ' + (isActive ? 'active' : '') + '"' + (isActive ? ' aria-current="true"' : '') + ' data-action="pick-model" data-model-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || 'openrouter') + '">' +
           '<div class="flyout-item-info">' +
             (isActive ? '<span class="flyout-active-dot"></span>' : '') +
@@ -5165,7 +5247,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           '</div>' +
           '<div class="flyout-item-actions">' +
             (isActive ? '<span class="flyout-active-label">Active</span>' : '') +
-            '<span class="flyout-item-meta">' + escapeHtml(m.provider || 'openrouter') + (m.pricing ? ' · ' + escapeHtml(m.pricing) : '') + '</span>' +
+            (m.needs_key
+              ? '<span class="flyout-tag key" title="Set your ' + escapeHtml(providerDisplayName(m.provider)) + ' API key to use this model">Needs API key</span>'
+              : catalogTag
+                ? '<button type="button" class="flyout-tag catalog" data-action="refresh-provider-models" data-provider="' + escapeHtml(m.provider) + '" title="Built-in catalog list, not fetched from ' + escapeHtml(providerDisplayName(m.provider)) + '. Click to refresh.">' +
+                    (refreshingProviders.has(m.provider) ? 'Refreshing…' : 'Catalog') +
+                    '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>' +
+                  '</button>'
+                : '') +
+            '<span class="flyout-item-meta">' + escapeHtml(m.provider || 'openrouter') + (m.pricing && !m.needs_key && !catalogTag ? ' · ' + escapeHtml(m.pricing) : '') + '</span>' +
             '<button class="flyout-pin-btn ' + (isPinned ? 'pinned' : '') + '" data-action="toggle-pin" data-model-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || 'openrouter') + '" data-name="' + escapeHtml(m.name || m.id) + '" title="' + (isPinned ? 'Unpin model' : 'Pin to top of picker') + '">' +
               '<svg width="11" height="11" viewBox="0 0 24 24" fill="' + (isPinned ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
                 '<line x1="12" y1="17" x2="12" y2="22"></line>' +
@@ -5181,7 +5271,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const pinnedItems = rest.filter(m => isModelPinned(m.id, m.provider));
         const otherItems = rest.filter(m => !isModelPinned(m.id, m.provider)).slice(0, 45);
 
-        let html = '<div class="flyout-section-title"><span>CURRENT</span></div>' + renderFlyoutItem(active);
+        let html = notice + '<div class="flyout-section-title"><span>CURRENT</span></div>' + renderFlyoutItem(active);
         if (pinnedItems.length > 0) {
           html += '<div class="flyout-section-title"><span>PINNED</span><span class="flyout-section-count">' + pinnedItems.length + '</span></div>';
           html += pinnedItems.map(renderFlyoutItem).join('');
@@ -5194,7 +5284,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       } else {
         const rank = m => (isActiveModel(m) ? 2 : 0) + (isModelPinned(m.id, m.provider) ? 1 : 0);
         const sorted = [...filtered].sort((a, b) => rank(b) - rank(a)).slice(0, 50);
-        flyoutList.innerHTML = sorted.map(renderFlyoutItem).join('');
+        flyoutList.innerHTML = notice + sorted.map(renderFlyoutItem).join('');
       }
     }
 
@@ -5210,6 +5300,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       updateModelBadge();
       modelFlyout.style.display = 'none';
       vscode.postMessage({ type: 'update_config', key: 'model', value: modelId, provider: provider || currentProvider });
+      const picked = (allModels || []).find(m => m.id === modelId && (m.provider || 'openrouter') === currentProvider);
+      if (picked && picked.needs_key) showKeyRequiredNote(currentProvider);
+      else hideKeyRequiredNote();
     };
 
     window.openModelHub = function() {
@@ -9290,6 +9383,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.providers) {
             allProviders = msg.providers;
           }
+          syncKeyRequiredNote();
           updateModelBadge();
           updateOnboardingVisibility();
           const btnSignInInit = document.getElementById('zero-gateway-signin-btn');
@@ -9427,11 +9521,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             }
             updateModelBadge();
             updateReasoningBadge();
+            syncKeyRequiredNote();
           } else if (msg.key === 'provider') {
             currentProvider = msg.value;
             currentModelReasoningCapability = null;
             updateReasoningBadge();
             updateModelBadge();
+            syncKeyRequiredNote();
           } else if (msg.key === 'profile') {
             currentProfile = msg.value;
             updateProfileBadge();
@@ -11087,12 +11183,27 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           renderFlyoutList(flyoutSearch ? flyoutSearch.value.toLowerCase().trim() : '');
           break;
 
+        case 'key_required_note':
+          if (msg.provider) showKeyRequiredNote(msg.provider, msg.name, msg.portal);
+          break;
+
+        case 'provider_models_refreshed': {
+          const refreshedId = msg.provider || '';
+          refreshingProviders.delete(refreshedId);
+          if (Array.isArray(msg.models)) {
+            allModels = allModels.filter(m => m.provider !== refreshedId).concat(msg.models);
+          }
+          flyoutNotice = msg.ok ? '' : providerDisplayName(refreshedId) + ': ' + (msg.message || "Couldn't refresh models.");
+          if (modelFlyout && modelFlyout.style.display === 'flex') renderFlyoutList(currentFlyoutQuery());
+          break;
+        }
+
         case 'show_onboarding_guide':
           toggleOnboarding(true);
           break;
 
         case 'key_configured_select_model': {
-          showOnboardingModelStep(msg.provider, msg.models, msg.defaultModel);
+          showOnboardingModelStep(msg.provider, msg.models, msg.defaultModel, msg.unverified);
           break;
         }
 
@@ -11100,7 +11211,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           showOnboardingKeyStep();
           if (btnOnboardingSave) {
             btnOnboardingSave.disabled = false;
-            btnOnboardingSave.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px;vertical-align:-1px;"><polyline points="20 6 9 17 4 12"></polyline></svg><span>Connected!</span>';
+            btnOnboardingSave.innerHTML = msg.unverified
+              ? '<span>Saved, not verified</span>'
+              : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px;vertical-align:-1px;"><polyline points="20 6 9 17 4 12"></polyline></svg><span>Connected!</span>';
+            btnOnboardingSave.title = msg.unverified || '';
           }
           if (btnOnboardingOllamaSave) {
             btnOnboardingOllamaSave.disabled = false;

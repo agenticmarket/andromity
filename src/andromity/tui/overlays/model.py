@@ -6,9 +6,11 @@ from textual.containers import Horizontal, Vertical, Container
 from textual.screen import ModalScreen
 from textual.widgets import Static, Button, OptionList, Input
 from textual.widgets.option_list import Option
+from textual.markup import escape
 from textual.reactive import reactive
 from andromity.tui.overlays.dialog import dialog_styles
 from andromity.config import config
+from andromity.core.connections import portal_url
 from andromity.core.models import provider_catalog, fetch_live_models_sync, get_cached_live_models
 
 
@@ -150,10 +152,7 @@ ModelPickerScreen.compact #mp-footer { height: 3; padding: 0 1; }
                 providers = provider_catalog()
                 self._provider_keys = list(providers)
                 yield ModelList(*(
-                    Option(Content.assemble(
-                        (info["name"], "bold"), "  ",
-                        (info.get("requires_env") or "local / free", "dim"),
-                    ), id=f"provider-{key}")
+                    Option(self._provider_prompt(key, info), id=f"provider-{key}")
                     for key, info in providers.items()
                 ), id="mp-providers")
             with Vertical(id="mp-step2"):
@@ -187,9 +186,24 @@ ModelPickerScreen.compact #mp-footer { height: 3; padding: 0 1; }
     def _set_ready(self) -> None:
         self._ready = True
 
+    @staticmethod
+    def _provider_prompt(key: str, info: dict) -> Content:
+        env = info.get("requires_env")
+        if env and not config.get_api_key(key):
+            return Content.assemble((info["name"], "bold"), "  ", ("needs key", "$text-warning"), "  ", (env, "dim"))
+        return Content.assemble((info["name"], "bold"), "  ", (env or "local / free", "dim"))
+
+    def _refresh_provider_prompts(self) -> None:
+        providers = provider_catalog()
+        provider_list = self.query_one("#mp-providers", OptionList)
+        for idx, key in enumerate(self._provider_keys[:provider_list.option_count]):
+            if key in providers:
+                provider_list.replace_option_prompt_at_index(idx, self._provider_prompt(key, providers[key]))
+
     def _show_step1(self):
         self._step = 1
         self._selected_model_idx = -1
+        self._refresh_provider_prompts()
         self.query_one("#mp-title").update(" Step 1: Select Provider ")
         self.query_one("#mp-step1").display = True
         self.query_one("#mp-step2").display = False
@@ -245,6 +259,9 @@ ModelPickerScreen.compact #mp-footer { height: 3; padding: 0 1; }
             header_text += " [dim](fetching live models...)[/]"
         elif req_env and not has_key:
             header_text = "[bold]Choose a model[/] [$text-warning]· API key required[/]"
+            portal = portal_url(provider_key)
+            if portal:
+                header_text += f"\n[dim]Get a key: {escape(portal)}[/]"
             self.query_one("#mp-models-header").update(header_text)
             self.call_after_refresh(self._focus_key_input)
             return

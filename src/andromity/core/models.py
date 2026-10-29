@@ -378,23 +378,51 @@ def normalize_endpoint_model(item: dict[str, Any], provider_key: str) -> dict[st
     return model
 
 
-def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str = None) -> list[dict]:
+def fetch_failure_reason(exc: BaseException) -> str:
+    """Why a model-list request failed, without its body or headers."""
+    code = getattr(exc, "code", None)
+    if isinstance(code, int):
+        if code in (401, 403):
+            return "auth_error"
+        if code == 429:
+            return "rate_limit"
+        if code == 404:
+            return "not_found"
+        return "provider_unavailable" if code >= 500 else "http_error"
+    if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError):
+        return "timeout"
+    if isinstance(exc, OSError):
+        return "offline"
+    if isinstance(exc, ValueError):
+        return "bad_response"
+    return "error"
+
+
+def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str = None, *,
+                           status: dict | None = None) -> list[dict]:
     """Fetch live models from provider API. Returns list of model dicts or empty list on failure.
-    Caches the context windows to disk for future use.
+    Caches the context windows to disk for future use. When ``status`` is given, the first
+    failure reason is stored in ``status["error"]``.
     """
     import json
     import urllib.request
     import urllib.error
 
+    def _note(reason: str) -> None:
+        if status is not None:
+            status.setdefault("error", reason)
+
     def _get(url: str, headers: dict, timeout: float = 4.0) -> dict | None:
         from andromity.core import network_policy
         if not network_policy.url_allowed(url):
+            _note("airgap")
             return None
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Andromity/1.0", **headers})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except Exception as exc:
+            _note(fetch_failure_reason(exc))
             from andromity.core.debug_log import get_logger
             get_logger("models").warning("Model discovery failed: provider=%s error=%s HTTP=%s", provider_key, type(exc).__name__, getattr(exc, "code", "unknown"))
             return None
@@ -424,6 +452,7 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
         for _ in range(20):
             data = _get(url, headers)
             if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+                _note("bad_response")
                 return []
             page_ids = []
             for item in data["data"]:
@@ -438,18 +467,22 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
                 return _cache_and_return(provider_key, models)
             # Build cursors against this endpoint, never follow a supplied external URL.
             if not page_ids:
+                _note("bad_response")
                 return []
             url = endpoint + "?" + urlencode({"after_id" if adapter == "anthropic" else "after": page_ids[-1]})
+        _note("bad_response")
         return []
     if provider_key not in MODEL_CATALOG and base_url and adapter not in ("ollama", "ollama_chat"):
+        _note("unsupported")
         return []  # Unsupported catalog protocol: preserve manual entry, never send its key elsewhere.
     if provider_key not in MODEL_CATALOG and adapter in MODEL_CATALOG:
-        return _cache_and_return(provider_key, fetch_live_models_sync(adapter, api_key, base_url))
+        return _cache_and_return(provider_key, fetch_live_models_sync(adapter, api_key, base_url, status=status))
 
     # ── Ollama (local daemon) ──────────────────────────────────────────────────
     if provider_key == "ollama":
         ollama_root = reachable_loopback_url(base_url or "http://localhost:11434")
         if ollama_root is None:
+            _note("offline")
             return []
         url = ollama_root.rstrip("/") + "/api/tags"
         data = _get(url, {}, timeout=1.5)
@@ -739,6 +772,8 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
                     models.append(entry)
         return _cache_and_return(provider_key, models)
 
+    needs_key = bool((MODEL_CATALOG.get(provider_key) or {}).get("requires_env"))
+    _note("no_key" if needs_key and not api_key else "unsupported")
     return _cache_and_return(provider_key, [])
 
 

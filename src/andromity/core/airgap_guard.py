@@ -87,6 +87,19 @@ def parse_allowlist(raw: Optional[str]) -> Tuple[Set[str], List, List[str]]:
     return names, networks, ignored
 
 
+def is_loopback_host(host: str) -> bool:
+    """This machine: a loopback name, *.localhost, or any loopback address (127.0.0.0/8, ::1)."""
+    host = (host or "").lower().rstrip(".")
+    if host in _LOOPBACK_NAMES or host.endswith(".localhost"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return (mapped or ip).is_loopback
+
+
 class _Policy:
     def __init__(self) -> None:
         self.names, self.networks, self.ignored = parse_allowlist(os.environ.get(ENV_ALLOW))
@@ -108,7 +121,7 @@ class _Policy:
 
     def name_allowed(self, host: str) -> bool:
         host = host.lower().rstrip(".")
-        if host in _LOOPBACK_NAMES or host.endswith(".localhost"):
+        if is_loopback_host(host):
             return True
         try:
             ipaddress.ip_address(host.split("%", 1)[0])

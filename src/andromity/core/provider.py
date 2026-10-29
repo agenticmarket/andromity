@@ -3,7 +3,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import AsyncGenerator, List, Dict, Any, Optional
+from typing import AsyncGenerator, List, Dict, Any, Iterable, Optional
 
 from andromity.config import config
 from andromity.core.debug_log import get_logger
@@ -215,6 +215,9 @@ async def stream_completion(
     reasoning_effort: Optional[str] = None,
     first_token_timeout: Optional[float] = None,
     turn_id: Optional[str] = None,
+    retry: bool = True,
+    max_tokens: Optional[int] = None,
+    least_reasoning: bool = False,
 ) -> AsyncGenerator[StreamEvent, None]:
     # Lazy-import litellm — it has a heavy import chain (~2-4s), so we defer
     # it until the first actual AI call rather than paying the cost at startup.
@@ -300,11 +303,16 @@ async def stream_completion(
         apply_reasoning_to_request, discover_model_reasoning_capability,
     )
     capability = await asyncio.to_thread(discover_model_reasoning_capability, provider_name, model)
+    if least_reasoning:
+        efforts = getattr(capability, "supported_efforts", None) or []
+        reasoning_effort = next((e for e in ("off", "none", "minimal", "low") if e in efforts), "auto")
     apply_reasoning_to_request(provider_name, model, reasoning_effort, kwargs, capability)
+    if max_tokens:
+        kwargs.setdefault("max_tokens", int(max_tokens))
 
     # Upstream retry with backoff for stalls, rate limits, and transient drops
-    STREAM_BACKOFF_DELAYS = [5.0, 10.0, 20.0]
-    total_attempts = len(STREAM_BACKOFF_DELAYS) + 1
+    backoff = list(STREAM_BACKOFF_DELAYS) if retry else []
+    total_attempts = len(backoff) + 1
 
     if first_token_timeout is None:
         first_token_timeout = (
@@ -351,12 +359,13 @@ async def stream_completion(
                 if is_daily_quota or is_auth_error or is_bad_request or gateway_model_unavailable(e) or gateway_wait_is_long(e):
                     log.info("Non-retryable provider error: %s (HTTP %s).", type(e).__name__, getattr(e, "status_code", "unknown"))
                     yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-                    yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"])
+                    yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"],
+                               error_detail=short_error_detail(e, secrets=(resolved.get("api_key"),)), error_status=http_status(e))
                     return
 
                 is_429 = has_status_code(msg, "429") or "rate limit" in msg or "ratelimit" in msg or "quota" in msg
-                if attempt < len(STREAM_BACKOFF_DELAYS):
-                    wait_s = STREAM_BACKOFF_DELAYS[attempt]
+                if attempt < len(backoff):
+                    wait_s = backoff[attempt]
                     if is_429:
                         import re
                         m = re.search(r"retry in ([\d.]+)s", msg)
@@ -374,7 +383,8 @@ async def stream_completion(
                 else:
                     log.error("Provider call failed after %d attempts: %s (HTTP %s).", total_attempts, type(e).__name__, getattr(e, "status_code", "unknown"))
                     yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-                    yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"])
+                    yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"],
+                               error_detail=short_error_detail(e, secrets=(resolved.get("api_key"),)), error_status=http_status(e))
                     return
 
             # 2. Watchdog: guard against upstream queue stall
@@ -492,8 +502,8 @@ async def stream_completion(
             )
 
             # If stalled or failed BEFORE emitting any tokens, retry with backoff ONLY for transient errors
-            if not has_emitted_content and not is_non_retryable and attempt < len(STREAM_BACKOFF_DELAYS):
-                wait_s = STREAM_BACKOFF_DELAYS[attempt]
+            if not has_emitted_content and not is_non_retryable and attempt < len(backoff):
+                wait_s = backoff[attempt]
                 log.warning(
                     "Upstream stalled or failed before emitting tokens (%s). Retrying in %.0fs (attempt %d/%d)...",
                     type(e).__name__, wait_s, attempt + 1, total_attempts
@@ -506,7 +516,9 @@ async def stream_completion(
                 yield TextDelta(text=_format_stall_text(provider_name, model, e.timeout))
             else:
                 yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-            yield Done(usage=usage, outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"])
+            yield Done(usage=usage, outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"],
+                       error_detail=None if isinstance(e, ProviderStalledError) else short_error_detail(e, secrets=(resolved.get("api_key"),)),
+                       error_status=http_status(e))
             return
 
 
@@ -557,6 +569,45 @@ def extract_clean_error_message(err_or_text: Any) -> str:
     if lines:
         return lines[0]
     return raw.strip()
+
+
+_CREDENTIAL_TEXT = re.compile(
+    r"\bbearer\s+\S+"
+    r"|\b(?:api[_-]?key|access[_-]?token|key|token|secret|password)=[^\s&\"',;]+"
+    r"|\b(?:sk|pk|rk|gsk|xai|nvapi)[-_][A-Za-z0-9_\-]{8,}"
+    r"|\bAIza[0-9A-Za-z_\-]{20,}"
+    r"|\beyJ[A-Za-z0-9_\-]{10,}(?:\.[A-Za-z0-9_\-]+){1,2}"
+    r"|\b(?=[A-Za-z_]*\d)[A-Za-z0-9_]{24,}\b"
+    r"|\*{3,}[A-Za-z0-9]{2,8}",
+    re.IGNORECASE,
+)
+# No square brackets: the terminal app reads them as markup.
+REDACTED = "•••"
+
+
+def redact_credentials(text: str, secrets: Iterable[Optional[str]] = ()) -> str:
+    """Remove the given secrets, any token that starts like one of them, and credential-like tokens."""
+    text = text or ""
+    for secret in secrets:
+        if not isinstance(secret, str) or len(secret) < 6:
+            continue
+        if len(secret) >= 8:
+            text = re.sub(re.escape(secret[:8]) + r"\S*", REDACTED, text)
+        else:
+            text = text.replace(secret, REDACTED)
+    return _CREDENTIAL_TEXT.sub(REDACTED, text)
+
+
+def short_error_detail(e: BaseException, limit: int = 160, secrets: Iterable[Optional[str]] = ()) -> str:
+    """One line of the provider's own error text, without markup or credentials. Redacts before it truncates."""
+    text = redact_credentials(" ".join(extract_clean_error_message(e).split()), secrets)
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def http_status(e: BaseException) -> Optional[int]:
+    """The HTTP status a provider answered with, when the error carries one."""
+    status = getattr(e, "status_code", None)
+    return status if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599 else None
 
 
 def gateway_error(e: Exception, *types: str) -> Optional[Dict[str, Any]]:

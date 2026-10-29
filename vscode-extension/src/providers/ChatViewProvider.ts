@@ -24,6 +24,7 @@ import { PythonBridge } from "../server/PythonBridge.js";
 import { RpcClient } from "../server/RpcClient.js";
 import { handleInputMessage } from "../server/inputBridge.js";
 import { handleInteractionMessage, reportDisconnectedAction } from "../server/interactionBridge.js";
+import { PROVIDER_ID_PATTERN, refreshProviderModels, runKeyCheck, supportsKeyTests, unverifiedNotice } from "../server/keyCheck.js";
 import { SessionHydration } from "../server/sessionHydration.js";
 import {
   allowOpenPath,
@@ -88,6 +89,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _models: ModelInfo[] = [];
   private _pinnedModels: PinnedModelInfo[] = [];
   private _providers: ProviderInfo[] = [];
+  /** The provider whose key onboarding saved last, and why it could not be verified ("" when it passed). */
+  private _onboardingCheck: { provider: string; unverified: string } | null = null;
   private _currentPlan: any = null;
   private _sessionPlans: Map<string, any> = new Map();
   private _planViewProvider: PlanViewProvider | null = null;
@@ -126,6 +129,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _ollamaBinaryPath: string | null = null;
   private _ollamaAppBinaryPath: string | null = null;
   private _ollamaInstalledCached: boolean | null = null;
+
+  /** Explains in the chat that a chosen model's provider has no API key yet. */
+  public showKeyRequiredNote(provider: Pick<ProviderInfo, "id" | "name" | "portal">): void {
+    this._postToWebview({ type: "key_required_note", provider: provider.id, name: provider.name, portal: provider.portal || "" });
+  }
+
+  /** "Connected" only for a key that passed its test; otherwise the saved-but-unverified warning. */
+  private _announceKeyResult(unverified: string, connected: string): void {
+    if (!unverified) {
+      vscode.window.showInformationMessage(connected);
+      return;
+    }
+    void Promise.resolve(vscode.window.showWarningMessage(unverified, "Open API keys")).then((choice) => {
+      if (choice) SettingsPanel.createOrShow(this._extensionUri, this._rpcClient, "keys", () => this.refreshConfig());
+    });
+  }
 
   public isViewVisible(): boolean {
     return !!(this._view && this._view.visible);
@@ -2694,6 +2713,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this._currentProvider = provider;
           }
 
+          const keyCheck = apiKey && provider !== "ollama" && typeof provider === "string" && PROVIDER_ID_PATTERN.test(provider)
+            && await supportsKeyTests(this._rpcClient)
+            ? await runKeyCheck(this._rpcClient, provider)
+            : null;
+          const unverified = unverifiedNotice(keyCheck);
+          this._onboardingCheck = provider ? { provider, unverified } : null;
+
           // Fetch real models live from the provider API using verified key
           let liveModels: ModelInfo[] = [];
           try {
@@ -2757,6 +2783,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               provider,
               models: providerModels,
               defaultModel: modelId || providerModels[0].id,
+              unverified: unverified || undefined,
             });
           } else {
             if (modelId) {
@@ -2773,15 +2800,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               session_id: this._currentSessionId,
             }).catch(() => {});
 
-            vscode.window.showInformationMessage(
-              `Connected to ${provider || "AI Provider"}! You're ready to code.`
-            );
+            this._announceKeyResult(unverified, `Connected to ${provider || "AI Provider"}! You're ready to code.`);
 
             await this._loadInitialConfig(false);
             this._postToWebview({
               type: "key_configured_success",
               provider,
               model: this._currentModel,
+              unverified: unverified || undefined,
             });
           }
         } catch (err: any) {
@@ -2898,6 +2924,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "finish_onboarding_model": {
+        const check = this._onboardingCheck;
+        const unverified = check && check.provider === message.provider ? check.unverified : "";
         try {
           const provider = message.provider;
           const modelId = message.modelId;
@@ -2916,8 +2944,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             session_id: this._currentSessionId,
           }).catch(() => {});
 
-          vscode.window.showInformationMessage(
-            `Connected to ${provider || "AI Provider"}! Using model ${modelId || "ready"}.`
+          this._announceKeyResult(
+            unverified && (modelId ? `${unverified}. Using model ${modelId}.` : unverified),
+            `Connected to ${provider || "AI Provider"}! Using model ${modelId || "ready"}.`,
           );
 
           await this._loadInitialConfig(false);
@@ -2925,6 +2954,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             type: "key_configured_success",
             provider,
             model: this._currentModel,
+            unverified: unverified || undefined,
           });
         } catch (err: any) {
           vscode.window.showErrorMessage(`Failed to configure model: ${err.message}`);
@@ -2932,8 +2962,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             type: "key_configured_success",
             provider: message.provider,
             model: this._currentModel,
+            unverified: unverified || undefined,
           });
         }
+        break;
+      }
+
+      case "refresh_provider_models": {
+        const provider = typeof message.provider === "string" ? message.provider : "";
+        if (!PROVIDER_ID_PATTERN.test(provider)) break;
+        const refreshed = await refreshProviderModels(this._rpcClient, provider);
+        if (refreshed.models) {
+          this._models = this._models.filter((m) => m.provider !== provider).concat(refreshed.models);
+        }
+        this._postToWebview({ type: "provider_models_refreshed", ...refreshed });
         break;
       }
 

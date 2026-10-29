@@ -9,6 +9,7 @@ import * as path from "path";
 import { RpcClient } from "../server/RpcClient.js";
 import { handleInputMessage } from "../server/inputBridge.js";
 import { handleInteractionMessage, reportDisconnectedAction } from "../server/interactionBridge.js";
+import { PROVIDER_ID_PATTERN, refreshProviderModels, runKeyCheck, supportsKeyTests, unverifiedNotice } from "../server/keyCheck.js";
 import { SessionHydration } from "../server/sessionHydration.js";
 import { ChatViewProvider } from "../providers/ChatViewProvider.js";
 import { ModelInfo, ProviderInfo, SessionInfo } from "../server/types.js";
@@ -619,6 +620,10 @@ export class SessionTabPanel {
         try {
           if (!message.provider) throw new Error("Missing provider");
           if (message.apiKey) await this._rpcClient.call("config.set_api_key", { provider: message.provider, api_key: message.apiKey });
+          const keyCheck = message.apiKey && message.provider !== "ollama" && typeof message.provider === "string" && PROVIDER_ID_PATTERN.test(message.provider)
+            && await supportsKeyTests(this._rpcClient)
+            ? await runKeyCheck(this._rpcClient, message.provider)
+            : null;
           const models = await this._rpcClient.call<ModelInfo[]>("config.refresh_models", { provider: message.provider }, 6000)
             .catch(() => this._rpcClient!.call<ModelInfo[]>("config.list_models", { provider: message.provider }));
           if (!models.length) {
@@ -626,7 +631,7 @@ export class SessionTabPanel {
             break;
           }
           this._postMessage({ type: "key_configured_select_model", provider: message.provider, models,
-            defaultModel: message.modelId || models[0].id });
+            defaultModel: message.modelId || models[0].id, unverified: unverifiedNotice(keyCheck) || undefined });
         } catch {
           this._postMessage({ type: "key_configure_failed", error: "Could not configure this provider. Check the connection in Settings." });
         }
@@ -635,6 +640,12 @@ export class SessionTabPanel {
       case "activate_andromity_free": {
         await this._handleMessage({ type: "update_config", key: "model", value: "auto", provider: "andromity" });
         this._postMessage({ type: "key_configured_success", provider: "andromity", model: "auto" });
+        break;
+      }
+      case "refresh_provider_models": {
+        const provider = typeof message.provider === "string" ? message.provider : "";
+        if (!PROVIDER_ID_PATTERN.test(provider)) break;
+        this._postMessage({ type: "provider_models_refreshed", ...(await refreshProviderModels(this._rpcClient, provider)) });
         break;
       }
       case "start_ollama_server": {
