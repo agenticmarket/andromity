@@ -22,7 +22,7 @@ from andromity.core.session import Session, skipped_image_count
 TEXT_ONLY = {"provider": "deepseek", "model": "deepseek-chat"}
 VISION = {"provider": "openai", "model": "gpt-4o"}
 PLACEHOLDER = "Please inspect attached image"
-NOTE = "could not be shown because this model does not accept images"
+NOTE = "not sent to the assistant, so you cannot see"
 
 
 def _png(colour=(40, 90, 200)) -> str:
@@ -103,7 +103,7 @@ async def test_text_with_one_image_reaches_the_model_without_it_and_with_a_note(
     assert len(requests) == 1
     [user] = _users(requests[0])
     assert isinstance(user["content"], str), "no image parts reach a model that can't read them"
-    assert user["content"].startswith("why is this button red?\n\n[The user attached 1 image that " + NOTE)
+    assert user["content"].startswith("why is this button red?\n\n[The user attached 1 image that was " + NOTE + " it.")
     assert user["content"].endswith("If the request depends on it, say so instead of guessing.]")
     dumped = json.dumps(requests[0])
     assert "image_url" not in dumped and "data:image" not in dumped
@@ -130,7 +130,7 @@ async def test_note_counts_several_images(session, monkeypatch):
     agent = Agent(session, auto_approve=True, **TEXT_ONLY)
     [e async for e in agent.run("compare these", image_uris=[IMAGE, _png((1, 2, 3)), _png((9, 9, 9))])]
     content = _users(requests[0])[-1]["content"]
-    assert "[The user attached 3 images that " + NOTE in content
+    assert "[The user attached 3 images that were " + NOTE + " them." in content
     assert "If the request depends on them, say so" in content
     assert _users(session.messages)[-1]["images_skipped"] == 3
 
@@ -175,7 +175,7 @@ async def test_reloaded_session_keeps_the_count_and_a_new_agent_still_tells_the_
     assert stored["images_skipped"] == 2 and stored["content"] == "look at these two"
     sent = Agent(reloaded, auto_approve=True, **TEXT_ONLY)._messages_for_api()
     content = _users(sent)[-1]["content"]
-    assert content.startswith("look at these two") and "attached 2 images that " + NOTE in content
+    assert content.startswith("look at these two") and "attached 2 images that were " + NOTE in content
     assert not any("images_skipped" in m for m in sent)
 
 
@@ -241,7 +241,7 @@ async def test_a_message_of_only_images_is_not_sent_and_adds_no_turn(session, mo
     assert events == [ImagesSkipped(1, prompt_added=False), Done(outcome="success")]
     assert telemetry["features"] == ["image_skipped_no_vision"]
     assert not any(end.get("had_error") for end in telemetry["session_end"])
-    assert ("task_finished", "completed") in telemetry["tasks"]
+    assert telemetry["tasks"] == [], "no task starts for a message that is not sent"
 
 
 @pytest.mark.asyncio
@@ -286,7 +286,7 @@ async def test_steering_text_with_images_is_applied_with_the_note(session, monke
 
     assert len(requests) == 2
     last = _users(requests[1])[-1]["content"]
-    assert isinstance(last, str) and last.startswith("also check the footer") and "attached 2 images that " + NOTE in last
+    assert isinstance(last, str) and last.startswith("also check the footer") and "attached 2 images that were " + NOTE in last
     assert "image_url" not in json.dumps(requests[1])
     applied = [e for e in events if isinstance(e, InputApplied)]
     skipped = [e for e in events if isinstance(e, ImagesSkipped)]
@@ -574,7 +574,7 @@ async def test_engine_retry_without_images_refuses_a_message_of_only_images(proj
     _model(monkeypatch)
     engine = Engine(project)
     await engine.submit("r1", prompt=PLACEHOLDER, image_uris=[IMAGE], image_only=True)
-    with pytest.raises(ValueError, match="only contains an image"):
+    with pytest.raises(ValueError, match="This request is no longer available"):
         await engine.handler.rpc_agent_retry({"session_id": engine.session.id, "project_path": str(project), "strip_images": True})
 
 
