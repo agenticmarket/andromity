@@ -1124,7 +1124,7 @@ class JsonRpcHandler:
             return unavailable
         session = self._active_sessions.get(session_id) or self._cron_live_sessions.get(session_id)
         if session is None:
-            session = Session.load_by_id(session_id, params.get("project_path"))
+            session = await asyncio.to_thread(Session.load_by_id, session_id, params.get("project_path"))
         if session is None or not _refers_to_image(session, name):
             return unavailable
         uri = await asyncio.to_thread(stored_image_uri, getattr(session, "storage_dir", None), name)

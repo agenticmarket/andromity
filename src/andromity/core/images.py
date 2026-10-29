@@ -30,6 +30,8 @@ STORED_IMAGE_NAME = re.compile(r"[0-9a-f]{16}\.jpg")
 MAX_STORED_IMAGE_BYTES = 8 * 1024 * 1024
 _MAX_BASE64_CHARS = (MAX_STORED_IMAGE_BYTES + 2) // 3 * 4
 _MAX_OPEN_PIXELS = (2 * MAX_DIMENSION) ** 2
+# Total size of the images one restored prompt carries at full size; the rest come back as thumbnails.
+MAX_RESTORED_URI_CHARS = 16 * 1024 * 1024
 
 
 def load_image_file(path) -> "object":
@@ -169,7 +171,7 @@ def store_prompt_image(image_data: str, storage_dir: Optional[Any] = None,
     if not isinstance(image_data, str) or not image_data.startswith("data:"):
         return image_data, None
     try:
-        raw_bytes = base64.b64decode(image_data.split(",", 1)[1], validate=True)
+        raw_bytes = base64.b64decode("".join(image_data.split(",", 1)[1].split()), validate=True)
     except (IndexError, binascii.Error, ValueError):
         return image_data, None
     if not raw_bytes:
@@ -265,17 +267,20 @@ def checked_image_uri(uri: Any) -> Optional[str]:
 
 def prompt_images(message: Dict[str, Any], storage_dir: Optional[Any]) -> List[str]:
     """A sent prompt's images as data URIs, at most MAX_IMAGES: each full-size file the prompt refers to while it is
-    still in the session's image store, otherwise the thumbnail kept with the prompt."""
+    still in the session's image store and fits within MAX_RESTORED_URI_CHARS in all, otherwise the thumbnail kept
+    with the prompt."""
     thumbs = message.get("images")
     files = message.get("image_files")
     thumbs = thumbs if isinstance(thumbs, list) else []
     files = files if isinstance(files, list) else []
     found = []
+    budget = MAX_RESTORED_URI_CHARS
     for index in range(min(max(len(thumbs), len(files)), MAX_IMAGES)):
-        uri = (stored_image_uri(storage_dir, files[index] if index < len(files) else None)
-               or checked_image_uri(thumbs[index] if index < len(thumbs) else None))
+        full = stored_image_uri(storage_dir, files[index] if index < len(files) else None)
+        uri = (full if full and len(full) <= budget else None) or checked_image_uri(thumbs[index] if index < len(thumbs) else None)
         if uri:
             found.append(uri)
+            budget = max(0, budget - len(uri))
     return found
 
 
