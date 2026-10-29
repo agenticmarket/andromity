@@ -26,6 +26,7 @@ import { BackgroundTaskPanel } from "./BackgroundTaskPanel.js";
 import { wakeSessionForQuestion } from "../collabActions.js";
 import { recordNextStepEvent } from "../nextSteps.js";
 import { handleFeedbackMessage } from "../engagement/feedbackWebview.js";
+import { WAITLIST_MESSAGES } from "../engagement/waitlistController.js";
 import { checkSessionForNavigation } from "../sessionNavigation.js";
 import { confirmAndOpenLink } from "../linkOpener.js";
 
@@ -585,6 +586,11 @@ export class SessionTabPanel {
       return;
     }
 
+    if (WAITLIST_MESSAGES.has(message.type)) {
+      await this._viewProvider?.waitlist?.handleMessage(message, (reply) => this._postMessage(reply));
+      return;
+    }
+
     if (!this._rpcClient) {
       reportDisconnectedAction(message, this._sessionId, event => this._postMessage(event));
       vscode.window.showErrorMessage("Andromity daemon is not connected.");
@@ -651,12 +657,6 @@ export class SessionTabPanel {
       case "feedback_issue": {
         const reply = await handleFeedbackMessage(message, this._context);
         if (reply) this._postMessage(reply);
-        break;
-      }
-      case "waitlist_offer_shown":
-      case "waitlist_open":
-      case "waitlist_join": {
-        await this._viewProvider.waitlist?.handleMessage(message, (reply) => this._postMessage(reply));
         break;
       }
       case "open_external":

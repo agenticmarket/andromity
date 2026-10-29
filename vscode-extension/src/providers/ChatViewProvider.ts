@@ -53,7 +53,7 @@ import { recordNextStepEvent } from "../nextSteps.js";
 import { handleFeedbackMessage } from "../engagement/feedbackWebview.js";
 import { ANNOYANCES } from "../engagement/checkIn.js";
 import type { FeedbackNotifications } from "../engagement/feedbackNotifications.js";
-import type { WaitlistController } from "../engagement/waitlistController.js";
+import { WAITLIST_MESSAGES, type WaitlistController } from "../engagement/waitlistController.js";
 import { checkSessionForNavigation } from "../sessionNavigation.js";
 import { confirmAndOpenLink } from "../linkOpener.js";
 
@@ -2447,6 +2447,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    if (WAITLIST_MESSAGES.has(message.type)) {
+      await this._waitlist?.handleMessage(message, (reply) => this._postToWebview(reply));
+      return;
+    }
+
     if (!this._rpcClient && this._pythonBridge) {
       const client = await this._pythonBridge.waitForClient(3000);
       if (client) {
@@ -2654,13 +2659,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "checkin_review": {
         await this._checkIn?.reviewFromCheckIn();
-        break;
-      }
-
-      case "waitlist_offer_shown":
-      case "waitlist_open":
-      case "waitlist_join": {
-        await this._waitlist?.handleMessage(message, (reply) => this._postToWebview(reply));
         break;
       }
 

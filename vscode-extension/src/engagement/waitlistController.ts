@@ -6,6 +6,9 @@ import { WAITLIST_HEARD_FROM, WAITLIST_WANTS, cleanWaitlistAnswer, submitWaitlis
 
 const JOINED_KEY = "andromity.waitlistJoined";
 
+/** Chat page messages the waitlist handles. None of them needs the engine. */
+export const WAITLIST_MESSAGES: ReadonlySet<unknown> = new Set(["waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
+
 export interface WaitlistChoice {
   id: string;
   label: string;
