@@ -1,4 +1,5 @@
 """Text a session hands to a session started from it."""
+import re
 from typing import Any, Dict
 
 
@@ -20,6 +21,16 @@ def without_session_context(text: str) -> str:
     text = text or ""
     cuts = [i for i in (text.find(m) for m in SESSION_CONTEXT_MARKERS) if i >= 0]
     return text[:min(cuts)].rstrip() if cuts else text
+
+
+_MAILBOX_NOTICE = re.compile(r"\n\n\[Co-Agent Mailbox: (?:Pending questions: |\d+ unread message)")
+
+
+def prompt_as_written(text: str) -> str:
+    """A sent prompt without the session context and the co-agent mailbox notice added to it for the model."""
+    text = without_session_context(text)
+    notices = list(_MAILBOX_NOTICE.finditer(text))
+    return text[:notices[-1].start()] if notices and text.endswith("]") else text
 
 
 def shorten(text: str, limit: int) -> str:

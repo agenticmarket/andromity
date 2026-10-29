@@ -100,6 +100,20 @@ export function getPromptStyles(): string {
       border-color: transparent;
     }
     .prompt-edit-send:hover { background: var(--vscode-button-hoverBackground, #026ec1); }
+    .prompt-edit-images { padding: 2px 0 0 0; }
+
+    .undo-note-action {
+      margin-left: 8px;
+      padding: 1px 8px;
+      font: inherit;
+      font-size: 11px;
+      color: var(--vscode-textLink-foreground, var(--accent));
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .undo-note-action:hover { color: var(--fg); background: rgba(var(--tint), 0.06); }
 
     .message.user.prompt-card {
       background: var(--card-bg, #18181b);
@@ -206,6 +220,11 @@ export function getPromptStyles(): string {
     .prompt-image-thumb:hover {
       transform: scale(1.02);
       border-color: var(--accent);
+    }
+
+    .prompt-image-thumb:focus-visible {
+      outline: 2px solid var(--vscode-focusBorder, var(--accent));
+      outline-offset: -2px;
     }
 
     /* Prompt Text & Expand / Collapse Clamping */

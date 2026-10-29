@@ -268,7 +268,8 @@ class Session:
                     images: Optional[List[str]] = None,
                     duration: Optional[float] = None,
                     turn_id: Optional[str] = None, steering: bool = False,
-                    model: Optional[str] = None):
+                    model: Optional[str] = None,
+                    image_files: Optional[List[Optional[str]]] = None):
         msg: Dict[str, Any] = {"role": role, "ts": datetime.now(timezone.utc).isoformat()}
         if role == "tool":
             # Tool messages MUST always have a non-empty content string for LLM providers
@@ -287,6 +288,8 @@ class Session:
             msg["tool_call_id"] = tool_call_id
         if images is not None:
             msg["images"] = images
+        if image_files is not None:
+            msg["image_files"] = image_files
         if duration is not None:
             msg["duration"] = duration
         if turn_id is not None:
@@ -587,6 +590,7 @@ class Session:
                         m.get("duration"),
                         m.get("turn_id"),
                         int(bool(m.get("steering"))),
+                        j(m["image_files"]) if "image_files" in m else None,
                     )
                     for seq, m in enumerate(self.messages)
                 ]
@@ -597,8 +601,8 @@ class Session:
                     conn.executemany("""
                         INSERT OR REPLACE INTO session_messages (
                             session_id, seq, role, content, tool_calls,
-                            thinking, name, tool_call_id, ts, images, duration, turn_id, steering
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            thinking, name, tool_call_id, ts, images, duration, turn_id, steering, image_files
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, rows_to_insert)
             self._persisted = True
             self._message_digests = digests
@@ -721,6 +725,8 @@ class Session:
                 m["tool_call_id"] = mr["tool_call_id"]
             if "images" in mr_keys and mr["images"]:
                 m["images"] = uj(mr["images"], [])
+            if "image_files" in mr_keys and mr["image_files"]:
+                m["image_files"] = uj(mr["image_files"], [])
             if "duration" in mr_keys and mr["duration"] is not None:
                 m["duration"] = mr["duration"]
             if "turn_id" in mr_keys and mr["turn_id"]:

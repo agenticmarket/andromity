@@ -1069,6 +1069,14 @@ InputBar {
         self._attachments.clear()
         self._update_attachment_bar()
 
+    def restore_prompt(self, text: str, images: list) -> None:
+        """Replace the input and its attachments with a prompt put back after an undo."""
+        ta = self.query_one("#input-field", ChatInput)
+        ta.text = text
+        ta.move_cursor(ta.document.end)
+        self._attachments = list(images)[:MAX_IMAGES]
+        self._update_attachment_bar()
+
     def _update_attachment_bar(self):
         try:
             bar = self.query_one("#attachment-bar", AttachmentBar)

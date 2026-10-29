@@ -13,6 +13,7 @@ import { DiffManager } from "../integrations/DiffManager.js";
 import { EditorBridge } from "../integrations/EditorBridge.js";
 import { runCodeBlockInTerminal } from "../integrations/TerminalRunner.js";
 import { confirmRewindAndResend, resendPromptOf } from "../integrations/rewind.js";
+import { handlePromptImageMessage, undonePromptOf } from "../integrations/promptImages.js";
 import { SettingsPanel } from "../panels/SettingsPanel.js";
 import { SessionTabPanel } from "../panels/SessionTabPanel.js";
 import { WaterfallPanel } from "../panels/WaterfallPanel.js";
@@ -37,6 +38,7 @@ import {
   PinnedModelInfo,
   ProviderInfo,
   SessionInfo,
+  SessionUndoResult,
   SubAgentEvent,
   ToolApprovalEvent,
 } from "../server/types.js";
@@ -115,8 +117,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _latestTurnFiles: Set<string> = new Set<string>();
   private _hydration = new SessionHydration();
 
-  public async undoSession(sessionId: string, turnIndex?: number, turnsToUndo?: number): Promise<boolean> {
-    return this._diffManager ? this._diffManager.undoLastTurn(sessionId, turnIndex, turnsToUndo) : false;
+  public async undoSession(sessionId: string, turnIndex?: number, turnsToUndo?: number): Promise<SessionUndoResult | undefined> {
+    return this._diffManager ? this._diffManager.undoLastTurn(sessionId, turnIndex, turnsToUndo) : undefined;
   }
   private _configData: any = null;
   private _lastOllamaStatus: OllamaStatus | null = null;
@@ -777,15 +779,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Wired to the "Andromity: Undo Last Turn & Rollback Diff" command. */
   public async requestUndoTurn() {
     if (this._diffManager) {
-      await this._diffManager.undoLastTurn(this._currentSessionId);
+      const undone = await this._diffManager.undoLastTurn(this._currentSessionId);
       await this._loadSession(this._currentSessionId);
+      if (undone?.turns_undone) {
+        this._postToWebview({ type: "turn_undone", turnsUndone: undone.turns_undone, undonePrompt: undonePromptOf(undone) });
+      }
       try {
         vscode.commands.executeCommand("git.refresh");
         vscode.commands.executeCommand("andromity.refreshChanges");
       } catch {}
     } else if (this._rpcClient) {
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      const res = await this._rpcClient.call<any>("session.undo", {
+      const res = await this._rpcClient.call<SessionUndoResult>("session.undo", {
         session_id: this._currentSessionId,
         project_path: workspaceFolder,
       });
@@ -796,6 +801,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         } catch {}
         vscode.window.showInformationMessage(`Turn undone successfully. (${res.popped_messages || 0} messages removed.)`);
         await this._loadSession(this._currentSessionId);
+        if (res.turns_undone) {
+          this._postToWebview({ type: "turn_undone", turnsUndone: res.turns_undone, undonePrompt: undonePromptOf(res) });
+        }
       }
     }
   }
@@ -2466,6 +2474,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }, this._currentMode)) return;
 
     if (await handleInteractionMessage(this._rpcClient, message, this._currentSessionId, (event) => this._postToWebview(event))) return;
+    if (await handlePromptImageMessage(this._rpcClient, message, this._currentSessionId, (event) => this._postToWebview(event))) return;
 
     switch (message.type) {
 
@@ -3483,7 +3492,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (undone) {
             recordFeatureUse("turn_undone", { sessionId: this._currentSessionId });
             await this._loadSession(this._currentSessionId);
-            this._postToWebview({ type: "turn_undone", turnsUndone: turnsToUndo, targetTurnIndex: turnIndex, resendPrompt });
+            this._postToWebview({ type: "turn_undone", turnsUndone: turnsToUndo, targetTurnIndex: turnIndex, resendPrompt,
+              undonePrompt: undonePromptOf(undone) });
             try {
               vscode.commands.executeCommand("git.refresh");
               vscode.commands.executeCommand("andromity.refreshChanges");
@@ -3491,7 +3501,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
         } else if (this._rpcClient) {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-          const res = await this._rpcClient.call<any>("session.undo", {
+          const res = await this._rpcClient.call<SessionUndoResult>("session.undo", {
             session_id: this._currentSessionId,
             project_path: workspaceFolder,
             turn_index: turnIndex,
@@ -3506,7 +3516,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             const countMsg = (res.turns_undone && res.turns_undone > 1) ? `${res.turns_undone} turns undone` : "Turn undone";
             vscode.window.showInformationMessage(`${countMsg} successfully. (${res.popped_messages || 0} messages removed.)`);
             await this._loadSession(this._currentSessionId);
-            this._postToWebview({ type: "turn_undone", turnsUndone: res.turns_undone, targetTurnIndex: res.target_turn_index, resendPrompt });
+            this._postToWebview({ type: "turn_undone", turnsUndone: res.turns_undone, targetTurnIndex: res.target_turn_index, resendPrompt,
+              undonePrompt: undonePromptOf(res) });
           }
         }
         break;

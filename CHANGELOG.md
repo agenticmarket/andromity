@@ -4,7 +4,12 @@ All notable changes to Andromity are tracked here. We follow semantic versioning
 
 ## [Unreleased]
 
+### Added
+- **Step through a prompt's images (VS Code).** Clicking an image in a sent prompt or in the input box opens it full size with previous and next buttons, the left and right arrow keys and a "2 of 4" counter. Esc closes it.
+
 ### Fixed
+- **Undo puts your prompt back.** In VS Code, Undo to here now puts the undone prompt back in the input box with its attached files and images, and the terminal app now restores the images as well as the text. A draft already in the input is never replaced: the undo note offers **Put the prompt back** instead. Images come back full size while the session still has them; chats saved before this version get the smaller preview kept with the prompt.
+- **Edit and resend keeps images (VS Code).** The editor shows the message's images, each one removable, and sends the ones you keep with the edited text.
 - **Undo after a long conversation.** Once a conversation had been compacted, undoing one turn could revert the files of many earlier turns, not just that one. Undo now finds each turn by where it starts in the conversation as it is now, undoes exactly the turns asked for, and says plainly when a turn was summarized and can no longer be undone. A message sent while a turn was running no longer counts as a turn of its own. The turn during which a conversation compacts itself can be undone too; before, its files were left as they were. This applies to VS Code and the terminal app. In the terminal app, a turn that stopped before it started (for example, an image sent to a model that can't read images) no longer gets in the way of undoing earlier turns.
 - **Pasted images when a conversation compacts.** If a long conversation compacted itself on the turn you sent an image, the model got your message without the image. It now gets the image too, in VS Code and the terminal app.
 
