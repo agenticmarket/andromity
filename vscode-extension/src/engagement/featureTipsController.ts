@@ -37,11 +37,13 @@ export class FeatureTipsController implements vscode.Disposable {
   async onTurnFinished(facts: TurnFacts): Promise<FeatureTipId | null> {
     const today = localDay(new Date());
     const result: { tip: FeatureTipId | null } = { tip: null };
-    await this._update((state) => {
+    const saved = await this._update((state) => {
       const next = recordTurn(state, facts.sessionId, today);
       result.tip = this.enabled() ? pickTip(next, facts, today) : null;
       return result.tip ? markTipShown(next, result.tip, today) : next;
     });
+    // A tip whose showing couldn't be saved would repeat after every turn.
+    if (!saved) return null;
     if (result.tip) recordFeatureUse(`tip_shown_${result.tip}`, { sessionId: facts.sessionId });
     return result.tip;
   }
@@ -65,11 +67,13 @@ export class FeatureTipsController implements vscode.Disposable {
     this._unsubscribe();
   }
 
-  private _update(change: (state: FeatureTipsState) => FeatureTipsState): Promise<void> {
-    this._writes = this._writes.then(async () => {
+  private _update(change: (state: FeatureTipsState) => FeatureTipsState): Promise<boolean> {
+    const write = this._writes.then(async () => {
       const next = change(normalizeFeatureTipsState(this._memento.get(STATE_KEY)));
       await this._memento.update(STATE_KEY, next);
-    }).catch(() => {});
-    return this._writes;
+      return true;
+    }).catch(() => false);
+    this._writes = write.then(() => undefined);
+    return write;
   }
 }

@@ -56,6 +56,8 @@ import type { FeedbackNotifications } from "../engagement/feedbackNotifications.
 import { checkSessionForNavigation } from "../sessionNavigation.js";
 import { confirmAndOpenLink } from "../linkOpener.js";
 
+let chatViewOpenRecorded = false;
+
 export interface OllamaStatus {
   running: boolean;
   installed: boolean;
@@ -434,6 +436,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this._bindRpcEvents();
     this._postToWebview({ type: "backend_ready" });
+    this._recordChatViewOpened();
     void this._loadStartupState();
   }
 
@@ -493,6 +496,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const waiters = this._webviewReadyWaiters;
     this._webviewReadyWaiters = [];
     for (const waiter of waiters) waiter();
+  }
+
+  /** Once per window, as soon as the chat has been shown and the engine is connected. */
+  private _recordChatViewOpened() {
+    if (chatViewOpenRecorded || !this._webviewReady || !this._rpcClient) return;
+    chatViewOpenRecorded = true;
+    recordFeatureUse("chat_view_opened", { client: this._rpcClient });
   }
 
   private _disposeRpcEvents() {
@@ -2330,7 +2340,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       if (this._rpcClient) {
         this._postToWebview({ type: "backend_ready" });
-        recordFeatureUse("chat_view_opened", { oncePerSession: true, client: this._rpcClient });
+        this._recordChatViewOpened();
         if (!this._isStartupStateDelivered()) await this._loadStartupState();
       }
       return;
