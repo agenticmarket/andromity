@@ -8,7 +8,8 @@ export const HEARD_FROM = ['marketplace', 'search', 'friend', 'reddit', 'x', 'yo
 export const MAX_WANTS_NOTE = 300;
 export const MAX_HEARD_NOTE = 200;
 const NOT_READY = 'Waitlist is not available yet';
-const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
+/** Bounded so a scan stays linear: an address part is never longer than the RFC 5321 limits. */
+const EMAIL_PATTERN = /[\p{L}\p{N}._%+-]{1,64}@(?:[\p{L}\p{N}-]{1,63}\.){1,8}\p{L}{2,24}/gu;
 const MISSING_TABLE = /no such table/i;
 const ENTRY_COLUMNS = 'id, wants, wants_note, heard_from, heard_note, client, os, version, country, created_at';
 
@@ -24,8 +25,9 @@ function isMissingTable(err) {
 function optionalNote(value, name, max) {
   if (value === undefined || value === null) return { note: null };
   if (typeof value !== 'string') return { error: `${name} must be a string` };
-  const note = cleanText(value).replace(EMAIL_PATTERN, '[email removed]');
-  if (note.length > max) return { error: `${name} is longer than ${max} characters` };
+  const typed = value.replace(/\r\n?/g, '\n').trim();
+  if (typed.length > max) return { error: `${name} is longer than ${max} characters` };
+  const note = cleanText(typed).replace(EMAIL_PATTERN, '[email removed]');
   return { note: note || null };
 }
 
@@ -74,12 +76,17 @@ async function readBody(request) {
   }
 }
 
+/** Wrangler passes `WAITLIST_OPEN = false` from wrangler.toml as a boolean, and a secret or dashboard value as a string. */
+function isClosed(setting) {
+  return setting === false || (typeof setting === 'string' && setting.trim().toLowerCase() === 'false');
+}
+
 function isJson(request) {
   return (request.headers.get('content-type') || '').split(';')[0].trim().toLowerCase() === 'application/json';
 }
 
 async function submit(request, env, headers) {
-  if (env.WAITLIST_OPEN === 'false') return json({ error: 'The waitlist is closed' }, 503, headers);
+  if (isClosed(env.WAITLIST_OPEN)) return json({ error: 'The waitlist is closed' }, 503, headers);
   if (!isJson(request)) return json({ error: 'Content-Type must be application/json' }, 415, headers);
   if (env.WAITLIST_RATE_LIMITER) {
     const { success } = await env.WAITLIST_RATE_LIMITER.limit({ key: request.headers.get('CF-Connecting-IP') ?? 'unknown' });

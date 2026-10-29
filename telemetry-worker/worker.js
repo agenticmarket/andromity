@@ -33,7 +33,7 @@ export default {
         return new Response(JSON.stringify({ error: 'Too Many Requests' }), {
           status: 429,
           headers: {
-            ...securityHeaders,
+            ...(new URL(request.url).pathname === '/waitlist' ? withoutCors(securityHeaders) : securityHeaders),
             'Content-Type': 'application/json',
             'Retry-After': '60',
           },

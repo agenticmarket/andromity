@@ -351,7 +351,7 @@ async def stream_completion(
                 if is_daily_quota or is_auth_error or is_bad_request or gateway_model_unavailable(e) or gateway_wait_is_long(e):
                     log.info("Non-retryable provider error: %s (HTTP %s).", type(e).__name__, getattr(e, "status_code", "unknown"))
                     yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-                    yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"])
+                    yield _error_done(e, provider_name, model, has_images)
                     return
 
                 is_429 = has_status_code(msg, "429") or "rate limit" in msg or "ratelimit" in msg or "quota" in msg
@@ -374,7 +374,7 @@ async def stream_completion(
                 else:
                     log.error("Provider call failed after %d attempts: %s (HTTP %s).", total_attempts, type(e).__name__, getattr(e, "status_code", "unknown"))
                     yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-                    yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"])
+                    yield _error_done(e, provider_name, model, has_images)
                     return
 
             # 2. Watchdog: guard against upstream queue stall
@@ -506,7 +506,7 @@ async def stream_completion(
                 yield TextDelta(text=_format_stall_text(provider_name, model, e.timeout))
             else:
                 yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-            yield Done(usage=usage, outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"])
+            yield _error_done(e, provider_name, model, has_images, usage)
             return
 
 
@@ -587,6 +587,11 @@ def gateway_error(e: Exception, *types: str) -> Optional[Dict[str, Any]]:
     if headers.get("retry-after", "").strip().isdigit():
         error["retry_after"] = int(headers["retry-after"].strip())
     return error
+
+
+def _error_done(e: Exception, provider: str, model: str, has_images: bool, usage: Optional[Dict[str, int]] = None) -> Done:
+    info = classify_error_info(e, provider=provider, model=model, has_images=has_images)
+    return Done(usage=usage, outcome="error", error_type=info["type"], error_action=info["action"] or None)
 
 
 def gateway_model_unavailable(e: Exception) -> Optional[Dict[str, Any]]:

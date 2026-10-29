@@ -39,6 +39,8 @@ class Done(StreamEvent):
     usage: Optional[Dict[str, int]] = None
     outcome: str = "success"
     error_type: Optional[str] = None
+    # An action the gateway suggests for the error, passed through unchanged.
+    error_action: Optional[str] = None
 
 
 @dataclass

@@ -269,7 +269,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let waitlistJoined = false;
     let waitlistOffered = false;
     let waitlistOfferNoted = false;
-    let waitlistGatewayOfferNoted = false;
     let waitlistForm = null;
     const btnOnboardingInstantStart = document.getElementById('btn-onboarding-instant-start');
     const btnOnboardingGithubLogin = document.getElementById('btn-onboarding-github-login');
@@ -8259,13 +8258,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (waitlistOffered && onboardingSection && onboardingSection.style.display === 'flex') noteWaitlistOffer();
     }
 
-    /** Tells the host the gateway offered the waitlist, so the Andromity cards may offer it too. */
-    function noteGatewayWaitlistOffer() {
-      if (waitlistGatewayOfferNoted || waitlistOffered) return;
-      waitlistGatewayOfferNoted = true;
-      vscode.postMessage({ type: 'waitlist_offered' });
-    }
-
     function noteWaitlistOffer() {
       if (waitlistOfferNoted || waitlistJoined) return;
       waitlistOfferNoted = true;
@@ -11416,7 +11408,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       });
       if (errorType === 'quota_exceeded' && source.getAttribute('data-error-action') === 'join_waitlist') {
         actionsHtml += waitlistOfferButton();
-        noteGatewayWaitlistOffer();
         noteWaitlistOffer();
       }
       const detailsNode = source.querySelector('.error-details .error-code');

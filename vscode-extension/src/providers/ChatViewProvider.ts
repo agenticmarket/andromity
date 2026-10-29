@@ -1640,6 +1640,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     bind("agent/done", (params: any) => {
       const sid = params?.session_id || this._currentSessionId;
+      if (params?.error_action === "join_waitlist") void this._waitlist?.markOffered();
       this._noteWhileAway("reply", params);
       this._refreshSidePanel(["changes"]);
       if (sid) {

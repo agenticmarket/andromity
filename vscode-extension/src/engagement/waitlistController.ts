@@ -9,7 +9,7 @@ const JOINED_KEY = "andromity.waitlistJoined";
 const OFFERED_KEY = "andromity.waitlistOffered";
 
 /** Chat page messages the waitlist handles. None of them needs the engine. */
-export const WAITLIST_MESSAGES: ReadonlySet<unknown> = new Set(["waitlist_offered", "waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
+export const WAITLIST_MESSAGES: ReadonlySet<unknown> = new Set(["waitlist_offer_shown", "waitlist_open", "waitlist_join"]);
 
 export interface WaitlistChoice {
   id: string;
@@ -63,6 +63,7 @@ export class WaitlistController {
     return { dispose: () => this._listeners.delete(listener) };
   }
 
+  /** Only the engine's own turn result may call this; rendered chat text can imitate an error card. */
   async markOffered(): Promise<void> {
     if (this.offered()) return;
     try {
@@ -79,9 +80,7 @@ export class WaitlistController {
 
   /** Handles the waitlist messages of a chat page. Returns false for any other message. */
   async handleMessage(message: { type?: unknown }, post: (reply: WaitlistPageMessage) => void): Promise<boolean> {
-    if (message.type === "waitlist_offered") {
-      await this.markOffered();
-    } else if (message.type === "waitlist_offer_shown") {
+    if (message.type === "waitlist_offer_shown") {
       this.offerShown();
     } else if (message.type === "waitlist_open") {
       this._openForm(post);

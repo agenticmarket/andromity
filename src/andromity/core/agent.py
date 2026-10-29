@@ -588,6 +588,7 @@ class Agent:
             last_usage = None
             provider_outcome = "success"
             provider_error_type = None
+            provider_error_action = None
 
             stream_kwargs: Dict[str, Any] = {"tools": self._tools_for_this_call(), "turn_id": user_turn_id}
             if self.provider:
@@ -618,6 +619,7 @@ class Agent:
                     last_usage = event.usage
                     provider_outcome = event.outcome
                     provider_error_type = event.error_type
+                    provider_error_action = event.error_action
                 else:
                     yield event
                 if isinstance(event, TextDelta):
@@ -725,7 +727,7 @@ class Agent:
                 for call in tool_calls_to_execute:
                     self.session.add_message("tool", content="Not executed: provider response failed.",
                                              tool_call_id=call["id"], name=call["function"]["name"])
-                yield Done(usage=last_usage, outcome="error", error_type=provider_error_type)
+                yield Done(usage=last_usage, outcome="error", error_type=provider_error_type, error_action=provider_error_action)
                 self._fire_session_end(had_error=True, error_type=provider_error_type or "provider_failed")
                 break
 
