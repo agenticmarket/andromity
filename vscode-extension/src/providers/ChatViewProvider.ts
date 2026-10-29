@@ -23,7 +23,7 @@ import { PythonBridge } from "../server/PythonBridge.js";
 import { RpcClient } from "../server/RpcClient.js";
 import { handleInputMessage } from "../server/inputBridge.js";
 import { handleInteractionMessage, reportDisconnectedAction } from "../server/interactionBridge.js";
-import { PROVIDER_ID_PATTERN, refreshProviderModels, runKeyCheck, unverifiedNotice } from "../server/keyCheck.js";
+import { PROVIDER_ID_PATTERN, refreshProviderModels, runKeyCheck, supportsKeyTests, unverifiedNotice } from "../server/keyCheck.js";
 import { SessionHydration } from "../server/sessionHydration.js";
 import {
   allowOpenPath,
@@ -2693,6 +2693,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
 
           const keyCheck = apiKey && provider !== "ollama" && typeof provider === "string" && PROVIDER_ID_PATTERN.test(provider)
+            && await supportsKeyTests(this._rpcClient)
             ? await runKeyCheck(this._rpcClient, provider)
             : null;
           const unverified = unverifiedNotice(keyCheck);

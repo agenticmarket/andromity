@@ -216,6 +216,8 @@ async def stream_completion(
     first_token_timeout: Optional[float] = None,
     turn_id: Optional[str] = None,
     retry: bool = True,
+    max_tokens: Optional[int] = None,
+    least_reasoning: bool = False,
 ) -> AsyncGenerator[StreamEvent, None]:
     # Lazy-import litellm — it has a heavy import chain (~2-4s), so we defer
     # it until the first actual AI call rather than paying the cost at startup.
@@ -301,7 +303,12 @@ async def stream_completion(
         apply_reasoning_to_request, discover_model_reasoning_capability,
     )
     capability = await asyncio.to_thread(discover_model_reasoning_capability, provider_name, model)
+    if least_reasoning:
+        efforts = getattr(capability, "supported_efforts", None) or []
+        reasoning_effort = next((e for e in ("off", "none", "minimal", "low") if e in efforts), "auto")
     apply_reasoning_to_request(provider_name, model, reasoning_effort, kwargs, capability)
+    if max_tokens:
+        kwargs.setdefault("max_tokens", int(max_tokens))
 
     # Upstream retry with backoff for stalls, rate limits, and transient drops
     backoff = list(STREAM_BACKOFF_DELAYS) if retry else []
@@ -570,9 +577,12 @@ _CREDENTIAL_TEXT = re.compile(
     r"|\b(?:sk|pk|rk|gsk|xai|nvapi)[-_][A-Za-z0-9_\-]{8,}"
     r"|\bAIza[0-9A-Za-z_\-]{20,}"
     r"|\beyJ[A-Za-z0-9_\-]{10,}(?:\.[A-Za-z0-9_\-]+){1,2}"
-    r"|\b(?=[A-Za-z_]*\d)[A-Za-z0-9_]{24,}\b",
+    r"|\b(?=[A-Za-z_]*\d)[A-Za-z0-9_]{24,}\b"
+    r"|\*{3,}[A-Za-z0-9]{2,8}",
     re.IGNORECASE,
 )
+# No square brackets: the terminal app reads them as markup.
+REDACTED = "•••"
 
 
 def redact_credentials(text: str, secrets: Iterable[Optional[str]] = ()) -> str:
@@ -582,10 +592,10 @@ def redact_credentials(text: str, secrets: Iterable[Optional[str]] = ()) -> str:
         if not isinstance(secret, str) or len(secret) < 6:
             continue
         if len(secret) >= 8:
-            text = re.sub(re.escape(secret[:8]) + r"\S*", "[redacted]", text)
+            text = re.sub(re.escape(secret[:8]) + r"\S*", REDACTED, text)
         else:
-            text = text.replace(secret, "[redacted]")
-    return _CREDENTIAL_TEXT.sub("[redacted]", text)
+            text = text.replace(secret, REDACTED)
+    return _CREDENTIAL_TEXT.sub(REDACTED, text)
 
 
 def short_error_detail(e: BaseException, limit: int = 160, secrets: Iterable[Optional[str]] = ()) -> str:

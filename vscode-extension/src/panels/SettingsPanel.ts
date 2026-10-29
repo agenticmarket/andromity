@@ -9,7 +9,7 @@ import {
 } from "../server/securityPolicy.js";
 import { RpcClient } from "../server/RpcClient.js";
 import { ModelInfo, ProviderInfo, IntegrationResult, McpServerConfig, ConnectorInfo, ConnectorConnectResult, KeyCheckResult } from "../server/types.js";
-import { PROVIDER_ID_PATTERN, refreshProviderModels, runKeyCheck } from "../server/keyCheck.js";
+import { KEY_TESTS_UNSUPPORTED, PROVIDER_ID_PATTERN, refreshProviderModels, runKeyCheck, supportsKeyTests } from "../server/keyCheck.js";
 import { join } from "path";
 import { existsSync, readFileSync } from "fs";
 import { homedir } from "os";
@@ -434,9 +434,13 @@ export class SettingsPanel {
   }
 
   /** Tests a saved key with a tiny request; a passing key also gets its live model list. */
-  private async _testKey(provider: unknown): Promise<KeyCheckResult | null> {
+  private async _testKey(provider: unknown, requested = false, providers?: ProviderInfo[]): Promise<KeyCheckResult | null> {
     const rpc = this._rpcClient;
     if (!rpc || typeof provider !== "string" || !PROVIDER_ID_PATTERN.test(provider)) return null;
+    if (!(await supportsKeyTests(rpc, providers))) {
+      if (requested) this._postIfOpen({ type: "key_test_result", provider, ...KEY_TESTS_UNSUPPORTED });
+      return requested ? KEY_TESTS_UNSUPPORTED : null;
+    }
     const result = await runKeyCheck(rpc, provider, () => this._postIfOpen({ type: "key_test_started", provider }));
     this._postIfOpen({ type: "key_test_result", provider, ...result });
     if (result.ok) {
@@ -713,6 +717,7 @@ export class SettingsPanel {
       }
 
       case "set_api_key": {
+        let savedProviders: ProviderInfo[] = [];
         if (typeof message.apiKey !== "string" || !message.apiKey.trim()) {
           vscode.window.showWarningMessage("Paste an API key before saving. The current key was not changed.");
           break;
@@ -722,10 +727,10 @@ export class SettingsPanel {
             provider: message.provider,
             api_key: message.apiKey.trim(),
           });
-          const providers = await this._rpcClient.call<ProviderInfo[]>("config.list_providers", {});
+          savedProviders = await this._rpcClient.call<ProviderInfo[]>("config.list_providers", {});
           this._panel.webview.postMessage({
             type: "providers_updated",
-            providers: providers || [],
+            providers: savedProviders || [],
             savedProvider: message.provider,
           });
           vscode.window.showInformationMessage(`API key for ${message.provider} saved.`);
@@ -734,12 +739,12 @@ export class SettingsPanel {
           vscode.window.showErrorMessage(`Failed to save API key: ${err.message}`);
           break;
         }
-        await this._testKey(message.provider);
+        await this._testKey(message.provider, false, savedProviders);
         break;
       }
 
       case "test_key": {
-        if (!(await this._testKey(message.provider))) {
+        if (!(await this._testKey(message.provider, true))) {
           this._postIfOpen({ type: "key_test_result", provider: String(message.provider ?? "").slice(0, 64), ok: false, tone: "error", label: "Couldn't verify the key" });
         }
         break;

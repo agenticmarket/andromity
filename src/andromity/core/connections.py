@@ -147,8 +147,33 @@ def provider_request(provider: str, model: str) -> dict[str, Any]:
     return request
 
 
+_CHEAP_HINTS = ("flash", "haiku", "mini", "lite", "nano", "small")
+_PRICE = re.compile(r"\$\s*([0-9]+(?:\.[0-9]+)?)")
+_PROBE_MAX_TOKENS = 16
+
+
+def _probe_cost(model: dict) -> Optional[float]:
+    tags = model.get("tags") if isinstance(model.get("tags"), list) else []
+    if model.get("is_free") is True or model["id"].lower().endswith(":free") or "free" in tags:
+        return 0.0
+    prices = [float(p) for p in _PRICE.findall(model.get("pricing") or "")] if isinstance(model.get("pricing"), str) else []
+    return sum(prices) if prices else None
+
+
+def _cheapest(models: list[dict]) -> str:
+    """Free or small models first (flash, haiku, mini…), then the lowest listed price, then list order."""
+    def hinted(model: dict) -> bool:
+        tags = model.get("tags") if isinstance(model.get("tags"), list) else []
+        words = " ".join([model["id"], *[t for t in tags if isinstance(t, str)]]).lower()
+        return _probe_cost(model) == 0.0 or any(hint in words for hint in _CHEAP_HINTS)
+
+    pool = [m for m in models if hinted(m)] or models
+    priced = [(cost, index) for index, m in enumerate(pool) if (cost := _probe_cost(m)) is not None]
+    return pool[min(priced)[1]]["id"] if priced else pool[0]["id"]
+
+
 def probe_model_for(provider: str) -> str:
-    """A model that belongs to this connection: its own model, else one from its live list or catalog."""
+    """A cheap model that belongs to this connection: its own model, else one from its live list or catalog."""
     from andromity.core.models import get_cached_live_models, get_models_for_provider
 
     saved = config.get_provider_config(provider) or {}
@@ -156,16 +181,18 @@ def probe_model_for(provider: str) -> str:
     if isinstance(own, str) and own.strip():
         return own.strip()
 
-    def ids(models: list) -> list[str]:
-        return [m["id"] for m in models if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"].strip()]
+    def valid(models: list) -> list[dict]:
+        return [m for m in models if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"].strip()]
 
-    live = ids(get_cached_live_models(provider))
-    catalog = ids(get_models_for_provider(provider))
+    live = valid(get_cached_live_models(provider))
+    catalog = valid(get_models_for_provider(provider))
     if live:
-        available = set(live)
-        return next((m for m in catalog if m in available), live[0])
+        by_id = {m["id"]: m for m in live}
+        confirmed = [{**m, **{k: v for k, v in by_id[m["id"]].items() if v not in (None, "")}}
+                     for m in catalog if m["id"] in by_id]
+        return _cheapest(confirmed or live)
     if catalog:
-        return catalog[0]
+        return _cheapest(catalog)
     return "auto" if provider == "andromity" else ""
 
 
@@ -176,10 +203,22 @@ def _probe_detail(detail: Optional[str], provider: str, limit: int = 160) -> str
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-def _probe_error_type(error_type: str, status: Optional[int]) -> str:
-    """A real HTTP status decides first; provider text can quote unrelated numbers such as a 500 RPM limit."""
-    if status in (401, 403):
+_KEY_PROBLEM = re.compile(
+    r"\b(?:invalid|incorrect|expired|revoked|missing|malformed|unauthori[sz]ed)\b.*\b(?:api[ _-]?key|key|token|credentials?)\b"
+    r"|\b(?:api[ _-]?key|key|token|credentials?)\b.*\b(?:invalid|incorrect|expired|revoked|not valid)\b",
+    re.IGNORECASE,
+)
+
+
+def _probe_error_type(error_type: str, status: Optional[int], detail: str = "") -> str:
+    """A real HTTP status decides first; provider text can quote unrelated numbers such as a 500 RPM limit.
+
+    A 403 for an accepted key means the account may not use the chosen model, not that the key is bad.
+    """
+    if status == 401:
         return "auth_error"
+    if status == 403:
+        return "auth_error" if _KEY_PROBLEM.search(detail or "") else "model_forbidden"
     if status == 429:
         return error_type if error_type == "quota_exceeded" else "rate_limit"
     if status == 404:
@@ -203,25 +242,28 @@ async def test_connection(provider: str, model: str = "") -> dict[str, Any]:
     chunks: list[str] = []
     finished = False
     started = time.monotonic()
+    probe_options: dict[str, Any] = {"max_tokens": _PROBE_MAX_TOKENS, "least_reasoning": True} if preset else {}
     try:
         async for event in stream_completion(
             [{"role": "user", "content": "Reply with OK."}], provider_name=provider,
-            model=model, first_token_timeout=15, retry=not preset,
+            model=model, first_token_timeout=15, retry=not preset, **probe_options,
         ):
             if isinstance(event, TextDelta):
                 chunks.append(event.text)
             elif isinstance(event, Done):
                 if event.outcome != "success":
-                    return connection_failure(_probe_error_type(event.error_type or "generic", event.error_status),
-                                              _probe_detail(event.error_detail, provider), model)
+                    detail = _probe_detail(event.error_detail, provider)
+                    return connection_failure(_probe_error_type(event.error_type or "generic", event.error_status, detail),
+                                              detail, model)
                 finished = True
     except Exception as exc:
-        key = config.get_api_key(provider)
-        return connection_failure(_probe_error_type(classify_error_info(exc, provider=provider, model=model)["type"], http_status(exc)),
-                                  _probe_detail(short_error_detail(exc, limit=1000, secrets=(key,)), provider), model)
+        detail = _probe_detail(short_error_detail(exc, limit=1000, secrets=(config.get_api_key(provider),)), provider)
+        return connection_failure(_probe_error_type(classify_error_info(exc, provider=provider, model=model)["type"], http_status(exc), detail),
+                                  detail, model)
     if not finished:
         return connection_failure("incomplete_stream", model=model)
-    if not chunks:
+    # A capped probe can finish with reasoning only; the provider still accepted the key and model.
+    if not chunks and not preset:
         return connection_failure("empty_response", model=model)
     return {"success": True, "message": "Connection ready.", "model": model,
             "latency_ms": max(1, round((time.monotonic() - started) * 1000))}
@@ -231,6 +273,7 @@ _FAILURE_MESSAGES = {
     "endpoint_not_found": "HTTP 404: the endpoint returned a web page. Use the API base URL (for example, https://your-provider/v1), without /chat/completions.",
     "model_not_found": "HTTP 404: the API endpoint or model was not found. Check the base URL and exact model ID from your provider.",
     "auth_error": "HTTP 401/403: authentication or access denied. Check the API key and provider account permissions.",
+    "model_forbidden": "HTTP 403: the key was accepted, but this account cannot use the selected model. Check its access or plan.",
     "rate_limit": "The provider's rate limit or quota was reached. Check your allowance and retry later.",
     "quota_exceeded": "The provider's quota was reached. Check your allowance or billing settings.",
     "provider_unavailable": "The provider is unavailable. Check its service status and retry.",

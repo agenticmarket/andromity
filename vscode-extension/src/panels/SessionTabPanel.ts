@@ -9,7 +9,7 @@ import * as path from "path";
 import { RpcClient } from "../server/RpcClient.js";
 import { handleInputMessage } from "../server/inputBridge.js";
 import { handleInteractionMessage, reportDisconnectedAction } from "../server/interactionBridge.js";
-import { PROVIDER_ID_PATTERN, refreshProviderModels, runKeyCheck, unverifiedNotice } from "../server/keyCheck.js";
+import { PROVIDER_ID_PATTERN, refreshProviderModels, runKeyCheck, supportsKeyTests, unverifiedNotice } from "../server/keyCheck.js";
 import { SessionHydration } from "../server/sessionHydration.js";
 import { ChatViewProvider } from "../providers/ChatViewProvider.js";
 import { ModelInfo, ProviderInfo, SessionInfo } from "../server/types.js";
@@ -619,6 +619,7 @@ export class SessionTabPanel {
           if (!message.provider) throw new Error("Missing provider");
           if (message.apiKey) await this._rpcClient.call("config.set_api_key", { provider: message.provider, api_key: message.apiKey });
           const keyCheck = message.apiKey && message.provider !== "ollama" && typeof message.provider === "string" && PROVIDER_ID_PATTERN.test(message.provider)
+            && await supportsKeyTests(this._rpcClient)
             ? await runKeyCheck(this._rpcClient, message.provider)
             : null;
           const models = await this._rpcClient.call<ModelInfo[]>("config.refresh_models", { provider: message.provider }, 6000)

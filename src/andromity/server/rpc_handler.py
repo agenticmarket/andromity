@@ -142,6 +142,7 @@ class JsonRpcHandler:
         self._mcp_manager: Optional[Any] = None
         self._mcp_started: bool = False
         self._user_killed_processes: Set[str | tuple[str, str]] = set()
+        self._model_refreshes: Dict[str, "asyncio.Future[Dict[str, Any]]"] = {}
         try:
             self._loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
         except RuntimeError:
@@ -2434,6 +2435,7 @@ class JsonRpcHandler:
     async def rpc_config_list_models(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         target_provider = params.get("provider") if params else None
         force_refresh = params.get("refresh", False) if params else False
+        discover = params.get("discover", True) is not False if params else True
         models = []
         try:
             from andromity.core.connections import provider_info
@@ -2460,14 +2462,15 @@ class JsonRpcHandler:
                     except Exception:
                         pass
 
-            await asyncio.gather(*[_discover_connection(p) for p in providers_to_check])
+            if discover:
+                await asyncio.gather(*[_discover_connection(p) for p in providers_to_check])
 
             def _is_pinned(m_id: str, p_key: str) -> bool:
                 return any(p.get("id") == m_id and (not p.get("provider") or p.get("provider") == p_key) for p in pinned_list)
 
             # If OpenRouter not cached and not force_refresh, trigger background fetch without blocking
             openrouter_cached = get_cached_live_models("openrouter")
-            if not openrouter_cached and ("openrouter" in providers_to_check):
+            if discover and not openrouter_cached and ("openrouter" in providers_to_check):
                 try:
                     asyncio.create_task(
                         asyncio.to_thread(fetch_live_models_sync, "openrouter", api_key=config.get_api_key("openrouter"))
@@ -2576,10 +2579,22 @@ class JsonRpcHandler:
         return await self.rpc_config_list_models({"provider": target_provider})
 
     async def rpc_config_refresh_provider_models(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Refresh one provider's live model list and say why, when it could not."""
+        """Refresh one provider's live model list and say why, when it could not.
+
+        One refresh per provider runs at a time; a repeated request shares its result.
+        """
         provider = str((params or {}).get("provider") or "").strip()
         if not provider:
             raise ValueError("provider is required")
+        running = self._model_refreshes.get(provider)
+        if running is None:
+            running = asyncio.ensure_future(self._refresh_provider_models(provider))
+            self._model_refreshes[provider] = running
+            running.add_done_callback(lambda _done, key=provider: self._model_refreshes.pop(key, None))
+        return await asyncio.shield(running)
+
+    async def _refresh_provider_models(self, provider: str) -> Dict[str, Any]:
+        # The fetch and the listing that follows stay under the extension's 12 s request timeout.
         saved = config.get_provider_config(provider) or {}
         status: Dict[str, Any] = {}
         fetched: List[Dict[str, Any]] = []
@@ -2587,14 +2602,14 @@ class JsonRpcHandler:
             fetched = await asyncio.wait_for(asyncio.to_thread(
                 fetch_live_models_sync, provider, api_key=config.get_api_key(provider),
                 base_url=saved.get("base_url"), status=status,
-            ), timeout=8.0)
+            ), timeout=7.0)
         except asyncio.TimeoutError:
             status.setdefault("error", "timeout")
         except Exception as exc:
             log.warning("Model refresh failed: provider=%s error=%s", provider, type(exc).__name__)
             status.setdefault("error", "error")
         error = status.get("error") or (None if fetched else "empty")
-        models = await self.rpc_config_list_models({"provider": provider})
+        models = await self.rpc_config_list_models({"provider": provider, "discover": False})
         return {
             "provider": provider,
             "ok": error is None,
@@ -2837,6 +2852,10 @@ class JsonRpcHandler:
     async def rpc_config_delete_provider(self, params: Dict[str, Any]) -> Dict[str, Any]:
         config.delete_provider(params["provider"])
         return {"success": True, "providers": await self.rpc_config_list_providers()}
+
+    async def rpc_config_capabilities(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Behaviour clients can rely on; a client talking to an engine without this method assumes none."""
+        return {"key_tests": True, "provider_model_refresh": True}
 
     async def rpc_config_test_provider(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from andromity.core.connections import PRESETS, connection_failure, test_connection

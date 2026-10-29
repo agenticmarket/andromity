@@ -19,6 +19,7 @@ type RpcCaller = Pick<RpcClient, "call">;
 
 const FIXED_LABELS: Record<string, { label: string; tone: KeyCheckTone }> = {
   auth_error: { label: "Key rejected", tone: "error" },
+  model_forbidden: { label: "This account can't use that model", tone: "warn" },
   rate_limit: { label: "Rate limited (the key works)", tone: "warn" },
   quota_exceeded: { label: "Rate limited (the key works)", tone: "warn" },
   model_not_found: { label: "Model not found", tone: "warn" },
@@ -68,6 +69,34 @@ export async function checkProviderKey(rpc: RpcCaller, provider: string, timeout
     return error instanceof Error && error.message.startsWith("RPC timeout") ? { ...UNREACHABLE } : { ...UNVERIFIED };
   }
 }
+
+const keyTestSupport = new WeakMap<object, boolean>();
+
+/** Older engines test a key with another provider's default model, so their results are not trusted.
+ *  A provider list the caller already has answers this without a request: only newer engines send key_required. */
+export async function supportsKeyTests(rpc: RpcCaller, providers?: unknown): Promise<boolean> {
+  const known = keyTestSupport.get(rpc);
+  if (known !== undefined) return known;
+  if (Array.isArray(providers) && providers.some((p) => p && typeof p === "object")) {
+    const supported = providers.some((p) => p && typeof p === "object" && typeof (p as { key_required?: unknown }).key_required === "boolean");
+    keyTestSupport.set(rpc, supported);
+    return supported;
+  }
+  try {
+    const reply = await rpc.call<{ key_tests?: unknown }>("config.capabilities", {}, 5000);
+    const supported = !(reply && typeof reply === "object" && reply.key_tests === false);
+    keyTestSupport.set(rpc, supported);
+    return supported;
+  } catch (error) {
+    const missing = error instanceof Error && error.message.includes("-32601");
+    if (missing) keyTestSupport.set(rpc, false);
+    return !missing;
+  }
+}
+
+export const KEY_TESTS_UNSUPPORTED: KeyCheckResult = {
+  ok: false, tone: "warn", label: "Update the Andromity engine to test keys", errorType: "unsupported",
+};
 
 let queueTail: Promise<unknown> = Promise.resolve();
 
