@@ -521,12 +521,14 @@ class Agent:
 
         turn_start_time = time.time()
         thumb_uris = None
+        image_files = None
         if _uris:
-            from andromity.core.images import save_and_thumbnail_image
-            thumb_uris = [
-                save_and_thumbnail_image(u, storage_dir=getattr(self.session, "storage_dir", None))
-                for u in _uris
-            ]
+            from andromity.core.images import store_prompt_image
+            storage_dir = getattr(self.session, "storage_dir", None)
+            stored = [store_prompt_image(u, storage_dir) for u in _uris]
+            thumb_uris = [thumb for thumb, _ in stored]
+            if any(name for _, name in stored):
+                image_files = [name for _, name in stored]
         sess_id = getattr(self.session, "id", None)
         effective_input = user_input
         if sess_id:
@@ -542,7 +544,7 @@ class Agent:
                 if unread_cnt > 0:
                     notices.append(f"{unread_cnt} unread message(s). (Read them with session_inbox)")
                 effective_input += f"\n\n[Co-Agent Mailbox: {'; '.join(notices)}]"
-        self.session.add_message("user", content=effective_input, images=thumb_uris)
+        self.session.add_message("user", content=effective_input, images=thumb_uris, image_files=image_files)
         if self._turn_image_parts:
             message = self.session.messages[-1]
             self._message_images[id(message)] = (message, self._turn_image_parts)

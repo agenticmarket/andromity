@@ -158,14 +158,23 @@ ${styles}
 
 
   <!-- Image Lightbox Modal Overlay -->
-  <div id="image-lightbox-overlay" class="image-lightbox-overlay" style="display:none;" role="dialog" aria-modal="true" aria-label="Image preview">
+  <div id="image-lightbox-overlay" class="image-lightbox-overlay" style="display:none;" role="dialog" aria-modal="true" aria-label="Image preview" tabindex="-1">
     <div class="image-lightbox-header">
-      <span class="image-lightbox-title" id="image-lightbox-title">Image Preview</span>
+      <div class="image-lightbox-heading">
+        <span class="image-lightbox-title" id="image-lightbox-title">Image Preview</span>
+        <span class="image-lightbox-counter" id="image-lightbox-counter" aria-live="polite" hidden></span>
+      </div>
       <button class="image-lightbox-close" id="btn-lightbox-close" aria-label="Close image preview" title="Close (Esc)">&times;</button>
     </div>
+    <button type="button" class="image-lightbox-nav prev" id="btn-lightbox-prev" aria-label="Previous image" title="Previous image (Left arrow)" hidden>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="15 18 9 12 15 6"></polyline></svg>
+    </button>
     <div class="image-lightbox-container">
       <img id="image-lightbox-img" class="image-lightbox-img" src="" alt="Image Preview">
     </div>
+    <button type="button" class="image-lightbox-nav next" id="btn-lightbox-next" aria-label="Next image" title="Next image (Right arrow)" hidden>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>
+    </button>
   </div>
 
   <div class="top-bar">

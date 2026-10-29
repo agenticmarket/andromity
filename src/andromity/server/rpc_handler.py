@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Set
 
 from andromity import __version__
-from andromity.core.session_context import background_context as _background_context, message_text as _message_text, shorten as _shorten
+from andromity.core.images import STORED_IMAGE_NAME, prompt_images, stored_image_uri
+from andromity.core.session_context import background_context as _background_context, message_text as _message_text, \
+    prompt_as_written, shorten as _shorten
 from andromity.core.tools import collab_action
 from andromity.config import config, get_config_dir
 from andromity.core.agent import Agent
@@ -102,6 +104,20 @@ def _undo_limit_error(available: int, summarized: bool) -> str:
         return reach + ("Earlier turns were summarized when the conversation was compacted, so they can't be "
                         "undone from here.")
     return f"There {'is' if available == 1 else 'are'} only {turns} to undo."
+
+
+def _undone_prompt(message: Dict[str, Any], storage_dir: Any) -> Dict[str, Any]:
+    """The prompt an undo removed, for putting it back in the input: its text and its images as data URIs."""
+    content = message.get("content")
+    if isinstance(content, list):
+        content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
+    return {"text": prompt_as_written(str(content or "")), "images": prompt_images(message, storage_dir)}
+
+
+def _refers_to_image(session: Session, name: str) -> bool:
+    messages = [*session.messages, *(getattr(session, "compacted_history", None) or [])]
+    return any(isinstance(m, dict) and isinstance(m.get("image_files"), list) and name in m["image_files"]
+               for m in messages)
 
 
 class JsonRpcHandler:
@@ -1082,7 +1098,13 @@ class JsonRpcHandler:
             if not ok:
                 return {"success": False, "error": "Files changed after this turn or its checkpoint is incomplete. Review the changes before undoing; your conversation is preserved."}
             rollback_msg = "Restored snapshot " + records[0]["snapshot_hash"][:7]
+        prompt = session.messages[cutoff] if cutoff < len(session.messages) else {}
         turns_undone, popped, _ = session.rollback_to_turn(target_turn_idx)
+        try:
+            undone_prompt = await asyncio.to_thread(_undone_prompt, prompt, getattr(session, "storage_dir", None))
+        except Exception:
+            log.exception("The undone prompt could not be read back")
+            undone_prompt = None
 
         return {
             "success": True,
@@ -1090,7 +1112,23 @@ class JsonRpcHandler:
             "target_turn_index": target_turn_idx,
             "popped_messages": popped,
             "git_status": rollback_msg,
+            "undone_prompt": undone_prompt,
         }
+
+    async def rpc_session_image(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """The full-size copy of an image sent with a prompt in this session, for viewing it."""
+        name = params.get("name")
+        session_id = params.get("session_id")
+        unavailable = {"success": False, "error": "The full-size image is no longer available."}
+        if not isinstance(name, str) or not STORED_IMAGE_NAME.fullmatch(name) or not isinstance(session_id, str):
+            return unavailable
+        session = self._active_sessions.get(session_id) or self._cron_live_sessions.get(session_id)
+        if session is None:
+            session = Session.load_by_id(session_id, params.get("project_path"))
+        if session is None or not _refers_to_image(session, name):
+            return unavailable
+        uri = await asyncio.to_thread(stored_image_uri, getattr(session, "storage_dir", None), name)
+        return {"success": True, "uri": uri} if uri else unavailable
 
     async def rpc_session_sendMessage(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from andromity.core.session_bus import SessionBus

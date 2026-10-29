@@ -18,6 +18,7 @@ import { airGapPillMessage } from "../airgapState.js";
 import { copySessionAsMarkdown } from "../chatMarkdown.js";
 import { runSidePanelCommand, SidePanelFeed } from "../sidePanelFeed.js";
 import { confirmRewindAndResend, resendPromptOf } from "../integrations/rewind.js";
+import { handlePromptImageMessage, undonePromptOf } from "../integrations/promptImages.js";
 import { recordFeatureUse } from "../telemetry/featureUsage.js";
 import { SettingsPanel } from "./SettingsPanel.js";
 import { PlanEditorPanel } from "./PlanEditorPanel.js";
@@ -591,6 +592,7 @@ export class SessionTabPanel {
 
     if (await handleInputMessage(this._rpcClient, message, this._sessionId, (event) => this._postMessage(event), this._currentMode)) return;
     if (await handleInteractionMessage(this._rpcClient, message, this._sessionId, (event) => this._postMessage(event))) return;
+    if (await handlePromptImageMessage(this._rpcClient, message, this._sessionId, (event) => this._postMessage(event))) return;
 
     switch (message.type) {
       case "get_context_breakdown": {
@@ -951,6 +953,7 @@ export class SessionTabPanel {
             turnsUndone: message.turnsToUndo || 1,
             targetTurnIndex: message.turnIndex,
             resendPrompt,
+            undonePrompt: undonePromptOf(undone),
           });
         }
         break;

@@ -11,7 +11,7 @@ from textual.containers import Horizontal, Vertical
 
 from typing import Any
 
-from andromity.tui.panels.chat import ChatPanel, NextStepCard
+from andromity.tui.panels.chat import ChatPanel, NextStepCard, PromptBackCard
 from andromity.tui.panels.filetree import FileTreePanel
 from andromity.tui.panels.diff import DiffPanel
 from andromity.tui.panels.plan import PlanPanel
@@ -159,6 +159,21 @@ def _newest_turn_start(session: Any, prompt: str) -> int | None:
         return None
     content = str(session.messages[starts[-1]].get("content") or "")
     return starts[-1] if content.startswith(prompt or "") else None
+
+
+async def _prompt_attachments(message: dict, storage_dir: Any) -> list:
+    """The images sent with a prompt as input-bar attachments: full size while the image store still has them."""
+    if not message.get("images") and not message.get("image_files"):
+        return []
+    from andromity.core.images import image_from_data_uri, prompt_images
+
+    def _load() -> list:
+        return [image for image in map(image_from_data_uri, prompt_images(message, storage_dir)) if image is not None]
+    try:
+        return await asyncio.to_thread(_load)
+    except Exception:
+        log.warning("Undone prompt images could not be loaded", exc_info=True)
+        return []
 
 
 def _prompt_added(session: Any, count_before: int, summarized_before: int) -> bool:
@@ -1717,6 +1732,12 @@ class AndromityApp(App):
             self._submit_prompt(option["prompt"])
         self.focus_input()
 
+    @on(PromptBackCard.Chosen)
+    def on_prompt_back_chosen(self, event: "PromptBackCard.Chosen") -> None:
+        self.query_one(InputBar).restore_prompt(event.text, event.images)
+        self.query_one(ChatPanel).clear_prompt_back()
+        self.focus_input()
+
     def _process_message(self, prompt: str, images: list | None = None):
         chat = self.query_one(ChatPanel)
         chat.clear_ephemeral()
@@ -2464,6 +2485,7 @@ Your output must be:
                 self.query_one(ChatPanel).add_system_message("[yellow]Undo stopped: files changed after the turn or the checkpoint is incomplete. Review changes first.[/]")
                 return
 
+            prompt_message = self.session.messages[cutoff]
             self.session.messages = self.session.messages[:cutoff]
             try:
                 from andromity.core.agent import _estimate_tokens as _est2
@@ -2496,21 +2518,29 @@ Your output must be:
             except Exception:
                 pass
 
+            # ── 5. Put the prompt and its images back, keeping any draft ──────
+            images = await _prompt_attachments(prompt_message, getattr(self.session, "storage_dir", None))
+            try:
+                bar = self.query_one(InputBar)
+                keep_draft = bool(bar.query_one("#input-field", TextArea).text.strip() or bar.attachments)
+            except Exception:
+                bar, keep_draft = None, False
+
             short = undone_prompt[:60] + ("…" if len(undone_prompt) > 60 else "")
             file_note = "[green]✓ Files reverted[/] " if files_reverted else "[yellow]⚠ File revert unavailable (no git repo)[/] "
+            prompt_note = "[cyan]Your draft was kept[/]" if keep_draft else "[cyan]Prompt restored to input[/]"
             chat.add_system_message(
                 f"[bold green]↩ Undone:[/] \"{escape(short)}\"\n"
-                f"{file_note}│ [dim]Conversation rolled back to {len(self.session.messages)} messages[/] │ [cyan]Prompt restored to input[/]"
+                f"{file_note}│ [dim]Conversation rolled back to {len(self.session.messages)} messages[/] │ {prompt_note}"
             )
-
-            # ── 5. Restore prompt into the user input box ─────────────────────
             try:
-                input_field = self.query_one("InputBar").query_one("#input-field", TextArea)
-                input_field.text = undone_prompt
-                input_field.move_cursor(input_field.get_cursor_line_end_location())
-                self.focus_input()
+                if keep_draft:
+                    chat.offer_prompt_back(undone_prompt, images)
+                elif bar is not None:
+                    bar.restore_prompt(undone_prompt, images)
+                    self.focus_input()
             except Exception:
-                pass
+                log.warning("Undone prompt could not be put back", exc_info=True)
 
             self._update_status()
         finally:

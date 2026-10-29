@@ -104,6 +104,27 @@ export interface InputBridgeMessage {
   reasoningEffort?: string;
 }
 
+/** The prompt an undo removed: its text and its images as data URIs, full size where the engine still has them. */
+export interface UndonePrompt {
+  text: string;
+  images: string[];
+}
+
+export interface SessionUndoResult {
+  success: boolean;
+  popped_messages?: number;
+  turns_undone?: number;
+  target_turn_index?: number;
+  git_status?: string;
+  error?: string;
+  undone_prompt?: UndonePrompt;
+}
+
+export interface PromptImageMessage {
+  type: string;
+  name?: unknown;
+}
+
 export interface ToolApprovalEvent {
   session_id: string;
   approval_id: string;

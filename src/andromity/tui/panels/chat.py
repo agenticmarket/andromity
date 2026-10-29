@@ -865,6 +865,46 @@ NextStepCard #next-step-dismiss:hover { color: $text !important; }
         self.post_message(self.Chosen(action))
 
 
+class PromptBackCard(Horizontal):
+    """After an undo that kept the user's draft: puts the undone prompt and its images in the input instead."""
+    DEFAULT_CSS = """\
+PromptBackCard { height: auto; margin: 1 0 0 0; padding: 0 1; border: round $panel-lighten-2; align: left middle; }
+PromptBackCard > Static { width: 1fr; color: $text-muted; }
+PromptBackCard Button {
+    height: 1 !important; width: auto !important; min-width: 0 !important;
+    border: none !important; padding: 0 1 !important; margin: 0 0 0 1 !important;
+    background: $primary !important; color: $text !important; text-style: bold;
+}
+PromptBackCard #prompt-back-dismiss { background: transparent !important; color: $text-muted !important; text-style: none; }
+PromptBackCard #prompt-back-dismiss:hover { color: $text !important; }
+"""
+
+    class Chosen(Message):
+        def __init__(self, text: str, images: list):
+            super().__init__()
+            self.text = text
+            self.images = images
+
+    def __init__(self, text: str, images: list, **kwargs):
+        super().__init__(**kwargs)
+        self._text = text
+        self._images = images
+
+    def compose(self) -> ComposeResult:
+        count = len(self._images)
+        extra = f" and its {count} image{'' if count == 1 else 's'}" if count else ""
+        yield Static(f"Your draft was kept. The undone prompt{extra} can replace it.")
+        yield Button("Put the prompt back", id="prompt-back")
+        yield Button("✕", id="prompt-back-dismiss", tooltip="Dismiss")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "prompt-back":
+            self.post_message(self.Chosen(self._text, self._images))
+        else:
+            self.remove()
+
+
 class ChatPanel(VerticalScroll):
     DEFAULT_CSS = """\
 ChatPanel { width: 1fr; height: 1fr; overflow-y: auto; background: $surface; }
@@ -1003,6 +1043,16 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
 
     def clear_next_step(self) -> None:
         for card in self.query(NextStepCard):
+            card.remove()
+
+    def offer_prompt_back(self, text: str, images: list) -> None:
+        self.clear_prompt_back()
+        self.mount(PromptBackCard(text, images))
+        if not self._user_scrolled_up:
+            self.scroll_end()
+
+    def clear_prompt_back(self) -> None:
+        for card in self.query(PromptBackCard):
             card.remove()
 
     def _add_collab_card(self, role: str, heading: str, content: str) -> None:

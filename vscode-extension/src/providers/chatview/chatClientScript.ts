@@ -4713,6 +4713,32 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           vscode.postMessage(Object.assign({ type: 'undo_turn' }, undoRequestFor(target.closest('.message-wrap.user'))));
           break;
         }
+        case 'restore-undone-prompt': {
+          const note = target.closest('.undo-note');
+          if (note && note._undonePrompt) {
+            putPromptBack(note._undonePrompt);
+            note._undonePrompt = null;
+            target.remove();
+          }
+          break;
+        }
+        case 'remove-edit-image': {
+          const box = target.closest('.prompt-edit-box');
+          const idx = parseInt(target.getAttribute('data-idx') || '-1', 10);
+          if (box && box._images && idx >= 0 && idx < box._images.length) {
+            box._images.splice(idx, 1);
+            renderPromptEditImages(box);
+            const input = box.querySelector('.prompt-edit-input');
+            if (input) input.focus();
+          }
+          break;
+        }
+        case 'preview-edit-image': {
+          const box = target.closest('.prompt-edit-box');
+          const idx = parseInt(target.getAttribute('data-idx') || '-1', 10);
+          if (box && box._images && box._images[idx]) openImageViewer(box._images, idx, 'Prompt image');
+          break;
+        }
         case 'carousel-prev': {
           const cWrap = target.closest('.prompt-images-container');
           const carousel = cWrap ? cWrap.querySelector('.prompt-image-carousel') : null;
@@ -5252,6 +5278,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let attachedImages = [];
     let attachedFiles = [];
     let currentActiveEditorContext = null;
+    const MAX_ATTACHED_IMAGES = 5;
+    const MAX_ATTACHED_FILES = 8;
+    const IMAGE_ONLY_PROMPT = 'Please inspect attached image';
+    const MAX_IMAGE_URI_CHARS = Math.ceil(8 * 1024 * 1024 / 3) * 4 + 'data:image/jpeg;base64,'.length;
+    const STORED_IMAGE_NAME = /^[0-9a-f]{16}\\.jpg$/;
+    const FULL_IMAGE_CACHE_LIMIT = 8;
+    const fullImageCache = new Map();
+    const fullImageRequests = new Set();
+    const imageViewer = { items: [], index: 0, title: '', returnFocus: null };
+    let pendingResend = null;
 
     const BINARY_FILE_EXTENSIONS = new Set([
       'exe', 'dll', 'bin', 'so', 'dylib', 'zip', 'tar', 'gz', '7z', 'rar', 'iso',
@@ -5377,8 +5413,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (attachedFiles.some(f => f.path === fileInfo.path || f.name === fileInfo.name)) {
         return;
       }
-      if (attachedFiles.length >= 8) {
-        appendSystemNote('Maximum 8 files can be attached per message.');
+      if (attachedFiles.length >= MAX_ATTACHED_FILES) {
+        appendSystemNote('Maximum ' + MAX_ATTACHED_FILES + ' files can be attached per message.');
         return;
       }
       attachedFiles.push(fileInfo);
@@ -5556,8 +5592,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
       container.style.display = 'flex';
       container.innerHTML = attachedImages.map((imgUri, idx) => {
-        const title = 'Attachment ' + (idx + 1) + (attachedImages.length > 1 ? (' of ' + attachedImages.length) : '');
-        return '<div class="image-attachment-chip" data-action="preview-image" data-src="' + escapeHtml(imgUri) + '" data-title="' + escapeHtml(title) + '" title="Click to preview image">' +
+        return '<div class="image-attachment-chip" data-action="preview-image" data-idx="' + idx + '" title="Click to preview image">' +
           '<img class="image-attachment-thumb" src="' + escapeHtml(imgUri) + '" alt="Attachment ' + (idx + 1) + '" />' +
           '<button class="image-attachment-remove" data-action="remove-image-attachment" data-idx="' + idx + '" title="Remove image">&#x2715;</button>' +
         '</div>';
@@ -5566,8 +5601,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function addImageAttachment(dataUri) {
       if (!dataUri) return;
-      if (attachedImages.length >= 5) {
-        appendSystemNote('Maximum 5 images can be attached per message.');
+      if (attachedImages.length >= MAX_ATTACHED_IMAGES) {
+        appendSystemNote('Maximum ' + MAX_ATTACHED_IMAGES + ' images can be attached per message.');
         return;
       }
       attachedImages.push(dataUri);
@@ -5977,7 +6012,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         fullText = filePrefix + (fullText ? String.fromCharCode(10) + fullText : '');
       }
 
-      const promptPayload = fullText || (imagesToSend.length > 0 ? 'Please inspect attached image' : 'Please inspect attached files');
+      const promptPayload = fullText || (imagesToSend.length > 0 ? IMAGE_ONLY_PROMPT : 'Please inspect attached files');
 
       if (queueSupported) {
         const requestId = 'input-' + Date.now() + '-' + Math.random().toString(36).slice(2);
@@ -7181,7 +7216,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (el.classList.contains('message-wrap') && el.classList.contains('user')) {
           const textEl = el.querySelector('.prompt-text-content');
           const images = Array.prototype.map.call(el.querySelectorAll('.prompt-image-thumb'), function(img) { return img.src; }).filter(Boolean);
-          out.push({ role: 'user', content: (textEl && textEl.textContent) || '', images: images });
+          const imageFiles = (el._promptImages || []).map(item => item.name);
+          out.push({ role: 'user', content: (textEl && textEl.textContent) || '', images: images, image_files: imageFiles });
         } else if (el.classList.contains('message-wrap') && el.classList.contains('assistant')) {
           const thinkEl = el.querySelector('.thinking-content');
           const textNodes = el.querySelectorAll('.assistant-text');
@@ -7348,7 +7384,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (card) card.style.display = 'none';
       const box = document.createElement('div');
       box.className = 'prompt-edit-box';
-      box.innerHTML = '<textarea class="prompt-edit-input" rows="3" aria-label="Edit this message"></textarea>' +
+      box.innerHTML = '<div class="prompt-edit-images image-attachments-container" style="display:none;"></div>' +
+        '<textarea class="prompt-edit-input" rows="3" aria-label="Edit this message"></textarea>' +
         '<div class="prompt-edit-footer">' +
           '<span class="prompt-edit-note">Resending undoes this turn and everything after it, including file changes.</span>' +
           '<div class="prompt-edit-actions">' +
@@ -7356,7 +7393,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             '<button type="button" class="prompt-edit-send" data-action="resend-prompt">Undo &amp; resend</button>' +
           '</div>' +
         '</div>';
+      const promptImages = wrap._promptImages || [];
+      box._imageCount = promptImages.length;
+      box._images = promptImages.map((item, index) => ({ src: item.src, name: item.name, index: index }));
       (card ? card.parentNode : wrap).insertBefore(box, card ? card.nextSibling : null);
+      renderPromptEditImages(box);
       const input = box.querySelector('.prompt-edit-input');
       input.value = wrap._promptText || (card ? card.innerText : '');
       input.addEventListener('keydown', (e) => {
@@ -7375,6 +7416,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (card) card.style.display = '';
     }
 
+    // The images a prompt being edited keeps; each can be removed or viewed before resending.
+    function renderPromptEditImages(box) {
+      const strip = box && box.querySelector('.prompt-edit-images');
+      if (!strip) return;
+      const images = box._images || [];
+      strip.style.display = images.length ? 'flex' : 'none';
+      strip.innerHTML = images.map((item, idx) =>
+        '<div class="image-attachment-chip" data-action="preview-edit-image" data-idx="' + idx + '" title="Click to preview image">' +
+          '<img class="image-attachment-thumb" src="' + escapeHtml(item.src) + '" alt="Image ' + (idx + 1) + '" />' +
+          '<button type="button" class="image-attachment-remove" data-action="remove-edit-image" data-idx="' + idx + '" title="Remove image" aria-label="Remove image ' + (idx + 1) + '">&#x2715;</button>' +
+        '</div>').join('');
+    }
+
     function resendEditedPrompt(wrap) {
       if (!wrap) return;
       const input = wrap.querySelector('.prompt-edit-input');
@@ -7384,6 +7438,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         appendSystemNote('Stop the current turn before editing an earlier message.');
         return;
       }
+      const box = wrap.querySelector('.prompt-edit-box');
+      pendingResend = {
+        text: text, turnPrompt: !wrap.hasAttribute('data-steering'),
+        imageCount: box ? box._imageCount || 0 : 0, images: box && box._images ? box._images.slice() : [],
+      };
       const request = undoRequestFor(wrap);
       if (request.turnIndex === undefined) return;
       vscode.postMessage(Object.assign({ type: 'undo_turn', resendPrompt: text }, request));
@@ -7402,6 +7461,67 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         totalTurns: prompts.length,
         turnsToUndo: turnIndex >= 0 ? prompts.length - turnIndex : 1,
       };
+    }
+
+    function undonePromptFrom(raw) {
+      if (!raw || typeof raw !== 'object') return null;
+      const text = typeof raw.text === 'string' ? raw.text : '';
+      const images = Array.isArray(raw.images) ? raw.images.filter(isImageDataUri).slice(0, MAX_ATTACHED_IMAGES) : [];
+      return text.trim() || images.length ? { text: text, images: images } : null;
+    }
+
+    // The images kept in the editor, full size where the engine returned them: it returns the turn's own prompt,
+    // so a message sent while that turn ran keeps what the chat shows for it.
+    function resendImagesFor(pending, text, undone) {
+      if (!pending || pending.text !== text) return [];
+      const full = pending.turnPrompt && undone && undone.images.length === pending.imageCount ? undone.images : null;
+      return pending.images
+        .map(item => (full && full[item.index]) || (item.name && fullImageCache.get(item.name)) || item.src)
+        .filter(src => typeof src === 'string' && src)
+        .slice(0, MAX_ATTACHED_IMAGES);
+    }
+
+    function composerIsEmpty() {
+      return !promptInput.value.trim() && attachedImages.length === 0 && attachedFiles.length === 0;
+    }
+
+    // Replaces the composer's text, files and images with an undone prompt, without the editor context sent with it.
+    function putPromptBack(undone) {
+      const parsed = parseUserPromptDisplay(undone.text);
+      const text = parsed.userText === IMAGE_ONLY_PROMPT && undone.images.length ? '' : parsed.userText;
+      promptInput.value = text;
+      promptInput.style.height = 'auto';
+      promptInput.style.height = Math.min(promptInput.scrollHeight, 160) + 'px';
+      sendBtn.classList.toggle('has-text', text.trim().length > 0);
+      if (currentSessionId) {
+        sessionsState[currentSessionId] = sessionsState[currentSessionId] || {};
+        sessionsState[currentSessionId].draftInput = text;
+      }
+      attachedImages = undone.images.slice(0, MAX_ATTACHED_IMAGES);
+      renderImageAttachments();
+      attachedFiles = parsed.files.slice(0, MAX_ATTACHED_FILES).map(f => ({ name: f.name, path: f.path }));
+      renderAttachedFiles();
+      promptInput.focus();
+      promptInput.setSelectionRange(text.length, text.length);
+    }
+
+    function appendUndoNote(text, undone) {
+      const note = document.createElement('div');
+      note.className = 'system-note undo-note';
+      note.style.fontSize = '11px';
+      note.style.color = 'var(--muted)';
+      const label = document.createElement('span');
+      label.textContent = text;
+      note.appendChild(label);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'undo-note-action';
+      button.setAttribute('data-action', 'restore-undone-prompt');
+      button.textContent = 'Put the prompt back';
+      note.appendChild(button);
+      note._undonePrompt = undone;
+      chatContainer.appendChild(note);
+      scrollToBottomIfNeeded();
     }
 
     // Empty-chat starters: two generic buttons become specific when there is something to act on.
@@ -7442,6 +7562,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         description: changed + ' changed file' + (changed === 1 ? '' : 's'),
         prompt: 'Review my uncommitted changes for bugs and risky edits, then suggest a commit message.',
       } : null);
+    }
+
+    // A prompt's images as viewer items; name is the full-size copy the engine keeps, if it kept one.
+    function promptImageItems(images, imageFiles) {
+      const names = Array.isArray(imageFiles) ? imageFiles : [];
+      return (Array.isArray(images) ? images : []).map((src, index) => ({
+        src: src,
+        name: typeof names[index] === 'string' && STORED_IMAGE_NAME.test(names[index]) ? names[index] : null,
+      })).filter(item => typeof item.src === 'string' && item.src);
     }
 
     function appendUserMessage(text, images, ts, opts) {
@@ -7491,11 +7620,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       '</button>';
       wrap.appendChild(actionsDiv);
       wrap._promptText = parsed.userText || rawText;
+      const promptImages = promptImageItems(images, opts && opts.imageFiles);
+      wrap._promptImages = promptImages;
 
       const msgDiv = document.createElement('div');
       msgDiv.className = 'message user prompt-card';
 
-      if (images && Array.isArray(images) && images.length > 0) {
+      if (promptImages.length > 0) {
         const imgContainer = document.createElement('div');
         imgContainer.className = 'prompt-images-container';
 
@@ -7516,14 +7647,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const carousel = document.createElement('div');
         carousel.className = 'prompt-image-carousel';
 
-        images.forEach(uri => {
+        promptImages.forEach((item, index) => {
           const imgEl = document.createElement('img');
-          imgEl.src = uri;
+          imgEl.src = item.src;
           imgEl.className = 'prompt-image-thumb';
+          imgEl.alt = 'Image ' + (index + 1) + ' of ' + promptImages.length;
           imgEl.title = 'Click to preview full size';
+          imgEl.setAttribute('tabindex', '0');
+          imgEl.setAttribute('role', 'button');
           imgEl.addEventListener('click', (e) => {
             if (e && e.stopPropagation) e.stopPropagation();
-            openImageLightbox(uri);
+            openImageViewer(promptImages, index, 'Prompt image');
           });
           carousel.appendChild(imgEl);
         });
@@ -9443,6 +9577,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           // accumulate into the newly loaded session's tool call replay.
           globalDiffStats = {};
           turnEditedFiles.clear();
+          const reloadingShownSession = Boolean(msg.session && msg.session.id && msg.session.id === currentSessionId);
           if (msg.session && msg.session.id) {
             currentSessionId = msg.session.id;
             noteSessionShown(currentSessionId);
@@ -9474,7 +9609,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           sessionsState[currentSessionId].scheduledRun = (msg.session && msg.session.scheduled_run) || null;
           updateScheduledRunNotice(sessionsState[currentSessionId].scheduledRun, sessionIsRunning);
-          if (promptInput && !msg.draft) {
+          if (promptInput && !msg.draft && !reloadingShownSession) {
             promptInput.value = (sessionsState[currentSessionId] && sessionsState[currentSessionId].draftInput) || '';
             promptInput.style.height = 'auto';
           }
@@ -9538,7 +9673,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   appendCompactionSummaryCard(uContent);
                 } else {
                   try {
-                    appendUserMessage(uContent, m.images || [], m.ts, { skipDedupe: true, steering: Boolean(m.steering) });
+                    appendUserMessage(uContent, m.images || [], m.ts, { skipDedupe: true, steering: Boolean(m.steering), imageFiles: m.image_files });
                   } catch (userRenderErr) {
                     console.error('[Andromity webview] Failed to render user prompt', userRenderErr);
                   }
@@ -10664,7 +10799,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             msg.seedMessages.forEach(function(m) {
               if (!m) return;
               if (m.role === 'user') {
-                appendUserMessage(extractMessageText(m.content), m.images || [], m.ts, { skipDedupe: true, steering: Boolean(m.steering) });
+                appendUserMessage(extractMessageText(m.content), m.images || [], m.ts, { skipDedupe: true, steering: Boolean(m.steering), imageFiles: m.image_files });
               } else if (m.role === 'assistant' && extractMessageText(m.content).trim()) {
                 const wrap = document.createElement('div');
                 wrap.className = 'message-wrap assistant';
@@ -10763,15 +10898,37 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         case 'turn_undone': {
           const undoneCount = msg.turnsUndone || 1;
-          appendSystemNote(undoneCount > 1
+          const undoneNote = undoneCount > 1
             ? (undoneCount + ' turns undone: file changes rolled back.')
-            : 'Last turn undone: file changes rolled back.');
+            : 'Last turn undone: file changes rolled back.';
+          const undone = undonePromptFrom(msg.undonePrompt);
           if (typeof msg.resendPrompt === 'string' && msg.resendPrompt.trim()) {
+            appendSystemNote(undoneNote);
             const resend = msg.resendPrompt.trim();
+            const images = resendImagesFor(pendingResend, resend, undone);
+            pendingResend = null;
             if (sentPromptsHistory[sentPromptsHistory.length - 1] !== resend) sentPromptsHistory.push(resend);
             promptHistoryIndex = sentPromptsHistory.length;
-            dispatchPrompt(resend, true, [], 'queue');
+            dispatchPrompt(resend, true, images, 'queue');
+          } else if (undone && composerIsEmpty()) {
+            putPromptBack(undone);
+            appendSystemNote(undoneNote + ' Your prompt is back in the input box.');
+          } else if (undone) {
+            appendUndoNote(undoneNote + ' Your draft was kept.', undone);
+          } else {
+            appendSystemNote(undoneNote);
           }
+          break;
+        }
+
+        case 'prompt_image': {
+          if (typeof msg.name !== 'string') break;
+          fullImageRequests.delete(msg.name);
+          fullImageCache.delete(msg.name);
+          fullImageCache.set(msg.name, isImageDataUri(msg.uri) ? msg.uri : null);
+          while (fullImageCache.size > FULL_IMAGE_CACHE_LIMIT) fullImageCache.delete(fullImageCache.keys().next().value);
+          const shown = imageViewer.items[imageViewer.index];
+          if (shown && shown.name === msg.name && isImageViewerOpen()) renderImageViewer();
           break;
         }
 
@@ -12146,32 +12303,126 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         .replace(/'/g, '&#39;');
     }
 
-    window.openImageLightbox = function(uri, title) {
+    function isImageDataUri(uri) {
+      return typeof uri === 'string' && uri.length <= MAX_IMAGE_URI_CHARS && /^data:image\\/(?:png|jpeg|gif|webp);base64,/.test(uri);
+    }
+
+    function isImageViewerOpen() {
       const overlay = document.getElementById('image-lightbox-overlay');
+      return Boolean(overlay && overlay.classList.contains('open'));
+    }
+
+    function requestFullImage(name) {
+      if (!name || fullImageCache.has(name) || fullImageRequests.has(name)) return;
+      fullImageRequests.add(name);
+      vscode.postMessage({ type: 'load_prompt_image', name: name });
+    }
+
+    // Items are { src, name }: src is what the chat already has (a thumbnail for saved prompts),
+    // name the full-size copy the engine keeps, fetched when the item is shown.
+    function openImageViewer(items, index, title) {
+      const overlay = document.getElementById('image-lightbox-overlay');
+      const list = (items || []).filter(item => item && typeof item.src === 'string' && item.src);
+      if (!overlay || !document.getElementById('image-lightbox-img') || !list.length) return;
+      if (!isImageViewerOpen()) imageViewer.returnFocus = document.activeElement;
+      imageViewer.items = list;
+      imageViewer.index = Math.min(Math.max(0, Number(index) || 0), list.length - 1);
+      imageViewer.title = title || 'Image Preview';
+      overlay.style.display = 'flex';
+      void overlay.offsetWidth;
+      overlay.classList.add('open');
+      renderImageViewer();
+      const close = document.getElementById('btn-lightbox-close');
+      if (close) close.focus();
+    }
+
+    function renderImageViewer() {
+      const item = imageViewer.items[imageViewer.index];
       const img = document.getElementById('image-lightbox-img');
+      if (!item || !img) return;
+      const total = imageViewer.items.length;
+      const position = (imageViewer.index + 1) + ' of ' + total;
+      img.src = (item.name && fullImageCache.get(item.name)) || item.src;
+      img.alt = total > 1 ? imageViewer.title + ', ' + position : imageViewer.title;
       const titleEl = document.getElementById('image-lightbox-title');
-      if (overlay && img && uri) {
-        img.src = uri;
-        if (titleEl) titleEl.textContent = title || 'Image Preview';
-        overlay.style.display = 'flex';
-        void overlay.offsetWidth;
-        overlay.classList.add('open');
+      if (titleEl) titleEl.textContent = imageViewer.title;
+      const counter = document.getElementById('image-lightbox-counter');
+      if (counter) {
+        counter.textContent = total > 1 ? position : '';
+        counter.hidden = total < 2;
       }
+      ['btn-lightbox-prev', 'btn-lightbox-next'].forEach(id => {
+        const button = document.getElementById(id);
+        if (button) button.hidden = total < 2;
+      });
+      const overlay = document.getElementById('image-lightbox-overlay');
+      if (overlay) overlay.classList.toggle('has-nav', total > 1);
+      if (item.name) requestFullImage(item.name);
+    }
+
+    function stepImageViewer(delta) {
+      const total = imageViewer.items.length;
+      if (total < 2) return;
+      imageViewer.index = (imageViewer.index + delta + total) % total;
+      renderImageViewer();
+    }
+
+    window.openImageLightbox = function(uri, title) {
+      if (uri) openImageViewer([{ src: uri, name: null }], 0, title);
     };
 
     window.closeImageLightbox = function() {
       const overlay = document.getElementById('image-lightbox-overlay');
-      if (overlay) {
-        overlay.classList.remove('open');
-        setTimeout(function() {
-          if (!overlay.classList.contains('open')) {
-            overlay.style.display = 'none';
-            const img = document.getElementById('image-lightbox-img');
-            if (img) img.src = '';
-          }
-        }, 200);
-      }
+      if (!overlay) return;
+      const wasOpen = overlay.classList.contains('open');
+      overlay.classList.remove('open');
+      setTimeout(function() {
+        if (!overlay.classList.contains('open')) {
+          overlay.style.display = 'none';
+          const img = document.getElementById('image-lightbox-img');
+          if (img) img.src = '';
+        }
+      }, 200);
+      if (!wasOpen) return;
+      const back = imageViewer.returnFocus;
+      imageViewer.items = [];
+      imageViewer.returnFocus = null;
+      if (back && back !== document.body && back.isConnected && typeof back.focus === 'function') back.focus();
+      else focusPrompt();
     };
+
+    // While the viewer is open it owns the keyboard: Esc closes, arrows step, Tab stays on its buttons.
+    window.addEventListener('keydown', function(e) {
+      if (!isImageViewerOpen()) return;
+      const overlay = document.getElementById('image-lightbox-overlay');
+      let handled = true;
+      if (e.key === 'Escape') {
+        window.closeImageLightbox();
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        stepImageViewer(e.key === 'ArrowLeft' ? -1 : 1);
+      } else if (e.key === 'Tab') {
+        const buttons = Array.from(overlay.querySelectorAll('button')).filter(button => !button.hidden && !button.disabled);
+        const at = buttons.indexOf(document.activeElement);
+        const step = e.shiftKey ? -1 : 1;
+        const next = buttons[at < 0 ? (step < 0 ? buttons.length - 1 : 0) : (at + step + buttons.length) % buttons.length];
+        if (next) next.focus();
+      } else {
+        handled = false;
+      }
+      if (handled) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
+
+    document.addEventListener('focusin', function(e) {
+      if (!isImageViewerOpen()) return;
+      const overlay = document.getElementById('image-lightbox-overlay');
+      if (overlay && !overlay.contains(e.target)) {
+        const close = document.getElementById('btn-lightbox-close');
+        if (close) close.focus();
+      }
+    });
 
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape') {
@@ -12205,6 +12456,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     });
 
     document.addEventListener('click', function(e) {
+      const navLb = e.target.closest('#btn-lightbox-prev, #btn-lightbox-next');
+      if (navLb) {
+        stepImageViewer(navLb.id === 'btn-lightbox-prev' ? -1 : 1);
+        return;
+      }
       const closeLb = e.target.closest('#btn-lightbox-close');
       const overlayLb = e.target === document.getElementById('image-lightbox-overlay') || (e.target.classList && e.target.classList.contains('image-lightbox-container'));
       if (closeLb || overlayLb) {
@@ -12231,11 +12487,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
       const previewImg = e.target.closest('[data-action="preview-image"]');
       if (previewImg && !e.target.closest('[data-action="remove-image-attachment"]')) {
-        const src = previewImg.getAttribute('data-src') || (previewImg.querySelector('img') ? previewImg.querySelector('img').src : '');
-        const title = previewImg.getAttribute('data-title') || 'Image Preview';
-        if (src) {
-          window.openImageLightbox(src, title);
-        }
+        const idx = parseInt(previewImg.getAttribute('data-idx') || '0', 10);
+        openImageViewer(attachedImages.map(src => ({ src: src, name: null })), idx, 'Attachment');
         return;
       }
       const chatImg = e.target.closest('.message img, .assistant-text img, .user-text img');
