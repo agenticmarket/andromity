@@ -2,6 +2,7 @@ import { ingestTelemetry } from './ingest.js';
 import { buildStatsScope, measurementQueries } from './statsScope.js';
 import { cachedStats } from './statsCache.js';
 import { sessionSummaries, featureSummaries } from './metricSummaries.js';
+import { usageQueries, usageResults } from './usageStats.js';
 import { handleBlogRequest } from './blog.js';
 import { handleFeedbackRequest } from './feedback.js';
 
@@ -440,7 +441,10 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
   };
   const scope = buildStatsScope(params);
   const prepare = sql => scope.prepare(env.DB, sql);
-  const measurement = await batch(measurementQueries(scope, env.DB));
+  const measurementStatements = measurementQueries(scope, env.DB);
+  const measured = await batch([...measurementStatements, ...usageQueries(params, env.DB)]);
+  const measurement = measured.slice(0, measurementStatements.length);
+  const usage = usageResults(measured.slice(measurementStatements.length));
   const [sessionRows, featureRows] = await batch([
     prepare(`SELECT user_id,client,country,os,version,provider,model,provider_type,reasoning_effort,
       profile,turn_count,created_at FROM sessions`),
@@ -620,6 +624,7 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
     cohort_health: measurement[1].results[0],
     retention: measurement[2].results[0],
     task_outcomes: measurement[3].results[0],
+    ...usage,
     measurement_version: 2,
     coverage: { legacy_activity: true, task_outcomes_require_version: "0.2.14", watermark: "Observed activity; opt-outs and historical gaps are excluded." },
     filters: Object.fromEntries(params),

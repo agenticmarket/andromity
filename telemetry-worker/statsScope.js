@@ -42,16 +42,26 @@ export function buildStatsScope(params = new URLSearchParams()) {
     SELECT * FROM feature_events WHERE ${dateCondition}
       ${hasScope ? 'AND user_id IN (SELECT user_id FROM scoped_activity) AND session_id IN (SELECT session_id FROM scoped_activity)' : ''}
   )`;
+  const withScope = (db, sql) => {
+    if (!hasScope && !/\bscoped_(activity|tasks|users)\b/.test(sql)) return db.prepare(sql).bind();
+    const combined = /^\s*WITH\s/i.test(sql) ? cte + ',' + sql.replace(/^\s*WITH\s/i, '') : cte + ' ' + sql;
+    return db.prepare(combined).bind(...bindings);
+  };
   return {
     bindings,
+    hasScope,
+    rangeDays: days,
+    tables: hasScope
+      ? { activity: 'scoped_activity', sessions: 'scoped_sessions', tasks: 'scoped_tasks' }
+      : { activity: 'activity_facts', sessions: 'sessions', tasks: 'task_runs' },
     prepare(db, sql) {
-      const scoped = sql.replace(/\b(FROM|JOIN)\s+(sessions|users|events|feature_events)\b/gi,
+      return withScope(db, sql.replace(/\b(FROM|JOIN)\s+(sessions|users|events|feature_events)\b/gi,
         (_, keyword, table) => `${keyword} ${ { sessions: hasScope ? 'scoped_sessions' : 'sessions',
           users: 'scoped_users', events: hasScope ? 'scoped_events' : 'events',
-          feature_events: hasScope ? 'scoped_features' : 'feature_events' }[table.toLowerCase()]}`);
-      if (!hasScope && !/\bscoped_(activity|tasks|users)\b/.test(scoped)) return db.prepare(scoped).bind();
-      const combined = /^\s*WITH\s/i.test(scoped) ? cte + ',' + scoped.replace(/^\s*WITH\s/i, '') : cte + ' ' + scoped;
-      return db.prepare(combined).bind(...bindings);
+          feature_events: hasScope ? 'scoped_features' : 'feature_events' }[table.toLowerCase()]}`));
+    },
+    prepareExplicit(db, sql) {
+      return withScope(db, sql);
     },
   };
 }
