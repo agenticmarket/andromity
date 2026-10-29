@@ -41,7 +41,7 @@ export async function handleInputMessage(
         message.prompt || "", EditorBridge.getActiveContext(), message.attachContext !== false);
       const result = await rpc.call<{ queue: InputQueueState; input_id: string }>("agent.submit", {
         session_id: sid, request_id: message.requestId, delivery: message.delivery || "queue",
-        prompt, image_uris: message.images || [], project_path: projectPath,
+        prompt, image_uris: message.images || [], image_only: message.imageOnly === true, project_path: projectPath,
         profile: message.profile, model: message.model, provider: message.provider,
         mode: clampPromptMode(message.mode, approvedMode), reasoning_effort: message.reasoningEffort,
       });

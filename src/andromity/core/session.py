@@ -71,6 +71,12 @@ def is_compaction_summary(message: Dict[str, Any]) -> bool:
     return message.get("role") == "user" and str(message.get("content") or "").startswith(_COMPACTION_SUMMARY_PREFIXES)
 
 
+def skipped_image_count(message: Dict[str, Any]) -> int:
+    """How many images were attached to a message but left out because the model could not read them."""
+    count = message.get("images_skipped")
+    return count if isinstance(count, int) and not isinstance(count, bool) and count > 0 else 0
+
+
 class Session:
     def __init__(
         self,
@@ -268,7 +274,7 @@ class Session:
                     images: Optional[List[str]] = None,
                     duration: Optional[float] = None,
                     turn_id: Optional[str] = None, steering: bool = False,
-                    model: Optional[str] = None):
+                    model: Optional[str] = None, images_skipped: Optional[int] = None):
         msg: Dict[str, Any] = {"role": role, "ts": datetime.now(timezone.utc).isoformat()}
         if role == "tool":
             # Tool messages MUST always have a non-empty content string for LLM providers
@@ -287,6 +293,8 @@ class Session:
             msg["tool_call_id"] = tool_call_id
         if images is not None:
             msg["images"] = images
+        if images_skipped is not None and images_skipped > 0:
+            msg["images_skipped"] = int(images_skipped)
         if duration is not None:
             msg["duration"] = duration
         if turn_id is not None:
@@ -587,6 +595,7 @@ class Session:
                         m.get("duration"),
                         m.get("turn_id"),
                         int(bool(m.get("steering"))),
+                        skipped_image_count(m) or None,
                     )
                     for seq, m in enumerate(self.messages)
                 ]
@@ -597,8 +606,9 @@ class Session:
                     conn.executemany("""
                         INSERT OR REPLACE INTO session_messages (
                             session_id, seq, role, content, tool_calls,
-                            thinking, name, tool_call_id, ts, images, duration, turn_id, steering
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            thinking, name, tool_call_id, ts, images, duration, turn_id, steering,
+                            images_skipped
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, rows_to_insert)
             self._persisted = True
             self._message_digests = digests
@@ -727,6 +737,8 @@ class Session:
                 m["turn_id"] = mr["turn_id"]
             if "steering" in mr_keys and mr["steering"]:
                 m["steering"] = True
+            if "images_skipped" in mr_keys and (skipped := skipped_image_count({"images_skipped": mr["images_skipped"]})):
+                m["images_skipped"] = skipped
             msgs.append(m)
         session.messages = msgs
 

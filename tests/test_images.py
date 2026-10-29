@@ -7,7 +7,7 @@ from unittest.mock import patch
 from textual.app import App, ComposeResult
 
 from andromity.core.agent import Agent
-from andromity.core.events import TextDelta, Done
+from andromity.core.events import TextDelta, Done, ImagesSkipped
 from andromity.core.images import (
     MAX_IMAGES, image_label, image_to_data_uri, extract_image_path, load_image_file,
 )
@@ -67,8 +67,15 @@ async def test_run_with_images_sends_content_parts_but_keeps_session_text(sessio
 @pytest.mark.asyncio
 async def test_run_blocks_images_for_non_vision_model(session):
     """Direct, well-known providers still get blocked when they explicitly
-    report no vision support (e.g. openai/gpt-3.5-turbo)."""
+    report no vision support (e.g. openai/gpt-3.5-turbo): the text is sent
+    without the images."""
     agent = Agent(session, profile="builder", auto_approve=True, dry_run=True)
+    seen = {}
+
+    async def mock_stream(messages, tools=None, **kwargs):
+        seen["messages"] = messages
+        yield TextDelta(text="No image reached me")
+        yield Done(usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
 
     def fake_config_get(section, key, default=None):
         if key == "provider":
@@ -77,18 +84,18 @@ async def test_run_blocks_images_for_non_vision_model(session):
             return "gpt-3.5-turbo"
         return default
 
-    with patch("andromity.core.agent.stream_completion") as mock_stream, \
+    with patch("andromity.core.agent.stream_completion", side_effect=mock_stream), \
          patch("litellm.supports_vision", return_value=False), \
          patch("andromity.core.agent.config.get", side_effect=fake_config_get):
         events = []
         async for event in agent.run("describe this", image_uris=["data:image/jpeg;base64,AAAA"]):
             events.append(event)
 
-    mock_stream.assert_not_called()
-    errs = [e for e in events if isinstance(e, TextDelta)]
-    assert any("does not support images" in e.text for e in errs)
-    # No user message was recorded for the blocked turn.
-    assert not [m for m in session.messages if m["role"] == "user"]
+    sent = [m for m in seen["messages"] if m["role"] == "user"][-1]["content"]
+    assert isinstance(sent, str) and sent.startswith("describe this")
+    assert any(isinstance(e, ImagesSkipped) and e.count == 1 for e in events)
+    # The prompt was recorded with how many images were left out.
+    assert [m for m in session.messages if m["role"] == "user"][-1]["images_skipped"] == 1
 
 
 @pytest.mark.asyncio

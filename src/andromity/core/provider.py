@@ -803,7 +803,7 @@ def classify_error_info(
         )
         actions_tui = [
             "Retry prompt without image attachments",
-            "Press Ctrl+L to switch to a vision model (e.g. Claude 3.7 Sonnet, GPT-4o)",
+            "Press Ctrl+L or type /model to switch to a vision model (e.g. Claude 3.7 Sonnet, GPT-4o)",
         ]
     elif is_upstream:
         err_type = "provider_unavailable"

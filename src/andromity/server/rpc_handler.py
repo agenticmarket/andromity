@@ -41,6 +41,7 @@ CRON_SEED_PRESET_NAMES = {"Run Tests & Verify Build", "Daily Code Health & TODO 
 CRON_RUN_BUSY_MESSAGE = "This scheduled run is still in progress. You can continue the chat when it finishes."
 from andromity.core.events import (
     Done,
+    ImagesSkipped,
     InputApplied,
     HandoffWritten,
     LLMCallEnd,
@@ -1412,7 +1413,7 @@ class JsonRpcHandler:
             if params.get("strip_images"):
                 payload.pop("images", None)
                 payload["image_uris"] = []
-                if not str(payload.get("prompt", "")).strip():
+                if payload.get("image_only") or not str(payload.get("prompt", "")).strip():
                     raise ValueError("This message only contains an image. Add a text prompt before retrying.")
             for key in ("model", "provider", "reasoning_effort"):
                 if params.get(key):
@@ -1869,12 +1870,19 @@ class JsonRpcHandler:
                     "image_uris": image_uris or [],
                 })
                 session.set_status("running")
-                async for event in agent.run(prompt, images=images, image_uris=image_uris):
+                async for event in agent.run(prompt, images=images, image_uris=image_uris,
+                                             image_only=bool(params.get("image_only"))):
                     if isinstance(event, InputApplied):
                         self.notify("agent/inputApplied", {
                             "session_id": session_id, "input_id": event.input_id,
                             "prompt": event.prompt, "image_uris": event.image_uris or [],
                             "turn_index": event.turn_index, "ts": time.time(),
+                        })
+                    elif isinstance(event, ImagesSkipped):
+                        self.notify("agent/imagesSkipped", {
+                            "session_id": session_id, "count": event.count,
+                            "prompt_added": event.prompt_added, "steering": event.steering,
+                            "input_id": event.input_id if event.steering else params.get("input_id"),
                         })
                     elif isinstance(event, Done):
                         if event.outcome != "success":

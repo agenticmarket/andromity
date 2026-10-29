@@ -5982,7 +5982,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (queueSupported) {
         const requestId = 'input-' + Date.now() + '-' + Math.random().toString(36).slice(2);
         pendingInputDraft = { requestId, text, images: imagesToSend, files: filesToSend, sessionId: currentSessionId };
-        dispatchPrompt(promptPayload, true, imagesToSend, delivery === 'steer' ? 'steer' : 'queue', requestId);
+        dispatchPrompt(promptPayload, true, imagesToSend, delivery === 'steer' ? 'steer' : 'queue', requestId, !fullText && imagesToSend.length > 0);
         return;
       }
 
@@ -5994,13 +5994,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       dispatchPrompt(promptPayload, true, imagesToSend);
     }
 
-    function dispatchPrompt(text, attachContext, images, delivery, requestId) {
+    function dispatchPrompt(text, attachContext, images, delivery, requestId, imageOnly) {
       try {
         setNextStep(currentSessionId, null);
         if (queueSupported) {
           vscode.postMessage({
             type: 'submit_input', requestId: requestId || ('input-' + Date.now() + '-' + Math.random().toString(36).slice(2)),
-            prompt: text, sessionId: currentSessionId, images: images || [],
+            prompt: text, sessionId: currentSessionId, images: images || [], imageOnly: imageOnly === true,
             delivery: delivery || 'queue', attachContext,
             profile: currentProfile, mode: currentMode, model: currentModel,
             provider: currentProvider, reasoningEffort: currentReasoning,
@@ -7471,6 +7471,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const normalUserCount = chatContainer.querySelectorAll('.message-wrap.user:not([data-steering])').length;
       const existingUserCount = opts && opts.turnIndex !== undefined ? opts.turnIndex : (opts && opts.steering ? Math.max(0, normalUserCount - 1) : normalUserCount);
       if (opts && opts.steering) wrap.setAttribute('data-steering', 'true');
+      if (opts && opts.inputId) wrap.setAttribute('data-input-id', String(opts.inputId));
       wrap.setAttribute('data-turn-index', String(existingUserCount));
 
       const actionsDiv = document.createElement('div');
@@ -9539,6 +9540,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                 } else {
                   try {
                     appendUserMessage(uContent, m.images || [], m.ts, { skipDedupe: true, steering: Boolean(m.steering) });
+                    if (Number(m.images_skipped) > 0) chatContainer.appendChild(buildImagesSkippedNotice(m.images_skipped));
                   } catch (userRenderErr) {
                     console.error('[Andromity webview] Failed to render user prompt', userRenderErr);
                   }
@@ -10641,8 +10643,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           activePendingApprovalId = null;
           activePendingToolName = '';
           activePendingPlan = false;
-          appendUserMessage(msg.prompt, msg.image_uris || [], Date.now(), { skipDedupe: true, steering: true, turnIndex: msg.turn_index });
+          appendUserMessage(msg.prompt, msg.image_uris || [], Date.now(), { skipDedupe: true, steering: true, turnIndex: msg.turn_index, inputId: msg.input_id });
           startAssistantTurn();
+          break;
+        case 'images_skipped':
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
+          showImagesSkipped(msg);
           break;
         case 'init_queue':
           if (queueSupported) { requestQueueSnapshot(); break; }
@@ -10695,7 +10701,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.input_id && !appliedInputIds.has(msg.input_id)) {
             appliedInputIds.add(msg.input_id);
             hideZeroState();
-            appendUserMessage(msg.prompt, msg.image_uris || [], Date.now(), { skipDedupe: true });
+            appendUserMessage(msg.prompt, msg.image_uris || [], Date.now(), { skipDedupe: true, inputId: msg.input_id });
             startAssistantTurn();
             break;
           }
@@ -11410,6 +11416,62 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       note.style.color = 'var(--muted)';
       note.textContent = text;
       chatContainer.appendChild(note);
+      scrollToBottomIfNeeded();
+    }
+
+    function buildImagesSkippedNotice(count) {
+      const single = !(Number(count) > 1);
+      const notice = document.createElement('div');
+      notice.className = 'images-skipped-notice';
+      notice.setAttribute('role', 'status');
+      const icon = document.createElement('span');
+      icon.className = 'images-skipped-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" x2="22" y1="2" y2="22"></line><path d="M10.41 10.41a2 2 0 1 1-2.83-2.83"></path><line x1="13.5" x2="6" y1="13.5" y2="21"></line><line x1="18" x2="21" y1="12" y2="15"></line><path d="M3.59 3.59A1.99 1.99 0 0 0 3 5v14a2 2 0 0 0 2 2h14c.55 0 1.052-.22 1.41-.59"></path><path d="M21 15V5a2 2 0 0 0-2-2H9"></path></svg>';
+      const text = document.createElement('span');
+      text.className = 'images-skipped-text';
+      text.textContent = single
+        ? "This model can't read images, so your image wasn't sent. Switch to a model that supports images to include it."
+        : "This model can't read images, so your images weren't sent. Switch to a model that supports images to include them.";
+      const action = document.createElement('button');
+      action.className = 'btn-error-secondary images-skipped-action';
+      action.setAttribute('data-action', 'switch-model-flyout');
+      action.title = 'Choose a model that supports images';
+      action.innerHTML = iconModel + 'Switch model';
+      notice.append(icon, text, action);
+      return notice;
+    }
+
+    function showImagesSkipped(msg) {
+      const notice = buildImagesSkippedNotice(msg.count);
+      if (msg.prompt_added !== false) {
+        if (currentTurnAssistantDiv && currentTurnAssistantDiv.parentNode === chatContainer) {
+          chatContainer.insertBefore(notice, currentTurnAssistantDiv);
+        } else {
+          chatContainer.appendChild(notice);
+        }
+      } else if (msg.steering) {
+        // Mid-turn: start new blocks so whatever the model says next appears below the notice.
+        finishCurrentThinking();
+        if (currentToolSequence) finishToolSequence();
+        currentAssistantContent = null;
+        (currentTurnAssistantDiv || chatContainer).appendChild(notice);
+      } else {
+        // No turn was added, so the prompt and its empty reply leave the transcript; undo counts prompts in it.
+        const prompt = msg.input_id
+          ? Array.from(chatContainer.querySelectorAll('.message-wrap.user')).find((el) => el.getAttribute('data-input-id') === String(msg.input_id))
+          : null;
+        if (prompt) prompt.remove();
+        const placeholderOnly = currentTurnAssistantDiv && Array.from(currentTurnAssistantDiv.children)
+          .every((el) => el.classList.contains('assistant-header') || el.id === 'turn-loading-indicator');
+        if (placeholderOnly) {
+          removeTurnLoader();
+          currentTurnAssistantDiv.remove();
+          currentTurnAssistantDiv = null;
+          currentAssistantContent = null;
+        }
+        chatContainer.appendChild(notice);
+      }
       scrollToBottomIfNeeded();
     }
 

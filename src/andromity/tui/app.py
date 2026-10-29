@@ -11,7 +11,7 @@ from textual.containers import Horizontal, Vertical
 
 from typing import Any
 
-from andromity.tui.panels.chat import ChatPanel, NextStepCard
+from andromity.tui.panels.chat import ChatPanel, NextStepCard, images_skipped_notice
 from andromity.tui.panels.filetree import FileTreePanel
 from andromity.tui.panels.diff import DiffPanel
 from andromity.tui.panels.plan import PlanPanel
@@ -1346,7 +1346,7 @@ class AndromityApp(App):
         self._process_message(prompt, images)
 
     async def _stream_agent(self, prompt: str, images: list | None = None):
-        from andromity.core.events import InputApplied, NextStepSuggested
+        from andromity.core.events import ImagesSkipped, InputApplied, NextStepSuggested
         self.agent.input_queue = self._inputs()
         chat = self.query_one(ChatPanel)
         self._clear_next_step()
@@ -1365,6 +1365,7 @@ class AndromityApp(App):
         tool_calls_count = 0
         estimated_tokens = 0
         first_text_seen = False
+        prompt_skipped = False
         new_files_created = False  # True only when write_file creates a brand-new file
 
         tools_used = set()  # track which tools were called this stream
@@ -1409,6 +1410,17 @@ class AndromityApp(App):
                     chat.add_user_message(event.prompt, image_count=len(event.image_uris or []))
                     chat.start_assistant_message()
                     first_text_seen = False
+                elif isinstance(event, ImagesSkipped):
+                    notice = images_skipped_notice(event.count)
+                    if event.prompt_added:
+                        chat.add_reply_notice(notice)
+                    elif event.steering:
+                        chat.add_inline_notice(notice)
+                        first_text_seen = False
+                    else:
+                        prompt_skipped = True
+                        chat.discard_empty_turn()
+                        chat.add_system_message(notice)
                 elif isinstance(event, ThinkingDelta):
                     if not hasattr(chat, "_thinking") or not getattr(chat, "_thinking", None):
                         chat.start_thinking_message()
@@ -1525,8 +1537,8 @@ class AndromityApp(App):
             # Show how long the response took as a distinct colored footnote,
             # e.g. "⏱ 3.5s · 4 tool calls" (kept separate from the AI text)
             try:
-                elapsed = time.time() - turn_started
-                chat.add_response_time(elapsed, tool_calls_count)
+                if not prompt_skipped:
+                    chat.add_response_time(time.time() - turn_started, tool_calls_count)
             except Exception:
                 pass
             if next_step is not None:

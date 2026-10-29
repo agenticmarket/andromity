@@ -257,6 +257,9 @@ export class SessionTabPanel {
     bind("agent/inputApplied", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "input_applied", ...params });
     });
+    bind("agent/imagesSkipped", (params: any) => {
+      if (isMatch(params)) this._postMessage({ type: "images_skipped", ...params });
+    });
     bind("agent/started", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "agent_started", ...params });
     });
