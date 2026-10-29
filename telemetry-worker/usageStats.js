@@ -22,11 +22,15 @@ export function usageQueries(params, db) {
         SELECT date, user_id FROM ${usage.sessions} WHERE date >= date('now','-${span} days')
       ), user_days AS (
         SELECT a.date,
-          CASE WHEN date(u.first_seen) >= a.date THEN 'new'
-            WHEN date(u.first_seen) >= date(a.date,'-6 days') THEN 'week' ELSE 'older' END AS installed,
+          CASE WHEN a.first_day >= a.date THEN 'new'
+            WHEN a.first_day >= date(a.date,'-6 days') THEN 'week' ELSE 'older' END AS installed,
           p.user_id IS NOT NULL AS used
-        FROM (SELECT DISTINCT date, user_id FROM ${usage.activity} WHERE date >= date('now','-${span} days')) a
-        JOIN users u ON u.user_id=a.user_id
+        FROM (
+          SELECT o.date, o.user_id, COALESCE(date(u.first_seen),
+            (SELECT MIN(f.date) FROM activity_facts f WHERE f.user_id=o.user_id)) AS first_day
+          FROM (SELECT DISTINCT date, user_id FROM ${usage.activity} WHERE date >= date('now','-${span} days')) o
+          LEFT JOIN users u ON u.user_id=o.user_id
+        ) a
         LEFT JOIN prompt_days p ON p.date=a.date AND p.user_id=a.user_id
       )
       SELECT d.date, COUNT(ud.date) AS opened,

@@ -1,4 +1,5 @@
 const dimensions = ['country', 'client', 'os', 'version', 'provider', 'model'];
+const rangeStartDays = new Map([['today', 0], ['7d', 6], ['30d', 29]]);
 
 export function buildStatsScope(params = new URLSearchParams()) {
   const conditions = [];
@@ -14,7 +15,7 @@ export function buildStatsScope(params = new URLSearchParams()) {
     }
   }
   const range = params.get('timeRange') || 'all';
-  const days = { today: 0, '7d': 6, '30d': 29 }[range];
+  const days = rangeStartDays.get(range);
   if (range !== 'all' && days === undefined) throw new Error('Invalid time range');
   if (days !== undefined) conditions.push(`a.date >= date('now', '-${days} days')`);
   const dateCondition = days === undefined ? '1=1' : `date >= date('now', '-${days} days')`;
