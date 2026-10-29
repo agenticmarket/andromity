@@ -337,8 +337,10 @@ async def stream_completion(
             try:
                 response_stream = await acompletion(**kwargs)
             except Exception as e:
-                msg = str(e).lower()
-                is_daily_quota = (
+                msg = str(e).lower()[:_MESSAGE_LIMIT]
+                status = _http_status(_exception_chain(e))
+                text_counts = status is None or status < 500
+                is_daily_quota = text_counts and (
                     "daily_limit_reached" in msg
                     or "quota_exceeded" in msg
                     or "free trial requests" in msg
@@ -348,8 +350,8 @@ async def stream_completion(
                 )
                 is_auth_error = (
                     isinstance(e, (litellm.AuthenticationError, litellm.PermissionDeniedError))
-                    or has_status_code(msg, "401") or has_status_code(msg, "403")
-                    or any(k in msg for k in (
+                    or (status is None and (has_status_code(msg, "401") or has_status_code(msg, "403")))
+                    or text_counts and any(k in msg for k in (
                         "missing credentials", "please pass an `api_key`", "please pass an api_key",
                         "invalid api key", "invalid_api_key", "unauthorized", "forbidden",
                         "no api key", "missing api key"
@@ -357,7 +359,8 @@ async def stream_completion(
                 )
                 is_bad_request = (
                     isinstance(e, (litellm.BadRequestError, litellm.NotFoundError, litellm.ContextWindowExceededError, litellm.UnsupportedParamsError))
-                    or any(k in msg for k in (
+                    or _is_final_client_error(status)
+                    or text_counts and any(k in msg for k in (
                         "context_length_exceeded", "maximum context length", "model not found", "does not exist"
                     ))
                 )
@@ -488,7 +491,8 @@ async def stream_completion(
                 except Exception:
                     pass
 
-            msg = str(e).lower()
+            msg = str(e).lower()[:_MESSAGE_LIMIT]
+            status = _http_status(_exception_chain(e))
             is_non_retryable = (
                 isinstance(e, (
                     litellm.AuthenticationError,
@@ -498,13 +502,15 @@ async def stream_completion(
                     litellm.ContextWindowExceededError,
                     litellm.UnsupportedParamsError,
                 ))
-                or any(k in msg for k in (
+                or _is_final_client_error(status)
+                or (status is None and (has_status_code(msg, "401") or has_status_code(msg, "403")))
+                or ((status is None or status < 500) and any(k in msg for k in (
                     "missing credentials", "please pass an `api_key`", "please pass an api_key",
-                    "invalid api key", "invalid_api_key", "unauthorized", "401", "forbidden", "403",
+                    "invalid api key", "invalid_api_key", "unauthorized", "forbidden",
                     "no api key", "missing api key",
                     "daily_limit_reached", "quota_exceeded", "free trial requests", "daily limit",
                     "context_length_exceeded", "maximum context length", "model not found"
-                ))
+                )))
                 or (provider_name == GATEWAY_PROVIDER and gateway_error(e, "quota_exceeded") is not None)
             )
 
@@ -524,6 +530,11 @@ async def stream_completion(
             return
 
 
+def _is_final_client_error(status: Optional[int]) -> bool:
+    """A 4xx other than 408 and 429 gets the same answer when the request is sent again."""
+    return status is not None and 400 <= status <= 499 and status not in (408, 429)
+
+
 def _error_events(e: Exception, provider_name: str, model: str, has_images: bool,
                   usage: Optional[Dict[str, Any]] = None) -> List[StreamEvent]:
     """The card for a failed call and the Done event that ends the turn with its error type."""
@@ -541,7 +552,7 @@ def extract_clean_error_message(err_or_text: Any) -> str:
     import json
     import re
 
-    raw = str(err_or_text) if err_or_text is not None else ""
+    raw = (str(err_or_text) if err_or_text is not None else "")[:_MESSAGE_LIMIT]
     if not raw:
         return ""
     if re.search(r"<(?:!doctype\s+html|html\b|head\b|body\b)", raw, re.IGNORECASE):
@@ -603,8 +614,10 @@ _PROVIDER_NAMES = {"lmstudio": "LM Studio", "llamacpp": "llama.cpp", "opencode":
 _IDENTIFIER = re.compile(r"[a-z0-9_]{1,64}")
 _HTML_PAGE = re.compile(r"<(?:!doctype\s+html|html\b|head\b|body\b)", re.IGNORECASE)
 _EXCEPTION_PREFIX = re.compile(r"^(?:litellm\.)?\w+(?:Error|Exception)\s*[-:]\s*|^Message:\s*", re.IGNORECASE)
-_SSL_CONTEXT_NOTE = re.compile(r"\s*ssl:(?:<[^>]*>|\S+)")
+_SSL_CONTEXT_NOTE = re.compile(r" ?ssl:(?:<[^>]{0,200}>|\S{1,200})")
 _DETAIL_LIMIT = 400
+_MESSAGE_LIMIT = 20000
+_PLACEHOLDER_KEYS = frozenset({"anonymous_trial", "not-required"})
 
 _TIMEOUT_ERRORS = frozenset({
     "Timeout", "APITimeoutError", "ReadTimeout", "WriteTimeout", "PoolTimeout", "TimeoutException",
@@ -654,6 +667,11 @@ _OUTAGE_PHRASES = (
     "gateway timeout", "overloaded", "upstream error", "internal server error", "temporarily unavailable",
 )
 _OUTAGE_TYPES = frozenset({"overloaded_error", "server_error", "api_error", "service_unavailable"})
+_RATE_CODES = frozenset({
+    "rate_limit", "rate_limit_error", "rate_limit_exceeded", "resource_exhausted", "quota_exceeded",
+    "too_many_requests", "daily_limit_reached",
+})
+_CREDIT_CODES = frozenset({"insufficient_quota", "insufficient_credits", "insufficient_balance", "payment_required"})
 _STALL_PHRASES = ("stalled", "watchdog", "first token", "timed out")
 _GATEWAY_QUOTA_PHRASES = (
     "daily_limit_reached", "quota_exceeded", "free trial requests", "daily limit", "upgrade_url",
@@ -853,7 +871,7 @@ def _chain_body(chain: List[BaseException]) -> Dict[str, Any]:
 
 def _error_facts(e: BaseException) -> Dict[str, Any]:
     chain = _exception_chain(e)
-    text = str(e) or type(e).__name__
+    text = (str(e) or type(e).__name__)[:_MESSAGE_LIMIT]
     text_body = _json_error_in_text(text)
     return {
         "chain": chain,
@@ -962,8 +980,23 @@ def _timer_badge_html(text: str) -> str:
 
 
 def has_status_code(text: str, code: str) -> bool:
-    """An HTTP status as a whole number; request IDs and timestamps often contain "404" or "500"."""
-    return re.search(rf"(?<!\d){re.escape(code)}(?!\d)", text or "") is not None
+    """An HTTP status as a standalone number; request IDs and timestamps often contain "404" or "500"."""
+    return re.search(rf"(?<![\w.-]){re.escape(code)}(?![\w-])", (text or "")[:_MESSAGE_LIMIT]) is not None
+
+
+def redact_error_text(text: str, provider: str = "") -> str:
+    """Error text with known key shapes, sign-in tokens and the connection's own key removed."""
+    from andromity.telemetry import redact_secrets
+    text = redact_secrets((text or "")[:_MESSAGE_LIMIT])
+    try:
+        key = config.get_api_key(provider) if provider and provider != GATEWAY_PROVIDER else None
+    except Exception:
+        key = None
+    if isinstance(key, str) and len(key.strip()) >= 12 and key not in _PLACEHOLDER_KEYS:
+        key = key.strip()
+        text = text.replace(key, "[redacted]")
+        text = re.sub(re.escape(key[:10]) + r"[^\s\"'<>]*", "[redacted]", text)
+    return text
 
 
 def _strip_exception_prefixes(text: str) -> str:
@@ -1025,7 +1058,6 @@ def classify_error_info(
     import html
     from datetime import datetime, timezone, timedelta
     from andromity.core.network_policy import AirgapBlockedError, AirgapFeatureOff
-    from andromity.telemetry import redact_secrets
 
     facts = _error_facts(e)
     chain = facts["chain"]
@@ -1059,22 +1091,24 @@ def classify_error_info(
     server_error = status is not None and status >= 500
     timed_out = not network and not server_error and (
         status == 408 or bool(names & _TIMEOUT_ERRORS) or mentions(_STALL_PHRASES))
-    is_not_found = (
+    no_status = status is None
+    client_error = status is not None and 400 <= status <= 499
+    body_codes = (_identifier(body.get("type")), _identifier(body.get("code")))
+    is_not_found = not server_error and (
         status == 404 or "NotFoundError" in names or mentions(_NOT_FOUND_PHRASES)
-        or (status is None and has_code("404") and ("model" in low or "endpoint" in low))
+        or (no_status and has_code("404") and ("model" in low or "endpoint" in low))
     )
-    is_auth = (
-        status in (401, 403) or bool(names & {"AuthenticationError", "PermissionDeniedError"})
-        or (status is None and has_code("401", "403")) or mentions(_AUTH_PHRASES) or mentions(_MISSING_KEY_PHRASES)
-    )
+    is_auth = status in (401, 403) or (no_status and (
+        bool(names & {"AuthenticationError", "PermissionDeniedError"}) or has_code("401", "403")
+        or mentions(_AUTH_PHRASES) or mentions(_MISSING_KEY_PHRASES)
+    )) or (status == 400 and (mentions(_AUTH_PHRASES) or mentions(_MISSING_KEY_PHRASES)))
     is_credits = not gateway and (
-        status == 402 or mentions(_CREDIT_PHRASES)
-        or "insufficient_quota" in (_identifier(body.get("type")), _identifier(body.get("code")))
+        status == 402 or bool(set(body_codes) & _CREDIT_CODES)
+        or ((no_status or client_error) and mentions(_CREDIT_PHRASES))
     )
-    is_rate = (
-        status == 429 or "RateLimitError" in names or (status is None and has_code("429")) or mentions(_RATE_PHRASES)
-    )
-    is_context = mentions(_CONTEXT_PHRASES) or "ContextWindowExceededError" in names
+    is_rate = status == 429 or bool(set(body_codes) & _RATE_CODES) or (no_status and (
+        "RateLimitError" in names or has_code("429") or mentions(_RATE_PHRASES)))
+    is_context = not server_error and (mentions(_CONTEXT_PHRASES) or "ContextWindowExceededError" in names)
     is_outage = (status is not None and 500 <= status <= 504) or ((status is None or server_error) and (
         _identifier(body.get("type")) in _OUTAGE_TYPES
         or bool(names & {"ServiceUnavailableError", "BadGatewayError"}) or mentions(_OUTAGE_PHRASES)))
@@ -1085,8 +1119,8 @@ def classify_error_info(
     detail_text = body_message.strip() or _strip_exception_prefixes(clean_msg)
     if not detail_text:
         detail_text = msg.strip().splitlines()[0] if msg.strip() else err_cls
-    detail_text = _SSL_CONTEXT_NOTE.sub("", re.sub(r"\bof \d+ (?:requests|turns)\b", "", detail_text))
-    detail_text = redact_secrets(detail_text).strip()
+    detail_text = _SSL_CONTEXT_NOTE.sub("", re.sub(r"\bof \d+ (?:requests|turns)\b", "", detail_text[:4000]))
+    detail_text = redact_error_text(detail_text, provider_id).strip()
 
     timer_text = ""
     timer_html = ""
@@ -1110,6 +1144,8 @@ def classify_error_info(
         elif not network:
             if g_type == "invalid_request_error" and g_code in _GATEWAY_CONTEXT_CODES:
                 is_context = True
+            elif server_error:
+                gateway_card = "trouble"
             elif is_auth:
                 if mentions(_SIGN_IN_PHRASES):
                     gateway_card = "sign_in"
@@ -1119,7 +1155,7 @@ def classify_error_info(
                     gateway_card = "gateway_auth"
             elif g_type is None and mentions(_GATEWAY_QUOTA_PHRASES) and (is_rate or status in (None, 429)):
                 gateway_card = "quota_exceeded"
-            elif server_error or is_outage:
+            elif is_outage:
                 gateway_card = "trouble"
     typed_message = g_message.strip() if g_type and not is_html else ""
 
@@ -1438,8 +1474,8 @@ def classify_error_info(
         "type": err_type,
         "badge": badge,
         "title": title,
-        "desc_text": desc_text,
-        "desc_html": desc_html,
+        "desc_text": redact_error_text(desc_text, provider_id),
+        "desc_html": redact_error_text(desc_html, provider_id),
         "timer_text": timer_text,
         "timer_html": timer_html,
         "actions_html": actions_html,

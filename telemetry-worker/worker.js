@@ -580,7 +580,8 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
           WHERE event='session_end' AND had_error=1 GROUP BY user_id,session_id,date
         ) e WHERE 1=1
           AND NOT EXISTS(SELECT 1 FROM task_runs t WHERE t.session_id=e.session_id AND t.date=e.date)
-          AND NOT EXISTS(SELECT 1 FROM feature_events f WHERE f.session_id=e.session_id AND f.date=e.date AND f.feature_name LIKE 'error_%')
+          AND NOT EXISTS(SELECT 1 FROM feature_events f WHERE f.session_id=e.session_id AND f.date=e.date AND f.feature_name LIKE 'error_%'
+            AND substr(f.feature_name,1,10)<>'error_src_')
       )`),
     prepare(`
       SELECT

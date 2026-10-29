@@ -505,10 +505,10 @@ def friendly_error(error_type: Optional[str], detail: Optional[str] = None) -> s
 def classify_exception(e: BaseException, provider: str = "", model: str = "") -> Tuple[str, str]:
     """Map an exception from a cron run to (error_type, user-facing message)."""
     try:
-        from andromity.core.provider import classify_error_info, extract_clean_error_message
+        from andromity.core.provider import classify_error_info, extract_clean_error_message, redact_error_text
         info = classify_error_info(e, provider=provider, model=model)  # type: ignore[arg-type]
         err_type = info.get("type") or "generic"
-        detail = extract_clean_error_message(e) if err_type == "generic" else ""
+        detail = redact_error_text(extract_clean_error_message(e), provider) if err_type == "generic" else ""
     except Exception:
         err_type, detail = "generic", ""
     if err_type == "generic" and not detail:

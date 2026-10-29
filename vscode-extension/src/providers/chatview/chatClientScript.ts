@@ -6420,7 +6420,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       let start;
       while ((start = md.indexOf(ERROR_CARD_OPEN, from)) !== -1) {
         const end = errorCardMarkupEnd(md, start);
-        const card = end !== -1 && startsLineOutsideFence(md, start) ? errorCardFromMarkup(md.slice(start, end)) : '';
+        const card = end !== -1 && startsLineOutsideFence(md, start) ? errorCardFromMarkup(md.slice(start, end), true) : '';
         if (card) {
           html += renderMarkdownText(md.slice(0, start)) + card;
           md = md.slice(end);
@@ -10823,6 +10823,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           const finishedTurn = finishedTurnFacts(msg);
           endAssistantTurn();
+          if (msg.outcome === 'error') enableEngineCardActions(msg.error_type);
           interactiveSlot.innerHTML = '';
           activePendingApprovalId = null;
           activePendingToolName = '';
@@ -11156,6 +11157,28 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       'use-without-sign-in': iconSignOut,
     };
 
+    // Actions with side effects: only engine error events may show them, always with these labels.
+    const ERROR_CARD_ENGINE_ACTIONS = {
+      'use-without-sign-in': { label: 'Use without signing in', title: 'Sign out and retry this turn without an account' },
+    };
+
+    function engineActionButton(action, primary) {
+      const fixed = ERROR_CARD_ENGINE_ACTIONS[action];
+      return '<button class="' + (primary ? 'btn-error-retry' : 'btn-error-secondary') + '" data-action="' + action + '" title="' + escapeHtml(fixed.title) + '">' +
+        ERROR_CARD_ACTION_ICONS[action] + escapeHtml(fixed.label) + '</button>';
+    }
+
+    // The engine's sign-in error arrives as reply text, which may not carry side-effect actions;
+    // the turn's error event then adds them to the last such card.
+    function enableEngineCardActions(errorType) {
+      if (errorType !== 'sign_in_invalid' || !chatContainer || typeof chatContainer.querySelectorAll !== 'function') return;
+      const cards = chatContainer.querySelectorAll('.andromity-error-card[data-error-type="sign_in_invalid"]');
+      const card = cards && cards.length ? cards[cards.length - 1] : null;
+      const actions = card && card.querySelector('.error-card-actions');
+      if (!actions || actions.querySelector('[data-action="use-without-sign-in"]')) return;
+      actions.insertAdjacentHTML('beforeend', engineActionButton('use-without-sign-in', false));
+    }
+
     function errorCardMarkupEnd(text, start) {
       const tag = /<(\\/?)div\\b[^>]*>/gi;
       tag.lastIndex = start;
@@ -11181,7 +11204,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     // Reads the card through an inert DOMParser document and keeps only text, inline emphasis,
     // the quota timer, and buttons whose data-action the click handler already supports.
-    function errorCardFromMarkup(markup) {
+    function errorCardFromMarkup(markup, fromReplyText) {
       if (typeof DOMParser === 'undefined') return '';
       const source = new DOMParser().parseFromString(markup, 'text/html').querySelector('.andromity-error-card');
       if (!source) return '';
@@ -11222,6 +11245,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       source.querySelectorAll('.error-card-actions [data-action]').forEach((button) => {
         const action = button.getAttribute('data-action') || '';
         if (!Object.prototype.hasOwnProperty.call(ERROR_CARD_ACTION_ICONS, action) || seenActions.has(action)) return;
+        if (Object.prototype.hasOwnProperty.call(ERROR_CARD_ENGINE_ACTIONS, action)) {
+          if (!fromReplyText) actionsHtml += engineActionButton(action, seenActions.size === 0);
+          seenActions.add(action);
+          return;
+        }
         const label = (button.textContent || '').replace(/\\s+/g, ' ').trim();
         if (!label) return;
         actionsHtml += '<button class="' + (seenActions.size === 0 ? 'btn-error-retry' : 'btn-error-secondary') + '" data-action="' + action + '" title="' + escapeHtml(button.getAttribute('title') || label) + '">' +
@@ -11229,7 +11257,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         seenActions.add(action);
       });
       const detailsNode = source.querySelector('.error-details .error-code');
-      const detailsText = detailsNode ? detailsNode.textContent.trim() : '';
+      const detailsText = detailsNode ? redactErrorDetails(detailsNode.textContent.trim()) : '';
       const iconAlert = '<span class="error-header-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span>';
       return '<div class="andromity-error-card" data-error-type="' + errorType + '"' +
           (errorAction ? ' data-error-action="' + errorAction + '"' : '') + ' data-retryable="true">' +
@@ -11301,7 +11329,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
 
     function redactErrorDetails(text) {
-      const value = String(text || '')
+      const value = String(text || '').slice(0, 20000)
+        .replace(/\\b(?:sk-|nvapi-|gsk_|xai-|key-)[A-Za-z0-9_-]{16,}/g, '[REDACTED API key]')
+        .replace(/\\bAIza[A-Za-z0-9_-]{16,}/g, '[REDACTED API key]')
         .replace(/"user_id"\\s*:\\s*"[^"]+"/gi, '"user_id":"[redacted]"')
         .replace(/andromity_[0-9a-f]{32,}/gi, '[REDACTED Andromity sign-in token]')
         .replace(/(bearer\\s+)[A-Za-z0-9._~+\\/=-]{8,}/gi, '$1[REDACTED]');
