@@ -522,6 +522,12 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
           THEN 1 ELSE 0 END AS had_error,
         (SELECT group_concat(DISTINCT ef.feature_name) FROM feature_events ef
           WHERE ef.session_id=s.session_id AND ef.user_id=s.user_id AND ef.feature_name LIKE 'error_%') AS error_categories,
+        (SELECT COUNT(*) FROM task_runs tr WHERE tr.session_id=s.session_id AND tr.user_id=s.user_id) AS turns,
+        (SELECT COUNT(*) FROM task_runs tr
+          WHERE tr.session_id=s.session_id AND tr.user_id=s.user_id AND tr.outcome='failed') AS failed_turns,
+        (SELECT tr.outcome='failed' FROM task_runs tr
+          WHERE tr.session_id=s.session_id AND tr.user_id=s.user_id AND tr.outcome IN ('completed','failed','cancelled')
+          ORDER BY tr.date DESC, tr.started_at DESC, tr.run_id DESC LIMIT 1) AS last_turn_failed,
         COALESCE(
           e.duration_bucket,
           CASE
@@ -650,6 +656,7 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
     recent_sessions: (recentSessionsRes.results ?? []).map(session => ({...session,
       error_categories: [...new Set(String(session.error_categories || '').split(',')
         .filter(category => /^error_[a-z0-9_]{1,58}$/.test(category)))],
+      last_turn_failed: session.last_turn_failed == null ? null : session.last_turn_failed === 1,
     })),
     user_distribution: userBucketsRes.results ?? [],
     // v2
