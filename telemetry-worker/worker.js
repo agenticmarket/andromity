@@ -1,7 +1,7 @@
 import { ingestTelemetry } from './ingest.js';
 import { buildStatsScope, measurementQueries } from './statsScope.js';
 import { cachedStats } from './statsCache.js';
-import { sessionSummaries, featureSummaries } from './metricSummaries.js';
+import { sessionSummaries, featureSummaries, ERROR_SOURCE_PREFIX } from './metricSummaries.js';
 import { handleBlogRequest } from './blog.js';
 import { handleFeedbackRequest } from './feedback.js';
 
@@ -447,7 +447,7 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
     prepare(`SELECT feature_name,user_id,COUNT(*) AS use_count FROM feature_events GROUP BY feature_name,user_id`),
   ]);
   const { clientsRes, countriesRes, osRes, versionsRes, hourlyRes, providersRes, providerTypesRes, reasoningRes, profilesRes, turnDistRes } = sessionSummaries(sessionRows.results || []);
-  const { featuresRes, onboardingRes, errorCategoriesRes, cronStatsRes, mascotStatsRes, wallpaperStatsRes, settingsTabsRes, waterfallFrequencyRes } = featureSummaries(featureRows.results || []);
+  const { featuresRes, onboardingRes, errorCategoriesRes, errorSourcesRes, cronStatsRes, mascotStatsRes, wallpaperStatsRes, settingsTabsRes, waterfallFrequencyRes } = featureSummaries(featureRows.results || []);
   const [modelsRes] = await batch([prepare(`
     SELECT COALESCE(model,'unknown') AS model,COALESCE(provider,'unknown') AS provider,
       COUNT(DISTINCT user_id) AS users,COUNT(*) AS sessions
@@ -571,6 +571,7 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
           WHERE t.outcome='failed'
         UNION ALL
         SELECT user_id,session_id,COUNT(*) AS error_count FROM feature_events f WHERE feature_name LIKE 'error_%'
+          AND substr(feature_name,1,10)<>'error_src_'
           AND NOT EXISTS(SELECT 1 FROM task_runs t WHERE t.session_id=f.session_id AND t.date=f.date)
           GROUP BY user_id,session_id,date
         UNION ALL
@@ -642,10 +643,14 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
     os:               osRes.results ?? [],
     versions:         versionsRes.results ?? [],
     hourly:           hourlyRes.results ?? [],
-    recent_sessions: (recentSessionsRes.results ?? []).map(session => ({...session,
-      error_categories: [...new Set(String(session.error_categories || '').split(',')
-        .filter(category => /^error_[a-z0-9_]{1,58}$/.test(category)))],
-    })),
+    recent_sessions: (recentSessionsRes.results ?? []).map(session => {
+      const recorded = [...new Set(String(session.error_categories || '').split(',')
+        .filter(category => /^error_[a-z0-9_]{1,58}$/.test(category)))];
+      return {...session,
+        error_categories: recorded.filter(name => !name.startsWith(ERROR_SOURCE_PREFIX)),
+        error_sources: recorded.filter(name => name.startsWith(ERROR_SOURCE_PREFIX)).map(name => name.slice(ERROR_SOURCE_PREFIX.length)),
+      };
+    }),
     user_distribution: userBucketsRes.results ?? [],
     // v2
     providers:         providersRes.results ?? [],
@@ -666,6 +671,7 @@ export async function computeD1Stats(env, params = new URLSearchParams()) {
       affected_users: affectedUsers,
       session_error_rate: sessionErrorRate,
       categories: errorCategoriesRes?.results ?? [],
+      sources: errorSourcesRes?.results ?? [],
     },
     cron_stats: cronStatsRes?.results?.[0] ?? {
       user_crons_created: 0,

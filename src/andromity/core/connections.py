@@ -154,6 +154,8 @@ def connection_failure(error_type: str) -> dict[str, Any]:
         "rate_limit": "The provider's rate limit or quota was reached. Check your allowance and retry later.",
         "quota_exceeded": "The provider's quota was reached. Check your allowance or billing settings.",
         "provider_unavailable": "The provider is unavailable. Check its service status and retry.",
+        "network_error": "Couldn't reach the provider. Check the base URL, your internet connection, VPN or proxy.",
+        "insufficient_credits": "The provider account is out of credits. Add credits with the provider, or choose another model.",
         "timeout": "Connection timed out. Check that the endpoint is reachable and retry.",
         "ollama_offline": "Ollama is offline. Start Ollama and check the local endpoint.",
         "incomplete_stream": "The provider closed the stream before completing the response. Retry or check its streaming support.",

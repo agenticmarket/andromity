@@ -2829,6 +2829,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "sign_out_and_retry": {
+        recordFeatureUse("sign_out_and_retry", { sessionId: message.sessionId || this._currentSessionId });
+        await this.logout();
+        await this._handleWebviewMessage({ ...message, type: "retry_turn" });
+        break;
+      }
+
       case "refresh_usage": {
         await this.fetchUsage();
         break;

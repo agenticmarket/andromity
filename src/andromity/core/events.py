@@ -39,6 +39,8 @@ class Done(StreamEvent):
     usage: Optional[Dict[str, int]] = None
     outcome: str = "success"
     error_type: Optional[str] = None
+    # "<source>_<kind>", e.g. "provider_429" or "network_conn"; see provider.ERROR_SOURCES and ERROR_KINDS.
+    error_detail: Optional[str] = None
 
 
 @dataclass

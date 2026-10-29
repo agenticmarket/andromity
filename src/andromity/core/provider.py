@@ -1,9 +1,14 @@
 import asyncio
+import errno
+import ipaddress
 import json
 import os
 import re
+import socket
+import ssl
 from pathlib import Path
-from typing import AsyncGenerator, List, Dict, Any, Optional
+from typing import AsyncGenerator, List, Dict, Any, Optional, Tuple
+from urllib.parse import urlsplit
 
 from andromity.config import config
 from andromity.core.debug_log import get_logger
@@ -42,10 +47,19 @@ def _format_stall_text(provider_name: str, model: str, timeout: float) -> str:
 
 
 def _is_local_base_url(base_url: Optional[str]) -> bool:
+    """True for localhost and loopback addresses such as 127.0.0.1 and ::1."""
     if not base_url:
         return False
-    b = base_url.lower()
-    return "localhost" in b or "127.0.0.1" in b or "[::1]" in b
+    try:
+        host = (urlsplit(base_url if "//" in base_url else f"//{base_url}").hostname or "").lower()
+    except ValueError:
+        return False
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 async def _first_token_guard(stream: Any, timeout: float, idle_chunk_timeout: float = 60.0):
@@ -348,10 +362,12 @@ async def stream_completion(
                     ))
                 )
 
-                if is_daily_quota or is_auth_error or is_bad_request or gateway_model_unavailable(e) or gateway_wait_is_long(e):
+                gateway_refused = provider_name == GATEWAY_PROVIDER and gateway_error(e, "quota_exceeded") is not None
+                if (is_daily_quota or is_auth_error or is_bad_request or gateway_refused
+                        or gateway_model_unavailable(e) or gateway_wait_is_long(e)):
                     log.info("Non-retryable provider error: %s (HTTP %s).", type(e).__name__, getattr(e, "status_code", "unknown"))
-                    yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-                    yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"])
+                    for event in _error_events(e, provider_name, model, has_images):
+                        yield event
                     return
 
                 is_429 = has_status_code(msg, "429") or "rate limit" in msg or "ratelimit" in msg or "quota" in msg
@@ -373,8 +389,8 @@ async def stream_completion(
                     continue
                 else:
                     log.error("Provider call failed after %d attempts: %s (HTTP %s).", total_attempts, type(e).__name__, getattr(e, "status_code", "unknown"))
-                    yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-                    yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"])
+                    for event in _error_events(e, provider_name, model, has_images):
+                        yield event
                     return
 
             # 2. Watchdog: guard against upstream queue stall
@@ -489,6 +505,7 @@ async def stream_completion(
                     "daily_limit_reached", "quota_exceeded", "free trial requests", "daily limit",
                     "context_length_exceeded", "maximum context length", "model not found"
                 ))
+                or (provider_name == GATEWAY_PROVIDER and gateway_error(e, "quota_exceeded") is not None)
             )
 
             # If stalled or failed BEFORE emitting any tokens, retry with backoff ONLY for transient errors
@@ -502,12 +519,20 @@ async def stream_completion(
                 continue
 
             log.error("Provider stream error: %s (HTTP %s).", type(e).__name__, getattr(e, "status_code", "unknown"))
-            if isinstance(e, ProviderStalledError):
-                yield TextDelta(text=_format_stall_text(provider_name, model, e.timeout))
-            else:
-                yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-            yield Done(usage=usage, outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"])
+            for event in _error_events(e, provider_name, model, has_images, usage):
+                yield event
             return
+
+
+def _error_events(e: Exception, provider_name: str, model: str, has_images: bool,
+                  usage: Optional[Dict[str, Any]] = None) -> List[StreamEvent]:
+    """The card for a failed call and the Done event that ends the turn with its error type."""
+    info = classify_error_info(e, provider=provider_name, model=model, has_images=has_images)
+    if isinstance(e, ProviderStalledError):
+        text = _format_stall_text(provider_display_name(provider_name), model, e.timeout)
+    else:
+        text = format_error_for_client(info)
+    return [TextDelta(text=text), Done(usage=usage, outcome="error", error_type=info["type"], error_detail=info["detail"])]
 
 
 def extract_clean_error_message(err_or_text: Any) -> str:
@@ -522,11 +547,12 @@ def extract_clean_error_message(err_or_text: Any) -> str:
     if re.search(r"<(?:!doctype\s+html|html\b|head\b|body\b)", raw, re.IGNORECASE):
         return "The endpoint returned a web page instead of an API response. Check the provider base URL."
 
-    # 1. Look for embedded JSON error payload (e.g. {"error": {"message": "..."}})
-    json_match = re.search(r'(\{[\s\S]*\})', raw)
-    if json_match:
+    # 1. Look for embedded JSON error payload (e.g. {"error": {"message": "..."}}), from the first "{"
+    # to the last "}". Index slicing keeps this linear on long messages with unbalanced braces.
+    json_start, json_end = raw.find("{"), raw.rfind("}")
+    if 0 <= json_start < json_end:
         try:
-            data = json.loads(json_match.group(1))
+            data = json.loads(raw[json_start:json_end + 1])
             if isinstance(data, dict):
                 err_val = data.get("error")
                 if isinstance(err_val, dict) and err_val.get("message"):
@@ -547,7 +573,9 @@ def extract_clean_error_message(err_or_text: Any) -> str:
     cleaned = re.sub(r'^\w+Exception\s*[-:]\s*', '', cleaned, flags=re.IGNORECASE)
 
     # 3. Strip trailing raw JSON or user_id dumps
-    cleaned = re.sub(r'\{[\s\S]*\}', '', cleaned).strip()
+    json_start, json_end = cleaned.find("{"), cleaned.rfind("}")
+    if 0 <= json_start < json_end:
+        cleaned = (cleaned[:json_start] + cleaned[json_end + 1:]).strip()
     cleaned = re.sub(r'["\']user_id["\']\s*:\s*["\'][^"\']+["\']', '', cleaned, flags=re.IGNORECASE).strip()
 
     # 4. Strip leftover punctuation
@@ -559,53 +587,364 @@ def extract_clean_error_message(err_or_text: Any) -> str:
     return raw.strip()
 
 
+GATEWAY_PROVIDER = "andromity"
+ERROR_SOURCES = ("gateway", "provider", "local", "network")
+ERROR_KINDS = ("4xx", "429", "5xx", "timeout", "conn", "other")
+
+# Cards whose explanation is complete without the underlying error text. Only the gateway's typed
+# errors produce them, and the gateway writes its messages for users.
+QUIET_ERROR_TYPES = {
+    "quota_exceeded", "service_busy", "service_unavailable", "model_unavailable",
+    "sign_in_invalid", "gateway_auth_error", "access_denied",
+}
+
+_LOCAL_PROVIDERS = frozenset({"ollama", "lmstudio", "llamacpp"})
+_PROVIDER_NAMES = {"lmstudio": "LM Studio", "llamacpp": "llama.cpp", "opencode": "OpenCode", "vllm": "vLLM"}
+_IDENTIFIER = re.compile(r"[a-z0-9_]{1,64}")
+_HTML_PAGE = re.compile(r"<(?:!doctype\s+html|html\b|head\b|body\b)", re.IGNORECASE)
+_EXCEPTION_PREFIX = re.compile(r"^(?:litellm\.)?\w+(?:Error|Exception)\s*[-:]\s*|^Message:\s*", re.IGNORECASE)
+_SSL_CONTEXT_NOTE = re.compile(r"\s*ssl:(?:<[^>]*>|\S+)")
+_DETAIL_LIMIT = 400
+
+_TIMEOUT_ERRORS = frozenset({
+    "Timeout", "APITimeoutError", "ReadTimeout", "WriteTimeout", "PoolTimeout", "TimeoutException",
+    "TimeoutError", "SocketTimeoutError", "ServerTimeoutError", "ProviderStalledError",
+})
+_HTTPX_NETWORK_ERRORS = frozenset({
+    "ConnectError", "ConnectTimeout", "ReadError", "WriteError", "CloseError", "RemoteProtocolError",
+    "NetworkError", "ProxyError", "UnsupportedProtocol",
+})
+_AIOHTTP_NETWORK_ERRORS = frozenset({
+    "ServerDisconnectedError", "ClientOSError", "ClientConnectionResetError", "ClientProxyConnectionError",
+    "ClientSSLError",
+})
+
+_NETWORK_PHRASES = (
+    "connection error", "connection refused", "connection reset", "connection aborted", "failed to connect",
+    "cannot connect to host", "could not connect", "unable to connect", "actively refused",
+    "refused the network connection", "name or service not known", "nodename nor servname",
+    "getaddrinfo failed", "name resolution", "network is unreachable", "no route to host", "broken pipe",
+    "remote end closed connection", "server disconnected", "certificate verify failed", "ssl handshake",
+)
+_AUTH_PHRASES = (
+    "unauthorized", "invalid api key", "invalid_api_key", "incorrect api key", "api key not valid",
+    "api_key_invalid", "invalid x-api-key", "authentication error", "authenticationerror",
+    "permission denied", "permissiondenied", "forbidden",
+)
+_MISSING_KEY_PHRASES = (
+    "missing credentials", "please pass an `api_key`", "please pass an api_key", "no api key", "missing api key",
+)
+_CREDIT_PHRASES = (
+    "insufficient_quota", "insufficient quota", "insufficient credit", "insufficient balance",
+    "insufficient funds", "requires more credits", "credit balance is too low", "out of credits",
+    "payment required",
+)
+_RATE_PHRASES = (
+    "rate limit", "ratelimit", "rate_limit", "too many requests", "resource_exhausted",
+    "resource has been exhausted", "quota", "throttl", "daily limit", "daily_limit",
+)
+_DAILY_PHRASES = ("per day", "per-day", "perday", "daily", "(rpd)", "(tpd)")
+_CONTEXT_PHRASES = (
+    "context length", "maximum context", "token limit", "context_length_exceeded", "prompt is too long",
+    "context window", "contextwindowexceeded",
+)
+_NOT_FOUND_PHRASES = ("notfound", "not found", "no endpoints found", "model_not_found", "does not exist")
+_OUTAGE_PHRASES = (
+    "service unavailable", "serviceunavailable", "service_unavailable", "bad gateway", "badgateway",
+    "gateway timeout", "overloaded", "upstream error", "internal server error", "temporarily unavailable",
+)
+_OUTAGE_TYPES = frozenset({"overloaded_error", "server_error", "api_error", "service_unavailable"})
+_STALL_PHRASES = ("stalled", "watchdog", "first token", "timed out")
+_GATEWAY_QUOTA_PHRASES = (
+    "daily_limit_reached", "quota_exceeded", "free trial requests", "daily limit", "upgrade_url",
+    "sign in with github",
+)
+_SIGN_IN_PHRASES = ("sign in", "sign-in", "signin", "log in", "login", "authentication token", "expired")
+_GATEWAY_CONTEXT_CODES = ("prompt_too_large", "payload_too_large", "context_length_exceeded")
+
+_SVG = (
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" '
+    'stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;">{}</svg>'
+)
+_ICON_RETRY = _SVG.format('<path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/>')
+_ICONS = {
+    "retry-turn": _ICON_RETRY,
+    "retry-without-image": _ICON_RETRY,
+    "switch-model-flyout": _SVG.format('<path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>'),
+    "trigger-compact": _SVG.format(
+        '<polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline>'
+        '<line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line>'),
+    "new-session": _SVG.format(
+        '<line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>'),
+    "open-settings": _SVG.format(
+        '<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 '
+        '2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 '
+        '19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 '
+        '0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06'
+        '.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 '
+        '0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 '
+        '0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>'),
+    "open-account-login": _SVG.format(
+        '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle>'),
+    "use-without-sign-in": _SVG.format(
+        '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline>'
+        '<line x1="21" y1="12" x2="9" y2="12"></line>'),
+}
+
+_RETRY = ("retry-turn", "Retry Turn", "Retry this turn")
+_SWITCH = ("switch-model-flyout", "Switch Model", "Choose another model")
+_OWN_KEY = ("open-settings", "Use Your Own Key", "Use your own API key")
+_CHECK_KEY = ("open-settings", "Check API Key", "Open API keys in Settings")
+_SIGN_IN = ("open-account-login", "Sign In", "Sign in with AgenticMarket")
+_TUI_RETRY = "Type /retry to re-send this turn"
+_TUI_SWITCH = "Press Ctrl+L to switch model"
+_TUI_OWN_KEY = "Press Ctrl+E and add your own API key to skip shared limits"
+
+
+def _actions_html(*buttons: Tuple[str, str, str]) -> str:
+    """Card buttons as (data-action, label, tooltip); the first one is the primary button."""
+    import html
+    return "".join(
+        f'<button class="{"btn-error-retry" if index == 0 else "btn-error-secondary"}" data-action="{action}" '
+        f'title="{html.escape(tooltip)}">{_ICONS[action]}{html.escape(label)}</button>'
+        for index, (action, label, tooltip) in enumerate(buttons)
+    )
+
+
+def _sentence(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
+def _provider_key(provider: str) -> str:
+    return re.sub(r"[\s._-]+", "", (provider or "").strip().lower())
+
+
+def _saved_connection(provider: str) -> Dict[str, Any]:
+    try:
+        saved = config.get_provider_config(provider)
+    except Exception:
+        return {}
+    return saved if isinstance(saved, dict) else {}
+
+
+def provider_display_name(provider: str) -> str:
+    """How cards name a provider: the connection's own name, the preset's label, or its ID in title case."""
+    provider = (provider or "").strip()
+    if not provider:
+        return "the provider"
+    if provider.lower() == GATEWAY_PROVIDER:
+        return "Andromity Cloud"
+    label = str(_saved_connection(provider).get("display_name") or "").strip()
+    if not label or label.lower() == provider.lower():
+        from andromity.core.connections import PRESETS
+        preset = PRESETS.get(provider.lower())
+        label = preset[0] if preset else _PROVIDER_NAMES.get(_provider_key(provider), "")
+    label = re.sub(r"\s*\([^)]*\)\s*$", "", label).strip()
+    if not label:
+        label = " ".join(part[:1].upper() + part[1:] for part in re.split(r"[\s_-]+", provider) if part)
+    return label[:48]
+
+
+def _is_local_provider(provider: str) -> bool:
+    if _provider_key(provider) in _LOCAL_PROVIDERS:
+        return True
+    return _is_local_base_url(str(_saved_connection(provider).get("base_url") or ""))
+
+
+def _server_address(provider: str) -> str:
+    base_url = str(_saved_connection(provider).get("base_url") or "")
+    if not base_url and _provider_key(provider) == "ollama":
+        base_url = "http://localhost:11434"
+    try:
+        parts = urlsplit(base_url)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return ""
+    if not host:
+        return ""
+    host = f"[{host}]" if ":" in host else host
+    return f"{host}:{port}" if port else host
+
+
+def _exception_chain(e: BaseException, limit: int = 8) -> List[BaseException]:
+    """The error and the errors it was raised from, outermost first."""
+    chain: List[BaseException] = []
+    current: Optional[BaseException] = e
+    while current is not None and len(chain) < limit and not any(current is seen for seen in chain):
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+def _as_status(value: Any) -> Optional[int]:
+    if isinstance(value, str) and value.strip().isdigit():
+        value = int(value.strip())
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if 100 <= value <= 599 else None
+
+
+def _http_status(chain: List[BaseException]) -> Optional[int]:
+    """The status of the provider's reply, or None when no reply arrived.
+
+    LiteLLM reports connection failures and its own internal errors as 500, and client read timeouts
+    as 408, so those two count only when the reply itself is in the chain.
+    """
+    for exc in chain:
+        bases = {cls.__name__ for cls in type(exc).__mro__}
+        from_litellm = (type(exc).__module__ or "").startswith("litellm")
+        if "HTTPStatusError" in bases or ("APIStatusError" in bases and not from_litellm):
+            status = _as_status(getattr(exc, "status_code", None)) or _as_status(
+                getattr(getattr(exc, "response", None), "status_code", None))
+            if status:
+                return status
+    status = _as_status(getattr(chain[0], "status_code", None))
+    if status in (408, 500) and (type(chain[0]).__module__ or "").startswith("litellm"):
+        return None
+    return status
+
+
+def _response_headers(chain: List[BaseException]) -> Dict[str, str]:
+    for exc in chain:
+        for raw in (getattr(exc, "litellm_response_headers", None),
+                    getattr(getattr(exc, "response", None), "headers", None)):
+            try:
+                headers = {str(k).lower(): str(v) for k, v in dict(raw or {}).items()}
+            except (TypeError, ValueError):
+                continue
+            if headers:
+                return headers
+    return {}
+
+
+def _json_error_in_text(text: str) -> Dict[str, Any]:
+    """The first JSON error object written into an error message, or an empty dict."""
+    decoder = json.JSONDecoder()
+    text = text[:20000]
+    start = text.find("{")
+    for _attempt in range(16):
+        if start == -1:
+            break
+        try:
+            data, _end = decoder.raw_decode(text, start)
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            error = data.get("error")
+            if isinstance(error, dict):
+                return error
+            if isinstance(error, str) and error.strip():
+                return {"message": error.strip()}
+            if any(key in data for key in ("message", "type", "code", "detail")):
+                return data
+        start = text.find("{", start + 1)
+    return {}
+
+
+def _chain_body(chain: List[BaseException]) -> Dict[str, Any]:
+    """The parsed error body an HTTP client kept on the exception, which LiteLLM's message leaves out."""
+    for exc in chain:
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict) and body:
+            inner = body.get("error")
+            return inner if isinstance(inner, dict) else body
+    return {}
+
+
+def _error_facts(e: BaseException) -> Dict[str, Any]:
+    chain = _exception_chain(e)
+    text = str(e) or type(e).__name__
+    text_body = _json_error_in_text(text)
+    return {
+        "chain": chain,
+        "text": text,
+        "text_body": text_body,
+        "body": text_body or _chain_body(chain),
+        "headers": _response_headers(chain),
+        "status": _http_status(chain),
+    }
+
+
+def _is_network_failure(chain: List[BaseException]) -> bool:
+    """The request never got a reply: refused, reset, DNS, TLS or a dropped connection."""
+    for exc in chain:
+        if isinstance(exc, (ConnectionError, socket.gaierror, ssl.SSLError)):
+            return True
+        if isinstance(exc, OSError) and exc.errno in (errno.ENETUNREACH, errno.EHOSTUNREACH):
+            return True
+        name = type(exc).__name__
+        module = type(exc).__module__ or ""
+        if module.startswith(("httpx", "httpcore")) and name in _HTTPX_NETWORK_ERRORS:
+            return True
+        if module.startswith("aiohttp") and (name.startswith("ClientConnector") or name in _AIOHTTP_NETWORK_ERRORS):
+            return True
+        if module.startswith("openai") and name == "APIConnectionError":
+            return True
+    return False
+
+
+def _identifier(value: Any) -> Optional[str]:
+    text = value.strip().lower() if isinstance(value, str) else ""
+    return text if _IDENTIFIER.fullmatch(text) else None
+
+
+def _gateway_details(e: BaseException, facts: Dict[str, Any]) -> Dict[str, Any]:
+    """What the gateway said about a failed request: its typed headers first, then its JSON body."""
+    headers, body = facts["headers"], facts["body"]
+    message = body.get("message") if isinstance(body.get("message"), str) else ""
+    retry_after = None
+    header_wait = headers.get("retry-after", "").strip()
+    body_wait = body.get("retry_after")
+    if header_wait.isdigit():
+        retry_after = int(header_wait)
+    elif isinstance(body_wait, (int, float)) and not isinstance(body_wait, bool) and body_wait > 0:
+        retry_after = int(body_wait)
+    return {
+        "type": _identifier(headers.get("x-andromity-error-type")) or _identifier(body.get("type")),
+        "code": _identifier(body.get("code")),
+        "action": _identifier(headers.get("x-andromity-error-action")) or _identifier(body.get("action")),
+        "retry_after": retry_after,
+        "message": message.strip() or extract_clean_error_message(e),
+    }
+
+
 def gateway_error(e: Exception, *types: str) -> Optional[Dict[str, Any]]:
-    """The structured error the Andromity gateway sends, when its type is one of `types`.
+    """The structured error the Andromity gateway sent, when its type is one of `types`.
 
     LiteLLM keeps only the message text and the response headers of a failed call, so the type,
-    action and wait come from the gateway's headers; a raw JSON body is read when one is present.
+    action and wait come from the gateway's headers, then from its JSON body when that is reachable.
     """
-    match = re.search(r'(\{[\s\S]*\})', str(e) or "")
-    if match:
-        try:
-            error = json.loads(match.group(1)).get("error")
-        except (ValueError, AttributeError):
-            error = None
-        if isinstance(error, dict) and error.get("type") in types:
-            return error
-    raw_headers = getattr(e, "litellm_response_headers", None) or getattr(getattr(e, "response", None), "headers", None)
-    try:
-        headers = {str(k).lower(): str(v) for k, v in dict(raw_headers or {}).items()}
-    except (TypeError, ValueError):
+    facts = _error_facts(e)
+    if facts["text_body"].get("type") in types:
+        return dict(facts["text_body"])
+    details = _gateway_details(e, facts)
+    if details["type"] not in types:
         return None
-    error_type = headers.get("x-andromity-error-type")
-    if error_type not in types:
-        return None
-    error = {"type": error_type, "message": extract_clean_error_message(e)}
-    if headers.get("x-andromity-error-action"):
-        error["action"] = headers["x-andromity-error-action"]
-    if headers.get("retry-after", "").strip().isdigit():
-        error["retry_after"] = int(headers["retry-after"].strip())
+    error: Dict[str, Any] = {"type": details["type"], "message": details["message"]}
+    if details["action"]:
+        error["action"] = details["action"]
+    if details["retry_after"] is not None:
+        error["retry_after"] = details["retry_after"]
     return error
 
 
-def gateway_model_unavailable(e: Exception) -> Optional[Dict[str, Any]]:
-    return gateway_error(e, "model_unavailable")
+def gateway_model_unavailable(e: Exception, provider: str = GATEWAY_PROVIDER) -> Optional[Dict[str, Any]]:
+    return gateway_error(e, "model_unavailable") if provider == GATEWAY_PROVIDER else None
 
 
 def gateway_capacity_error(e: Exception, provider: str = "") -> Optional[Dict[str, Any]]:
     """Shared capacity is exhausted or unavailable. The gateway writes these messages for users."""
-    error = gateway_error(e, "service_busy")
-    if error is None and provider == "andromity":
-        error = gateway_error(e, "service_unavailable")
+    if provider != GATEWAY_PROVIDER:
+        return None
+    error = gateway_error(e, "service_busy", "service_unavailable")
     if error is None or not isinstance(error.get("message"), str) or not error["message"].strip():
         return None
     return error
 
 
-def gateway_wait_is_long(e: Exception) -> bool:
+def gateway_wait_is_long(e: Exception, provider: str = GATEWAY_PROVIDER) -> bool:
     """Retrying in a few seconds cannot help when the gateway says capacity returns much later."""
-    error = gateway_error(e, "service_busy")
+    error = gateway_error(e, "service_busy") if provider == GATEWAY_PROVIDER else None
     if not error:
         return False
     wait = error.get("retry_after")
@@ -622,13 +961,53 @@ def _timer_badge_html(text: str) -> str:
     )
 
 
-# Cards whose explanation is complete without the underlying exception text.
-QUIET_ERROR_TYPES = {"quota_exceeded", "service_busy", "service_unavailable"}
-
-
 def has_status_code(text: str, code: str) -> bool:
     """An HTTP status as a whole number; request IDs and timestamps often contain "404" or "500"."""
     return re.search(rf"(?<!\d){re.escape(code)}(?!\d)", text or "") is not None
+
+
+def _strip_exception_prefixes(text: str) -> str:
+    text = (text or "").strip()
+    for _attempt in range(8):
+        stripped = _EXCEPTION_PREFIX.sub("", text, count=1).strip()
+        if stripped == text:
+            break
+        text = stripped
+    return text
+
+
+def _retry_seconds(text: str, headers: Dict[str, str]) -> Optional[float]:
+    seconds: Optional[float] = None
+    header_wait = headers.get("retry-after", "").strip()
+    if re.fullmatch(r"\d{1,6}(?:\.\d+)?", header_wait):
+        seconds = float(header_wait)
+    else:
+        match = re.search(r"(?:retry|try again) in (\d{1,6}(?:\.\d+)?)\s*s\b", text, re.IGNORECASE)
+        if match:
+            seconds = float(match.group(1))
+    return seconds if seconds and 0 < seconds <= 86400 else None
+
+
+def _wait_phrase(seconds: float) -> str:
+    if seconds < 120:
+        return f"~{int(seconds)}s"
+    if seconds < 7200:
+        return f"~{round(seconds / 60)} min"
+    return f"~{round(seconds / 3600)} h"
+
+
+def _error_kind(status: Optional[int], network: bool, timed_out: bool) -> str:
+    if network:
+        return "conn"
+    if timed_out:
+        return "timeout"
+    if status == 429:
+        return "429"
+    if status and 400 <= status <= 499:
+        return "4xx"
+    if status and 500 <= status <= 599:
+        return "5xx"
+    return "other"
 
 
 def classify_error_info(
@@ -637,76 +1016,112 @@ def classify_error_info(
     model: str = "",
     has_images: bool = False,
 ) -> dict:
-    import html
-    import re
-    from datetime import datetime, timezone, timedelta
+    """Choose the card for a failed model call.
 
-    msg = str(e) or type(e).__name__
+    For the built-in gateway the card follows the gateway's typed error, and only gateway cards talk
+    about its limits and sign-in. Any other provider gets a card that names it, says in plain words
+    what went wrong and shows the provider's own message, with secrets removed, as the details.
+    """
+    import html
+    from datetime import datetime, timezone, timedelta
+    from andromity.core.network_policy import AirgapBlockedError, AirgapFeatureOff
+    from andromity.telemetry import redact_secrets
+
+    facts = _error_facts(e)
+    chain = facts["chain"]
+    body = facts["body"]
+    msg = facts["text"]
     low = msg.lower()
+    status = facts["status"]
+    names = {type(exc).__name__ for exc in chain}
     err_cls = type(e).__name__
     clean_msg = extract_clean_error_message(e)
-    is_html = bool(re.search(r"<(?:!doctype\s+html|html\b|head\b|body\b)", msg, re.IGNORECASE))
+    is_html = bool(_HTML_PAGE.search(msg))
+    provider_id = (provider or "").strip().lower()
+    gateway = provider_id == GATEWAY_PROVIDER
+    local = not gateway and _is_local_provider(provider_id)
+    name = provider_display_name(provider_id)
+    name_html = html.escape(name)
+    disp_model = model or "the selected model"
 
     def has_code(*codes: str) -> bool:
         return any(has_status_code(msg, code) for code in codes)
 
-    disp_model = model or "the selected model"
-    disp_prov = (provider or "AI provider").capitalize()
+    def mentions(phrases: Tuple[str, ...]) -> bool:
+        return any(phrase in low for phrase in phrases)
 
     is_vision = (
         has_images
         or any(k in low for k in ("image", "vision", "multimodal", "modality", "does not support image"))
     ) and (any(k in low for k in ("image", "vision", "multimodal", "modality", "support", "payload")) or has_code("400"))
 
+    network = _is_network_failure(chain) or (status is None and mentions(_NETWORK_PHRASES))
+    server_error = status is not None and status >= 500
+    timed_out = not network and not server_error and (
+        status == 408 or bool(names & _TIMEOUT_ERRORS) or mentions(_STALL_PHRASES))
     is_not_found = (
-        getattr(e, "status_code", None) == 404
-        or err_cls == "NotFoundError"
-        or "notfound" in low
-        or "not found" in low
-        or "no endpoints found" in low
-        or "model_not_found" in low
-        or "does not exist" in low
-        or (has_code("404") and ("model" in low or "endpoint" in low or "not found" in low))
+        status == 404 or "NotFoundError" in names or mentions(_NOT_FOUND_PHRASES)
+        or (status is None and has_code("404") and ("model" in low or "endpoint" in low))
     )
-
+    is_auth = (
+        status in (401, 403) or bool(names & {"AuthenticationError", "PermissionDeniedError"})
+        or (status is None and has_code("401", "403")) or mentions(_AUTH_PHRASES) or mentions(_MISSING_KEY_PHRASES)
+    )
+    is_credits = not gateway and (
+        status == 402 or mentions(_CREDIT_PHRASES)
+        or "insufficient_quota" in (_identifier(body.get("type")), _identifier(body.get("code")))
+    )
     is_rate = (
-        getattr(e, "status_code", None) == 429
-        or has_code("429")
-        or "rate limit" in low
-        or "ratelimit" in low
-        or "quota" in low
-        or "daily_limit" in low
-        or "daily limit" in low
-        or "free trial" in low
+        status == 429 or "RateLimitError" in names or (status is None and has_code("429")) or mentions(_RATE_PHRASES)
     )
-    is_upstream = getattr(e, "status_code", None) in (500, 502, 503, 504) or has_code("500", "502", "503", "504") or any(k in low for k in (
-        "midstreamfallbackerror", "serviceunavailable", "service_unavailable", "service unavailable",
-        "bad gateway", "gateway timeout",
-        "upstream error", "apiconnectionerror", "connection reset", "broken pipe"
-    ))
-    is_context = any(k in low for k in ("context length", "maximum context", "token limit", "context_length_exceeded", "prompt is too long", "context window"))
-    is_auth = getattr(e, "status_code", None) in (401, 403) or err_cls in ("AuthenticationError", "PermissionDeniedError") or has_code("401", "403") or any(k in low for k in (
-        "unauthorized", "invalid api key", "authentication error",
-        "invalid_api_key", "forbidden", "missing credentials", "please pass an `api_key`",
-        "please pass an api_key", "no api key", "missing api key"
-    ))
-    is_ollama_off = ("connection refused" in low or "failed to connect" in low) and ("11434" in low or provider == "ollama")
-    is_stall = err_cls in ("TimeoutError", "Timeout", "ProviderStalledError") or any(k in low for k in ("stalled", "watchdog", "first token", "timed out"))
+    is_context = mentions(_CONTEXT_PHRASES) or "ContextWindowExceededError" in names
+    is_outage = (status is not None and 500 <= status <= 504) or ((status is None or server_error) and (
+        _identifier(body.get("type")) in _OUTAGE_TYPES
+        or bool(names & {"ServiceUnavailableError", "BadGatewayError"}) or mentions(_OUTAGE_PHRASES)))
 
-    icon_retry = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>'
-    icon_model = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>'
-    icon_compact = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>'
-    icon_plus = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>'
-    icon_settings = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>'
-    icon_account = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>'
+    body_message = body.get("message") if isinstance(body.get("message"), str) else ""
+    if not body_message and isinstance(body.get("detail"), str):
+        body_message = body["detail"]
+    detail_text = body_message.strip() or _strip_exception_prefixes(clean_msg)
+    if not detail_text:
+        detail_text = msg.strip().splitlines()[0] if msg.strip() else err_cls
+    detail_text = _SSL_CONTEXT_NOTE.sub("", re.sub(r"\bof \d+ (?:requests|turns)\b", "", detail_text))
+    detail_text = redact_secrets(detail_text).strip()
 
     timer_text = ""
     timer_html = ""
-
-    from andromity.core.network_policy import AirgapBlockedError, AirgapFeatureOff
+    action: Optional[str] = None
+    gateway_card: Optional[str] = None
+    g_type: Optional[str] = None
+    g_message = ""
+    g_wait: Optional[int] = None
     is_airgap = isinstance(e, (AirgapFeatureOff, AirgapBlockedError)) or "air-gap mode" in low
-    unavailable = gateway_model_unavailable(e)
-    capacity = gateway_capacity_error(e, provider)
+
+    if gateway and not is_airgap:
+        details = _gateway_details(e, facts)
+        g_type, g_code = details["type"], details["code"]
+        g_message, g_wait, action = details["message"], details["retry_after"], details["action"]
+        if g_type in ("model_unavailable", "service_busy", "quota_exceeded", "access_denied"):
+            gateway_card = g_type
+        elif g_type == "service_unavailable":
+            gateway_card = "trouble"
+        elif g_type == "authentication_error":
+            gateway_card = "gateway_auth" if g_code == "invalid_key" else "sign_in"
+        elif not network:
+            if g_type == "invalid_request_error" and g_code in _GATEWAY_CONTEXT_CODES:
+                is_context = True
+            elif is_auth:
+                if mentions(_SIGN_IN_PHRASES):
+                    gateway_card = "sign_in"
+                elif status == 403 and "blocked" in low:
+                    gateway_card = "access_denied"
+                else:
+                    gateway_card = "gateway_auth"
+            elif g_type is None and mentions(_GATEWAY_QUOTA_PHRASES) and (is_rate or status in (None, 429)):
+                gateway_card = "quota_exceeded"
+            elif server_error or is_outage:
+                gateway_card = "trouble"
+    typed_message = g_message.strip() if g_type and not is_html else ""
 
     if is_airgap:
         err_type = "airgap"
@@ -716,62 +1131,110 @@ def classify_error_info(
         desc_html = html.escape(desc_text)
         actions_html = (
             f'<button class="btn-error-retry" data-action="open-model-hub" title="Pick a model that runs on this machine">'
-            f'{icon_settings}Choose a local model</button>'
+            f'{_ICONS["open-settings"]}Choose a local model</button>'
         )
         actions_tui = ["Press Ctrl+L and choose a local model, such as one served by Ollama"]
-    elif unavailable:
-        needs_sign_in = unavailable.get("action") == "sign_in"
+    elif gateway_card == "model_unavailable":
+        needs_sign_in = action == "sign_in"
         err_type = "model_unavailable"
         badge = "SIGN IN REQUIRED" if needs_sign_in else "MODEL UNAVAILABLE"
         title = "Sign in to use this model" if needs_sign_in else "Model Not Available"
-        desc_text = clean_msg or "This model isn't available right now. Switch to another model."
+        desc_text = typed_message or "This model isn't available right now. Switch to another model."
         desc_html = html.escape(desc_text)
-        switch_class = "btn-error-secondary" if needs_sign_in else "btn-error-retry"
-        actions_html = (
-            (
-                f'<button class="btn-error-retry" data-action="open-account-login" title="Sign in with AgenticMarket">'
-                f'{icon_account}Sign In</button>'
-                if needs_sign_in else ""
-            )
-            + f'<button class="{switch_class}" data-action="switch-model-flyout" title="Choose another model">'
-            f'{icon_model}Switch Model</button>'
-        )
+        actions_html = _actions_html(*((_SIGN_IN, _SWITCH) if needs_sign_in else (_SWITCH,)))
         actions_tui = (
             ["Sign in with AgenticMarket from the Andromity VS Code extension"] if needs_sign_in else []
-        ) + ["Press Ctrl+L to switch model"]
-    elif capacity:
-        busy = capacity.get("type") == "service_busy"
+        ) + [_TUI_SWITCH]
+    elif gateway_card in ("service_busy", "trouble"):
+        busy = gateway_card == "service_busy"
         err_type = "service_busy" if busy else "service_unavailable"
         badge = "HIGH DEMAND" if busy else "UNAVAILABLE"
-        title = "Andromity is busy right now" if busy else "Shared models are unavailable"
-        desc_text = capacity["message"].strip()
-        wait = capacity.get("retry_after")
-        if isinstance(wait, (int, float)) and not isinstance(wait, bool) and 0 < wait <= 86400:
-            if wait <= 90:
+        title = "Andromity is busy right now" if busy else "Andromity Cloud is having trouble right now"
+        desc_text = typed_message or "Try again in a moment."
+        if isinstance(g_wait, int) and 0 < g_wait <= 86400:
+            if g_wait <= 90:
                 timer_text = "Expected back in about a minute"
             else:
-                back_at = datetime.now().astimezone() + timedelta(seconds=float(wait))
+                back_at = datetime.now().astimezone() + timedelta(seconds=float(g_wait))
                 timer_text = f"Expected back around {back_at.strftime('%H:%M')} your time"
             timer_html = _timer_badge_html(timer_text)
         desc_html = f"<div>{html.escape(desc_text)}</div>{timer_html}"
-        retry_first = capacity.get("action") == "retry"
-        retry_btn = (
-            f'<button class="{"btn-error-retry" if retry_first else "btn-error-secondary"}" data-action="retry-turn" title="Try this turn again">'
-            f'{icon_retry}Retry Turn</button>'
-        )
-        switch_btn = (
-            f'<button class="{"btn-error-secondary" if retry_first else "btn-error-retry"}" data-action="switch-model-flyout" title="Choose another model">'
-            f'{icon_model}Switch Model</button>'
-        )
-        own_key_btn = (
-            f'<button class="btn-error-secondary" data-action="open-settings" title="Use your own API key">'
-            f'{icon_settings}Use Your Own Key</button>'
-        )
-        actions_html = (retry_btn + switch_btn if retry_first else switch_btn + retry_btn) + own_key_btn
+        retry_first = action == "retry" if busy else action != "switch_model"
+        actions_html = _actions_html(*((_RETRY, _SWITCH) if retry_first else (_SWITCH, _RETRY)), _OWN_KEY)
         actions_tui = (
-            ["Wait a minute and type /retry", "Press Ctrl+L to switch model"] if retry_first
-            else ["Press Ctrl+L to switch model", "Wait and type /retry later"]
-        ) + ["Press Ctrl+E and add your own API key to skip shared limits"]
+            ["Wait a minute and type /retry", _TUI_SWITCH] if retry_first
+            else [_TUI_SWITCH, "Wait and type /retry later"]
+        ) + [_TUI_OWN_KEY]
+    elif gateway_card == "quota_exceeded":
+        now = datetime.now(timezone.utc)
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        secs = int((tomorrow - now).total_seconds())
+        h = max(0, secs // 3600)
+        m = max(0, (secs % 3600) // 60)
+        timer_text = f"Quota resets in {h}h {m}m (00:00 UTC)"
+        timer_html = _timer_badge_html(timer_text)
+        err_type = "quota_exceeded"
+        badge = "QUOTA LIMIT"
+        title = "Daily Limit Reached"
+        is_authed = bool(config.get_api_key("andromity") or config.get("default", "user_email", "") or config.get("user", "token", ""))
+        if is_authed:
+            desc_text = (
+                "You have reached your daily gateway limit. "
+                "Add your BYOK key in Settings for unlimited requests, or adjust your quota in the panel."
+            )
+            actions_html = _actions_html(
+                ("open-settings", "Open Settings", "Configure BYOK"),
+                ("switch-model-flyout", "Switch Model", "Switch to an alternate model"),
+            )
+            actions_tui = [
+                "Press Ctrl+E to open Settings and add a BYOK key for unlimited usage",
+                _TUI_SWITCH,
+            ]
+        else:
+            desc_text = (
+                "You have reached your daily free trial limit. "
+                "Sign in with your AgenticMarket account to activate your account, or add a BYOK key in Settings."
+            )
+            actions_html = _actions_html(
+                _SIGN_IN,
+                ("open-settings", "Open Settings", "Configure BYOK"),
+                ("switch-model-flyout", "Switch Model", "Switch to an alternate model"),
+            )
+            actions_tui = [
+                "Sign in with AgenticMarket from the Andromity VS Code extension",
+                "Press Ctrl+E to open Settings and add a BYOK key for unlimited usage",
+            ]
+        desc_html = f"<div>{desc_text}</div>{timer_html}"
+    elif gateway_card == "sign_in":
+        err_type = "sign_in_invalid"
+        badge = "SIGN IN REQUIRED"
+        title = "Your Andromity sign-in isn't valid anymore"
+        desc_text = "Sign in again, or keep using Andromity without signing in."
+        desc_html = html.escape(desc_text)
+        actions_html = _actions_html(
+            ("open-account-login", "Sign in again", "Sign in with AgenticMarket again"),
+            ("use-without-sign-in", "Use without signing in", "Sign out and retry this turn without an account"),
+        )
+        actions_tui = [
+            "Sign in again from the Andromity VS Code extension",
+            "Or sign out there to keep using Andromity without an account, then type /retry",
+        ]
+    elif gateway_card == "gateway_auth":
+        err_type = "gateway_auth_error"
+        badge = "UNAVAILABLE"
+        title = "Andromity Cloud couldn't verify this request"
+        desc_text = "This is a problem on Andromity's side, not with your account or API key. Try again later."
+        desc_html = html.escape(desc_text)
+        actions_html = _actions_html(_RETRY, _OWN_KEY)
+        actions_tui = ["Try again later with /retry", _TUI_OWN_KEY]
+    elif gateway_card == "access_denied":
+        err_type = "access_denied"
+        badge = "ACCESS DENIED"
+        title = "Andromity Cloud blocked this request"
+        desc_text = typed_message or "Requests from this network are blocked. Use your own API key or a local model instead."
+        desc_html = html.escape(desc_text)
+        actions_html = _actions_html(_OWN_KEY, _SWITCH)
+        actions_tui = ["Press Ctrl+E and add your own API key", "Press Ctrl+L to choose a local model"]
     elif is_html and is_not_found:
         err_type = "endpoint_not_found"
         badge = "INVALID ENDPOINT"
@@ -780,7 +1243,7 @@ def classify_error_info(
         desc_html = html.escape(desc_text)
         actions_html = (
             f'<button class="btn-error-retry" data-action="open-settings" title="Correct the provider base URL">'
-            f'{icon_settings}Open Settings</button>'
+            f'{_ICONS["open-settings"]}Open Settings</button>'
         )
         actions_tui = ["Open Settings and correct the provider base URL"]
     elif is_vision:
@@ -797,123 +1260,97 @@ def classify_error_info(
         )
         actions_html = (
             f'<button class="btn-error-retry" data-action="retry-without-image" title="Retry prompt with image removed">'
-            f'{icon_retry}Retry without Image</button>'
+            f'{_ICON_RETRY}Retry without Image</button>'
             f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Choose a vision-capable model">'
-            f'{icon_model}Switch Model</button>'
+            f'{_ICONS["switch-model-flyout"]}Switch Model</button>'
         )
         actions_tui = [
             "Retry prompt without image attachments",
             "Press Ctrl+L to switch to a vision model (e.g. Claude 3.7 Sonnet, GPT-4o)",
         ]
-    elif is_upstream:
-        err_type = "provider_unavailable"
-        badge = "SERVICE DISRUPTED"
-        title = "Upstream Service Interruption"
-        desc_text = (
-            f"The upstream provider ({disp_prov}) experienced a temporary service disruption or mid-stream disconnect. "
-            "This is usually transient—retry to continue."
-        )
-        desc_html = (
-            f"The upstream provider ({html.escape(disp_prov)}) experienced a temporary service disruption or mid-stream disconnect. "
-            "This is usually transient—click Retry to continue."
-        )
-        actions_html = (
-            f'<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn immediately">'
-            f'{icon_retry}Retry Turn</button>'
-            f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another provider/model">'
-            f'{icon_model}Switch Model</button>'
-        )
-        actions_tui = [
-            "Type /retry to re-send this turn",
-            "Press Ctrl+L to switch to another provider or model",
-        ]
-    elif is_rate:
-        is_daily_quota = (
-            "daily_limit_reached" in low
-            or "quota_exceeded" in low
-            or "free trial requests" in low
-            or "daily limit" in low
-            or "upgrade_url" in low
-            or "sign in with github" in low
-        )
-        if is_daily_quota:
-            now = datetime.now(timezone.utc)
-            tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-            secs = int((tomorrow - now).total_seconds())
-            h = max(0, secs // 3600)
-            m = max(0, (secs % 3600) // 60)
-            timer_text = f"Quota resets in {h}h {m}m (00:00 UTC)"
-            timer_html = _timer_badge_html(timer_text)
-            err_type = "quota_exceeded"
-            badge = "QUOTA LIMIT"
-            title = "Daily Limit Reached"
-            is_authed = bool(config.get_api_key("andromity") or config.get("default", "user_email", "") or config.get("user", "token", ""))
-            if is_authed:
-                desc_text = (
-                    "You have reached your daily gateway limit. "
-                    "Add your BYOK key in Settings for unlimited requests, or adjust your quota in the panel."
-                )
-                desc_html = (
-                    f"<div>{desc_text}</div>"
-                    f"{timer_html}"
-                )
-                actions_html = (
-                    f'<button class="btn-error-retry" data-action="open-settings" title="Configure BYOK">'
-                    f'{icon_settings}Open Settings</button>'
-                    f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to an alternate model">'
-                    f'{icon_model}Switch Model</button>'
-                )
-                actions_tui = [
-                    "Press Ctrl+E to open Settings and add a BYOK key for unlimited usage",
-                    "Press Ctrl+L to switch model",
-                ]
-            else:
-                desc_text = (
-                    "You have reached your daily free trial limit. "
-                    "Sign in with your AgenticMarket account to activate your account, or add a BYOK key in Settings."
-                )
-                desc_html = (
-                    f"<div>{desc_text}</div>"
-                    f"{timer_html}"
-                )
-                actions_html = (
-                    f'<button class="btn-error-retry" data-action="open-account-login" title="Sign in with AgenticMarket">'
-                    f'{icon_account}Sign In</button>'
-                    f'<button class="btn-error-secondary" data-action="open-settings" title="Configure BYOK">'
-                    f'{icon_settings}Open Settings</button>'
-                    f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to an alternate model">'
-                    f'{icon_model}Switch Model</button>'
-                )
-                actions_tui = [
-                    "Sign in with AgenticMarket from the Andromity VS Code extension",
-                    "Press Ctrl+E to open Settings and add a BYOK key for unlimited usage",
-                ]
-        else:
-            err_type = "rate_limit"
-            badge = "RATE LIMIT"
-            title = "Rate Limit / Quota Reached"
-            retry_hint = ""
-            m = re.search(r"retry in ([\d.]+)s", msg, re.IGNORECASE)
-            if m:
-                retry_hint = f" (wait ~{int(float(m.group(1)))}s)"
-            desc_text = (
-                f"The provider ({disp_prov}) returned HTTP 429 rate limit or quota exceeded{retry_hint}. "
-                "Please wait a moment and retry."
-            )
+    elif network and local:
+        err_type = "ollama_offline"
+        badge = "OFFLINE"
+        address = _server_address(provider_id)
+        where = f" at {address}" if address else ""
+        if _provider_key(provider_id) == "ollama":
+            title = "Local Ollama Not Running"
+            desc_text = f"Could not connect to local Ollama{where}. Make sure the Ollama service is running ('ollama serve')."
             desc_html = (
-                f"The provider ({html.escape(disp_prov)}) returned HTTP 429 rate limit or quota exceeded{retry_hint}. "
-                "Please wait a moment and click Retry."
+                f"Could not connect to local Ollama{html.escape(where)}. "
+                "Make sure the Ollama service is running (<code>ollama serve</code>)."
             )
-            actions_html = (
-                f'<button class="btn-error-retry" data-action="retry-turn" title="Retry after waiting">'
-                f'{icon_retry}Retry Turn</button>'
-                f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to an alternate model">'
-                f'{icon_model}Switch Model</button>'
+            actions_tui = ["Run 'ollama serve' in a terminal, then type /retry", _TUI_SWITCH]
+        else:
+            title = f"{name} isn't running"
+            desc_text = f"Could not connect to {name}{where}. Start the local model server, then retry."
+            desc_html = f"Could not connect to <strong>{name_html}</strong>{html.escape(where)}. Start the local model server, then retry."
+            actions_tui = [f"Start {name}, then type /retry", _TUI_SWITCH]
+        actions_html = _actions_html(_RETRY, _SWITCH)
+    elif network:
+        err_type = "network_error"
+        badge = "CONNECTION"
+        title = f"Couldn't reach {name}"
+        checks = "your internet connection, VPN or proxy"
+        if not gateway and _saved_connection(provider_id).get("base_url"):
+            checks += ", and the connection's base URL in Settings"
+        desc_text = f"Couldn't connect to {name}. Check {checks}, then retry."
+        desc_html = f"Couldn't connect to <strong>{name_html}</strong>. Check {html.escape(checks)}, then retry."
+        actions_html = _actions_html(_RETRY, _SWITCH)
+        actions_tui = ["Check your connection, then type /retry", _TUI_SWITCH]
+    elif is_auth:
+        err_type = "auth_error"
+        badge = "AUTHENTICATION"
+        if mentions(_MISSING_KEY_PHRASES):
+            title = f"No API key for {name}"
+            desc_text = f"Add your API key for {name} under API keys in Settings."
+        elif status == 403 or "PermissionDeniedError" in names:
+            title = f"Request refused by {name}"
+            desc_text = _sentence(
+                f"{name} refused this request. Your key may not have access to {disp_model}. "
+                "Check the key under API keys in Settings, or pick another model."
             )
-            actions_tui = [
-                "Wait a moment and type /retry",
-                "Press Ctrl+L to switch model",
-            ]
+        else:
+            title = f"API key rejected by {name}"
+            desc_text = _sentence(
+                f"{name} didn't accept your API key. Check it under API keys in Settings; "
+                "it may be mistyped, revoked or expired."
+            )
+        desc_html = html.escape(desc_text)
+        actions_html = _actions_html(_CHECK_KEY, _SWITCH)
+        actions_tui = [f"Press Ctrl+E and check your API key for {name} under API keys", _TUI_SWITCH]
+    elif is_credits:
+        err_type = "insufficient_credits"
+        badge = "CREDITS"
+        title = f"Out of credits at {name}"
+        desc_text = _sentence(
+            f"{name} says your account doesn't have enough credits for this request. "
+            "Add credits there, or pick another model."
+        )
+        desc_html = html.escape(desc_text)
+        actions_html = _actions_html(_SWITCH, _RETRY)
+        actions_tui = [_TUI_SWITCH, f"Add credits at {name}, then type /retry"]
+    elif is_rate:
+        err_type = "rate_limit"
+        badge = "RATE LIMIT"
+        wait = g_wait or _retry_seconds(msg, facts["headers"])
+        retry_hint = f" (wait {_wait_phrase(wait)})" if wait else ""
+        if not gateway and mentions(_DAILY_PHRASES):
+            title = f"Daily limit reached at {name}"
+            desc_text = _sentence(
+                f"{name} won't take more requests from your key until its daily limit resets{retry_hint}. "
+                "Wait for the reset, add credits or upgrade your plan there, or pick another model."
+            )
+            actions_html = _actions_html(_SWITCH, _RETRY)
+            actions_tui = [_TUI_SWITCH, "Type /retry once the limit resets"]
+        else:
+            title = f"Rate limit at {name}"
+            desc_text = _sentence(
+                f"{name} is limiting requests right now{retry_hint}. Wait a moment and retry, or pick another model."
+            )
+            actions_html = _actions_html(_RETRY, _SWITCH)
+            actions_tui = ["Wait a moment and type /retry", _TUI_SWITCH]
+        desc_html = html.escape(desc_text)
     elif is_context:
         err_type = "context_exceeded"
         badge = "CONTEXT LIMIT"
@@ -926,125 +1363,76 @@ def classify_error_info(
             f"This conversation has reached the context limit for <strong>{html.escape(disp_model)}</strong>. "
             "Compact the conversation to preserve key details, or start a fresh session."
         )
-        actions_html = (
-            f'<button class="btn-error-retry" data-action="trigger-compact" title="Compact previous context">'
-            f'{icon_compact}Compact Context</button>'
-            f'<button class="btn-error-secondary" data-action="new-session" title="Start a new session">'
-            f'{icon_plus}New Session</button>'
+        actions_html = _actions_html(
+            ("trigger-compact", "Compact Context", "Compact previous context"),
+            ("new-session", "New Session", "Start a new session"),
         )
         actions_tui = [
             "Type /compact to summarize context",
             "Press Ctrl+N to start a fresh session",
         ]
-    elif is_auth:
-        err_type = "auth_error"
-        badge = "AUTHENTICATION"
-        title = "Authentication Error"
-        desc_text = (
-            f"Invalid or missing API key for {disp_prov}. "
-            "Please configure your API key in Settings."
-        )
-        desc_html = (
-            f"Invalid or missing API key for <strong>{html.escape(disp_prov)}</strong>. "
-            "Please configure your API key in Settings."
-        )
-        actions_html = (
-            f'<button class="btn-error-retry" data-action="open-settings" title="Open Settings to enter API key">'
-            f'{icon_settings}Open Settings</button>'
-        )
-        actions_tui = [
-            f"Press Ctrl+E to open Settings and add a key for {disp_prov}",
-        ]
-    elif is_ollama_off:
-        err_type = "ollama_offline"
-        badge = "OFFLINE"
-        title = "Local Ollama Not Running"
-        desc_text = (
-            "Could not connect to local Ollama on port 11434. "
-            "Ensure the Ollama service is active ('ollama serve')."
-        )
-        desc_html = (
-            "Could not connect to local Ollama on port 11434. "
-            "Ensure the Ollama service is active (<code>ollama serve</code>)."
-        )
-        actions_html = (
-            f'<button class="btn-error-retry" data-action="retry-turn" title="Retry connection">'
-            f'{icon_retry}Retry Turn</button>'
-        )
-        actions_tui = [
-            "Run 'ollama serve' in terminal, then type /retry",
-        ]
-    elif is_stall:
-        err_type = "timeout"
-        badge = "TIMED OUT"
-        title = "Provider Connection Timed Out"
-        desc_text = (
-            f"{disp_prov}/{disp_model} sent no response within the timeout period. "
-            "The server may be overloaded. Retry to try again."
-        )
-        desc_html = (
-            f"{html.escape(disp_prov)}/{html.escape(disp_model)} sent no response within the timeout period. "
-            "The server may be overloaded. Click Retry to try again."
-        )
-        actions_html = (
-            f'<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">'
-            f'{icon_retry}Retry Turn</button>'
-            f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">'
-            f'{icon_model}Switch Model</button>'
-        )
-        actions_tui = [
-            "Type /retry to re-send this turn",
-            "Press Ctrl+L to switch to another model",
-        ]
     elif is_not_found:
         err_type = "model_not_found"
         badge = "NOT FOUND"
-        title = "Model Not Available"
-        clean_detail = clean_msg or f"No endpoints found for {disp_model}."
-        desc_text = (
-            f"{disp_prov}: {clean_detail} Please switch to another model."
+        title = "Model Not Available" if gateway else f"Model not found at {name}"
+        model_label = f"'{model}'" if model else "this model"
+        if local:
+            desc_text = f"{name} doesn't have {model_label}. Download or load it there, or pick another model."
+        elif gateway:
+            desc_text = f"{name} doesn't offer {model_label}. Pick another model."
+        else:
+            desc_text = _sentence(f"{name} doesn't offer {model_label}, or your key can't use it. Pick another model.")
+        desc_html = html.escape(desc_text)
+        actions_html = _actions_html(_SWITCH, _RETRY)
+        actions_tui = [_TUI_SWITCH, _TUI_RETRY]
+    elif timed_out:
+        err_type = "timeout"
+        badge = "TIMED OUT"
+        title = f"Timed out waiting for {name}"
+        desc_text = _sentence(
+            f"{name} sent no response for {disp_model} in time. It may be overloaded. Retry, or pick another model."
         )
-        desc_html = (
-            f"<strong>{html.escape(disp_prov)}</strong>: {html.escape(clean_detail)} Please switch to another model."
+        desc_html = html.escape(desc_text)
+        actions_html = _actions_html(_RETRY, _SWITCH)
+        actions_tui = [_TUI_RETRY, "Press Ctrl+L to switch to another model"]
+    elif is_outage:
+        err_type = "provider_unavailable"
+        badge = "SERVICE DISRUPTED"
+        title = f"Service disruption at {name}"
+        code = f" (HTTP {status})" if server_error else ""
+        desc_text = _sentence(
+            f"{name} had a problem on its side{code}. This usually clears up quickly. "
+            "Retry in a moment, or pick another model."
         )
-        actions_html = (
-            f'<button class="btn-error-retry" data-action="switch-model-flyout" title="Switch to another model">'
-            f'{icon_model}Switch Model</button>'
-            f'<button class="btn-error-secondary" data-action="retry-turn" title="Retry this turn">'
-            f'{icon_retry}Retry Turn</button>'
-        )
-        actions_tui = [
-            "Press Ctrl+L to switch to another model",
-            "Type /retry to re-send this turn",
-        ]
+        desc_html = html.escape(desc_text)
+        actions_html = _actions_html(_RETRY, _SWITCH)
+        actions_tui = [_TUI_RETRY, "Press Ctrl+L to switch to another provider or model"]
     else:
         err_type = "generic"
         badge = "ERROR"
         title = "Turn Interrupted"
-        user_err_msg = clean_msg or (msg.splitlines()[0] if msg else err_cls)
+        user_err_msg = detail_text or err_cls
         if len(user_err_msg) > 180:
             user_err_msg = user_err_msg[:177] + "..."
-        desc_text = (
-            f"{disp_prov}: {user_err_msg}. Retry to re-send this turn."
-        )
+        user_err_msg = user_err_msg.rstrip(". ")
+        desc_text = f"{_sentence(name)}: {user_err_msg}. Retry to re-send this turn."
         desc_html = (
-            f"<strong>{html.escape(disp_prov)}</strong>: {html.escape(user_err_msg)}. "
+            f"<strong>{html.escape(_sentence(name))}</strong>: {html.escape(user_err_msg)}. "
             "Click Retry to re-send this turn."
         )
-        actions_html = (
-            f'<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">'
-            f'{icon_retry}Retry Turn</button>'
-            f'<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">'
-            f'{icon_model}Switch Model</button>'
-        )
-        actions_tui = [
-            "Press Ctrl+L to switch to another model",
-        ]
+        actions_html = _actions_html(_RETRY, _SWITCH)
+        actions_tui = [_TUI_SWITCH]
 
-    clean_msg_raw = re.sub(r'\bof \d+ (?:requests|turns)\b', '', msg)
-    raw_preview = clean_msg_raw[:500] + ("..." if len(clean_msg_raw) > 500 else "")
     if is_html:
         raw_preview = "HTML response received instead of an API response."
+    else:
+        raw_preview = detail_text[:_DETAIL_LIMIT] + ("..." if len(detail_text) > _DETAIL_LIMIT else "")
+
+    if network:
+        source = "local" if local else "network"
+    else:
+        source = "gateway" if gateway else "local" if local else "provider"
+    kind = _error_kind(status, network, timed_out)
 
     return {
         "type": err_type,
@@ -1058,6 +1446,10 @@ def classify_error_info(
         "actions_tui": actions_tui,
         "raw_preview": raw_preview,
         "err_cls": err_cls,
+        "action": action,
+        "source": source,
+        "kind": kind,
+        "detail": f"{source}_{kind}",
     }
 
 
@@ -1076,13 +1468,15 @@ def format_error_html(info: dict) -> str:
             f'  </details>\n'
         )
 
+    action = _identifier(info.get("action"))
+    action_attr = f' data-error-action="{action}"' if action else ""
     return (
-        f'\n<div class="andromity-error-card" data-error-type="{info["type"]}" data-retryable="true">\n'
+        f'\n<div class="andromity-error-card" data-error-type="{info["type"]}"{action_attr} data-retryable="true">\n'
         f'  <div class="error-card-header">\n'
         f'    <div class="error-header-left">\n'
         f'      {icon_alert}\n'
-        f'      <span class="error-badge">{info["badge"]}</span>\n'
-        f'      <span class="error-title">{info["title"]}</span>\n'
+        f'      <span class="error-badge">{html.escape(info["badge"], quote=False)}</span>\n'
+        f'      <span class="error-title">{html.escape(info["title"], quote=False)}</span>\n'
         f'    </div>\n'
         f'  </div>\n'
         f'  <div class="error-card-body">{info["desc_html"]}</div>\n'
@@ -1149,7 +1543,10 @@ def classify_and_format_error(
     - Under TUI or CLI: outputs clean, tag-free terminal Markdown.
     """
     info = classify_error_info(e, provider=provider, model=model, has_images=has_images)
+    return format_error_for_client(info, output_format)
 
+
+def format_error_for_client(info: dict, output_format: str = "auto") -> str:
     if output_format == "html":
         return format_error_html(info)
     if output_format in ("terminal", "text", "markdown", "cli"):

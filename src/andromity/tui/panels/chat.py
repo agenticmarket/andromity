@@ -6,6 +6,7 @@ from textual.widgets import Static, Markdown, Collapsible, Button
 
 from andromity.config import config
 from andromity.tui.markup_utils import safe_markup, safe_update, escape_textual as escape
+import html
 import json
 import re
 import time
@@ -44,12 +45,12 @@ ChatMessage.session-handoff { border-left: solid $warning; margin: 1 0; padding:
         desc_m = re.search(r'class="error-card-body">(.*?)</div>', content, re.DOTALL)
         timer_m = re.search(r'Quota resets in [^<]+', content)
 
-        badge = badge_m.group(1).strip() if badge_m else "ERROR"
-        title = title_m.group(1).strip() if title_m else "Turn Interrupted"
+        badge = html.unescape(badge_m.group(1).strip()) if badge_m else "ERROR"
+        title = html.unescape(title_m.group(1).strip()) if title_m else "Turn Interrupted"
 
         raw_desc = desc_m.group(1).strip() if desc_m else ""
         clean_desc = re.sub(r'<[^>]+>', ' ', raw_desc)
-        clean_desc = re.sub(r'\s+', ' ', clean_desc).strip()
+        clean_desc = html.unescape(re.sub(r'\s+', ' ', clean_desc).strip())
         if "Quota resets in" in clean_desc:
             clean_desc = clean_desc.split("Quota resets in")[0].strip()
 
@@ -60,6 +61,8 @@ ChatMessage.session-handoff { border-left: solid $warning; margin: 1 0; padding:
             actions.append("Press Ctrl+E to open Settings and add a BYOK key")
         if "open-account-login" in content:
             actions.append("Sign in with AgenticMarket from the Andromity VS Code extension")
+        if "use-without-sign-in" in content:
+            actions.append("Or sign out in the VS Code extension to keep using Andromity without an account")
         if "switch-model-flyout" in content:
             actions.append("Press Ctrl+L to switch model")
         if "retry-turn" in content:
