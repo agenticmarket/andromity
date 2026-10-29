@@ -142,7 +142,7 @@ class JsonRpcHandler:
         self._mcp_manager: Optional[Any] = None
         self._mcp_started: bool = False
         self._user_killed_processes: Set[str | tuple[str, str]] = set()
-        self._model_refreshes: Dict[str, "asyncio.Future[Dict[str, Any]]"] = {}
+        self._model_refreshes: Dict[tuple[str, str], "asyncio.Future[Dict[str, Any]]"] = {}
         try:
             self._loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
         except RuntimeError:
@@ -2586,11 +2586,16 @@ class JsonRpcHandler:
         provider = str((params or {}).get("provider") or "").strip()
         if not provider:
             raise ValueError("provider is required")
-        running = self._model_refreshes.get(provider)
+        # A changed key or endpoint starts a new refresh; only a hash of them is kept.
+        saved = config.get_provider_config(provider) or {}
+        fingerprint = hashlib.sha256(
+            f"{config.get_api_key(provider) or ''}\0{saved.get('base_url') or ''}".encode("utf-8")).hexdigest()[:16]
+        slot = (provider, fingerprint)
+        running = self._model_refreshes.get(slot)
         if running is None:
             running = asyncio.ensure_future(self._refresh_provider_models(provider))
-            self._model_refreshes[provider] = running
-            running.add_done_callback(lambda _done, key=provider: self._model_refreshes.pop(key, None))
+            self._model_refreshes[slot] = running
+            running.add_done_callback(lambda _done, key=slot: self._model_refreshes.pop(key, None))
         return await asyncio.shield(running)
 
     async def _refresh_provider_models(self, provider: str) -> Dict[str, Any]:

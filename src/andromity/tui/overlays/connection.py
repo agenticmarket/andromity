@@ -3,12 +3,16 @@ import asyncio
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.markup import escape
 from textual.screen import ModalScreen
 from textual.widgets import Button, Collapsible, Input, Label, Static
 
 from andromity.tui.overlays.dialog import dialog_styles
 from andromity.config import config
+
+
+def _literal(text: str) -> str:
+    """Markup that shows ``text`` as written: every bracket is escaped, even an unclosed ``[/`` cut by truncation."""
+    return text.replace("[", "\\[")
 
 
 class ProviderConnectionScreen(ModalScreen):
@@ -74,7 +78,7 @@ ProviderConnectionScreen { align: center middle; }
         try:
             self.provider = config.save_provider(values)
         except ValueError as exc:
-            self.query_one("#connection-status", Static).update(escape(str(exc)))
+            self.query_one("#connection-status", Static).update(_literal(str(exc)))
             return
         self.query_one("#connection-key", Input).value = ""
         if event.button.id == "connection-save":
@@ -87,7 +91,7 @@ ProviderConnectionScreen { align: center middle; }
         self.query_one("#connection-status", Static).update("Testing connection…")
         try:
             result = await asyncio.wait_for(test_connection(self.provider), 30)
-            self.query_one("#connection-status", Static).update(escape(str(result.get("message") or "")))
+            self.query_one("#connection-status", Static).update(_literal(str(result.get("message") or "")))
         except asyncio.TimeoutError:
             self.query_one("#connection-status", Static).update("Connection timed out. Check the endpoint.")
         except Exception:

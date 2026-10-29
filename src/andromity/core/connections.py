@@ -147,7 +147,9 @@ def provider_request(provider: str, model: str) -> dict[str, Any]:
     return request
 
 
-_CHEAP_HINTS = ("flash", "haiku", "mini", "lite", "nano", "small")
+# Whole words of a model id: "gemini" must not count as "mini".
+_CHEAP_HINTS = frozenset({"flash", "haiku", "mini", "lite", "nano", "small"})
+_ID_TOKENS = re.compile(r"[-_./:\s]+")
 _PRICE = re.compile(r"\$\s*([0-9]+(?:\.[0-9]+)?)")
 _PROBE_MAX_TOKENS = 16
 
@@ -164,8 +166,8 @@ def _cheapest(models: list[dict]) -> str:
     """Free or small models first (flash, haiku, mini…), then the lowest listed price, then list order."""
     def hinted(model: dict) -> bool:
         tags = model.get("tags") if isinstance(model.get("tags"), list) else []
-        words = " ".join([model["id"], *[t for t in tags if isinstance(t, str)]]).lower()
-        return _probe_cost(model) == 0.0 or any(hint in words for hint in _CHEAP_HINTS)
+        words = set(_ID_TOKENS.split(model["id"].lower())) | {t.lower() for t in tags if isinstance(t, str)}
+        return _probe_cost(model) == 0.0 or not words.isdisjoint(_CHEAP_HINTS)
 
     pool = [m for m in models if hinted(m)] or models
     priced = [(cost, index) for index, m in enumerate(pool) if (cost := _probe_cost(m)) is not None]
