@@ -8533,6 +8533,31 @@ ${STATUS_SHIMMER_STYLES}
       font-size: 11.5px;
       color: var(--vscode-errorForeground, #f85149);
     }
+    .waitlist-question { margin-top: 10px; font-weight: 500; }
+    .waitlist-offer:disabled { cursor: default; }
+    .waitlist-offer:disabled svg { display: none; }
+    .btn-error-secondary.waitlist-offer:disabled,
+    .btn-error-secondary.waitlist-offer:disabled:hover {
+      color: var(--vscode-testing-iconPassed, #3fb950);
+      background: var(--vscode-button-secondaryBackground, rgba(var(--tint), 0.05));
+      border-color: var(--vscode-button-secondaryBorder, var(--border, rgba(var(--tint), 0.1)));
+    }
+    .onboarding-waitlist-offer {
+      align-self: center;
+      padding: 2px 4px;
+      border: none;
+      background: none;
+      font: inherit;
+      font-size: 11.5px;
+      color: var(--vscode-textLink-foreground, var(--accent));
+      cursor: pointer;
+    }
+    .onboarding-waitlist-offer:hover:not(:disabled) { text-decoration: underline; }
+    .onboarding-waitlist-offer:disabled { color: var(--vscode-testing-iconPassed, #3fb950); }
+    .onboarding-waitlist-offer:focus-visible, .waitlist-offer:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: 1px;
+    }
     .feature-tip-card {
       --tip-color: var(--vscode-editorLightBulb-foreground, #e2c08d);
       position: relative;

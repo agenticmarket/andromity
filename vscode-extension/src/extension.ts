@@ -16,6 +16,7 @@ import { PythonBridge, formatTimestamp } from "./server/PythonBridge.js";
 import { RpcClient } from "./server/RpcClient.js";
 import { recordFeatureUse, setFeatureUsageClient, setFeatureUsageGate } from "./telemetry/featureUsage.js";
 import { FeedbackNotifications } from "./engagement/feedbackNotifications.js";
+import { WaitlistController } from "./engagement/waitlistController.js";
 import { AttentionKind, BackgroundSessions, describeToolActivity } from "./backgroundSessions.js";
 import { confirmTurnOnAirGap, currentAirGap } from "./airgapState.js";
 import { airGapStatusLine } from "./airgap.js";
@@ -240,6 +241,13 @@ export async function activate(context: vscode.ExtensionContext) {
   const feedbackNotifications = new FeedbackNotifications(context);
   chatProvider.setFeedbackCheckIn(feedbackNotifications);
   feedbackNotifications.setCheckInPresenter(() => chatProvider.showFeedbackCheckIn());
+  const waitlist = new WaitlistController(context);
+  chatProvider.setWaitlist(waitlist);
+  SettingsPanel.waitlist = waitlist;
+  context.subscriptions.push(waitlist.onDidJoin(() => {
+    chatProvider.broadcastToWebviews(waitlist.stateMessage());
+    SettingsPanel.postWaitlistState();
+  }));
 
   // Plan approve/reject flows through the chat session + queue (TUI parity).
   planProvider.setPlanActionHandler(async (approved, feedback, sessionId) => {

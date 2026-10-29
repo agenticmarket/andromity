@@ -53,6 +53,7 @@ import { recordNextStepEvent } from "../nextSteps.js";
 import { handleFeedbackMessage } from "../engagement/feedbackWebview.js";
 import { ANNOYANCES } from "../engagement/checkIn.js";
 import type { FeedbackNotifications } from "../engagement/feedbackNotifications.js";
+import type { WaitlistController } from "../engagement/waitlistController.js";
 import { checkSessionForNavigation } from "../sessionNavigation.js";
 import { confirmAndOpenLink } from "../linkOpener.js";
 
@@ -215,6 +216,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private readonly _featureTips: FeatureTipsController | null;
   private _checkIn: FeedbackNotifications | null = null;
+  private _waitlist: WaitlistController | null = null;
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -544,6 +546,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public setFeedbackCheckIn(checkIn: FeedbackNotifications) {
     this._checkIn = checkIn;
+  }
+
+  public setWaitlist(waitlist: WaitlistController) {
+    this._waitlist = waitlist;
+  }
+
+  public get waitlist(): WaitlistController | null {
+    return this._waitlist;
+  }
+
+  /** Opens the waitlist form in the chat view, for an offer shown outside the chat. */
+  public async openWaitlistForm(): Promise<void> {
+    const waitlist = this._waitlist;
+    if (!waitlist) return;
+    await vscode.commands.executeCommand("andromity.chatView.focus");
+    for (let i = 0; i < 20 && !this._view; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    await this._whenWebviewReady();
+    await waitlist.handleMessage({ type: "waitlist_open" }, (reply) => this._postToWebview(reply));
   }
 
   /** Puts the check-in under the reply just finished. Only when someone is looking at the chat. */
@@ -2317,6 +2339,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (message.type === "ready" || message.type === "webview_ready") {
       this._markWebviewReady();
       this.broadcastAirGapState();
+      if (this._waitlist) this._postToWebview(this._waitlist.stateMessage());
       this._postToWebview({ type: "starter_context", ...collectStarterContext() });
       this._refreshSidePanel();
       void this.getWorkspaceIndex().then((index) => {
@@ -2631,6 +2654,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "checkin_review": {
         await this._checkIn?.reviewFromCheckIn();
+        break;
+      }
+
+      case "waitlist_offer_shown":
+      case "waitlist_open":
+      case "waitlist_join": {
+        await this._waitlist?.handleMessage(message, (reply) => this._postToWebview(reply));
         break;
       }
 

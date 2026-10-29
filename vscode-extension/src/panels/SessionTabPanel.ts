@@ -411,6 +411,8 @@ export class SessionTabPanel {
     if (message.type === "ready" || message.type === "webview_ready") {
       this._postMessage({ type: "backend_ready" });
       this._postMessage(airGapPillMessage());
+      const waitlist = this._viewProvider.waitlist;
+      if (waitlist) this._postMessage(waitlist.stateMessage());
       this._sidePanelFeed.refresh();
       void this._viewProvider.getWorkspaceIndex().then((index) => {
         this._postMessage({ type: "workspace_files_updated", files: index.files, dirs: index.dirs });
@@ -649,6 +651,12 @@ export class SessionTabPanel {
       case "feedback_issue": {
         const reply = await handleFeedbackMessage(message, this._context);
         if (reply) this._postMessage(reply);
+        break;
+      }
+      case "waitlist_offer_shown":
+      case "waitlist_open":
+      case "waitlist_join": {
+        await this._viewProvider.waitlist?.handleMessage(message, (reply) => this._postMessage(reply));
         break;
       }
       case "open_external":

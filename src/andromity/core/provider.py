@@ -1045,6 +1045,7 @@ def classify_error_info(
     raw_preview = clean_msg_raw[:500] + ("..." if len(clean_msg_raw) > 500 else "")
     if is_html:
         raw_preview = "HTML response received instead of an API response."
+    gateway = gateway_error(e, err_type) if provider == "andromity" else None
 
     return {
         "type": err_type,
@@ -1058,6 +1059,7 @@ def classify_error_info(
         "actions_tui": actions_tui,
         "raw_preview": raw_preview,
         "err_cls": err_cls,
+        "action": str((gateway or {}).get("action") or ""),
     }
 
 
@@ -1076,8 +1078,10 @@ def format_error_html(info: dict) -> str:
             f'  </details>\n'
         )
 
+    action = re.sub(r"[^a-z_]", "", str(info.get("action") or ""))[:40]
+    action_attr = f' data-error-action="{action}"' if action else ""
     return (
-        f'\n<div class="andromity-error-card" data-error-type="{info["type"]}" data-retryable="true">\n'
+        f'\n<div class="andromity-error-card" data-error-type="{info["type"]}"{action_attr} data-retryable="true">\n'
         f'  <div class="error-card-header">\n'
         f'    <div class="error-header-left">\n'
         f'      {icon_alert}\n'

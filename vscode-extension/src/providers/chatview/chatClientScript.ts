@@ -266,6 +266,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const onboardingOllamaForm = document.getElementById('onboarding-ollama-form');
     const onboardingOwnProvider = document.getElementById('onboarding-own-provider');
     const onboardingTrialSection = document.getElementById('onboarding-trial-section');
+    let waitlistJoined = false;
+    let waitlistOfferNoted = false;
+    let waitlistForm = null;
     const btnOnboardingInstantStart = document.getElementById('btn-onboarding-instant-start');
     const btnOnboardingGithubLogin = document.getElementById('btn-onboarding-github-login');
     const onboardingKeyInput = document.getElementById('onboarding-key-input');
@@ -3054,6 +3057,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         onboardingSection.style.display = 'flex';
         readyHeroSection.style.display = 'none';
         showOnboardingKeyStep();
+        noteWaitlistOffer();
       } else {
         userDismissedOnboarding = true;
         onboardingSection.style.display = 'none';
@@ -3084,6 +3088,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           window.__onboarding_viewed_tracked = true;
           vscode.postMessage({ type: 'telemetry_feature', feature: 'onboarding_viewed' });
         }
+        noteWaitlistOffer();
       } else {
         onboardingSection.style.display = 'none';
         readyHeroSection.style.display = 'flex';
@@ -4569,6 +4574,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'checkin-never':
         case 'checkin-close':
           checkInAction(action, target);
+          break;
+        case 'join-waitlist':
+          if (!waitlistJoined) vscode.postMessage({ type: 'waitlist_open' });
+          break;
+        case 'waitlist-want':
+        case 'waitlist-heard':
+        case 'waitlist-send':
+        case 'waitlist-close':
+          waitlistFormAction(action, target);
           break;
         case 'open-session-tab': {
           e.stopPropagation();
@@ -8213,6 +8227,174 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
     // ── End feedback check-in ────────────────────────────────────────────────
 
+    // ── Waitlist: offered on the Andromity card and on daily-limit cards, then a short form ──
+    function waitlistOfferIcon() {
+      return '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>';
+    }
+
+    function waitlistOfferLabel() {
+      return waitlistJoined ? 'On the waitlist ✓' : 'Need more? Join the waitlist';
+    }
+
+    function waitlistOfferButton() {
+      return '<button class="btn-error-secondary waitlist-offer" data-action="join-waitlist"' + (waitlistJoined ? ' disabled' : '') + '>' +
+        waitlistOfferIcon() + '<span class="waitlist-offer-label">' + waitlistOfferLabel() + '</span></button>';
+    }
+
+    function syncWaitlistOffers() {
+      document.querySelectorAll('.waitlist-offer').forEach((button) => {
+        button.disabled = waitlistJoined;
+        const label = button.querySelector('.waitlist-offer-label');
+        if (label) label.textContent = waitlistOfferLabel();
+      });
+    }
+
+    function setWaitlistJoined(joined) {
+      waitlistJoined = joined;
+      syncWaitlistOffers();
+    }
+
+    function noteWaitlistOffer() {
+      if (waitlistOfferNoted || waitlistJoined) return;
+      waitlistOfferNoted = true;
+      vscode.postMessage({ type: 'waitlist_offer_shown' });
+    }
+
+    function openWaitlistForm(msg) {
+      if (msg.joined === true) setWaitlistJoined(true);
+      const previous = document.getElementById('waitlist-card');
+      if (previous) previous.remove();
+      const choices = (list) => (Array.isArray(list) ? list : [])
+        .filter(c => c && typeof c.id === 'string' && typeof c.label === 'string').slice(0, 12);
+      waitlistForm = {
+        step: waitlistJoined ? 'joined' : 'ask',
+        wants: choices(msg.wants), heardFrom: choices(msg.heardFrom),
+        picked: new Set(), heard: '', wantsNote: '', heardNote: '', sending: false, error: '',
+      };
+      const card = document.createElement('div');
+      card.id = 'waitlist-card';
+      card.className = 'checkin-card waitlist-card';
+      card.setAttribute('role', 'group');
+      card.setAttribute('aria-labelledby', 'waitlist-title');
+      chatContainer.appendChild(card);
+      renderWaitlistForm();
+      const firstChip = card.querySelector('.checkin-chip');
+      if (firstChip) firstChip.focus({ preventScroll: true });
+    }
+
+    function readWaitlistNotes() {
+      if (!waitlistForm) return;
+      const wantsNote = document.getElementById('waitlist-wants-note');
+      const heardNote = document.getElementById('waitlist-heard-note');
+      if (wantsNote) waitlistForm.wantsNote = wantsNote.value;
+      if (heardNote) waitlistForm.heardNote = heardNote.value;
+    }
+
+    function renderWaitlistForm() {
+      const card = document.getElementById('waitlist-card');
+      if (!card || !waitlistForm) return;
+      readWaitlistNotes();
+      const close = '<button class="next-step-dismiss checkin-close" data-action="waitlist-close" aria-label="Close" title="Close">&times;</button>';
+      if (waitlistForm.step === 'joined') {
+        card.innerHTML = close + '<div class="checkin-title" id="waitlist-title" role="status">You\\'re on the waitlist. We\\'ll let you know here in Andromity.</div>';
+      } else {
+        card.innerHTML = close + waitlistQuestionsHtml();
+        const wantsNote = document.getElementById('waitlist-wants-note');
+        const heardNote = document.getElementById('waitlist-heard-note');
+        if (wantsNote) wantsNote.value = waitlistForm.wantsNote;
+        if (heardNote) heardNote.value = waitlistForm.heardNote;
+      }
+      if (typeof card.scrollIntoView === 'function') card.scrollIntoView({ block: 'nearest' });
+      const focusSelector = waitlistForm.step === 'joined' ? '.checkin-close'
+        : waitlistForm.error && !waitlistForm.sending ? '[data-action="waitlist-send"]' : '';
+      const focusTarget = focusSelector ? card.querySelector(focusSelector) : null;
+      if (focusTarget) focusTarget.focus({ preventScroll: true });
+    }
+
+    function waitlistQuestionsHtml() {
+      const disabled = waitlistForm.sending ? ' disabled' : '';
+      const chips = (list, action, isPicked) => list.map(c => '<button class="checkin-chip" data-action="' + action + '" data-id="' + escapeHtml(c.id) +
+        '" aria-pressed="' + (isPicked(c.id) ? 'true' : 'false') + '"' + disabled + '>' + escapeHtml(c.label) + '</button>').join('');
+      return '<div class="checkin-title" id="waitlist-title">Join the waitlist</div>' +
+        '<div class="checkin-text">Two quick questions. No email needed.</div>' +
+        '<div class="waitlist-question" id="waitlist-wants-label">What would you want?</div>' +
+        '<div class="checkin-chips" role="group" aria-labelledby="waitlist-wants-label">' +
+          chips(waitlistForm.wants, 'waitlist-want', id => waitlistForm.picked.has(id)) +
+        '</div>' +
+        '<input type="text" class="checkin-note" id="waitlist-wants-note" maxlength="300" aria-label="Anything specific you would want (optional)" placeholder="Anything specific? (optional)"' + disabled + '>' +
+        '<div class="waitlist-question" id="waitlist-heard-label">Where did you hear about Andromity?</div>' +
+        '<div class="checkin-chips" role="group" aria-labelledby="waitlist-heard-label">' +
+          chips(waitlistForm.heardFrom, 'waitlist-heard', id => waitlistForm.heard === id) +
+        '</div>' +
+        '<input type="text" class="checkin-note" id="waitlist-heard-note" maxlength="200" aria-label="Where exactly (optional)" placeholder="Where exactly? (optional)"' + disabled + '>' +
+        (waitlistForm.error ? '<div class="checkin-error" role="alert">' + escapeHtml(waitlistForm.error) + '</div>' : '') +
+        '<div class="checkin-actions"><button class="next-step-btn primary" data-action="waitlist-send"' + disabled + '>' +
+          (waitlistForm.sending ? 'Joining…' : 'Join the waitlist') + '</button></div>' +
+        '<div class="checkin-foot"><span>Your answers go to the Andromity team and aren\\'t linked to your usage data.</span></div>';
+    }
+
+    function sendWaitlistForm() {
+      readWaitlistNotes();
+      waitlistForm.error = !waitlistForm.picked.size ? 'Pick at least one thing you\\'d want.'
+        : !waitlistForm.heard ? 'Pick where you heard about Andromity.' : '';
+      if (!waitlistForm.error) {
+        waitlistForm.sending = true;
+        vscode.postMessage({
+          type: 'waitlist_join',
+          wants: Array.from(waitlistForm.picked),
+          wants_note: waitlistForm.wantsNote,
+          heard_from: waitlistForm.heard,
+          heard_note: waitlistForm.heardNote,
+        });
+      }
+      renderWaitlistForm();
+    }
+
+    function waitlistFormAction(action, target) {
+      if (!waitlistForm || !document.getElementById('waitlist-card')) return;
+      if (action === 'waitlist-close') {
+        const card = document.getElementById('waitlist-card');
+        if (card) card.remove();
+        waitlistForm = null;
+        return;
+      }
+      if (waitlistForm.sending || waitlistForm.step !== 'ask') return;
+      const id = target.getAttribute('data-id');
+      if (action !== 'waitlist-send' && waitlistForm.error) {
+        waitlistForm.error = '';
+        const shownError = document.querySelector('#waitlist-card .checkin-error');
+        if (shownError) shownError.remove();
+      }
+      if (action === 'waitlist-want') {
+        if (!waitlistForm.wants.some(c => c.id === id)) return;
+        if (waitlistForm.picked.has(id)) waitlistForm.picked.delete(id);
+        else waitlistForm.picked.add(id);
+        target.setAttribute('aria-pressed', waitlistForm.picked.has(id) ? 'true' : 'false');
+      } else if (action === 'waitlist-heard') {
+        if (!waitlistForm.heardFrom.some(c => c.id === id)) return;
+        waitlistForm.heard = id;
+        document.querySelectorAll('#waitlist-card [data-action="waitlist-heard"]').forEach((chip) => {
+          chip.setAttribute('aria-pressed', chip.getAttribute('data-id') === id ? 'true' : 'false');
+        });
+      } else if (action === 'waitlist-send') {
+        sendWaitlistForm();
+      }
+    }
+
+    function finishWaitlistForm(msg) {
+      if (msg.ok) setWaitlistJoined(true);
+      if (!waitlistForm) return;
+      waitlistForm.sending = false;
+      if (msg.ok) {
+        waitlistForm.step = 'joined';
+        waitlistForm.error = '';
+      } else {
+        waitlistForm.error = String(msg.error || 'You couldn\\'t be added to the waitlist right now.');
+      }
+      renderWaitlistForm();
+    }
+    // ── End waitlist ─────────────────────────────────────────────────────────
+
     function updateSessionActivityIndicator() {
       const dot = document.getElementById('session-activity-dot');
       if (!dot) return;
@@ -10836,6 +11018,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           finishCheckIn(msg);
           break;
 
+        case 'waitlist_state':
+          setWaitlistJoined(msg.joined === true);
+          break;
+
+        case 'waitlist_form':
+          openWaitlistForm(msg);
+          break;
+
+        case 'waitlist_result':
+          finishWaitlistForm(msg);
+          break;
+
         case 'agent_cancelled': {
           if (msg.session_id) {
             sessionsState[msg.session_id] = sessionsState[msg.session_id] || {};
@@ -11208,6 +11402,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           ERROR_CARD_ACTION_ICONS[action] + escapeHtml(label) + '</button>';
         seenActions.add(action);
       });
+      if (errorType === 'quota_exceeded' && source.getAttribute('data-error-action') === 'join_waitlist') {
+        actionsHtml += waitlistOfferButton();
+        noteWaitlistOffer();
+      }
       const detailsNode = source.querySelector('.error-details .error-code');
       const detailsText = detailsNode ? detailsNode.textContent.trim() : '';
       const iconAlert = '<span class="error-header-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span>';

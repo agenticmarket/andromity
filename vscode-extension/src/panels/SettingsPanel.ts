@@ -15,6 +15,7 @@ import { homedir } from "os";
 import { getUsageScript } from "./usage/usageScript.js";
 import { decodeUsagePng } from "./usage/usageImage.js";
 import { recordFeatureUse } from "../telemetry/featureUsage.js";
+import type { WaitlistController } from "../engagement/waitlistController.js";
 import { DOCS, INTEGRATIONS_URL } from "../docsLinks.js";
 import { CONNECTOR_ICONS } from "./connectorIcons.js";
 import { CONNECTOR_GUIDE_SLUGS } from "./connectorGuides.js";
@@ -51,6 +52,7 @@ export class SettingsPanel {
 
   public static extensionContext?: vscode.ExtensionContext;
   public static chatProvider?: any;
+  public static waitlist?: WaitlistController;
   public static _cachedState: any = null;
   private static _prewarmPromise: Promise<void> | null = null;
   private static _prewarmTimer: NodeJS.Timeout | null = null;
@@ -115,6 +117,7 @@ export class SettingsPanel {
           pinnedModels: configData?.pinned_models || [],
           providers: providers || [],
           account,
+          waitlistJoined: SettingsPanel._waitlistJoined(),
           skills: skills || [],
           remoteSkills: SettingsPanel._cachedState?.remoteSkills || [],
           mcpServers: mcpServers || [],
@@ -237,6 +240,16 @@ export class SettingsPanel {
     this.loadData();
   }
 
+  private static _waitlistJoined(): boolean {
+    return SettingsPanel.waitlist?.joined() === true;
+  }
+
+  public static postWaitlistState(): void {
+    const joined = SettingsPanel._waitlistJoined();
+    if (SettingsPanel._cachedState) SettingsPanel._cachedState.waitlistJoined = joined;
+    SettingsPanel.currentPanel?._panel.webview.postMessage({ type: "waitlist_state", joined });
+  }
+
   public static updateMcpServers(mcpServers: unknown[]): void {
     SettingsPanel._lastMcpServers = mcpServers;
     if (SettingsPanel._cachedState) SettingsPanel._cachedState.mcpServers = mcpServers;
@@ -295,6 +308,7 @@ export class SettingsPanel {
             config: { ...configData, permission_mode: permissionMode },
             providers: providers || [],
             account,
+            waitlistJoined: SettingsPanel._waitlistJoined(),
             systemInfo: systemInfo || {},
             trustData: trustData || { is_trusted: false, trusted_projects: [] },
             currentWorkspace: workspaceFolder || "",
@@ -335,6 +349,7 @@ export class SettingsPanel {
           models: models || [],
           providers: fastRes.providers || [],
           account,
+          waitlistJoined: SettingsPanel._waitlistJoined(),
           skills: skills || [],
           remoteSkills: SettingsPanel._cachedState?.remoteSkills || [],
           mcpServers: mcpServers || [],
@@ -491,6 +506,16 @@ export class SettingsPanel {
       } catch (err: any) {
         vscode.window.showErrorMessage(`Failed to open login: ${err.message}`);
       }
+      return;
+    }
+
+    if (message.type === "open_waitlist") {
+      await SettingsPanel.chatProvider?.openWaitlistForm?.();
+      return;
+    }
+
+    if (message.type === "waitlist_offer_shown") {
+      SettingsPanel.waitlist?.offerShown();
       return;
     }
 
@@ -2300,6 +2325,18 @@ export class SettingsPanel {
 
     .btn-danger:hover {
       background: rgba(248, 81, 73, 0.25);
+    }
+
+    .btn.waitlist-offer {
+      align-self: flex-start;
+      padding: 4px 10px;
+      font-size: 11px;
+    }
+
+    .btn.waitlist-offer:disabled {
+      cursor: default;
+      color: var(--tag-green-fg);
+      background: rgba(var(--tint), 0.08);
     }
 
     .btn svg {
@@ -4272,6 +4309,16 @@ SOFTWARE.</pre>
     let currentUsageRange = "all";
     let currentUsageScope = "global";
     let currentAccount = { isAuthenticated: false, username: "", email: "", plan: "free" };
+    let waitlistJoined = false;
+    let waitlistOfferNoted = false;
+
+    function noteWaitlistOffer() {
+      if (waitlistOfferNoted || waitlistJoined) return;
+      const pane = document.getElementById("pane-keys");
+      if (!pane || !pane.classList.contains("active") || !pane.querySelector(".waitlist-offer")) return;
+      waitlistOfferNoted = true;
+      vscode.postMessage({ type: "waitlist_offer_shown" });
+    }
 
     // Tabs Navigation
     const sideNav = document.getElementById("side-nav");
@@ -4297,6 +4344,7 @@ SOFTWARE.</pre>
         }
       });
       panes.forEach(p => p.classList.toggle("active", p.id === "pane-" + tab));
+      if (tab === "keys") noteWaitlistOffer();
       if (fromUser) {
         try {
           vscode.postMessage({ type: "tab_switched", tab: tab });
@@ -4837,6 +4885,8 @@ SOFTWARE.</pre>
         btn.disabled = true;
         btn.innerHTML = '<span class="spinning-loader"></span> Signing out...';
         vscode.postMessage({ type: "logout_account" });
+      } else if (action === "join-waitlist") {
+        if (!waitlistJoined) vscode.postMessage({ type: "open_waitlist" });
       }
     });
 
@@ -4876,6 +4926,7 @@ SOFTWARE.</pre>
       if (currentConfig.default_model) activeModelId = currentConfig.default_model;
       if (currentConfig.default_provider) activeModelProvider = (currentConfig.default_provider || "").toLowerCase();
       if (msg.account) currentAccount = msg.account;
+      if (typeof msg.waitlistJoined === "boolean") waitlistJoined = msg.waitlistJoined;
 
       const setEl = (id, val) => {
         const el = document.getElementById(id);
@@ -4975,6 +5026,11 @@ SOFTWARE.</pre>
         }
         case "switch_tab": {
           switchTab(msg.tab);
+          break;
+        }
+        case "waitlist_state": {
+          waitlistJoined = msg.joined === true;
+          renderProviders();
           break;
         }
         case "daemon_status": {
@@ -5569,6 +5625,9 @@ SOFTWARE.</pre>
                 : '<button class="btn" style="font-size: 11px; padding: 4px 12px;" data-action="login-account">Sign In with AgenticMarket</button>'
               ) +
             '</div>' +
+            (waitlistJoined
+              ? '<button class="btn btn-secondary waitlist-offer" data-action="join-waitlist" disabled>On the waitlist ✓</button>'
+              : '<button class="btn btn-secondary waitlist-offer" data-action="join-waitlist" title="Opens a short form in the chat">Need more? Join the waitlist</button>') +
           '</div>';
         }
 
@@ -5594,6 +5653,7 @@ SOFTWARE.</pre>
           ) +
         '</div>';
       }).join("");
+      noteWaitlistOffer();
     }
 
     ${getUsageScript()}

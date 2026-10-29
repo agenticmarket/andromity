@@ -9,11 +9,29 @@ export const SENTIMENTS = ['love', 'ok', 'bad'];
 export const ANNOYANCES = ['slow', 'wrong_edits', 'too_many_prompts', 'errors_limits', 'hard_to_use', 'missing_feature'];
 const MISSING_COLUMN = /no such column|has no column/i;
 
-function json(body, status, headers) {
+export function json(body, status, headers) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...headers, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
   });
+}
+
+/** Normalises line endings, trims, and replaces API-key-shaped strings before storage. */
+export function cleanText(raw) {
+  return raw.replace(/\r\n?/g, '\n').trim().replace(SECRET_PATTERN, '[removed]');
+}
+
+/** The client, OS family, version and Cloudflare country stored with a submission. Unknown values fall back. */
+export function clientFields(input, cfCountry) {
+  const client = String(input.client || '').toLowerCase();
+  const os = String(input.os || '').toLowerCase();
+  const country = String(cfCountry || '').toUpperCase();
+  return {
+    client: CLIENTS.includes(client) ? client : 'unknown',
+    os: SYSTEMS.includes(os) ? os : 'unknown',
+    version: String(input.version || '').slice(0, 20).replace(/[^0-9a-zA-Z.-]/g, '') || 'unknown',
+    country: /^[A-Z]{2}$/.test(country) ? country : 'XX',
+  };
 }
 
 /**
@@ -33,19 +51,13 @@ export function cleanFeedback(input, cfCountry) {
   }
   const rawMessage = hasSentiment && (input.message === undefined || input.message === null) ? '' : input.message;
   if (typeof rawMessage !== 'string') return { error: 'message must be a string' };
-  const message = rawMessage.replace(/\r\n?/g, '\n').trim().replace(SECRET_PATTERN, '[removed]');
+  const message = cleanText(rawMessage);
   if (!message && !hasSentiment) return { error: 'message is required' };
   if (message.length > MAX_MESSAGE_LENGTH) return { error: `message is longer than ${MAX_MESSAGE_LENGTH} characters` };
-  const client = String(input.client || '').toLowerCase();
-  const os = String(input.os || '').toLowerCase();
-  const country = String(cfCountry || '').toUpperCase();
   return {
     values: {
       message,
-      client: CLIENTS.includes(client) ? client : 'unknown',
-      os: SYSTEMS.includes(os) ? os : 'unknown',
-      version: String(input.version || '').slice(0, 20).replace(/[^0-9a-zA-Z.-]/g, '') || 'unknown',
-      country: /^[A-Z]{2}$/.test(country) ? country : 'XX',
+      ...clientFields(input, cfCountry),
       sentiment: hasSentiment ? input.sentiment : null,
       annoyances: annoyances.length ? annoyances.join(',') : null,
     },

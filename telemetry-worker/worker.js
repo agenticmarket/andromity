@@ -4,6 +4,7 @@ import { cachedStats } from './statsCache.js';
 import { sessionSummaries, featureSummaries } from './metricSummaries.js';
 import { handleBlogRequest } from './blog.js';
 import { handleFeedbackRequest } from './feedback.js';
+import { handleWaitlistRequest } from './waitlist.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -48,6 +49,8 @@ export default {
     if (blogResponse) return blogResponse;
     const feedbackResponse = await handleFeedbackRequest(request, env, { url, headers: securityHeaders, isAdmin });
     if (feedbackResponse) return feedbackResponse;
+    const waitlistResponse = await handleWaitlistRequest(request, env, { url, headers: securityHeaders, isAdmin });
+    if (waitlistResponse) return waitlistResponse;
 
     if (request.method === 'GET') {
       if (url.pathname === '/api/stats' || url.pathname === '/stats') {
