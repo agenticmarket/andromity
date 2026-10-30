@@ -79,9 +79,10 @@ def _record_unprocessable_rejections() -> None:
 def _rejection_error(seen: List[BaseException]) -> ProviderRejectedError:
     last = seen[-1] if seen else None
     body = getattr(last, "body", None)
-    text = json.dumps(body, default=str) if isinstance(body, (dict, list)) else str(body or last or "")
+    said = _said(body) if isinstance(body, dict) else ""
+    text = said or (body if isinstance(body, str) else "")
     status = http_status(last) if last is not None else None
-    return ProviderRejectedError(text or "The provider returned no response.", status)
+    return ProviderRejectedError(text.strip() or "The provider returned no response.", status)
 
 
 def _format_stall_text(provider_name: str, model: str, timeout: float) -> str:
@@ -400,6 +401,9 @@ async def stream_completion(
                     _rejections.reset(token)
                 if response_stream is None:
                     raise _rejection_error(rejections)
+                if not hasattr(response_stream, "__aiter__"):
+                    response_stream = None
+                    raise ProviderRejectedError("The provider returned no response stream.", None)
             except Exception as e:
                 msg = str(e).lower()[:_MESSAGE_LIMIT]
                 status = _http_status(_exception_chain(e))
@@ -440,8 +444,8 @@ async def stream_completion(
                     return
 
                 if attempt < len(backoff):
-                    hinted = _retry_seconds(msg, _response_headers(_exception_chain(e)))
-                    wait_s = min(max(hinted, 1.0), 30.0) if hinted else backoff[attempt]
+                    hinted = _retry_hint(msg, _response_headers(_exception_chain(e)))
+                    wait_s = min(max(hinted, 1.0), 30.0) if hinted is not None else backoff[attempt]
                     log.warning(
                         "Upstream call error (%s). Retrying in %.1fs (attempt %d/%d)...",
                         type(e).__name__, wait_s, attempt + 1, total_attempts
@@ -601,12 +605,20 @@ def _error_events(e: Exception, provider_name: str, model: str, has_images: bool
         text = _format_stall_text(provider_display_name(provider_name), model, e.timeout)
     else:
         text = format_error_for_client(info)
-    no_reply = isinstance(e, ProviderStalledError) or (
-        _http_status(_exception_chain(e)) is None and info["detail"].endswith(("_conn", "_timeout")))
-    message = None if no_reply else short_error_detail(e, secrets=secrets)
+    message = None if _no_reply(e) else short_error_detail(e, secrets=secrets)
     return [TextDelta(text=text), Done(usage=usage, outcome="error", error_type=info["type"], error_detail=info["detail"],
                                        error_message=message, error_status=_http_status(_exception_chain(e)),
                                        error_action=_clean_action(info.get("action")) or None)]
+
+
+def _no_reply(e: BaseException) -> bool:
+    """The request failed in transport, so there are no provider words to show."""
+    chain = _exception_chain(e)
+    if isinstance(e, ProviderStalledError):
+        return True
+    if _http_status(chain) is not None:
+        return False
+    return _is_network_failure(chain) or any(type(exc).__name__ in _TRANSPORT_TIMEOUTS for exc in chain)
 
 
 def extract_clean_error_message(err_or_text: Any) -> str:
@@ -615,7 +627,7 @@ def extract_clean_error_message(err_or_text: Any) -> str:
     import json
     import re
 
-    raw = (str(err_or_text) if err_or_text is not None else "")[:_MESSAGE_LIMIT]
+    raw = _bounded(str(err_or_text) if err_or_text is not None else "")
     raw = _ORIGINAL_EXCEPTION.split(raw, 1)[0] or raw
     if not raw:
         return ""
@@ -640,6 +652,13 @@ def extract_clean_error_message(err_or_text: Any) -> str:
                     return data["detail"].strip()
                 elif _validation_text(data.get("detail")):
                     return _validation_text(data.get("detail"))
+        except RecursionError:
+            field = _MESSAGE_FIELD.search(raw, json_start)
+            if field:
+                try:
+                    return str(json.loads(f'"{field.group(1)}"')).strip()
+                except ValueError:
+                    pass
         except Exception:
             pass
 
@@ -659,6 +678,30 @@ def extract_clean_error_message(err_or_text: Any) -> str:
     if lines:
         return lines[0]
     return _strip_exception_prefixes(raw) or raw.strip()
+
+
+def _bounded(text: str) -> str:
+    """At most _MESSAGE_LIMIT characters, without a word the cut would split."""
+    if len(text) <= _MESSAGE_LIMIT:
+        return text
+    head = text[:_MESSAGE_LIMIT]
+    if not text[_MESSAGE_LIMIT].isspace():
+        words = head.rsplit(maxsplit=1)
+        head = words[0] if len(words) > 1 else ""
+    return head
+
+
+def _said(body: Dict[str, Any]) -> str:
+    """What an error body says: its message or detail, or the field errors of a validation reply."""
+    for value in (body.get("message"), body.get("detail")):
+        if isinstance(value, dict):
+            value = value.get("message") or value.get("detail")
+        if isinstance(value, str) and value.strip():
+            return value
+        fields = _validation_text(value)
+        if fields:
+            return fields
+    return ""
 
 
 def _validation_text(detail: Any) -> str:
@@ -704,9 +747,8 @@ def redact_credentials(text: str, secrets: Iterable[Optional[str]] = ()) -> str:
 
 def short_error_detail(e: BaseException, limit: int = 160, secrets: Iterable[Optional[str]] = ()) -> str:
     """One line of the provider's own error text, without markup or credentials. Redacts before it truncates."""
-    said = _chain_body(_exception_chain(e)).get("message")
-    source = said if isinstance(said, str) and said.strip() else e
-    text = redact_credentials(" ".join(extract_clean_error_message(source)[: limit + 512].split()), secrets)
+    source = _said(_chain_body(_exception_chain(e))) or e
+    text = redact_credentials(" ".join(extract_clean_error_message(source).split()), secrets)
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
@@ -733,6 +775,7 @@ _IDENTIFIER = re.compile(r"[a-z0-9_]{1,64}")
 _HTML_PAGE = re.compile(r"<(?:!doctype\s+html|html\b|head\b|body\b)", re.IGNORECASE)
 _EXCEPTION_PREFIX = re.compile(r"^(?:litellm\.)?\w*(?:Error|Exception)\s*[-:]\s*|^Message:\s*", re.IGNORECASE)
 _ORIGINAL_EXCEPTION = re.compile(r"(?<!\s)\s+Original exception:", re.IGNORECASE)
+_MESSAGE_FIELD = re.compile(r'"message"\s*:\s*"((?:[^"\\]|\\.){1,2000})"')
 _SSL_CONTEXT_NOTE = re.compile(r" ?ssl:(?:<[^>]{0,200}>|\S{1,200})")
 _DETAIL_LIMIT = 400
 _MESSAGE_LIMIT = 20000
@@ -742,6 +785,8 @@ _TIMEOUT_ERRORS = frozenset({
     "Timeout", "APITimeoutError", "ReadTimeout", "WriteTimeout", "PoolTimeout", "TimeoutException",
     "TimeoutError", "SocketTimeoutError", "ServerTimeoutError", "ProviderStalledError",
 })
+# LiteLLM's own Timeout also wraps a provider's error event that merely says "timed out".
+_TRANSPORT_TIMEOUTS = _TIMEOUT_ERRORS - {"Timeout", "ProviderStalledError"}
 _HTTPX_NETWORK_ERRORS = frozenset({
     "ConnectError", "ConnectTimeout", "ReadError", "WriteError", "CloseError", "RemoteProtocolError",
     "NetworkError", "ProxyError", "UnsupportedProtocol",
@@ -964,7 +1009,7 @@ def _json_error_in_text(text: str) -> Dict[str, Any]:
             break
         try:
             data, _end = decoder.raw_decode(text, start)
-        except ValueError:
+        except (ValueError, RecursionError):
             data = None
         if isinstance(data, dict):
             error = data.get("error")
@@ -1133,15 +1178,17 @@ def _strip_exception_prefixes(text: str) -> str:
     return text
 
 
-def _retry_seconds(text: str, headers: Dict[str, str]) -> Optional[float]:
-    seconds: Optional[float] = None
+def _retry_hint(text: str, headers: Dict[str, str]) -> Optional[float]:
+    """The wait a reply asks for, from its Retry-After header in seconds or a "retry in Ns" phrase."""
     header_wait = headers.get("retry-after", "").strip()
-    if re.fullmatch(r"\d{1,6}(?:\.\d+)?", header_wait):
-        seconds = float(header_wait)
-    else:
-        match = re.search(r"(?:retry|try again) in (\d{1,6}(?:\.\d+)?)\s*s\b", text, re.IGNORECASE)
-        if match:
-            seconds = float(match.group(1))
+    if re.fullmatch(r"\d{1,9}(?:\.\d{1,6})?", header_wait):
+        return float(header_wait)
+    match = re.search(r"(?:retry|try again) in (\d{1,9}(?:\.\d{1,6})?)\s*s\b", text, re.IGNORECASE)
+    return float(match.group(1)) if match else None
+
+
+def _retry_seconds(text: str, headers: Dict[str, str]) -> Optional[float]:
+    seconds = _retry_hint(text, headers)
     return seconds if seconds and 0 < seconds <= 86400 else None
 
 
