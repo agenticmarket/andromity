@@ -41,7 +41,11 @@ GATEWAY_ONLY_WORDS = ("gateway", "00:00 UTC", "panel", "free trial", "AgenticMar
 
 
 def _reply(status, body, headers=None, delay=0.0, timeout=None, api_key="x"):
-    """The exception LiteLLM raises when an OpenAI-compatible endpoint answers with this reply."""
+    """The exception LiteLLM raises when an OpenAI-compatible endpoint answers with this reply.
+
+    drop_params stays off for the call: with it on, LiteLLM answers a 422 by retrying once without the rejected
+    parameters and then returns None instead of raising.
+    """
     payload = json.dumps(body).encode() if not isinstance(body, bytes) else body
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -66,6 +70,8 @@ def _reply(status, body, headers=None, delay=0.0, timeout=None, api_key="x"):
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     extra = {"timeout": timeout} if timeout else {}
+    drop_params = litellm.drop_params
+    litellm.drop_params = False
     try:
         litellm.completion(
             model="openai/auto", api_base=f"http://127.0.0.1:{server.server_address[1]}/v1", api_key=api_key,
@@ -74,6 +80,7 @@ def _reply(status, body, headers=None, delay=0.0, timeout=None, api_key="x"):
     except Exception as exc:
         return exc
     finally:
+        litellm.drop_params = drop_params
         server.shutdown()
         server.server_close()
     raise AssertionError("the call should have failed")

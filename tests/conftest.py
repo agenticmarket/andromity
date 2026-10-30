@@ -1,5 +1,22 @@
+import sys
+
 import pytest
 from andromity.core.tools import register_session
+
+_LITELLM_DEFAULTS = {"drop_params": False, "suppress_debug_info": False}
+
+
+@pytest.fixture(autouse=True)
+def _restore_litellm_settings():
+    """stream_completion turns LiteLLM settings on for the whole process; put them back after each test."""
+    loaded = sys.modules.get("litellm")
+    before = {name: getattr(loaded, name, default) if loaded is not None else default
+              for name, default in _LITELLM_DEFAULTS.items()}
+    yield
+    litellm = sys.modules.get("litellm")
+    if litellm is not None:
+        for name, value in before.items():
+            setattr(litellm, name, value)
 
 
 @pytest.fixture(autouse=True)
