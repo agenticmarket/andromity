@@ -1067,6 +1067,13 @@ export class SessionTabPanel {
         break;
       }
 
+      case "sign_out_and_retry": {
+        recordFeatureUse("sign_out_and_retry", { sessionId: this._sessionId });
+        await this._viewProvider.logout();
+        await this._handleMessage({ ...message, type: "retry_turn" });
+        break;
+      }
+
       case "refresh_usage": {
         await this._viewProvider.fetchUsage();
         break;

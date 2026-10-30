@@ -164,7 +164,7 @@ async def test_unfinished_stream_still_fails_for_builtin(monkeypatch):
 async def test_403_says_key_rejected_only_when_the_key_is_bad(monkeypatch, status, detail, expected):
     providers({"name": "openai", "api_key": FAKE_OPENAI})
     recording_stream(monkeypatch, [Done(outcome="error", error_type="auth_error" if status != 404 else "generic",
-                                        error_detail=detail, error_status=status)])
+                                        error_message=detail, error_status=status)])
     result = await connections.test_connection("openai", "gpt-x")
     assert result["error_type"] == expected, result
 

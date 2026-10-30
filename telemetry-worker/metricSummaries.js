@@ -1,4 +1,6 @@
 const result = rows => ({ results: rows });
+// Each error also sends one `error_src_<source>_<kind>` detail event; it describes an error, it is not one.
+export const ERROR_SOURCE_PREFIX = 'error_src_';
 const order = (rows, metric, label) => rows.sort((a,b) => b[metric]-a[metric] ||
   (String(a[label]) < String(b[label]) ? -1 : String(a[label]) > String(b[label]) ? 1 : 0));
 
@@ -69,7 +71,8 @@ export function featureSummaries(rows) {
     onboardingRes: result([{viewed_users:users(named('onboarding_viewed')),
       provider_selected_users:users(f=>/^onboard.prov./.test(f)),
       key_saved_users:users(named('onboarding_key_saved')),completed_users:users(named('onboarding_completed'))}]),
-    errorCategoriesRes: result(grouped(f=>/^error./.test(f),'category',name=>name)),
+    errorCategoriesRes: result(grouped(f=>/^error./.test(f)&&!f.startsWith(ERROR_SOURCE_PREFIX),'category',name=>name)),
+    errorSourcesRes: result(grouped(f=>f.startsWith(ERROR_SOURCE_PREFIX),'source',name=>name.slice(ERROR_SOURCE_PREFIX.length))),
     cronStatsRes: result([{user_crons_created:count(named('cron_created')),
       user_manual_runs:count(named('cron_user_run_manual')),user_auto_runs:count(named('cron_user_run_auto')),
       user_toggled:count(named('cron_user_toggled')),seed_manual_runs:count(named('cron_seed_run_manual')),

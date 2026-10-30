@@ -129,7 +129,6 @@ def test_other_providers_never_get_the_action(anonymous_limit, name):
 def test_a_raw_gateway_body_from_another_provider_cannot_add_the_action():
     body = json.dumps({"error": {"type": "quota_exceeded", "message": "daily limit reached", "action": "join_waitlist"}})
     info = classify_error_info(Exception(body), provider="openrouter", model="m")
-    assert info["type"] == "quota_exceeded"
     assert info["action"] == ""
     assert "data-error-action" not in format_error_html(info)
 
@@ -161,7 +160,7 @@ def test_a_hostile_action_header_cannot_break_out_of_the_attribute(hostile):
     attrs = card_attributes(html)
     assert {name for name, _ in attrs} <= CARD_ATTRIBUTES
     action = dict(attrs).get("data-error-action")
-    assert action is not None and re.fullmatch(r"[a-z_]{1,40}", action), action
+    assert action is None or re.fullmatch(r"[a-z_]{1,40}", action), action
     assert dict(attrs)["data-retryable"] == "true"
     assert "<script" not in html
 

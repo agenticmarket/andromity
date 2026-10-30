@@ -4803,7 +4803,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             errCard.style.opacity = '0.5';
             errCard.dataset.retryPending = 'true';
             const btn = errCard.querySelector('.btn-error-retry');
-            if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>Retrying...';
+            if (btn && btn.dataset.action === 'retry-turn') btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>Retrying...';
           }
           vscode.postMessage({
             type: 'retry_turn',
@@ -4819,7 +4819,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             errCard.style.opacity = '0.5';
             errCard.dataset.retryPending = 'true';
             const btn = errCard.querySelector('.btn-error-retry');
-            if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>Retrying without image...';
+            if (btn && btn.dataset.action === 'retry-without-image') btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>Retrying without image...';
           }
           vscode.postMessage({
             type: 'retry_turn',
@@ -4839,6 +4839,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
         case 'open-account-login': {
           vscode.postMessage({ type: 'open_login' });
+          break;
+        }
+        case 'use-without-sign-in': {
+          const errCard = target.closest('.andromity-error-card, .error-card');
+          if (errCard?.dataset.retryPending === 'true') break;
+          if (errCard) {
+            errCard.style.opacity = '0.5';
+            errCard.dataset.retryPending = 'true';
+          }
+          vscode.postMessage({
+            type: 'sign_out_and_retry',
+            sessionId: currentSessionId,
+            stripImages: false, model: currentModel, provider: currentProvider, reasoningEffort: currentReasoning,
+          });
           break;
         }
         case 'open-settings': {
@@ -6554,7 +6568,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       let start;
       while ((start = md.indexOf(ERROR_CARD_OPEN, from)) !== -1) {
         const end = errorCardMarkupEnd(md, start);
-        const card = end !== -1 && startsLineOutsideFence(md, start) ? errorCardFromMarkup(md.slice(start, end)) : '';
+        const card = end !== -1 && startsLineOutsideFence(md, start) ? errorCardFromMarkup(md.slice(start, end), true) : '';
         if (card) {
           html += renderMarkdownText(md.slice(0, start)) + card;
           md = md.slice(end);
@@ -11022,7 +11036,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             delete card.dataset.retryPending;
             card.style.opacity = '';
             const button = card.querySelector('.btn-error-retry');
-            if (button) button.textContent = button.dataset.action === 'retry-without-image' ? 'Retry without Image' : 'Retry';
+            if (button && (button.dataset.action === 'retry-turn' || button.dataset.action === 'retry-without-image')) {
+              button.textContent = button.dataset.action === 'retry-without-image' ? 'Retry without Image' : 'Retry';
+            }
           });
           if (!msg.success) appendSystemNote(msg.error || 'Retry could not start. Try again.');
           break;
@@ -11261,6 +11277,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           const finishedTurn = unsentTurnSessions.delete(msg.session_id || currentSessionId) ? null : finishedTurnFacts(msg);
           endAssistantTurn();
+          if (msg.outcome === 'error') enableEngineCardActions(msg.error_type);
           interactiveSlot.innerHTML = '';
           activePendingApprovalId = null;
           activePendingToolName = '';
@@ -11348,7 +11365,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           endAssistantTurn();
           interactiveSlot.innerHTML = '';
-          appendErrorCard(msg.error || 'Unknown agent error.');
+          appendErrorCard(msg.error || 'Unknown agent error.', undefined, undefined, msg.provider);
           updateScheduledRunNotice(sessionsState[currentSessionId]?.scheduledRun, false);
           break;
         }
@@ -11611,6 +11628,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const iconSettings = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83-2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>';
     const iconAccount = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>';
 
+    const iconSignOut = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>';
+
     const ERROR_CARD_ACTION_ICONS = {
       'retry-turn': iconRetry,
       'retry-without-image': iconRetry,
@@ -11619,7 +11638,30 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       'new-session': iconPlus,
       'open-settings': iconSettings,
       'open-account-login': iconAccount,
+      'use-without-sign-in': iconSignOut,
     };
+
+    // Actions with side effects: only engine error events may show them, always with these labels.
+    const ERROR_CARD_ENGINE_ACTIONS = {
+      'use-without-sign-in': { label: 'Use without signing in', title: 'Sign out and retry this turn without an account' },
+    };
+
+    function engineActionButton(action, primary) {
+      const fixed = ERROR_CARD_ENGINE_ACTIONS[action];
+      return '<button class="' + (primary ? 'btn-error-retry' : 'btn-error-secondary') + '" data-action="' + action + '" title="' + escapeHtml(fixed.title) + '">' +
+        ERROR_CARD_ACTION_ICONS[action] + escapeHtml(fixed.label) + '</button>';
+    }
+
+    // The engine's sign-in error arrives as reply text, which may not carry side-effect actions;
+    // the turn's error event then adds them to the last such card.
+    function enableEngineCardActions(errorType) {
+      if (errorType !== 'sign_in_invalid' || !chatContainer || typeof chatContainer.querySelectorAll !== 'function') return;
+      const cards = chatContainer.querySelectorAll('.andromity-error-card[data-error-type="sign_in_invalid"]');
+      const card = cards && cards.length ? cards[cards.length - 1] : null;
+      const actions = card && card.querySelector('.error-card-actions');
+      if (!actions || actions.querySelector('[data-action="use-without-sign-in"]')) return;
+      actions.insertAdjacentHTML('beforeend', engineActionButton('use-without-sign-in', false));
+    }
 
     function errorCardMarkupEnd(text, start) {
       const tag = /<(\\/?)div\\b[^>]*>/gi;
@@ -11646,7 +11688,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     // Reads the card through an inert DOMParser document and keeps only text, inline emphasis,
     // the quota timer, and buttons whose data-action the click handler already supports.
-    function errorCardFromMarkup(markup) {
+    function errorCardFromMarkup(markup, fromReplyText) {
       if (typeof DOMParser === 'undefined') return '';
       const source = new DOMParser().parseFromString(markup, 'text/html').querySelector('.andromity-error-card');
       if (!source) return '';
@@ -11655,6 +11697,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         return node ? node.textContent.replace(/\\s+/g, ' ').trim() : '';
       };
       const errorType = (source.getAttribute('data-error-type') || 'generic').replace(/[^a-z_]/gi, '') || 'generic';
+      const errorAction = (source.getAttribute('data-error-action') || '').replace(/[^a-z0-9_]/gi, '').slice(0, 64);
       let bodyHtml = '';
       let timerText = '';
       const body = source.querySelector('.error-card-body');
@@ -11686,6 +11729,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       source.querySelectorAll('.error-card-actions [data-action]').forEach((button) => {
         const action = button.getAttribute('data-action') || '';
         if (!Object.prototype.hasOwnProperty.call(ERROR_CARD_ACTION_ICONS, action) || seenActions.has(action)) return;
+        if (Object.prototype.hasOwnProperty.call(ERROR_CARD_ENGINE_ACTIONS, action)) {
+          if (!fromReplyText) actionsHtml += engineActionButton(action, seenActions.size === 0);
+          seenActions.add(action);
+          return;
+        }
         const label = (button.textContent || '').replace(/\\s+/g, ' ').trim();
         if (!label) return;
         actionsHtml += '<button class="' + (seenActions.size === 0 ? 'btn-error-retry' : 'btn-error-secondary') + '" data-action="' + action + '" title="' + escapeHtml(button.getAttribute('title') || label) + '">' +
@@ -11697,9 +11745,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         noteWaitlistOffer();
       }
       const detailsNode = source.querySelector('.error-details .error-code');
-      const detailsText = detailsNode ? detailsNode.textContent.trim() : '';
+      const detailsText = detailsNode ? redactErrorDetails(detailsNode.textContent.trim()) : '';
       const iconAlert = '<span class="error-header-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span>';
-      return '<div class="andromity-error-card" data-error-type="' + errorType + '" data-retryable="true">' +
+      return '<div class="andromity-error-card" data-error-type="' + errorType + '"' +
+          (errorAction ? ' data-error-action="' + errorAction + '"' : '') + ' data-retryable="true">' +
           '<div class="error-card-header">' +
             '<div class="error-header-left">' +
               iconAlert +
@@ -11718,7 +11767,66 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         '</div>';
     }
 
-    function appendErrorCard(text, rawError, errorType) {
+    const ERROR_PROVIDER_NAMES = {
+      openrouter: 'OpenRouter', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google Gemini', deepseek: 'DeepSeek',
+      groq: 'Groq', nvidia: 'NVIDIA NIM', ollama: 'Ollama', lmstudio: 'LM Studio', llamacpp: 'llama.cpp', opencode: 'OpenCode',
+    };
+    const LOCAL_ERROR_PROVIDERS = ['ollama', 'lmstudio', 'llamacpp'];
+    const NETWORK_ERROR_WORDS = [
+      'connection error', 'connection refused', 'connection reset', 'connection aborted', 'failed to connect',
+      'cannot connect to host', 'could not connect', 'unable to connect', 'actively refused', 'refused the network connection',
+      'name or service not known', 'nodename nor servname', 'getaddrinfo', 'name resolution', 'network is unreachable',
+      'no route to host', 'broken pipe', 'remote end closed connection', 'server disconnected', 'certificate verify failed',
+      'econnrefused', 'econnreset', 'enotfound',
+    ];
+    const CREDIT_ERROR_WORDS = [
+      'insufficient_quota', 'insufficient quota', 'insufficient credit', 'insufficient balance', 'insufficient funds',
+      'requires more credits', 'credit balance is too low', 'out of credits', 'payment required',
+    ];
+    const OUTAGE_ERROR_WORDS = [
+      'service unavailable', 'serviceunavailable', 'service_unavailable', 'bad gateway', 'badgateway', 'gateway timeout',
+      'overloaded', 'upstream error', 'internal server error', 'temporarily unavailable',
+    ];
+    const DAILY_LIMIT_WORDS = ['per day', 'per-day', 'perday', 'daily', '(rpd)', '(tpd)'];
+
+    function errorProviderKey(id) {
+      return String(id || '').toLowerCase().replace(/[\\s._-]+/g, '');
+    }
+
+    function isLoopbackUrl(url) {
+      const match = /^[a-z][a-z0-9+.-]*:\\/\\/(?:[^@\\/?#]*@)?(\\[[^\\]]*\\]|[^:\\/?#]*)/i.exec(String(url || '').trim());
+      const host = match ? match[1].toLowerCase().replace(/^\\[|\\]$/g, '') : '';
+      return host === 'localhost' || host.endsWith('.localhost') || host === '::1' || /^127(\\.\\d{1,3}){3}$/.test(host);
+    }
+
+    function errorProviderInfo(providerId) {
+      const id = String(providerId || '').trim().toLowerCase();
+      const entry = (allProviders || []).find(p => p && String(p.id || '').toLowerCase() === id) || null;
+      let name = 'Andromity Cloud';
+      if (id !== 'andromity') {
+        name = String((entry && entry.name) || '').trim();
+        if (!name || name.toLowerCase() === id) name = ERROR_PROVIDER_NAMES[errorProviderKey(id)] || '';
+        name = name.replace(/\\s*\\([^)]*\\)\\s*$/, '').trim();
+        if (!name) name = id.split(/[\\s_-]+/).filter(Boolean).map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+      }
+      return {
+        name: (name || 'the provider').slice(0, 48),
+        gateway: id === 'andromity',
+        local: id !== 'andromity' && (LOCAL_ERROR_PROVIDERS.includes(errorProviderKey(id)) || isLoopbackUrl(entry && entry.base_url)),
+      };
+    }
+
+    function redactErrorDetails(text) {
+      const value = String(text || '').slice(0, 20000)
+        .replace(/\\b(?:sk-|nvapi-|gsk_|xai-|key-)[A-Za-z0-9_-]{16,}/g, '[REDACTED API key]')
+        .replace(/\\bAIza[A-Za-z0-9_-]{16,}/g, '[REDACTED API key]')
+        .replace(/"user_id"\\s*:\\s*"[^"]+"/gi, '"user_id":"[redacted]"')
+        .replace(/andromity_[0-9a-f]{32,}/gi, '[REDACTED Andromity sign-in token]')
+        .replace(/(bearer\\s+)[A-Za-z0-9._~+\\/=-]{8,}/gi, '$1[REDACTED]');
+      return redactSecrets(value, findSecrets(value));
+    }
+
+    function appendErrorCard(text, rawError, errorType, providerId) {
       if (!text) text = 'An unexpected agent error occurred.';
       const trimmed = String(text).trim();
       const wrap = document.createElement('div');
@@ -11735,20 +11843,26 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
       }
 
+      const provider = errorProviderInfo(providerId || currentProvider);
+      const name = provider.name;
+      const capitalize = (value) => value.charAt(0).toUpperCase() + value.slice(1);
       const cleanMsg = extractCleanErrorMessage(trimmed);
       const low = trimmed.toLowerCase();
       // Status codes as whole numbers: timestamps and IDs in the text often contain "404" or "500".
       const hasCode = (code) => new RegExp('(^|[^0-9])' + code + '([^0-9]|$)').test(low);
+      const mentions = (words) => words.some(word => low.includes(word));
+      const button = (primary, action, title, icon, label) =>
+        '<button class="' + (primary ? 'btn-error-retry' : 'btn-error-secondary') + '" data-action="' + action + '" title="' + title + '">' + icon + label + '</button>';
+      const retryButton = (primary) => button(primary, 'retry-turn', 'Retry this turn', iconRetry, 'Retry Turn');
+      const switchButton = (primary) => button(primary, 'switch-model-flyout', 'Switch to another model', iconModel, 'Switch Model');
       let badge = 'ERROR';
       let title = 'Turn Interrupted';
       let desc = cleanMsg || trimmed;
       let timerHtml = '';
       let eType = errorType || 'generic';
+      let actionsHtml = retryButton(true);
 
-
-      let actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">' + iconRetry + 'Retry Turn</button>';
-
-      if (low.includes('daily limit') || low.includes('daily_limit') || low.includes('free trial limit') || low.includes('quota limit') || low.includes('quota resets in')) {
+      if (provider.gateway && (low.includes('daily limit') || low.includes('daily_limit') || low.includes('free trial limit') || low.includes('quota limit') || low.includes('quota resets in'))) {
         badge = 'QUOTA LIMIT';
         title = 'Daily Limit Reached';
         const isUserAuthed = isAndromityActive ||
@@ -11775,13 +11889,32 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             '<button class="btn-error-secondary" data-action="open-settings" title="Configure BYOK">' + iconSettings + 'Open Settings</button>' +
             '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">' + iconModel + 'Switch Model</button>';
         }
+      } else if (provider.gateway && (low.includes('authentication token') || low.includes('sign in again'))) {
+        badge = 'SIGN IN REQUIRED';
+        title = "Your Andromity sign-in isn't valid anymore";
+        desc = 'Sign in again, or keep using Andromity without signing in.';
+        eType = 'sign_in_invalid';
+        actionsHtml = button(true, 'open-account-login', 'Sign in with AgenticMarket again', iconAccount, 'Sign in again') +
+          button(false, 'use-without-sign-in', 'Sign out and retry this turn without an account', iconSignOut, 'Use without signing in');
+      } else if (mentions(NETWORK_ERROR_WORDS)) {
+        if (provider.local) {
+          badge = 'OFFLINE';
+          title = name === 'Ollama' ? 'Local Ollama Not Running' : name + " isn't running";
+          desc = 'Could not connect to ' + name + '. Start the local model server, then retry.';
+          eType = 'ollama_offline';
+        } else {
+          badge = 'CONNECTION';
+          title = "Couldn't reach " + name;
+          desc = "Couldn't connect to " + name + '. Check your internet connection, VPN or proxy, then retry.';
+          eType = 'network_error';
+        }
+        actionsHtml = retryButton(true) + switchButton(false);
       } else if (low.includes('notfound') || low.includes('not found') || low.includes('no endpoints found') || low.includes('model_not_found') || (hasCode('404') && (low.includes('model') || low.includes('endpoint')))) {
         badge = 'NOT FOUND';
-        title = 'Model Not Available';
+        title = provider.gateway ? 'Model Not Available' : 'Model not found at ' + name;
         desc = (cleanMsg || 'The requested model was not found or has no active endpoints.') + ' Please switch to another model.';
         eType = 'model_not_found';
-        actionsHtml = '<button class="btn-error-retry" data-action="switch-model-flyout" title="Switch to another model">' + iconModel + 'Switch Model</button>' +
-          '<button class="btn-error-secondary" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>';
+        actionsHtml = switchButton(true) + retryButton(false);
       } else if (low.includes('image') || low.includes('vision') || low.includes('multimodal') || low.includes('does not support')) {
         badge = 'IMAGE NOT SUPPORTED';
         title = 'Model Does Not Support Images';
@@ -11789,17 +11922,26 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         eType = 'vision_unsupported';
         actionsHtml = '<button class="btn-error-retry" data-action="retry-without-image" title="Retry without image">' + iconRetry + 'Retry without Image</button>' +
           '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to a vision model">' + iconModel + 'Switch Model</button>';
+      } else if (!provider.gateway && (hasCode('402') || mentions(CREDIT_ERROR_WORDS))) {
+        badge = 'CREDITS';
+        title = 'Out of credits at ' + name;
+        desc = capitalize(name + " says your account doesn't have enough credits for this request. Add credits there, or pick another model.");
+        eType = 'insufficient_credits';
+        actionsHtml = switchButton(true) + retryButton(false);
       } else if (hasCode('429') || low.includes('rate limit') || low.includes('quota')) {
         badge = 'RATE LIMIT';
-        title = 'Rate Limit Reached';
+        const daily = !provider.gateway && mentions(DAILY_LIMIT_WORDS);
+        title = (daily ? 'Daily limit reached at ' : 'Rate limit at ') + name;
         eType = 'rate_limit';
         const reason = (cleanMsg || 'Rate limit or quota threshold reached for the model provider.').trim();
         const sentence = /[.!?]$/.test(reason) ? reason : reason + '.';
         const resetAt = rateLimitResetAt(trimmed, Date.now());
         const waitMs = resetAt === null ? 0 : resetAt - Date.now();
-        const longWait = waitMs > 2 * 60 * 1000;
+        const longWait = waitMs > 2 * 60 * 1000 || (daily && resetAt === null);
         if (resetAt === null) {
-          desc = sentence + ' Please wait a moment and click Retry.';
+          desc = sentence + (daily
+            ? ' Wait for the limit to reset, add credits at ' + name + ', or switch to another model.'
+            : ' Please wait a moment and click Retry.');
         } else {
           const at = new Date(resetAt);
           const sameDay = at.toDateString() === new Date().toDateString();
@@ -11814,13 +11956,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const retryBtn = '<button class="' + (longWait ? 'btn-error-secondary' : 'btn-error-retry') + '" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>';
         const switchBtn = '<button class="' + (longWait ? 'btn-error-retry' : 'btn-error-secondary') + '" data-action="switch-model-flyout" title="Switch model">' + iconModel + 'Switch Model</button>';
         actionsHtml = longWait ? switchBtn + retryBtn : retryBtn + switchBtn;
-      } else if (low.includes('midstream') || hasCode('503') || hasCode('502') || hasCode('500') || low.includes('serviceunavailable') || low.includes('service unavailable') || low.includes('bad gateway') || low.includes('upstream error')) {
-        badge = 'SERVICE DISRUPTED';
-        title = 'Upstream Service Interruption';
-        desc = (cleanMsg || 'The upstream provider experienced a temporary service disruption or disconnect.') + ' This is usually transient—click Retry to continue.';
-        eType = 'provider_unavailable';
-        actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>' +
-          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch model">' + iconModel + 'Switch Model</button>';
+      } else if (mentions(OUTAGE_ERROR_WORDS)) {
+        if (provider.gateway) {
+          badge = 'UNAVAILABLE';
+          title = 'Andromity Cloud is having trouble right now';
+          desc = 'Try again in a moment.';
+          eType = 'service_unavailable';
+        } else {
+          badge = 'SERVICE DISRUPTED';
+          title = 'Service disruption at ' + name;
+          desc = capitalize(name + ' had a problem on its side. This usually clears up quickly. Retry in a moment, or pick another model.');
+          eType = 'provider_unavailable';
+        }
+        actionsHtml = retryButton(true) + switchButton(false);
       } else if (low.includes('context') || low.includes('token limit') || low.includes('maximum context')) {
         badge = 'CONTEXT LIMIT';
         title = 'Context Window Limit Reached';
@@ -11829,15 +11977,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         actionsHtml = '<button class="btn-error-retry" data-action="trigger-compact" title="Compact context">' + iconCompact + 'Compact Context</button>' +
           '<button class="btn-error-secondary" data-action="new-session" title="New session">' + iconPlus + 'New Session</button>';
       } else if (hasCode('401') || hasCode('403') || low.includes('unauthorized') || low.includes('api key') || low.includes('missing credentials') || low.includes('pass an api_key') || low.includes('no api key')) {
-        badge = 'AUTHENTICATION';
-        title = 'Authentication Error';
-        desc = (cleanMsg || 'Invalid or missing API key.') + ' Please check your provider settings.';
-        eType = 'auth_error';
-        actionsHtml = '<button class="btn-error-retry" data-action="open-settings" title="Open settings">' + iconSettings + 'Open Settings</button>';
+        if (provider.gateway) {
+          badge = 'UNAVAILABLE';
+          title = "Andromity Cloud couldn't verify this request";
+          desc = "This is a problem on Andromity's side, not with your account or API key. Try again later.";
+          eType = 'gateway_auth_error';
+          actionsHtml = retryButton(true) + button(false, 'open-settings', 'Use your own API key', iconSettings, 'Use Your Own Key');
+        } else {
+          badge = 'AUTHENTICATION';
+          title = 'API key rejected by ' + name;
+          desc = capitalize(name + " didn't accept your API key. Check it under API keys in Settings; it may be mistyped, revoked or expired.");
+          eType = 'auth_error';
+          actionsHtml = button(true, 'open-settings', 'Open API keys in Settings', iconSettings, 'Check API Key') + switchButton(false);
+        }
       } else {
         desc = cleanMsg || trimmed;
-        actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">' + iconRetry + 'Retry Turn</button>' +
-          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">' + iconModel + 'Switch Model</button>';
+        actionsHtml = retryButton(true) + switchButton(false);
       }
 
       const iconAlert = '<span class="error-header-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span>';
@@ -11851,10 +12006,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               '<span class="error-title">' + escapeHtml(title) + '</span>' +
             '</div>' +
           '</div>' +
-          '<div class="error-card-body">' + escapeHtml(desc) + timerHtml + '</div>' +
+          '<div class="error-card-body">' + escapeHtml(redactErrorDetails(desc)) + timerHtml + '</div>' +
           '<details class="error-details">' +
             '<summary>Technical Details</summary>' +
-            '<pre class="error-code"><code>' + escapeHtml(String(rawError || text || '').replace(/"user_id"\s*:\s*"[^"]+"/gi, '"user_id":"[redacted]"')) + '</code></pre>' +
+            '<pre class="error-code"><code>' + escapeHtml(redactErrorDetails(rawError || text)) + '</code></pre>' +
           '</details>' +
           '<div class="error-card-actions">' +
             actionsHtml +

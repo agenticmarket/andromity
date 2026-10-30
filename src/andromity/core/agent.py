@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from typing import AsyncGenerator, Dict, Any, Optional, Callable
 
-from andromity.core.provider import stream_completion, sanitize_messages_for_api
+from andromity.core.provider import ERROR_KINDS, ERROR_SOURCES, stream_completion, sanitize_messages_for_api
 from andromity.core.session import Session, skipped_image_count
 from andromity.core.profiles import (
     filter_tools_for_profile, get_allowed_tools, get_system_prompt, load_project_instructions,
@@ -165,6 +165,14 @@ def error_feature_name(error_type: Optional[str]) -> str:
     if kind.startswith("error_"):
         return kind
     return _ERROR_FEATURE_NAMES.get(kind, f"error_{kind}")
+
+
+def error_detail_feature_name(error_detail: Optional[str]) -> Optional[str]:
+    """`error_src_<source>_<kind>` for a provider error's coarse origin, or None when it is not one."""
+    source, _, kind = (error_detail or "").strip().lower().partition("_")
+    if source in ERROR_SOURCES and kind in ERROR_KINDS:
+        return f"error_src_{source}_{kind}"
+    return None
 
 
 class Agent:
@@ -671,6 +679,7 @@ class Agent:
             provider_outcome = "success"
             provider_error_type = None
             provider_error_action = None
+            provider_error_detail = None
 
             stream_kwargs: Dict[str, Any] = {"tools": self._tools_for_this_call(), "turn_id": user_turn_id}
             if self.provider:
@@ -702,6 +711,7 @@ class Agent:
                     provider_outcome = event.outcome
                     provider_error_type = event.error_type
                     provider_error_action = event.error_action
+                    provider_error_detail = event.error_detail
                 else:
                     yield event
                 if isinstance(event, TextDelta):
@@ -809,8 +819,10 @@ class Agent:
                 for call in tool_calls_to_execute:
                     self.session.add_message("tool", content="Not executed: provider response failed.",
                                              tool_call_id=call["id"], name=call["function"]["name"])
-                yield Done(usage=last_usage, outcome="error", error_type=provider_error_type, error_action=provider_error_action)
-                self._fire_session_end(had_error=True, error_type=provider_error_type or "provider_failed")
+                yield Done(usage=last_usage, outcome="error", error_type=provider_error_type,
+                           error_detail=provider_error_detail, error_action=provider_error_action)
+                self._fire_session_end(had_error=True, error_type=provider_error_type or "provider_failed",
+                                       error_detail=provider_error_detail)
                 break
 
             if not assistant_content and not tool_calls_to_execute:
@@ -1202,13 +1214,17 @@ class Agent:
     def _get_session_duration(self) -> float:
         return max(0.0, time.monotonic() - getattr(self, "_telemetry_turn_start", time.monotonic()))
 
-    def _fire_session_end(self, had_error: bool = False, error_type: Optional[str] = None) -> None:
+    def _fire_session_end(self, had_error: bool = False, error_type: Optional[str] = None,
+                          error_detail: Optional[str] = None) -> None:
         """Send live session update and session outcome telemetry."""
         try:
             from andromity.telemetry import send_session_update, send_session_end, send_feature_used
             if had_error:
                 # Category only (e.g. error_auth, error_ollama_offline); never the message text.
                 send_feature_used(error_feature_name(error_type), session_id=self.session.id)
+                detail_feature = error_detail_feature_name(error_detail)
+                if detail_feature:
+                    send_feature_used(detail_feature, session_id=self.session.id)
             _prov = self.provider or config.get("default", "provider", "")
             _mod  = self.model  or config.get("default", "model", "")
             turns = self._get_turn_count()

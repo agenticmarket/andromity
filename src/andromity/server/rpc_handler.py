@@ -1977,6 +1977,7 @@ class JsonRpcHandler:
                             "usage": event.usage,
                             "outcome": event.outcome,
                             "error_action": event.error_action,
+                            "error_type": event.error_type,
                             "token_total": getattr(session, "token_total", 0),
                             "context_tokens": getattr(session, "context_tokens", 0),
                             "cost_usd": getattr(session, "cost_usd", 0.0),

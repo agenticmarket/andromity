@@ -11,7 +11,7 @@ export function reportDisconnectedAction(
     post({ type: "interaction_failed", session_id: sessionId, error });
   } else if (message.type === "submit_input") {
     post({ type: "input_rejected", session_id: sessionId, request_id: message.requestId, error });
-  } else if (message.type === "retry_turn") {
+  } else if (message.type === "retry_turn" || message.type === "sign_out_and_retry") {
     post({ type: "retry_result", session_id: sessionId, success: false, error });
   } else {
     post({ type: "action_failed", session_id: sessionId, error });
