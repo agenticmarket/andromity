@@ -11826,14 +11826,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       };
     }
 
+    const REDACTED = '\\u2022\\u2022\\u2022';
+
     function redactErrorDetails(text) {
       const value = String(text || '').slice(0, 20000)
-        .replace(/\\b(?:sk-|nvapi-|gsk_|xai-|key-)[A-Za-z0-9_-]{16,}/g, '[REDACTED API key]')
-        .replace(/\\bAIza[A-Za-z0-9_-]{16,}/g, '[REDACTED API key]')
-        .replace(/"user_id"\\s*:\\s*"[^"]+"/gi, '"user_id":"[redacted]"')
-        .replace(/andromity_[0-9a-f]{32,}/gi, '[REDACTED Andromity sign-in token]')
-        .replace(/(bearer\\s+)[A-Za-z0-9._~+\\/=-]{8,}/gi, '$1[REDACTED]');
-      return redactSecrets(value, findSecrets(value));
+        .replace(/\\b(?:sk-|nvapi-|gsk_|xai-|key-)[A-Za-z0-9_-]{16,}/g, REDACTED)
+        .replace(/\\bAIza[A-Za-z0-9_-]{16,}/g, REDACTED)
+        .replace(/"user_id"\\s*:\\s*"[^"]+"/gi, '"user_id":"' + REDACTED + '"')
+        .replace(/andromity_[0-9a-f]{32,}/gi, REDACTED)
+        .replace(/(bearer\\s+)[A-Za-z0-9._~+\\/=-]{8,}/gi, '$1' + REDACTED);
+      return redactSecrets(value, findSecrets(value), REDACTED);
     }
 
     function appendErrorCard(text, rawError, errorType, providerId) {

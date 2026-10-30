@@ -32,6 +32,8 @@ _MAX_BASE64_CHARS = (MAX_STORED_IMAGE_BYTES + 2) // 3 * 4
 _MAX_OPEN_PIXELS = (2 * MAX_DIMENSION) ** 2
 # Total size of the images one restored prompt carries at full size; the rest come back as thumbnails.
 MAX_RESTORED_URI_CHARS = 16 * 1024 * 1024
+# A thumbnail this small comes back even when the budget is spent; a larger one must fit what is left.
+_MAX_THUMBNAIL_URI_CHARS = 256 * 1024
 
 
 def load_image_file(path) -> "object":
@@ -277,7 +279,10 @@ def prompt_images(message: Dict[str, Any], storage_dir: Optional[Any]) -> List[s
     budget = MAX_RESTORED_URI_CHARS
     for index in range(min(max(len(thumbs), len(files)), MAX_IMAGES)):
         full = stored_image_uri(storage_dir, files[index] if index < len(files) else None)
-        uri = (full if full and len(full) <= budget else None) or checked_image_uri(thumbs[index] if index < len(thumbs) else None)
+        uri = full if full and len(full) <= budget else None
+        if uri is None:
+            thumb = checked_image_uri(thumbs[index] if index < len(thumbs) else None)
+            uri = thumb if thumb and len(thumb) <= max(budget, _MAX_THUMBNAIL_URI_CHARS) else None
         if uri:
             found.append(uri)
             budget = max(0, budget - len(uri))

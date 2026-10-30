@@ -1,5 +1,7 @@
 import asyncio
+import contextvars
 import errno
+import functools
 import ipaddress
 import json
 import math
@@ -36,6 +38,47 @@ class ProviderStalledError(Exception):
     def __init__(self, timeout: float):
         super().__init__(f"no first token within {timeout:.0f}s")
         self.timeout = timeout
+
+
+class ProviderRejectedError(Exception):
+    """A request the provider refused that LiteLLM retried with fewer params and then dropped without raising."""
+
+    def __init__(self, message: str, status_code: Optional[int]):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+_rejections: contextvars.ContextVar[Optional[List[BaseException]]] = contextvars.ContextVar(
+    "andromity_provider_rejections", default=None)
+
+
+def _record_unprocessable_rejections() -> None:
+    """LiteLLM swallows a 422 when drop_params is on; record it so the turn can report the provider's answer."""
+    try:
+        from litellm.llms.openai import openai as openai_llm
+    except Exception:
+        return
+    original = getattr(openai_llm, "drop_params_from_unprocessable_entity_error", None)
+    if not callable(original) or getattr(original, "_records_rejections", False):
+        return
+
+    @functools.wraps(original)
+    def recording(e, data):
+        seen = _rejections.get()
+        if seen is not None:
+            seen.append(e)
+        return original(e, data)
+
+    recording._records_rejections = True
+    openai_llm.drop_params_from_unprocessable_entity_error = recording
+
+
+def _rejection_error(seen: List[BaseException]) -> ProviderRejectedError:
+    last = seen[-1] if seen else None
+    body = getattr(last, "body", None)
+    text = json.dumps(body, default=str) if isinstance(body, (dict, list)) else str(body or last or "")
+    status = http_status(last) if last is not None else None
+    return ProviderRejectedError(text or "The provider returned no response.", status)
 
 
 def _format_stall_text(provider_name: str, model: str, timeout: float) -> str:
@@ -241,6 +284,7 @@ async def stream_completion(
     from litellm import acompletion
     litellm.drop_params = True
     litellm.suppress_debug_info = True
+    _record_unprocessable_rejections()
     has_images = any(
         isinstance(m.get("content"), list) and any(
             isinstance(p, dict) and p.get("type") in ("image_url", "image")
@@ -268,6 +312,7 @@ async def stream_completion(
         "messages": sanitized_messages,
         "stream": True,
         "stream_options": {"include_usage": True},
+        "max_retries": 0,
     }
     if tools:
         kwargs["tools"] = tools
@@ -344,7 +389,14 @@ async def stream_completion(
         try:
             # 1. Start acompletion stream
             try:
-                response_stream = await acompletion(**kwargs)
+                rejections: List[BaseException] = []
+                token = _rejections.set(rejections)
+                try:
+                    response_stream = await acompletion(**kwargs)
+                finally:
+                    _rejections.reset(token)
+                if response_stream is None:
+                    raise _rejection_error(rejections)
             except Exception as e:
                 msg = str(e).lower()[:_MESSAGE_LIMIT]
                 status = _http_status(_exception_chain(e))
@@ -553,7 +605,8 @@ def _error_events(e: Exception, provider_name: str, model: str, has_images: bool
         text = _format_stall_text(provider_display_name(provider_name), model, e.timeout)
     else:
         text = format_error_for_client(info)
-    message = None if isinstance(e, ProviderStalledError) else short_error_detail(e, secrets=secrets)
+    no_reply = isinstance(e, ProviderStalledError) or info["detail"].endswith(("_conn", "_timeout"))
+    message = None if no_reply else short_error_detail(e, secrets=secrets)
     return [TextDelta(text=text), Done(usage=usage, outcome="error", error_type=info["type"], error_detail=info["detail"],
                                        error_message=message, error_status=_http_status(_exception_chain(e)),
                                        error_action=_clean_action(info.get("action")) or None)]
@@ -566,6 +619,7 @@ def extract_clean_error_message(err_or_text: Any) -> str:
     import re
 
     raw = (str(err_or_text) if err_or_text is not None else "")[:_MESSAGE_LIMIT]
+    raw = _ORIGINAL_EXCEPTION.split(raw, 1)[0] or raw
     if not raw:
         return ""
     if re.search(r"<(?:!doctype\s+html|html\b|head\b|body\b)", raw, re.IGNORECASE):
@@ -591,10 +645,7 @@ def extract_clean_error_message(err_or_text: Any) -> str:
             pass
 
     # 2. Strip leading LiteLLM / Provider exception boilerplate
-    cleaned = raw.strip()
-    cleaned = re.sub(r'^(?:litellm\.)?\w*(?:Error|Exception):\s*', '', cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r'^(?:litellm\.)?\w*(?:Error|Exception):\s*', '', cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r'^\w+Exception\s*[-:]\s*', '', cleaned, flags=re.IGNORECASE)
+    cleaned = _strip_exception_prefixes(raw)
 
     # 3. Strip trailing raw JSON or user_id dumps
     json_start, json_end = cleaned.find("{"), cleaned.rfind("}")
@@ -665,7 +716,8 @@ _LOCAL_PROVIDERS = frozenset({"ollama", "lmstudio", "llamacpp"})
 _PROVIDER_NAMES = {"lmstudio": "LM Studio", "llamacpp": "llama.cpp", "opencode": "OpenCode", "vllm": "vLLM"}
 _IDENTIFIER = re.compile(r"[a-z0-9_]{1,64}")
 _HTML_PAGE = re.compile(r"<(?:!doctype\s+html|html\b|head\b|body\b)", re.IGNORECASE)
-_EXCEPTION_PREFIX = re.compile(r"^(?:litellm\.)?\w+(?:Error|Exception)\s*[-:]\s*|^Message:\s*", re.IGNORECASE)
+_EXCEPTION_PREFIX = re.compile(r"^(?:litellm\.)?\w*(?:Error|Exception)\s*[-:]\s*|^Message:\s*", re.IGNORECASE)
+_ORIGINAL_EXCEPTION = re.compile(r"\s+Original exception:", re.IGNORECASE)
 _SSL_CONTEXT_NOTE = re.compile(r" ?ssl:(?:<[^>]{0,200}>|\S{1,200})")
 _DETAIL_LIMIT = 400
 _MESSAGE_LIMIT = 20000
