@@ -127,10 +127,11 @@ def test_nvidia_provider_catalog_and_key(monkeypatch):
     from andromity.core.models import MODEL_CATALOG, get_models_for_provider
     assert "nvidia" in MODEL_CATALOG
     models = get_models_for_provider("nvidia")
-    assert len(models) >= 4
-    model_ids = [m["id"] for m in models]
-    assert "nvidia/llama-3.1-nemotron-70b-instruct" in model_ids
-    assert "deepseek-ai/deepseek-r1" in model_ids
+    assert [m["id"] for m in models] == [
+        "nvidia/nemotron-3.5-lightning-30b-a3b", "nvidia/nemotron-3-ultra-550b-a55b",
+        "mistralai/mistral-large-4-1t-a52b", "minimaxai/minimax-m3.1-flash",
+    ]
+    assert all(m.get("name") and m.get("context") for m in models)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         cm = ConfigManager(config_dir=Path(tmpdir))
