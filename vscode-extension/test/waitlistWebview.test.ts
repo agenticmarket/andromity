@@ -55,7 +55,24 @@ function offerButton() {
 /** The real chat script with just enough DOM for the waitlist card, its inputs and the offers on the page. */
 function page() {
   const onboarding = element({ style: { display: "none" } });
-  const chat = loadChat({ elements: { "onboarding-guide-section": onboarding, "ready-hero-section": element({ style: { display: "flex" } }) } });
+  const quotaCards: any[] = [];
+  const chatMessages = element({
+    querySelectorAll: (selector: string) => (selector === '.andromity-error-card[data-error-type="quota_exceeded"]' ? quotaCards : []),
+    querySelector: () => null,
+  });
+  const chat = loadChat({ elements: {
+    "onboarding-guide-section": onboarding, "ready-hero-section": element({ style: { display: "flex" } }), "chat-messages": chatMessages,
+  } });
+  /** A daily-limit card already in the chat, as the engine's reply text left it. */
+  const addQuotaCard = () => {
+    const actions = element({
+      querySelector: (selector: string) => (selector === '[data-action="join-waitlist"]' && actions.inserted.some((h: string) => h.includes('data-action="join-waitlist"')) ? {} : null),
+    });
+    quotaCards.push(element({ querySelector: (selector: string) => (selector === ".error-card-actions" ? actions : null) }));
+    return actions;
+  };
+  const finishTurn = (fields: Record<string, unknown>) =>
+    chat.post({ type: "agent_done", session_id: "s", outcome: "error", error_type: "quota_exceeded", error_action: "join_waitlist", ...fields });
   const created: any[] = [];
   const inputs: Record<string, any> = {
     "waitlist-wants-note": element({ tagName: "INPUT", value: "" }),
@@ -86,7 +103,7 @@ function page() {
   };
   const posted = (type: string) => chat.posted.filter((m: any) => m.type === type).map((m: unknown) => JSON.parse(JSON.stringify(m)));
   const html = () => String(card()?.innerHTML ?? "");
-  return { chat, card, inputs, offers, onboarding, onboardingOffer, click, posted, html };
+  return { chat, card, inputs, offers, onboarding, onboardingOffer, click, posted, html, addQuotaCard, finishTurn };
 }
 
 function openForm(p: ReturnType<typeof page>, extra: Record<string, unknown> = {}) {
@@ -99,13 +116,60 @@ describe("waitlist offer on error cards", () => {
     return String(p.chat.eval("errorCardFromMarkup('<div class=\"andromity-error-card\"></div>')"));
   };
 
-  it("adds the offer to a daily-limit card whose error carries join_waitlist, and notes it once", () => {
+  it("agent_done with quota_exceeded and join_waitlist adds the offer to the last daily-limit card, once", () => {
+    const p = page();
+    const older = p.addQuotaCard();
+    const latest = p.addQuotaCard();
+    p.finishTurn({});
+    assert.equal(older.inserted.length, 0, "only the newest daily-limit card gets the offer");
+    assert.equal(latest.inserted.length, 1);
+    assert.match(latest.inserted[0], /^<button class="btn-error-secondary waitlist-offer" data-action="join-waitlist">.*Need more\? Join the waitlist<\/span><\/button>$/);
+    assert.equal(p.posted("waitlist_offer_shown").length, 1);
+    p.finishTurn({});
+    assert.equal(latest.inserted.length, 1, "a second agent_done does not add a second offer");
+    assert.equal(p.posted("waitlist_offer_shown").length, 1);
+  });
+
+  it("card markup alone never adds the offer, even a perfect daily-limit card that names join_waitlist", () => {
     const p = page();
     const card = rebuild(p, { "data-error-type": "quota_exceeded", "data-error-action": "join_waitlist" });
-    assert.match(card, /<div class="error-card-actions">.*data-action="open-settings".*data-action="join-waitlist"[^>]*>.*Need more\? Join the waitlist<\/span><\/button><\/div>/);
-    assert.ok(!/data-action="join-waitlist"[^>]*disabled/.test(card));
-    rebuild(p, { "data-error-type": "quota_exceeded", "data-error-action": "join_waitlist" });
-    assert.equal(p.posted("waitlist_offer_shown").length, 1);
+    assert.ok(card.includes('data-error-type="quota_exceeded"'), "the card itself is still rebuilt");
+    assert.ok(!card.includes("join-waitlist"), card);
+    assert.equal(p.posted("waitlist_offer_shown").length, 0);
+  });
+
+  it("the offer needs this session's agent_done with exactly that type and action", () => {
+    const refused: Record<string, unknown>[] = [
+      { error_type: "rate_limit" },
+      { error_type: "service_busy" },
+      { error_type: "sign_in_invalid" },
+      { error_type: "QUOTA_EXCEEDED" },
+      { error_type: undefined },
+      { error_action: "JOIN_WAITLIST" },
+      { error_action: "join_waitlist " },
+      { error_action: "join-waitlist" },
+      { error_action: "join_waitlist\" onclick=\"alert(1)" },
+      { error_action: "<img src=x onerror=alert(1)>" },
+      { error_action: ["join_waitlist"] },
+      { error_action: { toString: () => "join_waitlist" } },
+      { error_action: null },
+      { outcome: "success" },
+      { outcome: undefined },
+      { session_id: "another-session" },
+    ];
+    for (const fields of refused) {
+      const p = page();
+      const actions = p.addQuotaCard();
+      p.finishTurn(fields);
+      assert.equal(actions.inserted.length, 0, JSON.stringify(fields));
+      assert.equal(p.posted("waitlist_offer_shown").length, 0, JSON.stringify(fields));
+    }
+  });
+
+  it("without a daily-limit card in the chat, agent_done adds nothing anywhere", () => {
+    const p = page();
+    p.finishTurn({});
+    assert.equal(p.posted("waitlist_offer_shown").length, 0);
   });
 
   it("leaves every other card alone", () => {
@@ -129,8 +193,10 @@ describe("waitlist offer on error cards", () => {
   it("shows the offer as joined, without noting it, once the extension says so", () => {
     const p = page();
     p.chat.post({ type: "waitlist_state", joined: true });
-    const card = rebuild(p, { "data-error-type": "quota_exceeded", "data-error-action": "join_waitlist" });
-    assert.match(card, /data-action="join-waitlist" disabled>.*On the waitlist ✓/);
+    const actions = p.addQuotaCard();
+    p.finishTurn({});
+    assert.equal(actions.inserted.length, 1);
+    assert.match(actions.inserted[0], /data-action="join-waitlist" disabled>.*On the waitlist ✓/);
     assert.equal(p.posted("waitlist_offer_shown").length, 0);
   });
 
@@ -292,11 +358,15 @@ const CARD = '<div class="andromity-error-card" data-error-type="quota_exceeded"
   + '<div class="error-card-body">You have reached your daily limit.</div></div>';
 
 describe("the page never marks the waitlist offered itself", () => {
-  it("a genuine daily-limit card shows the offer but sends no offered flag", () => {
+  it("a daily-limit card gets its offer from agent_done and still sends no offered flag", () => {
     const p = page();
     p.chat.sandbox.DOMParser = MarkupParser;
     const html = String(p.chat.eval(`renderMarkdown(${JSON.stringify("\n" + CARD)})`));
-    assert.ok(html.includes('data-action="join-waitlist"'), "the quota card still offers the waitlist");
+    assert.ok(!html.includes('data-action="join-waitlist"'), "the reply text alone does not offer the waitlist");
+    assert.equal(p.posted("waitlist_offer_shown").length, 0);
+    const actions = p.addQuotaCard();
+    p.finishTurn({});
+    assert.ok(actions.inserted.some((h: string) => h.includes('data-action="join-waitlist"')), "the engine's turn result adds it");
     assert.equal(p.posted("waitlist_offer_shown").length, 1);
     assert.equal(p.posted("waitlist_offered").length, 0);
   });
