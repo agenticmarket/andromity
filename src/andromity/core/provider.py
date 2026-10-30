@@ -1270,30 +1270,30 @@ def classify_error_info(
         is_authed = bool(config.get_api_key("andromity") or config.get("default", "user_email", "") or config.get("user", "token", ""))
         if is_authed:
             desc_text = (
-                "You have reached your daily gateway limit. "
-                "Add your BYOK key in Settings for unlimited requests, or adjust your quota in the panel."
+                "You have used today's Andromity Cloud requests. "
+                "Add your own API key in Settings to keep going, or try again after the reset."
             )
             actions_html = _actions_html(
-                ("open-settings", "Open Settings", "Configure BYOK"),
+                ("open-settings", "Open Settings", "Add your own API key"),
                 ("switch-model-flyout", "Switch Model", "Switch to an alternate model"),
             )
             actions_tui = [
-                "Press Ctrl+E to open Settings and add a BYOK key for unlimited usage",
+                "Press Ctrl+E to open Settings and add your own API key",
                 _TUI_SWITCH,
             ]
         else:
             desc_text = (
-                "You have reached your daily free trial limit. "
-                "Sign in with your AgenticMarket account to activate your account, or add a BYOK key in Settings."
+                "You have used today's free Andromity Cloud requests. "
+                "Sign in with your AgenticMarket account, or add your own API key in Settings."
             )
             actions_html = _actions_html(
                 _SIGN_IN,
-                ("open-settings", "Open Settings", "Configure BYOK"),
+                ("open-settings", "Open Settings", "Add your own API key"),
                 ("switch-model-flyout", "Switch Model", "Switch to an alternate model"),
             )
             actions_tui = [
                 "Sign in with AgenticMarket from the Andromity VS Code extension",
-                "Press Ctrl+E to open Settings and add a BYOK key for unlimited usage",
+                "Press Ctrl+E to open Settings and add your own API key",
             ]
         desc_html = f"<div>{desc_text}</div>{timer_html}"
     elif gateway_card == "sign_in":

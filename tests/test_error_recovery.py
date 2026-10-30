@@ -166,7 +166,7 @@ def test_terminal_formatting_has_zero_html():
     assert "Daily Limit Reached" in term_text
     assert "⏱ **Quota resets in" in term_text
     assert "Actions:" in term_text
-    assert "BYOK" in term_text
+    assert "own API key" in term_text
 
 
 def test_quota_exceeded_omits_raw_litellm_error():

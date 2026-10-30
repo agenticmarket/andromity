@@ -5638,7 +5638,7 @@ SOFTWARE.</pre>
         const state = modelRefresh[pid] || {};
         return '<span class="source-item">' +
           '<span class="badge" title="Listed from the built-in catalog, not fetched from the provider">Catalog</span>' +
-          '<span class="source-name">' + escapeHtml(providerName(pid)) + '</span>' +
+          '<span class="source-name">' + escapeHtml(providerName(pid)) + ' models are from the built-in catalog, not your live list.</span>' +
           '<button type="button" class="source-refresh" data-action="refresh-provider-models" data-provider="' + escapeHtml(pid) + '"' + (state.running ? ' disabled' : '') + '>' + (state.running ? 'Refreshing…' : 'Refresh') + '</button>' +
           (state.message ? '<span class="source-reason">' + escapeHtml(state.message) + '</span>' : '') +
         '</span>';
@@ -5844,7 +5844,9 @@ SOFTWARE.</pre>
               '<span class="status-dot ' + (hasKey ? 'connected' : '') + '"></span>' +
               '<span>' + escapeHtml(meta.name) + '</span>' +
             '</div>' +
-            '<span class="badge ' + (p.id === 'ollama' ? (ollamaStatus?.running ? 'green' : '') : hasKey ? 'green' : '') + '">' + (p.id === 'ollama' ? (!ollamaChecked ? 'Checking' : ollamaStatus?.running ? 'Running' : 'Offline') : hasKey ? 'Active' : 'Optional Key') + '</span>' +
+            (p.id === 'ollama'
+              ? '<span class="badge ' + (ollamaStatus?.running ? 'green' : '') + '">' + (!ollamaChecked ? 'Checking' : ollamaStatus?.running ? 'Running' : 'Offline') + '</span>'
+              : '<span class="badge ' + (hasKey ? 'green' : '') + '" data-key-badge="' + escapeHtml(p.id) + '" data-has-key="' + (hasKey ? '1' : '0') + '">' + (hasKey ? 'Active' : p.key_required ? 'No key' : 'Optional Key') + '</span>') +
           '</div>' +
           '<div class="item-card-desc">' + escapeHtml(meta.desc) + '</div>' +
           (p.id !== 'ollama'
@@ -5877,6 +5879,13 @@ SOFTWARE.</pre>
         btn.title = !hasKey ? "Save an API key first"
           : keyTestRunning && keyTestRunning !== pid ? "Another key test is running"
           : "Send a tiny request to check this key";
+      });
+      document.querySelectorAll("[data-key-badge]").forEach(el => {
+        if (el.dataset.hasKey !== "1") return;
+        const state = keyTests[el.dataset.keyBadge || ""];
+        const rejected = state && !state.running && state.errorType === "auth_error";
+        el.className = "badge " + (rejected ? "orange" : "green");
+        el.textContent = rejected ? "Check key" : "Active";
       });
       document.querySelectorAll(".key-test-status[data-provider]").forEach(el => {
         const state = keyTests[el.dataset.provider || ""];
@@ -5913,6 +5922,7 @@ SOFTWARE.</pre>
         label: msg.label || (msg.ok ? "Connected" : "Couldn't verify the key"),
         detail: msg.detail || "",
         model: msg.model || "",
+        errorType: msg.errorType || "",
       };
       applyKeyTestState();
     }
