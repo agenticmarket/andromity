@@ -67,7 +67,10 @@ def _record_unprocessable_rejections() -> None:
         seen = _rejections.get()
         if seen is not None:
             seen.append(e)
-        return original(e, data)
+        kept = original(e, data)
+        if isinstance(kept, dict) and isinstance(data, dict) and kept.keys() == data.keys():
+            raise e
+        return kept
 
     recording._records_rejections = True
     openai_llm.drop_params_from_unprocessable_entity_error = recording
@@ -428,6 +431,7 @@ async def stream_completion(
 
                 gateway_refused = provider_name == GATEWAY_PROVIDER and gateway_error(e, "quota_exceeded") is not None
                 if (is_daily_quota or is_auth_error or is_bad_request or gateway_refused
+                        or isinstance(e, ProviderRejectedError)
                         or gateway_model_unavailable(e, provider_name) or gateway_wait_is_long(e, provider_name)
                         or (_is_network_failure(_exception_chain(e)) and _is_local_base_url(base_url))):
                     log.info("Non-retryable provider error: %s (HTTP %s).", type(e).__name__, getattr(e, "status_code", "unknown"))
@@ -435,17 +439,9 @@ async def stream_completion(
                         yield event
                     return
 
-                is_429 = has_status_code(msg, "429") or "rate limit" in msg or "ratelimit" in msg or "quota" in msg
                 if attempt < len(backoff):
-                    wait_s = backoff[attempt]
-                    if is_429:
-                        import re
-                        m = re.search(r"retry in ([\d.]+)s", msg)
-                        if m:
-                            try:
-                                wait_s = min(max(float(m.group(1)), 1.0), 30.0)
-                            except Exception:
-                                pass
+                    hinted = _retry_seconds(msg, _response_headers(_exception_chain(e)))
+                    wait_s = min(max(hinted, 1.0), 30.0) if hinted else backoff[attempt]
                     log.warning(
                         "Upstream call error (%s). Retrying in %.1fs (attempt %d/%d)...",
                         type(e).__name__, wait_s, attempt + 1, total_attempts
@@ -605,7 +601,8 @@ def _error_events(e: Exception, provider_name: str, model: str, has_images: bool
         text = _format_stall_text(provider_display_name(provider_name), model, e.timeout)
     else:
         text = format_error_for_client(info)
-    no_reply = isinstance(e, ProviderStalledError) or info["detail"].endswith(("_conn", "_timeout"))
+    no_reply = isinstance(e, ProviderStalledError) or (
+        _http_status(_exception_chain(e)) is None and info["detail"].endswith(("_conn", "_timeout")))
     message = None if no_reply else short_error_detail(e, secrets=secrets)
     return [TextDelta(text=text), Done(usage=usage, outcome="error", error_type=info["type"], error_detail=info["detail"],
                                        error_message=message, error_status=_http_status(_exception_chain(e)),
@@ -641,6 +638,8 @@ def extract_clean_error_message(err_or_text: Any) -> str:
                     return data["message"].strip()
                 elif data.get("detail") and isinstance(data["detail"], str):
                     return data["detail"].strip()
+                elif _validation_text(data.get("detail")):
+                    return _validation_text(data.get("detail"))
         except Exception:
             pass
 
@@ -659,7 +658,21 @@ def extract_clean_error_message(err_or_text: Any) -> str:
     lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
     if lines:
         return lines[0]
-    return raw.strip()
+    return _strip_exception_prefixes(raw) or raw.strip()
+
+
+def _validation_text(detail: Any) -> str:
+    """The field errors of a validation reply, without the input values it may echo back."""
+    if not isinstance(detail, list):
+        return ""
+    parts = []
+    for item in detail[:3]:
+        if not isinstance(item, dict) or not isinstance(item.get("msg"), str):
+            continue
+        loc = item.get("loc") if isinstance(item.get("loc"), list) else []
+        field = ".".join(str(part) for part in loc if part != "body")
+        parts.append(f"{field}: {item['msg']}" if field else item["msg"])
+    return "; ".join(parts)
 
 
 _CREDENTIAL_TEXT = re.compile(
@@ -691,7 +704,9 @@ def redact_credentials(text: str, secrets: Iterable[Optional[str]] = ()) -> str:
 
 def short_error_detail(e: BaseException, limit: int = 160, secrets: Iterable[Optional[str]] = ()) -> str:
     """One line of the provider's own error text, without markup or credentials. Redacts before it truncates."""
-    text = redact_credentials(" ".join(extract_clean_error_message(e)[: limit + 512].split()), secrets)
+    said = _chain_body(_exception_chain(e)).get("message")
+    source = said if isinstance(said, str) and said.strip() else e
+    text = redact_credentials(" ".join(extract_clean_error_message(source)[: limit + 512].split()), secrets)
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
@@ -717,7 +732,7 @@ _PROVIDER_NAMES = {"lmstudio": "LM Studio", "llamacpp": "llama.cpp", "opencode":
 _IDENTIFIER = re.compile(r"[a-z0-9_]{1,64}")
 _HTML_PAGE = re.compile(r"<(?:!doctype\s+html|html\b|head\b|body\b)", re.IGNORECASE)
 _EXCEPTION_PREFIX = re.compile(r"^(?:litellm\.)?\w*(?:Error|Exception)\s*[-:]\s*|^Message:\s*", re.IGNORECASE)
-_ORIGINAL_EXCEPTION = re.compile(r"\s+Original exception:", re.IGNORECASE)
+_ORIGINAL_EXCEPTION = re.compile(r"(?<!\s)\s+Original exception:", re.IGNORECASE)
 _SSL_CONTEXT_NOTE = re.compile(r" ?ssl:(?:<[^>]{0,200}>|\S{1,200})")
 _DETAIL_LIMIT = 400
 _MESSAGE_LIMIT = 20000
