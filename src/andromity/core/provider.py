@@ -1042,15 +1042,15 @@ def has_status_code(text: str, code: str) -> bool:
 def redact_error_text(text: str, provider: str = "") -> str:
     """Error text with known key shapes, sign-in tokens and the connection's own key removed."""
     from andromity.telemetry import redact_secrets
-    text = redact_secrets((text or "")[:_MESSAGE_LIMIT])
+    text = redact_secrets((text or "")[:_MESSAGE_LIMIT], REDACTED)
     try:
         key = config.get_api_key(provider) if provider and provider != GATEWAY_PROVIDER else None
     except Exception:
         key = None
     if isinstance(key, str) and len(key.strip()) >= 12 and key not in _PLACEHOLDER_KEYS:
         key = key.strip()
-        text = text.replace(key, "[redacted]")
-        text = re.sub(re.escape(key[:10]) + r"[^\s\"'<>]*", "[redacted]", text)
+        text = text.replace(key, REDACTED)
+        text = re.sub(re.escape(key[:10]) + r"[^\s\"'<>]*", REDACTED, text)
     return text
 
 

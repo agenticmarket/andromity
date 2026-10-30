@@ -109,9 +109,9 @@ _SECRETS_IN_TEXT = re.compile(
 )
 
 
-def redact_secrets(text: str) -> str:
+def redact_secrets(text: str, marker: str = "[redacted]") -> str:
     """The text with API keys, sign-in tokens and bearer credentials replaced by a marker."""
-    return _SECRETS_IN_TEXT.sub("[redacted]", text or "")
+    return _SECRETS_IN_TEXT.sub(marker, text or "")
 
 
 def _scrub_api_key(value: str) -> str:
