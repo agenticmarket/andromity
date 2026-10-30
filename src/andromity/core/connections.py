@@ -111,20 +111,21 @@ _OWN_MODEL_NAMES = frozenset({"nvidia"})
 
 def _effective_base_url(provider: str, saved: dict) -> str:
     """The endpoint a connection talks to; empty means the provider's own cloud API."""
-    return saved.get("base_url") or _DEFAULT_BASE_URLS.get(provider, "")
+    kind = saved.get("type") if saved.get("type") in _OWN_MODEL_NAMES else provider
+    return saved.get("base_url") or _DEFAULT_BASE_URLS.get(provider) or _DEFAULT_BASE_URLS.get(kind, "")
 
 
 def provider_request(provider: str, model: str) -> dict[str, Any]:
     """Resolve a named connection without borrowing another connection's key."""
     saved = config.get_provider_config(provider) or {}
-    adapter = saved.get("type") or provider
+    kind = saved.get("type") or provider
     adapter = {"google": "gemini", "nvidia": "openai", "ollama": "ollama_chat",
-               "andromity": "openai", "opencode": "openai"}.get(adapter, adapter)
+               "andromity": "openai", "opencode": "openai"}.get(kind, kind)
     model = (model or saved.get("model") or ("auto" if provider == "andromity" else "")).lstrip("~")
     if not model:
         raise ValueError("Choose a model for this connection.")
     prefix = adapter + "/"
-    routed = provider not in _OWN_MODEL_NAMES and (
+    routed = kind not in _OWN_MODEL_NAMES and (
         model.startswith(prefix) or (adapter == "ollama_chat" and model.startswith("ollama/")))
     routed_model = model if routed else prefix + model
     base_url = _effective_base_url(provider, saved)
@@ -136,7 +137,7 @@ def provider_request(provider: str, model: str) -> dict[str, Any]:
         key = "anonymous_trial"
     if provider == "opencode" and not key:
         raise ValueError("Add your OpenCode API key to use this connection.")
-    if adapter == "openai" and provider not in ("openai", "andromity") and not key:
+    if adapter in ("openai", "nvidia_nim") and provider not in ("openai", "andromity") and not key:
         # LiteLLM otherwise reads OPENAI_API_KEY even for an unrelated endpoint.
         key = "not-required"
     request: dict[str, Any] = {"model": routed_model}
@@ -212,7 +213,7 @@ def _probe_detail(detail: Optional[str], provider: str, limit: int = 160) -> str
 _KEY_PROBLEM = re.compile(
     r"\b(?:invalid|incorrect|expired|revoked|missing|malformed|unauthori[sz]ed)\b.*\b(?:api[ _-]?key|key|token|credentials?)\b"
     r"|\b(?:api[ _-]?key|key|token|credentials?)\b.*\b(?:invalid|incorrect|expired|revoked|not valid)\b"
-    r"|^\s*authori[sz]ation failed\b",
+    r"|^\s*authori[sz]ation failed[.!]?\s*$",
     re.IGNORECASE,
 )
 
@@ -278,7 +279,7 @@ async def test_connection(provider: str, model: str = "") -> dict[str, Any]:
 
 _FAILURE_MESSAGES = {
     "endpoint_not_found": "HTTP 404: the endpoint returned a web page. Use the API base URL (for example, https://your-provider/v1), without /chat/completions.",
-    "model_not_found": "HTTP 404: the API endpoint or model was not found. Check the base URL and exact model ID from your provider.",
+    "model_not_found": "The API endpoint or model was not found, or the provider has retired the model. Check the base URL and exact model ID from your provider.",
     "auth_error": "HTTP 401/403: authentication or access denied. Check the API key and provider account permissions.",
     "model_forbidden": "HTTP 403: the key was accepted, but this account cannot use the selected model. Check its access or plan.",
     "rate_limit": "The provider's rate limit or quota was reached. Check your allowance and retry later.",

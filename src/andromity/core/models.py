@@ -709,17 +709,16 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
 
     # ── NVIDIA NIM ────────────────────────────────────────────────────────────
     elif provider_key == "nvidia" and api_key:
-        data = _get(
-            "https://integrate.api.nvidia.com/v1/models",
-            {"Authorization": f"Bearer {api_key}"},
-        )
-        if not data:
+        root = (base_url or "https://integrate.api.nvidia.com/v1").rstrip("/")
+        data = _get(root + "/models", {"Authorization": f"Bearer {api_key}"})
+        items = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(items, list):
             return []
         # NVIDIA's /v1/models endpoint exposes no context window per model.
         models = []
-        for item in data.get("data", []):
-            m_id = item.get("id", "")
-            if not m_id or any(word in m_id.lower() for word in _NON_CHAT_NIM_MODELS):
+        for item in items:
+            m_id = item.get("id") if isinstance(item, dict) else None
+            if not isinstance(m_id, str) or not m_id or any(word in m_id.lower() for word in _NON_CHAT_NIM_MODELS):
                 continue
             models.append({
                 "id": m_id,
