@@ -9351,6 +9351,24 @@ ${STATUS_SHIMMER_STYLES}
       color: var(--fg, #ffffff);
     }
 
+    .images-skipped-notice {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px 8px;
+      margin: 2px 0 10px;
+      padding: 6px 8px 6px 10px;
+      font-size: 11.5px;
+      line-height: 1.45;
+      color: var(--muted);
+      background: rgba(var(--tint), 0.03);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .images-skipped-icon { display: inline-flex; flex-shrink: 0; }
+    .images-skipped-text { flex: 1 1 220px; min-width: 0; }
+    .images-skipped-action { flex-shrink: 0; }
+
     ${getPromptStyles()}
     ${getTurnRailStyles()}
 `;

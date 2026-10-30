@@ -52,6 +52,20 @@ class InputApplied(StreamEvent):
 
 
 @dataclass
+class ImagesSkipped(StreamEvent):
+    """Images left out of a user message because the active model can't read them.
+
+    `prompt_added` is False when the message held nothing else, so no turn was added for it;
+    `images` then carries them so the client can give them back to the user.
+    """
+    count: int
+    prompt_added: bool = True
+    steering: bool = False
+    input_id: Optional[str] = None
+    images: Optional[list] = field(default=None, compare=False, repr=False)
+
+
+@dataclass
 class ToolResult(StreamEvent):
     tool_id: str
     result: str

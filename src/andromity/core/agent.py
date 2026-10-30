@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import AsyncGenerator, Dict, Any, Optional, Callable
 
 from andromity.core.provider import stream_completion, sanitize_messages_for_api
-from andromity.core.session import Session
+from andromity.core.session import Session, skipped_image_count
 from andromity.core.profiles import (
     filter_tools_for_profile, get_allowed_tools, get_system_prompt, load_project_instructions,
 )
@@ -14,9 +14,10 @@ from andromity.core.tools import (
     execute_tool, parse_next_step, register_session, requires_workspace_trust,
 )
 from andromity.core.context_breakdown import AUTO_COMPACT_THRESHOLD
+from andromity.core.inputs import PendingInput
 from andromity.core.events import (
     StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired, PlanUpdated,
-    LLMCallStart, LLMCallEnd, InputApplied, NextStepSuggested
+    LLMCallStart, LLMCallEnd, InputApplied, NextStepSuggested, ImagesSkipped
 )
 from andromity.core.debug_log import get_logger
 from andromity.config import config
@@ -75,6 +76,80 @@ def _estimate_tokens(messages: list) -> int:
         if m.get("tool_call_id"):
             total += 2  # rough
     return total
+
+
+def _with_skipped_images_note(content: Any, count: int) -> Any:
+    """The user's message as sent to a model that was not given the images attached to it."""
+    images, were, them = ("1 image", "was", "it") if count == 1 else (f"{count} images", "were", "them")
+    note = (f"[The user attached {images} that {were} not sent to the assistant, so you cannot see {them}. "
+            f"If the request depends on {them}, say so instead of guessing.]")
+    if isinstance(content, list):
+        return [*content, {"type": "text", "text": note}]
+    text = content if isinstance(content, str) else ""
+    return f"{text}\n\n{note}" if text.strip() else note
+
+
+def model_supports_vision(provider: str, model: str) -> bool:
+    """Best-effort check that a model accepts images.
+
+    LiteLLM's supports_vision() is unreliable for routed/aggregator and
+    local providers — it reports False for many OpenRouter vision models
+    (e.g. dots-3-note supports images but supports_vision() says no). So
+    we only block models known explicitly to be text-only (e.g. DeepSeek-R1,
+    text-only Llama/Qwen) or direct providers reporting False.
+    """
+    litellm_model = f"{provider}/{model}" if model and "/" not in model else model
+    if not litellm_model:
+        return True
+
+    m_lower = model.lower()
+    # Explicit vision indicators
+    vision_indicators = (
+        "vision", "-vl", "vl-", "llava", "bakllava", "gemma3", "gemma-3",
+        "minicpm", "pixtral", "omni", "gpt-4o", "gpt-4.1", "gpt-5",
+        "claude-3", "claude-opus", "claude-sonnet", "claude-haiku", "gemini",
+        "o1", "o3", "o4"
+    )
+    if any(vi in m_lower for vi in vision_indicators):
+        return True
+
+    # Explicit known text-only model families across all providers
+    text_only_indicators = (
+        "deepseek",
+        "llama-3.1", "llama-3.2-1b", "llama-3.2-3b", "llama-3.3", "llama3.1", "llama3.3",
+        "qwen2.5-coder", "qwen2.5-7b", "qwen2.5-14b", "qwen2.5-32b", "qwen2.5-72b",
+        "mistral-large", "mistral-small", "codellama", "phi-4", "phi4"
+    )
+    if any(ti in m_lower for ti in text_only_indicators) and "vision" not in m_lower and "vl" not in m_lower:
+        return False
+
+    cfg = config.get_provider_config(provider) or {}
+    routed_or_local = provider in ("openrouter", "ollama", "nvidia") \
+        or (cfg.get("type") and cfg.get("type") != provider)
+    if routed_or_local:
+        return True
+    try:
+        import litellm
+        return litellm.supports_vision(litellm_model) is not False
+    except Exception:
+        return True
+
+
+def note_images_skipped(session_id: str) -> None:
+    try:
+        from andromity.telemetry import send_feature_used
+        send_feature_used("image_skipped_no_vision", session_id=session_id)
+    except Exception:
+        pass
+
+
+def _holds_no_text(text: Any, image_only: Any) -> bool:
+    return bool(image_only) or not str(text or "").strip()
+
+
+def only_unreadable_images(text: Any, images: Optional[list], image_only: Any, provider: str, model: str) -> bool:
+    """Whether a message holds nothing but images the model can't read; such a message is not sent and adds no turn."""
+    return bool(images) and _holds_no_text(text, image_only) and not model_supports_vision(provider, model)
 
 
 _ERROR_FEATURE_NAMES = {
@@ -220,35 +295,55 @@ class Agent:
         When the current turn has pasted images, the plain-text user message
         stored in the session is swapped for the OpenAI-style content-parts
         list (text + image_url data URIs) on the fly — so session history and
-        replay stay clean and compact.
+        replay stay clean and compact. A message whose images were left out
+        because the model can't read them says so after the user's text, and
+        earlier images stay out once the model is switched to one that can't.
         """
         msgs = [
             {k: v for k, v in m.items() if k in ("role", "content", "tool_calls", "name", "tool_call_id")}
             for m in self.session.messages
         ]
+        send_images = bool(self._message_images) and self._model_supports_vision()
         for original, msg in zip(self.session.messages, msgs):
-            entry = self._message_images.get(id(original))
+            entry = self._message_images.get(id(original)) if send_images else None
             if entry and entry[0] is original:
                 msg["content"] = entry[1]
+            if original.get("role") == "user" and (skipped := skipped_image_count(original)):
+                msg["content"] = _with_skipped_images_note(msg.get("content"), skipped)
         live_ids = {id(message) for message in self.session.messages}
         self._message_images = {key: value for key, value in self._message_images.items() if key in live_ids}
         return sanitize_messages_for_api(msgs)
 
-    def _apply_steering(self) -> list[InputApplied]:
-        events = []
+    def _apply_steering(self) -> list[StreamEvent]:
+        events: list[StreamEvent] = []
         while (item := self.input_queue.peek(steering_only=True)) is not None:
             payload = item.payload
             prompt = payload.get("prompt", "")
+            attached = payload.get("image_uris") or payload.get("images") or []
+            skipped = len(attached) if attached and not self._model_supports_vision() else 0
+            if skipped:
+                note_images_skipped(self.session.id)
+                if _holds_no_text(prompt, payload.get("image_only")):
+                    events.append(ImagesSkipped(skipped, prompt_added=False, steering=True, input_id=item.id,
+                                                images=list(attached)))
+                    self.input_queue.applied(item)
+                    continue
             uris = payload.get("image_uris") or []
             if not uris and payload.get("images"):
                 from andromity.core.images import image_to_data_uri
                 uris = [image_to_data_uri(image) for image in payload["images"]]
-            if uris and not self._model_supports_vision():
-                self.input_queue.pause()
-                raise ValueError("The active model does not support images. Your steering message is still queued; choose a vision model and resume.")
-            self.session.add_message("user", content=prompt, images=uris or None,
-                                     turn_id=getattr(self, "current_user_turn_id", None), steering=True)
-            if uris:
+            image_files = None
+            if skipped:
+                from andromity.core.images import store_prompt_image
+                storage_dir = getattr(self.session, "storage_dir", None)
+                stored = [store_prompt_image(uri, storage_dir) for uri in uris]
+                uris = [thumb for thumb, _ in stored]
+                if any(name for _, name in stored):
+                    image_files = [name for _, name in stored]
+            self.session.add_message("user", content=prompt, images=uris or None, images_skipped=skipped or None,
+                                     image_files=image_files, turn_id=getattr(self, "current_user_turn_id", None),
+                                     steering=True)
+            if uris and not skipped:
                 parts = [
                     {"type": "text", "text": prompt},
                     *({"type": "image_url", "image_url": {"url": uri}} for uri in uris),
@@ -256,55 +351,24 @@ class Agent:
                 message = self.session.messages[-1]
                 self._message_images[id(message)] = (message, parts)
             events.append(InputApplied(item.id, prompt, uris, max(0, len(self.session.get_user_turn_indices()) - 1)))
+            if skipped:
+                events.append(ImagesSkipped(skipped, steering=True, input_id=item.id))
             self.input_queue.applied(item)
         return events
 
     def _model_supports_vision(self) -> bool:
-        """Best-effort check that the active model accepts images.
+        return model_supports_vision(self.provider or config.get("default", "provider", ""),
+                                     self.model or config.get("default", "model", ""))
 
-        LiteLLM's supports_vision() is unreliable for routed/aggregator and
-        local providers — it reports False for many OpenRouter vision models
-        (e.g. dots-3-note supports images but supports_vision() says no). So
-        we only block models known explicitly to be text-only (e.g. DeepSeek-R1,
-        text-only Llama/Qwen) or direct providers reporting False.
-        """
-        provider = self.provider or config.get("default", "provider", "")
-        model = self.model or config.get("default", "model", "")
-        litellm_model = f"{provider}/{model}" if model and "/" not in model else model
-        if not litellm_model:
-            return True
+    def drops_message(self, text: Any, images: Optional[list], image_only: Any = False) -> bool:
+        """Whether a message holds nothing but images this model can't read, so it is not sent and adds no turn."""
+        return bool(images) and _holds_no_text(text, image_only) and not self._model_supports_vision()
 
-        m_lower = model.lower()
-        # Explicit vision indicators
-        vision_indicators = (
-            "vision", "-vl", "vl-", "llava", "bakllava", "gemma3", "gemma-3",
-            "minicpm", "pixtral", "omni", "gpt-4o", "gpt-4.1", "gpt-5",
-            "claude-3", "claude-opus", "claude-sonnet", "claude-haiku", "gemini",
-            "o1", "o3", "o4"
-        )
-        if any(vi in m_lower for vi in vision_indicators):
-            return True
-
-        # Explicit known text-only model families across all providers
-        text_only_indicators = (
-            "deepseek",
-            "llama-3.1", "llama-3.2-1b", "llama-3.2-3b", "llama-3.3", "llama3.1", "llama3.3",
-            "qwen2.5-coder", "qwen2.5-7b", "qwen2.5-14b", "qwen2.5-32b", "qwen2.5-72b",
-            "mistral-large", "mistral-small", "codellama", "phi-4", "phi4"
-        )
-        if any(ti in m_lower for ti in text_only_indicators) and "vision" not in m_lower and "vl" not in m_lower:
-            return False
-
-        cfg = config.get_provider_config(provider) or {}
-        routed_or_local = provider in ("openrouter", "ollama", "nvidia") \
-            or (cfg.get("type") and cfg.get("type") != provider)
-        if routed_or_local:
-            return True
-        try:
-            import litellm
-            return litellm.supports_vision(litellm_model) is not False
-        except Exception:
-            return True
+    def steering_adds_input(self, item: PendingInput) -> bool:
+        """Whether a message sent while the turn runs counts as a new instruction."""
+        payload = item.payload
+        return not self.drops_message(payload.get("prompt"), payload.get("image_uris") or payload.get("images"),
+                                      payload.get("image_only"))
 
     async def _compact_context(self, force: bool = False) -> AsyncGenerator[StreamEvent, None]:
         if not force and not config.get("advanced", "auto_compact", True):
@@ -458,10 +522,20 @@ class Agent:
                 pass
         yield TextDelta(text=f"*Context compacted successfully ({old_count} → {len(new_messages)} messages).*\n\n")
 
-    async def run(self, user_input: str, images: list = None, image_uris: list = None) -> AsyncGenerator[StreamEvent, None]:
+    async def run(self, user_input: str, images: list = None, image_uris: list = None,
+                  image_only: bool = False) -> AsyncGenerator[StreamEvent, None]:
+        """Run one user turn. ``image_only`` marks text a client wrote in for a message that holds
+        only images; a message with nothing but images this model can't read is not sent, runs no
+        task and adds no turn."""
         import asyncio
         import uuid
         from andromity.telemetry import send_task_event
+        attached = image_uris or images or []
+        if self.drops_message(user_input, attached, image_only):
+            note_images_skipped(self.session.id)
+            yield ImagesSkipped(len(attached), prompt_added=False, images=list(attached))
+            yield Done(outcome="success")
+            return
         run_id = uuid.uuid4().hex
         self._telemetry_turn_start = time.monotonic()
         first_response_ms = None
@@ -491,11 +565,14 @@ class Agent:
         """Run one user turn.
 
         Accepts either raw ``images`` (paths/PIL objects — will be encoded)
-        or pre-encoded ``image_uris`` (data: URIs — used as-is).
+        or pre-encoded ``image_uris`` (data: URIs — used as-is). A model that
+        can't read images gets the text without them.
         """
         register_session(self.session)
         self._refresh_prompt_if_stale()
         self._turn_image_parts = None
+        attached = image_uris or images or []
+        skipped_images = len(attached) if attached and not self._model_supports_vision() else 0
         _uris: list | None = None
         if image_uris:          # already-encoded URIs from the TUI paste path
             _uris = image_uris
@@ -503,17 +580,7 @@ class Agent:
             from andromity.core.images import image_to_data_uri
             _uris = [image_to_data_uri(img) for img in images]
 
-        if _uris:
-            if not self._model_supports_vision():
-                model_name = self.model or config.get("default", "model", "the current model")
-                prov_name = self.provider or config.get("default", "provider", "")
-                from andromity.core.provider import classify_and_format_error
-                fake_err = Exception(f"Model '{model_name}' does not support image input.")
-                card = classify_and_format_error(fake_err, provider=prov_name, model=model_name, has_images=True)
-                yield TextDelta(text=f"\n[Image not sent] {model_name} does not support images. Switch to a vision model (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-flash) with /model.\n" + card)
-                yield Done(outcome="error")
-                self._fire_session_end(had_error=True, error_type="vision_unsupported")
-                return
+        if _uris and not skipped_images:
             self._turn_image_parts = [
                 {"type": "text", "text": user_input},
                 *({"type": "image_url", "image_url": {"url": uri}} for uri in _uris),
@@ -544,7 +611,8 @@ class Agent:
                 if unread_cnt > 0:
                     notices.append(f"{unread_cnt} unread message(s). (Read them with session_inbox)")
                 effective_input += f"\n\n[Co-Agent Mailbox: {'; '.join(notices)}]"
-        self.session.add_message("user", content=effective_input, images=thumb_uris, image_files=image_files)
+        self.session.add_message("user", content=effective_input, images=thumb_uris, image_files=image_files,
+                                 images_skipped=skipped_images or None)
         if self._turn_image_parts:
             message = self.session.messages[-1]
             self._message_images[id(message)] = (message, self._turn_image_parts)
@@ -566,7 +634,11 @@ class Agent:
                 )
             except Exception:
                 pass
-        
+
+        if skipped_images:
+            note_images_skipped(self.session.id)
+            yield ImagesSkipped(skipped_images)
+
         async for event in self._compact_context():
             yield event
 
@@ -578,9 +650,17 @@ class Agent:
             setattr(self.orchestrator, "current_turn_id", user_turn_id)
         iteration_idx = 0
         self._suggested_last_step = False
+        # Set when the loop goes round again only to take in messages sent meanwhile.
+        resumed_for_steering = False
         while True:
-            for applied in self._apply_steering():
-                yield applied
+            steering_events = self._apply_steering()
+            for steering_event in steering_events:
+                yield steering_event
+            if resumed_for_steering and not any(isinstance(event, InputApplied) for event in steering_events):
+                yield Done(usage=last_usage, outcome="success")
+                self._fire_session_end(had_error=False, error_type=None)
+                break
+            resumed_for_steering = False
             iteration_idx += 1
             turn_id = f"{self._turn_count}_{iteration_idx}_{int(time.time()*1000)}"
             pending_tool_calls: Dict[str, Dict[str, str]] = {}
@@ -779,6 +859,7 @@ class Agent:
                     ))
                 )
                 if not has_error and self.input_queue.peek(steering_only=True):
+                    resumed_for_steering = True
                     continue
                 yield Done(usage=last_usage, outcome="error" if has_error else "success")
                 # Marker text in a successful reply: tracked separately so false positives stay visible.
@@ -838,7 +919,8 @@ class Agent:
                 elif self.on_questions:
                     try:
                         result = await self.input_queue.interaction(
-                            self.on_questions(questions), "Questions superseded by a new user instruction.")
+                            self.on_questions(questions), "Questions superseded by a new user instruction.",
+                            self.steering_adds_input)
                         interaction_superseded = result == "Questions superseded by a new user instruction."
                     except Exception as e:
                         _log.warning("on_questions callback error: %s", e, exc_info=True)
@@ -913,7 +995,8 @@ class Agent:
                 if not self.auto_approve and self.on_tool_approval:
                     import inspect
                     approval_res = await self.input_queue.interaction(
-                        self.on_tool_approval(tool_name, args), (False, "Superseded by a new user instruction")
+                        self.on_tool_approval(tool_name, args), (False, "Superseded by a new user instruction"),
+                        self.steering_adds_input,
                     ) if inspect.iscoroutinefunction(self.on_tool_approval) else self.on_tool_approval(tool_name, args)
                     interaction_superseded = approval_res == (False, "Superseded by a new user instruction")
                     is_approved = True
@@ -1090,10 +1173,12 @@ class Agent:
             # return an empty reply. A message the user queued in the meantime still gets its reply.
             step_tools = {(call.get("function") or {}).get("name") for call in tool_calls_to_execute if isinstance(call, dict)}
             self._suggested_last_step = "suggest_next_step" in step_tools
-            if step_tools == {"suggest_next_step"} and not self.input_queue.peek(steering_only=True):
-                yield Done(usage=last_usage, outcome="success")
-                self._fire_session_end(had_error=False, error_type=None)
-                break
+            if step_tools == {"suggest_next_step"}:
+                if not self.input_queue.peek(steering_only=True):
+                    yield Done(usage=last_usage, outcome="success")
+                    self._fire_session_end(had_error=False, error_type=None)
+                    break
+                resumed_for_steering = True
 
     def _tools_for_this_call(self) -> list:
         """Collaboration tools only when another session is around or something is waiting for this one."""

@@ -11,7 +11,7 @@ from textual.containers import Horizontal, Vertical
 
 from typing import Any
 
-from andromity.tui.panels.chat import ChatPanel, NextStepCard, PromptBackCard
+from andromity.tui.panels.chat import ChatPanel, NextStepCard, PromptBackCard, images_skipped_notice
 from andromity.tui.panels.filetree import FileTreePanel
 from andromity.tui.panels.diff import DiffPanel
 from andromity.tui.panels.plan import PlanPanel
@@ -30,7 +30,7 @@ from andromity.tui.overlays.batch_review import BatchReviewOverlay
 from andromity.tui.overlays.questions import QuestionPanel, format_question_answers, normalize_questions
 from andromity.core.session import Session
 from andromity.core.session_context import prompt_as_written
-from andromity.core.agent import Agent
+from andromity.core.agent import Agent, note_images_skipped
 from andromity.core.events import (
     StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired, SubAgentProgress
 )
@@ -1328,6 +1328,12 @@ class AndromityApp(App):
         panel = self.query_one("#queue-panel", QueuePanel)
         panel.update_queue(self._inputs().snapshot())
 
+    def _restore_attachments(self, images: list) -> None:
+        try:
+            self.query_one(InputBar).restore_attachments(images)
+        except Exception:
+            log.debug("Images could not be put back in the input bar", exc_info=True)
+
     def _inputs(self):
         from andromity.core.inputs import InputQueue
         if self.session.id not in self._input_queues:
@@ -1362,10 +1368,17 @@ class AndromityApp(App):
         self._process_message(prompt, images)
 
     async def _stream_agent(self, prompt: str, images: list | None = None):
-        from andromity.core.events import InputApplied, NextStepSuggested
+        from andromity.core.events import ImagesSkipped, InputApplied, NextStepSuggested
         self.agent.input_queue = self._inputs()
         chat = self.query_one(ChatPanel)
         self._clear_next_step()
+        if self.agent.drops_message(prompt, images):
+            note_images_skipped(self.session.id)
+            chat.add_system_message(images_skipped_notice(len(images)))
+            self._restore_attachments(images)
+            self._is_streaming = False
+            self.call_after_refresh(self._drain_inputs)
+            return
         # The suggestion shows once the turn ends, as a card rather than a tool call.
         next_step = None
         next_step_tool_ids: set = set()
@@ -1425,6 +1438,14 @@ class AndromityApp(App):
                     chat.add_user_message(event.prompt, image_count=len(event.image_uris or []))
                     chat.start_assistant_message()
                     first_text_seen = False
+                elif isinstance(event, ImagesSkipped):
+                    notice = images_skipped_notice(event.count)
+                    if event.prompt_added:
+                        chat.add_reply_notice(notice)
+                    else:
+                        chat.add_inline_notice(notice)
+                        self._restore_attachments(event.images or [])
+                        first_text_seen = False
                 elif isinstance(event, ThinkingDelta):
                     if not hasattr(chat, "_thinking") or not getattr(chat, "_thinking", None):
                         chat.start_thinking_message()
@@ -1489,7 +1510,7 @@ class AndromityApp(App):
                 elif isinstance(event, PlanApprovalRequired):
                     log.info("Plan approval required. Pausing agent loop.")
                     self._plan_approval_future = asyncio.Future()
-                    await self._inputs().interaction(self._plan_approval_future, False)
+                    await self._inputs().interaction(self._plan_approval_future, False, self.agent.steering_adds_input)
                     self._plan_approval_future = None
                 elif isinstance(event, Done):
                     if event.outcome != "success":
@@ -1541,8 +1562,7 @@ class AndromityApp(App):
             # Show how long the response took as a distinct colored footnote,
             # e.g. "⏱ 3.5s · 4 tool calls" (kept separate from the AI text)
             try:
-                elapsed = time.time() - turn_started
-                chat.add_response_time(elapsed, tool_calls_count)
+                chat.add_response_time(time.time() - turn_started, tool_calls_count)
             except Exception:
                 pass
             if next_step is not None:
@@ -1753,8 +1773,8 @@ class AndromityApp(App):
             except Exception:
                 pass
             chat.add_user_message(prompt, image_count=len(images) if images else 0)
-            # Auto-name session from the first user message
-            if not self._session_named:
+            # Auto-name session from the first user message the model gets
+            if not self._session_named and not self.agent.drops_message(prompt, images):
                 self._session_named = True
                 name = Session.auto_name_from_message(prompt)
                 self.session.rename(name)

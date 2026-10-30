@@ -6,6 +6,7 @@ All notable changes to the "andromity" extension will be documented in this file
 
 ### Fixed
 - **Undo after a long conversation.** After the conversation was compacted, **Undo to here** could revert the files of many earlier turns instead of just the ones you chose. It now undoes exactly those turns, and tells you when a turn was summarized and can't be undone. A message you sent while a turn was running no longer throws off which turns **Undo to here** undoes. The turn during which the conversation compacted itself can be undone too; before, its files were left as they were.
+- **Images on models that can't read them.** If the model you picked can't read images, your message is sent without the image and a small notice says so, with **Switch model**. A message with only an image isn't sent. Before, the turn ended in an error card, the message was gone after a reload, and queued messages were paused.
 
 ## [0.2.24] — 2026-10-26
 

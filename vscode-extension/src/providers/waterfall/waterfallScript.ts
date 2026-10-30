@@ -898,6 +898,20 @@ export function getWaterfallScript(sessionId: string): string {
             break;
           }
 
+          case 'images_skipped': {
+            // A message of only images the model can't read adds no turn, so the turn opened for it goes.
+            if (msg.prompt_added !== false || msg.steering) break;
+            const skippedTurn = state.currentTurnId ? state.turns.get(state.currentTurnId) : null;
+            if (!skippedTurn || skippedTurn.endTime || skippedTurn.spans.length > 0) break;
+            if (skippedTurn.element) skippedTurn.element.remove();
+            state.turns.delete(skippedTurn.id);
+            state.currentTurnId = null;
+            if (state.turns.size === 0 && els.emptyState) els.emptyState.style.display = 'flex';
+            recalcTotals();
+            updateSummaryStats();
+            break;
+          }
+
           case 'waterfall_llm_start': {
             state.isRunning = true;
             const turn = ensureTurn(state.currentTurnId, undefined, msg.ts ? msg.ts * 1000 : undefined);

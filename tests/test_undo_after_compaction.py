@@ -311,7 +311,7 @@ def _model(root: Path):
 
 
 def _never_starts(monkeypatch) -> None:
-    """Turns sent with an image to a model that can't read images stop before their prompt is added."""
+    """A message of only images, sent to a model that can't read images, stops before its prompt is added."""
     monkeypatch.setattr("andromity.core.agent.Agent._model_supports_vision", lambda self: False)
     monkeypatch.setattr("andromity.core.images.image_to_data_uri", lambda image, **kwargs: "data:image/jpeg;base64,AA==")
 
@@ -324,7 +324,8 @@ async def _serve(session: Session, root: Path, prompt: str, **params) -> None:
     handler._active_sessions[session.id] = session
     await handler.rpc_agent_prompt({"session_id": session.id, "project_path": str(root), "prompt": prompt,
                                     "mode": "full", **params})
-    await handler._running_tasks[session.id]
+    if session.id in handler._running_tasks:
+        await handler._running_tasks[session.id]
     await asyncio.sleep(0)
 
 
@@ -366,7 +367,7 @@ async def test_a_turn_that_never_started_leaves_no_undo_record(project, monkeypa
     records = list(s.undo_stack)
 
     _never_starts(monkeypatch)
-    await _serve(s, project, "turn 11: create f11.txt", image_uris=["data:image/png;base64,AA=="])
+    await _serve(s, project, "", image_uris=["data:image/png;base64,AA=="])
     assert s.undo_stack == records
     result = await _undo(s, project, turns_to_undo=1)
     assert result["success"] is True and _files(project) == list(range(10))
@@ -388,7 +389,7 @@ async def test_terminal_turns_that_compact_or_never_start_keep_undo_in_step(proj
         assert any(map(is_compaction_summary, app.session.messages)), "the turn compacted the conversation"
 
         _never_starts(monkeypatch)
-        await app._stream_agent("turn 6: create f6.txt", images=["screenshot.png"])
+        await app._stream_agent("", images=["screenshot.png"])
         assert [c["prompt"] for c in app._undo_stack] == [f"turn {n}: create f{n}.txt" for n in range(6)]
 
         for left in (5, 4, 4):

@@ -20,7 +20,7 @@ from andromity.core.session_context import background_context as _background_con
     prompt_as_written, shorten as _shorten
 from andromity.core.tools import collab_action
 from andromity.config import config, get_config_dir
-from andromity.core.agent import Agent
+from andromity.core.agent import Agent, note_images_skipped, only_unreadable_images
 
 READ_ONLY_TOOLS = {
     # Core read-only filesystem & search inspection
@@ -43,6 +43,7 @@ CRON_SEED_PRESET_NAMES = {"Run Tests & Verify Build", "Daily Code Health & TODO 
 CRON_RUN_BUSY_MESSAGE = "This scheduled run is still in progress. You can continue the chat when it finishes."
 from andromity.core.events import (
     Done,
+    ImagesSkipped,
     InputApplied,
     HandoffWritten,
     LLMCallEnd,
@@ -1333,6 +1334,26 @@ class JsonRpcHandler:
             "title": run.get("title", ""), "status": status, "summary": summary,
         })
 
+    def _skip_unsent_prompt(self, session: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+        """A message of only images the model can't read: say so and end, with no agent, checkpoint or turn."""
+        image_uris = params.get("image_uris") or []
+        count = len(image_uris or params.get("images") or [])
+        input_id = params.get("input_id")
+        self.notify("agent/started", {
+            "session_id": session.id, "prompt": params.get("prompt", ""), "input_id": input_id,
+            "turn_index": len(session.get_user_turn_indices()), "image_uris": image_uris,
+        })
+        note_images_skipped(session.id)
+        self.notify("agent/imagesSkipped", {
+            "session_id": session.id, "count": count, "prompt_added": False, "steering": False, "input_id": input_id,
+        })
+        self.notify("agent/done", {
+            "session_id": session.id, "usage": None, "outcome": "success",
+            "token_total": getattr(session, "token_total", 0), "context_tokens": getattr(session, "context_tokens", 0),
+            "cost_usd": getattr(session, "cost_usd", 0.0), "turn_files": [],
+        })
+        return {"status": "skipped", "session_id": session.id}
+
     @staticmethod
     def _with_background_results(session: Any, prompt: str) -> str:
         """Let the parent agent know what its background sessions finished since its last turn."""
@@ -1422,22 +1443,24 @@ class JsonRpcHandler:
             return self._inputs(sid).snapshot()
 
     async def _start_pending(self, sid: str) -> None:
-        task = self._running_tasks.get(sid)
-        if task and not task.done():
-            return
+        # A message that starts no turn (only images the model can't read) lets the next one go at once.
         queue = self._inputs(sid)
-        item = queue.peek()
-        if item is None:
-            return
-        payload = {**item.payload, "input_id": item.id}
-        try:
-            await self.rpc_agent_prompt(payload)
-            queue.applied(item)
-            from andromity.telemetry import send_feature_used
-            send_feature_used("queue_dispatched", session_id=sid)
-        except Exception:
-            queue.pause()
-            raise
+        while True:
+            task = self._running_tasks.get(sid)
+            if task and not task.done():
+                return
+            item = queue.peek()
+            if item is None:
+                return
+            payload = {**item.payload, "input_id": item.id}
+            try:
+                await self.rpc_agent_prompt(payload)
+                queue.applied(item)
+                from andromity.telemetry import send_feature_used
+                send_feature_used("queue_dispatched", session_id=sid)
+            except Exception:
+                queue.pause()
+                raise
 
     async def _finish_pending(self, sid: str, task: asyncio.Task) -> None:
         async with self._input_locks.setdefault(sid, asyncio.Lock()):
@@ -1465,7 +1488,7 @@ class JsonRpcHandler:
             if params.get("strip_images"):
                 payload.pop("images", None)
                 payload["image_uris"] = []
-                if not str(payload.get("prompt", "")).strip():
+                if payload.get("image_only") or not str(payload.get("prompt", "")).strip():
                     raise ValueError("This message only contains an image. Add a text prompt before retrying.")
             for key in ("model", "provider", "reasoning_effort"):
                 if params.get(key):
@@ -1689,6 +1712,11 @@ class JsonRpcHandler:
         prompt_repo = get_repo(Path(session.project_path))
         if prompt_repo and str(Path(prompt_repo.working_tree_dir).resolve()) in self._git_mutating_roots:
             raise ValueError("Wait for file restoration to finish before starting another turn.")
+        model = params.get("model") or config.get("default", "model", "claude-sonnet-4-6")
+        provider = params.get("provider") or config.get("default", "provider", "anthropic")
+        if only_unreadable_images(prompt, params.get("image_uris") or params.get("images"),
+                                  params.get("image_only"), provider, model):
+            return self._skip_unsent_prompt(session, params)
         if prompt:
             prompt = self._with_background_results(session, prompt)
 
@@ -1703,8 +1731,6 @@ class JsonRpcHandler:
 
         profile = params.get("profile") or config.get("default", "profile", "builder")
         session.profile = profile
-        model = params.get("model") or config.get("default", "model", "claude-sonnet-4-6")
-        provider = params.get("provider") or config.get("default", "provider", "anthropic")
         reasoning_effort = params.get("reasoning_effort") or config.get("default", "reasoning_effort", "auto")
         # Respect per-session mode passed from client, falling back to server default
         mode = (params.get("mode") or config.get("default", "permission_mode", "safe")).lower()
@@ -1922,12 +1948,19 @@ class JsonRpcHandler:
                     "image_uris": image_uris or [],
                 })
                 session.set_status("running")
-                async for event in agent.run(prompt, images=images, image_uris=image_uris):
+                async for event in agent.run(prompt, images=images, image_uris=image_uris,
+                                             image_only=bool(params.get("image_only"))):
                     if isinstance(event, InputApplied):
                         self.notify("agent/inputApplied", {
                             "session_id": session_id, "input_id": event.input_id,
                             "prompt": event.prompt, "image_uris": event.image_uris or [],
                             "turn_index": event.turn_index, "ts": time.time(),
+                        })
+                    elif isinstance(event, ImagesSkipped):
+                        self.notify("agent/imagesSkipped", {
+                            "session_id": session_id, "count": event.count,
+                            "prompt_added": event.prompt_added, "steering": event.steering,
+                            "input_id": event.input_id if event.steering else params.get("input_id"),
                         })
                     elif isinstance(event, Done):
                         if event.outcome != "success":

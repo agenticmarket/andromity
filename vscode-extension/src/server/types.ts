@@ -137,6 +137,8 @@ export interface InputBridgeMessage {
   inputId?: string;
   prompt?: string;
   images?: string[];
+  /** The prompt is text the chat wrote in for a message that holds only images. */
+  imageOnly?: boolean;
   delivery?: "queue" | "steer";
   attachContext?: boolean;
   profile?: string;

@@ -1454,6 +1454,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     bind("agent/queueChanged", (params: unknown) => this._postToWebview({ type: "queue_state", ...(params as object), supported: true }));
     bind("agent/inputApplied", (params: unknown) => this._postToWebview({ type: "input_applied", ...(params as object) }));
+    bind("agent/imagesSkipped", (params: unknown) => this._postToWebview({ type: "images_skipped", ...(params as object) }));
     bind("agent/started", (params: any) => {
       const sid = params?.session_id || this._currentSessionId;
       if (sid) {

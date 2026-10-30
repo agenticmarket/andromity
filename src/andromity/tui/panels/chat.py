@@ -5,6 +5,7 @@ from textual.message import Message
 from textual.widgets import Static, Markdown, Collapsible, Button
 
 from andromity.config import config
+from andromity.core.session import skipped_image_count
 from andromity.tui.markup_utils import safe_markup, safe_update, escape_textual as escape
 import json
 import re
@@ -13,6 +14,18 @@ from typing import Any
 
 
 _ASSISTANT_HEADER = "[bold $success]■ Andromity:[/bold $success]"
+
+
+def images_skipped_notice(count: int) -> str:
+    """Markup for images left out of a message because the model can't read them."""
+    if count > 1:
+        text = ("This model can't read images, so your images weren't sent. "
+                "Switch to a model that supports images to include them.")
+    else:
+        text = ("This model can't read images, so your image wasn't sent. "
+                "Switch to a model that supports images to include it.")
+    return f"[$warning]ℹ[/] {escape(text)} [dim]Press Ctrl+L or type /model to switch.[/dim]"
+
 
 class ChatMessage(Widget):
     DEFAULT_CSS = """\
@@ -974,6 +987,7 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
         self._thinking = None
         self._tool_seq = None
         self._header_shown = False
+        self._turn_header: Static | None = None
         self._unloaded_history = []
         # True when the user has manually scrolled up to read history.
         # While True, new tool calls and system messages won't hijack scroll.
@@ -996,6 +1010,7 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
 
     def add_user_message(self, text: str, image_count: int = 0):
         self._header_shown = False
+        self._turn_header = None
         self._tool_seq = None
         from andromity.core.session_context import without_session_context
         text = without_session_context(text)
@@ -1090,6 +1105,7 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
             return
         self._header_shown = True
         header = Static(_ASSISTANT_HEADER, classes="assistant-header")
+        self._turn_header = header
         try:
             if before is not None:
                 self.mount(header, before=before)
@@ -1284,6 +1300,26 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
             self._thinking = None
         self._finish_tool_sequence()
         self._header_shown = False
+        self._turn_header = None
+
+    def add_reply_notice(self, text: str) -> None:
+        """Show a notice about the user's message above the reply to it."""
+        notice = ChatMessage("system-markup", text)
+        header = self._turn_header
+        if header is not None and header.parent is self:
+            self.mount(notice, before=header)
+        else:
+            self.mount(notice)
+        self._prune_dom()
+        if not self._user_scrolled_up:
+            self.scroll_end()
+
+    def add_inline_notice(self, text: str) -> None:
+        """Show a notice where the reply has got to; whatever follows goes below it."""
+        self.stop_thinking_message()
+        self._finish_streaming_block(show_footer=False)
+        self._finish_tool_sequence()
+        self.add_system_message(text)
 
     def _finish_tool_sequence(self):
         """Freeze the current turn's tool summary once the turn ends."""
@@ -1393,6 +1429,7 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
         self._thinking = None
         self._tool_seq = None
         self._header_shown = False
+        self._turn_header = None
         await self.remove_children()
 
     async def load_history(self, messages: list, compacted_history: list | None = None):
@@ -1414,6 +1451,7 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
         self._thinking = None
         self._tool_seq = None
         self._header_shown = False
+        self._turn_header = None
         await self.remove_children()
 
         # Build full visual timeline: compacted old messages + current messages.
@@ -1454,6 +1492,8 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
                 _flush_seq()
                 turn_header_shown = False  # reset for the next assistant turn
                 widgets.append(ChatMessage("user", content))
+                if skipped := skipped_image_count(msg):
+                    widgets.append(ChatMessage("system-markup", images_skipped_notice(skipped)))
             elif role == "assistant":
                 thinking_text = msg.get("thinking") or ""
                 if thinking_text.strip():
