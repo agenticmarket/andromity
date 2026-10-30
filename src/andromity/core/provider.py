@@ -1266,7 +1266,7 @@ def classify_error_info(
     client_error = status is not None and 400 <= status <= 499
     body_codes = (_identifier(body.get("type")), _identifier(body.get("code")))
     is_not_found = not server_error and (
-        status == 404 or "NotFoundError" in names or mentions(_NOT_FOUND_PHRASES)
+        status in (404, 410) or "NotFoundError" in names or mentions(_NOT_FOUND_PHRASES)
         or (no_status and has_code("404") and ("model" in low or "endpoint" in low))
     )
     is_auth = status in (401, 403) or (no_status and (

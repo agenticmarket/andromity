@@ -102,14 +102,10 @@ MODEL_CATALOG = {
         "requires_env": "NVIDIA_API_KEY",
         "base_url": "https://integrate.api.nvidia.com/v1",
         "models": [
-            {"id": "nvidia/llama-3.1-nemotron-70b-instruct", "name": "Llama 3.1 Nemotron 70B", "desc": "NVIDIA high-accuracy aligned flagship", "context": "128K", "pricing": "NVIDIA NIM API / Free credits"},
-            {"id": "meta/llama-3.3-70b-instruct", "name": "Llama 3.3 70B", "desc": "Meta flagship open model on NVIDIA NIM", "context": "128K", "pricing": "NVIDIA NIM API"},
-            {"id": "meta/llama-3.1-405b-instruct", "name": "Llama 3.1 405B", "desc": "Frontier open-weights 405B model", "context": "128K", "pricing": "NVIDIA NIM API"},
-            {"id": "deepseek-ai/deepseek-r1", "name": "DeepSeek R1", "desc": "NVIDIA-accelerated reasoning model", "context": "128K", "pricing": "NVIDIA NIM API"},
-            {"id": "qwen/qwen2.5-coder-32b-instruct", "name": "Qwen 2.5 Coder 32B", "desc": "Specialized coding LLM on NVIDIA hardware", "context": "128K", "pricing": "NVIDIA NIM API"},
-            {"id": "mistralai/mistral-large-2-instruct", "name": "Mistral Large 2", "desc": "123B flagship multilingual & coding model", "context": "128K", "pricing": "NVIDIA NIM API"},
-            {"id": "google/gemma-3-27b-it", "name": "Gemma 3 27B IT", "desc": "Google's latest 27B multimodal reasoning model", "context": "32K", "pricing": "NVIDIA NIM API"},
-            {"id": "microsoft/phi-4", "name": "Phi 4", "desc": "Microsoft's 14B highly capable small model", "context": "16K", "pricing": "NVIDIA NIM API"},
+            {"id": "nvidia/nemotron-3.5-lightning-30b-a3b", "name": "Nemotron 3.5 Lightning", "desc": "Small, fast NVIDIA reasoning model", "context": "128K", "pricing": "NVIDIA NIM API / Free credits"},
+            {"id": "nvidia/nemotron-3-ultra-550b-a55b", "name": "Nemotron 3 Ultra", "desc": "NVIDIA flagship open model", "context": "128K", "pricing": "NVIDIA NIM API"},
+            {"id": "mistralai/mistral-large-4-1t-a52b", "name": "Mistral Large 4", "desc": "Mistral flagship model", "context": "128K", "pricing": "NVIDIA NIM API"},
+            {"id": "minimaxai/minimax-m3.1-flash", "name": "MiniMax M3.1 Flash", "desc": "Fast MiniMax model", "context": "128K", "pricing": "NVIDIA NIM API"},
         ],
     },
 }
@@ -216,6 +212,7 @@ def get_context_limit_for_model(provider_key: str, model_id: str) -> int:
     return 131072
 
 
+_NON_CHAT_NIM_MODELS = ("embed", "rerank", "reward", "safety", "guard", "parse", "retriever")
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 _LOOPBACK_CLOSED_TTL_S = 5.0
 _LOOPBACK_CONNECT_TIMEOUT_S = 0.15
@@ -719,10 +716,10 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
         if not data:
             return []
         # NVIDIA's /v1/models endpoint exposes no context window per model.
-        models = [{"id": "google/gemma-2-2b-it", "name": "Gemma 2 2B IT", "desc": "NVIDIA NIM accelerated model", "context": "128K", "context_limit": 131072, "provider": "nvidia", "tags": ["fast"]}]
+        models = []
         for item in data.get("data", []):
             m_id = item.get("id", "")
-            if not m_id or "embed" in m_id.lower() or "rerank" in m_id.lower():
+            if not m_id or any(word in m_id.lower() for word in _NON_CHAT_NIM_MODELS):
                 continue
             models.append({
                 "id": m_id,

@@ -103,8 +103,10 @@ def provider_info() -> list[dict[str, Any]]:
 
 _DEFAULT_BASE_URLS = {
     "ollama": "http://localhost:11434", "andromity": "https://gateway.agenticmarket.dev/v1",
-    "opencode": "https://opencode.ai/inference/openai/v1",
+    "opencode": "https://opencode.ai/inference/openai/v1", "nvidia": "https://integrate.api.nvidia.com/v1",
 }
+# Model IDs of these providers are their own names, even when one starts with the adapter's prefix (openai/gpt-oss-20b).
+_OWN_MODEL_NAMES = frozenset({"nvidia"})
 
 
 def _effective_base_url(provider: str, saved: dict) -> str:
@@ -116,13 +118,15 @@ def provider_request(provider: str, model: str) -> dict[str, Any]:
     """Resolve a named connection without borrowing another connection's key."""
     saved = config.get_provider_config(provider) or {}
     adapter = saved.get("type") or provider
-    adapter = {"google": "gemini", "nvidia": "nvidia_nim", "ollama": "ollama_chat",
+    adapter = {"google": "gemini", "nvidia": "openai", "ollama": "ollama_chat",
                "andromity": "openai", "opencode": "openai"}.get(adapter, adapter)
     model = (model or saved.get("model") or ("auto" if provider == "andromity" else "")).lstrip("~")
     if not model:
         raise ValueError("Choose a model for this connection.")
     prefix = adapter + "/"
-    routed_model = model if model.startswith(prefix) or (adapter == "ollama_chat" and model.startswith("ollama/")) else prefix + model
+    routed = provider not in _OWN_MODEL_NAMES and (
+        model.startswith(prefix) or (adapter == "ollama_chat" and model.startswith("ollama/")))
+    routed_model = model if routed else prefix + model
     base_url = _effective_base_url(provider, saved)
     network_policy.require_url(
         base_url, f"the {provider} connection",
@@ -148,7 +152,7 @@ def provider_request(provider: str, model: str) -> dict[str, Any]:
 
 
 # Whole words of a model id: "gemini" must not count as "mini".
-_CHEAP_HINTS = frozenset({"flash", "haiku", "mini", "lite", "nano", "small"})
+_CHEAP_HINTS = frozenset({"flash", "haiku", "mini", "lite", "nano", "small", "lightning"})
 _ID_TOKENS = re.compile(r"[-_./:\s]+")
 _PRICE = re.compile(r"\$\s*([0-9]+(?:\.[0-9]+)?)")
 _PROBE_MAX_TOKENS = 16
@@ -207,7 +211,8 @@ def _probe_detail(detail: Optional[str], provider: str, limit: int = 160) -> str
 
 _KEY_PROBLEM = re.compile(
     r"\b(?:invalid|incorrect|expired|revoked|missing|malformed|unauthori[sz]ed)\b.*\b(?:api[ _-]?key|key|token|credentials?)\b"
-    r"|\b(?:api[ _-]?key|key|token|credentials?)\b.*\b(?:invalid|incorrect|expired|revoked|not valid)\b",
+    r"|\b(?:api[ _-]?key|key|token|credentials?)\b.*\b(?:invalid|incorrect|expired|revoked|not valid)\b"
+    r"|^\s*authori[sz]ation failed\b",
     re.IGNORECASE,
 )
 
