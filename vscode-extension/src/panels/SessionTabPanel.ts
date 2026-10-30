@@ -28,6 +28,7 @@ import { BackgroundTaskPanel } from "./BackgroundTaskPanel.js";
 import { wakeSessionForQuestion } from "../collabActions.js";
 import { recordNextStepEvent } from "../nextSteps.js";
 import { handleFeedbackMessage } from "../engagement/feedbackWebview.js";
+import { WAITLIST_MESSAGES } from "../engagement/waitlistController.js";
 import { checkSessionForNavigation } from "../sessionNavigation.js";
 import { confirmAndOpenLink } from "../linkOpener.js";
 
@@ -416,6 +417,8 @@ export class SessionTabPanel {
     if (message.type === "ready" || message.type === "webview_ready") {
       this._postMessage({ type: "backend_ready" });
       this._postMessage(airGapPillMessage());
+      const waitlist = this._viewProvider.waitlist;
+      if (waitlist) this._postMessage(waitlist.stateMessage());
       this._sidePanelFeed.refresh();
       void this._viewProvider.getWorkspaceIndex().then((index) => {
         this._postMessage({ type: "workspace_files_updated", files: index.files, dirs: index.dirs });
@@ -585,6 +588,11 @@ export class SessionTabPanel {
           this._context
         );
       }
+      return;
+    }
+
+    if (WAITLIST_MESSAGES.has(message.type)) {
+      await this._viewProvider?.waitlist?.handleMessage(message, (reply) => this._postMessage(reply));
       return;
     }
 

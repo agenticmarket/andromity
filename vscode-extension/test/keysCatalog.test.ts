@@ -262,7 +262,7 @@ function loadSettings(providers: any[], models: any[] = []) {
     },
   };
   const escape = slice("    function escapeHtml(str) {", "\n    }\n") + "\n    }\n";
-  const state = "const keyTests = Object.create(null); const modelRefresh = Object.create(null); let keyTestRunning = \"\"; let keyTestTimer = 0;\n";
+  const state = "const keyTests = Object.create(null); const modelRefresh = Object.create(null); let keyTestRunning = \"\"; let keyTestTimer = 0; let waitlistJoined = false; let waitlistOffered = false; function noteWaitlistOffer() {}\n";
   const hub = slice("    function providerName(pid) {", "    function editProvider(id) {");
   const keys = slice("    function renderProviders() {", "    function finishKeyTest(msg) {");
   const finish = slice("    function finishKeyTest(msg) {", "\n    }\n") + "\n    }\n";

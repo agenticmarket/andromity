@@ -359,8 +359,7 @@ async def stream_completion(
                 if is_daily_quota or is_auth_error or is_bad_request or gateway_model_unavailable(e) or gateway_wait_is_long(e):
                     log.info("Non-retryable provider error: %s (HTTP %s).", type(e).__name__, getattr(e, "status_code", "unknown"))
                     yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-                    yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"],
-                               error_detail=short_error_detail(e, secrets=(resolved.get("api_key"),)), error_status=http_status(e))
+                    yield _error_done(e, provider_name, model, has_images, secrets=(resolved.get("api_key"),))
                     return
 
                 is_429 = has_status_code(msg, "429") or "rate limit" in msg or "ratelimit" in msg or "quota" in msg
@@ -383,8 +382,7 @@ async def stream_completion(
                 else:
                     log.error("Provider call failed after %d attempts: %s (HTTP %s).", total_attempts, type(e).__name__, getattr(e, "status_code", "unknown"))
                     yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-                    yield Done(outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"],
-                               error_detail=short_error_detail(e, secrets=(resolved.get("api_key"),)), error_status=http_status(e))
+                    yield _error_done(e, provider_name, model, has_images, secrets=(resolved.get("api_key"),))
                     return
 
             # 2. Watchdog: guard against upstream queue stall
@@ -516,9 +514,7 @@ async def stream_completion(
                 yield TextDelta(text=_format_stall_text(provider_name, model, e.timeout))
             else:
                 yield TextDelta(text=classify_and_format_error(e, provider=provider_name, model=model, has_images=has_images))
-            yield Done(usage=usage, outcome="error", error_type=classify_error_info(e, provider=provider_name, model=model, has_images=has_images)["type"],
-                       error_detail=None if isinstance(e, ProviderStalledError) else short_error_detail(e, secrets=(resolved.get("api_key"),)),
-                       error_status=http_status(e))
+            yield _error_done(e, provider_name, model, has_images, usage, secrets=(resolved.get("api_key"),))
             return
 
 
@@ -638,6 +634,19 @@ def gateway_error(e: Exception, *types: str) -> Optional[Dict[str, Any]]:
     if headers.get("retry-after", "").strip().isdigit():
         error["retry_after"] = int(headers["retry-after"].strip())
     return error
+
+
+def _clean_action(value: Any) -> str:
+    """A gateway action id reduced to lowercase letters and underscores, at most 40 characters."""
+    return re.sub(r"[^a-z_]", "", value if isinstance(value, str) else "")[:40]
+
+
+def _error_done(e: Exception, provider: str, model: str, has_images: bool, usage: Optional[Dict[str, int]] = None,
+                secrets: tuple = ()) -> Done:
+    info = classify_error_info(e, provider=provider, model=model, has_images=has_images)
+    detail = None if isinstance(e, ProviderStalledError) else short_error_detail(e, secrets=secrets)
+    return Done(usage=usage, outcome="error", error_type=info["type"], error_detail=detail, error_status=http_status(e),
+                error_action=_clean_action(info.get("action")) or None)
 
 
 def gateway_model_unavailable(e: Exception) -> Optional[Dict[str, Any]]:
@@ -1096,6 +1105,7 @@ def classify_error_info(
     raw_preview = clean_msg_raw[:500] + ("..." if len(clean_msg_raw) > 500 else "")
     if is_html:
         raw_preview = "HTML response received instead of an API response."
+    gateway = gateway_error(e, err_type) if provider == "andromity" else None
 
     return {
         "type": err_type,
@@ -1109,6 +1119,7 @@ def classify_error_info(
         "actions_tui": actions_tui,
         "raw_preview": raw_preview,
         "err_cls": err_cls,
+        "action": str((gateway or {}).get("action") or ""),
     }
 
 
@@ -1127,8 +1138,10 @@ def format_error_html(info: dict) -> str:
             f'  </details>\n'
         )
 
+    action = _clean_action(info.get("action"))
+    action_attr = f' data-error-action="{action}"' if action else ""
     return (
-        f'\n<div class="andromity-error-card" data-error-type="{info["type"]}" data-retryable="true">\n'
+        f'\n<div class="andromity-error-card" data-error-type="{info["type"]}"{action_attr} data-retryable="true">\n'
         f'  <div class="error-card-header">\n'
         f'    <div class="error-header-left">\n'
         f'      {icon_alert}\n'

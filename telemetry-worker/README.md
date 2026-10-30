@@ -19,8 +19,18 @@ The Cloudflare Worker behind `telemetry.agenticmarket.dev`. It receives Andromit
    npx wrangler d1 execute andromity-telemetry --remote --file=blog.sql
    npx wrangler d1 execute andromity-telemetry --remote --file=feedback.sql
    npx wrangler d1 execute andromity-telemetry --remote --file=feedback-checkin.sql
+   npx wrangler d1 execute andromity-telemetry --remote --file=waitlist.sql
    ```
    On a database that already has the `feedback` table, run only `feedback-checkin.sql`, once. Until it runs, check-in answers are kept inside the note text.
+
+   On an existing database, run `waitlist.sql` once to open the waitlist. Until it runs, `POST /waitlist` answers 503 with `Waitlist is not available yet`, and the admin list returns `{"waitlist": [], "not_ready": true}`.
+
+   Open the waitlist in this order:
+   1. Run `waitlist.sql` (above).
+   2. Deploy this worker (step 4).
+   3. In the admin panel, turn on **Offer the waitlist at the daily limit** under Gateway quotas. Clients offer the waitlist only after the gateway has offered it.
+
+   To close it again, turn that switch off, or set the worker variable `WAITLIST_OPEN` to `false`, which makes `POST /waitlist` answer 503. `POST /waitlist` accepts only `Content-Type: application/json`, sends no CORS headers, and is limited per IP by the `WAITLIST_RATE_LIMITER` binding when it is configured.
 
 3. Copy `.env.example` to `.env` and set `TELEMETRY_D1_ID` (and optionally `STATS_SECRET`).
 

@@ -5,6 +5,7 @@ import { sessionSummaries, featureSummaries } from './metricSummaries.js';
 import { usageQueries, usageResults } from './usageStats.js';
 import { handleBlogRequest } from './blog.js';
 import { handleFeedbackRequest } from './feedback.js';
+import { handleWaitlistRequest, withoutCors } from './waitlist.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -21,7 +22,8 @@ export default {
 
     // 1. Immediately answer CORS preflights before any rate limiting
     if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: securityHeaders });
+      const headers = new URL(request.url).pathname === '/waitlist' ? withoutCors(securityHeaders) : securityHeaders;
+      return new Response(null, { status: 204, headers });
     }
 
     // 2. IP Rate limiting with proper CORS headers on 429
@@ -32,7 +34,7 @@ export default {
         return new Response(JSON.stringify({ error: 'Too Many Requests' }), {
           status: 429,
           headers: {
-            ...securityHeaders,
+            ...(new URL(request.url).pathname === '/waitlist' ? withoutCors(securityHeaders) : securityHeaders),
             'Content-Type': 'application/json',
             'Retry-After': '60',
           },
@@ -49,6 +51,8 @@ export default {
     if (blogResponse) return blogResponse;
     const feedbackResponse = await handleFeedbackRequest(request, env, { url, headers: securityHeaders, isAdmin });
     if (feedbackResponse) return feedbackResponse;
+    const waitlistResponse = await handleWaitlistRequest(request, env, { url, headers: securityHeaders, isAdmin });
+    if (waitlistResponse) return waitlistResponse;
 
     if (request.method === 'GET') {
       if (url.pathname === '/api/stats' || url.pathname === '/stats') {

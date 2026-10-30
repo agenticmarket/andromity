@@ -3,17 +3,49 @@ const MAX_BODY = 16 * 1024;
 const LIST_LIMIT = 500;
 const CLIENTS = ['vscode', 'tui', 'cli'];
 const SYSTEMS = ['windows', 'darwin', 'linux'];
-const SECRET_PATTERN = /(?:sk-|nvapi-|gsk_|AIza|xai-|key-|ghp_|github_pat_)[a-zA-Z0-9_-]{16,}/g;
+/** Key-shaped strings, including every credential shape the VS Code extension's secret scan recognises. */
+const SECRET_PATTERN = new RegExp([
+  /(?:sk-|nvapi-|gsk_|AIza|xai-|key-|ghp_|github_pat_)[a-zA-Z0-9_-]{16,}/,
+  /-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|$)/,
+  /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
+  /\bgh[pousr]_[A-Za-z0-9]{36,}/,
+  /\b(?:sk|rk)_live_[0-9A-Za-z]{20,}/,
+  /\bxox[abprs]-[0-9A-Za-z-]{10,}/,
+  /\bhf_[A-Za-z0-9]{34,}/,
+  /\bnpm_[A-Za-z0-9]{36,}/,
+  /\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqps?):\/\/[^\s:@/]+:[^\s@/]{3,}@[^\s/]+/,
+  /\bAccountKey=[A-Za-z0-9+/]{40,}={0,2}/,
+  /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
+].map((pattern) => pattern.source).join('|'), 'g');
 /** Answers to the in-chat check-in. Clients send these ids; the admin panel labels them. */
 export const SENTIMENTS = ['love', 'ok', 'bad'];
 export const ANNOYANCES = ['slow', 'wrong_edits', 'too_many_prompts', 'errors_limits', 'hard_to_use', 'missing_feature'];
 const MISSING_COLUMN = /no such column|has no column/i;
 
-function json(body, status, headers) {
+export function json(body, status, headers) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...headers, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
   });
+}
+
+/** Normalises line endings, trims, and replaces API-key-shaped strings before storage. */
+export function cleanText(raw) {
+  return raw.replace(/\r\n?/g, '\n').trim().replace(SECRET_PATTERN, '[removed]');
+}
+
+/** The client, OS family, version and Cloudflare country stored with a submission. Unknown values fall back. */
+export function clientFields(input, cfCountry) {
+  const text = (value) => (typeof value === 'string' ? value : typeof value === 'number' ? String(value) : '');
+  const client = text(input.client).toLowerCase();
+  const os = text(input.os).toLowerCase();
+  const country = text(cfCountry).toUpperCase();
+  return {
+    client: CLIENTS.includes(client) ? client : 'unknown',
+    os: SYSTEMS.includes(os) ? os : 'unknown',
+    version: text(input.version).slice(0, 20).replace(/[^0-9a-zA-Z.-]/g, '') || 'unknown',
+    country: /^[A-Z]{2}$/.test(country) ? country : 'XX',
+  };
 }
 
 /**
@@ -33,19 +65,13 @@ export function cleanFeedback(input, cfCountry) {
   }
   const rawMessage = hasSentiment && (input.message === undefined || input.message === null) ? '' : input.message;
   if (typeof rawMessage !== 'string') return { error: 'message must be a string' };
-  const message = rawMessage.replace(/\r\n?/g, '\n').trim().replace(SECRET_PATTERN, '[removed]');
+  const message = cleanText(rawMessage);
   if (!message && !hasSentiment) return { error: 'message is required' };
   if (message.length > MAX_MESSAGE_LENGTH) return { error: `message is longer than ${MAX_MESSAGE_LENGTH} characters` };
-  const client = String(input.client || '').toLowerCase();
-  const os = String(input.os || '').toLowerCase();
-  const country = String(cfCountry || '').toUpperCase();
   return {
     values: {
       message,
-      client: CLIENTS.includes(client) ? client : 'unknown',
-      os: SYSTEMS.includes(os) ? os : 'unknown',
-      version: String(input.version || '').slice(0, 20).replace(/[^0-9a-zA-Z.-]/g, '') || 'unknown',
-      country: /^[A-Z]{2}$/.test(country) ? country : 'XX',
+      ...clientFields(input, cfCountry),
       sentiment: hasSentiment ? input.sentiment : null,
       annoyances: annoyances.length ? annoyances.join(',') : null,
     },

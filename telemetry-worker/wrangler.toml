@@ -17,6 +17,13 @@ type = "ratelimit"
 namespace_id = "1001"
 simple = { limit = 120, period = 60 }
 
+# POST /waitlist only, per client IP. Cloudflare rate limits allow a 10 or 60 second period.
+[[unsafe.bindings]]
+name = "WAITLIST_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 3, period = 60 }
+
 [observability]
 enabled = true
 
