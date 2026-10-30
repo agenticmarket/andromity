@@ -6567,8 +6567,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       let from = 0;
       let start;
       while ((start = md.indexOf(ERROR_CARD_OPEN, from)) !== -1) {
-        const end = errorCardMarkupEnd(md, start);
-        const card = end !== -1 && startsLineOutsideFence(md, start) ? errorCardFromMarkup(md.slice(start, end), true) : '';
+        const end = startsLineOutsideFence(md, start) ? errorCardMarkupEnd(md, start) : -1;
+        const card = end !== -1 ? errorCardFromMarkup(md.slice(start, end), true) : '';
         if (card) {
           html += renderMarkdownText(md.slice(0, start)) + card;
           md = md.slice(end);
@@ -11277,7 +11277,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           const finishedTurn = unsentTurnSessions.delete(msg.session_id || currentSessionId) ? null : finishedTurnFacts(msg);
           endAssistantTurn();
-          if (msg.outcome === 'error') enableEngineCardActions(msg.error_type);
+          if (msg.outcome === 'error') enableEngineCardActions(msg.error_type, msg.error_action);
           interactiveSlot.innerHTML = '';
           activePendingApprovalId = null;
           activePendingToolName = '';
@@ -11654,8 +11654,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     // The engine's sign-in error arrives as reply text, which may not carry side-effect actions;
     // the turn's error event then adds them to the last such card.
-    function enableEngineCardActions(errorType) {
-      if (errorType !== 'sign_in_invalid' || !chatContainer || typeof chatContainer.querySelectorAll !== 'function') return;
+    function enableEngineCardActions(errorType, errorAction) {
+      if (!chatContainer || typeof chatContainer.querySelectorAll !== 'function') return;
+      if (errorType === 'quota_exceeded' && errorAction === 'join_waitlist') {
+        const quotaCards = chatContainer.querySelectorAll('.andromity-error-card[data-error-type="quota_exceeded"]');
+        const quotaCard = quotaCards && quotaCards.length ? quotaCards[quotaCards.length - 1] : null;
+        const quotaActions = quotaCard && quotaCard.querySelector('.error-card-actions');
+        if (quotaActions && !quotaActions.querySelector('[data-action="join-waitlist"]')) {
+          quotaActions.insertAdjacentHTML('beforeend', waitlistOfferButton());
+          noteWaitlistOffer();
+        }
+        return;
+      }
+      if (errorType !== 'sign_in_invalid') return;
       const cards = chatContainer.querySelectorAll('.andromity-error-card[data-error-type="sign_in_invalid"]');
       const card = cards && cards.length ? cards[cards.length - 1] : null;
       const actions = card && card.querySelector('.error-card-actions');
@@ -11663,12 +11674,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       actions.insertAdjacentHTML('beforeend', engineActionButton('use-without-sign-in', false));
     }
 
+    // Engine cards are a few kilobytes; scanning further only happens on text that merely looks like one.
+    const ERROR_CARD_MAX_LENGTH = 16000;
     function errorCardMarkupEnd(text, start) {
-      const tag = /<(\\/?)div\\b[^>]*>/gi;
+      const tag = /<(\\/?)div\\b[^<>]*>/gi;
+      const scan = text.slice(0, start + ERROR_CARD_MAX_LENGTH);
       tag.lastIndex = start;
       let depth = 0;
       let match;
-      while ((match = tag.exec(text))) {
+      while ((match = tag.exec(scan))) {
         depth += match[1] ? -1 : 1;
         if (depth === 0) return tag.lastIndex;
       }
@@ -11740,10 +11754,6 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           ERROR_CARD_ACTION_ICONS[action] + escapeHtml(label) + '</button>';
         seenActions.add(action);
       });
-      if (errorType === 'quota_exceeded' && source.getAttribute('data-error-action') === 'join_waitlist') {
-        actionsHtml += waitlistOfferButton();
-        noteWaitlistOffer();
-      }
       const detailsNode = source.querySelector('.error-details .error-code');
       const detailsText = detailsNode ? redactErrorDetails(detailsNode.textContent.trim()) : '';
       const iconAlert = '<span class="error-header-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span>';

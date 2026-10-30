@@ -2,6 +2,7 @@ import asyncio
 import errno
 import ipaddress
 import json
+import math
 import os
 import re
 import socket
@@ -375,7 +376,8 @@ async def stream_completion(
 
                 gateway_refused = provider_name == GATEWAY_PROVIDER and gateway_error(e, "quota_exceeded") is not None
                 if (is_daily_quota or is_auth_error or is_bad_request or gateway_refused
-                        or gateway_model_unavailable(e) or gateway_wait_is_long(e)):
+                        or gateway_model_unavailable(e, provider_name) or gateway_wait_is_long(e, provider_name)
+                        or (_is_network_failure(_exception_chain(e)) and _is_local_base_url(base_url))):
                     log.info("Non-retryable provider error: %s (HTTP %s).", type(e).__name__, getattr(e, "status_code", "unknown"))
                     for event in _error_events(e, provider_name, model, has_images, secrets=(resolved.get("api_key"),)):
                         yield event
@@ -553,7 +555,7 @@ def _error_events(e: Exception, provider_name: str, model: str, has_images: bool
         text = format_error_for_client(info)
     message = None if isinstance(e, ProviderStalledError) else short_error_detail(e, secrets=secrets)
     return [TextDelta(text=text), Done(usage=usage, outcome="error", error_type=info["type"], error_detail=info["detail"],
-                                       error_message=message, error_status=http_status(e),
+                                       error_message=message, error_status=_http_status(_exception_chain(e)),
                                        error_action=_clean_action(info.get("action")) or None)]
 
 
@@ -616,7 +618,7 @@ _CREDENTIAL_TEXT = re.compile(
     r"|\bAIza[0-9A-Za-z_\-]{20,}"
     r"|\beyJ[A-Za-z0-9_\-]{10,}(?:\.[A-Za-z0-9_\-]+){1,2}"
     r"|\b(?=[A-Za-z_]*\d)[A-Za-z0-9_]{24,}\b"
-    r"|\*{3,}[A-Za-z0-9]{2,8}",
+    r"|(?<!\*)\*{3,}[A-Za-z0-9]{2,8}",
     re.IGNORECASE,
 )
 # No square brackets: the terminal app reads them as markup.
@@ -627,7 +629,7 @@ def redact_credentials(text: str, secrets: Iterable[Optional[str]] = ()) -> str:
     """Remove the given secrets, any token that starts like one of them, and credential-like tokens."""
     text = text or ""
     for secret in secrets:
-        if not isinstance(secret, str) or len(secret) < 6:
+        if not isinstance(secret, str) or len(secret) < 6 or secret in _PLACEHOLDER_KEYS:
             continue
         if len(secret) >= 8:
             text = re.sub(re.escape(secret[:8]) + r"\S*", REDACTED, text)
@@ -638,7 +640,7 @@ def redact_credentials(text: str, secrets: Iterable[Optional[str]] = ()) -> str:
 
 def short_error_detail(e: BaseException, limit: int = 160, secrets: Iterable[Optional[str]] = ()) -> str:
     """One line of the provider's own error text, without markup or credentials. Redacts before it truncates."""
-    text = redact_credentials(" ".join(extract_clean_error_message(e).split()), secrets)
+    text = redact_credentials(" ".join(extract_clean_error_message(e)[: limit + 512].split()), secrets)
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
@@ -965,8 +967,8 @@ def _gateway_details(e: BaseException, facts: Dict[str, Any]) -> Dict[str, Any]:
     body_wait = body.get("retry_after")
     if header_wait.isdigit():
         retry_after = int(header_wait)
-    elif isinstance(body_wait, (int, float)) and not isinstance(body_wait, bool) and body_wait > 0:
-        retry_after = int(body_wait)
+    elif isinstance(body_wait, (int, float)) and not isinstance(body_wait, bool) and math.isfinite(body_wait) and body_wait > 0:
+        retry_after = int(min(body_wait, 86400))
     return {
         "type": _identifier(headers.get("x-andromity-error-type")) or _identifier(body.get("type")),
         "code": _identifier(body.get("code")),
@@ -1021,7 +1023,7 @@ def gateway_wait_is_long(e: Exception, provider: str = GATEWAY_PROVIDER) -> bool
     if not error:
         return False
     wait = error.get("retry_after")
-    return error.get("action") == "switch_model" or (isinstance(wait, (int, float)) and wait > 60)
+    return error.get("action") == "switch_model" or (isinstance(wait, (int, float)) and wait > 20)
 
 
 def _timer_badge_html(text: str) -> str:
