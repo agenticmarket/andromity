@@ -2983,8 +2983,9 @@ class JsonRpcHandler:
         is_trusted = config.is_trusted(str(project_path))
         trusted_map = config.get_root("trusted_projects", {}) or {}
         trusted_list = [
-            {"key": k, "path": v.get("path", ""), "trusted_at": v.get("trusted_at", "")}
-            for k, v in trusted_map.items()
+            {"key": k, "path": str(v.get("path", "")), "trusted_at": str(v.get("trusted_at", ""))}
+            for k, v in (trusted_map.items() if isinstance(trusted_map, dict) else [])
+            if isinstance(v, dict)
         ]
         return {
             "is_trusted": is_trusted,

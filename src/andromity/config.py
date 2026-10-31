@@ -1,6 +1,9 @@
+import ast
 import hashlib
+import math
 import os
 import platform
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,44 +18,73 @@ try:
     import tomli_w
 except ImportError:
     class _TomliWFallback:
-        @staticmethod
-        def dump(d: dict, f):
-            f.write(_TomliWFallback.dumps(d).encode("utf-8"))
+        """Writes the TOML subset config.toml uses, at any depth, when tomli-w is not installed.
+        Unsupported values raise TypeError, as tomli-w does, instead of being written as text."""
 
-        @staticmethod
-        def dumps(d: dict) -> str:
-            lines = []
-            tables = []
-            array_tables = []
+        _BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
+        _ESCAPES = {"\\": "\\\\", '"': '\\"', "\b": "\\b", "\t": "\\t", "\n": "\\n", "\f": "\\f", "\r": "\\r"}
+
+        @classmethod
+        def dump(cls, d: dict, f):
+            f.write(cls.dumps(d).encode("utf-8"))
+
+        @classmethod
+        def dumps(cls, d: dict) -> str:
+            lines: list = []
+            cls._table(d, [], lines)
+            return "\n".join(lines).strip("\n") + "\n"
+
+        @classmethod
+        def _table(cls, d: dict, path: list, lines: list) -> None:
+            nested = []
             for k, v in d.items():
-                if isinstance(v, dict):
-                    tables.append((k, v))
-                elif isinstance(v, list) and v and all(isinstance(i, dict) for i in v):
-                    array_tables.append((k, v))
+                if isinstance(v, dict) or (isinstance(v, list) and v and all(isinstance(i, dict) for i in v)):
+                    nested.append((k, v))
                 else:
-                    lines.append(f"{k} = {_TomliWFallback._format_val(v)}")
-            for k, v in tables:
-                lines.append(f"\n[{k}]")
-                for sub_k, sub_v in v.items():
-                    lines.append(f"{sub_k} = {_TomliWFallback._format_val(sub_v)}")
-            for k, items in array_tables:
-                for item in items:
-                    lines.append(f"\n[[{k}]]")
-                    for sub_k, sub_v in item.items():
-                        lines.append(f"{sub_k} = {_TomliWFallback._format_val(sub_v)}")
-            return "\n".join(lines) + "\n"
+                    lines.append(f"{cls._key(k)} = {cls._value(v)}")
+            for k, v in nested:
+                header = ".".join(cls._key(part) for part in [*path, k])
+                for item in ([v] if isinstance(v, dict) else v):
+                    lines.extend(["", f"[{header}]" if isinstance(v, dict) else f"[[{header}]]"])
+                    cls._table(item, [*path, k], lines)
 
-        @staticmethod
-        def _format_val(v) -> str:
+        @classmethod
+        def _key(cls, k) -> str:
+            if not isinstance(k, str):
+                raise TypeError(f"TOML keys must be strings, not {type(k).__name__}")
+            return k if cls._BARE_KEY.fullmatch(k) else cls._string(k)
+
+        @classmethod
+        def _string(cls, s: str) -> str:
+            out = []
+            for ch in s:
+                if ch in cls._ESCAPES:
+                    out.append(cls._ESCAPES[ch])
+                elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+                    out.append(f"\\u{ord(ch):04X}")
+                else:
+                    out.append(ch)
+            return '"' + "".join(out) + '"'
+
+        @classmethod
+        def _value(cls, v) -> str:
             if isinstance(v, bool):
                 return "true" if v else "false"
-            elif isinstance(v, (int, float)):
+            if isinstance(v, int):
                 return str(v)
-            elif isinstance(v, list):
-                return "[" + ", ".join(_TomliWFallback._format_val(i) for i in v) + "]"
-            else:
-                s = str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-                return f'"{s}"'
+            if isinstance(v, float):
+                if math.isnan(v):
+                    return "nan"
+                if math.isinf(v):
+                    return "inf" if v > 0 else "-inf"
+                return repr(v)
+            if isinstance(v, str):
+                return cls._string(v)
+            if isinstance(v, (list, tuple)):
+                return "[" + ", ".join(cls._value(i) for i in v) + "]"
+            if isinstance(v, dict):
+                return "{" + ", ".join(f"{cls._key(k)} = {cls._value(x)}" for k, x in v.items()) + "}"
+            raise TypeError(f"Object of type {type(v).__name__} is not TOML serializable")
 
     tomli_w = _TomliWFallback
 
@@ -126,6 +158,53 @@ class ConfigManager:
             kept = f" A copy was saved to {self.unreadable_copy}." if self.unreadable_copy else ""
             print(f"Warning: Failed to parse {self.config_path}: {e}.{kept} Using default settings.", file=sys.stderr)
             self._config_cache = {}
+            return
+        if self._repair_stringified_tables():
+            try:
+                self.save()
+            except Exception as e:
+                print(f"Warning: Could not save the repaired {self.config_path}: {e}", file=sys.stderr)
+
+    @staticmethod
+    def _toml_compatible(value: Any, depth: int = 0) -> bool:
+        if depth > 16:
+            return False
+        if isinstance(value, dict):
+            return all(isinstance(k, str) and ConfigManager._toml_compatible(v, depth + 1) for k, v in value.items())
+        if isinstance(value, list):
+            return all(ConfigManager._toml_compatible(v, depth + 1) for v in value)
+        return isinstance(value, (str, int, float, bool))
+
+    @staticmethod
+    def _restore_table(value: Any) -> Any:
+        """A table that an older fallback writer saved as Python text, parsed back; any other value unchanged."""
+        if not (isinstance(value, str) and len(value) <= 16384 and (value == "{}" or value.startswith("{'"))
+                and value.endswith("}")):
+            return value
+        try:
+            parsed = ast.literal_eval(value)
+        except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+            return value
+        return parsed if isinstance(parsed, dict) and ConfigManager._toml_compatible(parsed) else value
+
+    def _repair_stringified_tables(self) -> bool:
+        """Turn nested tables an older writer stored as Python text back into tables, in sections and their lists."""
+        repaired = False
+        for section in self._config_cache.values():
+            for container in section if isinstance(section, list) else [section]:
+                if not isinstance(container, dict):
+                    continue
+                for key, value in container.items():
+                    if isinstance(value, list):
+                        fixed = [self._restore_table(item) for item in value]
+                        changed = any(new is not old for new, old in zip(fixed, value))
+                    else:
+                        fixed = self._restore_table(value)
+                        changed = fixed is not value
+                    if changed:
+                        container[key] = fixed
+                        repaired = True
+        return repaired
 
     def _keep_unreadable_copy(self, raw: bytes) -> Optional[Path]:
         try:
@@ -232,7 +311,7 @@ class ConfigManager:
     def get_pinned_models(self) -> list:
         sec = self._config_cache.get("models", {})
         if isinstance(sec, dict) and "pinned" in sec and isinstance(sec["pinned"], list):
-            return sec["pinned"]
+            return [item for item in sec["pinned"] if isinstance(item, dict)]
         return [
             {"id": "auto", "provider": "andromity", "name": "Andromity Auto"},
             {"id": "anthropic/claude-3.7-sonnet", "provider": "openrouter", "name": "Claude 3.7 Sonnet"},
@@ -266,8 +345,8 @@ class ConfigManager:
 
     def get_provider_config(self, provider_name: str) -> Optional[Dict[str, Any]]:
         providers = self._config_cache.get("providers", [])
-        for p in providers:
-            if p.get("name") == provider_name:
+        for p in providers if isinstance(providers, list) else []:
+            if isinstance(p, dict) and p.get("name") == provider_name:
                 return p
         return None
 
