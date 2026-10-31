@@ -46,14 +46,14 @@ export function findSecrets(text: string): FoundSecret[] {
   return found.sort((a, b) => a.start - b.start);
 }
 
-/** The text with each found secret replaced by a marker naming what it was. */
-export function redactSecrets(text: string, secrets: FoundSecret[]): string {
+/** The text with each found secret replaced by `marker`, or by a marker naming what it was. */
+export function redactSecrets(text: string, secrets: FoundSecret[], marker?: string): string {
   if (typeof text !== "string") return "";
   let out = "";
   let at = 0;
   for (const s of [...secrets].sort((a, b) => a.start - b.start)) {
     if (s.start < at) continue;
-    out += text.slice(at, s.start) + "[REDACTED " + s.label + "]";
+    out += text.slice(at, s.start) + (marker ?? "[REDACTED " + s.label + "]");
     at = s.end;
   }
   return out + text.slice(at);

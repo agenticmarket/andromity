@@ -9,6 +9,7 @@ import * as path from "path";
 import { RpcClient } from "../server/RpcClient.js";
 import { handleInputMessage } from "../server/inputBridge.js";
 import { handleInteractionMessage, reportDisconnectedAction } from "../server/interactionBridge.js";
+import { PROVIDER_ID_PATTERN, refreshProviderModels, runKeyCheck, supportsKeyTests, unverifiedNotice } from "../server/keyCheck.js";
 import { SessionHydration } from "../server/sessionHydration.js";
 import { ChatViewProvider } from "../providers/ChatViewProvider.js";
 import { ModelInfo, ProviderInfo, SessionInfo } from "../server/types.js";
@@ -18,6 +19,7 @@ import { airGapPillMessage } from "../airgapState.js";
 import { copySessionAsMarkdown } from "../chatMarkdown.js";
 import { runSidePanelCommand, SidePanelFeed } from "../sidePanelFeed.js";
 import { confirmRewindAndResend, resendPromptOf } from "../integrations/rewind.js";
+import { handlePromptImageMessage, undonePromptOf } from "../integrations/promptImages.js";
 import { recordFeatureUse } from "../telemetry/featureUsage.js";
 import { SettingsPanel } from "./SettingsPanel.js";
 import { PlanEditorPanel } from "./PlanEditorPanel.js";
@@ -26,6 +28,7 @@ import { BackgroundTaskPanel } from "./BackgroundTaskPanel.js";
 import { wakeSessionForQuestion } from "../collabActions.js";
 import { recordNextStepEvent } from "../nextSteps.js";
 import { handleFeedbackMessage } from "../engagement/feedbackWebview.js";
+import { WAITLIST_MESSAGES } from "../engagement/waitlistController.js";
 import { checkSessionForNavigation } from "../sessionNavigation.js";
 import { confirmAndOpenLink } from "../linkOpener.js";
 
@@ -257,6 +260,9 @@ export class SessionTabPanel {
     bind("agent/inputApplied", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "input_applied", ...params });
     });
+    bind("agent/imagesSkipped", (params: any) => {
+      if (isMatch(params)) this._postMessage({ type: "images_skipped", ...params });
+    });
     bind("agent/started", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "agent_started", ...params });
     });
@@ -411,6 +417,8 @@ export class SessionTabPanel {
     if (message.type === "ready" || message.type === "webview_ready") {
       this._postMessage({ type: "backend_ready" });
       this._postMessage(airGapPillMessage());
+      const waitlist = this._viewProvider.waitlist;
+      if (waitlist) this._postMessage(waitlist.stateMessage());
       this._sidePanelFeed.refresh();
       void this._viewProvider.getWorkspaceIndex().then((index) => {
         this._postMessage({ type: "workspace_files_updated", files: index.files, dirs: index.dirs });
@@ -583,6 +591,11 @@ export class SessionTabPanel {
       return;
     }
 
+    if (WAITLIST_MESSAGES.has(message.type)) {
+      await this._viewProvider?.waitlist?.handleMessage(message, (reply) => this._postMessage(reply));
+      return;
+    }
+
     if (!this._rpcClient) {
       reportDisconnectedAction(message, this._sessionId, event => this._postMessage(event));
       vscode.window.showErrorMessage("Andromity daemon is not connected.");
@@ -591,6 +604,7 @@ export class SessionTabPanel {
 
     if (await handleInputMessage(this._rpcClient, message, this._sessionId, (event) => this._postMessage(event), this._currentMode)) return;
     if (await handleInteractionMessage(this._rpcClient, message, this._sessionId, (event) => this._postMessage(event))) return;
+    if (await handlePromptImageMessage(this._rpcClient, message, this._sessionId, (event) => this._postMessage(event))) return;
 
     switch (message.type) {
       case "get_context_breakdown": {
@@ -617,6 +631,10 @@ export class SessionTabPanel {
         try {
           if (!message.provider) throw new Error("Missing provider");
           if (message.apiKey) await this._rpcClient.call("config.set_api_key", { provider: message.provider, api_key: message.apiKey });
+          const keyCheck = message.apiKey && message.provider !== "ollama" && typeof message.provider === "string" && PROVIDER_ID_PATTERN.test(message.provider)
+            && await supportsKeyTests(this._rpcClient)
+            ? await runKeyCheck(this._rpcClient, message.provider)
+            : null;
           const models = await this._rpcClient.call<ModelInfo[]>("config.refresh_models", { provider: message.provider }, 6000)
             .catch(() => this._rpcClient!.call<ModelInfo[]>("config.list_models", { provider: message.provider }));
           if (!models.length) {
@@ -624,7 +642,7 @@ export class SessionTabPanel {
             break;
           }
           this._postMessage({ type: "key_configured_select_model", provider: message.provider, models,
-            defaultModel: message.modelId || models[0].id });
+            defaultModel: message.modelId || models[0].id, unverified: unverifiedNotice(keyCheck) || undefined });
         } catch {
           this._postMessage({ type: "key_configure_failed", error: "Could not configure this provider. Check the connection in Settings." });
         }
@@ -633,6 +651,12 @@ export class SessionTabPanel {
       case "activate_andromity_free": {
         await this._handleMessage({ type: "update_config", key: "model", value: "auto", provider: "andromity" });
         this._postMessage({ type: "key_configured_success", provider: "andromity", model: "auto" });
+        break;
+      }
+      case "refresh_provider_models": {
+        const provider = typeof message.provider === "string" ? message.provider : "";
+        if (!PROVIDER_ID_PATTERN.test(provider)) break;
+        this._postMessage({ type: "provider_models_refreshed", ...(await refreshProviderModels(this._rpcClient, provider)) });
         break;
       }
       case "start_ollama_server": {
@@ -951,6 +975,7 @@ export class SessionTabPanel {
             turnsUndone: message.turnsToUndo || 1,
             targetTurnIndex: message.turnIndex,
             resendPrompt,
+            undonePrompt: undonePromptOf(undone),
           });
         }
         break;
@@ -1039,6 +1064,13 @@ export class SessionTabPanel {
 
       case "logout_account": {
         await this._viewProvider.logout();
+        break;
+      }
+
+      case "sign_out_and_retry": {
+        recordFeatureUse("sign_out_and_retry", { sessionId: this._sessionId });
+        await this._viewProvider.logout();
+        await this._handleMessage({ ...message, type: "retry_turn" });
         break;
       }
 

@@ -1,6 +1,7 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { RpcClient } from "../server/RpcClient.js";
+import { SessionUndoResult } from "../server/types.js";
 import { ChangesReviewPanel } from "../panels/ChangesReviewPanel.js";
 
 export const HEAD_SCHEME = "andromity-head";
@@ -195,10 +196,11 @@ export class DiffManager {
     }
   }
 
-  public async undoLastTurn(sessionId: string, turnIndex?: number, turnsToUndo?: number): Promise<boolean> {
+  /** Undoes turns after the user confirms; resolves to the engine's result on success, otherwise undefined. */
+  public async undoLastTurn(sessionId: string, turnIndex?: number, turnsToUndo?: number): Promise<SessionUndoResult | undefined> {
     if (vscode.workspace.textDocuments?.some(document => document.isDirty)) {
       vscode.window.showWarningMessage("Save or close unsaved editors before undoing file changes.");
-      return false;
+      return undefined;
     }
     const numTurns = turnsToUndo && turnsToUndo > 1 ? turnsToUndo : 1;
     const promptText = numTurns > 1
@@ -210,18 +212,11 @@ export class DiffManager {
       "Yes, Rollback"
     );
 
-    if (confirm !== "Yes, Rollback") return false;
+    if (confirm !== "Yes, Rollback") return undefined;
 
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     try {
-      const res = await this._rpcClient.call<{
-        success: boolean;
-        popped_messages: number;
-        turns_undone?: number;
-        target_turn_index?: number;
-        git_status: string;
-        error?: string;
-      }>(
+      const res = await this._rpcClient.call<SessionUndoResult>(
         "session.undo",
         {
           session_id: sessionId,
@@ -242,13 +237,13 @@ export class DiffManager {
         vscode.window.showInformationMessage(
           `${countMsg} successfully. (${res.popped_messages} messages removed. ${res.git_status})`
         );
-        return true;
+        return res;
       }
       vscode.window.showWarningMessage(res.error || "Undo could not complete. Review your file changes and try again.");
-      return false;
+      return undefined;
     } catch (e: any) {
       vscode.window.showErrorMessage("Undo could not complete. Check workspace trust and the daemon connection.");
-      return false;
+      return undefined;
     }
   }
 }

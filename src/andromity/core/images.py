@@ -5,11 +5,16 @@ before it is installed — the paste action simply degrades with a friendly
 notification instead of crashing at import time.
 """
 import base64
+import binascii
+import hashlib
 import io
 import os
+import re
 import shutil
 import subprocess
-from typing import Any, Optional
+import tempfile
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 # Product limit: how many images one message may carry.
 MAX_IMAGES = 5
@@ -19,6 +24,16 @@ MAX_DIMENSION = 2048
 JPEG_QUALITY = 88
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff", ".ico"}
+
+# The full bytes of a pasted image are kept in "<session storage>/images" under this name, whatever their format.
+STORED_IMAGE_NAME = re.compile(r"[0-9a-f]{16}\.jpg")
+MAX_STORED_IMAGE_BYTES = 8 * 1024 * 1024
+_MAX_BASE64_CHARS = (MAX_STORED_IMAGE_BYTES + 2) // 3 * 4
+_MAX_OPEN_PIXELS = (2 * MAX_DIMENSION) ** 2
+# Total size of the images one restored prompt carries at full size; the rest come back as thumbnails.
+MAX_RESTORED_URI_CHARS = 16 * 1024 * 1024
+# A thumbnail this small comes back even when the budget is spent; a larger one must fit what is left.
+_MAX_THUMBNAIL_URI_CHARS = 256 * 1024
 
 
 def load_image_file(path) -> "object":
@@ -148,29 +163,24 @@ def image_label(image, index: int) -> str:
         return f"🖼 Image {index}"
 
 
-def save_and_thumbnail_image(image_data: str, storage_dir: Optional[Any] = None, thumb_dimension: int = 360) -> str:
-    """Save full image binary to disk and return a compact thumbnail data URI (~10-15KB)
-    for session history and UI carousel rendering, preventing SQLite and JSON storage bloat.
+def store_prompt_image(image_data: str, storage_dir: Optional[Any] = None,
+                       thumb_dimension: int = 360) -> Tuple[str, Optional[str]]:
+    """Keep a pasted image's full bytes in the session's image store and return a compact thumbnail data URI
+    (~10-15KB) for the chat history, with the stored file's name (None when it was not stored).
     """
     from PIL import Image
-    import hashlib
 
     if not isinstance(image_data, str) or not image_data.startswith("data:"):
-        return image_data
-
+        return image_data, None
     try:
-        header, b64 = image_data.split(",", 1)
-        raw_bytes = base64.b64decode(b64)
+        raw_bytes = base64.b64decode("".join(image_data.split(",", 1)[1].split()), validate=True)
+    except (IndexError, binascii.Error, ValueError):
+        return image_data, None
+    if not raw_bytes:
+        return image_data, None
 
-        if storage_dir:
-            from pathlib import Path
-            img_dir = Path(storage_dir) / "images"
-            img_dir.mkdir(parents=True, exist_ok=True)
-            img_hash = hashlib.sha256(raw_bytes).hexdigest()[:16]
-            file_path = img_dir / f"{img_hash}.jpg"
-            if not file_path.exists():
-                file_path.write_bytes(raw_bytes)
-
+    name = _store_image_bytes(raw_bytes, storage_dir) if storage_dir and image_mime(raw_bytes) else None
+    try:
         with Image.open(io.BytesIO(raw_bytes)) as img:
             w, height = img.size
             if max(w, height) > thumb_dimension:
@@ -181,6 +191,117 @@ def save_and_thumbnail_image(image_data: str, storage_dir: Optional[Any] = None,
             thumb_buf = io.BytesIO()
             img.save(thumb_buf, format="JPEG", quality=72, optimize=True)
             thumb_b64 = base64.b64encode(thumb_buf.getvalue()).decode("ascii")
-            return f"data:image/jpeg;base64,{thumb_b64}"
+            return f"data:image/jpeg;base64,{thumb_b64}", name
     except Exception:
-        return image_data
+        return image_data, name
+
+
+def _store_image_bytes(raw_bytes: bytes, storage_dir: Any) -> Optional[str]:
+    """Write the bytes to the image store under their content hash, whole or not at all."""
+    name = f"{hashlib.sha256(raw_bytes).hexdigest()[:16]}.jpg"
+    try:
+        img_dir = Path(storage_dir) / "images"
+        img_dir.mkdir(parents=True, exist_ok=True)
+        target = img_dir / name
+        if target.is_file() and target.stat().st_size == len(raw_bytes):
+            return name
+        fd, temp_path = tempfile.mkstemp(dir=img_dir, prefix=".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(raw_bytes)
+            os.replace(temp_path, target)
+        except BaseException:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            raise
+        return name
+    except OSError:
+        return None
+
+
+def image_mime(data: bytes) -> Optional[str]:
+    """The image type the bytes themselves show, among those chat clients and model providers accept."""
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def stored_image_uri(storage_dir: Optional[Any], name: Any) -> Optional[str]:
+    """A full-size image from a session's image store as a data URI, or None unless `name` has the store's form,
+    resolves inside the store, and is an image of at most MAX_STORED_IMAGE_BYTES."""
+    if not storage_dir or not isinstance(name, str) or not STORED_IMAGE_NAME.fullmatch(name):
+        return None
+    try:
+        root = (Path(storage_dir) / "images").resolve()
+        path = (root / name).resolve(strict=True)
+        if path.parent != root or not path.is_file():
+            return None
+        with open(path, "rb") as handle:
+            data = handle.read(MAX_STORED_IMAGE_BYTES + 1)
+    except (OSError, RuntimeError):
+        return None
+    mime = image_mime(data) if len(data) <= MAX_STORED_IMAGE_BYTES else None
+    return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}" if mime else None
+
+
+def checked_image_uri(uri: Any) -> Optional[str]:
+    """`uri` retyped by its bytes when it is a base64 data URI of an image of at most MAX_STORED_IMAGE_BYTES."""
+    if not isinstance(uri, str) or not uri.startswith("data:image/"):
+        return None
+    header, _, payload = uri.partition(",")
+    if not header.endswith(";base64") or not payload or len(payload) > _MAX_BASE64_CHARS:
+        return None
+    try:
+        data = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    mime = image_mime(data) if len(data) <= MAX_STORED_IMAGE_BYTES else None
+    return f"data:{mime};base64,{payload}" if mime else None
+
+
+def prompt_images(message: Dict[str, Any], storage_dir: Optional[Any]) -> List[str]:
+    """A sent prompt's images as data URIs, at most MAX_IMAGES: each full-size file the prompt refers to while it is
+    still in the session's image store and fits within MAX_RESTORED_URI_CHARS in all, otherwise the thumbnail kept
+    with the prompt."""
+    thumbs = message.get("images")
+    files = message.get("image_files")
+    thumbs = thumbs if isinstance(thumbs, list) else []
+    files = files if isinstance(files, list) else []
+    found = []
+    budget = MAX_RESTORED_URI_CHARS
+    for index in range(min(max(len(thumbs), len(files)), MAX_IMAGES)):
+        full = stored_image_uri(storage_dir, files[index] if index < len(files) else None)
+        uri = full if full and len(full) <= budget else None
+        if uri is None:
+            thumb = checked_image_uri(thumbs[index] if index < len(thumbs) else None)
+            uri = thumb if thumb and len(thumb) <= max(budget, _MAX_THUMBNAIL_URI_CHARS) else None
+        if uri:
+            found.append(uri)
+            budget = max(0, budget - len(uri))
+    return found
+
+
+def image_from_data_uri(uri: str) -> Optional["object"]:
+    """A detached Pillow image from an image data URI, or None when it isn't a valid one or is too large to open."""
+    from PIL import Image
+
+    checked = checked_image_uri(uri)
+    if not checked:
+        return None
+    try:
+        with Image.open(io.BytesIO(base64.b64decode(checked.split(",", 1)[1]))) as img:
+            width, height = img.size
+            if width * height > _MAX_OPEN_PIXELS:
+                return None
+            img.load()
+            return img.copy()
+    except Exception:
+        return None

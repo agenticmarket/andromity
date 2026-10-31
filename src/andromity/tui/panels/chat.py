@@ -5,7 +5,9 @@ from textual.message import Message
 from textual.widgets import Static, Markdown, Collapsible, Button
 
 from andromity.config import config
+from andromity.core.session import skipped_image_count
 from andromity.tui.markup_utils import safe_markup, safe_update, escape_textual as escape
+import html
 import json
 import re
 import time
@@ -13,6 +15,18 @@ from typing import Any
 
 
 _ASSISTANT_HEADER = "[bold $success]■ Andromity:[/bold $success]"
+
+
+def images_skipped_notice(count: int) -> str:
+    """Markup for images left out of a message because the model can't read them."""
+    if count > 1:
+        text = ("This model can't read images, so your images weren't sent. "
+                "Switch to a model that supports images to include them.")
+    else:
+        text = ("This model can't read images, so your image wasn't sent. "
+                "Switch to a model that supports images to include it.")
+    return f"[$warning]ℹ[/] {escape(text)} [dim]Press Ctrl+L or type /model to switch.[/dim]"
+
 
 class ChatMessage(Widget):
     DEFAULT_CSS = """\
@@ -44,12 +58,12 @@ ChatMessage.session-handoff { border-left: solid $warning; margin: 1 0; padding:
         desc_m = re.search(r'class="error-card-body">(.*?)</div>', content, re.DOTALL)
         timer_m = re.search(r'Quota resets in [^<]+', content)
 
-        badge = badge_m.group(1).strip() if badge_m else "ERROR"
-        title = title_m.group(1).strip() if title_m else "Turn Interrupted"
+        badge = html.unescape(badge_m.group(1).strip()) if badge_m else "ERROR"
+        title = html.unescape(title_m.group(1).strip()) if title_m else "Turn Interrupted"
 
         raw_desc = desc_m.group(1).strip() if desc_m else ""
         clean_desc = re.sub(r'<[^>]+>', ' ', raw_desc)
-        clean_desc = re.sub(r'\s+', ' ', clean_desc).strip()
+        clean_desc = html.unescape(re.sub(r'\s+', ' ', clean_desc).strip())
         if "Quota resets in" in clean_desc:
             clean_desc = clean_desc.split("Quota resets in")[0].strip()
 
@@ -60,6 +74,8 @@ ChatMessage.session-handoff { border-left: solid $warning; margin: 1 0; padding:
             actions.append("Press Ctrl+E to open Settings and add a BYOK key")
         if "open-account-login" in content:
             actions.append("Sign in with AgenticMarket from the Andromity VS Code extension")
+        if "use-without-sign-in" in content:
+            actions.append("Or sign out in the VS Code extension to keep using Andromity without an account")
         if "switch-model-flyout" in content:
             actions.append("Press Ctrl+L to switch model")
         if "retry-turn" in content:
@@ -865,6 +881,46 @@ NextStepCard #next-step-dismiss:hover { color: $text !important; }
         self.post_message(self.Chosen(action))
 
 
+class PromptBackCard(Horizontal):
+    """After an undo that kept the user's draft: puts the undone prompt and its images in the input instead."""
+    DEFAULT_CSS = """\
+PromptBackCard { height: auto; margin: 1 0 0 0; padding: 0 1; border: round $panel-lighten-2; align: left middle; }
+PromptBackCard > Static { width: 1fr; color: $text-muted; }
+PromptBackCard Button {
+    height: 1 !important; width: auto !important; min-width: 0 !important;
+    border: none !important; padding: 0 1 !important; margin: 0 0 0 1 !important;
+    background: $primary !important; color: $text !important; text-style: bold;
+}
+PromptBackCard #prompt-back-dismiss { background: transparent !important; color: $text-muted !important; text-style: none; }
+PromptBackCard #prompt-back-dismiss:hover { color: $text !important; }
+"""
+
+    class Chosen(Message):
+        def __init__(self, text: str, images: list):
+            super().__init__()
+            self.text = text
+            self.images = images
+
+    def __init__(self, text: str, images: list, **kwargs):
+        super().__init__(**kwargs)
+        self._text = text
+        self._images = images
+
+    def compose(self) -> ComposeResult:
+        count = len(self._images)
+        extra = f" and its {count} image{'' if count == 1 else 's'}" if count else ""
+        yield Static(f"Your draft was kept. The undone prompt{extra} can replace it.")
+        yield Button("Put the prompt back", id="prompt-back")
+        yield Button("✕", id="prompt-back-dismiss", tooltip="Dismiss")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "prompt-back":
+            self.post_message(self.Chosen(self._text, self._images))
+        else:
+            self.remove()
+
+
 class ChatPanel(VerticalScroll):
     DEFAULT_CSS = """\
 ChatPanel { width: 1fr; height: 1fr; overflow-y: auto; background: $surface; }
@@ -934,6 +990,7 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
         self._thinking = None
         self._tool_seq = None
         self._header_shown = False
+        self._turn_header: Static | None = None
         self._unloaded_history = []
         # True when the user has manually scrolled up to read history.
         # While True, new tool calls and system messages won't hijack scroll.
@@ -956,6 +1013,7 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
 
     def add_user_message(self, text: str, image_count: int = 0):
         self._header_shown = False
+        self._turn_header = None
         self._tool_seq = None
         from andromity.core.session_context import without_session_context
         text = without_session_context(text)
@@ -1005,6 +1063,16 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
         for card in self.query(NextStepCard):
             card.remove()
 
+    def offer_prompt_back(self, text: str, images: list) -> None:
+        self.clear_prompt_back()
+        self.mount(PromptBackCard(text, images))
+        if not self._user_scrolled_up:
+            self.scroll_end()
+
+    def clear_prompt_back(self) -> None:
+        for card in self.query(PromptBackCard):
+            card.remove()
+
     def _add_collab_card(self, role: str, heading: str, content: str) -> None:
         self._append_widget(ChatMessage(role, content=content, heading=heading))
         self._prune_dom()
@@ -1040,6 +1108,7 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
             return
         self._header_shown = True
         header = Static(_ASSISTANT_HEADER, classes="assistant-header")
+        self._turn_header = header
         try:
             if before is not None:
                 self.mount(header, before=before)
@@ -1234,6 +1303,26 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
             self._thinking = None
         self._finish_tool_sequence()
         self._header_shown = False
+        self._turn_header = None
+
+    def add_reply_notice(self, text: str) -> None:
+        """Show a notice about the user's message above the reply to it."""
+        notice = ChatMessage("system-markup", text)
+        header = self._turn_header
+        if header is not None and header.parent is self:
+            self.mount(notice, before=header)
+        else:
+            self.mount(notice)
+        self._prune_dom()
+        if not self._user_scrolled_up:
+            self.scroll_end()
+
+    def add_inline_notice(self, text: str) -> None:
+        """Show a notice where the reply has got to; whatever follows goes below it."""
+        self.stop_thinking_message()
+        self._finish_streaming_block(show_footer=False)
+        self._finish_tool_sequence()
+        self.add_system_message(text)
 
     def _finish_tool_sequence(self):
         """Freeze the current turn's tool summary once the turn ends."""
@@ -1343,6 +1432,7 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
         self._thinking = None
         self._tool_seq = None
         self._header_shown = False
+        self._turn_header = None
         await self.remove_children()
 
     async def load_history(self, messages: list, compacted_history: list | None = None):
@@ -1364,6 +1454,7 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
         self._thinking = None
         self._tool_seq = None
         self._header_shown = False
+        self._turn_header = None
         await self.remove_children()
 
         # Build full visual timeline: compacted old messages + current messages.
@@ -1404,6 +1495,8 @@ ChatPanel MarkdownBlock > .code_inline { color: $accent; }
                 _flush_seq()
                 turn_header_shown = False  # reset for the next assistant turn
                 widgets.append(ChatMessage("user", content))
+                if skipped := skipped_image_count(msg):
+                    widgets.append(ChatMessage("system-markup", images_skipped_notice(skipped)))
             elif role == "assistant":
                 thinking_text = msg.get("thinking") or ""
                 if thinking_text.strip():

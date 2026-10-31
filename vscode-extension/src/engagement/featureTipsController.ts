@@ -37,11 +37,12 @@ export class FeatureTipsController implements vscode.Disposable {
   async onTurnFinished(facts: TurnFacts): Promise<FeatureTipId | null> {
     const today = localDay(new Date());
     const result: { tip: FeatureTipId | null } = { tip: null };
-    await this._update((state) => {
+    const saved = await this._update((state) => {
       const next = recordTurn(state, facts.sessionId, today);
       result.tip = this.enabled() ? pickTip(next, facts, today) : null;
       return result.tip ? markTipShown(next, result.tip, today) : next;
     });
+    if (!saved) return null;
     if (result.tip) recordFeatureUse(`tip_shown_${result.tip}`, { sessionId: facts.sessionId });
     return result.tip;
   }
@@ -65,11 +66,20 @@ export class FeatureTipsController implements vscode.Disposable {
     this._unsubscribe();
   }
 
-  private _update(change: (state: FeatureTipsState) => FeatureTipsState): Promise<void> {
-    this._writes = this._writes.then(async () => {
-      const next = change(normalizeFeatureTipsState(this._memento.get(STATE_KEY)));
-      await this._memento.update(STATE_KEY, next);
-    }).catch(() => {});
-    return this._writes;
+  private _update(change: (state: FeatureTipsState) => FeatureTipsState): Promise<boolean> {
+    const write = this._writes.then(async () => {
+      const previous = this._memento.get(STATE_KEY);
+      const next = change(normalizeFeatureTipsState(previous));
+      try {
+        await this._memento.update(STATE_KEY, next);
+        return true;
+      } catch {
+        // Memento.update changes the in-memory value before the disk write, so a failed write must be rolled back.
+        await Promise.resolve(this._memento.update(STATE_KEY, previous)).catch(() => {});
+        return false;
+      }
+    }).catch(() => false);
+    this._writes = write.then(() => undefined);
+    return write;
   }
 }

@@ -1309,7 +1309,7 @@ describe("Webview Client Scripts & Regex Escaping Unit Tests", () => {
       const diffMgr = new DiffManager(mockRpcClient, { subscriptions: [] } as any);
       const result = await diffMgr.undoLastTurn("sess-target", 2, 2);
 
-      assert.strictEqual(result, true, "undoLastTurn must return true on success");
+      assert.strictEqual(result?.success, true, "undoLastTurn must return the undo result on success");
       assert.strictEqual(calledMethod, "session.undo");
       assert.strictEqual(calledParams.session_id, "sess-target");
       assert.strictEqual(calledParams.turn_index, 2);

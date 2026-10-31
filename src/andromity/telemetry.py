@@ -101,6 +101,17 @@ _KEY_PATTERNS = re.compile(
 _UUID_OR_SESS_PATTERN = re.compile(
     r"^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|sess-[a-zA-Z0-9_\-]+)$"
 )
+_SECRETS_IN_TEXT = re.compile(
+    _KEY_PATTERNS.pattern
+    + r"|andromity_[0-9a-fA-F]{32,}"
+    + r"|(?i:bearer)\s+[A-Za-z0-9._~+/=\-]{8,}"
+    + r"|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"
+)
+
+
+def redact_secrets(text: str, marker: str = "[redacted]") -> str:
+    """The text with API keys, sign-in tokens and bearer credentials replaced by a marker."""
+    return _SECRETS_IN_TEXT.sub(marker, text or "")
 
 
 def _scrub_api_key(value: str) -> str:

@@ -147,13 +147,11 @@ describe("Feature tips controller", () => {
     inGitRepo: true, scheduled: false, localModel: false, airGapOn: false, mcpServers: -1,
   });
 
-  it("starts tipping in the third session and remembers what it showed", async () => {
+  it("shows the early tip from the first session and remembers what it showed", async () => {
     tipsEnabled = true;
     const tips = new FeatureTipsController(memento());
-    assert.equal(await tips.onTurnFinished(facts("a")), null);
-    assert.equal(await tips.onTurnFinished(facts("b")), null);
-    assert.equal(await tips.onTurnFinished(facts("c")), "fingerprint");
-    assert.equal(await tips.onTurnFinished(facts("c")), null, "one tip a day");
+    assert.equal(await tips.onTurnFinished(facts("a")), "fingerprint");
+    assert.equal(await tips.onTurnFinished(facts("b")), null, "one tip a day");
     tips.dispose();
   });
 

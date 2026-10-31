@@ -37,6 +37,10 @@ Now and then, after a reply that went well, the chat asks **How's Andromity work
 
 Notes and check-ins are sent whether or not telemetry is on, because you send each one yourself. Air-gap mode turns the feedback box and the check-in off. To delete a note you sent, email hello@agenticmarket.dev with the subject line `Feedback deletion` and roughly what it said and when.
 
+## Joining the waitlist
+
+When the Andromity gateway's daily-limit error offers it, VS Code shows **Need more? Join the waitlist** on that error card. After that first offer, the Andromity provider card in onboarding and in Settings shows it too. It opens a short form in the chat, and nothing is sent until you press **Join the waitlist**. It sends the options you picked for what you would want and where you heard about Andromity, the optional notes you write, and the client, OS family and Andromity version. The worker also stores the country Cloudflare reports for the connection, and the UTC day you joined, not the time. No email address is asked for; an entry is not linked to your telemetry ID, and the worker does not store your IP address. Anything that looks like an API key or an email address is removed from the notes before they are stored. Usage telemetry records only that the offer was shown, never whether you opened the form or joined, and never your answers. Like a note, an entry is sent whether or not telemetry is on, because you send it yourself. Air-gap mode turns the waitlist off.
+
 ## What is never collected
 
 - Prompts, responses, code, file contents, file names or paths

@@ -15,10 +15,12 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Set
 
 from andromity import __version__
-from andromity.core.session_context import background_context as _background_context, message_text as _message_text, shorten as _shorten
+from andromity.core.images import STORED_IMAGE_NAME, prompt_images, stored_image_uri
+from andromity.core.session_context import background_context as _background_context, message_text as _message_text, \
+    prompt_as_written, shorten as _shorten
 from andromity.core.tools import collab_action
 from andromity.config import config, get_config_dir
-from andromity.core.agent import Agent
+from andromity.core.agent import Agent, note_images_skipped, only_unreadable_images
 
 READ_ONLY_TOOLS = {
     # Core read-only filesystem & search inspection
@@ -41,6 +43,7 @@ CRON_SEED_PRESET_NAMES = {"Run Tests & Verify Build", "Daily Code Health & TODO 
 CRON_RUN_BUSY_MESSAGE = "This scheduled run is still in progress. You can continue the chat when it finishes."
 from andromity.core.events import (
     Done,
+    ImagesSkipped,
     InputApplied,
     HandoffWritten,
     LLMCallEnd,
@@ -78,7 +81,7 @@ from andromity.core.models import (
     fetch_live_models_sync,
     get_cached_live_models,
 )
-from andromity.core.session import Session
+from andromity.core.session import Session, is_compaction_summary
 from andromity.server.runtime import SessionRuntime
 from andromity.server.protocol import (
     AGENT_BUSY,
@@ -92,6 +95,44 @@ from andromity.server.protocol import (
 )
 
 log = logging.getLogger("andromity.server")
+
+MODEL_REFRESH_FAILURES = {
+    "no_key": "No API key set.",
+    "auth_error": "Key rejected.",
+    "rate_limit": "Rate limited. Try again shortly.",
+    "timeout": "Couldn't reach provider.",
+    "offline": "Couldn't reach provider.",
+    "provider_unavailable": "The provider is unavailable. Try again later.",
+    "not_found": "This endpoint has no model list.",
+    "airgap": "Blocked by air-gap mode.",
+    "bad_response": "The provider sent an unexpected response.",
+    "empty": "The provider returned no models.",
+    "unsupported": "This provider doesn't publish a model list.",
+}
+
+
+def _undo_limit_error(available: int, summarized: bool) -> str:
+    """Why undo can't reach back as far as asked."""
+    turns = f"{available} turn{'' if available == 1 else 's'}"
+    if summarized:
+        reach = f"Only the last {turns} can be undone. " if available else ""
+        return reach + ("Earlier turns were summarized when the conversation was compacted, so they can't be "
+                        "undone from here.")
+    return f"There {'is' if available == 1 else 'are'} only {turns} to undo."
+
+
+def _undone_prompt(message: Dict[str, Any], storage_dir: Any) -> Dict[str, Any]:
+    """The prompt an undo removed, for putting it back in the input: its text and its images as data URIs."""
+    content = message.get("content")
+    if isinstance(content, list):
+        content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
+    return {"text": prompt_as_written(str(content or "")), "images": prompt_images(message, storage_dir)}
+
+
+def _refers_to_image(session: Session, name: str) -> bool:
+    messages = [*session.messages, *(getattr(session, "compacted_history", None) or [])]
+    return any(isinstance(m, dict) and isinstance(m.get("image_files"), list) and name in m["image_files"]
+               for m in messages)
 
 
 class JsonRpcHandler:
@@ -118,6 +159,7 @@ class JsonRpcHandler:
         self._mcp_manager: Optional[Any] = None
         self._mcp_started: bool = False
         self._user_killed_processes: Set[str | tuple[str, str]] = set()
+        self._model_refreshes: Dict[tuple[str, str], "asyncio.Future[Dict[str, Any]]"] = {}
         try:
             self._loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
         except RuntimeError:
@@ -1018,9 +1060,14 @@ class JsonRpcHandler:
             return {"success": False, "error": f"Session {session_id} is currently running an active turn. Cancel or wait for it to finish."}
         session = self._get_or_load_session(session_id, params.get("project_path"))
 
-        user_turn_indices = session.get_user_turn_indices()
-        total_turns = len(user_turn_indices)
-        if total_turns == 0:
+        # Turns are counted from where they start in the conversation as it is now, so a compacted history
+        # can't shift which turn is meant; the chat counts the same way, from the newest prompt back.
+        starts = session.turn_starts()
+        total_turns = len(starts)
+        summarized = (any(is_compaction_summary(message) for message in session.messages)
+                      or any(isinstance(record, dict) and record.get("compacted")
+                             for record in getattr(session, "undo_stack", None) or []))
+        if total_turns == 0 and not summarized:
             return {
                 "success": True,
                 "turns_undone": 0,
@@ -1033,21 +1080,21 @@ class JsonRpcHandler:
         if target_turn is None:
             target_turn = params.get("target_turn_index")
 
-        if target_turn is not None:
-            target_turn_idx = max(0, min(int(target_turn), total_turns - 1))
-            turns_to_undo = total_turns - target_turn_idx
-        elif "turns_to_undo" in params:
-            turns_to_undo = max(1, min(int(params["turns_to_undo"]), total_turns))
-            target_turn_idx = total_turns - turns_to_undo
+        if params.get("turns_to_undo") is not None:
+            turns_to_undo = max(1, int(params["turns_to_undo"]))
+        elif target_turn is not None and total_turns:
+            turns_to_undo = total_turns - max(0, min(int(target_turn), total_turns - 1))
         else:
             turns_to_undo = 1
-            target_turn_idx = total_turns - 1
+        if turns_to_undo > total_turns:
+            return {"success": False, "error": _undo_limit_error(total_turns, summarized)}
+        target_turn_idx = total_turns - turns_to_undo
+        cutoff = starts[target_turn_idx]
 
         if not config.is_trusted(session.project_path):
             return {"success": False, "error": "Trust this workspace before undoing file changes."}
         self._review_repo({"project_path": session.project_path}, mutate=True)
-        records = [record for record in getattr(session, "undo_stack", [])
-                   if record.get("turn_index", -1) >= target_turn_idx]
+        records = session.turn_records_from(cutoff)
         repo = get_repo(Path(session.project_path))
         rollback_msg = "Conversation restored; no file checkpoint available."
         if records:
@@ -1067,7 +1114,13 @@ class JsonRpcHandler:
             if not ok:
                 return {"success": False, "error": "Files changed after this turn or its checkpoint is incomplete. Review the changes before undoing; your conversation is preserved."}
             rollback_msg = "Restored snapshot " + records[0]["snapshot_hash"][:7]
+        prompt = session.messages[cutoff] if cutoff < len(session.messages) else {}
         turns_undone, popped, _ = session.rollback_to_turn(target_turn_idx)
+        try:
+            undone_prompt = await asyncio.to_thread(_undone_prompt, prompt, getattr(session, "storage_dir", None))
+        except Exception:
+            log.exception("The undone prompt could not be read back")
+            undone_prompt = None
 
         return {
             "success": True,
@@ -1075,7 +1128,23 @@ class JsonRpcHandler:
             "target_turn_index": target_turn_idx,
             "popped_messages": popped,
             "git_status": rollback_msg,
+            "undone_prompt": undone_prompt,
         }
+
+    async def rpc_session_image(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """The full-size copy of an image sent with a prompt in this session, for viewing it."""
+        name = params.get("name")
+        session_id = params.get("session_id")
+        unavailable = {"success": False, "error": "The full-size image is no longer available."}
+        if not isinstance(name, str) or not STORED_IMAGE_NAME.fullmatch(name) or not isinstance(session_id, str):
+            return unavailable
+        session = self._active_sessions.get(session_id) or self._cron_live_sessions.get(session_id)
+        if session is None:
+            session = await asyncio.to_thread(Session.load_by_id, session_id, params.get("project_path"))
+        if session is None or not _refers_to_image(session, name):
+            return unavailable
+        uri = await asyncio.to_thread(stored_image_uri, getattr(session, "storage_dir", None), name)
+        return {"success": True, "uri": uri} if uri else unavailable
 
     async def rpc_session_sendMessage(self, params: Dict[str, Any]) -> Dict[str, Any]:
         from andromity.core.session_bus import SessionBus
@@ -1265,6 +1334,26 @@ class JsonRpcHandler:
             "title": run.get("title", ""), "status": status, "summary": summary,
         })
 
+    def _skip_unsent_prompt(self, session: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+        """A message of only images the model can't read: say so and end, with no agent, checkpoint or turn."""
+        image_uris = params.get("image_uris") or []
+        count = len(image_uris or params.get("images") or [])
+        input_id = params.get("input_id")
+        self.notify("agent/started", {
+            "session_id": session.id, "prompt": params.get("prompt", ""), "input_id": input_id,
+            "turn_index": len(session.get_user_turn_indices()), "image_uris": image_uris,
+        })
+        note_images_skipped(session.id)
+        self.notify("agent/imagesSkipped", {
+            "session_id": session.id, "count": count, "prompt_added": False, "steering": False, "input_id": input_id,
+        })
+        self.notify("agent/done", {
+            "session_id": session.id, "usage": None, "outcome": "success",
+            "token_total": getattr(session, "token_total", 0), "context_tokens": getattr(session, "context_tokens", 0),
+            "cost_usd": getattr(session, "cost_usd", 0.0), "turn_files": [],
+        })
+        return {"status": "skipped", "session_id": session.id}
+
     @staticmethod
     def _with_background_results(session: Any, prompt: str) -> str:
         """Let the parent agent know what its background sessions finished since its last turn."""
@@ -1354,22 +1443,24 @@ class JsonRpcHandler:
             return self._inputs(sid).snapshot()
 
     async def _start_pending(self, sid: str) -> None:
-        task = self._running_tasks.get(sid)
-        if task and not task.done():
-            return
+        # A message that starts no turn (only images the model can't read) lets the next one go at once.
         queue = self._inputs(sid)
-        item = queue.peek()
-        if item is None:
-            return
-        payload = {**item.payload, "input_id": item.id}
-        try:
-            await self.rpc_agent_prompt(payload)
-            queue.applied(item)
-            from andromity.telemetry import send_feature_used
-            send_feature_used("queue_dispatched", session_id=sid)
-        except Exception:
-            queue.pause()
-            raise
+        while True:
+            task = self._running_tasks.get(sid)
+            if task and not task.done():
+                return
+            item = queue.peek()
+            if item is None:
+                return
+            payload = {**item.payload, "input_id": item.id}
+            try:
+                await self.rpc_agent_prompt(payload)
+                queue.applied(item)
+                from andromity.telemetry import send_feature_used
+                send_feature_used("queue_dispatched", session_id=sid)
+            except Exception:
+                queue.pause()
+                raise
 
     async def _finish_pending(self, sid: str, task: asyncio.Task) -> None:
         async with self._input_locks.setdefault(sid, asyncio.Lock()):
@@ -1397,7 +1488,7 @@ class JsonRpcHandler:
             if params.get("strip_images"):
                 payload.pop("images", None)
                 payload["image_uris"] = []
-                if not str(payload.get("prompt", "")).strip():
+                if payload.get("image_only") or not str(payload.get("prompt", "")).strip():
                     raise ValueError("This message only contains an image. Add a text prompt before retrying.")
             for key in ("model", "provider", "reasoning_effort"):
                 if params.get(key):
@@ -1621,6 +1712,11 @@ class JsonRpcHandler:
         prompt_repo = get_repo(Path(session.project_path))
         if prompt_repo and str(Path(prompt_repo.working_tree_dir).resolve()) in self._git_mutating_roots:
             raise ValueError("Wait for file restoration to finish before starting another turn.")
+        model = params.get("model") or config.get("default", "model", "claude-sonnet-4-6")
+        provider = params.get("provider") or config.get("default", "provider", "anthropic")
+        if only_unreadable_images(prompt, params.get("image_uris") or params.get("images"),
+                                  params.get("image_only"), provider, model):
+            return self._skip_unsent_prompt(session, params)
         if prompt:
             prompt = self._with_background_results(session, prompt)
 
@@ -1635,8 +1731,6 @@ class JsonRpcHandler:
 
         profile = params.get("profile") or config.get("default", "profile", "builder")
         session.profile = profile
-        model = params.get("model") or config.get("default", "model", "claude-sonnet-4-6")
-        provider = params.get("provider") or config.get("default", "provider", "anthropic")
         reasoning_effort = params.get("reasoning_effort") or config.get("default", "reasoning_effort", "auto")
         # Respect per-session mode passed from client, falling back to server default
         mode = (params.get("mode") or config.get("default", "permission_mode", "safe")).lower()
@@ -1837,7 +1931,7 @@ class JsonRpcHandler:
                             session.undo_stack = []
                         user_turn_idx = len(session.get_user_turn_indices())
                         turn_checkpoint = {"snapshot_hash": snap_hash, "msg_count": len(session.messages),
-                                           "turn_index": user_turn_idx}
+                                           "turn_index": user_turn_idx, "anchored": True}
                         session.undo_stack.append(turn_checkpoint)
                         session.save()
                 except Exception as snap_err:
@@ -1854,12 +1948,19 @@ class JsonRpcHandler:
                     "image_uris": image_uris or [],
                 })
                 session.set_status("running")
-                async for event in agent.run(prompt, images=images, image_uris=image_uris):
+                async for event in agent.run(prompt, images=images, image_uris=image_uris,
+                                             image_only=bool(params.get("image_only"))):
                     if isinstance(event, InputApplied):
                         self.notify("agent/inputApplied", {
                             "session_id": session_id, "input_id": event.input_id,
                             "prompt": event.prompt, "image_uris": event.image_uris or [],
                             "turn_index": event.turn_index, "ts": time.time(),
+                        })
+                    elif isinstance(event, ImagesSkipped):
+                        self.notify("agent/imagesSkipped", {
+                            "session_id": session_id, "count": event.count,
+                            "prompt_added": event.prompt_added, "steering": event.steering,
+                            "input_id": event.input_id if event.steering else params.get("input_id"),
                         })
                     elif isinstance(event, Done):
                         if event.outcome != "success":
@@ -1875,6 +1976,8 @@ class JsonRpcHandler:
                             "session_id": session_id,
                             "usage": event.usage,
                             "outcome": event.outcome,
+                            "error_action": event.error_action,
+                            "error_type": event.error_type,
                             "token_total": getattr(session, "token_total", 0),
                             "context_tokens": getattr(session, "context_tokens", 0),
                             "cost_usd": getattr(session, "cost_usd", 0.0),
@@ -1961,7 +2064,7 @@ class JsonRpcHandler:
                     pass
             finally:
                 if turn_checkpoint:
-                    if len(session.get_user_turn_indices()) <= turn_checkpoint["turn_index"]:
+                    if not session.turn_was_added(turn_checkpoint):
                         session.undo_stack.remove(turn_checkpoint)
                     elif not turn_checkpoint.get("after_hash"):
                         turn_checkpoint["after_hash"] = await asyncio.to_thread(create_pre_edit_snapshot, Path(session.project_path))
@@ -2405,11 +2508,18 @@ class JsonRpcHandler:
     async def rpc_config_list_models(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         target_provider = params.get("provider") if params else None
         force_refresh = params.get("refresh", False) if params else False
+        discover = params.get("discover", True) is not False if params else True
         models = []
         try:
             from andromity.core.connections import provider_info
-            providers_to_check = [target_provider] if target_provider else [p["id"] for p in provider_info()]
+            known_providers = {p["id"]: p for p in provider_info()}
+            providers_to_check = [target_provider] if target_provider else list(known_providers)
             pinned_list = config.get_pinned_models()
+
+            def _key_flags(p_key: str) -> Dict[str, bool]:
+                info = known_providers.get(p_key)
+                has_key = bool(info["has_key"]) if info else bool(config.get_api_key(p_key))
+                return {"has_key": has_key, "needs_key": bool(info and info.get("key_required")) and not has_key}
 
             async def _discover_connection(p: str) -> None:
                 if p == "ollama":
@@ -2425,14 +2535,15 @@ class JsonRpcHandler:
                     except Exception:
                         pass
 
-            await asyncio.gather(*[_discover_connection(p) for p in providers_to_check])
+            if discover:
+                await asyncio.gather(*[_discover_connection(p) for p in providers_to_check])
 
             def _is_pinned(m_id: str, p_key: str) -> bool:
                 return any(p.get("id") == m_id and (not p.get("provider") or p.get("provider") == p_key) for p in pinned_list)
 
             # If OpenRouter not cached and not force_refresh, trigger background fetch without blocking
             openrouter_cached = get_cached_live_models("openrouter")
-            if not openrouter_cached and ("openrouter" in providers_to_check):
+            if discover and not openrouter_cached and ("openrouter" in providers_to_check):
                 try:
                     asyncio.create_task(
                         asyncio.to_thread(fetch_live_models_sync, "openrouter", api_key=config.get_api_key("openrouter"))
@@ -2456,6 +2567,7 @@ class JsonRpcHandler:
                     cached = openrouter_cached
 
                 from andromity.core.reasoning import get_model_reasoning_capability
+                flags = _key_flags(p)
                 if cached:
                     for m in cached:
                         m_id = m.get("id")
@@ -2471,6 +2583,8 @@ class JsonRpcHandler:
                             "tags": m.get("tags", []),
                             "is_pinned": _is_pinned(m_id, p),
                             "reasoning": get_model_reasoning_capability(p, m_id, m).to_dict(),
+                            "source": "live",
+                            **flags,
                         })
                 else:
                     # Fallback to catalog instantly
@@ -2490,6 +2604,8 @@ class JsonRpcHandler:
                             "tags": m.get("tags", []),
                             "is_pinned": _is_pinned(m_id, p),
                             "reasoning": get_model_reasoning_capability(p, m_id, m).to_dict(),
+                            "source": "catalog",
+                            **flags,
                         })
         except Exception as e:
             log.warning("Error listing models: %s", e)
@@ -2534,6 +2650,52 @@ class JsonRpcHandler:
             log.warning("Parallel model refresh encountered timeout or error: %s", e)
 
         return await self.rpc_config_list_models({"provider": target_provider})
+
+    async def rpc_config_refresh_provider_models(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Refresh one provider's live model list and say why, when it could not.
+
+        One refresh per provider runs at a time; a repeated request shares its result.
+        """
+        provider = str((params or {}).get("provider") or "").strip()
+        if not provider:
+            raise ValueError("provider is required")
+        # A changed key or endpoint starts a new refresh; only a hash of them is kept.
+        saved = config.get_provider_config(provider) or {}
+        fingerprint = hashlib.sha256(
+            f"{config.get_api_key(provider) or ''}\0{saved.get('base_url') or ''}".encode("utf-8")).hexdigest()[:16]
+        slot = (provider, fingerprint)
+        running = self._model_refreshes.get(slot)
+        if running is None:
+            running = asyncio.ensure_future(self._refresh_provider_models(provider))
+            self._model_refreshes[slot] = running
+            running.add_done_callback(lambda _done, key=slot: self._model_refreshes.pop(key, None))
+        return await asyncio.shield(running)
+
+    async def _refresh_provider_models(self, provider: str) -> Dict[str, Any]:
+        # The fetch and the listing that follows stay under the extension's 12 s request timeout.
+        saved = config.get_provider_config(provider) or {}
+        status: Dict[str, Any] = {}
+        fetched: List[Dict[str, Any]] = []
+        try:
+            fetched = await asyncio.wait_for(asyncio.to_thread(
+                fetch_live_models_sync, provider, api_key=config.get_api_key(provider),
+                base_url=saved.get("base_url"), status=status,
+            ), timeout=7.0)
+        except asyncio.TimeoutError:
+            status.setdefault("error", "timeout")
+        except Exception as exc:
+            log.warning("Model refresh failed: provider=%s error=%s", provider, type(exc).__name__)
+            status.setdefault("error", "error")
+        error = status.get("error") or (None if fetched else "empty")
+        models = await self.rpc_config_list_models({"provider": provider, "discover": False})
+        return {
+            "provider": provider,
+            "ok": error is None,
+            "error_type": error,
+            "message": MODEL_REFRESH_FAILURES.get(error, "Couldn't refresh models.") if error else "",
+            "source": "live" if any(m.get("source") == "live" for m in models) else "catalog",
+            "models": models,
+        }
 
     async def rpc_skills_list(self, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """List installed and discoverable skills."""
@@ -2769,10 +2931,19 @@ class JsonRpcHandler:
         config.delete_provider(params["provider"])
         return {"success": True, "providers": await self.rpc_config_list_providers()}
 
+    async def rpc_config_capabilities(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Behaviour clients can rely on; a client talking to an engine without this method assumes none."""
+        return {"key_tests": True, "provider_model_refresh": True}
+
     async def rpc_config_test_provider(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        from andromity.core.connections import connection_failure, test_connection
+        from andromity.core.connections import PRESETS, connection_failure, test_connection
+        provider = str((params or {}).get("provider") or "").strip()
+        if not provider:
+            return connection_failure("generic")
+        # Built-in providers answer within the UI's 20 s budget; custom endpoints keep their retries.
+        limit = 18 if provider in PRESETS else 30
         try:
-            return await asyncio.wait_for(test_connection(params["provider"], params.get("model", "")), 30)
+            return await asyncio.wait_for(test_connection(provider, str(params.get("model") or "")), limit)
         except asyncio.TimeoutError:
             return connection_failure("timeout")
         except Exception:
@@ -2812,8 +2983,9 @@ class JsonRpcHandler:
         is_trusted = config.is_trusted(str(project_path))
         trusted_map = config.get_root("trusted_projects", {}) or {}
         trusted_list = [
-            {"key": k, "path": v.get("path", ""), "trusted_at": v.get("trusted_at", "")}
-            for k, v in trusted_map.items()
+            {"key": k, "path": str(v.get("path", "")), "trusted_at": str(v.get("trusted_at", ""))}
+            for k, v in (trusted_map.items() if isinstance(trusted_map, dict) else [])
+            if isinstance(v, dict)
         ]
         return {
             "is_trusted": is_trusted,

@@ -1815,6 +1815,47 @@ ${STATUS_SHIMMER_STYLES}
       flex-shrink: 0;
     }
 
+    .flyout-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-family: inherit;
+      font-size: 10px;
+      font-weight: 600;
+      line-height: 1.3;
+      padding: 1px 6px;
+      border-radius: 4px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .flyout-tag.key {
+      color: #d29922;
+      background: rgba(210, 153, 34, 0.12);
+      border: 1px solid rgba(210, 153, 34, 0.35);
+    }
+
+    .flyout-tag.catalog {
+      color: var(--muted, #71717a);
+      background: transparent;
+      border: 1px solid rgba(var(--tint), 0.12);
+      cursor: pointer;
+    }
+
+    .flyout-tag.catalog:hover {
+      color: var(--fg, #e4e4e7);
+      border-color: rgba(var(--tint), 0.25);
+    }
+
+    .flyout-notice {
+      margin: 4px 6px 2px;
+      padding: 5px 8px;
+      font-size: 11px;
+      color: var(--muted, #71717a);
+      border: 1px dashed rgba(var(--tint), 0.15);
+      border-radius: 4px;
+    }
+
     .flyout-section-title {
       display: flex;
       align-items: center;
@@ -2729,6 +2770,9 @@ ${STATUS_SHIMMER_STYLES}
       padding: 0;
       background: transparent;
       border: none;
+    }
+    .onboarding-step2-badge.unverified {
+      color: #d29922;
     }
     .onboarding-step2-back {
       display: inline-flex;
@@ -5073,6 +5117,8 @@ ${STATUS_SHIMMER_STYLES}
       pointer-events: auto;
     }
 
+    .image-lightbox-overlay:focus { outline: none; }
+
     .image-lightbox-header {
       position: absolute;
       top: 16px;
@@ -5142,6 +5188,57 @@ ${STATUS_SHIMMER_STYLES}
       border-radius: 10px;
       border: 1px solid rgba(var(--tint), 0.14);
       box-shadow: 0 24px 60px rgba(0, 0, 0, 0.9), 0 4px 16px rgba(0, 0, 0, 0.5);
+    }
+
+    .image-lightbox-heading {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .image-lightbox-counter {
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      color: #d4d4d8;
+      background: rgba(20, 20, 24, 0.85);
+      padding: 5px 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(var(--tint), 0.12);
+    }
+
+    .image-lightbox-nav {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      background: rgba(20, 20, 24, 0.85);
+      border: 1px solid rgba(var(--tint), 0.18);
+      color: #f4f4f5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      z-index: 1000002;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+
+    .image-lightbox-nav.prev { left: 14px; }
+    .image-lightbox-nav.next { right: 14px; }
+    .image-lightbox-nav[hidden] { display: none; }
+    .image-lightbox-overlay.has-nav .image-lightbox-container { max-width: calc(100vw - 112px); }
+
+    .image-lightbox-nav:hover {
+      background: rgba(45, 45, 50, 0.95);
+      border-color: var(--accent);
+    }
+
+    .image-lightbox-nav:focus-visible,
+    .image-lightbox-close:focus-visible {
+      outline: 2px solid var(--vscode-focusBorder, var(--accent));
+      outline-offset: 2px;
     }
 
     /* Prompt Queue */
@@ -6917,6 +7014,51 @@ ${STATUS_SHIMMER_STYLES}
       color: var(--fg);
     }
 
+    .key-required-note {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 6px 10px;
+      margin: 0 0 6px 0;
+      padding: 7px 10px;
+      font-size: 11.5px;
+      line-height: 1.4;
+      color: var(--vscode-foreground);
+      background: rgba(210, 153, 34, 0.08);
+      border: 1px solid rgba(210, 153, 34, 0.35);
+      border-radius: 6px;
+    }
+    .key-required-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .key-required-btn {
+      font: inherit;
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      color: var(--vscode-button-secondaryForeground, var(--fg));
+      background: var(--vscode-button-secondaryBackground, rgba(var(--tint), 0.08));
+      border: 1px solid rgba(var(--tint), 0.12);
+    }
+    .key-required-btn:hover {
+      background: var(--vscode-button-secondaryHoverBackground, rgba(var(--tint), 0.14));
+    }
+    .key-required-note .banner-dismiss {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 14px;
+      padding: 0 4px;
+    }
+    .key-required-note .banner-dismiss:hover {
+      color: var(--fg);
+    }
+
     /* Send & Cancel Circular Buttons */
     .codex-send-btn {
       width: 24px;
@@ -8533,6 +8675,31 @@ ${STATUS_SHIMMER_STYLES}
       font-size: 11.5px;
       color: var(--vscode-errorForeground, #f85149);
     }
+    .waitlist-question { margin-top: 10px; font-weight: 500; }
+    .waitlist-offer:disabled { cursor: default; }
+    .waitlist-offer:disabled svg { display: none; }
+    .btn-error-secondary.waitlist-offer:disabled,
+    .btn-error-secondary.waitlist-offer:disabled:hover {
+      color: var(--vscode-testing-iconPassed, #3fb950);
+      background: var(--vscode-button-secondaryBackground, rgba(var(--tint), 0.05));
+      border-color: var(--vscode-button-secondaryBorder, var(--border, rgba(var(--tint), 0.1)));
+    }
+    .onboarding-waitlist-offer {
+      align-self: center;
+      padding: 2px 4px;
+      border: none;
+      background: none;
+      font: inherit;
+      font-size: 11.5px;
+      color: var(--vscode-textLink-foreground, var(--accent));
+      cursor: pointer;
+    }
+    .onboarding-waitlist-offer:hover:not(:disabled) { text-decoration: underline; }
+    .onboarding-waitlist-offer:disabled { color: var(--vscode-testing-iconPassed, #3fb950); }
+    .onboarding-waitlist-offer:focus-visible, .waitlist-offer:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: 1px;
+    }
     .feature-tip-card {
       --tip-color: var(--vscode-editorLightBulb-foreground, #e2c08d);
       position: relative;
@@ -9208,6 +9375,24 @@ ${STATUS_SHIMMER_STYLES}
       border-color: rgba(var(--tint), 0.18);
       color: var(--fg, #ffffff);
     }
+
+    .images-skipped-notice {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px 8px;
+      margin: 2px 0 10px;
+      padding: 6px 8px 6px 10px;
+      font-size: 11.5px;
+      line-height: 1.45;
+      color: var(--muted);
+      background: rgba(var(--tint), 0.03);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .images-skipped-icon { display: inline-flex; flex-shrink: 0; }
+    .images-skipped-text { flex: 1 1 220px; min-width: 0; }
+    .images-skipped-action { flex-shrink: 0; }
 
     ${getPromptStyles()}
     ${getTurnRailStyles()}

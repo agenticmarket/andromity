@@ -493,6 +493,7 @@ SettingsScreen {
                     with VerticalScroll(id="pane-trust", classes="settings-pane"):
                         yield Label("Trust & Security", classes="settings-label")
                         trusted = config.get_root("trusted_projects", {})
+                        trusted = {k: v for k, v in trusted.items() if isinstance(v, dict)} if isinstance(trusted, dict) else {}
                         if trusted:
                             yield Label(
                                 f"[dim]{len(trusted)} trusted folder(s).[/]  "
@@ -1777,7 +1778,7 @@ SettingsScreen {
         elif btn_id.startswith("revoke-"):
             t_key = btn_id.replace("revoke-", "")
             trusted = config._config_cache.get("trusted_projects", {})
-            if t_key in trusted:
+            if t_key in trusted and isinstance(trusted[t_key], dict):
                 path = trusted[t_key].get("path", "")
                 config.revoke_trust(path)
                 # Hide the parent row immediately without refresh

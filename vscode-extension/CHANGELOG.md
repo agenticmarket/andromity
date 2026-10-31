@@ -2,6 +2,26 @@
 
 All notable changes to the "andromity" extension will be documented in this file.
 
+## [0.2.25] — 2026-10-31
+
+### Added
+- **Test a provider's key.** Every provider in **API keys** has a **Test** button that says whether the key, model and endpoint work, with the provider's own reason when they don't. Saving a key tests it, and onboarding says **Connected** only when the test passes. A provider that needs a key and has none shows **No key**; a rejected key shows **Check key**.
+- **Catalog models are labelled.** Models whose provider has no key show **Needs API key**, with **Get key** and **Open API keys**. A model list from the built-in catalog rather than the provider's live list says so, with **Refresh**.
+- **Join the waitlist.** When the Andromity gateway's daily-limit error offers it, the card shows **Need more? Join the waitlist**, which opens a short form in the chat. Nothing is sent until you press **Join the waitlist**.
+- **Undo puts your prompt back.** **Undo to here** puts the undone prompt back in the input box with its files and images. A draft you already typed is never replaced: the undo note offers **Put the prompt back** instead. **Edit and resend** keeps the message's images.
+- **Step through a prompt's images.** Clicking an image opens it full size with previous and next buttons, the arrow keys and a "2 of 4" counter.
+
+### Changed
+- **NVIDIA NIM** uses NVIDIA's OpenAI-compatible API directly, with an up-to-date model list; seven of the eight models listed before have been retired.
+- A refused request reaches the provider once instead of up to three times, and retries wait as long as the provider asks.
+
+### Fixed
+- **Error details are the provider's own words**, without internal library text, and keys are hidden as •••. A request the provider can't process (HTTP 422) ends the turn with the provider's reason instead of an internal error, and a retired model shows the model-not-found card.
+- **Undo after a long conversation.** After the conversation was compacted, **Undo to here** could revert the files of many earlier turns instead of just the ones you chose. It now undoes exactly those turns, and tells you when a turn was summarized and can't be undone. A message you sent while a turn was running no longer throws off which turns **Undo to here** undoes. The turn during which the conversation compacted itself can be undone too; before, its files were left as they were.
+- **Images on models that can't read them.** If the model you picked can't read images, your message is sent without the image and a small notice says so, with **Switch model**. A message with only an image isn't sent. Before, the turn ended in an error card, the message was gone after a reload, and queued messages were paused.
+- **Error cards say which provider failed and why.** With your own API key, a limit at your provider no longer shows the Andromity daily-limit card. Cards name the provider, say whether it was a rate or daily limit, a rejected key, a missing model, an account out of credits, an outage or a network problem, and offer the right next step. A connection that never got through shows **Couldn't reach** the provider instead of "provider unavailable", and a local server that isn't running shows the local server card.
+- **Expired Andromity sign-in.** When the gateway no longer accepts your sign-in, the card offers **Sign in again** or **Use without signing in**, which signs you out and retries the turn.
+
 ## [0.2.24] — 2026-10-26
 
 ### Added

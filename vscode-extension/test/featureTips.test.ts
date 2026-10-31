@@ -23,12 +23,12 @@ function seasoned(days = 1): FeatureTipsState {
 }
 
 describe("feature tips", () => {
-  it("stays quiet during a user's first two sessions", () => {
+  it("stays quiet during a user's first two sessions, except for early tips", () => {
     let state = initialFeatureTipsState();
     state = recordTurn(state, "s1", "2026-10-01");
-    assert.equal(pickTip(state, edit, "2026-10-01"), null);
+    assert.equal(pickTip(retireTip(state, "fingerprint"), edit, "2026-10-01"), null);
     state = recordTurn(state, "s2", "2026-10-02");
-    assert.equal(pickTip(state, edit, "2026-10-02"), null);
+    assert.equal(pickTip(retireTip(state, "fingerprint"), edit, "2026-10-02"), null);
     state = recordTurn(state, "s3", "2026-10-03");
     assert.equal(pickTip(state, edit, "2026-10-03"), "fingerprint");
   });

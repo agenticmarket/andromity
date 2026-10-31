@@ -39,6 +39,11 @@ class Done(StreamEvent):
     usage: Optional[Dict[str, int]] = None
     outcome: str = "success"
     error_type: Optional[str] = None
+    # "<source>_<kind>", e.g. "provider_429" or "network_conn"; see provider.ERROR_SOURCES and ERROR_KINDS.
+    error_detail: Optional[str] = None
+    error_message: Optional[str] = None
+    error_status: Optional[int] = None
+    error_action: Optional[str] = None
 
 
 @dataclass
@@ -47,6 +52,20 @@ class InputApplied(StreamEvent):
     prompt: str
     image_uris: Optional[list] = None
     turn_index: int = 0
+
+
+@dataclass
+class ImagesSkipped(StreamEvent):
+    """Images left out of a user message because the active model can't read them.
+
+    `prompt_added` is False when the message held nothing else, so no turn was added for it;
+    `images` then carries them so the client can give them back to the user.
+    """
+    count: int
+    prompt_added: bool = True
+    steering: bool = False
+    input_id: Optional[str] = None
+    images: Optional[list] = field(default=None, compare=False, repr=False)
 
 
 @dataclass

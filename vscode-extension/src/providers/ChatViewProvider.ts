@@ -13,6 +13,7 @@ import { DiffManager } from "../integrations/DiffManager.js";
 import { EditorBridge } from "../integrations/EditorBridge.js";
 import { runCodeBlockInTerminal } from "../integrations/TerminalRunner.js";
 import { confirmRewindAndResend, resendPromptOf } from "../integrations/rewind.js";
+import { handlePromptImageMessage, undonePromptOf } from "../integrations/promptImages.js";
 import { SettingsPanel } from "../panels/SettingsPanel.js";
 import { SessionTabPanel } from "../panels/SessionTabPanel.js";
 import { WaterfallPanel } from "../panels/WaterfallPanel.js";
@@ -23,6 +24,7 @@ import { PythonBridge } from "../server/PythonBridge.js";
 import { RpcClient } from "../server/RpcClient.js";
 import { handleInputMessage } from "../server/inputBridge.js";
 import { handleInteractionMessage, reportDisconnectedAction } from "../server/interactionBridge.js";
+import { PROVIDER_ID_PATTERN, refreshProviderModels, runKeyCheck, supportsKeyTests, unverifiedNotice } from "../server/keyCheck.js";
 import { SessionHydration } from "../server/sessionHydration.js";
 import {
   allowOpenPath,
@@ -37,6 +39,7 @@ import {
   PinnedModelInfo,
   ProviderInfo,
   SessionInfo,
+  SessionUndoResult,
   SubAgentEvent,
   ToolApprovalEvent,
 } from "../server/types.js";
@@ -53,8 +56,11 @@ import { recordNextStepEvent } from "../nextSteps.js";
 import { handleFeedbackMessage } from "../engagement/feedbackWebview.js";
 import { ANNOYANCES } from "../engagement/checkIn.js";
 import type { FeedbackNotifications } from "../engagement/feedbackNotifications.js";
+import { WAITLIST_MESSAGES, type WaitlistController } from "../engagement/waitlistController.js";
 import { checkSessionForNavigation } from "../sessionNavigation.js";
 import { confirmAndOpenLink } from "../linkOpener.js";
+
+let chatViewOpenRecorded = false;
 
 export interface OllamaStatus {
   running: boolean;
@@ -84,6 +90,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _models: ModelInfo[] = [];
   private _pinnedModels: PinnedModelInfo[] = [];
   private _providers: ProviderInfo[] = [];
+  /** The provider whose key onboarding saved last, and why it could not be verified ("" when it passed). */
+  private _onboardingCheck: { provider: string; unverified: string } | null = null;
   private _currentPlan: any = null;
   private _sessionPlans: Map<string, any> = new Map();
   private _planViewProvider: PlanViewProvider | null = null;
@@ -113,8 +121,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _latestTurnFiles: Set<string> = new Set<string>();
   private _hydration = new SessionHydration();
 
-  public async undoSession(sessionId: string, turnIndex?: number, turnsToUndo?: number): Promise<boolean> {
-    return this._diffManager ? this._diffManager.undoLastTurn(sessionId, turnIndex, turnsToUndo) : false;
+  public async undoSession(sessionId: string, turnIndex?: number, turnsToUndo?: number): Promise<SessionUndoResult | undefined> {
+    return this._diffManager ? this._diffManager.undoLastTurn(sessionId, turnIndex, turnsToUndo) : undefined;
   }
   private _configData: any = null;
   private _lastOllamaStatus: OllamaStatus | null = null;
@@ -122,6 +130,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _ollamaBinaryPath: string | null = null;
   private _ollamaAppBinaryPath: string | null = null;
   private _ollamaInstalledCached: boolean | null = null;
+
+  /** Explains in the chat that a chosen model's provider has no API key yet. */
+  public showKeyRequiredNote(provider: Pick<ProviderInfo, "id" | "name" | "portal">): void {
+    this._postToWebview({ type: "key_required_note", provider: provider.id, name: provider.name, portal: provider.portal || "" });
+  }
+
+  /** "Connected" only for a key that passed its test; otherwise the saved-but-unverified warning. */
+  private _announceKeyResult(unverified: string, connected: string): void {
+    if (!unverified) {
+      vscode.window.showInformationMessage(connected);
+      return;
+    }
+    void Promise.resolve(vscode.window.showWarningMessage(unverified, "Open API keys")).then((choice) => {
+      if (choice) SettingsPanel.createOrShow(this._extensionUri, this._rpcClient, "keys", () => this.refreshConfig());
+    });
+  }
 
   public isViewVisible(): boolean {
     return !!(this._view && this._view.visible);
@@ -215,6 +239,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private readonly _featureTips: FeatureTipsController | null;
   private _checkIn: FeedbackNotifications | null = null;
+  private _waitlist: WaitlistController | null = null;
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -434,6 +459,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this._bindRpcEvents();
     this._postToWebview({ type: "backend_ready" });
+    this._recordChatViewOpened();
     void this._loadStartupState();
   }
 
@@ -495,6 +521,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     for (const waiter of waiters) waiter();
   }
 
+  /** Once per window, as soon as the chat has been shown and the engine is connected. */
+  private _recordChatViewOpened() {
+    if (chatViewOpenRecorded || !this._webviewReady || !this._rpcClient) return;
+    if (this._pythonBridge && this._pythonBridge.getClient() !== this._rpcClient) return;
+    chatViewOpenRecorded = true;
+    recordFeatureUse("chat_view_opened", { client: this._rpcClient });
+  }
+
   private _disposeRpcEvents() {
     for (const dispose of this._rpcDisposables) {
       try {
@@ -544,6 +578,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   public setFeedbackCheckIn(checkIn: FeedbackNotifications) {
     this._checkIn = checkIn;
+  }
+
+  public setWaitlist(waitlist: WaitlistController) {
+    this._waitlist = waitlist;
+  }
+
+  public get waitlist(): WaitlistController | null {
+    return this._waitlist;
+  }
+
+  /** Opens the waitlist form in the chat view, for an offer shown outside the chat. */
+  public async openWaitlistForm(): Promise<void> {
+    const waitlist = this._waitlist;
+    if (!waitlist) return;
+    await vscode.commands.executeCommand("andromity.chatView.focus");
+    for (let i = 0; i < 20 && !this._view; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    await this._whenWebviewReady();
+    await waitlist.handleMessage({ type: "waitlist_open" }, (reply) => this._postToWebview(reply));
   }
 
   /** Puts the check-in under the reply just finished. Only when someone is looking at the chat. */
@@ -766,15 +820,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Wired to the "Andromity: Undo Last Turn & Rollback Diff" command. */
   public async requestUndoTurn() {
     if (this._diffManager) {
-      await this._diffManager.undoLastTurn(this._currentSessionId);
+      const undone = await this._diffManager.undoLastTurn(this._currentSessionId);
       await this._loadSession(this._currentSessionId);
+      if (undone?.turns_undone) {
+        this._postToWebview({ type: "turn_undone", turnsUndone: undone.turns_undone, undonePrompt: undonePromptOf(undone) });
+      }
       try {
         vscode.commands.executeCommand("git.refresh");
         vscode.commands.executeCommand("andromity.refreshChanges");
       } catch {}
     } else if (this._rpcClient) {
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      const res = await this._rpcClient.call<any>("session.undo", {
+      const res = await this._rpcClient.call<SessionUndoResult>("session.undo", {
         session_id: this._currentSessionId,
         project_path: workspaceFolder,
       });
@@ -785,6 +842,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         } catch {}
         vscode.window.showInformationMessage(`Turn undone successfully. (${res.popped_messages || 0} messages removed.)`);
         await this._loadSession(this._currentSessionId);
+        if (res.turns_undone) {
+          this._postToWebview({ type: "turn_undone", turnsUndone: res.turns_undone, undonePrompt: undonePromptOf(res) });
+        }
       }
     }
   }
@@ -1416,6 +1476,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     bind("agent/queueChanged", (params: unknown) => this._postToWebview({ type: "queue_state", ...(params as object), supported: true }));
     bind("agent/inputApplied", (params: unknown) => this._postToWebview({ type: "input_applied", ...(params as object) }));
+    bind("agent/imagesSkipped", (params: unknown) => this._postToWebview({ type: "images_skipped", ...(params as object) }));
     bind("agent/started", (params: any) => {
       const sid = params?.session_id || this._currentSessionId;
       if (sid) {
@@ -1618,6 +1679,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     bind("agent/done", (params: any) => {
       const sid = params?.session_id || this._currentSessionId;
+      if (params?.error_action === "join_waitlist") void this._waitlist?.markOffered();
       this._noteWhileAway("reply", params);
       this._refreshSidePanel(["changes"]);
       if (sid) {
@@ -2317,6 +2379,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (message.type === "ready" || message.type === "webview_ready") {
       this._markWebviewReady();
       this.broadcastAirGapState();
+      if (this._waitlist) this._postToWebview(this._waitlist.stateMessage());
       this._postToWebview({ type: "starter_context", ...collectStarterContext() });
       this._refreshSidePanel();
       void this.getWorkspaceIndex().then((index) => {
@@ -2330,6 +2393,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       if (this._rpcClient) {
         this._postToWebview({ type: "backend_ready" });
+        this._recordChatViewOpened();
         if (!this._isStartupStateDelivered()) await this._loadStartupState();
       }
       return;
@@ -2424,6 +2488,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    if (WAITLIST_MESSAGES.has(message.type)) {
+      await this._waitlist?.handleMessage(message, (reply) => this._postToWebview(reply));
+      return;
+    }
+
     if (!this._rpcClient && this._pythonBridge) {
       const client = await this._pythonBridge.waitForClient(3000);
       if (client) {
@@ -2454,6 +2523,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }, this._currentMode)) return;
 
     if (await handleInteractionMessage(this._rpcClient, message, this._currentSessionId, (event) => this._postToWebview(event))) return;
+    if (await handlePromptImageMessage(this._rpcClient, message, this._currentSessionId, (event) => this._postToWebview(event))) return;
 
     switch (message.type) {
 
@@ -2673,6 +2743,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this._currentProvider = provider;
           }
 
+          const keyCheck = apiKey && provider !== "ollama" && typeof provider === "string" && PROVIDER_ID_PATTERN.test(provider)
+            && await supportsKeyTests(this._rpcClient)
+            ? await runKeyCheck(this._rpcClient, provider)
+            : null;
+          const unverified = unverifiedNotice(keyCheck);
+          this._onboardingCheck = provider ? { provider, unverified } : null;
+
           // Fetch real models live from the provider API using verified key
           let liveModels: ModelInfo[] = [];
           try {
@@ -2736,6 +2813,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               provider,
               models: providerModels,
               defaultModel: modelId || providerModels[0].id,
+              unverified: unverified || undefined,
             });
           } else {
             if (modelId) {
@@ -2752,15 +2830,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               session_id: this._currentSessionId,
             }).catch(() => {});
 
-            vscode.window.showInformationMessage(
-              `Connected to ${provider || "AI Provider"}! You're ready to code.`
-            );
+            this._announceKeyResult(unverified, `Connected to ${provider || "AI Provider"}! You're ready to code.`);
 
             await this._loadInitialConfig(false);
             this._postToWebview({
               type: "key_configured_success",
               provider,
               model: this._currentModel,
+              unverified: unverified || undefined,
             });
           }
         } catch (err: any) {
@@ -2829,6 +2906,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       }
 
+      case "sign_out_and_retry": {
+        recordFeatureUse("sign_out_and_retry", { sessionId: message.sessionId || this._currentSessionId });
+        await this.logout();
+        await this._handleWebviewMessage({ ...message, type: "retry_turn" });
+        break;
+      }
+
       case "refresh_usage": {
         await this.fetchUsage();
         break;
@@ -2877,6 +2961,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
 
       case "finish_onboarding_model": {
+        const check = this._onboardingCheck;
+        const unverified = check && check.provider === message.provider ? check.unverified : "";
         try {
           const provider = message.provider;
           const modelId = message.modelId;
@@ -2895,8 +2981,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             session_id: this._currentSessionId,
           }).catch(() => {});
 
-          vscode.window.showInformationMessage(
-            `Connected to ${provider || "AI Provider"}! Using model ${modelId || "ready"}.`
+          this._announceKeyResult(
+            unverified && (modelId ? `${unverified}. Using model ${modelId}.` : unverified),
+            `Connected to ${provider || "AI Provider"}! Using model ${modelId || "ready"}.`,
           );
 
           await this._loadInitialConfig(false);
@@ -2904,6 +2991,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             type: "key_configured_success",
             provider,
             model: this._currentModel,
+            unverified: unverified || undefined,
           });
         } catch (err: any) {
           vscode.window.showErrorMessage(`Failed to configure model: ${err.message}`);
@@ -2911,8 +2999,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             type: "key_configured_success",
             provider: message.provider,
             model: this._currentModel,
+            unverified: unverified || undefined,
           });
         }
+        break;
+      }
+
+      case "refresh_provider_models": {
+        const provider = typeof message.provider === "string" ? message.provider : "";
+        if (!PROVIDER_ID_PATTERN.test(provider)) break;
+        const refreshed = await refreshProviderModels(this._rpcClient, provider);
+        if (refreshed.models) {
+          this._models = this._models.filter((m) => m.provider !== provider).concat(refreshed.models);
+        }
+        this._postToWebview({ type: "provider_models_refreshed", ...refreshed });
         break;
       }
 
@@ -3471,7 +3571,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (undone) {
             recordFeatureUse("turn_undone", { sessionId: this._currentSessionId });
             await this._loadSession(this._currentSessionId);
-            this._postToWebview({ type: "turn_undone", turnsUndone: turnsToUndo, targetTurnIndex: turnIndex, resendPrompt });
+            this._postToWebview({ type: "turn_undone", turnsUndone: turnsToUndo, targetTurnIndex: turnIndex, resendPrompt,
+              undonePrompt: undonePromptOf(undone) });
             try {
               vscode.commands.executeCommand("git.refresh");
               vscode.commands.executeCommand("andromity.refreshChanges");
@@ -3479,7 +3580,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
         } else if (this._rpcClient) {
           const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-          const res = await this._rpcClient.call<any>("session.undo", {
+          const res = await this._rpcClient.call<SessionUndoResult>("session.undo", {
             session_id: this._currentSessionId,
             project_path: workspaceFolder,
             turn_index: turnIndex,
@@ -3494,7 +3595,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             const countMsg = (res.turns_undone && res.turns_undone > 1) ? `${res.turns_undone} turns undone` : "Turn undone";
             vscode.window.showInformationMessage(`${countMsg} successfully. (${res.popped_messages || 0} messages removed.)`);
             await this._loadSession(this._currentSessionId);
-            this._postToWebview({ type: "turn_undone", turnsUndone: res.turns_undone, targetTurnIndex: res.target_turn_index, resendPrompt });
+            this._postToWebview({ type: "turn_undone", turnsUndone: res.turns_undone, targetTurnIndex: res.target_turn_index, resendPrompt,
+              undonePrompt: undonePromptOf(res) });
           }
         }
         break;

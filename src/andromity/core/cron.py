@@ -34,13 +34,19 @@ ON_FAILURE_POLICIES = ("retry", "notify", "disable")
 PERMISSION_MODES = ("safe", "trust", "full", "yolo")
 
 # Provider error types (see provider.classify_error_info) worth retrying automatically.
-TRANSIENT_ERROR_TYPES = {"rate_limit", "provider_unavailable", "ollama_offline"}
+TRANSIENT_ERROR_TYPES = {"rate_limit", "provider_unavailable", "ollama_offline", "network_error", "service_unavailable"}
 
 ERROR_HELP: Dict[str, Tuple[str, Optional[str]]] = {
     "auth_error": ("The provider rejected the API key for this job's model.", "api_keys"),
     "quota_exceeded": ("The provider quota for this job's model is used up.", "edit_job"),
+    "insufficient_credits": ("The provider account for this job's model is out of credits.", "edit_job"),
     "rate_limit": ("The provider is rate limiting requests.", None),
     "provider_unavailable": ("The provider was temporarily unavailable.", None),
+    "network_error": ("The provider could not be reached. Check the connection and the provider's base URL.", None),
+    "service_unavailable": ("Andromity Cloud was having trouble.", None),
+    "sign_in_invalid": ("The Andromity sign-in is no longer valid. Sign in again in VS Code.", None),
+    "gateway_auth_error": ("Andromity Cloud could not verify the request. Try again later.", None),
+    "access_denied": ("Andromity Cloud blocked this request. Use your own API key or a local model.", "edit_job"),
     "model_not_found": ("This job's model is not available from its provider.", "edit_job"),
     "endpoint_not_found": ("The provider endpoint was not found. Check the provider base URL.", "api_keys"),
     "context_exceeded": ("The run grew past this model's context window.", "edit_job"),
@@ -499,10 +505,10 @@ def friendly_error(error_type: Optional[str], detail: Optional[str] = None) -> s
 def classify_exception(e: BaseException, provider: str = "", model: str = "") -> Tuple[str, str]:
     """Map an exception from a cron run to (error_type, user-facing message)."""
     try:
-        from andromity.core.provider import classify_error_info, extract_clean_error_message
+        from andromity.core.provider import classify_error_info, extract_clean_error_message, redact_error_text
         info = classify_error_info(e, provider=provider, model=model)  # type: ignore[arg-type]
         err_type = info.get("type") or "generic"
-        detail = extract_clean_error_message(e) if err_type == "generic" else ""
+        detail = redact_error_text(extract_clean_error_message(e), provider) if err_type == "generic" else ""
     except Exception:
         err_type, detail = "generic", ""
     if err_type == "generic" and not detail:

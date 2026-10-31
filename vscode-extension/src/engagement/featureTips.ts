@@ -2,7 +2,7 @@
  *  transitions so the rules are testable without VS Code; the controller keeps
  *  the state in globalState. A tip only introduces a feature this user has not
  *  used yet, only when the turn that just ended makes it relevant, and at most
- *  once a day. */
+ *  once a day. Only `early` tips show during a user's first sessions. */
 
 export type FeatureTipId =
   | "fingerprint" | "commit_message" | "inline_edit" | "cron_jobs"
@@ -42,10 +42,12 @@ export interface FeatureTip {
   id: FeatureTipId;
   /** Feature names (as recorded by featureUsage) that mean the user already knows it. */
   usedBy: string[];
+  /** Shown from the first session instead of waiting for FIRST_SESSIONS_QUIET to pass. */
+  early?: boolean;
   applies(facts: TurnFacts, state: FeatureTipsState): boolean;
 }
 
-/** No tips while a user is still in their first sessions. */
+/** Sessions a user has before tips that aren't `early` can show. */
 export const FIRST_SESSIONS_QUIET = 2;
 export const MAX_SHOWS_PER_TIP = 2;
 
@@ -53,6 +55,7 @@ export const FEATURE_TIPS: FeatureTip[] = [
   {
     id: "fingerprint",
     usedBy: ["fingerprint", "cmd_openfingerprint"],
+    early: true,
     applies: (f) => f.filesEdited >= 1,
   },
   {
@@ -157,11 +160,11 @@ export function recordTurn(state: FeatureTipsState, sessionId: string, today: st
 /** The tip to show after this turn, preferring the one shown least so far. */
 export function pickTip(state: FeatureTipsState, facts: TurnFacts, today: string): FeatureTipId | null {
   if (facts.scheduled || state.lastTipDay === today) return null;
-  if (state.sessionsSeen.length <= FIRST_SESSIONS_QUIET) return null;
+  const quiet = state.sessionsSeen.length <= FIRST_SESSIONS_QUIET;
   let best: FeatureTip | null = null;
   for (const tip of FEATURE_TIPS) {
     const record = state.tips[tip.id];
-    if (record.retired || record.shown >= MAX_SHOWS_PER_TIP || !tip.applies(facts, state)) continue;
+    if ((quiet && !tip.early) || record.retired || record.shown >= MAX_SHOWS_PER_TIP || !tip.applies(facts, state)) continue;
     if (!best || record.shown < state.tips[best.id].shown) best = tip;
   }
   return best ? best.id : null;

@@ -246,6 +246,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const recentSessionsList = document.getElementById('recent-sessions-list');
     let allSessions = [];
     let allProviders = [];
+    let flyoutNotice = '';
+    const refreshingProviders = new Set();
     let sessionDisplayLimit = 10;
     const sessionsState = {};
     const sessionLiveBuffer = new Map(); // sessionId -> Array<raw msg> for replay when switching to a live session
@@ -266,6 +268,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const onboardingOllamaForm = document.getElementById('onboarding-ollama-form');
     const onboardingOwnProvider = document.getElementById('onboarding-own-provider');
     const onboardingTrialSection = document.getElementById('onboarding-trial-section');
+    let waitlistJoined = false;
+    let waitlistOffered = false;
+    let waitlistOfferNoted = false;
+    let waitlistForm = null;
     const btnOnboardingInstantStart = document.getElementById('btn-onboarding-instant-start');
     const btnOnboardingGithubLogin = document.getElementById('btn-onboarding-github-login');
     const onboardingKeyInput = document.getElementById('onboarding-key-input');
@@ -907,6 +913,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const promptQueue = [];
     const serverQueues = {};
     const appliedInputIds = new Set();
+    // Sessions whose running turn's message held only images the model can't read, so it was never sent.
+    const unsentTurnSessions = new Set();
+    // Images of messages sent from this view and not yet started or applied, by input id, to give back if dropped.
+    const queuedImages = new Map();
     let queueSupported = false;
     let pendingInputDraft = null;
 
@@ -3054,6 +3064,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         onboardingSection.style.display = 'flex';
         readyHeroSection.style.display = 'none';
         showOnboardingKeyStep();
+        if (waitlistOffered) noteWaitlistOffer();
       } else {
         userDismissedOnboarding = true;
         onboardingSection.style.display = 'none';
@@ -3084,6 +3095,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           window.__onboarding_viewed_tracked = true;
           vscode.postMessage({ type: 'telemetry_feature', feature: 'onboarding_viewed' });
         }
+        if (waitlistOffered) noteWaitlistOffer();
       } else {
         onboardingSection.style.display = 'none';
         readyHeroSection.style.display = 'flex';
@@ -3402,7 +3414,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       return 0;
     }
 
-    function showOnboardingModelStep(provider, models, defaultModel) {
+    function showOnboardingModelStep(provider, models, defaultModel, unverified) {
       onboardingPendingProvider = provider || selectedOnboardingProvider || 'anthropic';
       
       const rawList = Array.isArray(models) ? models.slice() : [];
@@ -3428,7 +3440,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
       if (onboardingStep2Badge) {
         const provName = provider ? (provider.charAt(0).toUpperCase() + provider.slice(1)) : 'AI';
-        onboardingStep2Badge.textContent = provName + ' connected';
+        onboardingStep2Badge.textContent = unverified || (provName + ' connected');
+        onboardingStep2Badge.className = 'onboarding-step2-badge' + (unverified ? ' unverified' : '');
+        onboardingStep2Badge.title = unverified ? 'The key is saved. Test it again in Settings, API keys.' : '';
       }
 
       if (onboardingStep2Search) onboardingStep2Search.value = '';
@@ -3446,6 +3460,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (btnOnboardingSave) {
         btnOnboardingSave.disabled = false;
         btnOnboardingSave.innerHTML = '<span>Connect & Continue</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+        btnOnboardingSave.title = '';
       }
       if (btnOnboardingOllamaSave) {
         btnOnboardingOllamaSave.disabled = false;
@@ -4570,6 +4585,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         case 'checkin-close':
           checkInAction(action, target);
           break;
+        case 'join-waitlist':
+          if (!waitlistJoined) vscode.postMessage({ type: 'waitlist_open' });
+          break;
+        case 'waitlist-want':
+        case 'waitlist-heard':
+        case 'waitlist-send':
+        case 'waitlist-close':
+          waitlistFormAction(action, target);
+          break;
         case 'open-session-tab': {
           e.stopPropagation();
           const tabSid = target.getAttribute('data-session-id') || target.closest('[data-session-id]')?.getAttribute('data-session-id');
@@ -4710,23 +4734,33 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           resendEditedPrompt(target.closest('.message-wrap.user'));
           break;
         case 'undo-turn': {
-          const userWrap = target.closest('.message-wrap.user');
-          const allUserWraps = Array.from(chatContainer.querySelectorAll('.message-wrap.user'));
-          const totalTurns = allUserWraps.length;
-          let turnIndex = -1;
-          if (userWrap) {
-            turnIndex = allUserWraps.indexOf(userWrap);
+          vscode.postMessage(Object.assign({ type: 'undo_turn' }, undoRequestFor(target.closest('.message-wrap.user'))));
+          break;
+        }
+        case 'restore-undone-prompt': {
+          const note = target.closest('.undo-note');
+          if (note && note._undonePrompt) {
+            putPromptBack(note._undonePrompt);
+            note._undonePrompt = null;
+            target.remove();
           }
-          if (turnIndex < 0 && target.hasAttribute && target.hasAttribute('data-turn-index')) {
-            turnIndex = parseInt(target.getAttribute('data-turn-index'), 10);
+          break;
+        }
+        case 'remove-edit-image': {
+          const box = target.closest('.prompt-edit-box');
+          const idx = parseInt(target.getAttribute('data-idx') || '-1', 10);
+          if (box && box._images && idx >= 0 && idx < box._images.length) {
+            box._images.splice(idx, 1);
+            renderPromptEditImages(box);
+            const input = box.querySelector('.prompt-edit-input');
+            if (input) input.focus();
           }
-          const turnsToUndo = (turnIndex >= 0 && totalTurns > 0) ? (totalTurns - turnIndex) : 1;
-          vscode.postMessage({
-            type: 'undo_turn',
-            turnIndex: turnIndex >= 0 ? turnIndex : undefined,
-            totalTurns: totalTurns,
-            turnsToUndo: turnsToUndo,
-          });
+          break;
+        }
+        case 'preview-edit-image': {
+          const box = target.closest('.prompt-edit-box');
+          const idx = parseInt(target.getAttribute('data-idx') || '-1', 10);
+          if (box && box._images && box._images[idx]) openImageViewer(box._images, idx, 'Prompt image');
           break;
         }
         case 'carousel-prev': {
@@ -4769,7 +4803,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             errCard.style.opacity = '0.5';
             errCard.dataset.retryPending = 'true';
             const btn = errCard.querySelector('.btn-error-retry');
-            if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>Retrying...';
+            if (btn && btn.dataset.action === 'retry-turn') btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>Retrying...';
           }
           vscode.postMessage({
             type: 'retry_turn',
@@ -4785,7 +4819,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             errCard.style.opacity = '0.5';
             errCard.dataset.retryPending = 'true';
             const btn = errCard.querySelector('.btn-error-retry');
-            if (btn) btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>Retrying without image...';
+            if (btn && btn.dataset.action === 'retry-without-image') btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>Retrying without image...';
           }
           vscode.postMessage({
             type: 'retry_turn',
@@ -4805,6 +4839,20 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
         case 'open-account-login': {
           vscode.postMessage({ type: 'open_login' });
+          break;
+        }
+        case 'use-without-sign-in': {
+          const errCard = target.closest('.andromity-error-card, .error-card');
+          if (errCard?.dataset.retryPending === 'true') break;
+          if (errCard) {
+            errCard.style.opacity = '0.5';
+            errCard.dataset.retryPending = 'true';
+          }
+          vscode.postMessage({
+            type: 'sign_out_and_retry',
+            sessionId: currentSessionId,
+            stripImages: false, model: currentModel, provider: currentProvider, reasoningEffort: currentReasoning,
+          });
           break;
         }
         case 'open-settings': {
@@ -4874,6 +4922,26 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           break;
         }
+        case 'open-api-keys':
+          vscode.postMessage({ type: 'open_settings', tab: 'keys' });
+          break;
+        case 'dismiss-key-note':
+          hideKeyRequiredNote();
+          break;
+        case 'refresh-provider-models': {
+          const refreshId = target.getAttribute('data-provider') || '';
+          if (!refreshId || refreshingProviders.has(refreshId)) break;
+          refreshingProviders.add(refreshId);
+          flyoutNotice = 'Refreshing ' + providerDisplayName(refreshId) + ' models…';
+          renderFlyoutList(currentFlyoutQuery());
+          vscode.postMessage({ type: 'refresh_provider_models', provider: refreshId });
+          setTimeout(() => {
+            if (!refreshingProviders.delete(refreshId)) return;
+            flyoutNotice = providerDisplayName(refreshId) + ": Couldn't refresh models.";
+            if (modelFlyout && modelFlyout.style.display === 'flex') renderFlyoutList(currentFlyoutQuery());
+          }, 20000);
+          break;
+        }
         case 'send-starter':
           promptInput.value = target.getAttribute('data-prompt') || '';
           sendCurrentPrompt();
@@ -4906,6 +4974,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         }
         case 'remove-queued':
+          queuedImages.delete(target.getAttribute('data-input-id'));
           if (queueSupported) vscode.postMessage({ type: 'queue_remove', sessionId: currentSessionId, inputId: target.getAttribute('data-input-id') });
           else removeQueued(parseInt(target.getAttribute('data-idx') || '0', 10));
           break;
@@ -5081,6 +5150,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
         modelFlyout.style.display = 'flex';
         if (flyoutSearch) flyoutSearch.value = '';
+        if (refreshingProviders.size === 0) flyoutNotice = '';
         renderFlyoutList('');
         if (flyoutList) flyoutList.scrollTop = 0;
         if (flyoutSearch) setTimeout(() => flyoutSearch.focus(), 50);
@@ -5121,6 +5191,60 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       renderFlyoutList(flyoutSearch ? flyoutSearch.value.toLowerCase().trim() : '');
     };
 
+    function providerEntry(id) {
+      return (allProviders || []).find(p => p && p.id === id) || null;
+    }
+
+    function providerDisplayName(id) {
+      const entry = providerEntry(id);
+      return (entry && entry.name) || id || 'this provider';
+    }
+
+    /** The built-in provider and custom connections never show a catalog label. */
+    function showsCatalogLabel(id) {
+      const entry = providerEntry(id);
+      return !!id && id !== 'andromity' && id !== 'ollama' && !(entry && entry.custom);
+    }
+
+    function hideKeyRequiredNote() {
+      const note = document.getElementById('key-required-note');
+      if (note) note.remove();
+    }
+
+    function showKeyRequiredNote(providerId, name, portal) {
+      hideKeyRequiredNote();
+      const box = document.querySelector('.prompt-box');
+      if (!providerId || !box || !box.parentNode) return;
+      const entry = providerEntry(providerId) || {};
+      const label = name || entry.name || providerId;
+      const url = String(portal || entry.portal || '');
+      const note = document.createElement('div');
+      note.id = 'key-required-note';
+      note.className = 'key-required-note';
+      note.setAttribute('role', 'status');
+      note.setAttribute('data-provider', providerId);
+      note.innerHTML = '<span class="key-required-text">These are catalog models. Set your ' + escapeHtml(label) + ' API key to use them.</span>' +
+        '<span class="key-required-actions">' +
+          (url.startsWith('https://') ? '<button type="button" class="key-required-btn" data-action="open-portal" data-url="' + escapeHtml(url) + '">Get API key</button>' : '') +
+          '<button type="button" class="key-required-btn" data-action="open-api-keys">Open API keys</button>' +
+          '<button type="button" class="banner-dismiss" data-action="dismiss-key-note" title="Dismiss" aria-label="Dismiss">&times;</button>' +
+        '</span>';
+      box.parentNode.insertBefore(note, box);
+    }
+
+    /** A note about a missing key goes away once that provider has one or another provider is active. */
+    function syncKeyRequiredNote() {
+      const note = document.getElementById('key-required-note');
+      if (!note) return;
+      const noteProvider = note.getAttribute('data-provider') || '';
+      const entry = providerEntry(noteProvider);
+      if ((entry && entry.has_key) || noteProvider !== currentProvider) note.remove();
+    }
+
+    function currentFlyoutQuery() {
+      return flyoutSearch ? flyoutSearch.value.toLowerCase().trim() : '';
+    }
+
     /** The one model the session is using: same provider and ID, else same ID, else the bare ID. */
     function activeFlyoutModel(pool) {
       return pool.find(m => m.id === currentModel && (m.provider || 'openrouter') === currentProvider)
@@ -5137,8 +5261,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         return hay.includes(query);
       });
 
+      const notice = flyoutNotice ? '<div class="flyout-notice" role="status">' + escapeHtml(flyoutNotice) + '</div>' : '';
       if (filtered.length === 0) {
-        flyoutList.innerHTML = '<div style="padding:14px; text-align:center; color:var(--muted); font-size:11.5px;">No matching models found.<br><button class="prompt-pill-btn" data-action="open-model-hub" style="margin-top:8px;">Browse Model Hub</button></div>';
+        flyoutList.innerHTML = notice + '<div style="padding:14px; text-align:center; color:var(--muted); font-size:11.5px;">No matching models found.<br><button class="prompt-pill-btn" data-action="open-model-hub" style="margin-top:8px;">Browse Model Hub</button></div>';
         return;
       }
 
@@ -5148,6 +5273,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       function renderFlyoutItem(m) {
         const isActive = isActiveModel(m);
         const isPinned = isModelPinned(m.id, m.provider);
+        const catalogTag = !m.needs_key && m.source === 'catalog' && showsCatalogLabel(m.provider);
         return '<div class="flyout-item ' + (isActive ? 'active' : '') + '"' + (isActive ? ' aria-current="true"' : '') + ' data-action="pick-model" data-model-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || 'openrouter') + '">' +
           '<div class="flyout-item-info">' +
             (isActive ? '<span class="flyout-active-dot"></span>' : '') +
@@ -5155,7 +5281,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           '</div>' +
           '<div class="flyout-item-actions">' +
             (isActive ? '<span class="flyout-active-label">Active</span>' : '') +
-            '<span class="flyout-item-meta">' + escapeHtml(m.provider || 'openrouter') + (m.pricing ? ' · ' + escapeHtml(m.pricing) : '') + '</span>' +
+            (m.needs_key
+              ? '<span class="flyout-tag key" title="Set your ' + escapeHtml(providerDisplayName(m.provider)) + ' API key to use this model">Needs API key</span>'
+              : catalogTag
+                ? '<button type="button" class="flyout-tag catalog" data-action="refresh-provider-models" data-provider="' + escapeHtml(m.provider) + '" title="Built-in catalog list, not fetched from ' + escapeHtml(providerDisplayName(m.provider)) + '. Click to refresh.">' +
+                    (refreshingProviders.has(m.provider) ? 'Refreshing…' : 'Catalog') +
+                    '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>' +
+                  '</button>'
+                : '') +
+            '<span class="flyout-item-meta">' + escapeHtml(m.provider || 'openrouter') + (m.pricing && !m.needs_key && !catalogTag ? ' · ' + escapeHtml(m.pricing) : '') + '</span>' +
             '<button class="flyout-pin-btn ' + (isPinned ? 'pinned' : '') + '" data-action="toggle-pin" data-model-id="' + escapeHtml(m.id) + '" data-provider="' + escapeHtml(m.provider || 'openrouter') + '" data-name="' + escapeHtml(m.name || m.id) + '" title="' + (isPinned ? 'Unpin model' : 'Pin to top of picker') + '">' +
               '<svg width="11" height="11" viewBox="0 0 24 24" fill="' + (isPinned ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
                 '<line x1="12" y1="17" x2="12" y2="22"></line>' +
@@ -5171,7 +5305,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const pinnedItems = rest.filter(m => isModelPinned(m.id, m.provider));
         const otherItems = rest.filter(m => !isModelPinned(m.id, m.provider)).slice(0, 45);
 
-        let html = '<div class="flyout-section-title"><span>CURRENT</span></div>' + renderFlyoutItem(active);
+        let html = notice + '<div class="flyout-section-title"><span>CURRENT</span></div>' + renderFlyoutItem(active);
         if (pinnedItems.length > 0) {
           html += '<div class="flyout-section-title"><span>PINNED</span><span class="flyout-section-count">' + pinnedItems.length + '</span></div>';
           html += pinnedItems.map(renderFlyoutItem).join('');
@@ -5184,7 +5318,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       } else {
         const rank = m => (isActiveModel(m) ? 2 : 0) + (isModelPinned(m.id, m.provider) ? 1 : 0);
         const sorted = [...filtered].sort((a, b) => rank(b) - rank(a)).slice(0, 50);
-        flyoutList.innerHTML = sorted.map(renderFlyoutItem).join('');
+        flyoutList.innerHTML = notice + sorted.map(renderFlyoutItem).join('');
       }
     }
 
@@ -5200,6 +5334,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       updateModelBadge();
       modelFlyout.style.display = 'none';
       vscode.postMessage({ type: 'update_config', key: 'model', value: modelId, provider: provider || currentProvider });
+      const picked = (allModels || []).find(m => m.id === modelId && (m.provider || 'openrouter') === currentProvider);
+      if (picked && picked.needs_key) showKeyRequiredNote(currentProvider);
+      else hideKeyRequiredNote();
     };
 
     window.openModelHub = function() {
@@ -5268,6 +5405,16 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     let attachedImages = [];
     let attachedFiles = [];
     let currentActiveEditorContext = null;
+    const MAX_ATTACHED_IMAGES = 5;
+    const MAX_ATTACHED_FILES = 8;
+    const IMAGE_ONLY_PROMPT = 'Please inspect attached image';
+    const MAX_IMAGE_URI_CHARS = Math.ceil(8 * 1024 * 1024 / 3) * 4 + 'data:image/jpeg;base64,'.length;
+    const STORED_IMAGE_NAME = /^[0-9a-f]{16}\\.jpg$/;
+    const FULL_IMAGE_CACHE_LIMIT = 8;
+    const fullImageCache = new Map();
+    const fullImageRequests = new Set();
+    const imageViewer = { items: [], index: 0, title: '', returnFocus: null };
+    let pendingResend = null;
 
     const BINARY_FILE_EXTENSIONS = new Set([
       'exe', 'dll', 'bin', 'so', 'dylib', 'zip', 'tar', 'gz', '7z', 'rar', 'iso',
@@ -5393,8 +5540,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (attachedFiles.some(f => f.path === fileInfo.path || f.name === fileInfo.name)) {
         return;
       }
-      if (attachedFiles.length >= 8) {
-        appendSystemNote('Maximum 8 files can be attached per message.');
+      if (attachedFiles.length >= MAX_ATTACHED_FILES) {
+        appendSystemNote('Maximum ' + MAX_ATTACHED_FILES + ' files can be attached per message.');
         return;
       }
       attachedFiles.push(fileInfo);
@@ -5572,8 +5719,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
       container.style.display = 'flex';
       container.innerHTML = attachedImages.map((imgUri, idx) => {
-        const title = 'Attachment ' + (idx + 1) + (attachedImages.length > 1 ? (' of ' + attachedImages.length) : '');
-        return '<div class="image-attachment-chip" data-action="preview-image" data-src="' + escapeHtml(imgUri) + '" data-title="' + escapeHtml(title) + '" title="Click to preview image">' +
+        return '<div class="image-attachment-chip" data-action="preview-image" data-idx="' + idx + '" title="Click to preview image">' +
           '<img class="image-attachment-thumb" src="' + escapeHtml(imgUri) + '" alt="Attachment ' + (idx + 1) + '" />' +
           '<button class="image-attachment-remove" data-action="remove-image-attachment" data-idx="' + idx + '" title="Remove image">&#x2715;</button>' +
         '</div>';
@@ -5582,8 +5728,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function addImageAttachment(dataUri) {
       if (!dataUri) return;
-      if (attachedImages.length >= 5) {
-        appendSystemNote('Maximum 5 images can be attached per message.');
+      if (attachedImages.length >= MAX_ATTACHED_IMAGES) {
+        appendSystemNote('Maximum ' + MAX_ATTACHED_IMAGES + ' images can be attached per message.');
         return;
       }
       attachedImages.push(dataUri);
@@ -5993,12 +6139,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         fullText = filePrefix + (fullText ? String.fromCharCode(10) + fullText : '');
       }
 
-      const promptPayload = fullText || (imagesToSend.length > 0 ? 'Please inspect attached image' : 'Please inspect attached files');
+      const promptPayload = fullText || (imagesToSend.length > 0 ? IMAGE_ONLY_PROMPT : 'Please inspect attached files');
 
       if (queueSupported) {
         const requestId = 'input-' + Date.now() + '-' + Math.random().toString(36).slice(2);
         pendingInputDraft = { requestId, text, images: imagesToSend, files: filesToSend, sessionId: currentSessionId };
-        dispatchPrompt(promptPayload, true, imagesToSend, delivery === 'steer' ? 'steer' : 'queue', requestId);
+        dispatchPrompt(promptPayload, true, imagesToSend, delivery === 'steer' ? 'steer' : 'queue', requestId, !fullText && imagesToSend.length > 0);
         return;
       }
 
@@ -6010,13 +6156,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       dispatchPrompt(promptPayload, true, imagesToSend);
     }
 
-    function dispatchPrompt(text, attachContext, images, delivery, requestId) {
+    function dispatchPrompt(text, attachContext, images, delivery, requestId, imageOnly) {
       try {
         setNextStep(currentSessionId, null);
         if (queueSupported) {
           vscode.postMessage({
             type: 'submit_input', requestId: requestId || ('input-' + Date.now() + '-' + Math.random().toString(36).slice(2)),
-            prompt: text, sessionId: currentSessionId, images: images || [],
+            prompt: text, sessionId: currentSessionId, images: images || [], imageOnly: imageOnly === true,
             delivery: delivery || 'queue', attachContext,
             profile: currentProfile, mode: currentMode, model: currentModel,
             provider: currentProvider, reasoningEffort: currentReasoning,
@@ -6421,8 +6567,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       let from = 0;
       let start;
       while ((start = md.indexOf(ERROR_CARD_OPEN, from)) !== -1) {
-        const end = errorCardMarkupEnd(md, start);
-        const card = end !== -1 && startsLineOutsideFence(md, start) ? errorCardFromMarkup(md.slice(start, end)) : '';
+        const end = startsLineOutsideFence(md, start) ? errorCardMarkupEnd(md, start) : -1;
+        const card = end !== -1 ? errorCardFromMarkup(md.slice(start, end), true) : '';
         if (card) {
           html += renderMarkdownText(md.slice(0, start)) + card;
           md = md.slice(end);
@@ -7197,7 +7343,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         if (el.classList.contains('message-wrap') && el.classList.contains('user')) {
           const textEl = el.querySelector('.prompt-text-content');
           const images = Array.prototype.map.call(el.querySelectorAll('.prompt-image-thumb'), function(img) { return img.src; }).filter(Boolean);
-          out.push({ role: 'user', content: (textEl && textEl.textContent) || '', images: images });
+          const imageFiles = (el._promptImages || []).map(item => item.name);
+          out.push({ role: 'user', content: (textEl && textEl.textContent) || '', images: images, image_files: imageFiles });
         } else if (el.classList.contains('message-wrap') && el.classList.contains('assistant')) {
           const thinkEl = el.querySelector('.thinking-content');
           const textNodes = el.querySelectorAll('.assistant-text');
@@ -7364,7 +7511,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (card) card.style.display = 'none';
       const box = document.createElement('div');
       box.className = 'prompt-edit-box';
-      box.innerHTML = '<textarea class="prompt-edit-input" rows="3" aria-label="Edit this message"></textarea>' +
+      box.innerHTML = '<div class="prompt-edit-images image-attachments-container" style="display:none;"></div>' +
+        '<textarea class="prompt-edit-input" rows="3" aria-label="Edit this message"></textarea>' +
         '<div class="prompt-edit-footer">' +
           '<span class="prompt-edit-note">Resending undoes this turn and everything after it, including file changes.</span>' +
           '<div class="prompt-edit-actions">' +
@@ -7372,7 +7520,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             '<button type="button" class="prompt-edit-send" data-action="resend-prompt">Undo &amp; resend</button>' +
           '</div>' +
         '</div>';
+      const promptImages = wrap._promptImages || [];
+      box._imageCount = promptImages.length;
+      box._images = promptImages.map((item, index) => ({ src: item.src, name: item.name, index: index }));
       (card ? card.parentNode : wrap).insertBefore(box, card ? card.nextSibling : null);
+      renderPromptEditImages(box);
       const input = box.querySelector('.prompt-edit-input');
       input.value = wrap._promptText || (card ? card.innerText : '');
       input.addEventListener('keydown', (e) => {
@@ -7391,6 +7543,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       if (card) card.style.display = '';
     }
 
+    // The images a prompt being edited keeps; each can be removed or viewed before resending.
+    function renderPromptEditImages(box) {
+      const strip = box && box.querySelector('.prompt-edit-images');
+      if (!strip) return;
+      const images = box._images || [];
+      strip.style.display = images.length ? 'flex' : 'none';
+      strip.innerHTML = images.map((item, idx) =>
+        '<div class="image-attachment-chip" data-action="preview-edit-image" data-idx="' + idx + '" title="Click to preview image">' +
+          '<img class="image-attachment-thumb" src="' + escapeHtml(item.src) + '" alt="Image ' + (idx + 1) + '" />' +
+          '<button type="button" class="image-attachment-remove" data-action="remove-edit-image" data-idx="' + idx + '" title="Remove image" aria-label="Remove image ' + (idx + 1) + '">&#x2715;</button>' +
+        '</div>').join('');
+    }
+
     function resendEditedPrompt(wrap) {
       if (!wrap) return;
       const input = wrap.querySelector('.prompt-edit-input');
@@ -7400,16 +7565,90 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         appendSystemNote('Stop the current turn before editing an earlier message.');
         return;
       }
-      const allUserWraps = Array.from(chatContainer.querySelectorAll('.message-wrap.user'));
-      const turnIndex = allUserWraps.indexOf(wrap);
-      if (turnIndex < 0) return;
-      vscode.postMessage({
-        type: 'undo_turn',
-        turnIndex: turnIndex,
-        totalTurns: allUserWraps.length,
-        turnsToUndo: allUserWraps.length - turnIndex,
-        resendPrompt: text,
-      });
+      const box = wrap.querySelector('.prompt-edit-box');
+      pendingResend = {
+        text: text, turnPrompt: !wrap.hasAttribute('data-steering'),
+        imageCount: box ? box._imageCount || 0 : 0, images: box && box._images ? box._images.slice() : [],
+      };
+      const request = undoRequestFor(wrap);
+      if (request.turnIndex === undefined) return;
+      vscode.postMessage(Object.assign({ type: 'undo_turn', resendPrompt: text }, request));
+    }
+
+    /** Undo for the turn a prompt belongs to, counted the way the engine counts: from the newest prompt back,
+     *  where a message sent while a turn was running is part of that turn, not a turn of its own. */
+    function undoRequestFor(wrap) {
+      const isTurnPrompt = (el) => el && el.matches && el.matches('.message-wrap.user:not([data-steering])');
+      let prompt = wrap;
+      while (prompt && !isTurnPrompt(prompt)) prompt = prompt.previousElementSibling;
+      const prompts = Array.from(chatContainer.querySelectorAll('.message-wrap.user:not([data-steering])'));
+      const turnIndex = prompt ? prompts.indexOf(prompt) : -1;
+      return {
+        turnIndex: turnIndex >= 0 ? turnIndex : undefined,
+        totalTurns: prompts.length,
+        turnsToUndo: turnIndex >= 0 ? prompts.length - turnIndex : 1,
+      };
+    }
+
+    function undonePromptFrom(raw) {
+      if (!raw || typeof raw !== 'object') return null;
+      const text = typeof raw.text === 'string' ? raw.text : '';
+      const images = Array.isArray(raw.images) ? raw.images.filter(isImageDataUri).slice(0, MAX_ATTACHED_IMAGES) : [];
+      return text.trim() || images.length ? { text: text, images: images } : null;
+    }
+
+    // The images kept in the editor, full size where the engine returned them: it returns the turn's own prompt,
+    // so a message sent while that turn ran keeps what the chat shows for it.
+    function resendImagesFor(pending, text, undone) {
+      if (!pending || pending.text !== text) return [];
+      const full = pending.turnPrompt && undone && undone.images.length === pending.imageCount ? undone.images : null;
+      return pending.images
+        .map(item => (full && full[item.index]) || (item.name && fullImageCache.get(item.name)) || item.src)
+        .filter(src => typeof src === 'string' && src)
+        .slice(0, MAX_ATTACHED_IMAGES);
+    }
+
+    function composerIsEmpty() {
+      return !promptInput.value.trim() && attachedImages.length === 0 && attachedFiles.length === 0;
+    }
+
+    // Replaces the composer's text, files and images with an undone prompt, without the editor context sent with it.
+    function putPromptBack(undone) {
+      const parsed = parseUserPromptDisplay(undone.text);
+      const text = parsed.userText === IMAGE_ONLY_PROMPT && undone.images.length ? '' : parsed.userText;
+      promptInput.value = text;
+      promptInput.style.height = 'auto';
+      promptInput.style.height = Math.min(promptInput.scrollHeight, 160) + 'px';
+      sendBtn.classList.toggle('has-text', text.trim().length > 0);
+      if (currentSessionId) {
+        sessionsState[currentSessionId] = sessionsState[currentSessionId] || {};
+        sessionsState[currentSessionId].draftInput = text;
+      }
+      attachedImages = undone.images.slice();
+      renderImageAttachments();
+      attachedFiles = parsed.files.slice(0, MAX_ATTACHED_FILES).map(f => ({ name: f.name, path: f.path }));
+      renderAttachedFiles();
+      promptInput.focus();
+      promptInput.setSelectionRange(text.length, text.length);
+    }
+
+    function appendUndoNote(text, undone) {
+      const note = document.createElement('div');
+      note.className = 'system-note undo-note';
+      note.style.fontSize = '11px';
+      note.style.color = 'var(--muted)';
+      const label = document.createElement('span');
+      label.textContent = text;
+      note.appendChild(label);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'undo-note-action';
+      button.setAttribute('data-action', 'restore-undone-prompt');
+      button.textContent = 'Put the prompt back';
+      note.appendChild(button);
+      note._undonePrompt = undone;
+      chatContainer.appendChild(note);
+      scrollToBottomIfNeeded();
     }
 
     // Empty-chat starters: two generic buttons become specific when there is something to act on.
@@ -7452,6 +7691,15 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       } : null);
     }
 
+    // A prompt's images as viewer items; name is the full-size copy the engine keeps, if it kept one.
+    function promptImageItems(images, imageFiles) {
+      const names = Array.isArray(imageFiles) ? imageFiles : [];
+      return (Array.isArray(images) ? images : []).map((src, index) => ({
+        src: src,
+        name: typeof names[index] === 'string' && STORED_IMAGE_NAME.test(names[index]) ? names[index] : null,
+      })).filter(item => typeof item.src === 'string' && item.src);
+    }
+
     function appendUserMessage(text, images, ts, opts) {
       const rawText = typeof text === 'string' ? text : extractMessageText(text);
       const parsed = parseUserPromptDisplay(rawText);
@@ -7479,6 +7727,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       const normalUserCount = chatContainer.querySelectorAll('.message-wrap.user:not([data-steering])').length;
       const existingUserCount = opts && opts.turnIndex !== undefined ? opts.turnIndex : (opts && opts.steering ? Math.max(0, normalUserCount - 1) : normalUserCount);
       if (opts && opts.steering) wrap.setAttribute('data-steering', 'true');
+      if (opts && opts.inputId) wrap.setAttribute('data-input-id', String(opts.inputId));
       wrap.setAttribute('data-turn-index', String(existingUserCount));
 
       const actionsDiv = document.createElement('div');
@@ -7499,11 +7748,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       '</button>';
       wrap.appendChild(actionsDiv);
       wrap._promptText = parsed.userText || rawText;
+      const promptImages = promptImageItems(images, opts && opts.imageFiles);
+      wrap._promptImages = promptImages;
 
       const msgDiv = document.createElement('div');
       msgDiv.className = 'message user prompt-card';
 
-      if (images && Array.isArray(images) && images.length > 0) {
+      if (promptImages.length > 0) {
         const imgContainer = document.createElement('div');
         imgContainer.className = 'prompt-images-container';
 
@@ -7524,14 +7775,17 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const carousel = document.createElement('div');
         carousel.className = 'prompt-image-carousel';
 
-        images.forEach(uri => {
+        promptImages.forEach((item, index) => {
           const imgEl = document.createElement('img');
-          imgEl.src = uri;
+          imgEl.src = item.src;
           imgEl.className = 'prompt-image-thumb';
+          imgEl.alt = 'Image ' + (index + 1) + ' of ' + promptImages.length;
           imgEl.title = 'Click to preview full size';
+          imgEl.setAttribute('tabindex', '0');
+          imgEl.setAttribute('role', 'button');
           imgEl.addEventListener('click', (e) => {
             if (e && e.stopPropagation) e.stopPropagation();
-            openImageLightbox(uri);
+            openImageViewer(promptImages, index, 'Prompt image');
           });
           carousel.appendChild(imgEl);
         });
@@ -8221,6 +8475,177 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     }
     // ── End feedback check-in ────────────────────────────────────────────────
 
+    // ── Waitlist: offered on the Andromity card and on daily-limit cards, then a short form ──
+    function waitlistOfferIcon() {
+      return '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>';
+    }
+
+    function waitlistOfferLabel() {
+      return waitlistJoined ? 'On the waitlist ✓' : 'Need more? Join the waitlist';
+    }
+
+    function waitlistOfferButton() {
+      return '<button class="btn-error-secondary waitlist-offer" data-action="join-waitlist"' + (waitlistJoined ? ' disabled' : '') + '>' +
+        waitlistOfferIcon() + '<span class="waitlist-offer-label">' + waitlistOfferLabel() + '</span></button>';
+    }
+
+    function syncWaitlistOffers() {
+      document.querySelectorAll('.waitlist-offer').forEach((button) => {
+        if (button.classList.contains('onboarding-waitlist-offer')) button.hidden = !waitlistOffered;
+        button.disabled = waitlistJoined;
+        const label = button.querySelector('.waitlist-offer-label');
+        if (label) label.textContent = waitlistOfferLabel();
+      });
+    }
+
+    function setWaitlistState(joined, offered) {
+      waitlistJoined = joined;
+      waitlistOffered = offered || joined;
+      syncWaitlistOffers();
+      if (waitlistOffered && onboardingSection && onboardingSection.style.display === 'flex') noteWaitlistOffer();
+    }
+
+    function noteWaitlistOffer() {
+      if (waitlistOfferNoted || waitlistJoined) return;
+      waitlistOfferNoted = true;
+      vscode.postMessage({ type: 'waitlist_offer_shown' });
+    }
+
+    function openWaitlistForm(msg) {
+      if (msg.joined === true) setWaitlistState(true, true);
+      const previous = document.getElementById('waitlist-card');
+      if (previous) previous.remove();
+      const choices = (list) => (Array.isArray(list) ? list : [])
+        .filter(c => c && typeof c.id === 'string' && typeof c.label === 'string').slice(0, 12);
+      waitlistForm = {
+        step: waitlistJoined ? 'joined' : 'ask',
+        wants: choices(msg.wants), heardFrom: choices(msg.heardFrom),
+        picked: new Set(), heard: '', wantsNote: '', heardNote: '', sending: false, error: '',
+      };
+      const card = document.createElement('div');
+      card.id = 'waitlist-card';
+      card.className = 'checkin-card waitlist-card';
+      card.setAttribute('role', 'group');
+      card.setAttribute('aria-labelledby', 'waitlist-title');
+      chatContainer.appendChild(card);
+      renderWaitlistForm();
+      const firstChip = card.querySelector('.checkin-chip');
+      if (firstChip) firstChip.focus({ preventScroll: true });
+    }
+
+    function readWaitlistNotes() {
+      if (!waitlistForm) return;
+      const wantsNote = document.getElementById('waitlist-wants-note');
+      const heardNote = document.getElementById('waitlist-heard-note');
+      if (wantsNote) waitlistForm.wantsNote = wantsNote.value;
+      if (heardNote) waitlistForm.heardNote = heardNote.value;
+    }
+
+    function renderWaitlistForm() {
+      const card = document.getElementById('waitlist-card');
+      if (!card || !waitlistForm) return;
+      readWaitlistNotes();
+      const close = '<button class="next-step-dismiss checkin-close" data-action="waitlist-close" aria-label="Close" title="Close">&times;</button>';
+      if (waitlistForm.step === 'joined') {
+        card.innerHTML = close + '<div class="checkin-title" id="waitlist-title" role="status">You\\'re on the waitlist. We\\'ll let you know here in Andromity.</div>';
+      } else {
+        card.innerHTML = close + waitlistQuestionsHtml();
+        const wantsNote = document.getElementById('waitlist-wants-note');
+        const heardNote = document.getElementById('waitlist-heard-note');
+        if (wantsNote) wantsNote.value = waitlistForm.wantsNote;
+        if (heardNote) heardNote.value = waitlistForm.heardNote;
+      }
+      if (typeof card.scrollIntoView === 'function') card.scrollIntoView({ block: 'nearest' });
+      const focusSelector = waitlistForm.step === 'joined' ? '.checkin-close'
+        : waitlistForm.error && !waitlistForm.sending ? '[data-action="waitlist-send"]' : '';
+      const focusTarget = focusSelector ? card.querySelector(focusSelector) : null;
+      if (focusTarget) focusTarget.focus({ preventScroll: true });
+    }
+
+    function waitlistQuestionsHtml() {
+      const disabled = waitlistForm.sending ? ' disabled' : '';
+      const chips = (list, action, isPicked) => list.map(c => '<button class="checkin-chip" data-action="' + action + '" data-id="' + escapeHtml(c.id) +
+        '" aria-pressed="' + (isPicked(c.id) ? 'true' : 'false') + '"' + disabled + '>' + escapeHtml(c.label) + '</button>').join('');
+      return '<div class="checkin-title" id="waitlist-title">Join the waitlist</div>' +
+        '<div class="checkin-text">Two quick questions. No email needed. Please don\\'t include contact details.</div>' +
+        '<div class="waitlist-question" id="waitlist-wants-label">What would you want?</div>' +
+        '<div class="checkin-chips" role="group" aria-labelledby="waitlist-wants-label">' +
+          chips(waitlistForm.wants, 'waitlist-want', id => waitlistForm.picked.has(id)) +
+        '</div>' +
+        '<input type="text" class="checkin-note" id="waitlist-wants-note" maxlength="300" aria-label="Anything specific you would want (optional)" placeholder="Anything specific? (optional)"' + disabled + '>' +
+        '<div class="waitlist-question" id="waitlist-heard-label">Where did you hear about Andromity?</div>' +
+        '<div class="checkin-chips" role="group" aria-labelledby="waitlist-heard-label">' +
+          chips(waitlistForm.heardFrom, 'waitlist-heard', id => waitlistForm.heard === id) +
+        '</div>' +
+        '<input type="text" class="checkin-note" id="waitlist-heard-note" maxlength="200" aria-label="Where exactly (optional)" placeholder="Where exactly? (optional)"' + disabled + '>' +
+        (waitlistForm.error ? '<div class="checkin-error" role="alert">' + escapeHtml(waitlistForm.error) + '</div>' : '') +
+        '<div class="checkin-actions"><button class="next-step-btn primary" data-action="waitlist-send"' + disabled + '>' +
+          (waitlistForm.sending ? 'Joining…' : 'Join the waitlist') + '</button></div>' +
+        '<div class="checkin-foot"><span>Your answers go to the Andromity team and aren\\'t linked to your usage data.</span></div>';
+    }
+
+    function sendWaitlistForm() {
+      readWaitlistNotes();
+      waitlistForm.error = !waitlistForm.picked.size ? 'Pick at least one thing you\\'d want.'
+        : !waitlistForm.heard ? 'Pick where you heard about Andromity.' : '';
+      if (!waitlistForm.error) {
+        waitlistForm.sending = true;
+        vscode.postMessage({
+          type: 'waitlist_join',
+          wants: Array.from(waitlistForm.picked),
+          wants_note: waitlistForm.wantsNote,
+          heard_from: waitlistForm.heard,
+          heard_note: waitlistForm.heardNote,
+        });
+      }
+      renderWaitlistForm();
+    }
+
+    function waitlistFormAction(action, target) {
+      if (!waitlistForm || !document.getElementById('waitlist-card')) return;
+      if (action === 'waitlist-close') {
+        const card = document.getElementById('waitlist-card');
+        if (card) card.remove();
+        waitlistForm = null;
+        return;
+      }
+      if (waitlistForm.sending || waitlistForm.step !== 'ask') return;
+      const id = target.getAttribute('data-id');
+      if (action !== 'waitlist-send' && waitlistForm.error) {
+        waitlistForm.error = '';
+        const shownError = document.querySelector('#waitlist-card .checkin-error');
+        if (shownError) shownError.remove();
+      }
+      if (action === 'waitlist-want') {
+        if (!waitlistForm.wants.some(c => c.id === id)) return;
+        if (waitlistForm.picked.has(id)) waitlistForm.picked.delete(id);
+        else waitlistForm.picked.add(id);
+        target.setAttribute('aria-pressed', waitlistForm.picked.has(id) ? 'true' : 'false');
+      } else if (action === 'waitlist-heard') {
+        if (!waitlistForm.heardFrom.some(c => c.id === id)) return;
+        waitlistForm.heard = id;
+        document.querySelectorAll('#waitlist-card [data-action="waitlist-heard"]').forEach((chip) => {
+          chip.setAttribute('aria-pressed', chip.getAttribute('data-id') === id ? 'true' : 'false');
+        });
+      } else if (action === 'waitlist-send') {
+        sendWaitlistForm();
+      }
+    }
+
+    function finishWaitlistForm(msg) {
+      if (msg.ok) setWaitlistState(true, true);
+      if (!waitlistForm) return;
+      waitlistForm.sending = false;
+      if (msg.ok) {
+        waitlistForm.step = 'joined';
+        waitlistForm.error = '';
+      } else {
+        waitlistForm.error = String(msg.error || 'You couldn\\'t be added to the waitlist right now.');
+      }
+      renderWaitlistForm();
+    }
+    // ── End waitlist ─────────────────────────────────────────────────────────
+
     function updateSessionActivityIndicator() {
       const dot = document.getElementById('session-activity-dot');
       if (!dot) return;
@@ -8582,6 +9007,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     function startAssistantTurn() {
       isRunning = true;
+      unsentTurnSessions.delete(currentSessionId);
       removeFeatureTip();
       // Only stick to bottom if user was already at the bottom; do not steal scroll if user is reading history
       if (!userScrolledUp && !_isUserActivelyScrolling && isAtBottom(2)) {
@@ -9164,6 +9590,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           if (msg.providers) {
             allProviders = msg.providers;
           }
+          syncKeyRequiredNote();
           updateModelBadge();
           updateOnboardingVisibility();
           const btnSignInInit = document.getElementById('zero-gateway-signin-btn');
@@ -9301,11 +9728,13 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             }
             updateModelBadge();
             updateReasoningBadge();
+            syncKeyRequiredNote();
           } else if (msg.key === 'provider') {
             currentProvider = msg.value;
             currentModelReasoningCapability = null;
             updateReasoningBadge();
             updateModelBadge();
+            syncKeyRequiredNote();
           } else if (msg.key === 'profile') {
             currentProfile = msg.value;
             updateProfileBadge();
@@ -9451,6 +9880,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           // accumulate into the newly loaded session's tool call replay.
           globalDiffStats = {};
           turnEditedFiles.clear();
+          const reloadingShownSession = Boolean(msg.session && msg.session.id && msg.session.id === currentSessionId);
           if (msg.session && msg.session.id) {
             currentSessionId = msg.session.id;
             noteSessionShown(currentSessionId);
@@ -9482,7 +9912,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           sessionsState[currentSessionId].scheduledRun = (msg.session && msg.session.scheduled_run) || null;
           updateScheduledRunNotice(sessionsState[currentSessionId].scheduledRun, sessionIsRunning);
-          if (promptInput && !msg.draft) {
+          if (promptInput && !msg.draft && !reloadingShownSession) {
             promptInput.value = (sessionsState[currentSessionId] && sessionsState[currentSessionId].draftInput) || '';
             promptInput.style.height = 'auto';
           }
@@ -9546,7 +9976,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
                   appendCompactionSummaryCard(uContent);
                 } else {
                   try {
-                    appendUserMessage(uContent, m.images || [], m.ts, { skipDedupe: true, steering: Boolean(m.steering) });
+                    appendUserMessage(uContent, m.images || [], m.ts, { skipDedupe: true, steering: Boolean(m.steering), imageFiles: m.image_files });
+                    if (Number(m.images_skipped) > 0) chatContainer.appendChild(buildImagesSkippedNotice(m.images_skipped));
                   } catch (userRenderErr) {
                     console.error('[Andromity webview] Failed to render user prompt', userRenderErr);
                   }
@@ -10605,7 +11036,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             delete card.dataset.retryPending;
             card.style.opacity = '';
             const button = card.querySelector('.btn-error-retry');
-            if (button) button.textContent = button.dataset.action === 'retry-without-image' ? 'Retry without Image' : 'Retry';
+            if (button && (button.dataset.action === 'retry-turn' || button.dataset.action === 'retry-without-image')) {
+              button.textContent = button.dataset.action === 'retry-without-image' ? 'Retry without Image' : 'Retry';
+            }
           });
           if (!msg.success) appendSystemNote(msg.error || 'Retry could not start. Try again.');
           break;
@@ -10625,6 +11058,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           break;
         case 'input_accepted':
           if (pendingInputDraft && msg.request_id === pendingInputDraft.requestId) {
+            rememberQueuedImages(msg.input_id, pendingInputDraft.images);
             if (currentSessionId === pendingInputDraft.sessionId && promptInput.value.trim() === pendingInputDraft.text &&
                 JSON.stringify(attachedImages) === JSON.stringify(pendingInputDraft.images) &&
                 JSON.stringify(attachedFiles) === JSON.stringify(pendingInputDraft.files)) {
@@ -10642,6 +11076,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           appendSystemNote(msg.error || 'Message was not accepted. Your draft is preserved.');
           break;
         case 'input_applied':
+          queuedImages.delete(msg.input_id);
           if (msg.session_id !== currentSessionId || appliedInputIds.has(msg.input_id)) break;
           appliedInputIds.add(msg.input_id);
           endAssistantTurn();
@@ -10649,8 +11084,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           activePendingApprovalId = null;
           activePendingToolName = '';
           activePendingPlan = false;
-          appendUserMessage(msg.prompt, msg.image_uris || [], Date.now(), { skipDedupe: true, steering: true, turnIndex: msg.turn_index });
+          appendUserMessage(msg.prompt, msg.image_uris || [], Date.now(), { skipDedupe: true, steering: true, turnIndex: msg.turn_index, inputId: msg.input_id });
           startAssistantTurn();
+          break;
+        case 'images_skipped':
+          if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
+          showImagesSkipped(msg);
           break;
         case 'init_queue':
           if (queueSupported) { requestQueueSnapshot(); break; }
@@ -10672,7 +11111,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             msg.seedMessages.forEach(function(m) {
               if (!m) return;
               if (m.role === 'user') {
-                appendUserMessage(extractMessageText(m.content), m.images || [], m.ts, { skipDedupe: true, steering: Boolean(m.steering) });
+                appendUserMessage(extractMessageText(m.content), m.images || [], m.ts, { skipDedupe: true, steering: Boolean(m.steering), imageFiles: m.image_files });
               } else if (m.role === 'assistant' && extractMessageText(m.content).trim()) {
                 const wrap = document.createElement('div');
                 wrap.className = 'message-wrap assistant';
@@ -10699,11 +11138,12 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             }
             updateSessionActivityIndicator();
           }
+          if (msg.input_id) queuedImages.delete(msg.input_id);
           if (msg.session_id && currentSessionId && msg.session_id !== currentSessionId) break;
           if (msg.input_id && !appliedInputIds.has(msg.input_id)) {
             appliedInputIds.add(msg.input_id);
             hideZeroState();
-            appendUserMessage(msg.prompt, msg.image_uris || [], Date.now(), { skipDedupe: true });
+            appendUserMessage(msg.prompt, msg.image_uris || [], Date.now(), { skipDedupe: true, inputId: msg.input_id });
             startAssistantTurn();
             break;
           }
@@ -10771,15 +11211,37 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         case 'turn_undone': {
           const undoneCount = msg.turnsUndone || 1;
-          appendSystemNote(undoneCount > 1
+          const undoneNote = undoneCount > 1
             ? (undoneCount + ' turns undone: file changes rolled back.')
-            : 'Last turn undone: file changes rolled back.');
+            : 'Last turn undone: file changes rolled back.';
+          const undone = undonePromptFrom(msg.undonePrompt);
           if (typeof msg.resendPrompt === 'string' && msg.resendPrompt.trim()) {
+            appendSystemNote(undoneNote);
             const resend = msg.resendPrompt.trim();
+            const images = resendImagesFor(pendingResend, resend, undone);
+            pendingResend = null;
             if (sentPromptsHistory[sentPromptsHistory.length - 1] !== resend) sentPromptsHistory.push(resend);
             promptHistoryIndex = sentPromptsHistory.length;
-            dispatchPrompt(resend, true, [], 'queue');
+            dispatchPrompt(resend, true, images, 'queue');
+          } else if (undone && composerIsEmpty()) {
+            putPromptBack(undone);
+            appendSystemNote(undoneNote + ' Your prompt is back in the input box.');
+          } else if (undone) {
+            appendUndoNote(undoneNote + ' Your draft was kept.', undone);
+          } else {
+            appendSystemNote(undoneNote);
           }
+          break;
+        }
+
+        case 'prompt_image': {
+          if (typeof msg.name !== 'string') break;
+          fullImageRequests.delete(msg.name);
+          fullImageCache.delete(msg.name);
+          fullImageCache.set(msg.name, isImageDataUri(msg.uri) ? msg.uri : null);
+          while (fullImageCache.size > FULL_IMAGE_CACHE_LIMIT) fullImageCache.delete(fullImageCache.keys().next().value);
+          const shown = imageViewer.items[imageViewer.index];
+          if (shown && shown.name === msg.name && isImageViewerOpen()) renderImageViewer();
           break;
         }
 
@@ -10813,8 +11275,9 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               if (tf) turnEditedFiles.add(tf);
             }
           }
-          const finishedTurn = finishedTurnFacts(msg);
+          const finishedTurn = unsentTurnSessions.delete(msg.session_id || currentSessionId) ? null : finishedTurnFacts(msg);
           endAssistantTurn();
+          if (msg.outcome === 'error') enableEngineCardActions(msg.error_type, msg.error_action);
           interactiveSlot.innerHTML = '';
           activePendingApprovalId = null;
           activePendingToolName = '';
@@ -10842,6 +11305,18 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
         case 'checkin_result':
           finishCheckIn(msg);
+          break;
+
+        case 'waitlist_state':
+          setWaitlistState(msg.joined === true, msg.offered === true);
+          break;
+
+        case 'waitlist_form':
+          openWaitlistForm(msg);
+          break;
+
+        case 'waitlist_result':
+          finishWaitlistForm(msg);
           break;
 
         case 'agent_cancelled': {
@@ -10890,7 +11365,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           }
           endAssistantTurn();
           interactiveSlot.innerHTML = '';
-          appendErrorCard(msg.error || 'Unknown agent error.');
+          appendErrorCard(msg.error || 'Unknown agent error.', undefined, undefined, msg.provider);
           updateScheduledRunNotice(sessionsState[currentSessionId]?.scheduledRun, false);
           break;
         }
@@ -10938,12 +11413,27 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           renderFlyoutList(flyoutSearch ? flyoutSearch.value.toLowerCase().trim() : '');
           break;
 
+        case 'key_required_note':
+          if (msg.provider) showKeyRequiredNote(msg.provider, msg.name, msg.portal);
+          break;
+
+        case 'provider_models_refreshed': {
+          const refreshedId = msg.provider || '';
+          refreshingProviders.delete(refreshedId);
+          if (Array.isArray(msg.models)) {
+            allModels = allModels.filter(m => m.provider !== refreshedId).concat(msg.models);
+          }
+          flyoutNotice = msg.ok ? '' : providerDisplayName(refreshedId) + ': ' + (msg.message || "Couldn't refresh models.");
+          if (modelFlyout && modelFlyout.style.display === 'flex') renderFlyoutList(currentFlyoutQuery());
+          break;
+        }
+
         case 'show_onboarding_guide':
           toggleOnboarding(true);
           break;
 
         case 'key_configured_select_model': {
-          showOnboardingModelStep(msg.provider, msg.models, msg.defaultModel);
+          showOnboardingModelStep(msg.provider, msg.models, msg.defaultModel, msg.unverified);
           break;
         }
 
@@ -10951,7 +11441,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
           showOnboardingKeyStep();
           if (btnOnboardingSave) {
             btnOnboardingSave.disabled = false;
-            btnOnboardingSave.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px;vertical-align:-1px;"><polyline points="20 6 9 17 4 12"></polyline></svg><span>Connected!</span>';
+            btnOnboardingSave.innerHTML = msg.unverified
+              ? '<span>Saved, not verified</span>'
+              : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px;vertical-align:-1px;"><polyline points="20 6 9 17 4 12"></polyline></svg><span>Connected!</span>';
+            btnOnboardingSave.title = msg.unverified || '';
           }
           if (btnOnboardingOllamaSave) {
             btnOnboardingOllamaSave.disabled = false;
@@ -11135,6 +11628,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     const iconSettings = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83-2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>';
     const iconAccount = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>';
 
+    const iconSignOut = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;vertical-align:-1px;"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>';
+
     const ERROR_CARD_ACTION_ICONS = {
       'retry-turn': iconRetry,
       'retry-without-image': iconRetry,
@@ -11143,14 +11638,51 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       'new-session': iconPlus,
       'open-settings': iconSettings,
       'open-account-login': iconAccount,
+      'use-without-sign-in': iconSignOut,
     };
 
+    // Actions with side effects: only engine error events may show them, always with these labels.
+    const ERROR_CARD_ENGINE_ACTIONS = {
+      'use-without-sign-in': { label: 'Use without signing in', title: 'Sign out and retry this turn without an account' },
+    };
+
+    function engineActionButton(action, primary) {
+      const fixed = ERROR_CARD_ENGINE_ACTIONS[action];
+      return '<button class="' + (primary ? 'btn-error-retry' : 'btn-error-secondary') + '" data-action="' + action + '" title="' + escapeHtml(fixed.title) + '">' +
+        ERROR_CARD_ACTION_ICONS[action] + escapeHtml(fixed.label) + '</button>';
+    }
+
+    // The engine's sign-in error arrives as reply text, which may not carry side-effect actions;
+    // the turn's error event then adds them to the last such card.
+    function enableEngineCardActions(errorType, errorAction) {
+      if (!chatContainer || typeof chatContainer.querySelectorAll !== 'function') return;
+      if (errorType === 'quota_exceeded' && errorAction === 'join_waitlist') {
+        const quotaCards = chatContainer.querySelectorAll('.andromity-error-card[data-error-type="quota_exceeded"]');
+        const quotaCard = quotaCards && quotaCards.length ? quotaCards[quotaCards.length - 1] : null;
+        const quotaActions = quotaCard && quotaCard.querySelector('.error-card-actions');
+        if (quotaActions && !quotaActions.querySelector('[data-action="join-waitlist"]')) {
+          quotaActions.insertAdjacentHTML('beforeend', waitlistOfferButton());
+          noteWaitlistOffer();
+        }
+        return;
+      }
+      if (errorType !== 'sign_in_invalid') return;
+      const cards = chatContainer.querySelectorAll('.andromity-error-card[data-error-type="sign_in_invalid"]');
+      const card = cards && cards.length ? cards[cards.length - 1] : null;
+      const actions = card && card.querySelector('.error-card-actions');
+      if (!actions || actions.querySelector('[data-action="use-without-sign-in"]')) return;
+      actions.insertAdjacentHTML('beforeend', engineActionButton('use-without-sign-in', false));
+    }
+
+    // Engine cards are a few kilobytes; scanning further only happens on text that merely looks like one.
+    const ERROR_CARD_MAX_LENGTH = 16000;
     function errorCardMarkupEnd(text, start) {
-      const tag = /<(\\/?)div\\b[^>]*>/gi;
+      const tag = /<(\\/?)div\\b[^<>]*>/gi;
+      const scan = text.slice(0, start + ERROR_CARD_MAX_LENGTH);
       tag.lastIndex = start;
       let depth = 0;
       let match;
-      while ((match = tag.exec(text))) {
+      while ((match = tag.exec(scan))) {
         depth += match[1] ? -1 : 1;
         if (depth === 0) return tag.lastIndex;
       }
@@ -11170,7 +11702,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
 
     // Reads the card through an inert DOMParser document and keeps only text, inline emphasis,
     // the quota timer, and buttons whose data-action the click handler already supports.
-    function errorCardFromMarkup(markup) {
+    function errorCardFromMarkup(markup, fromReplyText) {
       if (typeof DOMParser === 'undefined') return '';
       const source = new DOMParser().parseFromString(markup, 'text/html').querySelector('.andromity-error-card');
       if (!source) return '';
@@ -11179,6 +11711,7 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         return node ? node.textContent.replace(/\\s+/g, ' ').trim() : '';
       };
       const errorType = (source.getAttribute('data-error-type') || 'generic').replace(/[^a-z_]/gi, '') || 'generic';
+      const errorAction = (source.getAttribute('data-error-action') || '').replace(/[^a-z0-9_]/gi, '').slice(0, 64);
       let bodyHtml = '';
       let timerText = '';
       const body = source.querySelector('.error-card-body');
@@ -11210,6 +11743,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       source.querySelectorAll('.error-card-actions [data-action]').forEach((button) => {
         const action = button.getAttribute('data-action') || '';
         if (!Object.prototype.hasOwnProperty.call(ERROR_CARD_ACTION_ICONS, action) || seenActions.has(action)) return;
+        if (Object.prototype.hasOwnProperty.call(ERROR_CARD_ENGINE_ACTIONS, action)) {
+          if (!fromReplyText) actionsHtml += engineActionButton(action, seenActions.size === 0);
+          seenActions.add(action);
+          return;
+        }
         const label = (button.textContent || '').replace(/\\s+/g, ' ').trim();
         if (!label) return;
         actionsHtml += '<button class="' + (seenActions.size === 0 ? 'btn-error-retry' : 'btn-error-secondary') + '" data-action="' + action + '" title="' + escapeHtml(button.getAttribute('title') || label) + '">' +
@@ -11217,9 +11755,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         seenActions.add(action);
       });
       const detailsNode = source.querySelector('.error-details .error-code');
-      const detailsText = detailsNode ? detailsNode.textContent.trim() : '';
+      const detailsText = detailsNode ? redactErrorDetails(detailsNode.textContent.trim()) : '';
       const iconAlert = '<span class="error-header-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span>';
-      return '<div class="andromity-error-card" data-error-type="' + errorType + '" data-retryable="true">' +
+      return '<div class="andromity-error-card" data-error-type="' + errorType + '"' +
+          (errorAction ? ' data-error-action="' + errorAction + '"' : '') + ' data-retryable="true">' +
           '<div class="error-card-header">' +
             '<div class="error-header-left">' +
               iconAlert +
@@ -11238,7 +11777,68 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         '</div>';
     }
 
-    function appendErrorCard(text, rawError, errorType) {
+    const ERROR_PROVIDER_NAMES = {
+      openrouter: 'OpenRouter', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google Gemini', deepseek: 'DeepSeek',
+      groq: 'Groq', nvidia: 'NVIDIA NIM', ollama: 'Ollama', lmstudio: 'LM Studio', llamacpp: 'llama.cpp', opencode: 'OpenCode',
+    };
+    const LOCAL_ERROR_PROVIDERS = ['ollama', 'lmstudio', 'llamacpp'];
+    const NETWORK_ERROR_WORDS = [
+      'connection error', 'connection refused', 'connection reset', 'connection aborted', 'failed to connect',
+      'cannot connect to host', 'could not connect', 'unable to connect', 'actively refused', 'refused the network connection',
+      'name or service not known', 'nodename nor servname', 'getaddrinfo', 'name resolution', 'network is unreachable',
+      'no route to host', 'broken pipe', 'remote end closed connection', 'server disconnected', 'certificate verify failed',
+      'econnrefused', 'econnreset', 'enotfound',
+    ];
+    const CREDIT_ERROR_WORDS = [
+      'insufficient_quota', 'insufficient quota', 'insufficient credit', 'insufficient balance', 'insufficient funds',
+      'requires more credits', 'credit balance is too low', 'out of credits', 'payment required',
+    ];
+    const OUTAGE_ERROR_WORDS = [
+      'service unavailable', 'serviceunavailable', 'service_unavailable', 'bad gateway', 'badgateway', 'gateway timeout',
+      'overloaded', 'upstream error', 'internal server error', 'temporarily unavailable',
+    ];
+    const DAILY_LIMIT_WORDS = ['per day', 'per-day', 'perday', 'daily', '(rpd)', '(tpd)'];
+
+    function errorProviderKey(id) {
+      return String(id || '').toLowerCase().replace(/[\\s._-]+/g, '');
+    }
+
+    function isLoopbackUrl(url) {
+      const match = /^[a-z][a-z0-9+.-]*:\\/\\/(?:[^@\\/?#]*@)?(\\[[^\\]]*\\]|[^:\\/?#]*)/i.exec(String(url || '').trim());
+      const host = match ? match[1].toLowerCase().replace(/^\\[|\\]$/g, '') : '';
+      return host === 'localhost' || host.endsWith('.localhost') || host === '::1' || /^127(\\.\\d{1,3}){3}$/.test(host);
+    }
+
+    function errorProviderInfo(providerId) {
+      const id = String(providerId || '').trim().toLowerCase();
+      const entry = (allProviders || []).find(p => p && String(p.id || '').toLowerCase() === id) || null;
+      let name = 'Andromity Cloud';
+      if (id !== 'andromity') {
+        name = String((entry && entry.name) || '').trim();
+        if (!name || name.toLowerCase() === id) name = ERROR_PROVIDER_NAMES[errorProviderKey(id)] || '';
+        name = name.replace(/\\s*\\([^)]*\\)\\s*$/, '').trim();
+        if (!name) name = id.split(/[\\s_-]+/).filter(Boolean).map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+      }
+      return {
+        name: (name || 'the provider').slice(0, 48),
+        gateway: id === 'andromity',
+        local: id !== 'andromity' && (LOCAL_ERROR_PROVIDERS.includes(errorProviderKey(id)) || isLoopbackUrl(entry && entry.base_url)),
+      };
+    }
+
+    const REDACTED = '\\u2022\\u2022\\u2022';
+
+    function redactErrorDetails(text) {
+      const value = String(text || '').slice(0, 20000)
+        .replace(/\\b(?:sk-|nvapi-|gsk_|xai-|key-)[A-Za-z0-9_-]{16,}/g, REDACTED)
+        .replace(/\\bAIza[A-Za-z0-9_-]{16,}/g, REDACTED)
+        .replace(/"user_id"\\s*:\\s*"[^"]+"/gi, '"user_id":"' + REDACTED + '"')
+        .replace(/andromity_[0-9a-f]{32,}/gi, REDACTED)
+        .replace(/(bearer\\s+)[A-Za-z0-9._~+\\/=-]{8,}/gi, '$1' + REDACTED);
+      return redactSecrets(value, findSecrets(value), REDACTED);
+    }
+
+    function appendErrorCard(text, rawError, errorType, providerId) {
       if (!text) text = 'An unexpected agent error occurred.';
       const trimmed = String(text).trim();
       const wrap = document.createElement('div');
@@ -11255,20 +11855,26 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         }
       }
 
+      const provider = errorProviderInfo(providerId || currentProvider);
+      const name = provider.name;
+      const capitalize = (value) => value.charAt(0).toUpperCase() + value.slice(1);
       const cleanMsg = extractCleanErrorMessage(trimmed);
       const low = trimmed.toLowerCase();
       // Status codes as whole numbers: timestamps and IDs in the text often contain "404" or "500".
       const hasCode = (code) => new RegExp('(^|[^0-9])' + code + '([^0-9]|$)').test(low);
+      const mentions = (words) => words.some(word => low.includes(word));
+      const button = (primary, action, title, icon, label) =>
+        '<button class="' + (primary ? 'btn-error-retry' : 'btn-error-secondary') + '" data-action="' + action + '" title="' + title + '">' + icon + label + '</button>';
+      const retryButton = (primary) => button(primary, 'retry-turn', 'Retry this turn', iconRetry, 'Retry Turn');
+      const switchButton = (primary) => button(primary, 'switch-model-flyout', 'Switch to another model', iconModel, 'Switch Model');
       let badge = 'ERROR';
       let title = 'Turn Interrupted';
       let desc = cleanMsg || trimmed;
       let timerHtml = '';
       let eType = errorType || 'generic';
+      let actionsHtml = retryButton(true);
 
-
-      let actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">' + iconRetry + 'Retry Turn</button>';
-
-      if (low.includes('daily limit') || low.includes('daily_limit') || low.includes('free trial limit') || low.includes('quota limit') || low.includes('quota resets in')) {
+      if (provider.gateway && (low.includes('daily limit') || low.includes('daily_limit') || low.includes('free trial limit') || low.includes('quota limit') || low.includes('quota resets in'))) {
         badge = 'QUOTA LIMIT';
         title = 'Daily Limit Reached';
         const isUserAuthed = isAndromityActive ||
@@ -11295,13 +11901,32 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
             '<button class="btn-error-secondary" data-action="open-settings" title="Configure BYOK">' + iconSettings + 'Open Settings</button>' +
             '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">' + iconModel + 'Switch Model</button>';
         }
+      } else if (provider.gateway && (low.includes('authentication token') || low.includes('sign in again'))) {
+        badge = 'SIGN IN REQUIRED';
+        title = "Your Andromity sign-in isn't valid anymore";
+        desc = 'Sign in again, or keep using Andromity without signing in.';
+        eType = 'sign_in_invalid';
+        actionsHtml = button(true, 'open-account-login', 'Sign in with AgenticMarket again', iconAccount, 'Sign in again') +
+          button(false, 'use-without-sign-in', 'Sign out and retry this turn without an account', iconSignOut, 'Use without signing in');
+      } else if (mentions(NETWORK_ERROR_WORDS)) {
+        if (provider.local) {
+          badge = 'OFFLINE';
+          title = name === 'Ollama' ? 'Local Ollama Not Running' : name + " isn't running";
+          desc = 'Could not connect to ' + name + '. Start the local model server, then retry.';
+          eType = 'ollama_offline';
+        } else {
+          badge = 'CONNECTION';
+          title = "Couldn't reach " + name;
+          desc = "Couldn't connect to " + name + '. Check your internet connection, VPN or proxy, then retry.';
+          eType = 'network_error';
+        }
+        actionsHtml = retryButton(true) + switchButton(false);
       } else if (low.includes('notfound') || low.includes('not found') || low.includes('no endpoints found') || low.includes('model_not_found') || (hasCode('404') && (low.includes('model') || low.includes('endpoint')))) {
         badge = 'NOT FOUND';
-        title = 'Model Not Available';
+        title = provider.gateway ? 'Model Not Available' : 'Model not found at ' + name;
         desc = (cleanMsg || 'The requested model was not found or has no active endpoints.') + ' Please switch to another model.';
         eType = 'model_not_found';
-        actionsHtml = '<button class="btn-error-retry" data-action="switch-model-flyout" title="Switch to another model">' + iconModel + 'Switch Model</button>' +
-          '<button class="btn-error-secondary" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>';
+        actionsHtml = switchButton(true) + retryButton(false);
       } else if (low.includes('image') || low.includes('vision') || low.includes('multimodal') || low.includes('does not support')) {
         badge = 'IMAGE NOT SUPPORTED';
         title = 'Model Does Not Support Images';
@@ -11309,17 +11934,26 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         eType = 'vision_unsupported';
         actionsHtml = '<button class="btn-error-retry" data-action="retry-without-image" title="Retry without image">' + iconRetry + 'Retry without Image</button>' +
           '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to a vision model">' + iconModel + 'Switch Model</button>';
+      } else if (!provider.gateway && (hasCode('402') || mentions(CREDIT_ERROR_WORDS))) {
+        badge = 'CREDITS';
+        title = 'Out of credits at ' + name;
+        desc = capitalize(name + " says your account doesn't have enough credits for this request. Add credits there, or pick another model.");
+        eType = 'insufficient_credits';
+        actionsHtml = switchButton(true) + retryButton(false);
       } else if (hasCode('429') || low.includes('rate limit') || low.includes('quota')) {
         badge = 'RATE LIMIT';
-        title = 'Rate Limit Reached';
+        const daily = !provider.gateway && mentions(DAILY_LIMIT_WORDS);
+        title = (daily ? 'Daily limit reached at ' : 'Rate limit at ') + name;
         eType = 'rate_limit';
         const reason = (cleanMsg || 'Rate limit or quota threshold reached for the model provider.').trim();
         const sentence = /[.!?]$/.test(reason) ? reason : reason + '.';
         const resetAt = rateLimitResetAt(trimmed, Date.now());
         const waitMs = resetAt === null ? 0 : resetAt - Date.now();
-        const longWait = waitMs > 2 * 60 * 1000;
+        const longWait = waitMs > 2 * 60 * 1000 || (daily && resetAt === null);
         if (resetAt === null) {
-          desc = sentence + ' Please wait a moment and click Retry.';
+          desc = sentence + (daily
+            ? ' Wait for the limit to reset, add credits at ' + name + ', or switch to another model.'
+            : ' Please wait a moment and click Retry.');
         } else {
           const at = new Date(resetAt);
           const sameDay = at.toDateString() === new Date().toDateString();
@@ -11334,13 +11968,19 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         const retryBtn = '<button class="' + (longWait ? 'btn-error-secondary' : 'btn-error-retry') + '" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>';
         const switchBtn = '<button class="' + (longWait ? 'btn-error-retry' : 'btn-error-secondary') + '" data-action="switch-model-flyout" title="Switch model">' + iconModel + 'Switch Model</button>';
         actionsHtml = longWait ? switchBtn + retryBtn : retryBtn + switchBtn;
-      } else if (low.includes('midstream') || hasCode('503') || hasCode('502') || hasCode('500') || low.includes('serviceunavailable') || low.includes('service unavailable') || low.includes('bad gateway') || low.includes('upstream error')) {
-        badge = 'SERVICE DISRUPTED';
-        title = 'Upstream Service Interruption';
-        desc = (cleanMsg || 'The upstream provider experienced a temporary service disruption or disconnect.') + ' This is usually transient—click Retry to continue.';
-        eType = 'provider_unavailable';
-        actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry turn">' + iconRetry + 'Retry Turn</button>' +
-          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch model">' + iconModel + 'Switch Model</button>';
+      } else if (mentions(OUTAGE_ERROR_WORDS)) {
+        if (provider.gateway) {
+          badge = 'UNAVAILABLE';
+          title = 'Andromity Cloud is having trouble right now';
+          desc = 'Try again in a moment.';
+          eType = 'service_unavailable';
+        } else {
+          badge = 'SERVICE DISRUPTED';
+          title = 'Service disruption at ' + name;
+          desc = capitalize(name + ' had a problem on its side. This usually clears up quickly. Retry in a moment, or pick another model.');
+          eType = 'provider_unavailable';
+        }
+        actionsHtml = retryButton(true) + switchButton(false);
       } else if (low.includes('context') || low.includes('token limit') || low.includes('maximum context')) {
         badge = 'CONTEXT LIMIT';
         title = 'Context Window Limit Reached';
@@ -11349,15 +11989,22 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         actionsHtml = '<button class="btn-error-retry" data-action="trigger-compact" title="Compact context">' + iconCompact + 'Compact Context</button>' +
           '<button class="btn-error-secondary" data-action="new-session" title="New session">' + iconPlus + 'New Session</button>';
       } else if (hasCode('401') || hasCode('403') || low.includes('unauthorized') || low.includes('api key') || low.includes('missing credentials') || low.includes('pass an api_key') || low.includes('no api key')) {
-        badge = 'AUTHENTICATION';
-        title = 'Authentication Error';
-        desc = (cleanMsg || 'Invalid or missing API key.') + ' Please check your provider settings.';
-        eType = 'auth_error';
-        actionsHtml = '<button class="btn-error-retry" data-action="open-settings" title="Open settings">' + iconSettings + 'Open Settings</button>';
+        if (provider.gateway) {
+          badge = 'UNAVAILABLE';
+          title = "Andromity Cloud couldn't verify this request";
+          desc = "This is a problem on Andromity's side, not with your account or API key. Try again later.";
+          eType = 'gateway_auth_error';
+          actionsHtml = retryButton(true) + button(false, 'open-settings', 'Use your own API key', iconSettings, 'Use Your Own Key');
+        } else {
+          badge = 'AUTHENTICATION';
+          title = 'API key rejected by ' + name;
+          desc = capitalize(name + " didn't accept your API key. Check it under API keys in Settings; it may be mistyped, revoked or expired.");
+          eType = 'auth_error';
+          actionsHtml = button(true, 'open-settings', 'Open API keys in Settings', iconSettings, 'Check API Key') + switchButton(false);
+        }
       } else {
         desc = cleanMsg || trimmed;
-        actionsHtml = '<button class="btn-error-retry" data-action="retry-turn" title="Retry this turn">' + iconRetry + 'Retry Turn</button>' +
-          '<button class="btn-error-secondary" data-action="switch-model-flyout" title="Switch to another model">' + iconModel + 'Switch Model</button>';
+        actionsHtml = retryButton(true) + switchButton(false);
       }
 
       const iconAlert = '<span class="error-header-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg></span>';
@@ -11371,10 +12018,10 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
               '<span class="error-title">' + escapeHtml(title) + '</span>' +
             '</div>' +
           '</div>' +
-          '<div class="error-card-body">' + escapeHtml(desc) + timerHtml + '</div>' +
+          '<div class="error-card-body">' + escapeHtml(redactErrorDetails(desc)) + timerHtml + '</div>' +
           '<details class="error-details">' +
             '<summary>Technical Details</summary>' +
-            '<pre class="error-code"><code>' + escapeHtml(String(rawError || text || '').replace(/"user_id"\s*:\s*"[^"]+"/gi, '"user_id":"[redacted]"')) + '</code></pre>' +
+            '<pre class="error-code"><code>' + escapeHtml(redactErrorDetails(rawError || text)) + '</code></pre>' +
           '</details>' +
           '<div class="error-card-actions">' +
             actionsHtml +
@@ -11418,6 +12065,83 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       note.style.color = 'var(--muted)';
       note.textContent = text;
       chatContainer.appendChild(note);
+      scrollToBottomIfNeeded();
+    }
+
+    function buildImagesSkippedNotice(count) {
+      const single = !(Number(count) > 1);
+      const notice = document.createElement('div');
+      notice.className = 'images-skipped-notice';
+      notice.setAttribute('role', 'status');
+      const icon = document.createElement('span');
+      icon.className = 'images-skipped-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" x2="22" y1="2" y2="22"></line><path d="M10.41 10.41a2 2 0 1 1-2.83-2.83"></path><line x1="13.5" x2="6" y1="13.5" y2="21"></line><line x1="18" x2="21" y1="12" y2="15"></line><path d="M3.59 3.59A1.99 1.99 0 0 0 3 5v14a2 2 0 0 0 2 2h14c.55 0 1.052-.22 1.41-.59"></path><path d="M21 15V5a2 2 0 0 0-2-2H9"></path></svg>';
+      const text = document.createElement('span');
+      text.className = 'images-skipped-text';
+      text.textContent = single
+        ? "This model can't read images, so your image wasn't sent. Switch to a model that supports images to include it."
+        : "This model can't read images, so your images weren't sent. Switch to a model that supports images to include them.";
+      const action = document.createElement('button');
+      action.className = 'btn-error-secondary images-skipped-action';
+      action.setAttribute('data-action', 'switch-model-flyout');
+      action.title = 'Choose a model that supports images';
+      action.innerHTML = iconModel + 'Switch model';
+      notice.append(icon, text, action);
+      return notice;
+    }
+
+    function rememberQueuedImages(inputId, images) {
+      if (!inputId || !Array.isArray(images) || images.length === 0) return;
+      queuedImages.set(inputId, images.slice());
+      while (queuedImages.size > 10) queuedImages.delete(queuedImages.keys().next().value);
+    }
+
+    // Images of a message that was not sent go back to the composer, after any attached since.
+    function giveBackImages(images) {
+      const fresh = (images || []).filter((uri) => typeof uri === 'string' && uri && !attachedImages.includes(uri));
+      const room = 5 - attachedImages.length;
+      if (!fresh.length || room <= 0) return;
+      attachedImages.push(...fresh.slice(0, room));
+      renderImageAttachments();
+    }
+
+    function showImagesSkipped(msg) {
+      const notice = buildImagesSkippedNotice(msg.count);
+      if (msg.prompt_added !== false) {
+        if (currentTurnAssistantDiv && currentTurnAssistantDiv.parentNode === chatContainer) {
+          chatContainer.insertBefore(notice, currentTurnAssistantDiv);
+        } else {
+          chatContainer.appendChild(notice);
+        }
+      } else if (msg.steering) {
+        // Mid-turn: start new blocks so whatever the model says next appears below the notice.
+        finishCurrentThinking();
+        if (currentToolSequence) finishToolSequence();
+        currentAssistantContent = null;
+        (currentTurnAssistantDiv || chatContainer).appendChild(notice);
+        giveBackImages(queuedImages.get(msg.input_id));
+        queuedImages.delete(msg.input_id);
+      } else {
+        // No turn was added, so the prompt and its empty reply leave the transcript; undo counts prompts in it.
+        const prompt = msg.input_id
+          ? Array.from(chatContainer.querySelectorAll('.message-wrap.user')).find((el) => el.getAttribute('data-input-id') === String(msg.input_id))
+          : null;
+        if (prompt) {
+          giveBackImages(Array.from(prompt.querySelectorAll('.prompt-image-thumb')).map((img) => img.src));
+          prompt.remove();
+        }
+        unsentTurnSessions.add(msg.session_id || currentSessionId);
+        const placeholderOnly = currentTurnAssistantDiv && Array.from(currentTurnAssistantDiv.children)
+          .every((el) => el.classList.contains('assistant-header') || el.id === 'turn-loading-indicator');
+        if (placeholderOnly) {
+          removeTurnLoader();
+          currentTurnAssistantDiv.remove();
+          currentTurnAssistantDiv = null;
+          currentAssistantContent = null;
+        }
+        chatContainer.appendChild(notice);
+      }
       scrollToBottomIfNeeded();
     }
 
@@ -12154,32 +12878,126 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
         .replace(/'/g, '&#39;');
     }
 
-    window.openImageLightbox = function(uri, title) {
+    function isImageDataUri(uri) {
+      return typeof uri === 'string' && uri.length <= MAX_IMAGE_URI_CHARS && /^data:image\\/(?:png|jpeg|gif|webp);base64,/.test(uri);
+    }
+
+    function isImageViewerOpen() {
       const overlay = document.getElementById('image-lightbox-overlay');
+      return Boolean(overlay && overlay.classList.contains('open'));
+    }
+
+    function requestFullImage(name) {
+      if (!name || fullImageCache.has(name) || fullImageRequests.has(name)) return;
+      fullImageRequests.add(name);
+      vscode.postMessage({ type: 'load_prompt_image', name: name });
+    }
+
+    // Items are { src, name }: src is what the chat already has (a thumbnail for saved prompts),
+    // name the full-size copy the engine keeps, fetched when the item is shown.
+    function openImageViewer(items, index, title) {
+      const overlay = document.getElementById('image-lightbox-overlay');
+      const list = (items || []).filter(item => item && typeof item.src === 'string' && item.src);
+      if (!overlay || !document.getElementById('image-lightbox-img') || !list.length) return;
+      if (!isImageViewerOpen()) imageViewer.returnFocus = document.activeElement;
+      imageViewer.items = list;
+      imageViewer.index = Math.min(Math.max(0, Number(index) || 0), list.length - 1);
+      imageViewer.title = title || 'Image Preview';
+      overlay.style.display = 'flex';
+      void overlay.offsetWidth;
+      overlay.classList.add('open');
+      renderImageViewer();
+      const close = document.getElementById('btn-lightbox-close');
+      if (close) close.focus();
+    }
+
+    function renderImageViewer() {
+      const item = imageViewer.items[imageViewer.index];
       const img = document.getElementById('image-lightbox-img');
+      if (!item || !img) return;
+      const total = imageViewer.items.length;
+      const position = (imageViewer.index + 1) + ' of ' + total;
+      img.src = (item.name && fullImageCache.get(item.name)) || item.src;
+      img.alt = total > 1 ? imageViewer.title + ', ' + position : imageViewer.title;
       const titleEl = document.getElementById('image-lightbox-title');
-      if (overlay && img && uri) {
-        img.src = uri;
-        if (titleEl) titleEl.textContent = title || 'Image Preview';
-        overlay.style.display = 'flex';
-        void overlay.offsetWidth;
-        overlay.classList.add('open');
+      if (titleEl) titleEl.textContent = imageViewer.title;
+      const counter = document.getElementById('image-lightbox-counter');
+      if (counter) {
+        counter.textContent = total > 1 ? position : '';
+        counter.hidden = total < 2;
       }
+      ['btn-lightbox-prev', 'btn-lightbox-next'].forEach(id => {
+        const button = document.getElementById(id);
+        if (button) button.hidden = total < 2;
+      });
+      const overlay = document.getElementById('image-lightbox-overlay');
+      if (overlay) overlay.classList.toggle('has-nav', total > 1);
+      if (item.name) requestFullImage(item.name);
+    }
+
+    function stepImageViewer(delta) {
+      const total = imageViewer.items.length;
+      if (total < 2) return;
+      imageViewer.index = (imageViewer.index + delta + total) % total;
+      renderImageViewer();
+    }
+
+    window.openImageLightbox = function(uri, title) {
+      if (uri) openImageViewer([{ src: uri, name: null }], 0, title);
     };
 
     window.closeImageLightbox = function() {
       const overlay = document.getElementById('image-lightbox-overlay');
-      if (overlay) {
-        overlay.classList.remove('open');
-        setTimeout(function() {
-          if (!overlay.classList.contains('open')) {
-            overlay.style.display = 'none';
-            const img = document.getElementById('image-lightbox-img');
-            if (img) img.src = '';
-          }
-        }, 200);
-      }
+      if (!overlay) return;
+      const wasOpen = overlay.classList.contains('open');
+      overlay.classList.remove('open');
+      setTimeout(function() {
+        if (!overlay.classList.contains('open')) {
+          overlay.style.display = 'none';
+          const img = document.getElementById('image-lightbox-img');
+          if (img) img.src = '';
+        }
+      }, 200);
+      if (!wasOpen) return;
+      const back = imageViewer.returnFocus;
+      imageViewer.items = [];
+      imageViewer.returnFocus = null;
+      if (back && back !== document.body && back.isConnected && typeof back.focus === 'function') back.focus();
+      else focusPrompt();
     };
+
+    // While the viewer is open it owns the keyboard: Esc closes, arrows step, Tab stays on its buttons.
+    window.addEventListener('keydown', function(e) {
+      if (!isImageViewerOpen()) return;
+      const overlay = document.getElementById('image-lightbox-overlay');
+      let handled = true;
+      if (e.key === 'Escape') {
+        window.closeImageLightbox();
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        stepImageViewer(e.key === 'ArrowLeft' ? -1 : 1);
+      } else if (e.key === 'Tab') {
+        const buttons = Array.from(overlay.querySelectorAll('button')).filter(button => !button.hidden && !button.disabled);
+        const at = buttons.indexOf(document.activeElement);
+        const step = e.shiftKey ? -1 : 1;
+        const next = buttons[at < 0 ? (step < 0 ? buttons.length - 1 : 0) : (at + step + buttons.length) % buttons.length];
+        if (next) next.focus();
+      } else {
+        handled = false;
+      }
+      if (handled) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
+
+    document.addEventListener('focusin', function(e) {
+      if (!isImageViewerOpen()) return;
+      const overlay = document.getElementById('image-lightbox-overlay');
+      if (overlay && !overlay.contains(e.target)) {
+        const close = document.getElementById('btn-lightbox-close');
+        if (close) close.focus();
+      }
+    });
 
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape') {
@@ -12213,6 +13031,11 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
     });
 
     document.addEventListener('click', function(e) {
+      const navLb = e.target.closest('#btn-lightbox-prev, #btn-lightbox-next');
+      if (navLb) {
+        stepImageViewer(navLb.id === 'btn-lightbox-prev' ? -1 : 1);
+        return;
+      }
       const closeLb = e.target.closest('#btn-lightbox-close');
       const overlayLb = e.target === document.getElementById('image-lightbox-overlay') || (e.target.classList && e.target.classList.contains('image-lightbox-container'));
       if (closeLb || overlayLb) {
@@ -12239,11 +13062,8 @@ export function getChatClientScript(sidebarIconUri: string, state: ChatViewState
       }
       const previewImg = e.target.closest('[data-action="preview-image"]');
       if (previewImg && !e.target.closest('[data-action="remove-image-attachment"]')) {
-        const src = previewImg.getAttribute('data-src') || (previewImg.querySelector('img') ? previewImg.querySelector('img').src : '');
-        const title = previewImg.getAttribute('data-title') || 'Image Preview';
-        if (src) {
-          window.openImageLightbox(src, title);
-        }
+        const idx = parseInt(previewImg.getAttribute('data-idx') || '0', 10);
+        openImageViewer(attachedImages.map(src => ({ src: src, name: null })), idx, 'Attachment');
         return;
       }
       const chatImg = e.target.closest('.message img, .assistant-text img, .user-text img');

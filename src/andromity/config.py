@@ -1,8 +1,11 @@
+import ast
 import hashlib
+import math
 import os
 import platform
+import re
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, time as dt_time, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -11,48 +14,88 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib
 
+_INT64_MIN, _INT64_MAX = -(2 ** 63), 2 ** 63 - 1
+
 try:
     import tomli_w
 except ImportError:
     class _TomliWFallback:
-        @staticmethod
-        def dump(d: dict, f):
-            f.write(_TomliWFallback.dumps(d).encode("utf-8"))
+        """Writes the TOML subset config.toml uses, at any depth, when tomli-w is not installed.
+        Unsupported values raise TypeError, as tomli-w does, instead of being written as text."""
 
-        @staticmethod
-        def dumps(d: dict) -> str:
-            lines = []
-            tables = []
-            array_tables = []
+        _BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
+        _ESCAPES = {"\\": "\\\\", '"': '\\"', "\b": "\\b", "\t": "\\t", "\n": "\\n", "\f": "\\f", "\r": "\\r"}
+
+        @classmethod
+        def dump(cls, d: dict, f):
+            f.write(cls.dumps(d).encode("utf-8"))
+
+        @classmethod
+        def dumps(cls, d: dict) -> str:
+            lines: list = []
+            cls._table(d, [], lines)
+            return "\n".join(lines).strip("\n") + "\n"
+
+        @classmethod
+        def _table(cls, d: dict, path: list, lines: list) -> None:
+            nested = []
             for k, v in d.items():
-                if isinstance(v, dict):
-                    tables.append((k, v))
-                elif isinstance(v, list) and v and all(isinstance(i, dict) for i in v):
-                    array_tables.append((k, v))
+                if isinstance(v, dict) or (isinstance(v, list) and v and all(isinstance(i, dict) for i in v)):
+                    nested.append((k, v))
                 else:
-                    lines.append(f"{k} = {_TomliWFallback._format_val(v)}")
-            for k, v in tables:
-                lines.append(f"\n[{k}]")
-                for sub_k, sub_v in v.items():
-                    lines.append(f"{sub_k} = {_TomliWFallback._format_val(sub_v)}")
-            for k, items in array_tables:
-                for item in items:
-                    lines.append(f"\n[[{k}]]")
-                    for sub_k, sub_v in item.items():
-                        lines.append(f"{sub_k} = {_TomliWFallback._format_val(sub_v)}")
-            return "\n".join(lines) + "\n"
+                    lines.append(f"{cls._key(k)} = {cls._value(v)}")
+            for k, v in nested:
+                header = ".".join(cls._key(part) for part in [*path, k])
+                for item in ([v] if isinstance(v, dict) else v):
+                    lines.extend(["", f"[{header}]" if isinstance(v, dict) else f"[[{header}]]"])
+                    cls._table(item, [*path, k], lines)
 
-        @staticmethod
-        def _format_val(v) -> str:
+        @classmethod
+        def _key(cls, k) -> str:
+            if not isinstance(k, str):
+                raise TypeError(f"TOML keys must be strings, not {type(k).__name__}")
+            return k if cls._BARE_KEY.fullmatch(k) else cls._string(k)
+
+        @classmethod
+        def _string(cls, s: str) -> str:
+            out = []
+            for ch in s:
+                if ch in cls._ESCAPES:
+                    out.append(cls._ESCAPES[ch])
+                elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+                    out.append(f"\\u{ord(ch):04X}")
+                else:
+                    out.append(ch)
+            return '"' + "".join(out) + '"'
+
+        @classmethod
+        def _value(cls, v) -> str:
             if isinstance(v, bool):
                 return "true" if v else "false"
-            elif isinstance(v, (int, float)):
-                return str(v)
-            elif isinstance(v, list):
-                return "[" + ", ".join(_TomliWFallback._format_val(i) for i in v) + "]"
-            else:
-                s = str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-                return f'"{s}"'
+            if isinstance(v, int):
+                if not _INT64_MIN <= v <= _INT64_MAX:
+                    raise TypeError("TOML integers must fit in 64 bits")
+                return str(int(v))
+            if isinstance(v, float):
+                v = float(v)
+                if math.isnan(v):
+                    return "nan"
+                if math.isinf(v):
+                    return "inf" if v > 0 else "-inf"
+                return repr(v)
+            if isinstance(v, str):
+                return cls._string(v)
+            if isinstance(v, datetime):
+                return v.isoformat()
+            if isinstance(v, (date, dt_time)):
+                if isinstance(v, dt_time) and v.tzinfo is not None:
+                    raise TypeError("TOML times can't carry a time zone")
+                return v.isoformat()
+            if isinstance(v, (list, tuple)):
+                return "[" + ", ".join(cls._value(i) for i in v) + "]"
+            if isinstance(v, dict):
+                return "{" + ", ".join(f"{cls._key(k)} = {cls._value(x)}" for k, x in v.items()) + "}"
+            raise TypeError(f"Object of type {type(v).__name__} is not TOML serializable")
 
     tomli_w = _TomliWFallback
 
@@ -126,6 +169,61 @@ class ConfigManager:
             kept = f" A copy was saved to {self.unreadable_copy}." if self.unreadable_copy else ""
             print(f"Warning: Failed to parse {self.config_path}: {e}.{kept} Using default settings.", file=sys.stderr)
             self._config_cache = {}
+            return
+        if self._repair_stringified_tables():
+            try:
+                self.save()
+            except Exception as e:
+                print(f"Warning: Could not save the repaired {self.config_path}: {e}", file=sys.stderr)
+
+    def _reload_saved(self) -> None:
+        try:
+            self._config_cache = tomllib.loads(self.config_path.read_bytes().decode("utf-8"))
+        except (OSError, ValueError):
+            pass
+
+    @staticmethod
+    def _toml_compatible(value: Any, depth: int = 0) -> bool:
+        if depth > 16:
+            return False
+        if isinstance(value, dict):
+            return all(isinstance(k, str) and ConfigManager._toml_compatible(v, depth + 1) for k, v in value.items())
+        if isinstance(value, list):
+            return all(ConfigManager._toml_compatible(v, depth + 1) for v in value)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return _INT64_MIN <= value <= _INT64_MAX
+        return isinstance(value, (str, float, bool))
+
+    @staticmethod
+    def _restore_table(value: Any) -> Any:
+        """A table that an older fallback writer saved as Python text, parsed back; any other value unchanged."""
+        if not (isinstance(value, str) and len(value) <= 16384 and (value == "{}" or value.startswith("{'"))
+                and value.endswith("}")):
+            return value
+        try:
+            parsed = ast.literal_eval(value)
+        except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+            return value
+        return parsed if isinstance(parsed, dict) and ConfigManager._toml_compatible(parsed) else value
+
+    def _repair_stringified_tables(self) -> bool:
+        """Turn nested tables an older writer stored as Python text back into tables, in sections and their lists."""
+        repaired = False
+        for section in self._config_cache.values():
+            for container in section if isinstance(section, list) else [section]:
+                if not isinstance(container, dict):
+                    continue
+                for key, value in container.items():
+                    if isinstance(value, list):
+                        fixed = [self._restore_table(item) for item in value]
+                        changed = any(new is not old for new, old in zip(fixed, value))
+                    else:
+                        fixed = self._restore_table(value)
+                        changed = fixed is not value
+                    if changed:
+                        container[key] = fixed
+                        repaired = True
+        return repaired
 
     def _keep_unreadable_copy(self, raw: bytes) -> Optional[Path]:
         try:
@@ -169,10 +267,17 @@ class ConfigManager:
             return
 
         data_to_save = config_data if config_data is not None else self._config_cache
+        try:
+            payload = tomli_w.dumps(data_to_save).encode("utf-8")
+        except (TypeError, ValueError):
+            # A value TOML can't hold must not stay in memory and fail every later save.
+            if config_data is None:
+                self._reload_saved()
+            raise
         tmp_path = self.config_path.with_name(f"{self.config_path.stem}_{os.getpid()}_{time.time_ns()}.tmp")
         try:
             with open(tmp_path, "wb") as f:
-                tomli_w.dump(data_to_save, f)
+                f.write(payload)
                 f.flush()
                 try:
                     os.fsync(f.fileno())
@@ -217,11 +322,11 @@ class ConfigManager:
         return sec.get(key, eff_default)
 
     def set(self, section: str, key: str, value: Any):
-        if section not in self._config_cache:
+        if not isinstance(self._config_cache.get(section), dict):
             self._config_cache[section] = {}
         self._config_cache[section][key] = value
         self.save()
-        
+
     def get_root(self, key: str, default: Any = None) -> Any:
         return self._config_cache.get(key, default)
         
@@ -232,7 +337,7 @@ class ConfigManager:
     def get_pinned_models(self) -> list:
         sec = self._config_cache.get("models", {})
         if isinstance(sec, dict) and "pinned" in sec and isinstance(sec["pinned"], list):
-            return sec["pinned"]
+            return [item for item in sec["pinned"] if isinstance(item, dict)]
         return [
             {"id": "auto", "provider": "andromity", "name": "Andromity Auto"},
             {"id": "anthropic/claude-3.7-sonnet", "provider": "openrouter", "name": "Claude 3.7 Sonnet"},
@@ -266,8 +371,8 @@ class ConfigManager:
 
     def get_provider_config(self, provider_name: str) -> Optional[Dict[str, Any]]:
         providers = self._config_cache.get("providers", [])
-        for p in providers:
-            if p.get("name") == provider_name:
+        for p in providers if isinstance(providers, list) else []:
+            if isinstance(p, dict) and p.get("name") == provider_name:
                 return p
         return None
 
@@ -330,7 +435,8 @@ class ConfigManager:
             os.environ[env_var] = api_key
 
     def list_providers(self) -> list:
-        return self._config_cache.get("providers", [])
+        providers = self._config_cache.get("providers", [])
+        return [p for p in providers if isinstance(p, dict)] if isinstance(providers, list) else []
 
     def save_provider(self, values: Dict[str, Any]) -> str:
         from andromity.core.connections import validate_connection
@@ -525,15 +631,15 @@ class ConfigManager:
     def is_trusted(self, path: str) -> bool:
         if not path:
             return False
-        key = self._trust_key(path)
-        return key in self._config_cache.get("trusted_projects", {})
+        trusted = self._config_cache.get("trusted_projects", {})
+        return isinstance(trusted, dict) and isinstance(trusted.get(self._trust_key(path)), dict)
 
     def set_trusted(self, path: str):
         resolved = str(Path(path).resolve())
         key = self._trust_key(path)
-        if "trusted_projects" not in self._config_cache:
+        if not isinstance(self._config_cache.get("trusted_projects"), dict):
             self._config_cache["trusted_projects"] = {}
-        if key in self._config_cache["trusted_projects"]:
+        if isinstance(self._config_cache["trusted_projects"].get(key), dict):
             return
         self._config_cache["trusted_projects"][key] = {
             "path": resolved,
@@ -545,7 +651,7 @@ class ConfigManager:
     def revoke_trust(self, path: str):
         key = self._trust_key(path)
         trusted = self._config_cache.get("trusted_projects", {})
-        if key in trusted:
+        if isinstance(trusted, dict) and key in trusted:
             del trusted[key]
             self.save()
 

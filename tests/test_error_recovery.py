@@ -28,7 +28,7 @@ def test_classify_midstream_service_unavailable():
     )
     html = classify_and_format_error(fake_err, provider="openrouter", model="deepseek/deepseek-r1")
     assert 'data-error-type="provider_unavailable"' in html
-    assert "Upstream Service Interruption" in html
+    assert "Service disruption at OpenRouter" in html
     assert 'data-action="retry-turn"' in html
     assert "Technical Details" in html
     assert "Service Unavailable (503)" in html
@@ -47,7 +47,7 @@ def test_classify_rate_limit_with_seconds():
     fake_err = Exception("RateLimitError: 429 Too Many Requests. Please retry in 4.5s")
     html = classify_and_format_error(fake_err, provider="anthropic", model="claude-sonnet-4-6")
     assert 'data-error-type="rate_limit"' in html
-    assert "Rate Limit / Quota Reached" in html
+    assert "Rate limit at Anthropic" in html
     assert "wait ~4s" in html
     assert 'data-action="retry-turn"' in html
 
@@ -65,7 +65,7 @@ def test_classify_auth_error():
     fake_err = Exception("AuthenticationError: 401 Unauthorized - invalid api key provided")
     html = classify_and_format_error(fake_err, provider="anthropic", model="claude-sonnet-4-6")
     assert 'data-error-type="auth_error"' in html
-    assert "Authentication Error" in html
+    assert "API key rejected by Anthropic" in html
     assert 'data-action="open-settings"' in html
 
 
@@ -166,7 +166,7 @@ def test_terminal_formatting_has_zero_html():
     assert "Daily Limit Reached" in term_text
     assert "⏱ **Quota resets in" in term_text
     assert "Actions:" in term_text
-    assert "BYOK" in term_text
+    assert "own API key" in term_text
 
 
 def test_quota_exceeded_omits_raw_litellm_error():
@@ -262,7 +262,7 @@ def test_classify_not_found_error():
     )
     html_out = classify_and_format_error(fake_err, provider="openrouter", model="anthropic/claude-3.7-sonnet")
     assert 'data-error-type="model_not_found"' in html_out
-    assert "Model Not Available" in html_out
+    assert "Model not found at OpenRouter" in html_out
     assert "No endpoints found for anthropic/claude-3.7-sonnet." in html_out
     assert 'data-action="switch-model-flyout"' in html_out
     # Visible card body must not leak user_id

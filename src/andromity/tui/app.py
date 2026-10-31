@@ -11,7 +11,7 @@ from textual.containers import Horizontal, Vertical
 
 from typing import Any
 
-from andromity.tui.panels.chat import ChatPanel, NextStepCard
+from andromity.tui.panels.chat import ChatPanel, NextStepCard, PromptBackCard, images_skipped_notice
 from andromity.tui.panels.filetree import FileTreePanel
 from andromity.tui.panels.diff import DiffPanel
 from andromity.tui.panels.plan import PlanPanel
@@ -29,7 +29,8 @@ from andromity.tui.overlays.undo import UndoConfirmOverlay
 from andromity.tui.overlays.batch_review import BatchReviewOverlay
 from andromity.tui.overlays.questions import QuestionPanel, format_question_answers, normalize_questions
 from andromity.core.session import Session
-from andromity.core.agent import Agent
+from andromity.core.session_context import prompt_as_written
+from andromity.core.agent import Agent, note_images_skipped
 from andromity.core.events import (
     StreamEvent, TextDelta, ThinkingDelta, ToolCallStart, ToolCallDelta, ToolCallEnd, Done, ToolResult, PlanApprovalRequired, SubAgentProgress
 )
@@ -149,6 +150,38 @@ PlanPanel { height: 1fr; border-top: solid $foreground 12%; }
 .response-footer { height: 1; margin: 0 0 1 0; }
 .resp-time { color: $text-muted; padding: 0 1; height: 1; content-align: left middle; }
 """
+
+
+def _newest_turn_start(session: Any, prompt: str) -> int | None:
+    """Where the newest turn starts in the conversation as it is now, or None when that turn isn't the one with
+    this prompt (it was summarized when the conversation was compacted)."""
+    starts = session.turn_starts()
+    if not starts:
+        return None
+    content = str(session.messages[starts[-1]].get("content") or "")
+    return starts[-1] if content.startswith(prompt or "") else None
+
+
+async def _prompt_attachments(message: dict, storage_dir: Any) -> list:
+    """The images sent with a prompt as input-bar attachments: full size while the image store still has them."""
+    if not message.get("images") and not message.get("image_files"):
+        return []
+    from andromity.core.images import image_from_data_uri, prompt_images
+
+    def _load() -> list:
+        return [image for image in map(image_from_data_uri, prompt_images(message, storage_dir)) if image is not None]
+    try:
+        return await asyncio.to_thread(_load)
+    except Exception:
+        log.warning("Undone prompt images could not be loaded", exc_info=True)
+        return []
+
+
+def _prompt_added(session: Any, count_before: int, summarized_before: int) -> bool:
+    """Whether a turn's prompt reached the conversation. Compaction, which can leave fewer messages than before,
+    only runs once the prompt is in."""
+    summarized = len(getattr(session, "compacted_history", None) or [])
+    return len(session.messages) > count_before or summarized > summarized_before
 
 
 class AndromityApp(App):
@@ -1295,6 +1328,12 @@ class AndromityApp(App):
         panel = self.query_one("#queue-panel", QueuePanel)
         panel.update_queue(self._inputs().snapshot())
 
+    def _restore_attachments(self, images: list) -> None:
+        try:
+            self.query_one(InputBar).restore_attachments(images)
+        except Exception:
+            log.debug("Images could not be put back in the input bar", exc_info=True)
+
     def _inputs(self):
         from andromity.core.inputs import InputQueue
         if self.session.id not in self._input_queues:
@@ -1329,10 +1368,17 @@ class AndromityApp(App):
         self._process_message(prompt, images)
 
     async def _stream_agent(self, prompt: str, images: list | None = None):
-        from andromity.core.events import InputApplied, NextStepSuggested
+        from andromity.core.events import ImagesSkipped, InputApplied, NextStepSuggested
         self.agent.input_queue = self._inputs()
         chat = self.query_one(ChatPanel)
         self._clear_next_step()
+        if self.agent.drops_message(prompt, images):
+            note_images_skipped(self.session.id)
+            chat.add_system_message(images_skipped_notice(len(images)))
+            self._restore_attachments(images)
+            self._is_streaming = False
+            self.call_after_refresh(self._drain_inputs)
+            return
         # The suggestion shows once the turn ends, as a card rather than a tool call.
         next_step = None
         next_step_tool_ids: set = set()
@@ -1355,6 +1401,7 @@ class AndromityApp(App):
         # ── UI feedback FIRST — zero perceived lag ────────────────────────────
         # Show "thinking" state immediately before any blocking work.
         msg_count_before = len(self.session.messages)
+        summarized_before = len(getattr(self.session, "compacted_history", None) or [])
         self._pre_write_contents.clear()  # fresh file-content tracking for this turn
         chat.start_assistant_message()
 
@@ -1391,6 +1438,14 @@ class AndromityApp(App):
                     chat.add_user_message(event.prompt, image_count=len(event.image_uris or []))
                     chat.start_assistant_message()
                     first_text_seen = False
+                elif isinstance(event, ImagesSkipped):
+                    notice = images_skipped_notice(event.count)
+                    if event.prompt_added:
+                        chat.add_reply_notice(notice)
+                    else:
+                        chat.add_inline_notice(notice)
+                        self._restore_attachments(event.images or [])
+                        first_text_seen = False
                 elif isinstance(event, ThinkingDelta):
                     if not hasattr(chat, "_thinking") or not getattr(chat, "_thinking", None):
                         chat.start_thinking_message()
@@ -1455,7 +1510,7 @@ class AndromityApp(App):
                 elif isinstance(event, PlanApprovalRequired):
                     log.info("Plan approval required. Pausing agent loop.")
                     self._plan_approval_future = asyncio.Future()
-                    await self._inputs().interaction(self._plan_approval_future, False)
+                    await self._inputs().interaction(self._plan_approval_future, False, self.agent.steering_adds_input)
                     self._plan_approval_future = None
                 elif isinstance(event, Done):
                     if event.outcome != "success":
@@ -1492,7 +1547,9 @@ class AndromityApp(App):
                 _err_msg = _err_msg[:157] + "..."
             chat.append_text("\nThe run could not finish. Pending messages are paused. Check your provider settings and retry.\n")
         finally:
-            if snapshot_hash:
+            if not _prompt_added(self.session, msg_count_before, summarized_before):
+                self._undo_stack = [checkpoint for checkpoint in self._undo_stack if checkpoint is not turn_checkpoint]
+            elif snapshot_hash:
                 from andromity.core.git_ops import create_pre_edit_snapshot
                 turn_checkpoint["after_hash"] = await asyncio.to_thread(create_pre_edit_snapshot, Path(self._project_path))
             self._current_task = None
@@ -1505,8 +1562,7 @@ class AndromityApp(App):
             # Show how long the response took as a distinct colored footnote,
             # e.g. "⏱ 3.5s · 4 tool calls" (kept separate from the AI text)
             try:
-                elapsed = time.time() - turn_started
-                chat.add_response_time(elapsed, tool_calls_count)
+                chat.add_response_time(time.time() - turn_started, tool_calls_count)
             except Exception:
                 pass
             if next_step is not None:
@@ -1697,6 +1753,12 @@ class AndromityApp(App):
             self._submit_prompt(option["prompt"])
         self.focus_input()
 
+    @on(PromptBackCard.Chosen)
+    def on_prompt_back_chosen(self, event: "PromptBackCard.Chosen") -> None:
+        self.query_one(InputBar).restore_prompt(event.text, event.images)
+        self.query_one(ChatPanel).clear_prompt_back()
+        self.focus_input()
+
     def _process_message(self, prompt: str, images: list | None = None):
         chat = self.query_one(ChatPanel)
         chat.clear_ephemeral()
@@ -1711,8 +1773,8 @@ class AndromityApp(App):
             except Exception:
                 pass
             chat.add_user_message(prompt, image_count=len(images) if images else 0)
-            # Auto-name session from the first user message
-            if not self._session_named:
+            # Auto-name session from the first user message the model gets
+            if not self._session_named and not self.agent.drops_message(prompt, images):
                 self._session_named = True
                 name = Session.auto_name_from_message(prompt)
                 self.session.rename(name)
@@ -2415,8 +2477,14 @@ Your output must be:
     async def _async_perform_undo(self, checkpoint: dict):
         try:
             snapshot_hash = checkpoint.get("snapshot_hash")
-            msg_count = checkpoint.get("msg_count", 0)
             undone_prompt = checkpoint.get("prompt", "")
+            cutoff = _newest_turn_start(self.session, undone_prompt)
+            if cutoff is None:
+                self._undo_stack.append(checkpoint)
+                self.query_one(ChatPanel).add_system_message(
+                    "[yellow]Undo stopped: this turn was summarized when the conversation was compacted, "
+                    "so it can't be undone from here.[/]")
+                return
 
             # ── 1. Revert file changes (in background thread) ─────────────────
             files_reverted = False
@@ -2438,16 +2506,16 @@ Your output must be:
                 self.query_one(ChatPanel).add_system_message("[yellow]Undo stopped: files changed after the turn or the checkpoint is incomplete. Review changes first.[/]")
                 return
 
-            if msg_count <= len(self.session.messages):
-                self.session.messages = self.session.messages[:msg_count]
-                try:
-                    from andromity.core.agent import _estimate_tokens as _est2
-                    self.session.context_tokens = _est2(self.session.messages)
-                except Exception:
-                    self.session.context_tokens = sum(
-                        len(str(msg.get("content", ""))) // 4 + len(str(msg.get("thinking", ""))) // 4 for msg in self.session.messages
-                    )
-                self.session.save()
+            prompt_message = self.session.messages[cutoff]
+            self.session.messages = self.session.messages[:cutoff]
+            try:
+                from andromity.core.agent import _estimate_tokens as _est2
+                self.session.context_tokens = _est2(self.session.messages)
+            except Exception:
+                self.session.context_tokens = sum(
+                    len(str(msg.get("content", ""))) // 4 + len(str(msg.get("thinking", ""))) // 4 for msg in self.session.messages
+                )
+            self.session.save()
 
             # ── 3. Clean visual chat panel rollback (await before system msg) ─
             chat = self.query_one(ChatPanel)
@@ -2471,21 +2539,32 @@ Your output must be:
             except Exception:
                 pass
 
+            # ── 5. Put the prompt and its images back, keeping any draft ──────
+            stored_text = prompt_message.get("content")
+            if isinstance(stored_text, str):
+                undone_prompt = prompt_as_written(stored_text)
+            images = await _prompt_attachments(prompt_message, getattr(self.session, "storage_dir", None))
+            try:
+                bar = self.query_one(InputBar)
+                keep_draft = bool(bar.query_one("#input-field", TextArea).text.strip() or bar.attachments)
+            except Exception:
+                bar, keep_draft = None, False
+
             short = undone_prompt[:60] + ("…" if len(undone_prompt) > 60 else "")
             file_note = "[green]✓ Files reverted[/] " if files_reverted else "[yellow]⚠ File revert unavailable (no git repo)[/] "
+            prompt_note = "[cyan]Your draft was kept[/]" if keep_draft else "[cyan]Prompt restored to input[/]"
             chat.add_system_message(
                 f"[bold green]↩ Undone:[/] \"{escape(short)}\"\n"
-                f"{file_note}│ [dim]Conversation rolled back to {len(self.session.messages)} messages[/] │ [cyan]Prompt restored to input[/]"
+                f"{file_note}│ [dim]Conversation rolled back to {len(self.session.messages)} messages[/] │ {prompt_note}"
             )
-
-            # ── 5. Restore prompt into the user input box ─────────────────────
             try:
-                input_field = self.query_one("InputBar").query_one("#input-field", TextArea)
-                input_field.text = undone_prompt
-                input_field.move_cursor(input_field.get_cursor_line_end_location())
-                self.focus_input()
+                if keep_draft:
+                    chat.offer_prompt_back(undone_prompt, images)
+                elif bar is not None:
+                    bar.restore_prompt(undone_prompt, images)
+                    self.focus_input()
             except Exception:
-                pass
+                log.warning("Undone prompt could not be put back", exc_info=True)
 
             self._update_status()
         finally:

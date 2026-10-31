@@ -1069,6 +1069,14 @@ InputBar {
         self._attachments.clear()
         self._update_attachment_bar()
 
+    def restore_prompt(self, text: str, images: list) -> None:
+        """Replace the input and its attachments with a prompt put back after an undo."""
+        ta = self.query_one("#input-field", ChatInput)
+        ta.text = text
+        ta.move_cursor(ta.document.end)
+        self._attachments = list(images)[:MAX_IMAGES]
+        self._update_attachment_bar()
+
     def _update_attachment_bar(self):
         try:
             bar = self.query_one("#attachment-bar", AttachmentBar)
@@ -1086,6 +1094,14 @@ InputBar {
             self.attach_path(event.path)
         elif event.image is not None:
             self._add_attachment(event.image)
+
+    def restore_attachments(self, images: list) -> None:
+        """Give back images from a message that was not sent, after any attached since."""
+        room = max(0, MAX_IMAGES - len(self._attachments))
+        restored = [img for img in images if not any(img is kept for kept in self._attachments)][:room]
+        if restored:
+            self._attachments.extend(restored)
+            self._update_attachment_bar()
 
     def _add_attachment(self, img):
         """Append an image, enforcing the 5-image cap, and refresh the chips."""

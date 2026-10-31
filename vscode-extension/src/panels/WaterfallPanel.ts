@@ -78,6 +78,7 @@ export class WaterfallTraceStore {
 
     bind("agent/started", "agent_started");
     bind("agent/inputApplied", "input_applied");
+    bind("agent/imagesSkipped", "images_skipped");
     bind("waterfall/llmStart", "waterfall_llm_start");
     bind("waterfall/llmEnd", "waterfall_llm_end");
     bind("agent/toolStart", "tool_start");
@@ -284,6 +285,9 @@ export class WaterfallPanel {
     });
     bind("agent/inputApplied", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "input_applied", ...params });
+    });
+    bind("agent/imagesSkipped", (params: any) => {
+      if (isMatch(params)) this._postMessage({ type: "images_skipped", ...params });
     });
     bind("waterfall/llmStart", (params: any) => {
       if (isMatch(params)) this._postMessage({ type: "waterfall_llm_start", ...params });

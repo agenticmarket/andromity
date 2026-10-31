@@ -102,14 +102,10 @@ MODEL_CATALOG = {
         "requires_env": "NVIDIA_API_KEY",
         "base_url": "https://integrate.api.nvidia.com/v1",
         "models": [
-            {"id": "nvidia/llama-3.1-nemotron-70b-instruct", "name": "Llama 3.1 Nemotron 70B", "desc": "NVIDIA high-accuracy aligned flagship", "context": "128K", "pricing": "NVIDIA NIM API / Free credits"},
-            {"id": "meta/llama-3.3-70b-instruct", "name": "Llama 3.3 70B", "desc": "Meta flagship open model on NVIDIA NIM", "context": "128K", "pricing": "NVIDIA NIM API"},
-            {"id": "meta/llama-3.1-405b-instruct", "name": "Llama 3.1 405B", "desc": "Frontier open-weights 405B model", "context": "128K", "pricing": "NVIDIA NIM API"},
-            {"id": "deepseek-ai/deepseek-r1", "name": "DeepSeek R1", "desc": "NVIDIA-accelerated reasoning model", "context": "128K", "pricing": "NVIDIA NIM API"},
-            {"id": "qwen/qwen2.5-coder-32b-instruct", "name": "Qwen 2.5 Coder 32B", "desc": "Specialized coding LLM on NVIDIA hardware", "context": "128K", "pricing": "NVIDIA NIM API"},
-            {"id": "mistralai/mistral-large-2-instruct", "name": "Mistral Large 2", "desc": "123B flagship multilingual & coding model", "context": "128K", "pricing": "NVIDIA NIM API"},
-            {"id": "google/gemma-3-27b-it", "name": "Gemma 3 27B IT", "desc": "Google's latest 27B multimodal reasoning model", "context": "32K", "pricing": "NVIDIA NIM API"},
-            {"id": "microsoft/phi-4", "name": "Phi 4", "desc": "Microsoft's 14B highly capable small model", "context": "16K", "pricing": "NVIDIA NIM API"},
+            {"id": "nvidia/nemotron-3.5-lightning-30b-a3b", "name": "Nemotron 3.5 Lightning", "desc": "Small, fast NVIDIA reasoning model", "context": "128K", "pricing": "NVIDIA NIM API / Free credits"},
+            {"id": "nvidia/nemotron-3-ultra-550b-a55b", "name": "Nemotron 3 Ultra", "desc": "NVIDIA flagship open model", "context": "128K", "pricing": "NVIDIA NIM API"},
+            {"id": "mistralai/mistral-large-4-1t-a52b", "name": "Mistral Large 4", "desc": "Mistral flagship model", "context": "128K", "pricing": "NVIDIA NIM API"},
+            {"id": "minimaxai/minimax-m3.1-flash", "name": "MiniMax M3.1 Flash", "desc": "Fast MiniMax model", "context": "128K", "pricing": "NVIDIA NIM API"},
         ],
     },
 }
@@ -216,6 +212,7 @@ def get_context_limit_for_model(provider_key: str, model_id: str) -> int:
     return 131072
 
 
+_NON_CHAT_NIM_MODELS = ("embed", "rerank", "reward", "safety", "guard", "parse", "retriever")
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 _LOOPBACK_CLOSED_TTL_S = 5.0
 _LOOPBACK_CONNECT_TIMEOUT_S = 0.15
@@ -378,23 +375,51 @@ def normalize_endpoint_model(item: dict[str, Any], provider_key: str) -> dict[st
     return model
 
 
-def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str = None) -> list[dict]:
+def fetch_failure_reason(exc: BaseException) -> str:
+    """Why a model-list request failed, without its body or headers."""
+    code = getattr(exc, "code", None)
+    if isinstance(code, int):
+        if code in (401, 403):
+            return "auth_error"
+        if code == 429:
+            return "rate_limit"
+        if code == 404:
+            return "not_found"
+        return "provider_unavailable" if code >= 500 else "http_error"
+    if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError):
+        return "timeout"
+    if isinstance(exc, OSError):
+        return "offline"
+    if isinstance(exc, ValueError):
+        return "bad_response"
+    return "error"
+
+
+def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str = None, *,
+                           status: dict | None = None) -> list[dict]:
     """Fetch live models from provider API. Returns list of model dicts or empty list on failure.
-    Caches the context windows to disk for future use.
+    Caches the context windows to disk for future use. When ``status`` is given, the first
+    failure reason is stored in ``status["error"]``.
     """
     import json
     import urllib.request
     import urllib.error
 
+    def _note(reason: str) -> None:
+        if status is not None:
+            status.setdefault("error", reason)
+
     def _get(url: str, headers: dict, timeout: float = 4.0) -> dict | None:
         from andromity.core import network_policy
         if not network_policy.url_allowed(url):
+            _note("airgap")
             return None
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Andromity/1.0", **headers})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except Exception as exc:
+            _note(fetch_failure_reason(exc))
             from andromity.core.debug_log import get_logger
             get_logger("models").warning("Model discovery failed: provider=%s error=%s HTTP=%s", provider_key, type(exc).__name__, getattr(exc, "code", "unknown"))
             return None
@@ -424,6 +449,7 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
         for _ in range(20):
             data = _get(url, headers)
             if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+                _note("bad_response")
                 return []
             page_ids = []
             for item in data["data"]:
@@ -438,18 +464,22 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
                 return _cache_and_return(provider_key, models)
             # Build cursors against this endpoint, never follow a supplied external URL.
             if not page_ids:
+                _note("bad_response")
                 return []
             url = endpoint + "?" + urlencode({"after_id" if adapter == "anthropic" else "after": page_ids[-1]})
+        _note("bad_response")
         return []
     if provider_key not in MODEL_CATALOG and base_url and adapter not in ("ollama", "ollama_chat"):
+        _note("unsupported")
         return []  # Unsupported catalog protocol: preserve manual entry, never send its key elsewhere.
     if provider_key not in MODEL_CATALOG and adapter in MODEL_CATALOG:
-        return _cache_and_return(provider_key, fetch_live_models_sync(adapter, api_key, base_url))
+        return _cache_and_return(provider_key, fetch_live_models_sync(adapter, api_key, base_url, status=status))
 
     # ── Ollama (local daemon) ──────────────────────────────────────────────────
     if provider_key == "ollama":
         ollama_root = reachable_loopback_url(base_url or "http://localhost:11434")
         if ollama_root is None:
+            _note("offline")
             return []
         url = ollama_root.rstrip("/") + "/api/tags"
         data = _get(url, {}, timeout=1.5)
@@ -679,17 +709,16 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
 
     # ── NVIDIA NIM ────────────────────────────────────────────────────────────
     elif provider_key == "nvidia" and api_key:
-        data = _get(
-            "https://integrate.api.nvidia.com/v1/models",
-            {"Authorization": f"Bearer {api_key}"},
-        )
-        if not data:
+        root = (base_url or "https://integrate.api.nvidia.com/v1").rstrip("/")
+        data = _get(root + "/models", {"Authorization": f"Bearer {api_key}"})
+        items = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(items, list):
             return []
         # NVIDIA's /v1/models endpoint exposes no context window per model.
-        models = [{"id": "google/gemma-2-2b-it", "name": "Gemma 2 2B IT", "desc": "NVIDIA NIM accelerated model", "context": "128K", "context_limit": 131072, "provider": "nvidia", "tags": ["fast"]}]
-        for item in data.get("data", []):
-            m_id = item.get("id", "")
-            if not m_id or "embed" in m_id.lower() or "rerank" in m_id.lower():
+        models = []
+        for item in items:
+            m_id = item.get("id") if isinstance(item, dict) else None
+            if not isinstance(m_id, str) or not m_id or any(word in m_id.lower() for word in _NON_CHAT_NIM_MODELS):
                 continue
             models.append({
                 "id": m_id,
@@ -739,6 +768,8 @@ def fetch_live_models_sync(provider_key: str, api_key: str = None, base_url: str
                     models.append(entry)
         return _cache_and_return(provider_key, models)
 
+    needs_key = bool((MODEL_CATALOG.get(provider_key) or {}).get("requires_env"))
+    _note("no_key" if needs_key and not api_key else "unsupported")
     return _cache_and_return(provider_key, [])
 
 

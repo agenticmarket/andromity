@@ -264,7 +264,7 @@ describe("Suggested next step wiring", () => {
   it("hooks into input keys, sending, turn start and end, and session load", () => {
     assert.ok(script.includes("promptInput.value === '' && document.getElementById('next-step-card')"), "Tab and Esc only while the input is empty and a card shows");
     assert.ok(script.includes("if (e.key === 'Tab') acceptNextStepIntoInput();"));
-    assert.ok(/function dispatchPrompt\(text, attachContext, images, delivery, requestId\) \{\n\s+try \{\n\s+setNextStep\(currentSessionId, null\);/.test(script), "sending anything clears the suggestion");
+    assert.ok(/function dispatchPrompt\(text, attachContext, images, delivery, requestId, imageOnly\) \{\n\s+try \{\n\s+setNextStep\(currentSessionId, null\);/.test(script), "sending anything clears the suggestion");
     assert.ok(script.includes("if (msg.tool_name === 'suggest_next_step') break;"), "no tool card for the suggestion");
     const started = script.slice(script.indexOf("case 'agent_started':"), script.indexOf("case 'agent_started':") + 200);
     assert.ok(started.includes("setNextStep(msg.session_id, null);"));

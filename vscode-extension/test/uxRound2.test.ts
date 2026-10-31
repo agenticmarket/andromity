@@ -266,7 +266,7 @@ describe("rewind and resend in the webview", () => {
   it("puts an Edit button next to Undo on every message", () => {
     const script = getChatClientScript("icon.svg", { currentSessionId: "s", currentModel: "m", currentProvider: "p", currentMode: "safe", currentProfile: "builder", currentReasoning: "auto" });
     assert.ok(script.includes(`data-action="edit-prompt" title="Edit and resend from here"`));
-    assert.ok(script.includes(`resendPrompt: text,`));
+    assert.ok(script.includes(`type: 'undo_turn', resendPrompt: text }`));
   });
 });
 
