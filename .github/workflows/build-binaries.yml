@@ -141,7 +141,37 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-  # Publish to Open VSX after all builds pass. VS Code Marketplace publishing is manual.
+  # Publish to the VS Code Marketplace with Trusted Publishing (OIDC): no stored token.
+  # The publisher's Trusted Publishing policy must name this repository, this workflow
+  # file (build-binaries.yml) and the `marketplace` environment.
+  publish-marketplace:
+    name: Publish to VS Code Marketplace
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: marketplace
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Download all .vsix artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: vsix-artifacts
+          pattern: "andromity-*.vsix"
+          merge-multiple: true
+
+      - name: Publish platform .vsix files
+        working-directory: vsix-artifacts
+        run: |
+          ls -lh
+          npx --yes @vscode/vsce@4.1.0 publish --oidc --skip-duplicate --packagePath *.vsix
+
+  # Publish to Open VSX after all builds pass.
   publish:
     name: Publish to Open VSX
     needs: build                         # wait for ALL platform builds to pass
