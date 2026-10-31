@@ -5,7 +5,7 @@ import os
 import platform
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, time as dt_time, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -13,6 +13,8 @@ if sys.version_info >= (3, 11):
     import tomllib
 else:
     import tomli as tomllib
+
+_INT64_MIN, _INT64_MAX = -(2 ** 63), 2 ** 63 - 1
 
 try:
     import tomli_w
@@ -71,8 +73,11 @@ except ImportError:
             if isinstance(v, bool):
                 return "true" if v else "false"
             if isinstance(v, int):
-                return str(v)
+                if not _INT64_MIN <= v <= _INT64_MAX:
+                    raise TypeError("TOML integers must fit in 64 bits")
+                return str(int(v))
             if isinstance(v, float):
+                v = float(v)
                 if math.isnan(v):
                     return "nan"
                 if math.isinf(v):
@@ -80,6 +85,12 @@ except ImportError:
                 return repr(v)
             if isinstance(v, str):
                 return cls._string(v)
+            if isinstance(v, datetime):
+                return v.isoformat()
+            if isinstance(v, (date, dt_time)):
+                if isinstance(v, dt_time) and v.tzinfo is not None:
+                    raise TypeError("TOML times can't carry a time zone")
+                return v.isoformat()
             if isinstance(v, (list, tuple)):
                 return "[" + ", ".join(cls._value(i) for i in v) + "]"
             if isinstance(v, dict):
@@ -165,6 +176,12 @@ class ConfigManager:
             except Exception as e:
                 print(f"Warning: Could not save the repaired {self.config_path}: {e}", file=sys.stderr)
 
+    def _reload_saved(self) -> None:
+        try:
+            self._config_cache = tomllib.loads(self.config_path.read_bytes().decode("utf-8"))
+        except (OSError, ValueError):
+            pass
+
     @staticmethod
     def _toml_compatible(value: Any, depth: int = 0) -> bool:
         if depth > 16:
@@ -173,7 +190,9 @@ class ConfigManager:
             return all(isinstance(k, str) and ConfigManager._toml_compatible(v, depth + 1) for k, v in value.items())
         if isinstance(value, list):
             return all(ConfigManager._toml_compatible(v, depth + 1) for v in value)
-        return isinstance(value, (str, int, float, bool))
+        if isinstance(value, int) and not isinstance(value, bool):
+            return _INT64_MIN <= value <= _INT64_MAX
+        return isinstance(value, (str, float, bool))
 
     @staticmethod
     def _restore_table(value: Any) -> Any:
@@ -248,10 +267,17 @@ class ConfigManager:
             return
 
         data_to_save = config_data if config_data is not None else self._config_cache
+        try:
+            payload = tomli_w.dumps(data_to_save).encode("utf-8")
+        except (TypeError, ValueError):
+            # A value TOML can't hold must not stay in memory and fail every later save.
+            if config_data is None:
+                self._reload_saved()
+            raise
         tmp_path = self.config_path.with_name(f"{self.config_path.stem}_{os.getpid()}_{time.time_ns()}.tmp")
         try:
             with open(tmp_path, "wb") as f:
-                tomli_w.dump(data_to_save, f)
+                f.write(payload)
                 f.flush()
                 try:
                     os.fsync(f.fileno())
@@ -296,11 +322,11 @@ class ConfigManager:
         return sec.get(key, eff_default)
 
     def set(self, section: str, key: str, value: Any):
-        if section not in self._config_cache:
+        if not isinstance(self._config_cache.get(section), dict):
             self._config_cache[section] = {}
         self._config_cache[section][key] = value
         self.save()
-        
+
     def get_root(self, key: str, default: Any = None) -> Any:
         return self._config_cache.get(key, default)
         
@@ -409,7 +435,8 @@ class ConfigManager:
             os.environ[env_var] = api_key
 
     def list_providers(self) -> list:
-        return self._config_cache.get("providers", [])
+        providers = self._config_cache.get("providers", [])
+        return [p for p in providers if isinstance(p, dict)] if isinstance(providers, list) else []
 
     def save_provider(self, values: Dict[str, Any]) -> str:
         from andromity.core.connections import validate_connection
@@ -604,15 +631,15 @@ class ConfigManager:
     def is_trusted(self, path: str) -> bool:
         if not path:
             return False
-        key = self._trust_key(path)
-        return key in self._config_cache.get("trusted_projects", {})
+        trusted = self._config_cache.get("trusted_projects", {})
+        return isinstance(trusted, dict) and isinstance(trusted.get(self._trust_key(path)), dict)
 
     def set_trusted(self, path: str):
         resolved = str(Path(path).resolve())
         key = self._trust_key(path)
-        if "trusted_projects" not in self._config_cache:
+        if not isinstance(self._config_cache.get("trusted_projects"), dict):
             self._config_cache["trusted_projects"] = {}
-        if key in self._config_cache["trusted_projects"]:
+        if isinstance(self._config_cache["trusted_projects"].get(key), dict):
             return
         self._config_cache["trusted_projects"][key] = {
             "path": resolved,
@@ -624,7 +651,7 @@ class ConfigManager:
     def revoke_trust(self, path: str):
         key = self._trust_key(path)
         trusted = self._config_cache.get("trusted_projects", {})
-        if key in trusted:
+        if isinstance(trusted, dict) and key in trusted:
             del trusted[key]
             self.save()
 
