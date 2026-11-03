@@ -74,6 +74,50 @@ function plural(count: number, word: string, many?: string): string {
   return `${n(count)} ${count === 1 ? word : many || word + "s"}`;
 }
 
+const TOOL_WORDS: Record<string, [string, string]> = {
+  shell_kill: ["stopped a background command", "stopped background commands"],
+  shell_read: ["read a background command's output", "read background command output"],
+  shell_list: ["listed background commands", "listed background commands"],
+  ask_questions: ["asked you a question", "asked you questions"],
+  write_plan: ["wrote a plan", "wrote plans"],
+  update_plan_step: ["updated the plan", "updated the plan"],
+  suggest_next_step: ["suggested a next step", "suggested next steps"],
+  handoff: ["handed the work to another session", "handed work to other sessions"],
+  session_message: ["messaged another session", "messaged other sessions"],
+  session_inbox: ["checked messages from other sessions", "checked messages from other sessions"],
+  session_watch: ["watched another session", "watched other sessions"],
+  shared_state: ["shared notes with other sessions", "shared notes with other sessions"],
+  list_tools: ["listed its tools", "listed its tools"],
+};
+
+/** Known tools in Andromity's own words; any other name stays in code style, since a tool's name can come from
+ *  an MCP server and must never read as part of Andromity's sentence. */
+function toolAction(name: string, count: number): string {
+  const words = Object.prototype.hasOwnProperty.call(TOOL_WORDS, name) ? TOOL_WORDS[name] : null;
+  if (!words) return `Used <code class="rc-chip">${escapeHtml(name)}</code>${count > 1 ? ` ${n(count)} times` : ""}`;
+  const text = count > 1 ? `${words[1]} (${n(count)})` : words[0];
+  return escapeHtml(text.charAt(0).toUpperCase() + text.slice(1));
+}
+
+const COMMAND_PREVIEW_CHARS = 160;
+const ESCAPED_NEWLINE = "\\u000a";
+
+/** A command shown short, with the rest one click away. The engine writes newlines as \u000a, so a multi-line
+ *  script shows its first line and how many more there are; nothing is hidden from the expanded view. */
+function renderCommandText(command: string): string {
+  const lines = command.split(ESCAPED_NEWLINE);
+  const first = lines[0];
+  const extraLines = lines.length - 1;
+  const cut = first.length > COMMAND_PREVIEW_CHARS;
+  if (!extraLines && !cut) return `<code class="rc-command">${escapeHtml(command)}</code>`;
+  const preview = cut ? first.slice(0, COMMAND_PREVIEW_CHARS) + "…" : first;
+  const label = extraLines ? `+${plural(extraLines, "line")}` : "show all";
+  return `<details class="rc-cmd">
+      <summary><code class="rc-command">${escapeHtml(preview)}</code><span class="rc-cmd-more">${label}</span></summary>
+      <code class="rc-command rc-command-full">${lines.map((line) => escapeHtml(line)).join("\n")}</code>
+    </details>`;
+}
+
 export function formatWhen(iso: string | null | undefined): string {
   if (!iso) return "";
   const date = new Date(iso);
@@ -134,8 +178,11 @@ function commandStatus(command: ReceiptCommand): { label: string; tone: string }
 function commandApproval(command: ReceiptCommand, names: Map<string, string>, viewerId?: string | null): string {
   if (command.decided_by_person === true) return `approved by ${person(command.decided_by, names, viewerId)}`;
   if (command.decided_by_person === false) return `declined by ${person(command.decided_by, names, viewerId)}`;
-  if (command.outcome === "ok" || command.outcome === "failed") return "without asking";
   return "";
+}
+
+function ranWithoutAsking(command: ReceiptCommand): boolean {
+  return command.decided_by_person !== true && (command.outcome === "ok" || command.outcome === "failed");
 }
 
 function renderFinding(finding: ReceiptFinding, names: Map<string, string>, viewerId?: string | null): string {
@@ -153,11 +200,7 @@ function renderFinding(finding: ReceiptFinding, names: Map<string, string>, view
 
 function renderAttention(receipt: Receipt, viewerId?: string | null): string {
   const findings = receipt.needs_attention;
-  if (!findings.length) {
-    return `<section class="rc-calm" aria-label="Needs your eyes">
-        <span class="rc-calm-dot" aria-hidden="true"></span>Nothing in this turn needs your eyes.
-      </section>`;
-  }
+  if (!findings.length) return "";
   const names = approverNames(receipt);
   return `<section class="rc-attention" aria-labelledby="rc-attention-title">
       <h2 id="rc-attention-title">Needs your eyes <span class="rc-count">${n(findings.length)}</span></h2>
@@ -176,13 +219,17 @@ function renderCommands(receipt: Receipt, viewerId?: string | null): string {
     const approval = commandApproval(command, names, viewerId);
     return `<li class="rc-row rc-row-cmd">
         <span class="rc-pill rc-${status.tone}">${escapeHtml(status.label)}</span>
-        <code class="rc-command">${escapeHtml(command.command)}</code>
+        ${renderCommandText(command.command)}
         <span class="rc-row-meta">${by}${approval ? `<span class="rc-approval">${approval}</span>` : ""}</span>
       </li>`;
   }).join("");
   const hidden = total - commands.length;
+  const unasked = commands.filter(ranWithoutAsking).length;
+  const unaskedNote = unasked
+    ? `<span class="rc-h-note">${unasked === commands.length && hidden <= 0 ? "all" : n(unasked)} ran without asking</span>`
+    : "";
   return `<section aria-labelledby="rc-commands-title">
-      <h2 id="rc-commands-title">Commands <span class="rc-count">${n(total)}</span></h2>
+      <h2 id="rc-commands-title">Commands <span class="rc-count">${n(total)}</span>${unaskedNote}</h2>
       <ul class="rc-rows">${rows}</ul>
       ${hidden > 0 ? `<p class="rc-more">${plural(hidden, "more command")} not listed.</p>` : ""}
     </section>`;
@@ -196,7 +243,7 @@ function renderChecks(checks: ReceiptCheck[]): string {
     const recovered = check.failed_first === true ? '<span class="rc-row-meta">failed first, passed after</span>' : "";
     return `<li class="rc-row rc-row-cmd">
         <span class="rc-pill rc-${passed ? "ok" : "bad"}">${passed ? "passed" : "failed" + code}</span>
-        <code class="rc-command">${escapeHtml(check.command)}</code>${recovered}
+        ${renderCommandText(check.command)}${recovered}
       </li>`;
   }).join("");
   return `<section aria-labelledby="rc-checks-title"><h2 id="rc-checks-title">Checks</h2><ul class="rc-rows">${rows}</ul></section>`;
@@ -265,42 +312,78 @@ function renderReach(receipt: Receipt): string {
   const chips = (values: string[]) => values.map((value) => `<li><span class="rc-chip">${escapeHtml(value)}</span></li>`).join("");
   if (receipt.web_hosts.length) groups.push(`<div><h3>Websites</h3><ul class="rc-chips">${chips(receipt.web_hosts)}</ul></div>`);
   if (receipt.mcp_servers.length) groups.push(`<div><h3>MCP servers</h3><ul class="rc-chips">${chips(receipt.mcp_servers)}</ul></div>`);
-  const tools = Object.entries(receipt.other_tools).map(([name, count]) => (count > 1 ? `${name} x${n(count)}` : name));
-  if (tools.length) groups.push(`<div><h3>Other tools</h3><ul class="rc-chips">${chips(tools)}</ul></div>`);
-  const s = receipt.summary;
-  const counts = [
-    s.searches ? plural(s.searches, "code search", "code searches") : "",
-    s.web_searches ? plural(s.web_searches, "web search", "web searches") : "",
-    s.subagents ? plural(s.subagents, "subagent") : "",
-  ].filter(Boolean);
-  if (counts.length) groups.push(`<div><h3>Also</h3><p class="rc-plain">${escapeHtml(counts.join(", "))}</p></div>`);
   if (!groups.length) return "";
   return `<section aria-labelledby="rc-reach-title"><h2 id="rc-reach-title">Reached</h2><div class="rc-reach">${groups.join("")}</div></section>`;
 }
 
-function renderStats(receipt: Receipt): string {
+function renderOtherActions(receipt: Receipt): string {
   const s = receipt.summary;
-  const stats = [
-    `<li><strong>${n(s.files_changed)}</strong> ${s.files_changed === 1 ? "file" : "files"} changed
-      <span class="rc-add">+${n(s.lines_added)}</span> <span class="rc-del">-${n(s.lines_deleted)}</span></li>`,
-    `<li><strong>${n(s.files_read)}</strong> read</li>`,
-  ];
-  if (s.commands) {
-    stats.push(`<li><strong>${n(s.commands)}</strong> ${s.commands === 1 ? "command" : "commands"}` +
-      (s.commands_failed ? `, <span class="rc-bad-text">${n(s.commands_failed)} failed</span>` : "") + "</li>");
-  }
-  if (s.blocked) stats.push(`<li><strong>${n(s.blocked)}</strong> blocked</li>`);
-  if (s.denied) stats.push(`<li><strong>${n(s.denied)}</strong> declined</li>`);
-  if (typeof receipt.cost_usd === "number" && Number.isFinite(receipt.cost_usd)) {
-    stats.push(`<li><strong>$${receipt.cost_usd.toFixed(2)}</strong></li>`);
-  }
-  return `<ul class="rc-stats">${stats.join("")}</ul>`;
+  const actions = [
+    s.searches ? `Searched the code ${s.searches === 1 ? "once" : n(s.searches) + " times"}` : "",
+    s.web_searches ? `Searched the web ${s.web_searches === 1 ? "once" : n(s.web_searches) + " times"}` : "",
+    s.subagents ? `Started ${plural(s.subagents, "subagent")}` : "",
+    ...Object.entries(receipt.other_tools).map(([name, count]) => toolAction(name, count)),
+  ].filter(Boolean);
+  if (!actions.length) return "";
+  const items = actions.map((action) => `<li>${action}</li>`).join("");
+  return `<section aria-labelledby="rc-actions-title"><h2 id="rc-actions-title">Other actions</h2><ul class="rc-list">${items}</ul></section>`;
+}
+
+function joinPhrases(phrases: string[]): string {
+  if (phrases.length <= 1) return phrases.join("");
+  return `${phrases.slice(0, -1).join(", ")} and ${phrases[phrases.length - 1]}`;
+}
+
+/** One sentence of what the turn did, built only from counts so no agent text can enter it. */
+function summarySentence(receipt: Receipt): string {
+  const s = receipt.summary;
+  const did: string[] = [];
+  did.push(s.files_changed
+    ? `changed ${plural(s.files_changed, "file")} (<span class="rc-add">+${n(s.lines_added)}</span> <span class="rc-del">-${n(s.lines_deleted)}</span>)`
+    : "changed no files");
+  if (s.files_read) did.push(`read ${plural(s.files_read, "file")}`);
+  if (s.commands) did.push(`ran ${plural(s.commands, "command")}`);
+  const extra: string[] = [];
+  if (s.commands_failed) extra.push(`<span class="rc-bad-text">${n(s.commands_failed)} failed</span>`);
+  const background = receipt.commands.filter((command) => command.background && command.outcome === "ok").length;
+  if (background) extra.push(`${n(background)} started in the background`);
+  if (s.blocked) extra.push(`${n(s.blocked)} blocked`);
+  if (s.denied) extra.push(`${n(s.denied)} declined`);
+  const sentence = joinPhrases(did);
+  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}${extra.length ? `; ${extra.join(", ")}` : ""}.`;
+}
+
+function renderSeal(receipt: Receipt): string {
+  if (!receipt.sealed) return "";
+  return receipt.sealed.matches === true
+    ? '<span class="rc-seal rc-seal-ok" title="This receipt was rebuilt from the same records that were sealed when the turn ended">Sealed · Matches the record made when the turn ended</span>'
+    : '<span class="rc-seal rc-seal-bad" title="The records changed after the turn ended">Differs from the record made when the turn ended</span>';
+}
+
+function renderVerdict(receipt: Receipt): string {
+  const findings = receipt.needs_attention;
+  const high = findings.filter((finding) => finding.severity === "high").length;
+  const tone = !findings.length ? "calm" : high ? "high" : "warn";
+  const title = !findings.length
+    ? "Nothing in this turn needs your eyes."
+    : `${plural(findings.length, "thing")} to check${high ? `, ${n(high)} high` : ""}`;
+  const when = [formatWhen(receipt.started_at), formatDuration(receipt.duration_seconds)].filter(Boolean);
+  const meta = [`Turn ${n(receipt.turn_index + 1)}`, ...when];
+  if (typeof receipt.cost_usd === "number" && Number.isFinite(receipt.cost_usd)) meta.push(`$${receipt.cost_usd.toFixed(2)}`);
+  if (receipt.models.length) meta.push(receipt.models.join(", "));
+  if (isText(receipt.mode) && receipt.mode) meta.push(`${receipt.mode} mode`);
+  return `<section class="rc-verdict rc-verdict-${tone}" aria-label="Summary">
+      <div class="rc-verdict-top">
+        <p class="rc-verdict-title"><span class="rc-verdict-dot" aria-hidden="true"></span>${escapeHtml(title)}</p>
+        ${renderSeal(receipt)}
+      </div>
+      <p class="rc-sentence">${summarySentence(receipt)}</p>
+      <p class="rc-meta">${meta.map((item) => escapeHtml(item)).join(" · ")}</p>
+    </section>`;
 }
 
 function renderFooter(receipt: Receipt, viewerId?: string | null): string {
   const parts: string[] = [];
-  if (receipt.models.length) parts.push(`Model: ${escapeHtml(receipt.models.join(", "))}`);
-  if (isText(receipt.mode) && receipt.mode) parts.push(`Mode: ${escapeHtml(receipt.mode)}`);
   const s = receipt.summary;
   if (s.approved_by_person || s.denied_by_person) {
     const names = approverNames(receipt);
@@ -315,15 +398,10 @@ function renderFooter(receipt: Receipt, viewerId?: string | null): string {
   const snapshots = isText(before) && isText(after)
     ? `Snapshots <code>${escapeHtml(before.slice(0, 7))}</code> to <code>${escapeHtml(after.slice(0, 7))}</code> · `
     : "";
-  const sealed = receipt.sealed
-    ? receipt.sealed.matches === true
-      ? '<span class="rc-sealed">Matches the record made when the turn ended</span>'
-      : '<span class="rc-unsealed">Differs from the record made when the turn ended</span>'
-    : "";
   const notes = receipt.notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("");
   return `<footer class="rc-foot">
       ${parts.length ? `<p>${parts.join(" · ")}</p>` : ""}
-      <p>${snapshots}Checksum <code title="${escapeHtml(receipt.record_hash)}">${escapeHtml(receipt.record_hash.slice(0, 12))}</code>${sealed ? " · " + sealed : ""}</p>
+      <p>${snapshots}Checksum <code title="${escapeHtml(receipt.record_hash)}">${escapeHtml(receipt.record_hash.slice(0, 12))}</code></p>
       ${notes ? `<ul class="rc-notes">${notes}</ul>` : ""}
       <p class="rc-limits">Not covered: most files git ignores, and files outside this folder.
         No prompts, file contents or command output are included. The checksum shows whether this record changed; it is not a signature.</p>
@@ -331,19 +409,16 @@ function renderFooter(receipt: Receipt, viewerId?: string | null): string {
 }
 
 export function renderReceipt(receipt: Receipt, viewerId?: string | null): string {
-  const when = [formatWhen(receipt.started_at), formatDuration(receipt.duration_seconds)].filter(Boolean).join(" · ");
   const turn = n(receipt.turn_index + 1);
   return `<article class="rc-doc" aria-label="Receipt for turn ${turn}">
-      <section class="rc-overview">
-        <p class="rc-when">Turn ${turn}${when ? " · " + escapeHtml(when) : ""}</p>
-        ${renderStats(receipt)}
-      </section>
+      ${renderVerdict(receipt)}
       ${renderAttention(receipt, viewerId)}
+      ${renderFilesChanged(receipt)}
       ${renderCommands(receipt, viewerId)}
       ${renderChecks(receipt.checks)}
-      ${renderFilesChanged(receipt)}
       ${renderFilesRead(receipt)}
       ${renderReach(receipt)}
+      ${renderOtherActions(receipt)}
       ${renderFooter(receipt, viewerId)}
     </article>`;
 }
@@ -380,7 +455,7 @@ export function renderReceiptBody(state: ReceiptViewState): string {
         <svg class="rc-logo" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${RECEIPT_ICON}</svg>
         <h1>Receipt</h1>
-        <span class="rc-session" title="${escapeHtml(state.sessionName)}">${escapeHtml(state.sessionName)}</span>
+        <span class="rc-session" title="Session: ${escapeHtml(state.sessionName)}"><span class="rc-session-label">Session</span> ${escapeHtml(state.sessionName)}</span>
       </div>
       ${nav}
       ${actions}
@@ -399,7 +474,7 @@ export function renderReceiptBody(state: ReceiptViewState): string {
     const actions = receipt && !state.loading
       ? `<div class="rc-actions">
           <button type="button" class="rc-btn" data-action="copy-text" title="Copy the receipt as plain text">Copy as text</button>
-          ${response?.markdown ? '<button type="button" class="rc-btn" data-action="copy-markdown" title="Copy as Markdown to paste into a pull request">Copy as Markdown</button>' : ""}
+          ${response?.markdown ? '<button type="button" class="rc-btn rc-btn-primary" data-action="copy-markdown" title="Copy as Markdown to paste into a pull request">Copy for pull request</button>' : ""}
           <button type="button" class="rc-btn" data-action="export-json" title="Save the full receipt as JSON">Save JSON</button>
         </div>`
       : "";

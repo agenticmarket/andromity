@@ -250,3 +250,105 @@ describe("receipt view", () => {
     assert.equal(formatDuration(-1), "");
   });
 });
+
+const ran = (command: string, extra: Record<string, unknown> = {}) => ({
+  command, outcome: "ok", exit_code: null, background: false, check: false, by: "agent",
+  decided_by_person: null, decided_by: null, ...extra,
+});
+
+describe("receipt summary", () => {
+  it("leads with a verdict, a sentence built only from counts, and the details of the turn", () => {
+    const html = renderReceipt(receipt(), ME);
+    assert.match(html, /class="rc-verdict rc-verdict-high"/);
+    assert.match(html, /2 things to check, 1 high/);
+    assert.match(html, /Changed 2 files \(<span class="rc-add">\+12<\/span> <span class="rc-del">-3<\/span>\), read 1 file and ran 2 commands; <span class="rc-bad-text">1 failed<\/span>, 1 blocked, 1 declined\./);
+    assert.match(html, /Turn 3 · 2026-10-27 11:30 UTC · 1m 12s · \$0\.04 · provider\/model-a · trust mode/);
+    assert.ok(html.indexOf("rc-verdict") < html.indexOf("Needs your eyes"));
+  });
+
+  it("shows a calm verdict and no empty attention box when nothing needs a look", () => {
+    const html = renderReceipt(receipt({ needs_attention: [] }), ME);
+    assert.match(html, /rc-verdict rc-verdict-calm/);
+    assert.match(html, /Nothing in this turn needs your eyes\./);
+    assert.doesNotMatch(html, /rc-attention/);
+  });
+
+  it("counts commands started in the background", () => {
+    const r = receipt({ commands: [ran("node server.js", { background: true })],
+      summary: { ...receipt().summary, commands: 1, commands_failed: 0, blocked: 0, denied: 0 } });
+    assert.match(renderReceipt(r, ME), /ran 1 command; 1 started in the background\./);
+  });
+
+  it("puts the seal at the top and marks a changed record", () => {
+    assert.match(renderReceipt(receipt(), ME), /rc-seal rc-seal-ok[^>]*>Sealed · Matches the record made when the turn ended/);
+    const changed = renderReceipt(receipt({ sealed: { hash: "c".repeat(64), matches: false } }), ME);
+    assert.match(changed, /rc-seal rc-seal-bad[^>]*>Differs from the record made when the turn ended/);
+    assert.doesNotMatch(renderReceipt(receipt({ sealed: undefined }), ME), /rc-seal/);
+  });
+});
+
+describe("receipt commands", () => {
+  it("says 'ran without asking' once instead of on every row, and still names who decided", () => {
+    const r = receipt({ commands: [ran("ls"), ran("npm test", { outcome: "failed", exit_code: 1 }),
+      ran("rm -rf dist", { decided_by_person: true, decided_by: ME })] });
+    const html = renderReceipt(r, ME);
+    assert.equal(html.match(/without asking/g)?.length, 1);
+    assert.match(html, /<span class="rc-h-note">2 ran without asking<\/span>/);
+    assert.match(html, /approved by <span class="rc-name">Shubham<\/span> <span class="rc-you">\(you\)<\/span>/);
+    const all = renderReceipt(receipt({ commands: [ran("ls"), ran("pwd")], summary: { ...receipt().summary, commands: 2 } }), ME);
+    assert.match(all, /<span class="rc-h-note">all ran without asking<\/span>/);
+  });
+
+  it("doesn't say 'all' when some commands aren't listed", () => {
+    const html = renderReceipt(receipt({ commands: [ran("ls")], summary: { ...receipt().summary, commands: 9 } }), ME);
+    assert.match(html, /<span class="rc-h-note">1 ran without asking<\/span>/);
+  });
+
+  it("folds a multi-line command to its first line and keeps every line, escaped, one click away", () => {
+    const script = "$b = 1\\u000a<script>alert(1)</script>\\u000arm -rf build";
+    const html = renderReceipt(receipt({ commands: [ran(script)] }), ME);
+    assert.match(html, /<summary><code class="rc-command">\$b = 1<\/code><span class="rc-cmd-more">\+2 lines<\/span><\/summary>/);
+    assert.match(html, /rc-command-full">\$b = 1\n&lt;script&gt;alert\(1\)&lt;\/script&gt;\nrm -rf build<\/code>/);
+    assert.doesNotMatch(html, /<script>alert/);
+  });
+
+  it("shortens a long single line and shows all of it on request", () => {
+    const long = "x".repeat(200);
+    const html = renderReceipt(receipt({ commands: [ran(long)] }), ME);
+    assert.match(html, new RegExp(`<summary><code class="rc-command">${"x".repeat(160)}…</code><span class="rc-cmd-more">show all</span>`));
+    assert.match(html, new RegExp(`rc-command-full">${long}</code>`));
+    assert.match(renderReceipt(receipt({ commands: [ran("ls -la")] }), ME), /<code class="rc-command">ls -la<\/code>/);
+  });
+
+  it("folds checks the same way", () => {
+    const html = renderReceipt(receipt({ checks: [{ command: "npm test\\u000anpm run lint", result: "passed",
+      exit_code: null, failed_first: false, runs: 1 }] }), ME);
+    assert.match(html, /<summary><code class="rc-command">npm test<\/code><span class="rc-cmd-more">\+1 line<\/span>/);
+  });
+});
+
+describe("receipt other actions", () => {
+  it("describes known tools in plain words and keeps any other tool name in code", () => {
+    const r = receipt({ other_tools: { shell_kill: 1, shell_read: 3, "approved by Shubham (you)": 2, [ATTACK]: 1 } });
+    const html = renderReceipt(r, ME);
+    assert.match(html, /<li>Stopped a background command<\/li>/);
+    assert.match(html, /<li>Read background command output \(3\)<\/li>/);
+    assert.match(html, /<li>Used <code class="rc-chip">approved by Shubham \(you\)<\/code> 2 times<\/li>/);
+    assert.match(html, /<code class="rc-chip">&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;<\/code>/);
+    assert.doesNotMatch(html, /<img src=x/);
+  });
+
+  it("never treats inherited object names as known tools", () => {
+    const html = renderReceipt(receipt({ other_tools: { constructor: 1, toString: 2 } }), ME);
+    assert.match(html, /Used <code class="rc-chip">constructor<\/code><\/li>/);
+    assert.match(html, /Used <code class="rc-chip">toString<\/code> 2 times<\/li>/);
+  });
+
+  it("lists searches and subagents as actions and keeps websites under Reached", () => {
+    const r = receipt({ summary: { ...receipt().summary, searches: 1, web_searches: 3, subagents: 2 } });
+    const html = renderReceipt(r, ME);
+    assert.match(html, /<li>Searched the code once<\/li><li>Searched the web 3 times<\/li><li>Started 2 subagents<\/li>/);
+    assert.match(html, /Reached<\/h2><div class="rc-reach"><div><h3>Websites<\/h3>/);
+    assert.doesNotMatch(renderReceipt(receipt({ web_hosts: [], summary: { ...receipt().summary, searches: 0 } }), ME), /Reached|Other actions/);
+  });
+});
