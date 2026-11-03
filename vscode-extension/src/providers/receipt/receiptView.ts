@@ -356,8 +356,8 @@ function summarySentence(receipt: Receipt): string {
 function renderSeal(receipt: Receipt): string {
   if (!receipt.sealed) return "";
   return receipt.sealed.matches === true
-    ? '<span class="rc-seal rc-seal-ok" title="This receipt was rebuilt from the same records that were sealed when the turn ended">Sealed · Matches the record made when the turn ended</span>'
-    : '<span class="rc-seal rc-seal-bad" title="The records changed after the turn ended">Differs from the record made when the turn ended</span>';
+    ? '<p class="rc-seal rc-seal-ok" title="Rebuilt from the same records that were sealed when the turn ended">Matches the record made when the turn ended.</p>'
+    : '<p class="rc-seal rc-seal-bad" title="The records changed after the turn ended">Differs from the record made when the turn ended.</p>';
 }
 
 function renderVerdict(receipt: Receipt): string {
@@ -373,12 +373,10 @@ function renderVerdict(receipt: Receipt): string {
   if (receipt.models.length) meta.push(receipt.models.join(", "));
   if (isText(receipt.mode) && receipt.mode) meta.push(`${receipt.mode} mode`);
   return `<section class="rc-verdict rc-verdict-${tone}" aria-label="Summary">
-      <div class="rc-verdict-top">
-        <p class="rc-verdict-title"><span class="rc-verdict-dot" aria-hidden="true"></span>${escapeHtml(title)}</p>
-        ${renderSeal(receipt)}
-      </div>
+      <p class="rc-verdict-title">${escapeHtml(title)}</p>
       <p class="rc-sentence">${summarySentence(receipt)}</p>
       <p class="rc-meta">${meta.map((item) => escapeHtml(item)).join(" · ")}</p>
+      ${renderSeal(receipt)}
     </section>`;
 }
 
@@ -455,7 +453,7 @@ export function renderReceiptBody(state: ReceiptViewState): string {
         <svg class="rc-logo" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${RECEIPT_ICON}</svg>
         <h1>Receipt</h1>
-        <span class="rc-session" title="Session: ${escapeHtml(state.sessionName)}"><span class="rc-session-label">Session</span> ${escapeHtml(state.sessionName)}</span>
+        <span class="rc-session" title="Session: ${escapeHtml(state.sessionName)}">${escapeHtml(state.sessionName)}</span>
       </div>
       ${nav}
       ${actions}

@@ -280,9 +280,9 @@ describe("receipt summary", () => {
   });
 
   it("puts the seal at the top and marks a changed record", () => {
-    assert.match(renderReceipt(receipt(), ME), /rc-seal rc-seal-ok[^>]*>Sealed · Matches the record made when the turn ended/);
+    assert.match(renderReceipt(receipt(), ME), /<p class="rc-seal rc-seal-ok"[^>]*>Matches the record made when the turn ended\.<\/p>/);
     const changed = renderReceipt(receipt({ sealed: { hash: "c".repeat(64), matches: false } }), ME);
-    assert.match(changed, /rc-seal rc-seal-bad[^>]*>Differs from the record made when the turn ended/);
+    assert.match(changed, /<p class="rc-seal rc-seal-bad"[^>]*>Differs from the record made when the turn ended\.<\/p>/);
     assert.doesNotMatch(renderReceipt(receipt({ sealed: undefined }), ME), /rc-seal/);
   });
 });
